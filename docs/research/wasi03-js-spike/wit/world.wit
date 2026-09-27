@@ -1,0 +1,6 @@
+package launcher:p3-probe@0.1.0;
+
+world search-extension {
+    import wasi:clocks/monotonic-clock@0.3.0;
+    export query: async func(text: string) -> string;
+}

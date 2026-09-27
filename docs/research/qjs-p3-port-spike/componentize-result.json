@@ -1,0 +1,5 @@
+{
+  "pass": false,
+  "milliseconds": 11.451800000000002,
+  "error": "Error: failed to link and encode component: missing libraries:\n\tcomponentize_qjs_runtime.wasm needs libc.so"
+}

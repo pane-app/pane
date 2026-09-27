@@ -1,0 +1,14 @@
+[
+  {
+    "case": "std-p3",
+    "exit_code": 0,
+    "stdout": "{\"ok\":true,\"epochMs\":1790534651945,\"entries\":1}\n",
+    "stderr": "p3 diagnostics work\n"
+  },
+  {
+    "case": "stock-js-mixed-rejection",
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "Error: component imports instance `wasi:cli/environment@0.2.12`, but a matching implementation was not found in the linker\n\nCaused by:\n    0: instance export `get-environment` has the wrong type\n    1: function implementation is missing\n\n"
+  }
+]

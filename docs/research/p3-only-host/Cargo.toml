@@ -1,0 +1,15 @@
+[package]
+name = "p3-only-host"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }
+wasmtime = { version = "=49.0.1", default-features = false, features = ["cranelift", "runtime", "std", "async", "component-model", "component-model-async"] }
+wasmtime-wasi = { version = "=49.0.1", default-features = false, features = ["p3"] }
+
+[profile.dev]
+debug = 0

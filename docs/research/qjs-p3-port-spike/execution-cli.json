@@ -1,0 +1,6 @@
+{
+  "exit_code": 0,
+  "seconds": 0.3589999999385327,
+  "stdout": "\"{\\\"title\\\":\\\"TypeScript: WASI 0.3 + Fuse.js + Zod\\\",\\\"items\\\":[{\\\"id\\\":\\\"calculator\\\",\\\"title\\\":\\\"Calculator\\\"}],\\\"elapsedNs\\\":\\\"25752600\\\",\\\"invalidDataRejected\\\":true}\"\n",
+  "stderr": ""
+}

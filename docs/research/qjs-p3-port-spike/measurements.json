@@ -1,0 +1,79 @@
+{
+  "scope": "Windows fresh release CLI processes; same Fuse/Zod/10ms-clock workload; 3 cached samples per variant. Different runtime/libc build optimizations; not intrinsic P3 overhead or persistent host budget.",
+  "variants": [
+    {
+      "label": "stock-mixed",
+      "component_bytes": 6991453,
+      "cache_bytes": 9680992,
+      "compilation": {
+        "exit_code": 0,
+        "stdout": "",
+        "stderr": "",
+        "elapsed_ms": 199.2029999382794,
+        "peak_working_set_bytes": 108892160
+      },
+      "cached": [
+        {
+          "exit_code": 0,
+          "stdout": "\"{\\\"title\\\":\\\"TypeScript: WASI 0.3 + Fuse.js + Zod\\\",\\\"items\\\":[{\\\"id\\\":\\\"calculator\\\",\\\"title\\\":\\\"Calculator\\\"}],\\\"elapsedNs\\\":\\\"14501500\\\",\\\"invalidDataRejected\\\":true}\"\n",
+          "stderr": "",
+          "elapsed_ms": 55.71240000426769,
+          "peak_working_set_bytes": 32239616
+        },
+        {
+          "exit_code": 0,
+          "stdout": "\"{\\\"title\\\":\\\"TypeScript: WASI 0.3 + Fuse.js + Zod\\\",\\\"items\\\":[{\\\"id\\\":\\\"calculator\\\",\\\"title\\\":\\\"Calculator\\\"}],\\\"elapsedNs\\\":\\\"20399100\\\",\\\"invalidDataRejected\\\":true}\"\n",
+          "stderr": "",
+          "elapsed_ms": 46.5400000102818,
+          "peak_working_set_bytes": 32206848
+        },
+        {
+          "exit_code": 0,
+          "stdout": "\"{\\\"title\\\":\\\"TypeScript: WASI 0.3 + Fuse.js + Zod\\\",\\\"items\\\":[{\\\"id\\\":\\\"calculator\\\",\\\"title\\\":\\\"Calculator\\\"}],\\\"elapsedNs\\\":\\\"19329900\\\",\\\"invalidDataRejected\\\":true}\"\n",
+          "stderr": "",
+          "elapsed_ms": 47.373900073580444,
+          "peak_working_set_bytes": 32157696
+        }
+      ],
+      "median_peak_mib": 30.71484375,
+      "median_elapsed_ms": 47.373900073580444
+    },
+    {
+      "label": "p3-port",
+      "component_bytes": 9898705,
+      "cache_bytes": 12640928,
+      "compilation": {
+        "exit_code": 0,
+        "stdout": "",
+        "stderr": "",
+        "elapsed_ms": 262.46190001256764,
+        "peak_working_set_bytes": 146591744
+      },
+      "cached": [
+        {
+          "exit_code": 0,
+          "stdout": "\"{\\\"title\\\":\\\"TypeScript: WASI 0.3 + Fuse.js + Zod\\\",\\\"items\\\":[{\\\"id\\\":\\\"calculator\\\",\\\"title\\\":\\\"Calculator\\\"}],\\\"elapsedNs\\\":\\\"21847000\\\",\\\"invalidDataRejected\\\":true}\"\n",
+          "stderr": "",
+          "elapsed_ms": 61.83170003350824,
+          "peak_working_set_bytes": 38629376
+        },
+        {
+          "exit_code": 0,
+          "stdout": "\"{\\\"title\\\":\\\"TypeScript: WASI 0.3 + Fuse.js + Zod\\\",\\\"items\\\":[{\\\"id\\\":\\\"calculator\\\",\\\"title\\\":\\\"Calculator\\\"}],\\\"elapsedNs\\\":\\\"18808500\\\",\\\"invalidDataRejected\\\":true}\"\n",
+          "stderr": "",
+          "elapsed_ms": 46.412300085648894,
+          "peak_working_set_bytes": 38600704
+        },
+        {
+          "exit_code": 0,
+          "stdout": "\"{\\\"title\\\":\\\"TypeScript: WASI 0.3 + Fuse.js + Zod\\\",\\\"items\\\":[{\\\"id\\\":\\\"calculator\\\",\\\"title\\\":\\\"Calculator\\\"}],\\\"elapsedNs\\\":\\\"17786400\\\",\\\"invalidDataRejected\\\":true}\"\n",
+          "stderr": "",
+          "elapsed_ms": 46.558700036257505,
+          "peak_working_set_bytes": 38477824
+        }
+      ],
+      "median_peak_mib": 36.8125,
+      "median_elapsed_ms": 46.558700036257505
+    }
+  ]
+}

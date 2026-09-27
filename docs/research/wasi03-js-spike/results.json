@@ -1,0 +1,153 @@
+{
+  "scope": "Windows fresh CLI processes, real p3 clock + Fuse.js/Zod; not persistent host or pure-p3 validation",
+  "versions": {
+    "wasmtime": "49.0.1",
+    "wasm_tools": "1.259.0",
+    "componentize_qjs": "0.4.5",
+    "fuse_js": "7.5.0",
+    "zod": "4.6.5"
+  },
+  "imports": [
+    "wasi:cli/environment@0.2.12",
+    "wasi:cli/exit@0.2.12",
+    "wasi:io/error@0.2.12",
+    "wasi:io/poll@0.2.12",
+    "wasi:io/streams@0.2.12",
+    "wasi:cli/stdin@0.2.12",
+    "wasi:cli/stdout@0.2.12",
+    "wasi:cli/stderr@0.2.12",
+    "wasi:cli/terminal-input@0.2.12",
+    "wasi:cli/terminal-output@0.2.12",
+    "wasi:cli/terminal-stdin@0.2.12",
+    "wasi:cli/terminal-stdout@0.2.12",
+    "wasi:cli/terminal-stderr@0.2.12",
+    "wasi:clocks/monotonic-clock@0.2.12",
+    "wasi:clocks/wall-clock@0.2.12",
+    "wasi:filesystem/types@0.2.12",
+    "wasi:filesystem/preopens@0.2.12",
+    "wasi:random/insecure-seed@0.2.12",
+    "wasi:clocks/types@0.3.0",
+    "wasi:clocks/monotonic-clock@0.3.0"
+  ],
+  "p2_imports": [
+    "wasi:cli/environment@0.2.12",
+    "wasi:cli/exit@0.2.12",
+    "wasi:io/error@0.2.12",
+    "wasi:io/poll@0.2.12",
+    "wasi:io/streams@0.2.12",
+    "wasi:cli/stdin@0.2.12",
+    "wasi:cli/stdout@0.2.12",
+    "wasi:cli/stderr@0.2.12",
+    "wasi:cli/terminal-input@0.2.12",
+    "wasi:cli/terminal-output@0.2.12",
+    "wasi:cli/terminal-stdin@0.2.12",
+    "wasi:cli/terminal-stdout@0.2.12",
+    "wasi:cli/terminal-stderr@0.2.12",
+    "wasi:clocks/monotonic-clock@0.2.12",
+    "wasi:clocks/wall-clock@0.2.12",
+    "wasi:filesystem/types@0.2.12",
+    "wasi:filesystem/preopens@0.2.12",
+    "wasi:random/insecure-seed@0.2.12"
+  ],
+  "satisfies_p3_only": false,
+  "component_bytes": 6991453,
+  "compiled_bytes": 9680992,
+  "cases": [
+    {
+      "query": "calclator",
+      "value": {
+        "title": "TypeScript: WASI 0.3 + Fuse.js + Zod",
+        "items": [
+          {
+            "id": "calculator",
+            "title": "Calculator"
+          }
+        ],
+        "elapsedNs": "24971600",
+        "invalidDataRejected": true
+      },
+      "execution": {
+        "exit_code": 0,
+        "stdout": "\"{\\\"title\\\":\\\"TypeScript: WASI 0.3 + Fuse.js + Zod\\\",\\\"items\\\":[{\\\"id\\\":\\\"calculator\\\",\\\"title\\\":\\\"Calculator\\\"}],\\\"elapsedNs\\\":\\\"24971600\\\",\\\"invalidDataRejected\\\":true}\"\n",
+        "stderr": "",
+        "elapsed_ms": 90.09119996335357,
+        "peak_working_set_bytes": 42147840
+      }
+    },
+    {
+      "query": "",
+      "value": {
+        "title": "TypeScript: WASI 0.3 + Fuse.js + Zod",
+        "items": [
+          {
+            "id": "calculator",
+            "title": "Calculator"
+          },
+          {
+            "id": "applications",
+            "title": "Applications"
+          },
+          {
+            "id": "quicklinks",
+            "title": "Quicklinks"
+          }
+        ],
+        "elapsedNs": "17768500",
+        "invalidDataRejected": true
+      },
+      "execution": {
+        "exit_code": 0,
+        "stdout": "\"{\\\"title\\\":\\\"TypeScript: WASI 0.3 + Fuse.js + Zod\\\",\\\"items\\\":[{\\\"id\\\":\\\"calculator\\\",\\\"title\\\":\\\"Calculator\\\"},{\\\"id\\\":\\\"applications\\\",\\\"title\\\":\\\"Applications\\\"},{\\\"id\\\":\\\"quicklinks\\\",\\\"title\\\":\\\"Quicklinks\\\"}],\\\"elapsedNs\\\":\\\"17768500\\\",\\\"invalidDataRejected\\\":true}\"\n",
+        "stderr": "",
+        "elapsed_ms": 76.88639999832958,
+        "peak_working_set_bytes": 42180608
+      }
+    },
+    {
+      "query": "zzzzzz",
+      "value": {
+        "title": "TypeScript: WASI 0.3 + Fuse.js + Zod",
+        "items": [],
+        "elapsedNs": "21731000",
+        "invalidDataRejected": true
+      },
+      "execution": {
+        "exit_code": 0,
+        "stdout": "\"{\\\"title\\\":\\\"TypeScript: WASI 0.3 + Fuse.js + Zod\\\",\\\"items\\\":[],\\\"elapsedNs\\\":\\\"21731000\\\",\\\"invalidDataRejected\\\":true}\"\n",
+        "stderr": "",
+        "elapsed_ms": 78.71060003526509,
+        "peak_working_set_bytes": 42229760
+      }
+    }
+  ],
+  "compilation": {
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": "",
+    "elapsed_ms": 207.82240002881736,
+    "peak_working_set_bytes": 115007488
+  },
+  "cached": [
+    {
+      "exit_code": 0,
+      "stdout": "\"{\\\"title\\\":\\\"TypeScript: WASI 0.3 + Fuse.js + Zod\\\",\\\"items\\\":[{\\\"id\\\":\\\"calculator\\\",\\\"title\\\":\\\"Calculator\\\"}],\\\"elapsedNs\\\":\\\"27082800\\\",\\\"invalidDataRejected\\\":true}\"\n",
+      "stderr": "",
+      "elapsed_ms": 69.54440008848906,
+      "peak_working_set_bytes": 32194560
+    },
+    {
+      "exit_code": 0,
+      "stdout": "\"{\\\"title\\\":\\\"TypeScript: WASI 0.3 + Fuse.js + Zod\\\",\\\"items\\\":[{\\\"id\\\":\\\"calculator\\\",\\\"title\\\":\\\"Calculator\\\"}],\\\"elapsedNs\\\":\\\"19193400\\\",\\\"invalidDataRejected\\\":true}\"\n",
+      "stderr": "",
+      "elapsed_ms": 47.43759997654706,
+      "peak_working_set_bytes": 32124928
+    },
+    {
+      "exit_code": 0,
+      "stdout": "\"{\\\"title\\\":\\\"TypeScript: WASI 0.3 + Fuse.js + Zod\\\",\\\"items\\\":[{\\\"id\\\":\\\"calculator\\\",\\\"title\\\":\\\"Calculator\\\"}],\\\"elapsedNs\\\":\\\"17404300\\\",\\\"invalidDataRejected\\\":true}\"\n",
+      "stderr": "",
+      "elapsed_ms": 45.727299991995096,
+      "peak_working_set_bytes": 32174080
+    }
+  ]
+}

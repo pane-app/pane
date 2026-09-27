@@ -1,0 +1,7 @@
+# Support extension calls with returned results
+
+**Subsequent dependency choices:** Q26 accepts installing compatible missing required extensions while optional integrations remain optional; Q27 settles dependent removal. The paragraph below records the original open questions. Concrete protocol, addressing and cancellation remain open. See [current dependencies](../extension-policy-proposal.md#dependencies-on-other-extensions).
+
+Accepted in Q25 after comparing Raycast, Pi and VS Code: provide a small host-routed API through which JS/TS and Rust extensions invoke explicitly published operations with structured inputs and await their results, completion or errors. This enables extensions to reuse one another's functionality across the selected worker/process boundaries; the model is closest to VS Code command execution rather than launch-only commands or a notification bus.
+
+Authors choose which operations support programmatic use; a UI command does not automatically become a headless API. The launcher resolves targets and reports missing, disabled or incompatible targets without silently enabling them. SDK syntax, serialization/schema details, dependency installation, cancellation and recursive-call behavior remain design work. This is an interoperability contract under the existing trusted-code model, not a sandbox or a commitment to build a workflow editor. See [comparison](../research/extension-composition.md).

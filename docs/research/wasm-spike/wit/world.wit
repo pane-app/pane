@@ -1,0 +1,10 @@
+package launcher:smoke@0.1.0;
+
+world search-extension {
+    record search-result {
+        id: string,
+        title: string,
+    }
+
+    export query: func(text: string) -> list<search-result>;
+}

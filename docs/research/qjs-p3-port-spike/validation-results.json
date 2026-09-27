@@ -1,0 +1,79 @@
+{
+  "pass": true,
+  "cases": [
+    {
+      "case": "calclator",
+      "exit_code": 0,
+      "stdout": "\"{\\\"title\\\":\\\"TypeScript: WASI 0.3 + Fuse.js + Zod\\\",\\\"items\\\":[{\\\"id\\\":\\\"calculator\\\",\\\"title\\\":\\\"Calculator\\\"}],\\\"elapsedNs\\\":\\\"23480400\\\",\\\"invalidDataRejected\\\":true}\"\n",
+      "stderr": ""
+    },
+    {
+      "case": "",
+      "exit_code": 0,
+      "stdout": "\"{\\\"title\\\":\\\"TypeScript: WASI 0.3 + Fuse.js + Zod\\\",\\\"items\\\":[{\\\"id\\\":\\\"calculator\\\",\\\"title\\\":\\\"Calculator\\\"},{\\\"id\\\":\\\"applications\\\",\\\"title\\\":\\\"Applications\\\"},{\\\"id\\\":\\\"quicklinks\\\",\\\"title\\\":\\\"Quicklinks\\\"}],\\\"elapsedNs\\\":\\\"21966600\\\",\\\"invalidDataRejected\\\":true}\"\n",
+      "stderr": ""
+    },
+    {
+      "case": "zzzzzz",
+      "exit_code": 0,
+      "stdout": "\"{\\\"title\\\":\\\"TypeScript: WASI 0.3 + Fuse.js + Zod\\\",\\\"items\\\":[],\\\"elapsedNs\\\":\\\"22614100\\\",\\\"invalidDataRejected\\\":true}\"\n",
+      "stderr": ""
+    }
+  ],
+  "artifacts": [
+    {
+      "name": "search",
+      "bytes": 9898705,
+      "sha256": "f6add930d98fe5767fcbe96b4f56a86c31a98bf6c6368cf93b8a1f2acc171141",
+      "imports": [
+        "import wasi:cli/environment@0.3.0;",
+        "import wasi:cli/exit@0.3.0;",
+        "import wasi:cli/types@0.3.0;",
+        "import wasi:cli/stdin@0.3.0;",
+        "import wasi:cli/stdout@0.3.0;",
+        "import wasi:cli/stderr@0.3.0;",
+        "import wasi:cli/terminal-input@0.3.0;",
+        "import wasi:cli/terminal-output@0.3.0;",
+        "import wasi:cli/terminal-stdin@0.3.0;",
+        "import wasi:cli/terminal-stdout@0.3.0;",
+        "import wasi:cli/terminal-stderr@0.3.0;",
+        "import wasi:clocks/types@0.3.0;",
+        "import wasi:clocks/monotonic-clock@0.3.0;",
+        "import wasi:clocks/system-clock@0.3.0;",
+        "import wasi:filesystem/types@0.3.0;",
+        "import wasi:filesystem/preopens@0.3.0;",
+        "import wasi:sockets/types@0.3.0;",
+        "import wasi:sockets/ip-name-lookup@0.3.0;",
+        "import wasi:random/random@0.3.0;",
+        "import wasi:random/insecure-seed@0.3.0;"
+      ]
+    },
+    {
+      "name": "capabilities",
+      "bytes": 9937165,
+      "sha256": "a8acd4471dfc45fbfe62a03dd6d9833359eaf24d8c425b812dbafb1b8c271171",
+      "imports": [
+        "import wasi:cli/environment@0.3.0;",
+        "import wasi:cli/exit@0.3.0;",
+        "import wasi:cli/types@0.3.0;",
+        "import wasi:cli/stdin@0.3.0;",
+        "import wasi:cli/stdout@0.3.0;",
+        "import wasi:cli/stderr@0.3.0;",
+        "import wasi:cli/terminal-input@0.3.0;",
+        "import wasi:cli/terminal-output@0.3.0;",
+        "import wasi:cli/terminal-stdin@0.3.0;",
+        "import wasi:cli/terminal-stdout@0.3.0;",
+        "import wasi:cli/terminal-stderr@0.3.0;",
+        "import wasi:clocks/types@0.3.0;",
+        "import wasi:clocks/monotonic-clock@0.3.0;",
+        "import wasi:clocks/system-clock@0.3.0;",
+        "import wasi:filesystem/types@0.3.0;",
+        "import wasi:filesystem/preopens@0.3.0;",
+        "import wasi:sockets/types@0.3.0;",
+        "import wasi:sockets/ip-name-lookup@0.3.0;",
+        "import wasi:random/random@0.3.0;",
+        "import wasi:random/insecure-seed@0.3.0;"
+      ]
+    }
+  ]
+}

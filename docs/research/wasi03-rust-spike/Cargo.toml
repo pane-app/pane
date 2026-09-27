@@ -1,0 +1,19 @@
+[package]
+name = "wasi03-rust-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasip3 = { version = "=0.9.0", default-features = false, features = ["bitflags"] }
+serde_json = { version = "=1.0.145", default-features = false, features = ["alloc"] }
+dlmalloc = { version = "0.2", features = ["global"] }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+

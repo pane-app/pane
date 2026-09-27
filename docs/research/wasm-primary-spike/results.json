@@ -1,0 +1,502 @@
+{
+  "scope": "Windows x64; sequential interleaved fresh CLI processes; potentially warm filesystem caches; no embedded host, GPUI, custom host calls, hot reload, or steady-state workload",
+  "versions": {
+    "wasmtime": "wasmtime 49.0.1 (46c23a87d 2026-09-24)",
+    "node": "v24.18.0",
+    "build_packages": {
+      "componentize-qjs": {
+        "version": "0.4.5",
+        "engines": {
+          "node": ">=18.0.0"
+        },
+        "dist": 61900
+      },
+      "@bytecodealliance/componentize-js": {
+        "version": "0.23.0",
+        "engines": null,
+        "dist": 42798700
+      },
+      "esbuild": {
+        "version": "0.28.2",
+        "engines": {
+          "node": ">=18"
+        },
+        "dist": 147361
+      }
+    }
+  },
+  "sizes": {
+    "rust": {
+      "wasm_bytes": 63347,
+      "gzip_bytes": 25878,
+      "precompiled_bytes": 192360
+    },
+    "qjs": {
+      "wasm_bytes": 1044344,
+      "gzip_bytes": 444616,
+      "precompiled_bytes": 3490400
+    },
+    "spidermonkey": {
+      "wasm_bytes": 11963710,
+      "gzip_bytes": 3843542,
+      "precompiled_bytes": 35515000
+    }
+  },
+  "compilation": {
+    "rust": {
+      "elapsed_ms": 58.20470000617206,
+      "peak_working_set_bytes": 31363072,
+      "stdout": ""
+    },
+    "qjs": {
+      "elapsed_ms": 413.8978000264615,
+      "peak_working_set_bytes": 90836992,
+      "stdout": ""
+    },
+    "spidermonkey": {
+      "elapsed_ms": 1886.5987000754103,
+      "peak_working_set_bytes": 467456000,
+      "stdout": ""
+    }
+  },
+  "component_builds": {
+    "qjs": {
+      "backend": "qjs",
+      "componentBytes": 1044344,
+      "componentizeMs": 359.53229999999996
+    },
+    "spidermonkey": {
+      "backend": "spidermonkey",
+      "componentBytes": 11963710,
+      "componentizeMs": 23302.8184
+    }
+  },
+  "summary": {
+    "rust_compile_each_process": {
+      "n": 5,
+      "median_ms": 45.818200102075934,
+      "median_peak_working_set_bytes": 30208000
+    },
+    "rust_precompiled_process": {
+      "n": 15,
+      "median_ms": 26.327499886974692,
+      "median_peak_working_set_bytes": 14905344
+    },
+    "qjs_compile_each_process": {
+      "n": 5,
+      "median_ms": 272.35680003650486,
+      "median_peak_working_set_bytes": 92368896
+    },
+    "qjs_precompiled_process": {
+      "n": 15,
+      "median_ms": 29.928699950687587,
+      "median_peak_working_set_bytes": 19734528
+    },
+    "spidermonkey_compile_each_process": {
+      "n": 5,
+      "median_ms": 2250.089199980721,
+      "median_peak_working_set_bytes": 460636160
+    },
+    "spidermonkey_precompiled_process": {
+      "n": 15,
+      "median_ms": 57.76799994055182,
+      "median_peak_working_set_bytes": 84021248
+    },
+    "node_process": {
+      "n": 15,
+      "median_ms": 59.02389995753765,
+      "median_peak_working_set_bytes": 59609088
+    }
+  },
+  "samples": {
+    "rust_compile_each_process": [
+      {
+        "elapsed_ms": 51.52690003160387,
+        "peak_working_set_bytes": 30130176,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 39.903299999423325,
+        "peak_working_set_bytes": 30412800,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 45.818200102075934,
+        "peak_working_set_bytes": 30208000,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 39.69220002181828,
+        "peak_working_set_bytes": 30732288,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 46.27619998063892,
+        "peak_working_set_bytes": 29544448,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      }
+    ],
+    "rust_precompiled_process": [
+      {
+        "elapsed_ms": 39.346499950625,
+        "peak_working_set_bytes": 14938112,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 25.1503000035882,
+        "peak_working_set_bytes": 14880768,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 210.2882000617683,
+        "peak_working_set_bytes": 14901248,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 26.691399980336428,
+        "peak_working_set_bytes": 14888960,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 26.68939996510744,
+        "peak_working_set_bytes": 15081472,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 24.901799974031746,
+        "peak_working_set_bytes": 14893056,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 24.211999960243702,
+        "peak_working_set_bytes": 14905344,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 25.043000001460314,
+        "peak_working_set_bytes": 14979072,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 27.056699967943132,
+        "peak_working_set_bytes": 14970880,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 25.29969997704029,
+        "peak_working_set_bytes": 15069184,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 23.696099990047514,
+        "peak_working_set_bytes": 14897152,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 28.936399961821735,
+        "peak_working_set_bytes": 14917632,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 28.85130001232028,
+        "peak_working_set_bytes": 14876672,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 26.327499886974692,
+        "peak_working_set_bytes": 14987264,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 24.343200027942657,
+        "peak_working_set_bytes": 14901248,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      }
+    ],
+    "qjs_compile_each_process": [
+      {
+        "elapsed_ms": 272.35680003650486,
+        "peak_working_set_bytes": 94281728,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 245.61869993340224,
+        "peak_working_set_bytes": 92368896,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 331.51819999329746,
+        "peak_working_set_bytes": 91316224,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 243.88009996619076,
+        "peak_working_set_bytes": 90087424,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 274.43220000714064,
+        "peak_working_set_bytes": 93290496,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      }
+    ],
+    "qjs_precompiled_process": [
+      {
+        "elapsed_ms": 48.270200029946864,
+        "peak_working_set_bytes": 19779584,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 29.928699950687587,
+        "peak_working_set_bytes": 19709952,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 28.8052000105381,
+        "peak_working_set_bytes": 19759104,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 33.227400039322674,
+        "peak_working_set_bytes": 19795968,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 31.67359996587038,
+        "peak_working_set_bytes": 19783680,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 29.992000083439052,
+        "peak_working_set_bytes": 19812352,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 29.52229999937117,
+        "peak_working_set_bytes": 19734528,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 192.53420003224164,
+        "peak_working_set_bytes": 19681280,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 29.184199986048043,
+        "peak_working_set_bytes": 19783680,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 27.137800003401935,
+        "peak_working_set_bytes": 19791872,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 29.890400008298457,
+        "peak_working_set_bytes": 19681280,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 29.63510004337877,
+        "peak_working_set_bytes": 19693568,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 31.132600037381053,
+        "peak_working_set_bytes": 19722240,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 32.15220000129193,
+        "peak_working_set_bytes": 19664896,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 28.957000002264977,
+        "peak_working_set_bytes": 19734528,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      }
+    ],
+    "spidermonkey_compile_each_process": [
+      {
+        "elapsed_ms": 2214.445299934596,
+        "peak_working_set_bytes": 472752128,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 2362.738399999216,
+        "peak_working_set_bytes": 474218496,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 2250.089199980721,
+        "peak_working_set_bytes": 455143424,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 2472.5096999900416,
+        "peak_working_set_bytes": 455487488,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 2173.439500038512,
+        "peak_working_set_bytes": 460636160,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      }
+    ],
+    "spidermonkey_precompiled_process": [
+      {
+        "elapsed_ms": 84.75220005493611,
+        "peak_working_set_bytes": 84127744,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 237.71630006376654,
+        "peak_working_set_bytes": 83976192,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 57.76799994055182,
+        "peak_working_set_bytes": 84054016,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 57.03900009393692,
+        "peak_working_set_bytes": 84070400,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 58.410300058312714,
+        "peak_working_set_bytes": 84074496,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 56.91619997378439,
+        "peak_working_set_bytes": 83922944,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 58.04179992992431,
+        "peak_working_set_bytes": 84017152,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 55.19159999676049,
+        "peak_working_set_bytes": 83935232,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 55.64629996661097,
+        "peak_working_set_bytes": 84049920,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 54.705599904991686,
+        "peak_working_set_bytes": 83955712,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 61.82320008520037,
+        "peak_working_set_bytes": 83976192,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 61.22759997379035,
+        "peak_working_set_bytes": 84062208,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 57.58689995855093,
+        "peak_working_set_bytes": 84062208,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 58.52179997600615,
+        "peak_working_set_bytes": 83939328,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 55.26950000785291,
+        "peak_working_set_bytes": 84021248,
+        "stdout": "[{id: \"calculator\", title: \"Calculator\"}]"
+      }
+    ],
+    "node_process": [
+      {
+        "elapsed_ms": 87.95369998551905,
+        "peak_working_set_bytes": 59510784,
+        "stdout": "[{\"id\":\"calculator\",\"title\":\"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 56.39899999368936,
+        "peak_working_set_bytes": 59682816,
+        "stdout": "[{\"id\":\"calculator\",\"title\":\"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 55.899899918586016,
+        "peak_working_set_bytes": 59473920,
+        "stdout": "[{\"id\":\"calculator\",\"title\":\"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 63.47379996441305,
+        "peak_working_set_bytes": 59625472,
+        "stdout": "[{\"id\":\"calculator\",\"title\":\"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 56.61940004210919,
+        "peak_working_set_bytes": 59600896,
+        "stdout": "[{\"id\":\"calculator\",\"title\":\"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 69.1131999483332,
+        "peak_working_set_bytes": 59551744,
+        "stdout": "[{\"id\":\"calculator\",\"title\":\"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 65.40139997377992,
+        "peak_working_set_bytes": 59576320,
+        "stdout": "[{\"id\":\"calculator\",\"title\":\"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 59.71629999112338,
+        "peak_working_set_bytes": 59629568,
+        "stdout": "[{\"id\":\"calculator\",\"title\":\"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 52.910299971699715,
+        "peak_working_set_bytes": 59613184,
+        "stdout": "[{\"id\":\"calculator\",\"title\":\"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 56.325300014577806,
+        "peak_working_set_bytes": 59625472,
+        "stdout": "[{\"id\":\"calculator\",\"title\":\"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 59.02389995753765,
+        "peak_working_set_bytes": 59576320,
+        "stdout": "[{\"id\":\"calculator\",\"title\":\"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 249.82939998153597,
+        "peak_working_set_bytes": 59609088,
+        "stdout": "[{\"id\":\"calculator\",\"title\":\"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 55.034899967722595,
+        "peak_working_set_bytes": 59711488,
+        "stdout": "[{\"id\":\"calculator\",\"title\":\"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 57.69649997819215,
+        "peak_working_set_bytes": 59609088,
+        "stdout": "[{\"id\":\"calculator\",\"title\":\"Calculator\"}]"
+      },
+      {
+        "elapsed_ms": 61.59629998728633,
+        "peak_working_set_bytes": 59572224,
+        "stdout": "[{\"id\":\"calculator\",\"title\":\"Calculator\"}]"
+      }
+    ]
+  }
+}

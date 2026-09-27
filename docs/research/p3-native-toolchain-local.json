@@ -1,0 +1,7 @@
+{
+  "root": "C:\\Users\\ADMIN\\AppData\\Local\\Temp\\kyoko-p3-native-toolchain",
+  "sdk": "C:\\Users\\ADMIN\\AppData\\Local\\Temp\\kyoko-p3-native-toolchain\\wasi-sdk-34.0-x86_64-windows",
+  "archive_sha256": "cccb5c323a9b34f0349a9b09e8804a0a7632c68c3310f4b5f437ed57d7e71d8f",
+  "release": "wasi-sdk-34",
+  "asset_bytes": 619003408
+}

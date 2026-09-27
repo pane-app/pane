@@ -1,0 +1,6 @@
+{
+  "exit_code": 1,
+  "seconds": 3.76500000001397,
+  "stdout": "",
+  "stderr": "Error: error while executing at wasm backtrace:\n    0:   0x3ef2 - <unknown>!<wasm function 177>\n    1: 0x2893d0 - componentize_qjs_runtime.wasm!__wasm_init_memory\n\nCaused by:\n    wasm trap: wasm `unreachable` instruction executed\n"
+}
