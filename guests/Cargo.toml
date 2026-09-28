@@ -8,12 +8,15 @@ members = [
     "sample-rust",
     "sample-settings",
     "calculator",
+    "applications",
     "quicklinks",
     "sample-operations",
     "fixtures/faulty",
     "fixtures/operations",
     "fixtures/old-api",
     "fixtures/mismatched-api",
+    "fixtures/failing-start",
+    "fixtures/refusing-view",
 ]
 # `mixed-p2` deliberately uses std (WASI 0.2) and has its own workspace.
 exclude = ["fixtures/mixed-p2"]

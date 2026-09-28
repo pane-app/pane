@@ -7,11 +7,12 @@
     {
       "id": "call",
       "title": "Call from TypeScript",
-      "subtitle": "A TypeScript command calling the Rust sample's greet operation",
+      "subtitle": "A TypeScript command calling another extension's greet operation",
       "component": "sample_operations_ts.wasm"
     }
   ],
   "operations": [
-    { "id": "greet", "version": 1, "component": "sample_operations_ts.wasm" }
+    { "id": "greet", "version": 1, "component": "sample_operations_ts.wasm" },
+    { "id": "wait", "version": 1, "component": "sample_operations_ts.wasm" }
   ]
 }

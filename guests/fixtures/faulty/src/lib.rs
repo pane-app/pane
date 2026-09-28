@@ -133,6 +133,20 @@ impl Guest for Faulty {
 
     async fn run_action(item_id: String) -> Result<String, String> {
         match item_id.as_str() {
+            // Holds a stream open to the host (its stdout), with the future of
+            // that write pending, saves `holding` as "started", then waits ten
+            // seconds before closing them and saving "finished". Tests stop it
+            // meanwhile; it is not listed.
+            "hold" => {
+                let (writer, reader) = wasip3::wit_stream::new::<u8>();
+                let written = wasip3::cli::stdout::write_via_stream(reader);
+                pane_guest::settings::set("holding", "started")?;
+                wasip3::clocks::monotonic_clock::wait_for(10_000_000_000).await;
+                drop(writer);
+                let _ = written.await;
+                pane_guest::settings::set("holding", "finished")?;
+                Ok("held".into())
+            }
             "error" => Err("the guest refused".into()),
             "trap" => panic!("guest trap"),
             _ => Ok("fine".into()),

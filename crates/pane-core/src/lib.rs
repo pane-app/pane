@@ -1,7 +1,11 @@
 //! Pane's core: the launcher model, extension packages and the extension
 //! runtime the launcher drives.
 
+pub mod applications;
 mod atomic;
+mod extension_data;
+mod generation;
+pub mod hotkeys;
 mod launcher;
 mod links;
 mod operations;
@@ -9,17 +13,16 @@ mod packages;
 mod platform;
 mod runtime;
 mod search;
-mod settings;
 
 pub use launcher::{
-    CommandRegistration, CustomViewSnapshot, FormField, FormView, Launcher, LauncherView, Row,
-    Screen, Status,
+    CommandRegistration, CustomViewSnapshot, FormField, FormView, Launcher, LauncherView, Question,
+    Row, Screen, Status,
 };
 pub use links::LinkOpener;
 pub use operations::{MAX_CALL_DEPTH, MAX_OPERATION_JSON};
 pub use packages::{
     EXTENSION_API, InstalledPackage, MANIFEST_FILE, MANIFEST_VERSION, Manifest, ManifestCommand,
-    ManifestOperation, PackageError, PackageIdentity,
+    ManifestOperation, PackageError, PackageIdentity, RetainedData, SavedData,
 };
 pub use platform::Platform;
 pub use runtime::{

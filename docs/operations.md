@@ -26,6 +26,8 @@ so a command never becomes a headless API by accident (US49):
   the operation's input and result; a change that breaks callers publishes a
   new version. `component`: the component serving it, relative to the package
   folder, often a command's component too (then one instance serves both).
+  `platforms` (optional, as for commands): the systems it works on;
+  elsewhere a call to it is `unavailable`.
 - A package may publish operations and no commands; it then adds nothing to
   root search. `commands` may be omitted when `operations` is not empty.
 - The package preview lists them ("Operations: greet (version 1)"). Their
@@ -48,20 +50,22 @@ publishes none does not export it and is unchanged.
 
 A guest calls with `pane:extension/operations.call` in
 [`wit/operations.wit`](../wit/operations.wit), imported by the world Pane
-hosts (`extension-with-settings`):
+hosts (`extension-with-data`):
 
 ```wit
 call: async func(source: string, operation: string, version: u32, input: string)
   -> result<string, call-error>;
 ```
 
-- **Addressing by identity.** `source` names the target package by its
-  [package identity](../CONTEXT.md), never its title: `local:` and its
-  source folder's path, absolute (as Pane shows it) or relative to the calling
-  package's own source folder (`local:../sample-operations-js`), resolved like
-  the identity at install time. Another scheme is `not-found` until Pane
-  installs from npm or Git. A command built into Pane has no source folder, so
-  only absolute sources work from it.
+- **Addressing by identity.** `source` is the target package's
+  [package identity](../CONTEXT.md) exactly as installed, never its title:
+  `local:` and the absolute path of the folder it was installed from, as
+  Pane resolved it (the path Manage extensions shows after "local folder";
+  `PackageIdentity::key` on the host). A relative path, or a spelling of the same folder
+  other than the resolved one, is not an identity and is `not-found`; so is
+  another scheme until Pane installs from npm or Git. A caller learns its
+  targets' identities from its user or configuration (the samples ask in a
+  form); declared dependencies come with #42.
 - **Input and result** are JSON text (any JSON value), at most 1 MiB each
   (`MAX_OPERATION_JSON`). Pane checks both before passing them on; their
   shape is the operation's documented contract at that version.
@@ -74,10 +78,10 @@ call: async func(source: string, operation: string, version: u32, input: string)
   | `not-found` | No installed package has that source, the source is not `local:`, or the package does not publish that operation (the message lists what it does publish). |
   | `disabled` | The package is disabled. Pane does not enable it, start it, or ask. |
   | `incompatible` | It publishes the operation at another version, its installed copy cannot load, or Pane cannot run its component (WASI 0.2, older API shape, not a component). |
-  | `unavailable` | The package does not support this system, or the runtime stopped. |
+  | `unavailable` | The package or the operation does not support this system, or the runtime stopped. |
   | `failed` | The operation ran and returned an error. |
   | `crashed` | The target trapped. Its instance is dropped; the next call starts it afresh. |
-  | `refused` | The call would reach a package already serving a call in the same chain, the chain is too deep, or the input or result is not JSON within the limit. |
+  | `refused` | The call would reach a package already serving a call in the same chain, the chain is too deep, the input or result is not JSON within the limit, or the guest called while Pane was not running a call of it. |
 
   The caller always gets an answer and keeps working; what it shows is up to
   it. The samples show `<kind>: <message>`, such as "failed: a name is
@@ -107,9 +111,10 @@ that rejects with an object whose `payload` is `{ kind, message }`
   operation on the same thread in the meantime (starting the target if
   needed), then resumes the caller with the answer. The operation may itself
   call further operations the same way.
-- **Bounded chains.** A package's component is busy from the start of its
-  call until it returns, so a call that would reach one already in the chain
-  (a package calling itself, or A calling B calling A) is `refused` at once
+- **Bounded chains.** A package is busy from the start of a call of any of
+  its components until it returns, so a call that would reach a package
+  already in the chain (a package calling itself, even an operation served by
+  another of its components, or A calling B calling A) is `refused` at once
   instead of waiting on itself. A chain holds at most 8 calls
   (`MAX_CALL_DEPTH`), counting the caller's own; the ninth is refused. An
   intermediate operation receives the refusal as its call's error and decides
@@ -117,26 +122,40 @@ that rejects with an object whose `payload` is `{ kind, message }`
 - **Cancellation ownership.** A call belongs to the guest call that made it
   and never outlives it: the caller's call cannot finish while its operation
   runs. If the caller abandons the call (drops the future) before Pane starts
-  it, it is not started; one already running finishes and its answer is
-  discarded. Pane has no timeouts or user cancellation yet (#14), so a target
-  that never returns holds the caller and, as with any hung guest call, the
-  runtime. A target disabled while serving a call finishes, and the caller
-  gets `disabled` instead of its answer.
-- **Concurrent calls from one caller** are served one after another. One
-  that arrives while another operation of the same chain is running is served
-  inside that chain, so if it targets a package already in the chain it is
-  refused like a cycle.
+  it, it is not started (tested). The caller's guest is not polled while its
+  operation runs, so it cannot abandon a running call. A call also belongs
+  to the target's [generation](generations.md) and, through the chain, to
+  every caller's: a target disabled, reloaded or updated while it serves a
+  call is stopped at once and the caller gets `disabled` or `unavailable`
+  instead of its answer; a caller stopped meanwhile stops the operation it
+  waits for, whose instance is dropped too (the target stays enabled and
+  the next call starts it afresh). Pane has no timeouts or user
+  cancellation yet (#18), so a target that never returns, or computes
+  without yielding, holds the caller and, as with any hung guest call, the
+  runtime.
+- **Concurrent calls from one caller** (Rust `join!`, JavaScript
+  `Promise.all`) are served one after another in the caller's own frame: each
+  frame serves only its own guest's calls, so a second call is never taken
+  for the operation serving the first, and is not refused as a cycle.
+- **Calls outside a Pane call.** A guest can call only while Pane is running
+  a call of it. A call made at another time, such as while its component
+  starts or from work left running after its call returned, is `refused`
+  ("operations can only be called while serving a Pane call"), as is one its
+  call returned without waiting for. This is not tested with a guest: none
+  of the fixtures runs code outside a call.
 
 ## Examples and tests
 
-- Samples, each publishing `greet` version 1 and calling another's:
-  [Rust](../guests/sample-operations/src/lib.rs) ("Call from Rust" asks the
-  JavaScript and TypeScript samples),
+- Samples, each publishing `greet` version 1 and with a command whose form
+  asks for another package's identity, a name, and whether to ask once or
+  twice at once: [Rust](../guests/sample-operations/src/lib.rs),
   [JavaScript](../guests/sample-operations-js/src/index.js) and
-  [TypeScript](../guests/sample-operations-ts/src/index.ts) (both ask Rust).
-  Installed side by side from `target/guests/packages/`, they answer "Rust
-  answered: Hello, JavaScript, from Rust" and so on, show the target's own
-  error ("failed: a name is needed") and a missing package (`not-found`).
+  [TypeScript](../guests/sample-operations-ts/src/index.ts). They answer
+  "Hello, Rust, from JavaScript" and so on, show the target's own error
+  ("failed: a name is needed") and a missing package (`not-found`). They
+  also publish `wait` version 1, which waits ten seconds, and a second item,
+  "Wait in another extension", calls it: disabling or reloading either
+  package meanwhile stops the call ([generations](generations.md)).
 - [`guests/fixtures/operations`](../guests/fixtures/operations/src/lib.rs):
   a Rust fixture the tests install as several packages to drive every error
   kind, cycles, the depth limit and settings isolation.
@@ -154,6 +173,6 @@ that rejects with an object whose `payload` is `{ kind, message }`
 - No declared dependencies: a caller names its targets in code, so Pane
   cannot show, install or check them before a call (#42), and disabling a
   target does not consider its callers (#43).
-- No timeouts or cancellation of a running operation (#14).
-- A target whose update or disable happens while it serves a call is
-  handled like a command's call in the same situation (#10, #11).
+- No timeouts, and a running operation stops only when a generation in its
+  chain ends; one computing without yielding is not preempted (#18,
+  [generations](generations.md#what-stopping-cannot-do-yet)).

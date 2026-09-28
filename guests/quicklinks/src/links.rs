@@ -1,5 +1,5 @@
 //! Quicklinks as the extension keeps them: validated names and web
-//! addresses, saved in its settings as one value.
+//! addresses, saved in its content (extension data) as one value.
 
 use pane_guest::alloc::{
     borrow::ToOwned,
@@ -7,9 +7,9 @@ use pane_guest::alloc::{
     string::{String, ToString},
     vec::Vec,
 };
-use pane_guest::settings;
+use pane_guest::content;
 
-/// The settings key holding every quicklink.
+/// The content key holding every quicklink.
 const KEY: &str = "quicklinks";
 
 /// The longest name, in characters.
@@ -26,7 +26,7 @@ pub struct Quicklink {
 
 /// The saved quicklinks, in the order they were created.
 pub fn load() -> Result<Vec<Quicklink>, String> {
-    let saved = settings::get(KEY)?.unwrap_or_default();
+    let saved = content::get(KEY)?.unwrap_or_default();
     Ok(saved
         .lines()
         .filter_map(|line| line.split_once('\t'))
@@ -44,7 +44,7 @@ pub fn save(links: &[Quicklink]) -> Result<(), String> {
         .iter()
         .map(|link| format!("{}\t{}\n", link.name, link.url))
         .collect();
-    settings::set(KEY, &value)
+    content::set(KEY, &value)
 }
 
 /// The index of the quicklink named `name`, ignoring letter case.

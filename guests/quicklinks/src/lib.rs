@@ -2,7 +2,8 @@
 //! address through its command's form, and typing the name (or part of the
 //! address) into root search lists it; invoking it opens the address with
 //! the system's handler for web links. Quicklinks are kept in the package's
-//! settings, so they survive restarts and disabling (see [`links`]).
+//! content, its durable extension data, so they survive restarts, updates,
+//! disabling and clearing its cache (see [`links`]).
 #![no_std]
 
 mod links;

@@ -9,10 +9,13 @@ is a first matching and ranking, not tuned relevance.
 [#27](https://github.com/hoangvu12/pane/issues/27) (US06, US12, T01, T03)
 adds [results computed from the query](#results-computed-from-the-query),
 with [the calculator](#the-calculator) as a default extension.
+[#24, #25 and #26](applications.md) add [results supplied ahead of the
+query](#results-supplied-ahead-of-the-query), with the installed
+applications as a default extension.
 [#28](https://github.com/hoangvu12/pane/issues/28) adds
 [quicklinks](quicklinks.md), computed results that open a saved web
-address. App launching, file search, aliases, fallback actions and hotkeys
-(#24 to #34) are not part of it.
+address. File search, aliases, fallback actions and hotkeys (#29 to #34)
+are not part of it.
 
 ## What is searched
 
@@ -21,7 +24,10 @@ Root search lists **root results**, in this order when the query is empty
 for it come first, once they arrive):
 
 1. the commands built into this Pane build (the three samples);
-2. the commands of each enabled installed package, in install order;
+2. the commands of each enabled installed package, in install order, and,
+   for a query that is not blank only, the [results supplied ahead of the
+   query](#results-supplied-ahead-of-the-query), such as the installed
+   applications, after them;
 3. an enabled installed package whose managed copy cannot be read, as one row
    explaining the problem;
 4. Pane's own rows: "Install extension from folder…" and "Manage
@@ -83,7 +89,7 @@ state and maps input to those calls.
 | --- | --- |
 | Typing, editing keys, clipboard, undo, input-method composition | Edit the query (GPUI CE's single-line editable text element); every change searches again |
 | Up / Down | Previous / next result (not the caret) |
-| Enter, or a click on a result | Invoke the selected result: open the command, explain an unavailable or unreadable one, open Pane's own screen, or copy a computed result's text to the clipboard ("Copied 42 to the clipboard"; root search stays as it was) |
+| Enter, or a click on a result | Invoke the selected result: open the command, explain an unavailable or unreadable one, open Pane's own screen, copy a computed result's text to the clipboard ("Copied 42 to the clipboard"; root search stays as it was), or open an application ("Opened Firefox"; root search stays as it was) |
 | Escape | Clear the query; with an empty query, nothing |
 
 The query field has keyboard focus whenever root search is on screen: when
@@ -146,6 +152,41 @@ comes from the extension, through the same guest boundary as its command:
 - A **disabled** package is not asked, and its computed results leave the
   results at once, even while the choice is being recorded. Enabled again, it
   answers from the next change of the query.
+
+## Results supplied ahead of the query
+
+Some results do not depend on the query but must be found outside Pane,
+such as the installed applications: matching titles is right for them, but
+they are not in any `pane.json`. Such an **indexed result** comes from the
+extension, through the same guest boundary as its command:
+
+- The command's `pane.json` entry sets `"indexedResults": true`, and its
+  component exports `pane:extension/indexed-results`
+  ([`wit/applications.wit`](../wit/applications.wit)) besides `command`;
+  Pane checks both at install, without running it
+  ([author guide](../guests/README.md#root-results-supplied-ahead-of-the-query),
+  in Rust, JavaScript and TypeScript).
+- The first change to a query that is not blank after root search is shown
+  asks each enabled command with `indexedResults` for `results()`, one after
+  another, after the commands computing results from the query. Pane keeps
+  the answer and ranks it with the other root results on every later query,
+  so typing never waits for it; until it answers, the results kept from an
+  earlier visit are listed. They are asked again after each return to root
+  search. The guest's work is not cancelled; calls run one at a time (#29).
+- They are listed only for a query that is not blank, ranked by title,
+  subtitle and rank exactly as commands are; on the same rank they come
+  after commands.
+- An indexed result has an id (`<command id>:<result id>`), title, optional
+  subtitle and an **action** Pane performs without calling the extension
+  again. The only action is **open-application**: Pane opens the application
+  through the host's [applications adapter](applications.md) and says
+  "Opened …" or "Could not open …: <why>".
+- An error or crash of the extension is listed as a row titled with the
+  command and "Could not list: …" for every query that is not blank; Enter
+  on it shows the whole error.
+- A **disabled** or updated package's indexed results leave at once and an
+  answer still on its way is discarded; enabled again, it is asked with the
+  next query.
 
 ### The calculator
 
@@ -220,9 +261,12 @@ to plug in:
   command, explain, open one of Pane's screens, or copy or open the link of
   a computed result).
 
+Since #24 to #26 a third provider kind exists:
+[results supplied ahead of the query](#results-supplied-ahead-of-the-query),
+which the core keeps and ranks like titles (the installed applications).
 What is *not* settled here, and is left to the tickets that need it: results
-from a provider that must search something outside the query (files,
-applications), provider-supplied ranks and how they mix with title matching,
+from a provider that must search something per query outside Pane (files),
+provider-supplied ranks and how they mix with title matching,
 cancelling a provider's work, and online providers, which stay inside their
 own command (US11, T03): nothing in root search queries an online service.
 
@@ -233,16 +277,17 @@ late answers but no ranks of their own and no cancellation. Still open, to be
 designed by their tickets:
 
 - **Asynchronous, cancellable providers** ([#29](https://github.com/hoangvu12/pane/issues/29)):
-  a provider that must run to answer (files, applications), whose late
+  a provider that must run to answer (files), whose late
   answers for an older query are discarded and whose work is cancelled when
   the query changes.
 - **Aliases and fallbacks** ([#31](https://github.com/hoangvu12/pane/issues/31)):
   extra words a result is found by, and actions offered when nothing
   matches.
 
-Removal is not covered either: a package's commands leave root search when
-it is disabled, and change when it is updated, but uninstalling a package
-is not built yet ([#40](https://github.com/hoangvu12/pane/issues/40)).
+A package's commands and root results leave root search when it is
+disabled or [uninstalled](extension-data.md#uninstalling-an-extension)
+([#40](https://github.com/hoangvu12/pane/issues/40)), and change when it is
+updated.
 
 ## Accessibility
 
@@ -325,9 +370,9 @@ expression showing the calculator's answer as the query changes, Enter
 writing it to the clipboard, and an incomplete expression showing no
 results.
 
-Native checks: the GUI smoke scripts' last phase types "typescr", presses
-Enter, runs "Wait briefly" and asserts the screen is pixel for pixel the one
-step 4 reached by Down; then it types a query that matches nothing, presses
+Native checks: the GUI smoke scripts' search phase (screenshots 24 to 26)
+types "typescr", presses Enter, runs "Wait briefly" and asserts the screen
+is pixel for pixel the one step 4 reached by Down; then it types a query that matches nothing, presses
 Enter, and asserts root, the search and the no-results screens all differ.
 The earlier phases still navigate root with Down, which moves the selection
 while the field has focus. On Linux X11 this ran on 2026-09-28
@@ -337,3 +382,7 @@ phase checks [the calculator](platforms/linux.md#calculator-27): its answer
 row, and that pasting the copied answer back gives the same screen as
 typing it; it ran on Linux X11 on 2026-09-28 and is written but not run on
 macOS and Windows.
+
+Results supplied ahead of the query and the installed applications have
+their own launcher, window, adapter and native checks, listed in
+[applications](applications.md#checks).

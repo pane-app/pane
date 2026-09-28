@@ -106,25 +106,55 @@ only the two other systems. In run [36372625940](https://github.com/wasimysaid/p
 ## Root search (#23)
 
 Root search has a query field with focus ([root search](../root-search.md)).
-The smoke's last phase (screenshots 24 to 26) types "typescr" with System
+The smoke's search phase (screenshots 24 to 26) types "typescr" with System
 Events `keystroke`, opens the only match and runs "Wait briefly", which must
 look exactly like step 4, then types "zzz" and presses Return on no results.
 In run [36420611977](https://github.com/wasimysaid/pane/actions/runs/36420611977) (commit `6d73d18`) every step passed: typing "typescr" left only TypeScript sample and Enter ran it, and "zzz" showed No results ([24-search.png](evidence/macos/24-search.png), [26-no-results.png](evidence/macos/26-no-results.png)). Input-method composition in the query field is still unverified here.
 
 ## Calculator (#27)
 
-The smoke's last phase (screenshots 27 to 30) installs the calculator
+The smoke's calculator phase (screenshots 27 to 30) installs the calculator
 package, types "6*7", checks the selected answer row, presses Enter to copy
 it, then compares typing "42+1" with pasting the copy (Cmd+A, Cmd+V) and typing
 "+1", which must look the same. In run [36423871204](https://github.com/wasimysaid/pane/actions/runs/36423871204) (commit `ab91081`) every step passed: "6*7" answered 42, Enter copied it, and pasting then typing "+1" matched typing "42+1", so the system clipboard held "42" ([27-answer.png](evidence/macos/27-answer.png), [30-pasted.png](evidence/macos/30-pasted.png)).
 
+## Applications (#25)
+
+[Applications](../applications.md) finds the `.app` bundles in
+`/Applications`, `/System/Applications` and `~/Applications` (and their
+subfolders such as `Utilities`) and opens one with `/usr/bin/open`. The
+smoke's last phase (screenshots 44 and 45) makes a bundle "Pane Smoke App"
+whose program is a shell script writing a marker file, in `~/Applications`
+of a HOME given to Pane only, installs the package, types "pane smoke",
+checks the selected row, presses Return and checks "Opened Pane Smoke App"
+and the marker. The adapter tests also open such a bundle and require
+Calculator among the system's applications. **Not run on macOS yet**: this
+branch was not pushed, so the phase, the native tests and the
+`open`/Launch Services path are unverified here, including whether Launch
+Services runs an unsigned script bundle on the runner.
+
 ## Quicklinks (#28)
 
-The smoke's last phase (screenshots 33 and 34) installs the Quicklinks
+The smoke's last phase (screenshots 46 and 47) installs the Quicklinks
 package, creates "Pane issues" (https://example.com/pane-issues) in its
 form, restarts Pane and types "pane iss", which must list it selected. It
 stops before Enter, which would open the default browser; opening a link
 here is checked only through the tests' recording opener. Not run yet.
+
+## Global hotkeys (#33)
+
+The smoke's hotkey phase (screenshots 52 to 58, [global hotkeys](../hotkeys.md#checks))
+assigns Control+Option+G to Greeting on its hotkey screen, brings Finder to
+the front, presses it through System Events and checks that Pane is the
+frontmost process with Greeting open; then again after a restart; then,
+with the extension disabled, that pressing it leaves Finder in front and
+Pane's window unchanged. The hotkey is a Carbon hot key
+(`RegisterEventHotKey`), which needs no Accessibility or Input Monitoring
+permission of Pane's own (System Events, which sends the keys, needs the
+Accessibility permission the runners grant). The adapter code was only
+compile- and lint-checked for `x86_64-apple-darwin` from Linux; **not run
+on macOS yet**, so registration, delivery on the main run loop and the
+focus transition are unverified natively.
 
 ## Text input and accessibility findings
 
@@ -160,6 +190,44 @@ Screenshots from run [36371205770](https://github.com/wasimysaid/pane/actions/ru
   screenshot's pixels to points (half on Retina). Each step must show the
   chosen color over at least 3000 pixels. In run [36378453278](https://github.com/wasimysaid/pane/actions/runs/36378453278) (commit `1487dc8`, macOS 15.7.9, arm64) every step passed: the picker opened on blue (#1E88E5), Right moved to purple (#8E24AA) and the click chose dark green (#1B5E20); posting the Quartz event needed no permission beyond the one System Events has. Accessibility: see
   [custom views](../custom-views.md#accessibility).
+- **Operations (#22):** the operations phase (screenshots 31 and 32) installs
+  the JavaScript operations sample, then the Rust one, opens the Rust
+  sample's command and fills its form with the JavaScript package's identity
+  and the name "Rust"; the Rust guest calls that package's `greet` operation
+  through Pane, the same steps as on
+  [Linux](linux.md#operations-22). In run
+  [36429153309](https://github.com/wasimysaid/pane/actions/runs/36429153309)
+  (commit `1848494`) every step passed: the Rust guest's call into the
+  JavaScript package answered "Hello, Rust, from JavaScript"
+  ([32-operation-answer.png](evidence/macos/32-operation-answer.png)).
+- **Reload (#11):** after the calculator and operations phases, the smoke installs a package from
+  `<output-dir>/dev`, replaces its component with the JavaScript sample and
+  reloads it in Manage extensions, then reloads it without its component (the
+  checks fail and the old code keeps answering) and with the `failing-start`
+  fixture (a startup failure, then Retry); screenshots 33 to 39, the same
+  steps as on [Linux](linux.md#reloading-a-package-11). In run
+  [36429153309](https://github.com/wasimysaid/pane/actions/runs/36429153309)
+  (commit `1848494`) every step passed: reloaded with the JavaScript build,
+  Dev answered from the new code
+  ([35-dev-after.png](evidence/macos/35-dev-after.png)); reloading the
+  `failing-start` fixture showed "Reloaded Dev, but it failed to start…
+  Retry…" ([38-start-failed.png](evidence/macos/38-start-failed.png)), and
+  Retry then showed "Started Dev"
+  ([39-retried.png](evidence/macos/39-retried.png)).
+- **Clearing an extension's cache (#39):** after the reload phase, the smoke
+  restarts Pane, saves one value of each kind of
+  [extension data](../extension-data.md) for the Settings sample (style,
+  content, cache and credential), then chooses "Clear cache of Settings
+  sample" in Manage extensions and confirms, the same steps as on
+  [Linux](linux.md#clearing-an-extensions-cache-39). In run
+  [36429153309](https://github.com/wasimysaid/pane/actions/runs/36429153309)
+  (commit `1848494`) every step passed: Manage extensions showed "Cleared the
+  cache of Settings sample"
+  ([42-cache-cleared.png](evidence/macos/42-cache-cleared.png)), and "Show
+  what Pane keeps" then read "Style: formal · Note: Water the plants ·
+  Signed in: yes · Cached greeting: none", with the cached greeting gone and
+  the other three values kept
+  ([43-kept-after-clear.png](evidence/macos/43-kept-after-clear.png)).
 
 ## Disabling an extension and keeping its settings (#10)
 

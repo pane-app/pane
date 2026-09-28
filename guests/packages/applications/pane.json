@@ -1,0 +1,15 @@
+{
+  "manifestVersion": 1,
+  "title": "Applications",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "applications",
+      "title": "Applications",
+      "subtitle": "Finds and opens the applications installed on this system",
+      "component": "applications.wasm",
+      "indexedResults": true
+    }
+  ]
+}

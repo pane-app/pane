@@ -1,0 +1,81 @@
+package pane:extension@0.1.0;
+
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// The applications installed on the system, which Pane's host finds and
+// opens for an extension (a pure WASI guest cannot), and root results an
+// extension supplies ahead of the query, which root search matches by title
+// like commands. Kept apart from the other files so a command that uses
+// neither is unchanged. Rust commands use them through pane-guest
+// (`pane_guest::applications`, `pane_guest::indexed::export!`), JS/TS
+// commands as the module "pane:extension/applications@0.1.0"
+// (guests/js/applications.d.ts) and by exporting `indexedResults` with
+// `"pane": { "indexedResults": true }` in their package.json.
+// The header follows `package`: comments above it would document the package,
+// which extension.wit already does.
+
+/// The applications installed on this system, as Pane finds them in the
+/// system's usual places: Start menu shortcuts on Windows, application
+/// bundles on macOS and desktop entries on Linux.
+interface applications {
+  record application {
+    /// Identifies the application to `open`: the shortcut, bundle or desktop
+    /// entry Pane found it by.
+    id: string,
+    /// Its name, as the system shows it.
+    name: string,
+    /// Where it was found, for people.
+    location: string,
+  }
+
+  /// The installed applications, in no particular order. A location that is
+  /// missing or cannot be read adds none; that is not an error.
+  installed: func() -> result<list<application>, string>;
+
+  /// Opens (launches) the application with `id`, as `installed` gave it. An
+  /// error explains why the system did not open it.
+  open: func(id: string) -> result<_, string>;
+}
+
+/// Root results a command supplies ahead of the query, such as the installed
+/// applications. Root search asks for them once it is first used, keeps
+/// them, and matches and ranks them by title like commands.
+interface indexed-results {
+  /// What invoking an indexed result does. Pane performs it; the extension
+  /// is not called again.
+  variant indexed-action {
+    /// Opens the application with this id, as `applications.open` does.
+    open-application(string),
+  }
+
+  record indexed-result {
+    /// Identifies the result among this command's results.
+    id: string,
+    title: string,
+    subtitle: option<string>,
+    action: indexed-action,
+  }
+
+  /// Every result the command supplies, whatever the query. An error is the
+  /// extension failing; Pane shows it as a result explaining the failure.
+  results: async func() -> result<list<indexed-result>, string>;
+}
+
+/// The indexed results export alone: a command whose `pane.json` entry sets
+/// `"indexedResults": true` exports it besides the `extension` world's
+/// `command`.
+world indexed-results-provider {
+  export indexed-results;
+}
+
+/// The applications import alone, for guest bindings.
+world applications-user {
+  import applications;
+}
+
+/// The world Pane hosts: a command that may also use settings, call
+/// operations and find and open installed applications.
+world extension-with-applications {
+  include extension-with-data;
+  import applications;
+}

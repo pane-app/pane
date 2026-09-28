@@ -136,7 +136,7 @@ have not been run for this change.
 
 ### Custom view (#21)
 
-Finally the smoke restarts Pane again and opens the Rust command's "Choose a color", a
+The smoke then restarts Pane again and opens the Rust command's "Choose a color", a
 color picker the guest draws ([custom views](../custom-views.md)), presses
 Right with a real X11 key event, then moves the real pointer onto the dark
 green swatch (found in the screenshot by its color with
@@ -161,7 +161,7 @@ click helpers; it has not run there yet.
 Root search now has a query field with focus ([root search](../root-search.md));
 the earlier phases still reach each command with Down, which moves the
 selection while the field keeps focus, and the screenshots above predate the
-field. The last phase restarts Pane, types "typescr" with real X11 key
+field. The search phase restarts Pane, types "typescr" with real X11 key
 events, presses Enter on the only match and runs "Wait briefly"; the screen
 must be pixel for pixel step 4's (`--same` with `4-result-2.png`). Escape
 clears the query, "zzz" and Enter show no results and open nothing, and root,
@@ -181,7 +181,7 @@ only by the window tests. The macOS and Windows smokes run the same phase
 
 ### Calculator (#27)
 
-The last phase installs the calculator package
+The calculator phase installs the calculator package
 (`--install target/guests/packages/calculator`), types "6*7" with real X11
 key events and checks the selected answer row's color; Enter copies the
 answer. Ctrl+A and typing "42+1" gives screenshot 29; Ctrl+A, Ctrl+V (the
@@ -203,28 +203,107 @@ calculator is covered by the launcher tests, not natively.
 
 ### Operations (#22)
 
-The last phase installs the JavaScript operations sample, then the Rust one
+The operations phase (screenshots 31 and 32) installs the JavaScript
+operations sample, then the Rust one
 (`--install target/guests/packages/sample-operations-js`, then
-`sample-operations`), opens the Rust sample's command and runs "Ask
-JavaScript to greet" with real X11 key events: the Rust guest calls the
-JavaScript package's `greet` operation through Pane, which starts that
-package's guest for the call. Run locally on 2026-09-28 (Ubuntu 26.04.1 LTS,
+`sample-operations`), opens the Rust sample's command and fills its form with
+real X11 key events: the JavaScript package's identity (`local:` and the
+resolved folder path) and the name "Rust". The Rust guest calls that
+package's `greet` operation through Pane, which starts its guest for the
+call. Run locally on 2026-09-28 (Ubuntu 26.04.1 LTS,
 kernel 7.0.0-31-generic, x86_64, same Xvfb/lavapipe setup): all checks of
 the whole smoke passed.
 
 | Step | Evidence |
 | --- | --- |
-| JavaScript operations sample installed | [31-operations-target.png](evidence/linux-x11/31-operations-target.png) |
-| "JavaScript answered: Hello, Rust, from JavaScript", from the other package's guest | [32-operation-answer.png](evidence/linux-x11/32-operation-answer.png) |
+| JavaScript operations sample installed | `31-operations-target.png` (not committed: it shows local paths) |
+| "Hello, Rust, from JavaScript", from the other package's guest | `32-operation-answer.png` (not committed: it shows the typed local path) |
+
+Both steps passed locally; the CI smoke's screenshots are the evidence to
+keep for this phase.
 
 The macOS and Windows smokes run the same phase (screenshots 31 and 32); it
 has not run there yet. The other directions (JavaScript and TypeScript
 calling Rust) and every failure are covered by the launcher tests, not
 natively.
 
+### Reloading a package (#11)
+
+After the operations phase, the smoke writes a package `Dev` in
+`<output-dir>/dev` whose component
+is a copy of the Rust sample, installs it and runs "Say hello". It then
+copies the JavaScript sample over the component, reloads Dev in **Manage
+extensions…** without restarting Pane, and runs "Say hello" again. Next it
+deletes the component and reloads (the checks fail, so the working code must
+keep answering exactly as before), and finally copies in the
+`failing-start` fixture, whose first start traps, reloads, and presses Retry.
+It checks that `settings.json` kept the setting the failed start saved. Run
+locally on 2026-09-28 (Ubuntu 26.04.1 LTS, kernel 7.0.0-37-generic, x86_64,
+same Xvfb/lavapipe setup), all checks of the whole smoke passed:
+
+| Step | Evidence |
+| --- | --- |
+| Dev as installed: the Rust guest answers | [33-dev-before.png](evidence/linux-x11/33-dev-before.png) |
+| Reload Dev: "Reloaded Dev" | `34-reloaded.png` (not committed: it shows local paths) |
+| The same command now shows the JavaScript sample and its answer (`--distinct` from step 33) | [35-dev-after.png](evidence/linux-x11/35-dev-after.png) |
+| Component deleted, Reload Dev: "Dev was not reloaded: Not ready to run: … It keeps running its installed code." | `36-not-reloaded.png` (not committed: it shows local paths) |
+| The command still answers from the JavaScript code, pixel for pixel as in step 35 (`--same`) | `37-still-running.png` |
+| Failing start: "Reloaded Dev, but it failed to start; its earlier code is not restored. …" | `38-start-failed.png` (not committed: it shows local paths) |
+| Retry starting Dev: "Started Dev" | `39-retried.png` (not committed: it shows local paths) |
+
+The macOS and Windows smokes run the same phase (screenshots 33 to 39); it
+has not run there yet.
+
+### Clearing an extension's cache (#39)
+
+After the reload phase, the smoke restarts Pane, and in Greeting chooses
+"Save a note" and
+"Sign in", so the settings sample keeps one value of each kind of
+[extension data](../extension-data.md): its style (settings), a note
+(content), the greeting cached by "Greet me" earlier (cache) and a token
+(credentials). It checks each value in `content.json`, `credentials.json` and
+`cache.json`, restarts, chooses "Clear cache of Settings sample" in **Manage
+extensions…**, confirms, and shows what Pane keeps again. Finally it checks
+that `cache.json` no longer holds the greeting while the style, note and
+token are still in their files. Run locally on 2026-09-28 (Ubuntu 26.04.1
+LTS, kernel 7.0.0-37-generic, x86_64, same Xvfb/lavapipe setup), all checks
+of the whole smoke passed.
+
+| Step | Evidence |
+| --- | --- |
+| "Style: formal · Note: Water the plants · Signed in: yes · Cached greeting: Good day to you" | [40-kept.png](evidence/linux-x11/40-kept.png) |
+| "Clear the cache of Settings sample?", its source, what is deleted and what is kept; Clear cache and Cancel | `41-confirm-clear-cache.png` (not committed: it shows the local checkout path) |
+| "Cleared the cache of Settings sample" | `42-cache-cleared.png` (not committed: it shows the local checkout path) |
+| "... Cached greeting: none", the other three kept | [43-kept-after-clear.png](evidence/linux-x11/43-kept-after-clear.png) |
+
+The macOS and Windows smokes run the same phase (screenshots 40 to 43); it
+has not run there yet.
+
+### Applications (#24, #25, #26)
+
+The applications phase adds a desktop entry "Pane Smoke App" whose `Exec` writes a
+marker file, in an `XDG_DATA_HOME` given to Pane only (the system's
+`XDG_DATA_DIRS` entries are searched too), installs the
+[applications](../applications.md) package, types "pane smoke" with real
+X11 key events, checks the selected row, presses Return and checks "Opened
+Pane Smoke App" and that the marker was written. Run locally on 2026-09-28
+(Ubuntu 26.04.1 LTS, kernel 7.0.0-31-generic, x86_64, same Xvfb/lavapipe
+setup): all checks of the whole smoke passed. The adapter tests also run a
+desktop entry's program natively and explain a missing program and a
+terminal application.
+
+| Step | Evidence |
+| --- | --- |
+| "pane smoke" typed: the application found by name, selected | [44-application.png](evidence/linux-x11/44-application.png) |
+| Return: "Opened Pane Smoke App"; its program wrote the marker | [45-opened.png](evidence/linux-x11/45-opened.png) |
+
+Only X11 (Xvfb, no desktop session) ran; Wayland and real desktops'
+`XDG_CURRENT_DESKTOP`, Flatpak and Snap folders are untested. Disabling is
+covered by the launcher tests, not natively.
+
 ### Quicklinks (#28)
 
-The last phase installs the Quicklinks package
+The quicklinks phase, after the applications phase, installs the Quicklinks package
 (`--install target/guests/packages/quicklinks`), opens its command, and in
 "Create quicklink" types "Pane issues", Tab and
 "https://example.com/pane-issues" with real X11 key events, then Return.
@@ -238,13 +317,72 @@ setup): all checks of the whole smoke passed.
 
 | Step | Evidence |
 | --- | --- |
-| Form submitted: "Saved quicklink “Pane issues”" | [33-quicklink-saved.png](evidence/linux-x11/33-quicklink-saved.png) |
-| Restarted, "pane iss" typed: the quicklink, first and selected | [34-quicklink-found.png](evidence/linux-x11/34-quicklink-found.png) |
-| Return: "Opened https://example.com/pane-issues", the URL received by the handler | [35-quicklink-opened.png](evidence/linux-x11/35-quicklink-opened.png) |
+| Form submitted: "Saved quicklink “Pane issues”" | [46-quicklink-saved.png](evidence/linux-x11/46-quicklink-saved.png) |
+| Restarted, "pane iss" typed: the quicklink, first and selected | [47-quicklink-found.png](evidence/linux-x11/47-quicklink-found.png) |
+| Return: "Opened https://example.com/pane-issues", the URL received by the handler | [48-quicklink-opened.png](evidence/linux-x11/48-quicklink-opened.png) |
 
 A real desktop's handler (GNOME's `gio open`, a browser chosen in the
 desktop settings) was not run. The macOS and Windows smokes run the phase up
-to screenshot 34; it has not run there yet.
+to screenshot 47; it has not run there yet.
+
+### Uninstalling an extension (#40)
+
+The last phase, after the quicklinks phase, restarts Pane, chooses "Uninstall Settings sample" in
+**Manage extensions…** and the first choice, "Uninstall and keep saved
+data". It then checks that `installed.json` records the retained data, that
+the token is gone from `credentials.json` and that the style and note are
+still in `settings.json` and `content.json`; installs the same folder again
+and shows what Pane keeps, which must differ from screenshot 43 (signed out
+now), and checks that the retained record was dropped. Run locally on
+2026-09-28 (Ubuntu 26.04.1 LTS, kernel 7.0.0-31-generic, x86_64, same
+Xvfb/lavapipe setup): all checks of the whole smoke passed.
+
+| Step | Evidence |
+| --- | --- |
+| "Uninstall Settings sample?", its source, what is removed, "Saved data: 1 setting and 1 content record", the source folder kept; the three choices | `49-confirm-uninstall.png` (not committed: it shows the local checkout path) |
+| "Uninstalled Settings sample; its settings and content are kept" | `50-uninstalled.png` (not committed: the list's rows show the local checkout path) |
+| Reinstalled: "Style: formal · Note: Water the plants · Signed in: no · Cached greeting: none" | [51-reinstalled.png](evidence/linux-x11/51-reinstalled.png) |
+
+An earlier run showed the confirmation's list scrolled past its selected
+first choice: the first frame of a new screen scrolled with the long
+extension list's size and rows, and nothing asked for another frame. The
+window now asks for one whenever the screen or rows change and scrolls
+again; the rerun shows the first choice selected at the top of the list.
+
+The macOS and Windows smokes run the same phase (screenshots 49 to 51); it
+has not run there yet. A managed folder that Windows keeps in use is covered
+only by the leftover mechanism's Unix test (a read-only folder), not
+natively.
+
+### Global hotkeys (#32, #33, #34)
+
+The last phase, after the uninstall phase ([global hotkeys](../hotkeys.md#checks)), with a data folder
+of its own, installs the settings sample, opens "Hotkey for Greeting" in
+Manage extensions and presses Ctrl+Alt+G with real X11 key events, then
+moves X input focus to the root window (checked with `xdotool
+getwindowfocus`) and presses Ctrl+Alt+G again through XTEST: the X server
+delivers it to Pane's passive grab and Greeting opens. After a restart the
+hotkey (read from `hotkeys.json`) opens Greeting the same way; after
+disabling the extension the press changes nothing. Pane's grab is on the
+smoke's Xvfb display only (`DISPLAY`; `WAYLAND_DISPLAY` unset). Run locally
+on 2026-09-28 (Ubuntu 26.04.1 LTS, kernel 7.0.0-31-generic, x86_64, same
+Xvfb/lavapipe setup): all checks of the whole smoke passed. The adapter test
+also grabs, conflicts, receives an `xdotool` press and releases on an Xvfb
+of its own.
+
+| Step | Evidence |
+| --- | --- |
+| The hotkey screen of Greeting | [52-hotkey-screen.png](evidence/linux-x11/52-hotkey-screen.png) |
+| Pane unfocused at root search before the press | [54-unfocused.png](evidence/linux-x11/54-unfocused.png) |
+| Ctrl+Alt+G pressed elsewhere: Greeting open in Pane | [55-hotkey-opened.png](evidence/linux-x11/55-hotkey-opened.png) |
+| After a restart, the same | [56-hotkey-after-restart.png](evidence/linux-x11/56-hotkey-after-restart.png) |
+| Extension disabled: root search before and after the press | [57-disabled.png](evidence/linux-x11/57-disabled.png), [58-disabled-pressed.png](evidence/linux-x11/58-disabled-pressed.png) |
+
+(Screenshot 53, "Ctrl+Alt+G now opens Greeting" on the extension list, is
+checked but not kept here: it shows the local package paths.) Xvfb has no
+window manager, so raising and focusing Pane's window
+(`_NET_ACTIVE_WINDOW`) is not verified; Wayland is explained as unavailable
+(tested with a fake, not natively), and no real desktop session ran.
 
 ## Text input and accessibility findings
 

@@ -644,6 +644,57 @@ fn an_install_finishing_in_the_background_keeps_the_selected_row() {
     assert_eq!(selected_title(&launcher).as_deref(), Some(INSTALL_ROW));
 }
 
+/// Sets the permission bits of `path` (Unix).
+#[cfg(unix)]
+fn chmod(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_replaced_copy_that_could_not_be_removed_is_removed_at_the_next_start() {
+    let dirs = Dirs::new();
+    let folder = package(&dirs.source("hello"), "Hello", "1.0.0", "sample_rust");
+    let launcher = dirs.launcher();
+    block_on(launcher.install_package(&folder));
+    let old = launcher.packages()[0].location.clone();
+    // Its files cannot be deleted, as on Windows while a file is in use.
+    chmod(&old, 0o555);
+    if fs::remove_file(old.join("pane.json")).is_ok() {
+        // Permissions do not apply (running as root): nothing to test.
+        return;
+    }
+    package(&folder, "Hello", "2.0.0", "sample_ts");
+    block_on(launcher.preview_package(&folder));
+    block_on(launcher.activate_selected());
+    assert_eq!(
+        launcher.view().status,
+        Status::Result("Updated Hello to 2.0.0".into())
+    );
+    assert!(old.exists(), "the replaced copy is left behind");
+    let current = launcher.packages()[0].location.clone();
+    let current_files = snapshot(&current);
+    // A copy the install record never listed, as after a lost record.
+    let unlisted = old.with_file_name("99");
+    fs::create_dir_all(&unlisted).unwrap();
+    chmod(&old, 0o755);
+
+    let restarted = dirs.launcher();
+
+    assert!(!old.exists(), "the left-behind copy is removed");
+    assert_eq!(
+        snapshot(&current),
+        current_files,
+        "the installed copy is kept"
+    );
+    assert!(unlisted.exists(), "a copy never recorded is not touched");
+    assert_eq!(restarted.packages()[0].location, current);
+    // Once removed, it is not tried again.
+    let again = dirs.launcher();
+    assert_eq!(again.packages()[0].location, current);
+}
+
 #[test]
 fn installing_after_the_install_record_is_lost_keeps_existing_managed_copies() {
     let dirs = Dirs::new();

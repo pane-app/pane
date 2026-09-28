@@ -1,0 +1,15 @@
+{
+  "manifestVersion": 1,
+  "title": "JavaScript applications sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "launch",
+      "title": "JavaScript applications sample",
+      "subtitle": "Finds and opens applications from a JavaScript extension",
+      "component": "sample_applications_js.wasm",
+      "indexedResults": true
+    }
+  ]
+}

@@ -208,8 +208,10 @@ not run yet.
 - A drag's pointer position is not reported between the last move Pane saw
   and a release it could not see; the release uses the last point.
 - A `render` or `handle-event` that never returns blocks every later
-  extension call, since the runtime handles calls one at a time; cancellation
-  and hang handling are separate work.
+  extension call, since the runtime handles calls one at a time. One
+  waiting at an `await` is stopped when its package is disabled, reloaded
+  or updated ([generations](generations.md)); one computing without
+  yielding is not, and hang handling is #18.
 - The contract adds required exports (`open-view` and the `custom-view`
   resource) without changing the extension API version (0.1), as #20 did for
   `submit-form`: components built against the earlier contract must be

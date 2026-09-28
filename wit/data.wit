@@ -1,0 +1,81 @@
+package pane:extension@0.1.0;
+
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// Extension data: settings and the other values an extension keeps between
+// runs. Kept apart from extension.wit so a component built for the
+// `extension` world alone is unchanged. Rust commands import them through
+// pane-guest, JS/TS commands as the modules "pane:extension/settings@0.1.0",
+// ".../content@0.1.0", ".../cache@0.1.0" and ".../credentials@0.1.0"
+// (guests/js/data.d.ts).
+//
+// Each interface is one kind of data, and the kind decides what Pane's
+// management actions do with it: clearing an extension's cache removes only
+// its cache and keeps its settings, content and credentials.
+// The header follows `package`: comments above it would document the package,
+// which extension.wit already does.
+
+/// String values the extension saves under keys of its choosing. Pane stores
+/// them for the installed package, owned by its source identity rather than
+/// its title, and keeps them while the package is disabled, updated or Pane
+/// restarts. Only installed packages have settings.
+interface settings {
+  /// The value saved under `key`, if any.
+  get: func(key: string) -> result<option<string>, string>;
+
+  /// Saves `value` under `key`, replacing any earlier value. Fails while the
+  /// package is disabled.
+  set: func(key: string, value: string) -> result<_, string>;
+}
+
+/// The extension's own durable records, such as notes or history, kept like
+/// its settings (owned by the source identity, kept while disabled, updated
+/// or Pane restarts) and not removed when its cache is cleared.
+interface content {
+  /// The value saved under `key`, if any.
+  get: func(key: string) -> result<option<string>, string>;
+
+  /// Saves `value` under `key`, replacing any earlier value. Fails while the
+  /// package is disabled.
+  set: func(key: string, value: string) -> result<_, string>;
+}
+
+/// Disposable values the extension can compute or download again. The user
+/// can clear an extension's cache in Manage extensions at any time without
+/// the extension running, so any value may be missing on the next call.
+interface cache {
+  /// The value saved under `key`, if any.
+  get: func(key: string) -> result<option<string>, string>;
+
+  /// Saves `value` under `key`, replacing any earlier value. Fails while the
+  /// package is disabled.
+  set: func(key: string, value: string) -> result<_, string>;
+}
+
+/// Local credentials: secrets the extension keeps on this computer, such as
+/// a sign-in token. Kept apart from settings and content so that clearing the
+/// cache keeps them and uninstalling can remove them. Pane stores them as
+/// plain text in its data folder, in a file only the user can read on macOS
+/// and Linux, not in the system's keychain; any extension or program running
+/// as the user can read them.
+interface credentials {
+  /// The value saved under `key`, if any.
+  get: func(key: string) -> result<option<string>, string>;
+
+  /// Saves `value` under `key`, replacing any earlier value. Fails while the
+  /// package is disabled.
+  set: func(key: string, value: string) -> result<_, string>;
+}
+
+/// A command that may also keep extension data (settings, content, cache
+/// and local credentials) and call other packages' operations
+/// (operations.wit). Pane hosts this world; a component built for
+/// `extension` alone runs unchanged.
+world extension-with-data {
+  include extension;
+  import settings;
+  import content;
+  import cache;
+  import credentials;
+  import operations;
+}

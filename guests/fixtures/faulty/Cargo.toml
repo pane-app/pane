@@ -10,3 +10,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pane-guest.workspace = true
+wasip3 = { version = "=0.9.0", default-features = false }

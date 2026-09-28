@@ -1,32 +1,36 @@
 //! Pane's operations sample in Rust. Its package publishes the operation
 //! `greet` (under `operations` in its pane.json), served by
-//! [`publish::Guest::run_operation`], and its command calls the `greet` operation the
-//! JavaScript and TypeScript operations samples publish, with
-//! [`pane_guest::operations::call`]. Items, titles, results and errors match
-//! those samples.
+//! [`publish::Guest::run_operation`], and its command calls the `greet`
+//! operation of another package, with [`pane_guest::operations::call`]:
+//! a form asks for that package's source (its identity, as Pane shows it:
+//! `local:` and the folder it was installed from), a name, and whether to
+//! ask once or twice at once. Items, titles, results and errors match the
+//! JavaScript and TypeScript samples.
 //!
 //! `greet` version 1 takes `{"name": "<name>"}` and answers
 //! `{"greeting": "Hello, <name>, from Rust"}`, or the error "a name is
 //! needed".
+//!
+//! `wait` version 1 shows a call Pane stops: it saves `waiting` as
+//! "started" in its settings, waits ten seconds, saves "finished" and
+//! answers `{"waited": true}`. Disabling or reloading either package
+//! meanwhile stops it; the "wait" item calls it.
 #![no_std]
 
 use pane_guest::alloc::{format, string::String, string::ToString, vec, vec::Vec};
 use pane_guest::operations::call;
-use pane_guest::{CustomView, FieldValue, FormError, Guest, Item, NoCustomView, View, publish};
+use pane_guest::{
+    Choice, CustomView, Field, FieldKind, FieldValue, Form, FormError, Guest, Item, NoCustomView,
+    TextField, View, publish, settings,
+};
 use serde_json::{Value, json};
-
-/// The packages this command calls, by source: relative to this package's
-/// own source folder, so the samples work side by side wherever they are.
-const JAVASCRIPT: &str = "local:../sample-operations-js";
-const TYPESCRIPT: &str = "local:../sample-operations-ts";
-const MISSING: &str = "local:../no-such-extension";
 
 struct Operations;
 pane_guest::export!(Operations);
 pane_guest::publish::export!(Operations);
 
 /// Calls `greet` version 1 of the package with `source` for `name`, and
-/// returns its greeting, or why there is none.
+/// returns its greeting, or why there is none ("<kind>: <message>").
 async fn greet(source: &str, name: &str) -> Result<String, String> {
     let input = json!({ "name": name }).to_string();
     let result = call(source.into(), "greet".into(), 1, input)
@@ -39,46 +43,125 @@ async fn greet(source: &str, name: &str) -> Result<String, String> {
     }
 }
 
+/// The form of the "greet" item.
+fn greet_form() -> Form {
+    let text = |id: &str, label: &str, placeholder: &str| Field {
+        id: id.into(),
+        label: label.into(),
+        kind: FieldKind::Text(TextField {
+            placeholder: Some(placeholder.into()),
+        }),
+    };
+    let choice = |id: &str, label: &str| Choice {
+        id: id.into(),
+        label: label.into(),
+    };
+    Form {
+        title: "Greet through another extension".into(),
+        fields: vec![
+            text(
+                "source",
+                "Package source",
+                "local:/path/to/sample-operations-js",
+            ),
+            text("name", "Name", "Rust"),
+            Field {
+                id: "times".into(),
+                label: "Ask".into(),
+                kind: FieldKind::Choice(vec![
+                    choice("once", "Once"),
+                    choice("twice", "Twice at once"),
+                ]),
+            },
+        ],
+        submit_label: "Greet".into(),
+    }
+}
+
+/// The form of the "wait" item.
+fn wait_form() -> Form {
+    Form {
+        title: "Wait in another extension".into(),
+        fields: vec![Field {
+            id: "source".into(),
+            label: "Package source".into(),
+            kind: FieldKind::Text(TextField {
+                placeholder: Some("local:/path/to/sample-operations-js".into()),
+            }),
+        }],
+        submit_label: "Wait".into(),
+    }
+}
+
+fn form_error(message: String) -> FormError {
+    FormError {
+        field: None,
+        message,
+    }
+}
+
 impl Guest for Operations {
     type CustomView = NoCustomView;
 
     async fn get_view() -> Result<View, String> {
-        let item = |id: &str, title: &str| Item {
-            id: id.into(),
-            title: title.into(),
-            subtitle: None,
-            form: None,
-            platforms: None,
-            custom_view: None,
-        };
         Ok(View {
             title: "Call from Rust".into(),
             items: vec![
-                item("ask-js", "Ask JavaScript to greet"),
-                item("ask-ts", "Ask TypeScript to greet"),
-                item("ask-empty", "Ask JavaScript with no name"),
-                item("ask-missing", "Ask an extension that is not installed"),
+                Item {
+                    id: "greet".into(),
+                    title: "Greet through another extension".into(),
+                    subtitle: Some("Calls its greet operation through Pane".into()),
+                    form: Some(greet_form()),
+                    platforms: None,
+                    custom_view: None,
+                },
+                Item {
+                    id: "wait".into(),
+                    title: "Wait in another extension".into(),
+                    subtitle: Some("Calls its wait operation, which takes ten seconds".into()),
+                    form: Some(wait_form()),
+                    platforms: None,
+                    custom_view: None,
+                },
             ],
         })
     }
 
     async fn run_action(item_id: String) -> Result<String, String> {
-        let (source, answerer, name) = match item_id.as_str() {
-            "ask-js" => (JAVASCRIPT, "JavaScript", "Rust"),
-            "ask-ts" => (TYPESCRIPT, "TypeScript", "Rust"),
-            "ask-empty" => (JAVASCRIPT, "JavaScript", ""),
-            "ask-missing" => (MISSING, "Nobody", "Rust"),
-            other => return Err(format!("unknown item: {other}")),
-        };
-        let greeting = greet(source, name).await?;
-        Ok(format!("{answerer} answered: {greeting}"))
+        Err(format!("unknown item: {item_id}"))
     }
 
-    async fn submit_form(item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {
-        Err(FormError {
-            field: None,
-            message: format!("unknown form: {item_id}"),
-        })
+    async fn submit_form(item_id: String, values: Vec<FieldValue>) -> Result<String, FormError> {
+        if item_id != "greet" && item_id != "wait" {
+            return Err(form_error(format!("unknown form: {item_id}")));
+        }
+        let value = |id: &str| {
+            values
+                .iter()
+                .find(|field| field.id == id)
+                .map_or("", |field| field.value.as_str())
+        };
+        let source = value("source").trim();
+        if source.is_empty() {
+            return Err(FormError {
+                field: Some("source".into()),
+                message: "Enter the package's source".into(),
+            });
+        }
+        if item_id == "wait" {
+            call(source.into(), "wait".into(), 1, "{}".into())
+                .await
+                .map_err(|error| form_error(error.explain()))?;
+            return Ok("Waited in the other extension".into());
+        }
+        let name = value("name");
+        if value("times") == "twice" {
+            // Both calls are made at once; Pane serves them one after another.
+            let (first, second) = futures::join!(greet(source, name), greet(source, name));
+            let (first, second) = (first.map_err(form_error)?, second.map_err(form_error)?);
+            return Ok(format!("{first} / {second}"));
+        }
+        greet(source, name).await.map_err(form_error)
     }
 
     async fn open_view(item_id: String) -> Result<CustomView, String> {
@@ -86,9 +169,16 @@ impl Guest for Operations {
     }
 }
 
-/// The operations the package publishes: `greet`.
+/// The operations the package publishes: `greet` and `wait`.
 impl publish::Guest for Operations {
     async fn run_operation(operation: String, input: String) -> Result<String, String> {
+        if operation == "wait" {
+            settings::set("waiting", "started")?;
+            // If Pane stops the call meanwhile, nothing after this runs.
+            wasip3::clocks::monotonic_clock::wait_for(10_000_000_000).await;
+            settings::set("waiting", "finished")?;
+            return Ok(json!({ "waited": true }).to_string());
+        }
         if operation != "greet" {
             return Err(format!("unknown operation: {operation}"));
         }

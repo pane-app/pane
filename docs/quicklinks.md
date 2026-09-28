@@ -55,12 +55,12 @@ form open; none of these is an extension error:
 
 ### Storage
 
-The quicklinks are the package's [extension settings](../guests/README.md#keeping-settings):
-one value, `quicklinks`, holding one line per quicklink (`name`, a tab, the
-URL), in creation order. So they belong to the package's identity, survive
-restarts and updates, and are kept while the package is disabled; they are
-not a separate store (moving them to the content storage of #39, once it
-exists, is open).
+The quicklinks are the package's **content**, its durable
+[extension data](extension-data.md) (`pane_guest::content`): one value,
+`quicklinks`, holding one line per quicklink (`name`, a tab, the URL), in
+creation order, in Pane's `content.json`. So they belong to the package's
+identity, survive restarts and updates, are kept while the package is
+disabled, and are not removed when its cache is cleared.
 
 ## In root search
 

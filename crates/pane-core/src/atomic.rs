@@ -6,11 +6,25 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// Who may read a file Pane writes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Readers {
+    /// Whoever the folder and the process's defaults allow (the umask on
+    /// Unix).
+    Default,
+    /// Only the user Pane runs as: on Unix the file is created with mode
+    /// 0600, whatever the umask. On Windows the file takes its folder's
+    /// permissions, as with `Default`.
+    OwnerOnly,
+}
+
 /// Distinguishes the temporary files of one process's writes.
 static NEXT_TEMPORARY: AtomicU64 = AtomicU64::new(0);
 
-/// Replaces the file at `path` with `contents`, creating its folder if
-/// needed.
+/// Replaces the file at `path` with `contents`, readable by `readers`,
+/// creating its folder if needed. The new file never has wider permissions
+/// than `readers`, even for a moment, and it replaces any earlier file's
+/// permissions.
 ///
 /// The contents go to a new temporary file in the same folder, which is
 /// flushed to disk and then renamed over `path`; on Unix the folder is
@@ -23,7 +37,7 @@ static NEXT_TEMPORARY: AtomicU64 = AtomicU64::new(0);
 /// writers in two processes or threads never share one. The file is not
 /// locked, though: when two writers each read, change and write it back, the
 /// later rename wins and the other change is lost.
-pub(crate) fn write_atomically(path: &Path, contents: &[u8]) -> io::Result<()> {
+pub(crate) fn write_atomically(path: &Path, contents: &[u8], readers: Readers) -> io::Result<()> {
     let dir = match path.parent() {
         Some(dir) if !dir.as_os_str().is_empty() => dir,
         _ => Path::new("."),
@@ -39,10 +53,10 @@ pub(crate) fn write_atomically(path: &Path, contents: &[u8]) -> io::Result<()> {
         NEXT_TEMPORARY.fetch_add(1, Ordering::Relaxed)
     ));
     let written = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        restrict(&mut options, readers);
+        let mut file = options.open(&temporary)?;
         file.write_all(contents)?;
         file.sync_all()?;
         drop(file);
@@ -56,6 +70,17 @@ pub(crate) fn write_atomically(path: &Path, contents: &[u8]) -> io::Result<()> {
 }
 
 #[cfg(unix)]
+fn restrict(options: &mut OpenOptions, readers: Readers) {
+    use std::os::unix::fs::OpenOptionsExt;
+    if readers == Readers::OwnerOnly {
+        options.mode(0o600);
+    }
+}
+
+#[cfg(not(unix))]
+fn restrict(_options: &mut OpenOptions, _readers: Readers) {}
+
+#[cfg(unix)]
 fn sync_dir(dir: &Path) -> io::Result<()> {
     fs::File::open(dir)?.sync_all()
 }
@@ -67,7 +92,7 @@ fn sync_dir(_dir: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::write_atomically;
+    use super::{Readers, write_atomically};
     use std::fs;
 
     #[test]
@@ -87,7 +112,7 @@ mod tests {
                 let path = &path;
                 scope.spawn(move || {
                     for _ in 0..50 {
-                        match write_atomically(path, payload.as_bytes()) {
+                        match write_atomically(path, payload.as_bytes(), Readers::Default) {
                             Ok(()) => {}
                             // Windows can refuse a rename onto a file that
                             // another rename is replacing at that moment; the

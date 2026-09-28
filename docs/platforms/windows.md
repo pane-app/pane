@@ -84,24 +84,55 @@ only the two other systems. In run [36372625940](https://github.com/wasimysaid/p
 ## Root search (#23)
 
 Root search has a query field with focus ([root search](../root-search.md)).
-The smoke's last phase (screenshots 24 to 26) types "typescr" with
+The smoke's search phase (screenshots 24 to 26) types "typescr" with
 `SendKeys`, opens the only match and runs "Wait briefly", which must look
 exactly like step 4, then types "zzz" and presses Enter on no results. In run [36420611977](https://github.com/wasimysaid/pane/actions/runs/36420611977) (commit `6d73d18`) every step passed: typing "typescr" left only TypeScript sample and Enter ran it, and "zzz" showed No results ([24-search.png](evidence/windows/24-search.png), [26-no-results.png](evidence/windows/26-no-results.png)). Input-method composition in the query field is still unverified here.
 
 ## Calculator (#27)
 
-The smoke's last phase (screenshots 27 to 30) installs the calculator
+The smoke's calculator phase (screenshots 27 to 30) installs the calculator
 package, types "6*7", checks the selected answer row, presses Enter to copy
 it, then compares typing "42+1" with pasting the copy (Ctrl+A, Ctrl+V through `SendKeys`) and typing
 "+1", which must look the same. In run [36423871204](https://github.com/wasimysaid/pane/actions/runs/36423871204) (commit `ab91081`) every step passed: "6*7" answered 42, Enter copied it, and pasting then typing "+1" matched typing "42+1", so the system clipboard held "42" ([27-answer.png](evidence/windows/27-answer.png), [30-pasted.png](evidence/windows/30-pasted.png)).
 
+## Applications (#24)
+
+[Applications](../applications.md) finds the `.lnk` shortcuts in the user's
+and all users' Start menu Programs folders and opens one with
+`ShellExecuteEx`, as Explorer does, plus the packaged (AppX/MSIX) apps of
+the shell's Apps folder, such as Calculator on Windows 11, opened by their
+AppUserModelID; a native test requires an inbox packaged app (Calculator or
+Settings) to be found. The smoke's
+last phase (screenshots 44 and 45) makes a shortcut "Pane Smoke App" to
+`cmd.exe` writing a marker file (with `WScript.Shell`, minimized) under an
+APPDATA given to Pane only, installs the package, types "pane smoke",
+checks the selected row, presses Enter and checks "Opened Pane Smoke App"
+and the marker; the adapter tests open such a shortcut too. **Not run on
+Windows yet**: this branch was not pushed, so the phase, the native tests
+and the `ShellExecuteEx` path are unverified here (the Windows code was
+only type-checked and linted for `x86_64-pc-windows-gnu`).
+
 ## Quicklinks (#28)
 
-The smoke's last phase (screenshots 33 and 34) installs the Quicklinks
+The smoke's last phase (screenshots 46 and 47) installs the Quicklinks
 package, creates "Pane issues" (https://example.com/pane-issues) in its
 form, restarts Pane and types "pane iss", which must list it selected. It
 stops before Enter, which would open the default browser; opening a link
 here is checked only through the tests' recording opener. Not run yet.
+
+## Global hotkeys (#32)
+
+The smoke's hotkey phase (screenshots 52 to 58, [global hotkeys](../hotkeys.md#checks))
+assigns Ctrl+Alt+G to Greeting on its hotkey screen, minimizes Pane,
+presses it with `SendKeys` and checks that Pane's window is the foreground
+window again with Greeting open; then again after a restart; then, with the
+extension disabled, that pressing it leaves Pane minimized and unchanged.
+`RegisterHotKey` needs no permission. `hotkey_adapters.rs` registers a
+shortcut on the test session, checks that a second registration is refused
+as taken and that the released shortcut can be registered again. The
+adapter was only compile- and lint-checked for `x86_64-pc-windows-gnu` from
+Linux; **not run on Windows yet**, so registration, delivery and the focus
+transition (foreground rules) are unverified natively.
 
 ## Text input and accessibility findings
 
@@ -133,6 +164,48 @@ Screenshots from run [36371205770](https://github.com/wasimysaid/pane/actions/ru
   the screenshot, the screen bounds and `SetCursorPos` all use physical
   pixels and the click should land on the swatch at any display scaling;
   scaling other than 100 % is unverified.
+- **Operations (#22):** the operations phase (screenshots 31 and 32) installs
+  the JavaScript operations sample, then the Rust one, opens the Rust
+  sample's command and fills its form with the JavaScript package's identity
+  and the name "Rust"; the Rust guest calls that package's `greet` operation
+  through Pane, the same steps as on
+  [Linux](linux.md#operations-22). In run
+  [36429153309](https://github.com/wasimysaid/pane/actions/runs/36429153309)
+  (commit `1848494`) every step passed: the Rust guest's call into the
+  JavaScript package answered "Hello, Rust, from JavaScript"
+  ([32-operation-answer.png](evidence/windows/32-operation-answer.png)).
+- **Reload (#11):** after the calculator and operations phases, the smoke installs a package from
+  `<output-dir>\dev`, replaces its component with the JavaScript sample and
+  reloads it in Manage extensions, then reloads it without its component (the
+  checks fail and the old code keeps answering) and with the `failing-start`
+  fixture (a startup failure, then Retry); screenshots 33 to 39, the same
+  steps as on [Linux](linux.md#reloading-a-package-11). In run
+  [36429153309](https://github.com/wasimysaid/pane/actions/runs/36429153309)
+  (commit `1848494`) every step passed: reloaded with the JavaScript build,
+  Dev answered from the new code
+  ([35-dev-after.png](evidence/windows/35-dev-after.png)); reloading the
+  `failing-start` fixture showed "Reloaded Dev, but it failed to start…
+  Retry…" ([38-start-failed.png](evidence/windows/38-start-failed.png)), and
+  Retry then showed "Started Dev"
+  ([39-retried.png](evidence/windows/39-retried.png)). Replacing the managed
+  copy removes the old folder on a best-effort basis; on Windows a folder
+  still in use is left behind, listed in `installed.json`, and removal is
+  tried again at the next start (tested on Linux with a folder whose files
+  cannot be deleted; not run on Windows).
+- **Clearing an extension's cache (#39):** after the reload phase, the smoke
+  restarts Pane, saves one value of each kind of
+  [extension data](../extension-data.md) for the Settings sample (style,
+  content, cache and credential), then chooses "Clear cache of Settings
+  sample" in Manage extensions and confirms, the same steps as on
+  [Linux](linux.md#clearing-an-extensions-cache-39). In run
+  [36429153309](https://github.com/wasimysaid/pane/actions/runs/36429153309)
+  (commit `1848494`) every step passed: Manage extensions showed "Cleared the
+  cache of Settings sample"
+  ([42-cache-cleared.png](evidence/windows/42-cache-cleared.png)), and "Show
+  what Pane keeps" then read "Style: formal · Note: Water the plants ·
+  Signed in: yes · Cached greeting: none", with the cached greeting gone and
+  the other three values kept
+  ([43-kept-after-clear.png](evidence/windows/43-kept-after-clear.png)).
 
 ## Disabling an extension and keeping its settings (#10)
 

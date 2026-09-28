@@ -14,6 +14,22 @@ unicode-normalization = "0.1"
 wasmtime = { version = "=49.0.1", default-features = false, features = ["cache", "cranelift", "parallel-compilation", "runtime", "std", "async", "component-model", "component-model-async"] }
 wasmtime-wasi = { version = "=49.0.1", default-features = false, features = ["p3"] }
 
+# Listing the Apps folder and opening a shortcut or packaged app as Explorer
+# does, and global hotkeys (`RegisterHotKey`); already in the dependency tree
+# through GPUI CE.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
+
+# Global hotkeys on X11 (key grabs on the root window); already in the
+# dependency tree through GPUI's X11 platform.
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13", features = ["xkb"] }
+
+# Global hotkeys on macOS through Carbon's RegisterEventHotKey, which needs no
+# Accessibility permission.
+[target.'cfg(target_os = "macos")'.dependencies]
+global-hotkey = "0.8"
+
 [dev-dependencies]
 futures = { version = "0.3", default-features = false, features = ["executor"] }
 tempfile = "3"

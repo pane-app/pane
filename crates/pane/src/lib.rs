@@ -8,9 +8,11 @@ use std::mem::{Discriminant, discriminant};
 use std::path::{Path, PathBuf};
 
 use gpui::{
-    App, ClipboardItem, Context, Div, FocusHandle, KeyBinding, PathPromptOptions, Pixels, Role,
-    ScrollHandle, SharedString, Size, Stateful, Window, actions, div, prelude::*, rgb,
+    App, ClipboardItem, Context, Div, FocusHandle, KeyBinding, KeyDownEvent, PathPromptOptions,
+    Pixels, Role, ScrollHandle, SharedString, Size, Stateful, Window, actions, div, prelude::*,
+    rgb,
 };
+use pane_core::hotkeys::Shortcut;
 use pane_core::{CommandRegistration, Launcher, LauncherView, Row, Screen, Status};
 
 mod custom_view;
@@ -159,6 +161,9 @@ pub struct LauncherWindow {
     scroll: ScrollHandle,
     /// What the list was last scrolled for.
     scrolled_for: Option<ScrolledFor>,
+    /// Whether the next frame scrolls to the selected row again, once the
+    /// list changed in this one has been laid out.
+    scroll_again: bool,
 }
 
 /// What the list was last scrolled for. When any of it changes, the list
@@ -190,6 +195,7 @@ impl LauncherWindow {
             form: None,
             scroll: ScrollHandle::new(),
             scrolled_for: None,
+            scroll_again: false,
             custom_view: None,
         }
     }
@@ -262,6 +268,53 @@ impl LauncherWindow {
         .detach();
     }
 
+    /// Opens the command whose global hotkey `shortcut` is, as the system
+    /// reported it pressed while any application had focus: the window
+    /// comes to the front and shows the command. A press that opens nothing
+    /// (a hotkey released meanwhile) leaves the window where it is.
+    pub fn hotkey_pressed(
+        &mut self,
+        shortcut: &Shortcut,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pending) = self.launcher.press_hotkey(shortcut) else {
+            return;
+        };
+        window.activate_window();
+        cx.activate(true);
+        self.show_until_done(pending, window, cx);
+    }
+
+    /// On the hotkey screen, a key pressed with its modifiers is the new
+    /// hotkey. Keys the launcher binds (Enter, Escape, arrows, Tab) do not
+    /// reach here; pressing a modifier alone is not a key press.
+    fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(self.launcher.view().screen, Screen::Hotkey { .. }) {
+            return;
+        }
+        let keystroke = &event.keystroke;
+        let modifiers = keystroke.modifiers;
+        let shortcut = Shortcut::new(
+            modifiers.control,
+            modifiers.alt,
+            modifiers.shift,
+            modifiers.platform,
+            &keystroke.key,
+        );
+        cx.stop_propagation();
+        match shortcut {
+            Ok(shortcut) => {
+                let pending = self.launcher.record_hotkey(shortcut);
+                self.show_until_done(pending, window, cx);
+            }
+            Err(problem) => {
+                self.launcher.show_error(problem);
+                cx.notify();
+            }
+        }
+    }
+
     fn focus_next(&mut self, _: &FocusNext, window: &mut Window, cx: &mut Context<Self>) {
         window.focus_next(cx);
     }
@@ -321,12 +374,22 @@ impl LauncherWindow {
             list: self.scroll.bounds().size,
         };
         let last = self.scrolled_for.as_ref();
-        if last == Some(&shown) {
+        if last == Some(&shown) && !self.scroll_again {
             return;
         }
-        if last.is_some_and(|last| last.window != shown.window) {
-            // The list's new size is known only once this frame is laid out,
-            // so the next frame scrolls again with it.
+        // Scrolling uses the list's size and rows as last laid out. When the
+        // window, the screen or the rows changed, those are known only once
+        // this frame is laid out, so the next frame scrolls again with them:
+        // otherwise a short screen after a long list, scrolled far down,
+        // would keep an offset that hides its selected row.
+        let relaid = last.is_some_and(|last| {
+            last.window != shown.window
+                || last.screen != shown.screen
+                || last.title != shown.title
+                || last.rows != shown.rows
+        });
+        self.scroll_again = relaid && !self.scroll_again;
+        if self.scroll_again {
             window.request_animation_frame();
         }
         if let Some(selected) = view.selected {
@@ -422,9 +485,11 @@ impl Render for LauncherWindow {
             Screen::Form(_) => ("", "Tab next field · Enter submit · Esc back"),
             Screen::Extensions { .. } => (
                 "No extensions are installed.",
-                "↑↓ select · Enter enable or disable · Esc back",
+                "↑↓ select · Enter choose · Esc back",
             ),
             Screen::CustomView(_) => ("", "Keys and pointer go to the view · Esc back"),
+            Screen::Confirm { .. } => ("", "↑↓ select · Enter choose · Esc cancel"),
+            Screen::Hotkey { .. } => ("", "Press the new hotkey · Enter choose · Esc back"),
         };
         let details: Vec<_> = view
             .details()
@@ -498,6 +563,7 @@ impl Render for LauncherWindow {
             .on_action(cx.listener(Self::back))
             .on_action(cx.listener(Self::focus_next))
             .on_action(cx.listener(Self::focus_previous))
+            .on_key_down(cx.listener(Self::key_down))
             .size_full()
             .flex()
             .flex_col()

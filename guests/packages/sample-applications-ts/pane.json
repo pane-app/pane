@@ -1,0 +1,15 @@
+{
+  "manifestVersion": 1,
+  "title": "TypeScript applications sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "launch",
+      "title": "TypeScript applications sample",
+      "subtitle": "Finds and opens applications from a TypeScript extension",
+      "component": "sample_applications_ts.wasm",
+      "indexedResults": true
+    }
+  ]
+}

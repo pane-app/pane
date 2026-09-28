@@ -38,13 +38,15 @@ REPO = HERE.parents[1]
 PINS = json.loads((HERE / "pins.json").read_text(encoding="utf-8"))
 EXE = ".exe" if os.name == "nt" else ""
 WORLD = "js-extension"
-# The world of a command that also computes root results, chosen by
-# `"pane": { "rootResults": true }` in its package.json.
-WORLD_WITH_ROOT_RESULTS = "js-extension-with-root-results"
-# The world of a command that also serves the operations its package
-# publishes, chosen by `"pane": { "operations": true }`, and of one with both.
-WORLD_WITH_OPERATIONS = "js-extension-with-operations"
-WORLD_WITH_ROOT_RESULTS_AND_OPERATIONS = "js-extension-with-root-results-and-operations"
+# The world a command is built against: `js-extension` plus the exports its
+# package.json's `"pane"` options name, written by `command_world`.
+COMMAND_WORLD = "js-command"
+# `"pane"` option -> the interface a command setting it also exports.
+EXPORT_OPTIONS = {
+    "rootResults": "pane:extension/root-results@0.1.0",
+    "indexedResults": "pane:extension/indexed-results@0.1.0",
+    "operations": "pane:extension/published-operations@0.1.0",
+}
 PREBUILT = REPO / "guests" / "prebuilt"
 MANIFEST = PREBUILT / "manifest.json"
 # (component file in guests/prebuilt and target/guests, source package)
@@ -55,9 +57,11 @@ SAMPLES = [
     ("sample_settings_ts.wasm", "guests/sample-settings-ts"),
     ("sample_operations_js.wasm", "guests/sample-operations-js"),
     ("sample_operations_ts.wasm", "guests/sample-operations-ts"),
+    ("sample_applications_js.wasm", "guests/sample-applications-js"),
+    ("sample_applications_ts.wasm", "guests/sample-applications-ts"),
 ]
 # Pane's WIT, copied beside the world in guests/js/wit.
-PANE_WIT = ["extension.wit", "settings.wit", "root-results.wit", "operations.wit"]
+PANE_WIT = ["extension.wit", "data.wit", "root-results.wit", "operations.wit", "applications.wit"]
 # Toolchain inputs that decide what a component contains.
 TOOL_INPUTS = ["pins.json", "package.json", "package-lock.json", "bundle.mjs", "p3_build.rs", "patches"]
 SKIP_DIRS = {"node_modules", ".git"}
@@ -357,18 +361,22 @@ def build(package: Path, out: Path, toolchain: Toolchain) -> dict:
     for name in PANE_WIT:
         shutil.copyfile(REPO / "wit" / name, wit / "deps" / "pane-extension" / name)
     out.parent.mkdir(parents=True, exist_ok=True)
-    options = manifest.get("pane", {})
-    world = {
-        (False, False): WORLD,
-        (True, False): WORLD_WITH_ROOT_RESULTS,
-        (False, True): WORLD_WITH_OPERATIONS,
-        (True, True): WORLD_WITH_ROOT_RESULTS_AND_OPERATIONS,
-    }[(bool(options.get("rootResults")), bool(options.get("operations")))]
-    report = run([toolchain.componentizer, wit, world, bundle, toolchain.runtime, out],
+    (wit / "command.wit").write_text(command_world(manifest.get("pane", {})), encoding="utf-8")
+    report = run([toolchain.componentizer, wit, COMMAND_WORLD, bundle, toolchain.runtime, out],
                  env=clean_env(QJS_P3_LIBC=str(toolchain.libc)), capture=True)
     result = json.loads(report.strip().splitlines()[-1])
     log(f"built {out} ({result['component_bytes']} bytes in {result['componentize_ms']} ms)")
     return result
+
+
+def command_world(options: dict) -> str:
+    """The world `js-command`: `js-extension` exporting what `options` name."""
+    unknown = sorted(set(options) - set(EXPORT_OPTIONS))
+    if unknown:
+        raise SystemExit(f"pane-js: unknown \"pane\" options in package.json: {', '.join(unknown)}")
+    exports = "".join(f"  export {interface};\n" for option, interface in EXPORT_OPTIONS.items()
+                      if options.get(option))
+    return f"package pane:js-guest@0.1.0;\n\nworld {COMMAND_WORLD} {{\n  include {WORLD};\n{exports}}}\n"
 
 
 def component_inputs(source: str) -> str:

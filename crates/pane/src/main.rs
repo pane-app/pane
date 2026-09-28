@@ -35,6 +35,10 @@ fn main() {
             None => Launcher::new(runtime, pane::sample_commands()),
         }
         .with_link_opener(Arc::new(pane::SystemLinks));
+        // Global hotkeys: the system's adapter is made on the main thread,
+        // whose run loop receives the presses on macOS.
+        let (press_sender, mut presses) = pane_core::hotkeys::channel();
+        let launcher = launcher.with_hotkeys(pane_core::hotkeys::native(press_sender));
         let bounds = Bounds::centered(None, size(px(640.), px(420.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -44,16 +48,29 @@ fn main() {
             }),
             ..Default::default()
         };
-        cx.open_window(options, |window, cx| {
-            cx.new(|cx| {
-                let mut launcher = LauncherWindow::new(launcher, window, cx);
-                if let Some(folder) = &preview {
-                    launcher.preview_package(folder, window, cx);
-                }
-                launcher
+        let window = cx
+            .open_window(options, |window, cx| {
+                cx.new(|cx| {
+                    let mut launcher = LauncherWindow::new(launcher, window, cx);
+                    if let Some(folder) = &preview {
+                        launcher.preview_package(folder, window, cx);
+                    }
+                    launcher
+                })
             })
+            .expect("failed to open the Pane window");
+        // A hotkey pressed in any application opens its command here.
+        cx.spawn(async move |cx| {
+            while let Some(shortcut) = presses.next().await {
+                let shown = window.update(cx, |launcher, window, cx| {
+                    launcher.hotkey_pressed(&shortcut, window, cx)
+                });
+                if shown.is_err() {
+                    break;
+                }
+            }
         })
-        .expect("failed to open the Pane window");
+        .detach();
         cx.activate(true);
     });
 }

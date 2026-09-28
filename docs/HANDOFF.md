@@ -37,7 +37,7 @@ The [validation checkpoint](research/wasi03-validation.md) links the Rust, JS an
 - [Embedded host](research/p3-only-host/README.md): P3-only registration; stock mixed JS rejected.
 - [GPUI Windows probe](research/wasi03-gpui-spike/README.md): guest JSON rendering, JSON replacement and clicks. Not live guest hot reload or production IPC.
 
-Remaining validation includes runtime reseeding, cancellation/concurrency, reload/disable cleanup, persistent resource measurements, host/UI integration and macOS/Linux. Benchmark numbers are scoped CLI/prototype measurements, not product budgets.
+Disabling, reloading or updating an extension stops its pending calls since #14 ([generations](generations.md)); remaining validation includes runtime reseeding, preempting a guest that does not yield and timeouts (#18), true concurrency, persistent resource measurements, host/UI integration and macOS/Linux. Benchmark numbers are scoped CLI/prototype measurements, not product budgets.
 
 Tool locations and scratch paths are recorded with the probes, including [P3 tool metadata](research/p3-native-toolchain-local.json). Some compiler/toolchain/checkouts and built binaries live under Windows temporary storage. Their presence is not a durable source-control guarantee. Repository source scripts, reports and the patch are the recovery path; runtime/toolchain installation must not silently alter the user's global Rust default.
 

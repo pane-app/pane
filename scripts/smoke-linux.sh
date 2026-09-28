@@ -17,18 +17,42 @@ rm -rf "$out/data"
 export PANE_DATA_DIR=$out/data
 { grep PRETTY_NAME /etc/os-release; uname -srm; } >"$out/system.txt"   # the tested OS and architecture
 
-display=:$((90 + RANDOM % 100))
-"$xvfb" "$display" -screen 0 1280x800x24 -nolisten tcp 2>"$out/xvfb.log" &
-xvfb_pid=$!
+# Starts Xvfb on a display no other server uses, and uses it only once it
+# is up: its socket appeared after it started and it is still running. A
+# display another server has (the developer's own session, a parallel
+# smoke) is never used: Xvfb exits there, and another number is tried.
+xvfb_pid=
 pane_pid=
 cleanup() {
   [ -n "$pane_pid" ] && kill "$pane_pid" 2>/dev/null || true
-  kill "$xvfb_pid" 2>/dev/null || true
+  [ -n "$xvfb_pid" ] && kill "$xvfb_pid" 2>/dev/null || true
 }
 trap cleanup EXIT
+display=
+for _ in $(seq 10); do
+  number=$((90 + RANDOM % 100))
+  socket=/tmp/.X11-unix/X$number
+  [ -e "$socket" ] || [ -e "/tmp/.X$number-lock" ] && continue
+  "$xvfb" ":$number" -screen 0 1280x800x24 -nolisten tcp 2>"$out/xvfb.log" &
+  xvfb_pid=$!
+  for _ in $(seq 50); do
+    kill -0 "$xvfb_pid" 2>/dev/null || break
+    [ -S "$socket" ] && break
+    sleep 0.1
+  done
+  if kill -0 "$xvfb_pid" 2>/dev/null && [ -S "$socket" ]; then
+    display=:$number
+    break
+  fi
+  kill "$xvfb_pid" 2>/dev/null || true
+  xvfb_pid=
+done
+[ -n "$display" ] || { echo "Xvfb did not start (see $out/xvfb.log)"; exit 1; }
 export DISPLAY=$display
 unset WAYLAND_DISPLAY
-sleep 1
+if command -v xdpyinfo >/dev/null; then
+  xdpyinfo >/dev/null || { echo "Xvfb on $display does not answer"; exit 1; }
+fi
 
 capture() {
   if command -v import >/dev/null; then
@@ -264,9 +288,10 @@ python3 "$(dirname "$0")/check_screenshot.py" --same "$out/29-typed.png" "$out/3
 stop_pane
 
 # Operations: install the JavaScript operations sample, then the Rust one,
-# whose command (Call from Rust, selected once installed) asks the JavaScript
-# package's greet operation: "JavaScript answered: Hello, Rust, from
-# JavaScript" comes from the other package's guest, started for the call.
+# whose command (Call from Rust, selected once installed) opens its form,
+# takes the JavaScript package's identity (local: and the folder's resolved
+# path) and a name, and calls that package's greet operation: "Hello, Rust,
+# from JavaScript" comes from the other package's guest, started for the call.
 start_pane --install target/guests/packages/sample-operations-js
 "$xdotool" windowfocus --sync "$window"
 "$xdotool" key Return; sleep 2   # Install
@@ -277,17 +302,170 @@ start_pane --install target/guests/packages/sample-operations
 "$xdotool" windowfocus --sync "$window"
 "$xdotool" key Return; sleep 2   # Install; Call from Rust is selected
 "$xdotool" key Return; sleep 3   # open Call from Rust
-"$xdotool" key Return; sleep 5   # "Ask JavaScript to greet"
+"$xdotool" key Return; sleep 2   # "Greet through another extension": its form
+"$xdotool" type --delay 20 "local:$(realpath target/guests/packages/sample-operations-js)"
+"$xdotool" key Tab; "$xdotool" type --delay 50 Rust
+"$xdotool" key Return; sleep 5   # Greet
 capture 32-operation-answer.png
 check 32-operation-answer.png 9fd8a8   # the JavaScript guest's answer
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{31-operations-target,32-operation-answer}.png
 stop_pane
+
+# Reload a development package while Pane stays open. Its command starts as
+# the Rust sample; a new build of it is the JavaScript sample. Root lists the
+# three samples, Rust sample, Greeting, Calculator, Call from JavaScript, Call
+# from Rust, Dev sample (the ninth row), the install row, then Manage
+# extensions… last; the extension list holds the six packages (Dev is the
+# sixth), then their six Reload rows (Reload Dev is the twelfth).
+mkdir -p "$out/dev"
+cp target/guests/sample_rust.wasm "$out/dev/command.wasm"
+cat >"$out/dev/pane.json" <<'JSON'
+{
+  "manifestVersion": 1,
+  "title": "Dev",
+  "apiVersion": "0.1",
+  "commands": [{ "id": "sample", "title": "Dev sample", "component": "command.wasm" }]
+}
+JSON
+start_pane --install "$out/dev"
+"$xdotool" windowfocus --sync "$window"
+"$xdotool" key Return; sleep 2   # Install; Dev sample is selected
+"$xdotool" key Return; sleep 3
+"$xdotool" key Return; sleep 2   # "Say hello"
+capture 33-dev-before.png
+check 33-dev-before.png 9fd8a8   # "Hello from the Rust guest"
+"$xdotool" key Escape; sleep 1
+cp target/guests/sample_js.wasm "$out/dev/command.wasm"
+for ((i = 0; i < 12; i++)); do "$xdotool" key Down; done   # the last row
+"$xdotool" key Return; sleep 1
+for ((i = 0; i < 11; i++)); do "$xdotool" key Down; done   # Reload Dev
+"$xdotool" key Return; sleep 3
+capture 34-reloaded.png
+check 34-reloaded.png 9fd8a8   # "Reloaded Dev"
+"$xdotool" key Escape; sleep 1
+for ((i = 0; i < 8; i++)); do "$xdotool" key Down; done   # Dev sample
+"$xdotool" key Return; sleep 3
+"$xdotool" key Return; sleep 2   # "Say hello"
+capture 35-dev-after.png
+check 35-dev-after.png 9fd8a8   # "Hello from the JavaScript guest"
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out/33-dev-before.png" "$out/35-dev-after.png"
+"$xdotool" key Escape; sleep 1
+
+# A build that fails the install checks (here its component is missing) is
+# not reloaded: the working code keeps running, exactly as before.
+rm "$out/dev/command.wasm"
+for ((i = 0; i < 12; i++)); do "$xdotool" key Down; done
+"$xdotool" key Return; sleep 1
+for ((i = 0; i < 11; i++)); do "$xdotool" key Down; done
+"$xdotool" key Return; sleep 2
+capture 36-not-reloaded.png
+check 36-not-reloaded.png f08c8c   # "Dev was not reloaded: ..."
+"$xdotool" key Escape; sleep 1
+for ((i = 0; i < 8; i++)); do "$xdotool" key Down; done
+"$xdotool" key Return; sleep 3
+"$xdotool" key Return; sleep 2
+capture 37-still-running.png
+python3 "$(dirname "$0")/check_screenshot.py" --same "$out/35-dev-after.png" "$out/37-still-running.png"
+"$xdotool" key Escape; sleep 1
+
+# A build whose start fails is reported with Retry, after Reload Dev; this
+# one saves a setting and fails its first start only, so Retry starts it.
+cp target/guests/failing_start.wasm "$out/dev/command.wasm"
+for ((i = 0; i < 12; i++)); do "$xdotool" key Down; done
+"$xdotool" key Return; sleep 1
+for ((i = 0; i < 11; i++)); do "$xdotool" key Down; done
+"$xdotool" key Return; sleep 3
+capture 38-start-failed.png
+check 38-start-failed.png f08c8c   # "Reloaded Dev, but it failed to start; ..."
+"$xdotool" key Down key Return; sleep 3   # Retry starting Dev
+capture 39-retried.png
+check 39-retried.png 9fd8a8   # "Started Dev"
+stop_pane
+grep -q '"start-attempted": "yes"' "$out/data/extensions/settings.json" || { echo "the failed start's setting was not kept"; exit 1; }
+
+# The settings sample keeps one value of each kind of data: its formal style
+# (settings) and "Good day to you" (cache) are saved above; its fourth and
+# fifth items save a note (content) and sign in (a local credential), and its
+# sixth shows all four.
+start_pane
+"$xdotool" windowfocus --sync "$window"
+for ((i = 0; i < 4; i++)); do "$xdotool" key Down; done   # Greeting
+"$xdotool" key Return; sleep 3
+for ((i = 0; i < 3; i++)); do "$xdotool" key Down; done
+"$xdotool" key Return; sleep 2   # "Save a note"
+"$xdotool" key Down key Return; sleep 2   # "Sign in"
+"$xdotool" key Down key Return; sleep 2   # "Show what Pane keeps"
+capture 40-kept.png
+check 40-kept.png 9fd8a8   # every value, the cached greeting included
+"$xdotool" key Escape; sleep 1
+stop_pane
+grep -q '"note": "Water the plants"' "$out/data/extensions/content.json" || { echo "note not saved"; exit 1; }
+grep -q '"token": "sample-token"' "$out/data/extensions/credentials.json" || { echo "credential not saved"; exit 1; }
+grep -q '"last-greeting": "Good day to you"' "$out/data/extensions/cache.json" || { echo "greeting not cached"; exit 1; }
+
+# Clear the settings sample's cache in Manage extensions: its row follows the
+# six package rows, their six Reload rows and "Clear cache of Rust sample". Pane asks first, then deletes only the cached
+# greeting, without running the extension.
+start_pane
+"$xdotool" windowfocus --sync "$window"
+for ((i = 0; i < 12; i++)); do "$xdotool" key Down; done   # the last row
+"$xdotool" key Return; sleep 1
+for ((i = 0; i < 13; i++)); do "$xdotool" key Down; done
+"$xdotool" key Return; sleep 1   # "Clear cache of Settings sample"
+capture 41-confirm-clear-cache.png
+check 41-confirm-clear-cache.png aab4c0   # what is deleted and what is kept
+"$xdotool" key Return; sleep 2   # "Clear cache"
+capture 42-cache-cleared.png
+check 42-cache-cleared.png 9fd8a8   # "Cleared the cache of Settings sample"
+"$xdotool" key Escape; sleep 1
+for ((i = 0; i < 4; i++)); do "$xdotool" key Down; done   # Greeting
+"$xdotool" key Return; sleep 3
+for ((i = 0; i < 5; i++)); do "$xdotool" key Down; done
+"$xdotool" key Return; sleep 2   # "Show what Pane keeps"
+capture 43-kept-after-clear.png
+check 43-kept-after-clear.png 9fd8a8   # "... Cached greeting: none"
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out/40-kept.png" "$out/43-kept-after-clear.png"
+"$xdotool" key Escape; sleep 1
+stop_pane
+if grep -q 'Good day to you' "$out/data/extensions/cache.json"; then echo "cache not cleared"; exit 1; fi
+grep -q '"greeting-style": "formal"' "$out/data/extensions/settings.json" || { echo "setting lost"; exit 1; }
+grep -q '"note": "Water the plants"' "$out/data/extensions/content.json" || { echo "note lost"; exit 1; }
+grep -q '"token": "sample-token"' "$out/data/extensions/credentials.json" || { echo "credential lost"; exit 1; }
+
+# Applications, a default extension: an installed application is found by
+# name in root search and Enter opens it. The application is a desktop entry
+# the smoke adds in an XDG_DATA_HOME of its own (for Pane only), whose
+# program writes a marker file, so nothing else is started; Pane still
+# searches the system's applications too.
+apps=$(cd "$out" && pwd)/apps
+rm -rf "$apps"
+mkdir -p "$apps/data/applications"
+cat >"$apps/data/applications/pane-smoke-app.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Pane Smoke App
+Exec=sh -c "echo launched > '$apps/launched'"
+EOF
+XDG_DATA_HOME=$apps/data start_pane --install target/guests/packages/applications
+"$xdotool" windowfocus --sync "$window"
+"$xdotool" key Return; sleep 2   # Install
+"$xdotool" type --delay 50 'pane smoke'; sleep 3
+capture 44-application.png
+check 44-application.png 364355 3000   # the selected application row
+"$xdotool" key Return; sleep 3
+capture 45-opened.png
+check 45-opened.png 9fd8a8   # "Opened Pane Smoke App"
+for _ in $(seq 50); do [ -f "$apps/launched" ] && break; sleep 0.2; done
+[ -f "$apps/launched" ] || { echo "the application did not run"; exit 1; }
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{44-application,45-opened}.png
+stop_pane
+
 # Quicklinks, a default extension: installed, its command's form saves a
 # quicklink (Quicklinks is selected once installed, and "Create quicklink" is
 # its first item). After a restart, typing part of its name lists it,
-# selected, and Enter opens its address with the system's link handler. The
-# handler is xdg-open outside any desktop session, with BROWSER set to a
-# script that records the address instead of starting a browser.
+# selected, and Enter opens its address with the system's link handler:
+# xdg-open, with no desktop session and a script that records the address,
+# instead of starting a browser, as the only handler for web links.
 start_pane --install target/guests/packages/quicklinks
 "$xdotool" windowfocus --sync "$window"
 "$xdotool" key Return; sleep 2   # Install
@@ -297,27 +475,139 @@ start_pane --install target/guests/packages/quicklinks
 "$xdotool" key Tab
 "$xdotool" type --delay 50 'https://example.com/pane-issues'
 "$xdotool" key Return; sleep 2
-capture 33-quicklink-saved.png
-check 33-quicklink-saved.png 9fd8a8   # "Saved quicklink “Pane issues”"
+capture 46-quicklink-saved.png
+check 46-quicklink-saved.png 9fd8a8   # "Saved quicklink “Pane issues”"
 "$xdotool" key Escape key Escape; sleep 1
 stop_pane
-mkdir -p "$out/xdg"
 printf '#!/bin/sh\necho "$1" >"%s/opened-link.txt"\n' "$out" >"$out/browser.sh"
 chmod +x "$out/browser.sh"
 rm -f "$out/opened-link.txt"
-unset XDG_CURRENT_DESKTOP DESKTOP_SESSION DBUS_SESSION_BUS_ADDRESS GNOME_DESKTOP_SESSION_ID KDE_FULL_SESSION
-# No desktop settings of the user choose the browser: only BROWSER.
-export BROWSER="$(cd "$out" && pwd)/browser.sh" XDG_CONFIG_HOME="$out/xdg" XDG_CONFIG_DIRS="$out/xdg" \
-  XDG_DATA_HOME="$out/xdg" XDG_DATA_DIRS="$out/xdg"
+# Only the recording script may open the link. No desktop session may choose
+# a browser: xdg-open would ask it (gio, kde-open, ...) for the user's.
+# XDG_CONFIG_HOME and XDG_DATA_HOME of the smoke's own, replacing the user's,
+# make the script the default for web links, and every way xdg-open finds a
+# default checks those before the system's; BROWSER, its last resort, is the
+# script too. XDG_DATA_DIRS and XDG_CONFIG_DIRS keep the system's folders:
+# Pane's Vulkan driver is found there (/usr/share/vulkan/icd.d), and without
+# one Pane has no window on CI.
+unset XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION GDMSESSION DBUS_SESSION_BUS_ADDRESS \
+  GNOME_DESKTOP_SESSION_ID KDE_FULL_SESSION KDE_SESSION_VERSION MATE_DESKTOP_SESSION_ID
+xdg=$(cd "$out" && pwd)/xdg
+rm -rf "$xdg"
+mkdir -p "$xdg/applications"
+cat >"$xdg/applications/pane-smoke-browser.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Pane Smoke Browser
+Exec=$(cd "$out" && pwd)/browser.sh %u
+MimeType=x-scheme-handler/http;x-scheme-handler/https;
+NoDisplay=true
+EOF
+printf '[Default Applications]\nx-scheme-handler/http=pane-smoke-browser.desktop\nx-scheme-handler/https=pane-smoke-browser.desktop\n' \
+  >"$xdg/mimeapps.list"
+cp "$xdg/mimeapps.list" "$xdg/applications/mimeapps.list"
+export BROWSER="$(cd "$out" && pwd)/browser.sh" XDG_CONFIG_HOME="$xdg" XDG_DATA_HOME="$xdg"
+if command -v xdg-mime >/dev/null; then
+  handler=$(xdg-mime query default x-scheme-handler/https)
+  [ "$handler" = pane-smoke-browser.desktop ] || { echo "web links would open with $handler, not the smoke's script"; exit 1; }
+fi
 start_pane
 "$xdotool" windowfocus --sync "$window"
 "$xdotool" type --delay 50 'pane iss'; sleep 2
-capture 34-quicklink-found.png
-check 34-quicklink-found.png 364355 3000   # the selected quicklink row
+capture 47-quicklink-found.png
+check 47-quicklink-found.png 364355 3000   # the selected quicklink row
 "$xdotool" key Return; sleep 3
-capture 35-quicklink-opened.png
-check 35-quicklink-opened.png 9fd8a8   # "Opened https://example.com/pane-issues"
+capture 48-quicklink-opened.png
+check 48-quicklink-opened.png 9fd8a8   # "Opened https://example.com/pane-issues"
 [ "$(cat "$out/opened-link.txt")" = https://example.com/pane-issues ] || { echo "the link handler was not asked to open the quicklink"; exit 1; }
-python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{33-quicklink-saved,34-quicklink-found,35-quicklink-opened}.png
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{46-quicklink-saved,47-quicklink-found,48-quicklink-opened}.png
+stop_pane
+
+# Uninstall the settings sample, keeping its saved data: its row follows the
+# eight Clear cache rows. Pane asks first, showing its saved data, and the first
+# choice keeps its settings and content while its copy and credential go.
+# Installing the same folder again finds its formal style and note, signed out.
+start_pane
+"$xdotool" windowfocus --sync "$window"
+for ((i = 0; i < 20; i++)); do "$xdotool" key Down; done   # the last row
+"$xdotool" key Return; sleep 1
+for ((i = 0; i < 25; i++)); do "$xdotool" key Down; done
+"$xdotool" key Return; sleep 1   # "Uninstall Settings sample"
+capture 49-confirm-uninstall.png
+check 49-confirm-uninstall.png aab4c0   # what is removed and the saved data
+"$xdotool" key Return; sleep 2   # "Uninstall and keep saved data"
+capture 50-uninstalled.png
+check 50-uninstalled.png 9fd8a8   # "Uninstalled Settings sample; its settings and content are kept"
+stop_pane
+grep -q '"retained"' "$out/data/extensions/installed.json" || { echo "kept data not recorded"; exit 1; }
+if grep -q 'sample-token' "$out/data/extensions/credentials.json"; then echo "credential not removed"; exit 1; fi
+grep -q '"greeting-style": "formal"' "$out/data/extensions/settings.json" || { echo "setting not kept"; exit 1; }
+grep -q '"note": "Water the plants"' "$out/data/extensions/content.json" || { echo "note not kept"; exit 1; }
+start_pane --install target/guests/packages/sample-settings
+"$xdotool" windowfocus --sync "$window"
+"$xdotool" key Return; sleep 2   # Install; Greeting is selected
+"$xdotool" key Return; sleep 3   # open Greeting
+for ((i = 0; i < 5; i++)); do "$xdotool" key Down; done
+"$xdotool" key Return; sleep 2   # "Show what Pane keeps"
+capture 51-reinstalled.png
+check 51-reinstalled.png 9fd8a8   # "Style: formal · Note: Water the plants · Signed in: no ..."
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out/43-kept-after-clear.png" "$out/51-reinstalled.png"
+"$xdotool" key Escape; sleep 1
+stop_pane
+if grep -q '"retained"' "$out/data/extensions/installed.json"; then echo "retained record not dropped"; exit 1; fi
+
+# Global hotkeys: in Manage extensions, the settings sample's command,
+# Greeting, is given Ctrl+Alt+G by pressing it on its hotkey screen (its row
+# follows the package's state, Reload, Clear cache and Uninstall rows).
+# With Pane no longer focused, pressing the hotkey opens Greeting in Pane's
+# window, also after a restart; once the extension is disabled, pressing it does nothing.
+# A data folder of its own keeps the rows in a known order. Only the Xvfb
+# display is touched: Pane's key grab is on DISPLAY, and WAYLAND_DISPLAY is
+# unset for the whole smoke.
+unfocus_pane() {   # focus the root window: no Pane window has focus
+  "$xdotool" windowfocus "$("$xdotool" search --maxdepth 0 '.*' 2>/dev/null | head -1)"; sleep 1
+  [ "$("$xdotool" getwindowfocus 2>/dev/null)" != "$window" ] || { echo "Pane still has focus"; exit 1; }
+}
+press_hotkey() { "$xdotool" key ctrl+alt+g; sleep 3; }
+export PANE_DATA_DIR=$out/hotkeys-data
+rm -rf "$PANE_DATA_DIR"
+start_pane --install target/guests/packages/sample-settings
+"$xdotool" windowfocus --sync "$window"
+"$xdotool" key Return; sleep 2   # Install; Greeting is selected
+for ((i = 0; i < 10; i++)); do "$xdotool" key Down; done   # Manage extensions…
+"$xdotool" key Return; sleep 1
+"$xdotool" key Down Down Down Down Return; sleep 1   # "Hotkey for Greeting"
+capture 52-hotkey-screen.png
+check 52-hotkey-screen.png aab4c0   # "Press the keys that should open Greeting ..."
+"$xdotool" key ctrl+alt+g; sleep 2
+capture 53-hotkey-assigned.png
+check 53-hotkey-assigned.png 9fd8a8   # "Ctrl+Alt+G now opens Greeting"
+"$xdotool" key Escape; sleep 1   # root search
+unfocus_pane
+capture 54-unfocused.png
+press_hotkey
+capture 55-hotkey-opened.png
+check 55-hotkey-opened.png 364355 3000   # Greeting's first item, selected
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{53-hotkey-assigned,55-hotkey-opened}.png
+stop_pane
+grep -q '"ctrl+alt+g"' "$PANE_DATA_DIR/extensions/hotkeys.json" || { echo "hotkey not recorded"; exit 1; }
+start_pane
+unfocus_pane
+press_hotkey
+capture 56-hotkey-after-restart.png
+check 56-hotkey-after-restart.png 364355 3000   # Greeting's first item, selected
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{54-unfocused,56-hotkey-after-restart}.png
+"$xdotool" windowfocus --sync "$window"   # no window manager: Pane is focused here
+"$xdotool" key Escape; sleep 1
+for ((i = 0; i < 10; i++)); do "$xdotool" key Down; done   # Manage extensions…
+"$xdotool" key Return; sleep 1
+"$xdotool" key Return; sleep 2   # disable Settings sample
+"$xdotool" key Escape; sleep 1
+capture 57-disabled.png   # root search
+unfocus_pane
+press_hotkey
+"$xdotool" windowfocus --sync "$window"; sleep 1
+capture 58-disabled-pressed.png   # still root search: nothing opened
+python3 "$(dirname "$0")/check_screenshot.py" --same "$out"/{57-disabled,58-disabled-pressed}.png
 stop_pane
 echo "screenshots in $out"

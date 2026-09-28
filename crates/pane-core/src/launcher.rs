@@ -9,17 +9,30 @@
 //! Every reply is checked against the screen it was requested from: once the
 //! user has left that screen, the reply is discarded, and a custom view that
 //! opened after the user left is closed again.
+//!
+//! A call into an installed package also belongs to the package's
+//! generation current when the user asked for it (see `generation`):
+//! disabling, reloading or updating the package ends it, which stops the call
+//! in the runtime, and its answer is never shown, even on a screen that is
+//! still current. Leaving a screen only discards its replies; it does not
+//! stop the call.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+mod hotkeys;
+mod indexed;
+
+use crate::extension_data::{ExtensionData, PackageData};
+use crate::generation::End;
+use crate::hotkeys::{self as system_hotkeys, Hotkeys};
 use crate::links::{self, LinkOpener, NoOpener};
 use crate::operations::{self, Installed};
 use crate::packages::{
-    InstalledPackage, PackageError, PackageIdentity, SourcePackage, Store, folder_name,
+    InstalledPackage, PackageError, PackageIdentity, SavedData, SourcePackage, Store, folder_name,
 };
 use crate::platform::{self, Platform};
 use crate::runtime::{
@@ -27,7 +40,12 @@ use crate::runtime::{
     RootAction, RootResult as ComputedResult, Runtime, ViewEvent, ViewId,
 };
 use crate::search::{self, Keys, Query};
-use crate::settings::{PackageSettings, Settings};
+
+mod reload;
+mod uninstall;
+
+use hotkeys::Bindings;
+use reload::StartFailures;
 
 /// The id of the root row that installs a package from a local folder.
 const INSTALL_FROM_FOLDER: &str = "pane.install-from-folder";
@@ -65,6 +83,31 @@ pub enum Screen {
     /// A custom view opened from an item of the command's list view. It has
     /// no rows.
     CustomView(CustomViewSnapshot),
+    /// `question` about an installed package before Pane acts on it, with
+    /// lines of information under the title, answered by choosing a row.
+    Confirm {
+        question: Question,
+        details: Vec<String>,
+    },
+    /// Asks for the keys of a global hotkey that opens the installed command
+    /// with id `command` from any application, with lines of information
+    /// under the title. The window sends the keys pressed to
+    /// [`Launcher::record_hotkey`]; the rows offer to remove its hotkey.
+    Hotkey {
+        command: String,
+        details: Vec<String>,
+    },
+}
+
+/// What a confirmation screen asks before Pane acts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Question {
+    /// Whether to clear the cache of the installed package with this
+    /// identity.
+    ClearCache(PackageIdentity),
+    /// Whether to uninstall the installed package with this identity, and
+    /// whether to keep its saved data.
+    Uninstall(PackageIdentity),
 }
 
 /// A selectable row.
@@ -170,7 +213,10 @@ impl LauncherView {
     /// compatibility; empty on screens without any.
     pub fn details(&self) -> &[String] {
         match &self.screen {
-            Screen::Package { details } | Screen::Extensions { details } => details,
+            Screen::Package { details }
+            | Screen::Extensions { details }
+            | Screen::Confirm { details, .. }
+            | Screen::Hotkey { details, .. } => details,
             _ => &[],
         }
     }
@@ -202,15 +248,20 @@ pub struct Launcher {
     installation: Option<Installation>,
     /// Opens the web links of computed results.
     links: Arc<dyn LinkOpener>,
+    /// Registers the global hotkeys the user assigns with the system.
+    hotkeys: Arc<dyn Hotkeys>,
     state: Arc<Mutex<State>>,
 }
 
-/// Pane's managed package location and the installed packages' settings,
+/// Pane's managed package location and the installed packages' extension
+/// data,
 /// kept beside it.
 #[derive(Clone)]
 struct Installation {
     store: Arc<Mutex<Store>>,
-    settings: Settings,
+    data: ExtensionData,
+    /// Where they are kept, with Pane's other records such as the hotkeys.
+    dir: PathBuf,
 }
 
 struct State {
@@ -223,9 +274,12 @@ struct State {
     /// The root results commands computed from the current query, listed
     /// first; each command's results are added when it answers.
     computed: Vec<Computed>,
+    /// The root results commands supplied ahead of the query, such as the
+    /// installed applications, listed for a query that is not blank.
+    indexes: indexed::Indexes,
     /// Incremented on every search, so that an answer arriving for an
     /// earlier search, even of the same query, is discarded.
-    search_generation: u64,
+    search_epoch: u64,
     /// The component of the command whose view is open.
     open: Option<PathBuf>,
     /// The form on screen, if one is open.
@@ -234,16 +288,77 @@ struct State {
     custom_view: Option<OpenCustomView>,
     /// Incremented on every navigation, so a reply that arrives after the
     /// user has left the screen it was requested from is discarded.
-    screen_generation: u64,
+    screen_epoch: u64,
     /// The installed packages. Whether each is enabled here is the user's
     /// latest choice, which applies at once, even while it is still being
     /// recorded.
     packages: Vec<InstalledPackage>,
-    /// Packages whose enabling or disabling is still being recorded; another
-    /// change to one of them is ignored meanwhile.
-    changing: Vec<PackageIdentity>,
+    /// Packages being enabled or disabled, reloaded or updated, with which;
+    /// another change to one of them is refused meanwhile (see
+    /// [`State::claim`]).
+    changing: HashMap<PackageIdentity, Changing>,
     /// Why the installed packages could not be read, if they could not.
     store_problem: Option<String>,
+    /// Packages whose reloaded code failed to start, each with why.
+    failed: StartFailures,
+    /// The global hotkeys the user assigned to commands.
+    bindings: Bindings,
+}
+
+/// What is happening to a package, which stops another change to it
+/// meanwhile.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Changing {
+    /// Its enabling or disabling has taken effect and is being recorded.
+    Recording,
+    /// It is being reloaded, or started again after it failed to start.
+    Reloading,
+    /// Its managed copy is being replaced from a package folder.
+    Updating,
+    /// It is being uninstalled.
+    Uninstalling,
+}
+
+impl State {
+    /// The installed package with `identity`.
+    fn package(&self, identity: &PackageIdentity) -> Option<&InstalledPackage> {
+        self.packages
+            .iter()
+            .find(|package| package.identity == *identity)
+    }
+
+    /// The title of the installed package with `identity`, or its identity if
+    /// it is no longer installed.
+    fn title_of(&self, identity: &PackageIdentity) -> String {
+        self.package(identity)
+            .map(InstalledPackage::title)
+            .unwrap_or_else(|| identity.to_string())
+    }
+
+    /// Notes that `what` begins on the package with `identity`, unless
+    /// something else is happening to it: then it says what, and returns
+    /// false. A second enabling or disabling while one is recorded is ignored
+    /// without a word, as pressing Enter twice would do.
+    fn claim(&mut self, identity: &PackageIdentity, what: Changing) -> bool {
+        let busy = match self.changing.get(identity) {
+            None => {
+                self.changing.insert(identity.clone(), what);
+                return true;
+            }
+            Some(Changing::Recording) => return false,
+            Some(Changing::Reloading) => "is reloading",
+            Some(Changing::Updating) => "is updating",
+            Some(Changing::Uninstalling) => "is being uninstalled",
+        };
+        self.view.status = Status::Error(format!("{} {busy}", self.title_of(identity)));
+        false
+    }
+
+    /// Notes that what began with [`State::claim`] on the package with
+    /// `identity` has ended.
+    fn release(&mut self, identity: &PackageIdentity) {
+        self.changing.remove(identity);
+    }
 }
 
 /// An enabling or disabling that has taken effect and is being recorded.
@@ -331,6 +446,8 @@ enum Entry {
     Copy(String),
     /// Open this web address with the link opener (root).
     OpenUrl(String),
+    /// Open the installed application `id`, named `name` (root).
+    OpenApplication { id: String, name: String },
     /// Open the command with this component (root).
     Open(PathBuf),
     /// Explain why this installed package cannot load (root).
@@ -353,12 +470,34 @@ enum Entry {
     Manage,
     /// Enable this installed package if it is disabled, else disable it.
     Toggle(PackageIdentity),
+    /// Reload this installed package from its source folder.
+    Reload(PackageIdentity),
+    /// Start again this package, whose reloaded code failed to start.
+    Retry(PackageIdentity),
+    /// Ask whether to clear this installed package's cache (extension list).
+    AskClearCache(PackageIdentity),
+    /// Clear this installed package's cache (confirmation).
+    ClearCache(PackageIdentity),
+    /// Ask for the keys of the hotkey of the command with this id
+    /// (extension list).
+    AskHotkey(String),
+    /// Remove the hotkey of the command with this id (hotkey screen).
+    RemoveHotkey(String),
+    /// Ask whether to uninstall this installed package, and whether to keep
+    /// its saved data (extension list).
+    AskUninstall(PackageIdentity),
+    /// Uninstall this installed package, keeping or deleting its saved data
+    /// (confirmation).
+    Uninstall(PackageIdentity, SavedData),
+    /// Return to the extension list without acting (confirmation).
+    Cancel,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Mode {
     Install,
-    Update,
+    /// Replace the managed copy of the installed package with this identity.
+    Update(PackageIdentity),
 }
 
 impl Launcher {
@@ -377,7 +516,8 @@ impl Launcher {
         packages_dir: PathBuf,
     ) -> Self {
         let installation = Installation {
-            settings: Settings::open(&packages_dir),
+            data: ExtensionData::open(&packages_dir),
+            dir: packages_dir.clone(),
             store: Arc::new(Mutex::new(Store::open(packages_dir))),
         };
         Launcher::create(runtime, commands, Some(installation))
@@ -388,12 +528,13 @@ impl Launcher {
         commands: Vec<CommandRegistration>,
         installation: Option<Installation>,
     ) -> Self {
-        let (packages, store_problem) = match &installation {
+        let (packages, store_problem, bindings) = match &installation {
             Some(installation) => {
                 let store = installation.store.lock().unwrap_or_else(|p| p.into_inner());
-                (store.installed(), store.problem())
+                let bindings = Bindings::open(&installation.dir);
+                (store.installed(), store.problem(), bindings)
             }
-            None => (Vec::new(), None),
+            None => (Vec::new(), None, Bindings::default()),
         };
         let state = State {
             // Replaced by root search below.
@@ -401,19 +542,22 @@ impl Launcher {
             entries: Vec::new(),
             root: Vec::new(),
             computed: Vec::new(),
-            search_generation: 0,
+            indexes: indexed::Indexes::default(),
+            search_epoch: 0,
             open: None,
             form: None,
             custom_view: None,
-            screen_generation: 0,
+            screen_epoch: 0,
             packages,
-            changing: Vec::new(),
+            changing: HashMap::new(),
             store_problem,
+            failed: StartFailures::default(),
+            bindings,
         };
         if let Some(installation) = &installation {
             for package in &state.packages {
                 installation
-                    .settings
+                    .data
                     .set_enabled(&package.identity, package.enabled);
             }
         }
@@ -422,18 +566,19 @@ impl Launcher {
             commands: commands.into(),
             installation,
             links: Arc::new(NoOpener),
+            hotkeys: system_hotkeys::none(),
             state: Arc::new(Mutex::new(state)),
         };
         if let (Ok(runtime), Some(installation)) = (&launcher.runtime, &launcher.installation) {
             // Operation calls see the packages as the launcher has them.
             let state = Arc::downgrade(&launcher.state);
-            let settings = installation.settings.clone();
+            let data = installation.data.clone();
             runtime.set_directory(Arc::new(move || Installed {
                 packages: state.upgrade().map_or_else(Vec::new, |state| {
                     let state = state.lock().unwrap_or_else(|p| p.into_inner());
                     state.packages.clone()
                 }),
-                settings: Some(settings.clone()),
+                data: Some(data.clone()),
             }));
         }
         launcher.show_root(&mut launcher.lock(), None);
@@ -445,6 +590,16 @@ impl Launcher {
     /// that this Pane has no link handler.
     pub fn with_link_opener(self, links: Arc<dyn LinkOpener>) -> Self {
         Launcher { links, ..self }
+    }
+
+    /// This launcher registering the global hotkeys the user assigns with
+    /// `hotkeys`, normally the system's ([`crate::hotkeys::native`]); the
+    /// recorded ones are registered now. Without it, assigning a hotkey
+    /// explains that this Pane has none.
+    pub fn with_hotkeys(self, hotkeys: Arc<dyn Hotkeys>) -> Self {
+        let launcher = Launcher { hotkeys, ..self };
+        launcher.sync_hotkeys(&mut launcher.lock());
+        launcher
     }
 
     pub fn view(&self) -> LauncherView {
@@ -485,37 +640,137 @@ impl Launcher {
     /// as it answers. Their answers are discarded if the query has changed
     /// meanwhile, and a command that fails is listed as a result explaining
     /// the failure.
+    ///
+    /// The first query that is not blank since root search was shown also
+    /// asks the enabled commands that supply results ahead of the query
+    /// (such as the installed applications), after those; the future lists
+    /// their results, matched like titles, when they answer, and they are
+    /// kept for later queries. Until then the results kept from before are
+    /// listed.
     pub fn set_query(&self, query: &str) -> impl Future<Output = ()> + Send + 'static {
         let mut state = self.lock();
-        let asked = match &state.view.screen {
+        let (asked, indexing) = match &state.view.screen {
             Screen::Root { query: current } if current != query => {
                 self.search(&mut state, query);
-                self.ask_for_root_results(&state, query)
+                let indexing = self.ask_for_indexed_results(&mut state, query);
+                (self.ask_for_root_results(&state, query), indexing)
             }
             // Searching the same query again changes nothing, not even the
             // selection.
-            _ => Vec::new(),
+            _ => (Vec::new(), Vec::new()),
         };
         let query = query.to_owned();
-        let generation = state.screen_generation;
-        let search = state.search_generation;
+        let epoch = state.screen_epoch;
+        let search = state.search_epoch;
         drop(state);
         let launcher = self.clone();
         async move {
             if !asked.is_empty() {
                 launcher
-                    .show_root_results(generation, search, query, asked)
+                    .show_root_results(epoch, search, query, asked)
                     .await
             }
+            launcher.show_indexed_results(indexing).await;
         }
+    }
+
+    /// The enabled commands that supply root results ahead of the query and
+    /// are to be asked now, each with its settings; none for a blank query.
+    fn ask_for_indexed_results(
+        &self,
+        state: &mut State,
+        query: &str,
+    ) -> Vec<(CommandRegistration, Option<PackageData>)> {
+        if query.trim().is_empty() {
+            return Vec::new();
+        }
+        let commands = state
+            .packages
+            .iter()
+            .filter(|package| package.enabled)
+            .flat_map(|package| {
+                let data = self
+                    .installation
+                    .as_ref()
+                    .map(|installation| installation.data.owned_by(&package.identity));
+                package
+                    .indexed_result_commands()
+                    .into_iter()
+                    .map(move |command| (command, data.clone()))
+            })
+            .collect();
+        state.indexes.begin_asking(commands)
+    }
+
+    /// Asks each of `commands` in turn for its results ahead of the query
+    /// and keeps them, listing them in root search if it is on screen,
+    /// whatever the query is by then. A command disabled or replaced
+    /// meanwhile contributes nothing.
+    async fn show_indexed_results(
+        &self,
+        commands: Vec<(CommandRegistration, Option<PackageData>)>,
+    ) {
+        for (command, data) in commands {
+            let answer = match self.runtime() {
+                Ok(runtime) => {
+                    runtime
+                        .indexed_results_with(&command.component, data.clone())
+                        .await
+                }
+                Err(error) => Err(error),
+            };
+            let mut state = self.lock();
+            let state = &mut *state;
+            if data.as_ref().and_then(PackageData::stopped).is_some() {
+                continue;
+            }
+            state.indexes.answer(&command, answer);
+            if let Some(query) = state.view.query().map(str::to_owned) {
+                relist_root(state, &query);
+            }
+        }
+    }
+
+    /// Forgets the results supplied ahead of the query by commands that are
+    /// no longer enabled, or were replaced.
+    fn forget_indexes(state: &mut State) {
+        let indexing: Vec<PathBuf> = state
+            .packages
+            .iter()
+            .filter(|package| package.enabled)
+            .flat_map(|package| package.indexed_result_commands())
+            .map(|command| command.component)
+            .collect();
+        state
+            .indexes
+            .retain(|component| indexing.iter().any(|kept| kept == component));
+    }
+
+    /// Opens the installed application `id`, named `name`, off the calling
+    /// thread, and reports whether the system opened it.
+    async fn open_application(&self, epoch: u64, id: String, name: String) {
+        let opened = match self.runtime() {
+            Ok(runtime) => {
+                let applications = runtime.applications();
+                off_thread(move || applications.open(&id)).await
+            }
+            Err(error) => Err(error.to_string()),
+        };
+        let Some(mut state) = self.lock_if_current(epoch) else {
+            return;
+        };
+        state.view.status = match opened {
+            Ok(()) => Status::Result(format!("Opened {name}")),
+            Err(problem) => Status::Error(format!("Could not open {name}: {problem}")),
+        };
     }
 
     /// Shows the root results matching `query` from metadata alone; results
     /// computed for an earlier query are gone.
     fn search(&self, state: &mut State, query: &str) {
-        state.search_generation += 1;
+        state.search_epoch += 1;
         state.computed.clear();
-        let (rows, entries) = root_rows(&state.root, &state.computed, query);
+        let (rows, entries) = root_rows(state, query);
         state.view.screen = Screen::Root {
             query: query.to_owned(),
         };
@@ -525,13 +780,13 @@ impl Launcher {
     }
 
     /// The enabled commands that compute root results, each with its
-    /// settings, to be asked for their results for `query`; none for a blank
+    /// extension data, to be asked for their results for `query`; none for a blank
     /// query.
     fn ask_for_root_results(
         &self,
         state: &State,
         query: &str,
-    ) -> Vec<(CommandRegistration, Option<PackageSettings>)> {
+    ) -> Vec<(CommandRegistration, Option<PackageData>)> {
         if query.trim().is_empty() {
             return Vec::new();
         }
@@ -540,14 +795,14 @@ impl Launcher {
             .iter()
             .filter(|package| package.enabled)
             .flat_map(|package| {
-                let settings = self
+                let data = self
                     .installation
                     .as_ref()
-                    .map(|installation| installation.settings.owned_by(&package.identity));
+                    .map(|installation| installation.data.owned_by(&package.identity));
                 package
                     .root_result_commands()
                     .into_iter()
-                    .map(move |command| (command, settings.clone()))
+                    .map(move |command| (command, data.clone()))
             })
             .collect()
     }
@@ -562,48 +817,35 @@ impl Launcher {
     /// asked before it.
     async fn show_root_results(
         &self,
-        generation: u64,
+        epoch: u64,
         search: u64,
         query: String,
-        commands: Vec<(CommandRegistration, Option<PackageSettings>)>,
+        commands: Vec<(CommandRegistration, Option<PackageData>)>,
     ) {
-        for (command, settings) in commands {
+        for (command, data) in commands {
             let answer = match self.runtime() {
                 Ok(runtime) => {
                     runtime
-                        .root_results_with(&command.component, &query, settings)
+                        .root_results_with(&command.component, &query, data.clone())
                         .await
                 }
                 Err(error) => Err(error),
             };
-            let Some(mut state) = self.lock_if_current(generation) else {
+            let Some(mut state) = self.lock_if_current(epoch) else {
                 return;
             };
-            if state.search_generation != search || state.view.query() != Some(query.as_str()) {
+            if state.search_epoch != search || state.view.query() != Some(query.as_str()) {
                 return;
             }
             let state = &mut *state;
-            // A command disabled meanwhile contributes nothing.
-            if disabled_owner(state, &command.component).is_some() {
+            // A command disabled or replaced meanwhile contributes nothing.
+            if data.as_ref().and_then(PackageData::stopped).is_some() {
                 continue;
             }
             state
                 .computed
                 .extend(computed_results(command, &query, answer));
-            // The best match stays selected, now that better ones may be
-            // first; a row the user moved to stays selected.
-            let keep = state
-                .view
-                .selected
-                .filter(|&index| index > 0)
-                .and_then(|index| state.view.rows.get(index))
-                .map(|row| row.id.clone());
-            let (rows, entries) = root_rows(&state.root, &state.computed, &query);
-            state.view.selected = keep
-                .and_then(|id| rows.iter().position(|row| row.id == id))
-                .or_else(|| first_index(&rows));
-            state.view.rows = rows;
-            state.entries = entries;
+            relist_root(state, &query);
         }
     }
 
@@ -650,13 +892,18 @@ impl Launcher {
         match &state.view.screen {
             Screen::Form(_) => {
                 let form = state.form.take().expect("a form is open");
-                state.screen_generation += 1;
+                state.screen_epoch += 1;
                 state.view = LauncherView {
                     status: Status::Idle,
                     ..form.return_to
                 };
             }
             Screen::CustomView(_) => self.return_from_custom_view(&mut state, Status::Idle),
+            Screen::Confirm { .. } => self.leave_confirm(&mut state),
+            Screen::Hotkey { command, .. } => {
+                let command = command.clone();
+                self.show_extensions_at_hotkey(&mut state, &command);
+            }
             Screen::Command | Screen::Package { .. } | Screen::Extensions { .. } => {
                 self.show_root(&mut state, None)
             }
@@ -682,6 +929,9 @@ impl Launcher {
             .selected
             .and_then(|index| state.entries.get(index).cloned());
         let mut change = None;
+        let mut reload = None;
+        let mut hotkey_change = None;
+        let mut uninstall = None;
         let entry = match entry {
             Some(Entry::Broken(problem) | Entry::Unavailable(problem)) => {
                 state.view.status = Status::Error(problem);
@@ -709,15 +959,48 @@ impl Launcher {
                 self.show_extensions(&mut state);
                 None
             }
+            Some(Entry::AskClearCache(identity)) => {
+                self.show_clear_cache(&mut state, &identity);
+                None
+            }
+            Some(Entry::AskUninstall(identity)) => {
+                self.show_uninstall(&mut state, &identity);
+                None
+            }
+            Some(Entry::Uninstall(identity, saved)) => {
+                uninstall = self.begin_uninstall(&mut state, identity, saved);
+                None
+            }
+            Some(Entry::Cancel) => {
+                self.leave_confirm(&mut state);
+                None
+            }
+            Some(Entry::AskHotkey(command)) => {
+                self.show_hotkey(&mut state, &command);
+                None
+            }
+            Some(Entry::RemoveHotkey(command)) => {
+                hotkey_change = self.remove_hotkey(&mut state, &command);
+                None
+            }
             Some(Entry::Toggle(identity)) => {
                 // The package's state when the user pressed, not when the
                 // future runs.
-                let enable = state
-                    .packages
-                    .iter()
-                    .find(|package| package.identity == identity)
-                    .is_some_and(|package| !package.enabled);
+                let enable = state.package(&identity).is_some_and(|p| !p.enabled);
                 change = self.begin_change(&mut state, identity, enable);
+                None
+            }
+            Some(Entry::Reload(identity)) => {
+                reload = self.begin_reload(&mut state, identity, reload::Attempt::Reload);
+                None
+            }
+            Some(Entry::Retry(identity)) => {
+                reload = self.begin_reload(&mut state, identity, reload::Attempt::Retry);
+                None
+            }
+            Some(Entry::Install(_, Mode::Update(identity)))
+                if !state.claim(&identity, Changing::Updating) =>
+            {
                 None
             }
             Some(Entry::InstallFromFolder) | None => None,
@@ -726,29 +1009,48 @@ impl Launcher {
                 Some(entry)
             }
         };
-        let generation = state.screen_generation;
+        let epoch = state.screen_epoch;
         let open = state.open.clone();
+        // A call into the package belongs to its generation as of now, not
+        // as of when the returned future first runs.
+        let called = match &entry {
+            Some(Entry::Open(component)) => Some(component),
+            Some(Entry::Run(_) | Entry::CustomView(..)) => open.as_ref(),
+            _ => None,
+        };
+        let data = called.and_then(|component| self.data_in(&state, component));
         drop(state);
         let launcher = self.clone();
         async move {
             if let Some(change) = change {
-                launcher.finish_change(generation, change).await;
+                launcher.finish_change(epoch, change).await;
+            }
+            if let Some(reload) = reload {
+                launcher.finish_reload(epoch, reload).await;
+            }
+            if let Some(hotkey_change) = hotkey_change {
+                launcher.finish_hotkey_change(hotkey_change).await;
+            }
+            if let Some(uninstall) = uninstall {
+                launcher.finish_uninstall(epoch, uninstall).await;
             }
             match entry {
-                Some(Entry::Open(component)) => launcher.open_command(generation, component).await,
+                Some(Entry::Open(component)) => launcher.open_command(epoch, component, data).await,
+                Some(Entry::OpenApplication { id, name }) => {
+                    launcher.open_application(epoch, id, name).await
+                }
                 Some(Entry::Run(item_id)) => {
                     if let Some(component) = open {
-                        launcher.run_action(generation, component, item_id).await
+                        launcher.run_action(epoch, component, item_id, data).await
                     }
                 }
-                Some(Entry::Install(folder, mode)) => {
-                    launcher.install(generation, folder, mode).await
-                }
-                Some(Entry::OpenUrl(url)) => launcher.open_url(generation, url).await,
+                Some(Entry::Install(folder, mode)) => launcher.install(epoch, folder, mode).await,
+                Some(Entry::OpenUrl(url)) => launcher.open_url(epoch, url).await,
+                Some(Entry::ClearCache(identity)) => launcher.clear_cache(epoch, identity).await,
                 Some(Entry::CustomView(item_id, info)) => {
                     if let Some(component) = open {
                         launcher
-                            .open_custom_view(generation, component, item_id, info)
+                            .open_custom_view(epoch, component, item_id, info, data)
                             .await
                     }
                 }
@@ -759,6 +1061,14 @@ impl Launcher {
                     | Entry::InstallFromFolder
                     | Entry::Manage
                     | Entry::Toggle(_)
+                    | Entry::Reload(_)
+                    | Entry::Retry(_)
+                    | Entry::AskClearCache(_)
+                    | Entry::AskHotkey(_)
+                    | Entry::RemoveHotkey(_)
+                    | Entry::AskUninstall(_)
+                    | Entry::Uninstall(..)
+                    | Entry::Cancel
                     | Entry::Form(..),
                 )
                 | None => {}
@@ -771,13 +1081,13 @@ impl Launcher {
     /// package with the same identity is installed. No guest code runs. An
     /// invalid or incompatible package is explained instead.
     pub fn preview_package(&self, folder: &Path) -> impl Future<Output = ()> + Send + 'static {
-        let generation = self.start_running();
+        let epoch = self.start_running();
         let launcher = self.clone();
         let folder = folder.to_path_buf();
         async move {
             let checked = launcher.read_and_check(folder.clone()).await;
             let mut state = launcher.lock();
-            if state.screen_generation != generation {
+            if state.screen_epoch != epoch {
                 return;
             }
             let installed = checked.as_ref().ok().and_then(|package| {
@@ -798,10 +1108,10 @@ impl Launcher {
     /// package whose identity is already installed is rejected: replacing
     /// it is an update.
     pub fn install_package(&self, folder: &Path) -> impl Future<Output = ()> + Send + 'static {
-        let generation = self.start_running();
+        let epoch = self.start_running();
         let launcher = self.clone();
         let folder = folder.to_path_buf();
-        async move { launcher.install(generation, folder, Mode::Install).await }
+        async move { launcher.install(epoch, folder, Mode::Install).await }
     }
 
     /// Enables or disables the installed package with `identity` and
@@ -822,20 +1132,21 @@ impl Launcher {
     ) -> impl Future<Output = ()> + Send + 'static {
         let mut state = self.lock();
         let change = self.begin_change(&mut state, identity.clone(), enabled);
-        let generation = state.screen_generation;
+        let epoch = state.screen_epoch;
         drop(state);
         let launcher = self.clone();
         async move {
             if let Some(change) = change {
-                launcher.finish_change(generation, change).await;
+                launcher.finish_change(epoch, change).await;
             }
         }
     }
 
     /// Applies the user's choice to enable or disable a package, to be
     /// recorded by [`Launcher::finish_change`]. Explains why not and returns
-    /// `None` if there is no such package; returns `None` without a word
-    /// while another change to it is being recorded.
+    /// `None` if there is no such package or it is being reloaded or updated;
+    /// returns `None` without a word while another change to it is being
+    /// recorded.
     fn begin_change(
         &self,
         state: &mut State,
@@ -847,18 +1158,13 @@ impl Launcher {
             state.view.status = Status::Error(error.to_string());
             return None;
         }
-        if !state
-            .packages
-            .iter()
-            .any(|package| package.identity == identity)
-        {
+        if state.package(&identity).is_none() {
             state.view.status = Status::Error(PackageError::NotInstalled(identity).to_string());
             return None;
         }
-        if state.changing.contains(&identity) {
+        if !state.claim(&identity, Changing::Recording) {
             return None;
         }
-        state.changing.push(identity.clone());
         self.apply_enabled(state, &identity, enabled);
         state.view.status = Status::Running;
         Some(Change { identity, enabled })
@@ -866,7 +1172,7 @@ impl Launcher {
 
     /// Records a change begun by [`Launcher::begin_change`], undoing it if
     /// it cannot be recorded.
-    async fn finish_change(&self, generation: u64, change: Change) {
+    async fn finish_change(&self, epoch: u64, change: Change) {
         let Change { identity, enabled } = change;
         let store = self
             .installation
@@ -883,15 +1189,10 @@ impl Launcher {
             .await
         };
         let mut state = self.lock();
-        state.changing.retain(|changing| *changing != identity);
+        state.release(&identity);
         let status = match recorded {
             Ok(()) => {
-                let title = state
-                    .packages
-                    .iter()
-                    .find(|package| package.identity == identity)
-                    .map(InstalledPackage::title)
-                    .unwrap_or_default();
+                let title = state.title_of(&identity);
                 if enabled {
                     Status::Result(format!("Enabled {title}"))
                 } else {
@@ -903,7 +1204,7 @@ impl Launcher {
                 Status::Error(error.to_string())
             }
         };
-        if state.screen_generation == generation {
+        if state.screen_epoch == epoch {
             state.view.status = status;
         }
     }
@@ -912,27 +1213,30 @@ impl Launcher {
     /// without recording it: whether it offers commands and may save
     /// settings, its instances, and the screen showing them.
     fn apply_enabled(&self, state: &mut State, identity: &PackageIdentity, enabled: bool) {
-        let Some(package) = state
-            .packages
-            .iter_mut()
-            .find(|package| package.identity == *identity)
-        else {
+        let Some(package) = state.packages.iter_mut().find(|p| p.identity == *identity) else {
             return;
         };
         package.enabled = enabled;
         if let Some(installation) = &self.installation {
-            installation.settings.set_enabled(identity, enabled);
+            installation.data.set_enabled(identity, enabled);
         }
+        let components: Vec<PathBuf> = package
+            .commands()
+            .into_iter()
+            .map(|command| command.component)
+            .collect();
+        // Its hotkeys are released while it is disabled.
+        self.sync_hotkeys(state);
         if !enabled {
-            let components: Vec<PathBuf> = package
-                .commands()
-                .into_iter()
-                .map(|command| command.component)
-                .collect();
-            // Its instances stop; enabling it again starts fresh ones.
+            // Its results kept for root search go, and so does an answer
+            // from it being awaited.
+            Launcher::forget_indexes(state);
+            // Its instances stop; enabling it again starts fresh ones, so a
+            // failure to start no longer describes it.
             if let Ok(runtime) = self.runtime() {
                 runtime.forget(components.iter().cloned());
             }
+            state.failed.forget(identity);
             if state
                 .open
                 .as_ref()
@@ -942,33 +1246,36 @@ impl Launcher {
                 return;
             }
         }
-        match state.view.screen {
-            Screen::Root { .. } => self.refresh_root(state),
-            Screen::Extensions { .. } => self.refresh_extensions(state),
-            // Other screens show no package state.
-            Screen::Command | Screen::Package { .. } | Screen::Form(_) | Screen::CustomView(_) => {}
-        }
+        self.refresh(state);
     }
 
     fn start_running(&self) -> u64 {
         let mut state = self.lock();
         state.view.status = Status::Running;
-        state.screen_generation
+        state.screen_epoch
     }
 
-    async fn install(&self, generation: u64, folder: PathBuf, mode: Mode) {
+    async fn install(&self, epoch: u64, folder: PathBuf, mode: Mode) {
         let result = match self.installation.as_ref().map(|i| &i.store) {
             None => Err(PackageError::Storage(
                 "this launcher does not install packages".into(),
             )),
             Some(store) => match self.read_and_check(folder).await {
+                // Not installed again while its data is being removed.
+                Ok(package) if self.is_uninstalling(&package.identity) => {
+                    Err(PackageError::Storage(format!(
+                        "{} is being uninstalled; install it again once that is done",
+                        package.manifest.title
+                    )))
+                }
                 Ok(package) => {
                     let store = store.clone();
+                    let mode = mode.clone();
                     off_thread(move || {
                         let mut store = store.lock().unwrap_or_else(|p| p.into_inner());
                         match mode {
                             Mode::Install => store.install(&package),
-                            Mode::Update => store.update(&package),
+                            Mode::Update(_) => store.update(&package),
                         }
                     })
                     .await
@@ -977,53 +1284,79 @@ impl Launcher {
             },
         };
         let mut state = self.lock();
-        let current = state.screen_generation == generation;
+        if let Mode::Update(identity) = &mode {
+            state.release(identity);
+        }
+        let current = state.screen_epoch == epoch;
         match result {
             Ok(installed) => {
                 let message = match (mode, installed.version()) {
                     (Mode::Install, _) => format!("Installed {}", installed.title()),
-                    (Mode::Update, Some(version)) => {
+                    (Mode::Update(_), Some(version)) => {
                         format!("Updated {} to {version}", installed.title())
                     }
-                    (Mode::Update, None) => format!("Updated {}", installed.title()),
+                    (Mode::Update(_), None) => format!("Updated {}", installed.title()),
                 };
                 let first = installed.commands().first().map(|c| c.component.clone());
-                let mut replaced = Vec::new();
-                match state
-                    .packages
-                    .iter_mut()
-                    .find(|package| package.identity == installed.identity)
-                {
-                    Some(package) => {
-                        // The replaced copy's code is not run again, and a
-                        // command of it that is open closes below: its state
-                        // is not carried over (#11, #14).
-                        replaced = package
-                            .commands()
-                            .into_iter()
-                            .map(|c| c.component)
-                            .collect();
-                        if let Ok(runtime) = self.runtime() {
-                            runtime.forget(replaced.iter().cloned());
-                        }
-                        *package = installed;
-                    }
-                    None => state.packages.push(installed),
-                }
-                let replaced_is_open = state
-                    .open
-                    .as_ref()
-                    .is_some_and(|open| replaced.contains(open));
+                let replaced_is_open = self.put_installed(&mut state, installed);
                 if current || replaced_is_open {
                     self.show_root(&mut state, first);
                     state.view.status = Status::Result(message);
-                } else if matches!(state.view.screen, Screen::Root { .. }) {
-                    self.refresh_root(&mut state);
+                } else {
+                    self.refresh(&mut state);
                 }
             }
             Err(error) if current => state.view.status = Status::Error(error.to_string()),
             Err(_) => {}
         }
+    }
+
+    /// Records `installed` as the managed copy of its package: added, or
+    /// replacing the copy before it, whose instances stop. Returns whether a
+    /// command of the replaced copy is open; the caller leaves it, since its
+    /// state is not carried over to the new code.
+    fn put_installed(&self, state: &mut State, installed: InstalledPackage) -> bool {
+        state.failed.forget(&installed.identity);
+        let Some(package) = state
+            .packages
+            .iter_mut()
+            .find(|package| package.identity == installed.identity)
+        else {
+            // An identity installed again after it was uninstalled may save
+            // data again.
+            if let Some(installation) = &self.installation {
+                installation
+                    .data
+                    .set_enabled(&installed.identity, installed.enabled);
+            }
+            state.packages.push(installed);
+            self.sync_hotkeys(state);
+            return false;
+        };
+        // The replaced copy's code is not run again: its generation ends,
+        // which stops its pending calls, and the new code runs in a new one.
+        if let Some(installation) = &self.installation {
+            installation.data.replace_code(&installed.identity);
+        }
+        let replaced: Vec<PathBuf> = package
+            .commands()
+            .into_iter()
+            .map(|c| c.component)
+            .collect();
+        if let Ok(runtime) = self.runtime() {
+            runtime.forget(replaced.iter().cloned());
+        }
+        *package = installed;
+        // A command the new copy no longer has releases its hotkey.
+        self.sync_hotkeys(state);
+        // The replaced copy's results are asked for afresh.
+        state
+            .indexes
+            .retain(|component| !replaced.iter().any(|old| old == component));
+        state
+            .open
+            .as_ref()
+            .is_some_and(|open| replaced.contains(open))
     }
 
     /// Reads the package in `folder` off the calling thread, then has the
@@ -1038,10 +1371,10 @@ impl Launcher {
                 continue;
             }
             checked_components.push(component);
-            let (root_results, operations) = package.manifest.exports_of(component);
+            let exports = package.manifest.exports_of(component);
             let source = package.folder.join(component);
             let checked = match self.runtime() {
-                Ok(runtime) => runtime.check_with(&source, root_results, operations).await,
+                Ok(runtime) => runtime.check_with(&source, exports).await,
                 Err(error) => Err(error),
             };
             checked.map_err(|error| PackageError::Component {
@@ -1058,7 +1391,8 @@ impl Launcher {
     fn show_root(&self, state: &mut State, select: Option<PathBuf>) {
         state.root = self.root_results(state);
         state.computed.clear();
-        let (rows, entries) = root_rows(&state.root, &state.computed, "");
+        state.indexes.stale();
+        let (rows, entries) = root_rows(state, "");
         let selected = select
             .and_then(|component| {
                 entries
@@ -1084,9 +1418,24 @@ impl Launcher {
         };
     }
 
+    /// Updates root search or the extension list on screen after a package
+    /// changed; other screens show no package state.
+    fn refresh(&self, state: &mut State) {
+        match &state.view.screen {
+            Screen::Root { .. } => self.refresh_root(state),
+            Screen::Extensions { .. } => self.refresh_extensions(state),
+            Screen::Command
+            | Screen::Package { .. }
+            | Screen::Form(_)
+            | Screen::CustomView(_)
+            | Screen::Confirm { .. }
+            | Screen::Hotkey { .. } => {}
+        }
+    }
+
     /// Updates the rows of the root search on screen after the installed
     /// packages changed in the background. Unlike navigating, it keeps the
-    /// screen generation, so an action the user started from root still
+    /// screen epoch, so an action the user started from root still
     /// applies, and it keeps the query and the selection on the same row.
     fn refresh_root(&self, state: &mut State) {
         let selected_id = state
@@ -1107,8 +1456,9 @@ impl Launcher {
         state
             .computed
             .retain(|computed| computing.contains(&computed.component));
+        Launcher::forget_indexes(state);
         let query = state.view.query().unwrap_or_default();
-        let (rows, entries) = root_rows(&state.root, &state.computed, query);
+        let (rows, entries) = root_rows(state, query);
         let selected = selected_id
             .and_then(|id| rows.iter().position(|row| row.id == id))
             .or_else(|| first_index(&rows));
@@ -1236,12 +1586,15 @@ impl Launcher {
         if submission.is_some() {
             state.view.status = Status::Running;
         }
-        let generation = state.screen_generation;
+        let epoch = state.screen_epoch;
+        let data = submission
+            .as_ref()
+            .and_then(|(component, ..)| self.data_in(state, component));
         let launcher = self.clone();
         async move {
             if let Some((component, item_id, values)) = submission {
                 launcher
-                    .submit(generation, component, item_id, values)
+                    .submit(epoch, component, item_id, values, data)
                     .await
             }
         }
@@ -1252,27 +1605,27 @@ impl Launcher {
     /// since is not marked, since editing a field clears its error.
     async fn submit(
         &self,
-        generation: u64,
+        epoch: u64,
         component: PathBuf,
         item_id: String,
         values: Vec<FieldValue>,
+        data: Option<PackageData>,
     ) {
-        let settings = self.settings_of(&component);
         let result = match self.runtime() {
             Ok(runtime) => {
                 runtime
-                    .submit_form_with(&component, &item_id, values.clone(), settings)
+                    .submit_form_with(&component, &item_id, values.clone(), data.clone())
                     .await
             }
             Err(error) => Err(error),
         };
-        let Some(mut state) = self.lock_if_current(generation) else {
+        let Some(mut state) = self.lock_if_current(epoch) else {
             return;
         };
         let state = &mut *state;
         state.form.as_mut().expect("a form is open").submitting = false;
-        if let Some(problem) = disabled_owner(state, &component) {
-            // Disabled while it was submitting: its answer is not shown.
+        if let Some(problem) = stopped(state, &component, &data) {
+            // Stopped while it was submitting: its answer is not shown.
             state.view.status = Status::Error(problem);
             return;
         }
@@ -1313,21 +1666,152 @@ impl Launcher {
 
     /// Shows the installed packages, each enabled or disabled.
     fn show_extensions(&self, state: &mut State) {
-        let (rows, entries) = extension_rows(&state.packages);
+        let (rows, entries) = self.extension_rows(state);
         self.leave_command(state);
         state.entries = entries;
         let details = vec![
             "A disabled extension adds no commands and runs nothing; it keeps its settings.".into(),
+            "Reloading replaces an extension's code with its source folder's current build; it \
+             keeps its settings."
+                .into(),
+            "Clearing an extension's cache keeps its settings, content and credentials.".into(),
+            "Uninstalling an extension asks whether to keep its settings and content.".into(),
         ];
         state.view =
             LauncherView::new(Screen::Extensions { details }, "Extensions").with_rows(rows);
     }
 
-    /// Updates the installed packages on screen after one was enabled or
-    /// disabled; the rows stay in place, and so does the selection.
+    /// The extension list's rows: each package's state, reload and cache
+    /// rows, then the hotkey of each command of the enabled packages.
+    fn extension_rows(&self, state: &State) -> (Vec<Row>, Vec<Entry>) {
+        let (mut rows, mut entries) = extension_rows(&state.packages, &state.failed);
+        for (row, entry) in self.hotkey_rows(state) {
+            rows.push(row);
+            entries.push(entry);
+        }
+        (rows, entries)
+    }
+
+    /// Asks whether to clear the cache of the installed package with
+    /// `identity`, saying what is deleted and what is kept.
+    fn show_clear_cache(&self, state: &mut State, identity: &PackageIdentity) {
+        let title = state.title_of(identity);
+        let choice = |title: &str, subtitle: &str| Row {
+            id: title.into(),
+            title: title.into(),
+            subtitle: Some(subtitle.into()),
+            unavailable: None,
+        };
+        state.screen_epoch += 1;
+        state.entries = vec![Entry::ClearCache(identity.clone()), Entry::Cancel];
+        let details = vec![
+            format!("From {identity}"),
+            "Pane deletes the data this extension keeps as its cache. Its settings, content and \
+             credentials are kept, and the extension does not run."
+                .into(),
+        ];
+        let screen = Screen::Confirm {
+            question: Question::ClearCache(identity.clone()),
+            details,
+        };
+        state.view =
+            LauncherView::new(screen, format!("Clear the cache of {title}?")).with_rows(vec![
+                choice("Clear cache", "Delete the cached data now"),
+                choice("Cancel", "Keep the cache"),
+            ]);
+    }
+
+    /// Clears the cache of the installed package with `identity` without
+    /// running it, then shows the extension list with the outcome. An
+    /// instance of it that is running keeps what it holds in memory and may
+    /// save it to its cache again, which the outcome then says.
+    async fn clear_cache(&self, epoch: u64, identity: PackageIdentity) {
+        let cleared = match &self.installation {
+            Some(installation) => {
+                let data = installation.data.clone();
+                let identity = identity.clone();
+                off_thread(move || data.clear_cache(&identity)).await
+            }
+            None => Err("this launcher does not install packages".into()),
+        };
+        let components: Vec<PathBuf> = {
+            let state = self.lock();
+            let package = state.package(&identity);
+            package.map_or_else(Vec::new, |package| {
+                package
+                    .commands()
+                    .into_iter()
+                    .map(|c| c.component)
+                    .collect()
+            })
+        };
+        let running = match self.runtime() {
+            Ok(runtime) => runtime.running().await,
+            Err(_) => Vec::new(),
+        };
+        let still_running = running.iter().any(|path| components.contains(path));
+        let Some(mut state) = self.lock_if_current(epoch) else {
+            return;
+        };
+        let title = state.title_of(&identity);
+        self.show_extensions_at_clear_cache(&mut state, &identity);
+        state.view.status = match cleared {
+            Ok(()) if still_running => Status::Result(format!(
+                "Cleared the cache of {title}. A running instance may write it again until it \
+                 stops."
+            )),
+            Ok(()) => Status::Result(format!("Cleared the cache of {title}")),
+            Err(reason) => Status::Error(format!("Could not clear the cache of {title}: {reason}")),
+        };
+    }
+
+    /// Returns from a confirmation to the extension list without acting.
+    fn leave_confirm(&self, state: &mut State) {
+        let Screen::Confirm { question, .. } = &state.view.screen else {
+            return;
+        };
+        match question.clone() {
+            Question::ClearCache(identity) => self.show_extensions_at_clear_cache(state, &identity),
+            Question::Uninstall(identity) => self.show_extensions_at(
+                state,
+                |entry| matches!(entry, Entry::AskUninstall(asked) if *asked == identity),
+            ),
+        }
+    }
+
+    /// Shows the extension list with the row that clears the cache of the
+    /// package with `identity` selected, where the user asked.
+    fn show_extensions_at_clear_cache(&self, state: &mut State, identity: &PackageIdentity) {
+        self.show_extensions_at(
+            state,
+            |entry| matches!(entry, Entry::AskClearCache(asked) if asked == identity),
+        );
+    }
+
+    /// Shows the extension list with the first row whose entry is `wanted`
+    /// selected, or the first row if there is none.
+    fn show_extensions_at(&self, state: &mut State, wanted: impl Fn(&Entry) -> bool) {
+        self.show_extensions(state);
+        let row = state.entries.iter().position(wanted);
+        if row.is_some() {
+            state.view.selected = row;
+        }
+    }
+
+    /// Updates the installed packages on screen after one changed, keeping
+    /// the selection on the same row.
     fn refresh_extensions(&self, state: &mut State) {
-        let (rows, entries) = extension_rows(&state.packages);
+        let (rows, entries) = self.extension_rows(state);
+        // The same row stays selected; if it is gone (a Retry row once the
+        // package started), the row before it.
+        let selected = state.view.selected.and_then(|index| {
+            let id = &state.view.rows.get(index)?.id;
+            rows.iter()
+                .position(|row| row.id == *id)
+                .or_else(|| Some(index.saturating_sub(1).min(rows.len().checked_sub(1)?)))
+        });
         state.entries = entries;
+        state.view.selected = selected.or_else(|| first_index(&rows));
         state.view.rows = rows;
     }
 
@@ -1335,26 +1819,30 @@ impl Launcher {
     /// closes it again if the user has left the command meanwhile.
     async fn open_custom_view(
         &self,
-        generation: u64,
+        epoch: u64,
         component: PathBuf,
         item_id: String,
         info: CustomViewInfo,
+        data: Option<PackageData>,
     ) {
-        let settings = self.settings_of(&component);
         let result = match self.runtime() {
-            Ok(runtime) => runtime.open_view_with(&component, &item_id, settings).await,
+            Ok(runtime) => {
+                runtime
+                    .open_view_with(&component, &item_id, data.clone())
+                    .await
+            }
             Err(error) => Err(error),
         };
-        let current = self.lock_if_current(generation);
-        let disabled = current
+        let current = self.lock_if_current(epoch);
+        let stopped = current
             .as_ref()
-            .and_then(|state| disabled_owner(state, &component));
-        let Some(mut state) = current.filter(|_| disabled.is_none()) else {
+            .and_then(|state| stopped(state, &component, &data));
+        let Some(mut state) = current.filter(|_| stopped.is_none()) else {
             if let (Ok((id, _)), Ok(runtime)) = (result, self.runtime()) {
                 runtime.close_view(id);
             }
-            if let Some(problem) = disabled {
-                // Disabled while it was opening.
+            if let Some(problem) = stopped {
+                // Stopped while it was opening.
                 self.lock().view.status = Status::Error(problem);
             }
             return;
@@ -1381,7 +1869,7 @@ impl Launcher {
                     moves_in_flight: 0,
                     waiting_move: None,
                 });
-                state.screen_generation += 1;
+                state.screen_epoch += 1;
             }
             Err(error) => state.view.status = Status::Error(error.to_string()),
         }
@@ -1402,7 +1890,7 @@ impl Launcher {
     /// before the next other event. Await every returned future.
     pub fn send_view_event(&self, event: ViewEvent) -> impl Future<Output = ()> + Send + 'static {
         let mut state = self.lock();
-        let generation = state.screen_generation;
+        let epoch = state.screen_epoch;
         // Sent now, so the view handles events in the order of these calls
         // whenever the returned futures are awaited.
         let mut sent: VecDeque<SentEvent> = self.send_to_view(&mut state, event).into();
@@ -1411,9 +1899,9 @@ impl Launcher {
         async move {
             while let Some(event) = sent.pop_front() {
                 let result = event.reply.await;
-                launcher.show_view_answer(generation, event.number, result);
+                launcher.show_view_answer(epoch, event.number, result);
                 if event.is_move {
-                    sent.extend(launcher.finish_move(generation));
+                    sent.extend(launcher.finish_move(epoch));
                 }
             }
         }
@@ -1458,10 +1946,10 @@ impl Launcher {
         sent
     }
 
-    /// Notes that a move sent to the view of `generation` was answered, and
+    /// Notes that a move sent to the view of `epoch` was answered, and
     /// sends the waiting move once no other move is in flight.
-    fn finish_move(&self, generation: u64) -> Option<SentEvent> {
-        let mut state = self.lock_if_current(generation)?;
+    fn finish_move(&self, epoch: u64) -> Option<SentEvent> {
+        let mut state = self.lock_if_current(epoch)?;
         let runtime = self.runtime().ok()?;
         let open = state.custom_view.as_mut()?;
         open.moves_in_flight = open.moves_in_flight.saturating_sub(1);
@@ -1473,8 +1961,8 @@ impl Launcher {
     }
 
     /// Shows the open view's answer to its event number `number`.
-    fn show_view_answer(&self, generation: u64, number: u64, result: Result<Frame, CallError>) {
-        let Some(mut state) = self.lock_if_current(generation) else {
+    fn show_view_answer(&self, epoch: u64, number: u64, result: Result<Frame, CallError>) {
+        let Some(mut state) = self.lock_if_current(epoch) else {
             return;
         };
         let state = &mut *state;
@@ -1504,7 +1992,7 @@ impl Launcher {
     /// from, with `status`, as a new screen.
     fn return_from_custom_view(&self, state: &mut State, status: Status) {
         let return_to = self.close_custom_view(state).expect("a view is open");
-        state.screen_generation += 1;
+        state.screen_epoch += 1;
         state.view = LauncherView {
             status,
             ..return_to
@@ -1518,7 +2006,7 @@ impl Launcher {
         self.close_custom_view(state);
         state.open = None;
         state.form = None;
-        state.screen_generation += 1;
+        state.screen_epoch += 1;
     }
 
     /// Closes the open custom view, if there is one, and returns the command
@@ -1533,13 +2021,13 @@ impl Launcher {
 
     /// Opens `url` with the link opener, off the calling thread, and reports
     /// the outcome while the screen is the one it was opened from.
-    async fn open_url(&self, generation: u64, url: String) {
+    async fn open_url(&self, epoch: u64, url: String) {
         let links = self.links.clone();
         let opened = {
             let url = url.clone();
             off_thread(move || links.open(&url)).await
         };
-        let Some(mut state) = self.lock_if_current(generation) else {
+        let Some(mut state) = self.lock_if_current(epoch) else {
             return;
         };
         state.view.status = match opened {
@@ -1548,40 +2036,70 @@ impl Launcher {
         };
     }
 
-    async fn run_action(&self, generation: u64, component: PathBuf, item_id: String) {
-        let settings = self.settings_of(&component);
+    async fn run_action(
+        &self,
+        epoch: u64,
+        component: PathBuf,
+        item_id: String,
+        data: Option<PackageData>,
+    ) {
         let result = match self.runtime() {
             Ok(runtime) => {
                 runtime
-                    .run_action_with(&component, &item_id, settings)
+                    .run_action_with(&component, &item_id, data.clone())
                     .await
             }
             Err(error) => Err(error),
         };
-        let Some(mut state) = self.lock_if_current(generation) else {
+        let Some(mut state) = self.lock_if_current(epoch) else {
             return;
         };
-        state.view.status = match (disabled_owner(&state, &component), result) {
-            // Disabled while it was running: its answer is not shown.
+        state.view.status = match (stopped(&state, &component, &data), result) {
+            // Stopped while it was running: its answer is not shown.
             (Some(problem), _) => Status::Error(problem),
             (None, Ok(answer)) => Status::Result(answer),
             (None, Err(error)) => Status::Error(error.to_string()),
         };
     }
 
-    async fn open_command(&self, generation: u64, component: PathBuf) {
-        let settings = self.settings_of(&component);
+    async fn open_command(&self, epoch: u64, component: PathBuf, data: Option<PackageData>) {
         let result = match self.runtime() {
-            Ok(runtime) => runtime.get_view_with(&component, settings).await,
+            Ok(runtime) => runtime.get_view_with(&component, data.clone()).await,
             Err(error) => Err(error),
         };
-        let Some(mut state) = self.lock_if_current(generation) else {
+        let Some(mut state) = self.lock_if_current(epoch) else {
             return;
         };
-        if let Some(problem) = disabled_owner(&state, &component) {
+        let end = data.as_ref().and_then(PackageData::stopped);
+        if end == Some(End::Disabled) {
             // Disabled while it was opening.
-            state.view.status = Status::Error(problem);
+            state.view.status = Status::Error(disabled(&state, &component));
             return;
+        }
+        if end == Some(End::Replaced) {
+            // Reloaded or updated while it was opening: the call was stopped,
+            // or its answer came from code that no longer runs. Its package's commands
+            // are in root search again. Unless the reload or update has
+            // reported its outcome meanwhile, this opening is still shown as
+            // running, so it ends here.
+            if state.view.status == Status::Running {
+                state.view.status = Status::Error(
+                    "The extension changed while its command was opening; open it again".into(),
+                );
+            }
+            return;
+        }
+        if end == Some(End::Uninstalled) {
+            // Uninstalled while it was opening: the uninstall reports its
+            // own outcome.
+            return;
+        }
+        let state = &mut *state;
+        if let (Ok(_) | Err(CallError::Guest(_)), Some(package)) =
+            (&result, owner(&state.packages, &component))
+        {
+            // It started, even if it refused to show its view.
+            state.failed.forget(&package.identity);
         }
         match result {
             Ok(view) => {
@@ -1608,34 +2126,33 @@ impl Launcher {
                     .unzip();
                 state.entries = entries;
                 state.open = Some(component);
-                state.screen_generation += 1;
+                state.screen_epoch += 1;
                 state.view = LauncherView::new(Screen::Command, view.title).with_rows(rows);
             }
             Err(error) => state.view.status = Status::Error(error.to_string()),
         }
     }
 
-    /// The settings of the installed package `component` belongs to; `None`
-    /// for a command built into Pane.
-    fn settings_of(&self, component: &Path) -> Option<PackageSettings> {
-        let state = self.lock();
+    /// The extension data of the installed package `component` belongs to,
+    /// in its current generation; `None` for a command built into Pane.
+    fn data_of(&self, component: &Path) -> Option<PackageData> {
+        self.data_in(&self.lock(), component)
+    }
+
+    /// Like [`Launcher::data_of`], with the state locked.
+    fn data_in(&self, state: &State, component: &Path) -> Option<PackageData> {
         let package = owner(&state.packages, component)?;
-        Some(
-            self.installation
-                .as_ref()?
-                .settings
-                .owned_by(&package.identity),
-        )
+        Some(self.installation.as_ref()?.data.owned_by(&package.identity))
     }
 
     fn runtime(&self) -> Result<&Runtime, CallError> {
         self.runtime.as_ref().map_err(Clone::clone)
     }
 
-    /// Locks the state only if the screen is still the one of `generation`.
-    fn lock_if_current(&self, generation: u64) -> Option<MutexGuard<'_, State>> {
+    /// Locks the state only if the screen is still the one of `epoch`.
+    fn lock_if_current(&self, epoch: u64) -> Option<MutexGuard<'_, State>> {
         let state = self.lock();
-        (state.screen_generation == generation).then_some(state)
+        (state.screen_epoch == epoch).then_some(state)
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -1652,32 +2169,103 @@ fn owner<'a>(packages: &'a [InstalledPackage], component: &Path) -> Option<&'a I
         .find(|package| component.starts_with(&package.location))
 }
 
-/// "<title> is disabled" if `component` belongs to a disabled package.
-fn disabled_owner(state: &State, component: &Path) -> Option<String> {
-    owner(&state.packages, component)
-        .filter(|package| !package.enabled)
-        .map(|package| format!("{} is disabled", package.title()))
+/// Why the answer of a call into `component` made with `data` is not shown:
+/// the generation it belonged to has ended, since its package was disabled
+/// ("<title> is disabled"), its code replaced or it was uninstalled. `None`
+/// while it lasts, and for a command built into Pane.
+fn stopped(state: &State, component: &Path, data: &Option<PackageData>) -> Option<String> {
+    match data.as_ref()?.stopped()? {
+        End::Disabled => Some(disabled(state, component)),
+        End::Replaced => Some(CallError::Replaced.to_string()),
+        End::Uninstalled => Some(CallError::Uninstalled.to_string()),
+    }
+}
+
+/// "<title> is disabled", for the package `component` belongs to.
+fn disabled(state: &State, component: &Path) -> String {
+    match owner(&state.packages, component) {
+        Some(package) => format!("{} is disabled", package.title()),
+        None => CallError::Disabled.to_string(),
+    }
 }
 
 /// One row per installed package, saying whether it is enabled and which
-/// source it is, so copies with the same title can be told apart.
-fn extension_rows(packages: &[InstalledPackage]) -> (Vec<Row>, Vec<Entry>) {
-    packages
+/// source it is, so copies with the same title can be told apart; then the
+/// rows that reload each enabled package, each followed by a Retry row if
+/// its reloaded code failed to start; then one row per package to clear its
+/// cache, and one to uninstall it, in the same order.
+fn extension_rows(packages: &[InstalledPackage], failed: &StartFailures) -> (Vec<Row>, Vec<Entry>) {
+    let failure = |package: &InstalledPackage| failed.of(&package.identity).map(str::to_owned);
+    let toggles = packages.iter().map(|package| {
+        let state = match (package.enabled, failure(package)) {
+            (false, _) => "Disabled",
+            (true, None) => "Enabled",
+            (true, Some(_)) => "Enabled · Failed to start",
+        };
+        let row = Row {
+            id: package.identity.key(),
+            title: package.title(),
+            subtitle: Some(format!("{state} · {}", package.identity)),
+            unavailable: None,
+        };
+        (row, Entry::Toggle(package.identity.clone()))
+    });
+    let reloads = packages
         .iter()
-        .map(|package| {
-            let state = if package.enabled {
-                "Enabled"
-            } else {
-                "Disabled"
+        .filter(|package| package.enabled)
+        .flat_map(|package| {
+            let title = package.title();
+            let source = match package.identity.local_folder() {
+                Some(folder) => folder.display().to_string(),
+                None => package.identity.to_string(),
             };
-            let row = Row {
-                id: package.identity.key(),
-                title: package.title(),
-                subtitle: Some(format!("{state} · {}", package.identity)),
+            let reload = Row {
+                id: format!("reload:{}", package.identity.key()),
+                title: format!("Reload {title}"),
+                subtitle: Some(format!(
+                    "Replace its code with the current build in {source}"
+                )),
                 unavailable: None,
             };
-            (row, Entry::Toggle(package.identity.clone()))
-        })
+            let retry = failure(package).map(|problem| {
+                let row = Row {
+                    id: format!("retry:{}", package.identity.key()),
+                    title: format!("Retry starting {title}"),
+                    subtitle: Some(problem),
+                    unavailable: None,
+                };
+                (row, Entry::Retry(package.identity.clone()))
+            });
+            std::iter::once((reload, Entry::Reload(package.identity.clone()))).chain(retry)
+        });
+    let clear_cache = packages.iter().map(|package| {
+        let row = Row {
+            id: format!("clear-cache:{}", package.identity.key()),
+            title: format!("Clear cache of {}", package.title()),
+            subtitle: Some(format!(
+                "Keeps its settings, content and credentials · {}",
+                package.identity
+            )),
+            unavailable: None,
+        };
+        (row, Entry::AskClearCache(package.identity.clone()))
+    });
+    let uninstall = packages.iter().map(|package| {
+        let row = Row {
+            id: format!("uninstall:{}", package.identity.key()),
+            title: format!("Uninstall {}", package.title()),
+            subtitle: Some(format!(
+                "Remove it and choose whether to keep its saved data · {}",
+                package.identity
+            )),
+            unavailable: None,
+        };
+        (row, Entry::AskUninstall(package.identity.clone()))
+    });
+    toggles
+        .chain(reloads)
+        .chain(clear_cache)
+        .chain(uninstall)
         .unzip()
 }
 
@@ -1747,7 +2335,8 @@ fn preview_view(
                 subtitle: Some("Replace the installed copy with this folder's contents".into()),
                 unavailable: None,
             };
-            (row, Entry::Install(package.folder.clone(), Mode::Update))
+            let mode = Mode::Update(installed.identity.clone());
+            (row, Entry::Install(package.folder.clone(), mode))
         }
         None => {
             let row = Row {
@@ -1800,23 +2389,56 @@ fn open_form(state: &mut State, item_id: String, form: Form) {
         return_to,
         submitting: false,
     });
-    state.screen_generation += 1;
+    state.screen_epoch += 1;
 }
 
 /// The rows of root search for `query`, and what activating each does: the
-/// results `computed` from it, then the `root` results matching it, best
-/// match first.
-fn root_rows(root: &[RootResult], computed: &[Computed], query: &str) -> (Vec<Row>, Vec<Entry>) {
-    let keys = root.iter().map(|result| &result.keys);
-    let matches = search::ranked_matches(&Query::new(query), keys)
+/// results computed from it, then the root results matching it, best match
+/// first, with, for a query that is not blank, those supplied ahead of it
+/// (after the others of the same rank), then the rows explaining why a
+/// command could not supply them.
+fn root_rows(state: &State, query: &str) -> (Vec<Row>, Vec<Entry>) {
+    let blank = query.trim().is_empty();
+    let candidates: Vec<&RootResult> = state
+        .root
+        .iter()
+        .chain(state.indexes.results().filter(|_| !blank))
+        .collect();
+    let keys: Vec<&Keys> = candidates.iter().map(|result| &result.keys).collect();
+    let matches = search::ranked_matches(&Query::new(query), keys.into_iter())
         .into_iter()
-        .map(|index| (&root[index].row, &root[index].entry));
-    computed
+        .map(|index| (&candidates[index].row, &candidates[index].entry));
+    let failures = state
+        .indexes
+        .failures()
+        .filter(|_| !blank)
+        .map(|(row, entry)| (row, entry));
+    state
+        .computed
         .iter()
         .map(|computed| (&computed.row, &computed.entry))
         .chain(matches)
+        .chain(failures)
         .map(|(row, entry)| (row.clone(), entry.clone()))
         .unzip()
+}
+
+/// Lists root search's rows for `query` again after results arrived: the
+/// best match stays selected, now that better ones may be first, and a row
+/// the user moved to stays selected.
+fn relist_root(state: &mut State, query: &str) {
+    let keep = state
+        .view
+        .selected
+        .filter(|&index| index > 0)
+        .and_then(|index| state.view.rows.get(index))
+        .map(|row| row.id.clone());
+    let (rows, entries) = root_rows(state, query);
+    state.view.selected = keep
+        .and_then(|id| rows.iter().position(|row| row.id == id))
+        .or_else(|| first_index(&rows));
+    state.view.rows = rows;
+    state.entries = entries;
 }
 
 /// The rows for `command`'s `answer` to `query`: its results, or one
