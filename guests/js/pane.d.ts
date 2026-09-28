@@ -5,6 +5,7 @@
 // describe plain values only; nothing here is specific to the JS engine.
 /// <reference path="./wasi.d.ts" />
 /// <reference path="./settings.d.ts" />
+/// <reference path="./operations.d.ts" />
 
 /** One entry in a command's list view. */
 export interface Item {
@@ -217,4 +218,74 @@ export interface Command {
    * with its own state. Throwing reports an error and opens nothing.
    */
   openView(itemId: string): Promise<CustomView>;
+}
+
+/** What invoking a root result does; Pane performs it. */
+export type RootAction = { tag: "copy"; val: string } | { tag: "open-url"; val: string };
+
+/**
+ * One result computed from root search's query, listed above the results
+ * root search finds by title.
+ */
+export interface RootResult {
+  /** Identifies the result among this command's results for the query. */
+  id: string;
+  title: string;
+  /** A second line under the title; omitted or `null` for none. */
+  subtitle?: string | null;
+  /**
+   * `{ tag: "copy", val: text }` copies `text` to the clipboard;
+   * `{ tag: "open-url", val: url }` opens `url`, an `http://` or `https://`
+   * address, with the system's handler for web links (Pane refuses others).
+   */
+  action: RootAction;
+}
+
+/**
+ * Results a command computes from root search's query, such as a
+ * calculator's answer (`pane:extension/root-results` in
+ * wit/root-results.wit). A command that computes them sets
+ * `"rootResults": true` on its entry in `pane.json`, and
+ * `"pane": { "rootResults": true }` in its `package.json` so that it is
+ * built with the interface; its module exports them as `rootResults`:
+ *
+ * ```ts
+ * export const rootResults: RootResults = {
+ *   async resultsFor(query) { return []; },
+ * };
+ * ```
+ */
+export interface RootResults {
+  /**
+   * The results for `query`, the text typed into root search, never empty or
+   * blank, best first. A query the command has no answer for resolves to
+   * `[]`: that is not an error. Throwing is the extension failing; Pane
+   * lists a result explaining it. Pane asks again on every change of the
+   * query and discards an answer once the query has changed.
+   */
+  resultsFor(query: string): Promise<RootResult[]>;
+}
+
+/**
+ * The operations a package publishes (`pane:extension/published-operations`
+ * in wit/operations.wit), served by the component its `pane.json` names
+ * under `operations`. That component's `package.json` sets
+ * `"pane": { "operations": true }` so that it is built with the interface;
+ * its module exports them as `publishedOperations`:
+ *
+ * ```ts
+ * export const publishedOperations: PublishedOperations = {
+ *   async runOperation(operation, input) { return "{}"; },
+ * };
+ * ```
+ */
+export interface PublishedOperations {
+  /**
+   * Serve a call to `operation`, which the package's `pane.json` publishes,
+   * on behalf of another extension; Pane calls it only for a published
+   * operation. `input` and the resolved text are JSON. Throwing reports the
+   * operation's own error to the caller: an `Error`'s message, or a thrown
+   * string as is.
+   */
+  runOperation(operation: string, input: string): Promise<string>;
 }

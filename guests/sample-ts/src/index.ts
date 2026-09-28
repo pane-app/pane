@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
 // Pane's sample command in TypeScript: a list with one action per item, a
-// form and a color picker the command draws itself. Items, titles, results,
+// form, a color picker the command draws itself and a root result computed
+// from the query ("reverse <text>"). Items, titles, results,
 // errors and drawings match the Rust sample (guests/sample-rust) and the
 // JavaScript sample.
 import type {
@@ -12,6 +13,8 @@ import type {
   FormError,
   Frame,
   Key,
+  RootResult,
+  RootResults,
   Shape,
   View,
   ViewEvent,
@@ -243,3 +246,36 @@ async function openView(itemId: string): Promise<CustomView> {
 }
 
 export const command: Command = { getView, runAction, submitForm, openView };
+
+/**
+ * "reverse <text>" typed into root search lists the text reversed, which
+ * Enter copies, and "pane website" lists Pane's website, which Enter opens;
+ * other queries have no results.
+ */
+async function resultsFor(query: string): Promise<RootResult[]> {
+  if (query === "pane website") {
+    return [
+      {
+        id: "website",
+        title: "Pane's website",
+        subtitle: "Opened by the TypeScript guest",
+        action: { tag: "open-url", val: "https://github.com/hoangvu12/pane" },
+      },
+    ];
+  }
+  const text = query.startsWith("reverse ") ? query.slice("reverse ".length).trim() : "";
+  if (!text) {
+    return [];
+  }
+  const reversed = [...text].reverse().join("");
+  return [
+    {
+      id: "reversed",
+      title: reversed,
+      subtitle: "Reversed by the TypeScript guest",
+      action: { tag: "copy", val: reversed },
+    },
+  ];
+}
+
+export const rootResults: RootResults = { resultsFor };

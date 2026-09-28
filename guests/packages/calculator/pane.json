@@ -1,0 +1,15 @@
+{
+  "manifestVersion": 1,
+  "title": "Calculator",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "calculator",
+      "title": "Calculator",
+      "subtitle": "Answers arithmetic typed into root search",
+      "component": "calculator.wasm",
+      "rootResults": true
+    }
+  ]
+}

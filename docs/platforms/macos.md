@@ -103,6 +103,29 @@ only the two other systems. In run [36372625940](https://github.com/wasimysaid/p
 | macOS-and-Linux action | [14-not-windows.png](evidence/macos/14-not-windows.png) |
 | Package for the other two systems | [15-no-compatible-package.png](evidence/macos/15-no-compatible-package.png) |
 
+## Root search (#23)
+
+Root search has a query field with focus ([root search](../root-search.md)).
+The smoke's last phase (screenshots 24 to 26) types "typescr" with System
+Events `keystroke`, opens the only match and runs "Wait briefly", which must
+look exactly like step 4, then types "zzz" and presses Return on no results.
+In run [36420611977](https://github.com/wasimysaid/pane/actions/runs/36420611977) (commit `6d73d18`) every step passed: typing "typescr" left only TypeScript sample and Enter ran it, and "zzz" showed No results ([24-search.png](evidence/macos/24-search.png), [26-no-results.png](evidence/macos/26-no-results.png)). Input-method composition in the query field is still unverified here.
+
+## Calculator (#27)
+
+The smoke's last phase (screenshots 27 to 30) installs the calculator
+package, types "6*7", checks the selected answer row, presses Enter to copy
+it, then compares typing "42+1" with pasting the copy (Cmd+A, Cmd+V) and typing
+"+1", which must look the same. In run [36423871204](https://github.com/wasimysaid/pane/actions/runs/36423871204) (commit `ab91081`) every step passed: "6*7" answered 42, Enter copied it, and pasting then typing "+1" matched typing "42+1", so the system clipboard held "42" ([27-answer.png](evidence/macos/27-answer.png), [30-pasted.png](evidence/macos/30-pasted.png)).
+
+## Quicklinks (#28)
+
+The smoke's last phase (screenshots 33 and 34) installs the Quicklinks
+package, creates "Pane issues" (https://example.com/pane-issues) in its
+form, restarts Pane and types "pane iss", which must list it selected. It
+stops before Enter, which would open the default browser; opening a link
+here is checked only through the tests' recording opener. Not run yet.
+
 ## Text input and accessibility findings
 
 - **Text input / IME (#20):** extension forms now have a text field. The
@@ -135,10 +158,28 @@ Screenshots from run [36371205770](https://github.com/wasimysaid/pane/actions/ru
   color picker, presses Right (key code 124) and clicks the dark green swatch
   with a Quartz mouse event posted through Python `ctypes`, converting the
   screenshot's pixels to points (half on Retina). Each step must show the
-  chosen color over at least 3000 pixels. **This phase has not run on macOS
-  yet**; whether posting the Quartz event needs a permission beyond the one
-  System Events has is unverified. Accessibility: see
+  chosen color over at least 3000 pixels. In run [36378453278](https://github.com/wasimysaid/pane/actions/runs/36378453278) (commit `1487dc8`, macOS 15.7.9, arm64) every step passed: the picker opened on blue (#1E88E5), Right moved to purple (#8E24AA) and the click chose dark green (#1B5E20); posting the Quartz event needed no permission beyond the one System Events has. Accessibility: see
   [custom views](../custom-views.md#accessibility).
+
+## Disabling an extension and keeping its settings (#10)
+
+In run [36378453278](https://github.com/wasimysaid/pane/actions/runs/36378453278) (commit `1487dc8`) the disable phase passed: the Settings sample
+saved the formal greeting, was disabled in Manage extensions, stayed disabled
+and absent from root search after a restart (the root screenshot matches the
+one taken before the package was installed), was enabled again, and "Greet me"
+answered "Good day to you" from the kept setting.
+
+| Step | Evidence |
+| --- | --- |
+| Formal greeting saved | [16-setting-saved.png](evidence/macos/16-setting-saved.png) |
+| Disabled in Manage extensions | [17-disabled.png](evidence/macos/17-disabled.png) |
+| After a restart: Greeting absent from root | [18-restarted-disabled.png](evidence/macos/18-restarted-disabled.png) |
+| Enabled again | [19-enabled.png](evidence/macos/19-enabled.png) |
+| The kept setting answers | [20-greeted.png](evidence/macos/20-greeted.png) |
+
+Custom view screenshots from the same run: [21-color.png](evidence/macos/21-color.png),
+[22-color-key.png](evidence/macos/22-color-key.png),
+[23-color-click.png](evidence/macos/23-color-click.png).
 
 ## Local extension package (#9)
 

@@ -70,7 +70,11 @@ fn a_mixed_wasi_02_component_is_rejected_and_root_stays_usable() {
 
     block_on(launcher.activate_selected());
 
-    assert_eq!(launcher.view().screen, Screen::Root);
+    assert!(
+        matches!(launcher.view().screen, Screen::Root { .. }),
+        "{:?}",
+        launcher.view().screen
+    );
     let message = error(&launcher);
     assert!(message.contains("only WASI 0.3"), "{message}");
     assert!(message.contains("wasi:cli/stdout@0.2"), "{message}");
@@ -88,7 +92,11 @@ fn back_returns_from_a_command_to_root_search() {
     launcher.back();
 
     let view = launcher.view();
-    assert_eq!(view.screen, Screen::Root);
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "{:?}",
+        view.screen
+    );
     assert_eq!(view.status, Status::Idle);
     assert_eq!(titles(&launcher), ["sample command"]);
 }
@@ -122,7 +130,11 @@ fn a_missing_component_explains_itself_on_root() {
 
     block_on(launcher.activate_selected());
 
-    assert_eq!(launcher.view().screen, Screen::Root);
+    assert!(
+        matches!(launcher.view().screen, Screen::Root { .. }),
+        "{:?}",
+        launcher.view().screen
+    );
     assert!(error(&launcher).contains("does-not-exist.wasm"));
 }
 
@@ -133,7 +145,11 @@ fn an_unavailable_runtime_leaves_root_navigable() {
 
     block_on(launcher.activate_selected());
 
-    assert_eq!(launcher.view().screen, Screen::Root);
+    assert!(
+        matches!(launcher.view().screen, Screen::Root { .. }),
+        "{:?}",
+        launcher.view().screen
+    );
     assert_eq!(error(&launcher), "Extension runtime unavailable: no engine");
 }
 
@@ -161,7 +177,7 @@ fn going_back_while_an_action_runs_discards_its_answer() {
     block_on(pending);
 
     let view = launcher.view();
-    assert_eq!((view.screen, view.status), (Screen::Root, Status::Idle));
+    assert_eq!((view.query(), &view.status), (Some(""), &Status::Idle));
 }
 
 /// A launcher with the Rust sample's form ("Greet someone") opened.
@@ -170,13 +186,21 @@ fn sample_form() -> Launcher {
     block_on(launcher.activate_selected());
     launcher.select(4);
     block_on(launcher.activate_selected());
-    assert_eq!(launcher.view().screen, Screen::Form);
+    assert!(
+        matches!(launcher.view().screen, Screen::Form(_)),
+        "{:?}",
+        launcher.view().screen
+    );
     launcher
 }
 
 fn field_errors(launcher: &Launcher) -> Vec<Option<String>> {
-    let form = launcher.view().form.expect("a form");
-    form.fields.into_iter().map(|field| field.error).collect()
+    let view = launcher.view();
+    let form = view.form().expect("a form");
+    form.fields
+        .iter()
+        .map(|field| field.error.clone())
+        .collect()
 }
 
 #[test]
@@ -187,11 +211,15 @@ fn back_from_a_form_returns_to_the_command_with_its_item_selected() {
 
     let view = launcher.view();
     assert_eq!(
-        (view.screen, view.title.as_str(), view.selected, view.form),
-        (Screen::Command, "Rust sample", Some(4), None)
+        (view.screen, view.title.as_str(), view.selected),
+        (Screen::Command, "Rust sample", Some(4))
     );
     launcher.back();
-    assert_eq!(launcher.view().screen, Screen::Root);
+    assert!(
+        matches!(launcher.view().screen, Screen::Root { .. }),
+        "{:?}",
+        launcher.view().screen
+    );
 }
 
 #[test]
@@ -212,13 +240,13 @@ fn a_choice_the_form_does_not_offer_is_ignored() {
     launcher.set_field_value("greeting", "howdy");
     launcher.set_field_value("missing", "value");
 
-    let values: Vec<String> = launcher
-        .view()
-        .form
+    let view = launcher.view();
+    let values: Vec<&str> = view
+        .form()
         .unwrap()
         .fields
-        .into_iter()
-        .map(|field| field.value)
+        .iter()
+        .map(|field| field.value.as_str())
         .collect();
     assert_eq!(values, ["", "hello"]);
 }
@@ -307,8 +335,8 @@ fn an_unavailable_form_explains_itself_instead_of_opening() {
 
     let view = launcher.view();
     assert_eq!(
-        (view.screen, view.form, view.status),
-        (Screen::Command, None, Status::Error(reason))
+        (view.screen, view.status),
+        (Screen::Command, Status::Error(reason))
     );
     launcher.select(0);
     block_on(launcher.activate_selected());
@@ -324,7 +352,11 @@ fn sample_color_view(runtime: &Runtime) -> Launcher {
     block_on(launcher.activate_selected());
     launcher.select(5);
     block_on(launcher.activate_selected());
-    assert_eq!(launcher.view().screen, Screen::CustomView);
+    assert!(
+        matches!(launcher.view().screen, Screen::CustomView(_)),
+        "{:?}",
+        launcher.view().screen
+    );
     launcher
 }
 
@@ -336,17 +368,21 @@ fn faulty_view(runtime: &Runtime) -> Launcher {
     );
     open_faulty_item(&launcher, "view");
     block_on(launcher.activate_selected());
-    assert_eq!(launcher.view().screen, Screen::CustomView);
+    assert!(
+        matches!(launcher.view().screen, Screen::CustomView(_)),
+        "{:?}",
+        launcher.view().screen
+    );
     launcher
 }
 
 fn view_value(launcher: &Launcher) -> String {
-    launcher
-        .view()
-        .custom_view
+    let view = launcher.view();
+    view.custom_view()
         .expect("a view is open")
         .frame
         .value
+        .clone()
 }
 
 const RIGHT: ViewEvent = ViewEvent::Key(Key::Right);
@@ -362,8 +398,8 @@ fn back_from_a_custom_view_closes_it_and_returns_to_the_command() {
 
     let view = launcher.view();
     assert_eq!(
-        (view.screen, view.selected, view.custom_view, view.status),
-        (Screen::Command, Some(5), None, Status::Idle)
+        (view.screen, view.selected, view.status),
+        (Screen::Command, Some(5), Status::Idle)
     );
     assert_eq!(block_on(runtime.view_count()), 0);
 }
@@ -383,7 +419,11 @@ fn a_view_that_opens_after_the_user_left_is_closed_again() {
     launcher.back();
     block_on(opening);
 
-    assert_eq!(launcher.view().screen, Screen::Root);
+    assert!(
+        matches!(launcher.view().screen, Screen::Root { .. }),
+        "{:?}",
+        launcher.view().screen
+    );
     assert_eq!(block_on(runtime.view_count()), 0);
 }
 
@@ -397,10 +437,7 @@ fn an_event_answer_arriving_after_back_is_discarded() {
     block_on(pending);
 
     let view = launcher.view();
-    assert_eq!(
-        (view.screen, view.custom_view, view.status),
-        (Screen::Command, None, Status::Idle)
-    );
+    assert_eq!((view.screen, view.status), (Screen::Command, Status::Idle));
     assert_eq!(block_on(runtime.view_count()), 0);
     // Events sent with no view open go nowhere.
     block_on(launcher.send_view_event(RIGHT));
@@ -475,7 +512,7 @@ fn a_frame_over_the_limits_is_an_error_and_the_view_stays_usable() {
         block_on(launcher.send_view_event(ViewEvent::Key(key)));
 
         let view = launcher.view();
-        assert_eq!(view.screen, Screen::CustomView, "{key:?}");
+        assert!(matches!(view.screen, Screen::CustomView(_)), "{key:?}");
         assert_eq!(
             error(&launcher),
             format!("The extension reported an error: {problem}")
@@ -546,7 +583,11 @@ fn an_error_from_a_view_is_shown_and_the_view_stays_open() {
 
     block_on(launcher.send_view_event(ViewEvent::Key(Key::Left)));
 
-    assert_eq!(launcher.view().screen, Screen::CustomView);
+    assert!(
+        matches!(launcher.view().screen, Screen::CustomView(_)),
+        "{:?}",
+        launcher.view().screen
+    );
     assert_eq!(
         error(&launcher),
         "The extension reported an error: the view refused"
@@ -565,7 +606,7 @@ fn a_crash_in_a_view_closes_it_and_the_command_keeps_working() {
     block_on(launcher.send_view_event(RIGHT));
 
     let view = launcher.view();
-    assert_eq!((view.screen, view.custom_view), (Screen::Command, None));
+    assert_eq!(view.screen, Screen::Command);
     assert!(error(&launcher).contains("crashed"), "{:?}", view.status);
     assert_eq!(block_on(runtime.view_count()), 0);
     launcher.select(0);
@@ -585,7 +626,11 @@ fn a_component_of_an_older_api_shape_is_refused_when_it_loads() {
 
     block_on(launcher.activate_selected());
 
-    assert_eq!(launcher.view().screen, Screen::Root);
+    assert!(
+        matches!(launcher.view().screen, Screen::Root { .. }),
+        "{:?}",
+        launcher.view().screen
+    );
     let message = error(&launcher);
     assert!(
         message.starts_with(
@@ -624,7 +669,11 @@ fn a_package_preview_closes_an_open_view() {
     block_on(launcher.preview_package(std::path::Path::new("no-such-folder")));
 
     let view = launcher.view();
-    assert_eq!((view.screen, view.custom_view), (Screen::Package, None));
+    assert!(
+        matches!(view.screen, Screen::Package { .. }),
+        "{:?}",
+        view.screen
+    );
     assert_eq!(block_on(runtime.view_count()), 0);
 }
 
@@ -637,7 +686,7 @@ fn replacing_a_components_code_closes_its_views() {
     block_on(launcher.send_view_event(RIGHT));
 
     let view = launcher.view();
-    assert_eq!((view.screen, view.custom_view), (Screen::Command, None));
+    assert_eq!(view.screen, Screen::Command);
     assert_eq!(error(&launcher), "The extension's view is no longer open");
     assert_eq!(block_on(runtime.view_count()), 0);
 }

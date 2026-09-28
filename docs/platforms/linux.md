@@ -156,6 +156,96 @@ A drag is not driven natively; it is covered by the window tests. The macOS
 and Windows smokes run the same phase (screenshots 21 to 23), with their own
 click helpers; it has not run there yet.
 
+### Root search (#23)
+
+Root search now has a query field with focus ([root search](../root-search.md));
+the earlier phases still reach each command with Down, which moves the
+selection while the field keeps focus, and the screenshots above predate the
+field. The last phase restarts Pane, types "typescr" with real X11 key
+events, presses Enter on the only match and runs "Wait briefly"; the screen
+must be pixel for pixel step 4's (`--same` with `4-result-2.png`). Escape
+clears the query, "zzz" and Enter show no results and open nothing, and root,
+the search, the result and the no-results screens must all differ. Run
+locally on 2026-09-28 (Ubuntu 26.04.1 LTS, kernel 7.0.0-31-generic, x86_64,
+same Xvfb/lavapipe setup), all checks of the whole smoke passed.
+
+| Step | Evidence |
+| --- | --- |
+| "typescr" typed: only TypeScript sample, selected | [24-search.png](evidence/linux-x11/24-search.png) |
+| Enter, Down, Enter: "Waited 50 ms inside the TypeScript guest" | `25-search-result.png` (identical to [4-result-2.png](evidence/linux-x11/4-result-2.png)) |
+| "zzz" and Enter: "No results for “zzz”", still root, status idle | [26-no-results.png](evidence/linux-x11/26-no-results.png) |
+
+No input method (IBus, Fcitx) was used; composition in the field is covered
+only by the window tests. The macOS and Windows smokes run the same phase
+(screenshots 24 to 26); it has not run there yet.
+
+### Calculator (#27)
+
+The last phase installs the calculator package
+(`--install target/guests/packages/calculator`), types "6*7" with real X11
+key events and checks the selected answer row's color; Enter copies the
+answer. Ctrl+A and typing "42+1" gives screenshot 29; Ctrl+A, Ctrl+V (the
+copied "42") and typing "+1" must give exactly the same screen (`--same`),
+which holds only if the X11 clipboard held "42"; screens 27 to 29 must
+differ. Run locally on 2026-09-28 (Ubuntu 26.04.1 LTS, kernel
+7.0.0-31-generic, x86_64, same Xvfb/lavapipe setup): all checks of the
+whole smoke passed.
+
+| Step | Evidence |
+| --- | --- |
+| "6*7" typed: the answer 42, first and selected, computed by the calculator's guest | [27-answer.png](evidence/linux-x11/27-answer.png) |
+| Enter: "Copied 42 to the clipboard", root search unchanged | [28-copied.png](evidence/linux-x11/28-copied.png) |
+| Pasted "42", typed "+1": the answer 43, the same screen as typing "42+1" | [30-pasted.png](evidence/linux-x11/30-pasted.png) |
+
+The macOS and Windows smokes run the same phase (screenshots 27 to 30, with
+Cmd and Ctrl respectively); it has not run there yet. Disabling the
+calculator is covered by the launcher tests, not natively.
+
+### Operations (#22)
+
+The last phase installs the JavaScript operations sample, then the Rust one
+(`--install target/guests/packages/sample-operations-js`, then
+`sample-operations`), opens the Rust sample's command and runs "Ask
+JavaScript to greet" with real X11 key events: the Rust guest calls the
+JavaScript package's `greet` operation through Pane, which starts that
+package's guest for the call. Run locally on 2026-09-28 (Ubuntu 26.04.1 LTS,
+kernel 7.0.0-31-generic, x86_64, same Xvfb/lavapipe setup): all checks of
+the whole smoke passed.
+
+| Step | Evidence |
+| --- | --- |
+| JavaScript operations sample installed | [31-operations-target.png](evidence/linux-x11/31-operations-target.png) |
+| "JavaScript answered: Hello, Rust, from JavaScript", from the other package's guest | [32-operation-answer.png](evidence/linux-x11/32-operation-answer.png) |
+
+The macOS and Windows smokes run the same phase (screenshots 31 and 32); it
+has not run there yet. The other directions (JavaScript and TypeScript
+calling Rust) and every failure are covered by the launcher tests, not
+natively.
+
+### Quicklinks (#28)
+
+The last phase installs the Quicklinks package
+(`--install target/guests/packages/quicklinks`), opens its command, and in
+"Create quicklink" types "Pane issues", Tab and
+"https://example.com/pane-issues" with real X11 key events, then Return.
+After a restart it types "pane iss" (the selected row's color must appear)
+and presses Return: `xdg-open` runs with no desktop session variables, every
+XDG configuration and data location in the smoke's output folder and
+`BROWSER` set to a script that records its argument, so no real browser
+starts; the script must have received the URL. Run locally on 2026-09-28
+(Ubuntu 26.04.1 LTS, kernel 7.0.0-31-generic, x86_64, same Xvfb/lavapipe
+setup): all checks of the whole smoke passed.
+
+| Step | Evidence |
+| --- | --- |
+| Form submitted: "Saved quicklink “Pane issues”" | [33-quicklink-saved.png](evidence/linux-x11/33-quicklink-saved.png) |
+| Restarted, "pane iss" typed: the quicklink, first and selected | [34-quicklink-found.png](evidence/linux-x11/34-quicklink-found.png) |
+| Return: "Opened https://example.com/pane-issues", the URL received by the handler | [35-quicklink-opened.png](evidence/linux-x11/35-quicklink-opened.png) |
+
+A real desktop's handler (GNOME's `gio open`, a browser chosen in the
+desktop settings) was not run. The macOS and Windows smokes run the phase up
+to screenshot 34; it has not run there yet.
+
 ## Text input and accessibility findings
 
 - **Text input / IME (#20):** extension forms have a text field (GPUI CE's

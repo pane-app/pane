@@ -1,4 +1,5 @@
-//! Test fixture: a guest whose actions fail in each way the host must report.
+//! Test fixture: a guest whose actions and root results fail in each way the
+//! host must report.
 #![no_std]
 
 use core::cell::Cell;
@@ -145,6 +146,39 @@ impl Guest for Faulty {
                 oversize: Cell::new(None),
             })),
             _ => Err("the guest refused the view".into()),
+        }
+    }
+}
+
+pane_guest::root::export!(Faulty);
+
+/// Root results that fail: the query "error" is refused and "trap" traps.
+/// The query "0 + 0" is answered slowly, after about a second of busy work,
+/// with one result titled "Slow answer". Any other query has no results.
+impl pane_guest::root::Guest for Faulty {
+    async fn results_for(query: String) -> Result<Vec<pane_guest::root::RootResult>, String> {
+        match query.as_str() {
+            "error" => Err("the guest refused the query".into()),
+            "file link" => Ok(vec![pane_guest::root::RootResult {
+                id: "file".into(),
+                title: "A local file".into(),
+                subtitle: None,
+                action: pane_guest::root::RootAction::OpenUrl("file:///etc/hosts".into()),
+            }]),
+            "trap" => panic!("trap requested"),
+            "0 + 0" => {
+                let mut sum = 0u64;
+                for step in 0..1u64 << 32 {
+                    sum = core::hint::black_box(sum.wrapping_add(step));
+                }
+                Ok(vec![pane_guest::root::RootResult {
+                    id: "slow".into(),
+                    title: "Slow answer".into(),
+                    subtitle: Some(format!("after {sum} steps")),
+                    action: pane_guest::root::RootAction::Copy("slow".into()),
+                }])
+            }
+            _ => Ok(Vec::new()),
         }
     }
 }

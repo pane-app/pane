@@ -227,4 +227,94 @@ Capture "23-color-click.png"
 Check "23-color-click.png" "1b5e20" 3000   # dark green
 Send "{ESC}{ESC}"; Start-Sleep -Seconds 1
 Stop-Pane $process
+
+# Root search: typing narrows root to the matching commands and Enter opens
+# the best match. "typescr" matches only TypeScript sample, whose "Wait
+# briefly" answers exactly as in step 4. A query that matches nothing shows
+# no results, and Enter then opens nothing.
+$process = Start-Pane "stderr-search.log"
+Send "typescr"; Start-Sleep -Seconds 1
+Capture "24-search.png"
+Send "{ENTER}"; Start-Sleep -Seconds 3
+Send "{DOWN}{ENTER}"; Start-Sleep -Seconds 2
+Capture "25-search-result.png"
+Check "25-search-result.png" "9fd8a8"   # the TypeScript guest's answer
+python "$PSScriptRoot/check_screenshot.py" --same (Join-Path $OutDir "4-result-2.png") (Join-Path $OutDir "25-search-result.png")
+if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the searched command is not the TypeScript sample" }
+Send "{ESC}"; Start-Sleep -Seconds 1
+Send "zzz"; Start-Sleep -Seconds 1
+Send "{ENTER}"; Start-Sleep -Seconds 1
+Capture "26-no-results.png"
+$shots = "1-root", "24-search", "25-search-result", "26-no-results" | ForEach-Object { Join-Path $OutDir "$_.png" }
+python "$PSScriptRoot/check_screenshot.py" --distinct @shots
+if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: root search showed the same window twice" }
+Stop-Pane $process
+
+# The calculator, a default extension: an expression typed into root search
+# lists its answer first, selected, and Enter copies it. Pasting the copy
+# over the query and typing on shows exactly the screen typing the whole
+# expression shows, so the clipboard held the answer.
+# SendKeys: {+} is a plus sign, ^ holds Ctrl.
+$process = Start-Pane "stderr-calculator.log" @("--install", "target/guests/packages/calculator")
+Send "{ENTER}"; Start-Sleep -Seconds 2   # Install
+Send "6*7"; Start-Sleep -Seconds 2
+Capture "27-answer.png"
+Check "27-answer.png" "364355" 3000   # the selected answer row
+Send "{ENTER}"; Start-Sleep -Seconds 1
+Capture "28-copied.png"   # "Copied 42 to the clipboard"
+Send "^a"; Send "42{+}1"; Start-Sleep -Seconds 2
+Capture "29-typed.png"
+Send "^a"; Send "^v"; Send "{+}1"; Start-Sleep -Seconds 2
+Capture "30-pasted.png"
+$shots = "27-answer", "28-copied", "29-typed" | ForEach-Object { Join-Path $OutDir "$_.png" }
+python "$PSScriptRoot/check_screenshot.py" --distinct @shots
+if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the calculator showed the same window twice" }
+python "$PSScriptRoot/check_screenshot.py" --same (Join-Path $OutDir "29-typed.png") (Join-Path $OutDir "30-pasted.png")
+if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: pasting did not give the copied answer" }
+Stop-Pane $process
+
+# Operations: install the JavaScript operations sample, then the Rust one,
+# whose command (Call from Rust, selected once installed) asks the JavaScript
+# package's greet operation: "JavaScript answered: Hello, Rust, from
+# JavaScript" comes from the other package's guest, started for the call.
+$process = Start-Pane "stderr-operations-target.log" @("--install", "target/guests/packages/sample-operations-js")
+Send "{ENTER}"; Start-Sleep -Seconds 2   # Install
+Capture "31-operations-target.png"
+Check "31-operations-target.png" "9fd8a8"   # "Installed JavaScript operations sample"
+Stop-Pane $process
+$process = Start-Pane "stderr-operations.log" @("--install", "target/guests/packages/sample-operations")
+Send "{ENTER}"; Start-Sleep -Seconds 2   # Install; Call from Rust is selected
+Send "{ENTER}"; Start-Sleep -Seconds 3   # open Call from Rust
+Send "{ENTER}"; Start-Sleep -Seconds 5   # "Ask JavaScript to greet"
+Capture "32-operation-answer.png"
+Check "32-operation-answer.png" "9fd8a8"   # the JavaScript guest's answer
+$shots = "31-operations-target", "32-operation-answer" | ForEach-Object { Join-Path $OutDir "$_.png" }
+python "$PSScriptRoot/check_screenshot.py" --distinct @shots
+if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the operation's answer did not appear" }
+Stop-Pane $process
+# Quicklinks, a default extension: installed, its command's form saves a
+# quicklink (Quicklinks is selected once installed, and "Create quicklink" is
+# its first item). After a restart, typing part of its name lists it,
+# selected. Enter would open the default browser, so this smoke stops there
+# (the Linux smoke opens it through a recording handler).
+$process = Start-Pane "stderr-quicklinks.log" @("--install", "target/guests/packages/quicklinks")
+Send "{ENTER}"; Start-Sleep -Seconds 2   # Install
+Send "{ENTER}"; Start-Sleep -Seconds 3   # open Quicklinks
+Send "{ENTER}"; Start-Sleep -Seconds 1   # Create quicklink
+Send "Pane issues"
+Send "{TAB}"
+Send "https://example.com/pane-issues"
+Send "{ENTER}"; Start-Sleep -Seconds 2
+Capture "33-quicklink-saved.png"
+Check "33-quicklink-saved.png" "9fd8a8"   # "Saved quicklink “Pane issues”"
+Send "{ESC}"; Send "{ESC}"; Start-Sleep -Seconds 1
+Stop-Pane $process
+$process = Start-Pane "stderr-quicklinks-restart.log"
+Send "pane iss"; Start-Sleep -Seconds 2
+Capture "34-quicklink-found.png"
+Check "34-quicklink-found.png" "364355" 3000   # the selected quicklink row
+$shots = "33-quicklink-saved", "34-quicklink-found" | ForEach-Object { Join-Path $OutDir "$_.png" }
+python "$PSScriptRoot/check_screenshot.py" --distinct @shots
+if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the quicklink was not found" }
+Stop-Pane $process
 Write-Output "screenshots in $OutDir"

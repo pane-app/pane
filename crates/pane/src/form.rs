@@ -20,7 +20,7 @@ use gpui_elements::editable_text::actions::{
     DEFAULT_INPUT_CONTEXT, Enter, Escape, Tab, default_bindings,
 };
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
-use pane_core::{FieldKind, FormField, FormView, Status};
+use pane_core::{FieldKind, FormField, FormView, Screen, Status};
 
 use crate::LauncherWindow;
 
@@ -29,9 +29,18 @@ actions!(form, [NextChoice, PreviousChoice, Press]);
 const CHOICE_CONTEXT: &str = "FormChoice";
 const BUTTON_CONTEXT: &str = "FormButton";
 
-/// Registers the form's key bindings. Tab, Enter and Escape are left to the
-/// launcher (focus traversal, submit and back) instead of being text edits.
-pub(crate) fn bind_keys(cx: &mut App) {
+/// Proof that the editing keys of every editable text element, the form's
+/// text fields and root search's query field alike, are bound: see
+/// [`bind_text_editing`].
+pub(crate) struct TextEditingKeys(());
+
+/// Registers GPUI CE's editing keys for every editable text element, once,
+/// except Tab, Enter and Escape: those are left to bubble to the launcher
+/// (focus traversal, confirm or submit, and back) instead of being text
+/// edits. The form's and root search's key bindings take the result, since
+/// both rely on it: without it their fields would not edit, and with Enter
+/// or Escape bound as text edits the fields would swallow them.
+pub(crate) fn bind_text_editing(cx: &mut App) -> TextEditingKeys {
     let text_editing = default_bindings()
         .as_keybindings(Some(DEFAULT_INPUT_CONTEXT))
         .filter(|binding| {
@@ -40,6 +49,12 @@ pub(crate) fn bind_keys(cx: &mut App) {
         })
         .collect::<Vec<_>>();
     cx.bind_keys(text_editing);
+    TextEditingKeys(())
+}
+
+/// Registers the form's key bindings; its text fields edit through the
+/// shared editing keys.
+pub(crate) fn bind_keys(cx: &mut App, _: &TextEditingKeys) {
     cx.bind_keys([
         KeyBinding::new("down", NextChoice, Some(CHOICE_CONTEXT)),
         KeyBinding::new("right", NextChoice, Some(CHOICE_CONTEXT)),
@@ -77,8 +92,9 @@ impl LauncherWindow {
     /// so the window tests compose through this instead.
     #[doc(hidden)]
     pub fn text_field(&self, field_id: &str) -> Option<Entity<EditableTextState>> {
-        let view = self.launcher.view();
-        let form = view.form?;
+        let Screen::Form(form) = self.launcher.view().screen else {
+            return None;
+        };
         let index = form.fields.iter().position(|field| field.id == field_id)?;
         match &self.form.as_ref()?.fields[index] {
             Control::Text(input) => Some(input.clone()),
@@ -92,7 +108,11 @@ impl LauncherWindow {
     /// after a rejected submission.
     pub(crate) fn sync_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let view = self.launcher.view();
-        match (view.form, self.form.is_some()) {
+        let form = match view.screen {
+            Screen::Form(form) => Some(form),
+            _ => None,
+        };
+        match (form, self.form.is_some()) {
             (Some(form), false) => {
                 let controls = self.form_controls(&form, cx);
                 if let Some(first) = controls.fields.first() {
@@ -153,7 +173,7 @@ impl LauncherWindow {
     /// Chooses the option `delta` places from the current one in the choice
     /// field `field_id`, clamped to the options.
     fn move_choice(&mut self, field_id: &str, delta: isize, cx: &mut Context<Self>) {
-        let Some(form) = self.launcher.view().form else {
+        let Screen::Form(form) = self.launcher.view().screen else {
             return;
         };
         let Some(field) = form.fields.into_iter().find(|field| field.id == field_id) else {

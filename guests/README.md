@@ -10,7 +10,8 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   `cabi_realloc` and `memcmp`/`bcmp` (which string comparisons need).
 - `sample-rust`, `sample-js`, `sample-ts`: the same sample command in Rust,
   JavaScript and TypeScript. All three show the same items, the same form and
-  the same color picker, and give the same answers and errors; the contract
+  the same color picker, compute the same root result ("reverse <text>"), and
+  give the same answers and errors; the contract
   tests in `crates/pane-core/tests/samples.rs` and `crates/pane/tests/window.rs`
   hold each of them to that.
 - `sample-settings`, `sample-settings-js`, `sample-settings-ts`: the same
@@ -18,17 +19,29 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   style in Pane's settings ([Keeping settings](#keeping-settings)); the
   fixtures for disabling and re-enabling a package, held alike by
   `crates/pane-core/tests/disable.rs`.
+- `calculator`: Pane's calculator, a default extension in Rust: an
+  arithmetic expression typed into root search lists its answer, which Enter
+  copies ([Root results](#root-results-computed-from-the-query),
+  [expression scope](../docs/root-search.md#the-calculator)). Its package
+  is `packages/calculator`; held by `crates/pane-core/tests/calculator.rs`.
+- `sample-operations`, `sample-operations-js`, `sample-operations-ts`: each
+  package publishes the operation `greet` and has a command that calls
+  another's, Rust calling JavaScript and TypeScript and they calling Rust
+  ([Operations](#operations)); held by
+  `crates/pane-core/tests/operations.rs`.
 - `js`: `@pane/extension`, TypeScript declarations for the contract
   (`pane.d.ts`) and the WIT world JS/TS commands are built against.
 - `prebuilt`: the JS and TS sample components (both samples in each
   language), committed so that tests and
   `cargo run -p pane` need no JavaScript toolchain, with `manifest.json`
   recording their hashes and build inputs.
-- `packages`: the samples' package manifests (`pane.json`). `cargo xtask
+- `packages`: the samples' and the calculator's package manifests (`pane.json`). `cargo xtask
   guests` puts each one with its built component in
   `target/guests/packages/<name>/`, a ready-to-install package.
-- `fixtures/faulty`: test fixture whose actions, form and custom view return
-  an error or trap.
+- `fixtures/faulty`: test fixture whose actions, form, custom view and root
+  results return an error or trap.
+- `fixtures/operations`: test fixture installed as several packages to drive
+  each way an operation call can fail, cycles and the depth limit.
 - `fixtures/mixed-p2`: negative control that imports WASI 0.2 and must be rejected.
 - `fixtures/old-api`: negative control built against extension API 0.1 as it
   was before `item` gained `platforms` and custom views, with its own copy of
@@ -241,7 +254,7 @@ Prerequisites, in addition to the Rust ones in the [README](../README.md):
   `npm` (Node.js 22+, for example through nvm).
 
 Toolchain used: upstream [componentize-qjs](https://github.com/andreiltd/componentize-qjs)
-0.4.5 at `e563c6d6` with the two patches in
+0.4.5 at `e563c6d6` with the three patches in
 [`tools/componentize-js/patches`](../tools/componentize-js/patches), its
 QuickJS runtime built with `nightly-2026-09-27` for `wasm32-wasip3` against
 wasi-sdk 34, the componentizer built with Rust 1.98.1, esbuild 0.28.2 and
@@ -349,6 +362,70 @@ which system it runs on; Pane applies the declaration. The samples' last two
 items are the runnable example, and
 [platform availability](../docs/platform-availability.md) has the details.
 
+## Root results computed from the query
+
+A command can answer what the user types into root search, as the
+[calculator](calculator) does: its results are listed above the results
+root search finds by title, and Enter on one performs its action:
+copying a text to the clipboard (`copy`) or opening an `http://` or
+`https://` address with the system's handler for web links, normally the
+default browser (`open-url`, as [quicklinks](quicklinks) do; Pane refuses
+any other address). Set `"rootResults": true` on the
+command in `pane.json` and export `pane:extension/root-results`
+([`wit/root-results.wit`](../wit/root-results.wit)) beside the command.
+Pane asks the command on every change of a query that is not blank, so its
+instance starts with the first query typed, and discards an answer once the
+query has changed. A query the command has no answer for returns no results
+(an incomplete expression is not an error); returning an error is the
+extension failing, and Pane lists a result explaining it. A disabled package
+is not asked. See [root search](../docs/root-search.md#results-computed-from-the-query).
+
+Rust (`pane_guest::root`; the component then exports both interfaces):
+
+```rust
+use pane_guest::alloc::{string::String, vec, vec::Vec};
+use pane_guest::root::{RootAction, RootResult};
+
+pane_guest::export!(Sample);
+pane_guest::root::export!(Sample);
+
+impl pane_guest::root::Guest for Sample {
+    async fn results_for(query: String) -> Result<Vec<RootResult>, String> {
+        let Some(text) = query.strip_prefix("reverse ") else {
+            return Ok(Vec::new());
+        };
+        let reversed: String = text.chars().rev().collect();
+        Ok(vec![RootResult {
+            id: "reversed".into(),
+            title: reversed.clone(),
+            subtitle: None,
+            action: RootAction::Copy(reversed),
+        }])
+    }
+}
+```
+
+JavaScript or TypeScript: add `"pane": { "rootResults": true }` to
+`package.json`, so the build exports the interface, and export
+`rootResults` from the module:
+
+```ts
+import type { RootResult, RootResults } from "@pane/extension";
+
+export const rootResults: RootResults = {
+  async resultsFor(query): Promise<RootResult[]> {
+    if (!query.startsWith("reverse ")) return [];
+    const reversed = [...query.slice(8)].reverse().join("");
+    return [{ id: "reversed", title: reversed, action: { tag: "copy", val: reversed } }];
+  },
+};
+```
+
+The three samples answer "reverse <text>" this way, and "pane website"
+with a result whose action opens a link (`RootAction::OpenUrl(url)` in Rust,
+`{ tag: "open-url", val: url }` in JavaScript and TypeScript); their
+packages in [`packages/`](packages) set `rootResults`.
+
 ## Custom views
 
 An item can open a custom view that the command draws itself: filled
@@ -441,6 +518,70 @@ text and 4096 x 4096 pixels; Pane shows a larger one as your error. Throwing fro
 command without custom views uses `type CustomView = NoCustomView;` in Rust
 and makes `open_view`/`openView` fail.
 
+## Operations
+
+A package can publish operations, named and versioned functions other
+extensions call through Pane with JSON input and results, and any command can
+call another package's operations; the full contract, errors and limits are
+in [docs/operations.md](../docs/operations.md). The operations samples show
+both sides in [Rust](sample-operations/src/lib.rs),
+[JavaScript](sample-operations-js/src/index.js) and
+[TypeScript](sample-operations-ts/src/index.ts).
+
+Publish in `pane.json`; only listed operations are callable:
+
+```json
+"operations": [{ "id": "greet", "version": 1, "component": "sample_operations.wasm" }]
+```
+
+The component named there serves them, beside its command, like a command
+computing [root results](#root-results-computed-from-the-query). In Rust it
+implements `pane_guest::publish::Guest` and calls
+`pane_guest::publish::export!`:
+
+```rust
+pane_guest::export!(Greeter);
+pane_guest::publish::export!(Greeter);
+
+impl pane_guest::publish::Guest for Greeter {
+    async fn run_operation(operation: String, input: String) -> Result<String, String> {
+        // `input` and the returned text are JSON; `Err` is the operation's own error.
+    }
+}
+```
+
+A JavaScript or TypeScript package sets `"pane": { "operations": true }` in
+its `package.json` and exports `publishedOperations` (typed as
+`PublishedOperations`) with `async runOperation(operation, input)`; throwing
+is the operation's own error.
+
+Call another package's operation with its source, the operation, the version
+you were written for and JSON input:
+
+```rust
+use pane_guest::operations::call;
+
+let result = call("local:../sample-operations-js".into(), "greet".into(), 1, input)
+    .await
+    .map_err(|error| error.explain())?; // "not-found: …", "failed: …"
+```
+
+```ts
+import { call, type CallError } from "pane:extension/operations@0.1.0";
+
+try {
+  const result = await call("local:../sample-operations", "greet", 1, JSON.stringify({ name }));
+} catch (error) {
+  const { kind, message } = (error as { payload: CallError }).payload;
+}
+```
+
+A relative `local:` source is resolved from your package's own source
+folder, so packages kept side by side find each other wherever they are.
+Pane starts the target only when it is called, never enables a disabled one,
+keeps each package's settings apart, and refuses a call back into a package
+already waiting in the same chain instead of deadlocking.
+
 ## Packaging and installing a local extension
 
 A package is a folder with a `pane.json` manifest at its root and the built
@@ -482,13 +623,20 @@ and TypeScript: Pane sees only components.
   optional `subtitle`, optional `platforms` (the same list, for this command
   alone: elsewhere its root row is listed with the reason and does not
   open), and `component`, a relative path inside the package folder (no
-  `..`, no absolute path) to a built component.
+  `..`, no absolute path) to a built component. Users find a command in
+  root search by its `title` and its `subtitle` (the package `title` when it
+  has none), so put the words people will type there; Pane searches this
+  metadata without running the command
+  ([root search](../docs/root-search.md#matching-and-ranking)). Optional
+  `rootResults: true` says the command also computes
+  [root results from the query](#root-results-computed-from-the-query).
 
 Unknown fields are ignored. The component must exist when you install: a
 package whose component is not built is refused as source-only, with the
 missing path. Pane then checks each component without running it: it must
 compile, import only WASI 0.3 and export the extension interface, each
-function Pane calls with the types it calls it with.
+function Pane calls with the types it calls it with, and for a command with
+`rootResults` the root results interface too.
 A component built against an older shape of the same `apiVersion` (the
 pre-release API 0.1 changes between slices) is therefore refused at install,
 naming the first mismatch ("it was built for an older extension API shape:
@@ -540,7 +688,8 @@ What installing does:
   even with identical contents, and nothing is merged or switched between
   them.
 - **Listing.** Installed commands are listed from the manifests alone; no
-  guest runs until you open a command. A damaged installed copy stays listed
+  guest runs until you open a command or another extension calls one of the
+  package's [operations](#operations). A damaged installed copy stays listed
   with its problem.
 - **Disabling.** **Manage extensions…**, the last row of root search once a
   package is installed, lists every installed package with whether it is

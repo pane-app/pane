@@ -44,6 +44,7 @@ key() {  # macOS virtual key codes: 36 Return, 125 Down, 124 Right, 53 Escape, 4
   osascript -e "tell application \"System Events\" to key code $1"
 }
 type_text() { osascript -e "tell application \"System Events\" to keystroke \"$1\""; }
+command_key() { osascript -e "tell application \"System Events\" to keystroke \"$1\" using command down"; }
 
 # Brings the running Pane to the front, so that key events reach it.
 focus_pane() {
@@ -218,5 +219,84 @@ click_at "$x" "$y" 22-color-key.png; sleep 1
 capture 23-color-click.png
 check 23-color-click.png 1b5e20 3000   # dark green
 key 53; key 53; sleep 1
+stop_pane
+
+# Root search: typing narrows root to the matching commands and Enter opens
+# the best match. "typescr" matches only TypeScript sample, whose "Wait
+# briefly" answers exactly as in step 4. A query that matches nothing shows
+# no results, and Enter then opens nothing.
+start_pane
+type_text typescr; sleep 1
+capture 24-search.png
+key 36; sleep 3
+key 125; key 36; sleep 2
+capture 25-search-result.png
+check 25-search-result.png 9fd8a8   # the TypeScript guest's answer
+python3 "$(dirname "$0")/check_screenshot.py" --same "$out/4-result-2.png" "$out/25-search-result.png"
+key 53; sleep 1
+type_text zzz; sleep 1
+key 36; sleep 1
+capture 26-no-results.png
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{1-root,24-search,25-search-result,26-no-results}.png
+stop_pane
+
+# The calculator, a default extension: an expression typed into root search
+# lists its answer first, selected, and Enter copies it. Pasting the copy
+# over the query and typing on shows exactly the screen typing the whole
+# expression shows, so the clipboard held the answer.
+start_pane --install target/guests/packages/calculator
+key 36; sleep 2   # Install
+type_text '6*7'; sleep 2
+capture 27-answer.png
+check 27-answer.png 364355 3000   # the selected answer row
+key 36; sleep 1
+capture 28-copied.png   # "Copied 42 to the clipboard"
+command_key a; type_text '42+1'; sleep 2
+capture 29-typed.png
+command_key a; command_key v; type_text '+1'; sleep 2
+capture 30-pasted.png
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{27-answer,28-copied,29-typed}.png
+python3 "$(dirname "$0")/check_screenshot.py" --same "$out/29-typed.png" "$out/30-pasted.png"
+stop_pane
+
+# Operations: install the JavaScript operations sample, then the Rust one,
+# whose command (Call from Rust, selected once installed) asks the JavaScript
+# package's greet operation: "JavaScript answered: Hello, Rust, from
+# JavaScript" comes from the other package's guest, started for the call.
+start_pane --install target/guests/packages/sample-operations-js
+key 36; sleep 2   # Install
+capture 31-operations-target.png
+check 31-operations-target.png 9fd8a8   # "Installed JavaScript operations sample"
+stop_pane
+start_pane --install target/guests/packages/sample-operations
+key 36; sleep 2   # Install; Call from Rust is selected
+key 36; sleep 3   # open Call from Rust
+key 36; sleep 5   # "Ask JavaScript to greet"
+capture 32-operation-answer.png
+check 32-operation-answer.png 9fd8a8   # the JavaScript guest's answer
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{31-operations-target,32-operation-answer}.png
+stop_pane
+# Quicklinks, a default extension: installed, its command's form saves a
+# quicklink (Quicklinks is selected once installed, and "Create quicklink" is
+# its first item). After a restart, typing part of its name lists it,
+# selected. Enter would open the default browser, so this smoke stops there
+# (the Linux smoke opens it through a recording handler).
+start_pane --install target/guests/packages/quicklinks
+key 36; sleep 2   # Install
+key 36; sleep 3   # open Quicklinks
+key 36; sleep 1   # Create quicklink
+type_text 'Pane issues'
+key 48
+type_text 'https://example.com/pane-issues'
+key 36; sleep 2
+capture 33-quicklink-saved.png
+check 33-quicklink-saved.png 9fd8a8   # "Saved quicklink “Pane issues”"
+key 53; key 53; sleep 1
+stop_pane
+start_pane
+type_text 'pane iss'; sleep 2
+capture 34-quicklink-found.png
+check 34-quicklink-found.png 364355 3000   # the selected quicklink row
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{33-quicklink-saved,34-quicklink-found}.png
 stop_pane
 echo "screenshots in $out"

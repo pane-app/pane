@@ -1,7 +1,10 @@
 //! Guest-side bindings for Pane's `pane:extension` contract.
 //!
 //! An extension implements [`Guest`] and calls [`export!`]. It may keep
-//! values between runs with [`settings`]. The crate is
+//! values between runs with [`settings`], compute results from root
+//! search's query with [`root`], call operations other packages publish with
+//! [`operations::call`] and serve those its own package publishes with
+//! [`publish`]. The crate is
 //! `no_std` so the component imports only WASI 0.3 interfaces; it supplies the
 //! allocator and a panic handler that traps, which the host reports as a
 //! runtime error.
@@ -29,7 +32,72 @@ pub use exports::pane::extension::command::{
     FormError, Frame, Guest, GuestCustomView, Item, Key, Platform, Point, Rect, Shape, Text,
     TextField, View, ViewEvent,
 };
-pub use pane::extension::settings;
+pub use pane::extension::{operations, settings};
+
+impl operations::CallErrorKind {
+    /// The kind's WIT name, such as `not-found`, as JavaScript sees it too.
+    pub fn name(&self) -> &'static str {
+        use operations::CallErrorKind::*;
+        match self {
+            NotFound => "not-found",
+            Disabled => "disabled",
+            Incompatible => "incompatible",
+            Unavailable => "unavailable",
+            Failed => "failed",
+            Crashed => "crashed",
+            Refused => "refused",
+        }
+    }
+}
+
+impl operations::CallError {
+    /// `<kind>: <message>`, such as "failed: a name is needed", to show
+    /// people.
+    pub fn explain(&self) -> alloc::string::String {
+        alloc::format!("{}: {}", self.kind.name(), self.message)
+    }
+}
+
+/// Serving the operations a package publishes
+/// (`pane:extension/published-operations`). The component its `pane.json`
+/// names under `operations` implements [`publish::Guest`] too and calls
+/// [`publish::export!`](crate::publish::export) beside [`export!`]:
+///
+/// ```ignore
+/// pane_guest::export!(Greeter);
+/// pane_guest::publish::export!(Greeter);
+/// ```
+pub mod publish {
+    wit_bindgen::generate!({
+        path: "../../wit",
+        world: "operations-provider",
+        pub_export_macro: true,
+        default_bindings_module: "pane_guest::publish",
+    });
+
+    pub use exports::pane::extension::published_operations::Guest;
+}
+
+/// Results a command computes from root search's query
+/// (`pane:extension/root-results`), such as a calculator's answer. A command
+/// whose `pane.json` entry sets `"rootResults": true` implements
+/// [`root::Guest`] too and calls [`root::export!`](crate::root::export)
+/// beside [`export!`]:
+///
+/// ```ignore
+/// pane_guest::export!(Calculator);
+/// pane_guest::root::export!(Calculator);
+/// ```
+pub mod root {
+    wit_bindgen::generate!({
+        path: "../../wit",
+        world: "root-results-provider",
+        pub_export_macro: true,
+        default_bindings_module: "pane_guest::root",
+    });
+
+    pub use exports::pane::extension::root_results::{Guest, RootAction, RootResult};
+}
 
 /// The custom view type of a command that has none: `type CustomView =
 /// NoCustomView;` in its `Guest` implementation, with an `open_view` that

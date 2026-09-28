@@ -16,14 +16,17 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use crate::links::{self, LinkOpener, NoOpener};
+use crate::operations::{self, Installed};
 use crate::packages::{
     InstalledPackage, PackageError, PackageIdentity, SourcePackage, Store, folder_name,
 };
 use crate::platform::{self, Platform};
 use crate::runtime::{
-    CallError, CustomViewInfo, CustomViewRole, FieldKind, FieldValue, Form, Frame, Point, Runtime,
-    ViewEvent, ViewId,
+    CallError, CustomViewInfo, CustomViewRole, FieldKind, FieldValue, Form, Frame, Point,
+    RootAction, RootResult as ComputedResult, Runtime, ViewEvent, ViewId,
 };
+use crate::search::{self, Keys, Query};
 use crate::settings::{PackageSettings, Settings};
 
 /// The id of the root row that installs a package from a local folder.
@@ -42,21 +45,26 @@ pub struct CommandRegistration {
     pub component: PathBuf,
 }
 
-/// Which screen the launcher shows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Which screen the launcher shows, with what only that screen has.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Screen {
-    /// Root search: the installed commands.
-    Root,
+    /// Root search: the root results matching `query`, the text typed into
+    /// it, best match first, or every root result when it is empty.
+    Root { query: String },
     /// An opened command's list view.
     Command,
-    /// A package folder's identity and compatibility, before installing it.
-    Package,
-    /// A form opened from an item of the command's list view.
-    Form,
-    /// The installed packages, each enabled or disabled.
-    Extensions,
-    /// A custom view opened from an item of the command's list view.
-    CustomView,
+    /// A package folder's identity and compatibility, before installing it,
+    /// as lines of information under the title.
+    Package { details: Vec<String> },
+    /// A form opened from an item of the command's list view. It has no
+    /// rows.
+    Form(FormView),
+    /// The installed packages, each enabled or disabled, with lines of
+    /// information under the title.
+    Extensions { details: Vec<String> },
+    /// A custom view opened from an item of the command's list view. It has
+    /// no rows.
+    CustomView(CustomViewSnapshot),
 }
 
 /// A selectable row.
@@ -122,18 +130,66 @@ pub struct CustomViewSnapshot {
 pub struct LauncherView {
     pub screen: Screen,
     pub title: String,
-    /// Lines of information under the title, such as a package's source and
-    /// compatibility.
-    pub details: Vec<String>,
-    /// Empty on the form screen.
+    /// Empty on the form and custom view screens.
     pub rows: Vec<Row>,
     /// Index into `rows`; `None` when there are no rows.
     pub selected: Option<usize>,
     pub status: Status,
-    /// The open form; `Some` exactly on the form screen.
-    pub form: Option<FormView>,
-    /// The open custom view; `Some` exactly on the custom view screen.
-    pub custom_view: Option<CustomViewSnapshot>,
+}
+
+impl LauncherView {
+    /// `screen` titled `title`, with no rows and an idle status.
+    fn new(screen: Screen, title: impl Into<String>) -> LauncherView {
+        LauncherView {
+            screen,
+            title: title.into(),
+            rows: Vec::new(),
+            selected: None,
+            status: Status::Idle,
+        }
+    }
+
+    /// This view listing `rows`, with the first selected.
+    fn with_rows(self, rows: Vec<Row>) -> LauncherView {
+        LauncherView {
+            selected: first_index(&rows),
+            rows,
+            ..self
+        }
+    }
+
+    /// The text typed into root search; `None` on other screens.
+    pub fn query(&self) -> Option<&str> {
+        match &self.screen {
+            Screen::Root { query } => Some(query),
+            _ => None,
+        }
+    }
+
+    /// Lines of information under the title, such as a package's source and
+    /// compatibility; empty on screens without any.
+    pub fn details(&self) -> &[String] {
+        match &self.screen {
+            Screen::Package { details } | Screen::Extensions { details } => details,
+            _ => &[],
+        }
+    }
+
+    /// The open form, on the form screen.
+    pub fn form(&self) -> Option<&FormView> {
+        match &self.screen {
+            Screen::Form(form) => Some(form),
+            _ => None,
+        }
+    }
+
+    /// The open custom view, on the custom view screen.
+    pub fn custom_view(&self) -> Option<&CustomViewSnapshot> {
+        match &self.screen {
+            Screen::CustomView(view) => Some(view),
+            _ => None,
+        }
+    }
 }
 
 /// The launcher. Cloning shares the same state.
@@ -144,6 +200,8 @@ pub struct Launcher {
     commands: Arc<[CommandRegistration]>,
     /// Where installed packages are kept, when installing packages is on.
     installation: Option<Installation>,
+    /// Opens the web links of computed results.
+    links: Arc<dyn LinkOpener>,
     state: Arc<Mutex<State>>,
 }
 
@@ -159,6 +217,15 @@ struct State {
     view: LauncherView,
     /// What activating each row of the current screen does.
     entries: Vec<Entry>,
+    /// Every root result in root search order, built when root search is
+    /// shown or refreshed, so that searching only ranks them.
+    root: Vec<RootResult>,
+    /// The root results commands computed from the current query, listed
+    /// first; each command's results are added when it answers.
+    computed: Vec<Computed>,
+    /// Incremented on every search, so that an answer arriving for an
+    /// earlier search, even of the same query, is discarded.
+    search_generation: u64,
     /// The component of the command whose view is open.
     open: Option<PathBuf>,
     /// The form on screen, if one is open.
@@ -241,9 +308,29 @@ impl OpenCustomView {
     }
 }
 
+/// A result root search can list: its row, what activating it does, and
+/// its text as the query is matched against it.
+struct RootResult {
+    row: Row,
+    entry: Entry,
+    keys: Keys,
+}
+
+/// A root result a command computed from the current query.
+struct Computed {
+    /// The component of the command that computed it.
+    component: PathBuf,
+    row: Row,
+    entry: Entry,
+}
+
 /// What activating a row does.
 #[derive(Clone)]
 enum Entry {
+    /// Copy this text to the clipboard, which the window does (root).
+    Copy(String),
+    /// Open this web address with the link opener (root).
+    OpenUrl(String),
     /// Open the command with this component (root).
     Open(PathBuf),
     /// Explain why this installed package cannot load (root).
@@ -309,17 +396,12 @@ impl Launcher {
             None => (Vec::new(), None),
         };
         let state = State {
-            view: LauncherView {
-                screen: Screen::Root,
-                title: String::new(),
-                details: Vec::new(),
-                rows: Vec::new(),
-                selected: None,
-                status: Status::Idle,
-                form: None,
-                custom_view: None,
-            },
+            // Replaced by root search below.
+            view: LauncherView::new(Screen::Command, ""),
             entries: Vec::new(),
+            root: Vec::new(),
+            computed: Vec::new(),
+            search_generation: 0,
             open: None,
             form: None,
             custom_view: None,
@@ -339,10 +421,30 @@ impl Launcher {
             runtime,
             commands: commands.into(),
             installation,
+            links: Arc::new(NoOpener),
             state: Arc::new(Mutex::new(state)),
         };
+        if let (Ok(runtime), Some(installation)) = (&launcher.runtime, &launcher.installation) {
+            // Operation calls see the packages as the launcher has them.
+            let state = Arc::downgrade(&launcher.state);
+            let settings = installation.settings.clone();
+            runtime.set_directory(Arc::new(move || Installed {
+                packages: state.upgrade().map_or_else(Vec::new, |state| {
+                    let state = state.lock().unwrap_or_else(|p| p.into_inner());
+                    state.packages.clone()
+                }),
+                settings: Some(settings.clone()),
+            }));
+        }
         launcher.show_root(&mut launcher.lock(), None);
         launcher
+    }
+
+    /// This launcher opening web links, such as quicklinks, with `links`,
+    /// normally the system's handler. Without one, opening a link explains
+    /// that this Pane has no link handler.
+    pub fn with_link_opener(self, links: Arc<dyn LinkOpener>) -> Self {
+        Launcher { links, ..self }
     }
 
     pub fn view(&self) -> LauncherView {
@@ -371,11 +473,160 @@ impl Launcher {
         }
     }
 
+    /// Searches root search for `query`: the rows become the root results
+    /// that match it, best match first, and the best match is selected. An
+    /// empty query lists every root result. Ignored on other screens, and
+    /// when `query` is already the query.
+    ///
+    /// Metadata is searched at once, without running any guest. For a query
+    /// that is not blank, the enabled commands that compute root results
+    /// (such as the calculator) are asked too, one after another: await the
+    /// returned future to list each one's results, above the others, as soon
+    /// as it answers. Their answers are discarded if the query has changed
+    /// meanwhile, and a command that fails is listed as a result explaining
+    /// the failure.
+    pub fn set_query(&self, query: &str) -> impl Future<Output = ()> + Send + 'static {
+        let mut state = self.lock();
+        let asked = match &state.view.screen {
+            Screen::Root { query: current } if current != query => {
+                self.search(&mut state, query);
+                self.ask_for_root_results(&state, query)
+            }
+            // Searching the same query again changes nothing, not even the
+            // selection.
+            _ => Vec::new(),
+        };
+        let query = query.to_owned();
+        let generation = state.screen_generation;
+        let search = state.search_generation;
+        drop(state);
+        let launcher = self.clone();
+        async move {
+            if !asked.is_empty() {
+                launcher
+                    .show_root_results(generation, search, query, asked)
+                    .await
+            }
+        }
+    }
+
+    /// Shows the root results matching `query` from metadata alone; results
+    /// computed for an earlier query are gone.
+    fn search(&self, state: &mut State, query: &str) {
+        state.search_generation += 1;
+        state.computed.clear();
+        let (rows, entries) = root_rows(&state.root, &state.computed, query);
+        state.view.screen = Screen::Root {
+            query: query.to_owned(),
+        };
+        state.view.selected = first_index(&rows);
+        state.view.rows = rows;
+        state.entries = entries;
+    }
+
+    /// The enabled commands that compute root results, each with its
+    /// settings, to be asked for their results for `query`; none for a blank
+    /// query.
+    fn ask_for_root_results(
+        &self,
+        state: &State,
+        query: &str,
+    ) -> Vec<(CommandRegistration, Option<PackageSettings>)> {
+        if query.trim().is_empty() {
+            return Vec::new();
+        }
+        state
+            .packages
+            .iter()
+            .filter(|package| package.enabled)
+            .flat_map(|package| {
+                let settings = self
+                    .installation
+                    .as_ref()
+                    .map(|installation| installation.settings.owned_by(&package.identity));
+                package
+                    .root_result_commands()
+                    .into_iter()
+                    .map(move |command| (command, settings.clone()))
+            })
+            .collect()
+    }
+
+    /// Asks each of `commands` in turn for its root results for `query` and
+    /// lists each one's as soon as it answers, unless the query, the search
+    /// or the screen has changed meanwhile.
+    ///
+    /// The runtime serves calls one at a time, so a command that is slow or
+    /// hangs still delays the commands asked after it (cancellation and
+    /// timeouts are #29 and #18); it no longer hides the answers of those
+    /// asked before it.
+    async fn show_root_results(
+        &self,
+        generation: u64,
+        search: u64,
+        query: String,
+        commands: Vec<(CommandRegistration, Option<PackageSettings>)>,
+    ) {
+        for (command, settings) in commands {
+            let answer = match self.runtime() {
+                Ok(runtime) => {
+                    runtime
+                        .root_results_with(&command.component, &query, settings)
+                        .await
+                }
+                Err(error) => Err(error),
+            };
+            let Some(mut state) = self.lock_if_current(generation) else {
+                return;
+            };
+            if state.search_generation != search || state.view.query() != Some(query.as_str()) {
+                return;
+            }
+            let state = &mut *state;
+            // A command disabled meanwhile contributes nothing.
+            if disabled_owner(state, &command.component).is_some() {
+                continue;
+            }
+            state
+                .computed
+                .extend(computed_results(command, &query, answer));
+            // The best match stays selected, now that better ones may be
+            // first; a row the user moved to stays selected.
+            let keep = state
+                .view
+                .selected
+                .filter(|&index| index > 0)
+                .and_then(|index| state.view.rows.get(index))
+                .map(|row| row.id.clone());
+            let (rows, entries) = root_rows(&state.root, &state.computed, &query);
+            state.view.selected = keep
+                .and_then(|id| rows.iter().position(|row| row.id == id))
+                .or_else(|| first_index(&rows));
+            state.view.rows = rows;
+            state.entries = entries;
+        }
+    }
+
     /// Selects the row at `index`, if there is one.
     pub fn select(&self, index: usize) {
         let mut state = self.lock();
         if index < state.view.rows.len() {
             state.view.selected = Some(index);
+        }
+    }
+
+    /// The text activating the selected row copies to the clipboard, if it
+    /// copies. Activating it only reports the copy: the window writes the
+    /// clipboard.
+    pub fn selected_copy(&self) -> Option<String> {
+        let state = self.lock();
+        let entry = state
+            .view
+            .selected
+            .and_then(|index| state.entries.get(index));
+        match entry {
+            Some(Entry::Copy(text)) => Some(text.clone()),
+            _ => None,
         }
     }
 
@@ -393,11 +644,11 @@ impl Launcher {
 
     /// Leaves an open form or custom view for its command's list, or an open
     /// command, package preview or the extension list for root search. A
-    /// custom view is closed.
+    /// custom view is closed. On root search it clears the query.
     pub fn back(&self) {
         let mut state = self.lock();
-        match state.view.screen {
-            Screen::Form => {
+        match &state.view.screen {
+            Screen::Form(_) => {
                 let form = state.form.take().expect("a form is open");
                 state.screen_generation += 1;
                 state.view = LauncherView {
@@ -405,11 +656,15 @@ impl Launcher {
                     ..form.return_to
                 };
             }
-            Screen::CustomView => self.return_from_custom_view(&mut state, Status::Idle),
-            Screen::Command | Screen::Package | Screen::Extensions => {
+            Screen::CustomView(_) => self.return_from_custom_view(&mut state, Status::Idle),
+            Screen::Command | Screen::Package { .. } | Screen::Extensions { .. } => {
                 self.show_root(&mut state, None)
             }
-            Screen::Root => {}
+            Screen::Root { query } => {
+                if !query.is_empty() {
+                    self.search(&mut state, "");
+                }
+            }
         }
     }
 
@@ -432,10 +687,24 @@ impl Launcher {
                 state.view.status = Status::Error(problem);
                 None
             }
+            Some(Entry::Copy(text)) => {
+                state.view.status = Status::Result(format!("Copied {text} to the clipboard"));
+                None
+            }
             Some(Entry::Form(item_id, form)) => {
                 open_form(&mut state, item_id, form);
                 None
             }
+            Some(Entry::OpenUrl(url)) => match links::refusal(&url) {
+                Some(reason) => {
+                    state.view.status = Status::Error(format!("Could not open {url}: {reason}"));
+                    None
+                }
+                None => {
+                    state.view.status = Status::Running;
+                    Some(Entry::OpenUrl(url))
+                }
+            },
             Some(Entry::Manage) => {
                 self.show_extensions(&mut state);
                 None
@@ -475,6 +744,7 @@ impl Launcher {
                 Some(Entry::Install(folder, mode)) => {
                     launcher.install(generation, folder, mode).await
                 }
+                Some(Entry::OpenUrl(url)) => launcher.open_url(generation, url).await,
                 Some(Entry::CustomView(item_id, info)) => {
                     if let Some(component) = open {
                         launcher
@@ -483,7 +753,8 @@ impl Launcher {
                     }
                 }
                 Some(
-                    Entry::Broken(_)
+                    Entry::Copy(_)
+                    | Entry::Broken(_)
                     | Entry::Unavailable(_)
                     | Entry::InstallFromFolder
                     | Entry::Manage
@@ -672,10 +943,10 @@ impl Launcher {
             }
         }
         match state.view.screen {
-            Screen::Root => self.refresh_root(state),
-            Screen::Extensions => self.refresh_extensions(state),
+            Screen::Root { .. } => self.refresh_root(state),
+            Screen::Extensions { .. } => self.refresh_extensions(state),
             // Other screens show no package state.
-            Screen::Command | Screen::Package | Screen::Form | Screen::CustomView => {}
+            Screen::Command | Screen::Package { .. } | Screen::Form(_) | Screen::CustomView(_) => {}
         }
     }
 
@@ -746,7 +1017,7 @@ impl Launcher {
                 if current || replaced_is_open {
                     self.show_root(&mut state, first);
                     state.view.status = Status::Result(message);
-                } else if state.view.screen == Screen::Root {
+                } else if matches!(state.view.screen, Screen::Root { .. }) {
                     self.refresh_root(&mut state);
                 }
             }
@@ -759,24 +1030,35 @@ impl Launcher {
     /// runtime check each component without running it.
     async fn read_and_check(&self, folder: PathBuf) -> Result<SourcePackage, PackageError> {
         let package = off_thread(move || SourcePackage::read(&folder)).await?;
-        for (command, component) in package.components() {
+        let mut checked_components = Vec::new();
+        for (name, component) in package.manifest.components() {
+            // A component serving several commands or operations is checked
+            // once, for everything it serves.
+            if checked_components.contains(&component) {
+                continue;
+            }
+            checked_components.push(component);
+            let (root_results, operations) = package.manifest.exports_of(component);
+            let source = package.folder.join(component);
             let checked = match self.runtime() {
-                Ok(runtime) => runtime.check(&component).await,
+                Ok(runtime) => runtime.check_with(&source, root_results, operations).await,
                 Err(error) => Err(error),
             };
             checked.map_err(|error| PackageError::Component {
-                command: command.title.clone(),
+                command: name.clone(),
                 error,
             })?;
         }
         Ok(package)
     }
 
-    /// Shows root search: this build's commands, then the installed
-    /// packages' commands, then the install row. Selects the command with
-    /// component `select` if given, else the first row.
+    /// Shows root search with an empty query: this build's commands, then
+    /// the installed packages' commands, then the install row. Selects the
+    /// command with component `select` if given, else the first row.
     fn show_root(&self, state: &mut State, select: Option<PathBuf>) {
-        let (rows, entries) = self.root_rows(state);
+        state.root = self.root_results(state);
+        state.computed.clear();
+        let (rows, entries) = root_rows(&state.root, &state.computed, "");
         let selected = select
             .and_then(|component| {
                 entries
@@ -787,31 +1069,46 @@ impl Launcher {
         self.leave_command(state);
         state.entries = entries;
         state.view = LauncherView {
-            screen: Screen::Root,
-            title: "Pane".into(),
-            details: Vec::new(),
             rows,
             selected,
             status: match &state.store_problem {
                 Some(problem) => Status::Error(problem.clone()),
                 None => Status::Idle,
             },
-            form: None,
-            custom_view: None,
+            ..LauncherView::new(
+                Screen::Root {
+                    query: String::new(),
+                },
+                "Pane",
+            )
         };
     }
 
     /// Updates the rows of the root search on screen after the installed
     /// packages changed in the background. Unlike navigating, it keeps the
     /// screen generation, so an action the user started from root still
-    /// applies, and it keeps the selection on the same row.
+    /// applies, and it keeps the query and the selection on the same row.
     fn refresh_root(&self, state: &mut State) {
         let selected_id = state
             .view
             .selected
             .and_then(|index| state.view.rows.get(index))
             .map(|row| row.id.clone());
-        let (rows, entries) = self.root_rows(state);
+        state.root = self.root_results(state);
+        // A command that was disabled or replaced contributes nothing more;
+        // one enabled again answers from the next change of the query.
+        let computing: Vec<PathBuf> = state
+            .packages
+            .iter()
+            .filter(|package| package.enabled)
+            .flat_map(|package| package.root_result_commands())
+            .map(|command| command.component)
+            .collect();
+        state
+            .computed
+            .retain(|computed| computing.contains(&computed.component));
+        let query = state.view.query().unwrap_or_default();
+        let (rows, entries) = root_rows(&state.root, &state.computed, query);
         let selected = selected_id
             .and_then(|id| rows.iter().position(|row| row.id == id))
             .or_else(|| first_index(&rows));
@@ -820,19 +1117,16 @@ impl Launcher {
         state.view.selected = selected;
     }
 
-    /// The rows of root search and what activating each does.
-    fn root_rows(&self, state: &State) -> (Vec<Row>, Vec<Entry>) {
-        let mut rows = Vec::new();
-        let mut entries = Vec::new();
-        let mut add = |row: Row, entry: Entry| {
-            rows.push(row);
-            entries.push(entry);
+    /// Every root result, in root search order: this build's commands, the
+    /// enabled packages' commands, the packages that cannot load, then
+    /// Pane's own rows.
+    fn root_results(&self, state: &State) -> Vec<RootResult> {
+        let mut results = Vec::new();
+        let mut add = |row: Row, entry: Entry, package: Option<&str>| {
+            let keys = Keys::new(&row.title, row.subtitle.as_deref(), package);
+            results.push(RootResult { row, entry, keys });
         };
-        // A disabled package contributes nothing to root search.
-        let enabled = || state.packages.iter().filter(|package| package.enabled);
-        let built = self.commands.iter().cloned().map(|command| (command, None));
-        let installed = enabled().flat_map(InstalledPackage::available_commands);
-        for (command, unavailable) in built.chain(installed) {
+        let command = |(command, unavailable): (CommandRegistration, Option<String>)| {
             let entry = match &unavailable {
                 Some(reason) => Entry::Unavailable(reason.clone()),
                 None => Entry::Open(command.component),
@@ -843,7 +1137,22 @@ impl Launcher {
                 subtitle: command.subtitle,
                 unavailable,
             };
-            add(row, entry);
+            (row, entry)
+        };
+        // A disabled package contributes nothing to root search.
+        let enabled = || state.packages.iter().filter(|package| package.enabled);
+        for built in self.commands.iter().cloned() {
+            let (row, entry) = command((built, None));
+            add(row, entry, None);
+        }
+        for package in enabled() {
+            // Its commands are found by its title too, even those that show
+            // a subtitle of their own.
+            let title = package.title();
+            for available in package.available_commands() {
+                let (row, entry) = command(available);
+                add(row, entry, Some(&title));
+            }
         }
         for package in enabled() {
             if let Err(error) = &package.manifest {
@@ -858,7 +1167,7 @@ impl Launcher {
                     package.title(),
                     package.location.display()
                 );
-                add(row, Entry::Broken(problem));
+                add(row, Entry::Broken(problem), None);
             }
         }
         if self.installation.is_some() {
@@ -868,7 +1177,7 @@ impl Launcher {
                 subtitle: Some("Choose a local extension package to install".into()),
                 unavailable: None,
             };
-            add(row, Entry::InstallFromFolder);
+            add(row, Entry::InstallFromFolder, None);
         }
         if self.installation.is_some() && !state.packages.is_empty() {
             let row = Row {
@@ -877,9 +1186,9 @@ impl Launcher {
                 subtitle: Some("Enable or disable installed extensions".into()),
                 unavailable: None,
             };
-            add(row, Entry::Manage);
+            add(row, Entry::Manage, None);
         }
-        (rows, entries)
+        results
     }
 
     /// Sets the value of the open form's field `field_id`: a text field's
@@ -887,7 +1196,7 @@ impl Launcher {
     /// options are ignored. Editing a field clears its error.
     pub fn set_field_value(&self, field_id: &str, value: &str) {
         let mut state = self.lock();
-        let Some(form) = state.view.form.as_mut() else {
+        let Screen::Form(form) = &mut state.view.screen else {
             return;
         };
         let Some(field) = form.fields.iter_mut().find(|field| field.id == field_id) else {
@@ -909,8 +1218,8 @@ impl Launcher {
     pub fn submit_form(&self) -> impl Future<Output = ()> + Send + 'static {
         let mut state = self.lock();
         let state = &mut *state;
-        let submission = match (&state.view.form, &mut state.form, &state.open) {
-            (Some(form), Some(open), Some(component)) if !open.submitting => {
+        let submission = match (&state.view.screen, &mut state.form, &state.open) {
+            (Screen::Form(form), Some(open), Some(component)) if !open.submitting => {
                 open.submitting = true;
                 let values: Vec<FieldValue> = form
                     .fields
@@ -968,7 +1277,10 @@ impl Launcher {
             return;
         }
         let view = &mut state.view;
-        let fields = &mut view.form.as_mut().expect("a form is open").fields;
+        let Screen::Form(form) = &mut view.screen else {
+            unreachable!("a form is open");
+        };
+        let fields = &mut form.fields;
         for field in fields.iter_mut() {
             field.error = None;
         }
@@ -1004,19 +1316,11 @@ impl Launcher {
         let (rows, entries) = extension_rows(&state.packages);
         self.leave_command(state);
         state.entries = entries;
-        state.view = LauncherView {
-            screen: Screen::Extensions,
-            title: "Extensions".into(),
-            details: vec![
-                "A disabled extension adds no commands and runs nothing; it keeps its settings."
-                    .into(),
-            ],
-            selected: first_index(&rows),
-            rows,
-            status: Status::Idle,
-            form: None,
-            custom_view: None,
-        };
+        let details = vec![
+            "A disabled extension adds no commands and runs nothing; it keeps its settings.".into(),
+        ];
+        state.view =
+            LauncherView::new(Screen::Extensions { details }, "Extensions").with_rows(rows);
     }
 
     /// Updates the installed packages on screen after one was enabled or
@@ -1057,21 +1361,13 @@ impl Launcher {
         };
         match result {
             Ok((id, frame)) => {
-                let view = LauncherView {
-                    screen: Screen::CustomView,
-                    title: info.title,
-                    details: Vec::new(),
-                    rows: Vec::new(),
-                    selected: None,
-                    status: Status::Idle,
-                    form: None,
-                    custom_view: Some(CustomViewSnapshot {
-                        id,
-                        label: info.label,
-                        role: info.role,
-                        frame,
-                    }),
+                let snapshot = CustomViewSnapshot {
+                    id,
+                    label: info.label,
+                    role: info.role,
+                    frame,
                 };
+                let view = LauncherView::new(Screen::CustomView(snapshot), info.title);
                 let return_to = LauncherView {
                     status: Status::Idle,
                     ..std::mem::replace(&mut state.view, view)
@@ -1188,7 +1484,9 @@ impl Launcher {
             Ok(_) | Err(CallError::Guest(_)) if number <= open.shown => {}
             Ok(frame) => {
                 open.shown = number;
-                let snapshot = state.view.custom_view.as_mut().expect("a view is open");
+                let Screen::CustomView(snapshot) = &mut state.view.screen else {
+                    unreachable!("a view is open");
+                };
                 snapshot.frame = frame;
                 state.view.status = Status::Idle;
             }
@@ -1231,6 +1529,23 @@ impl Launcher {
             runtime.close_view(open.id);
         }
         Some(open.return_to)
+    }
+
+    /// Opens `url` with the link opener, off the calling thread, and reports
+    /// the outcome while the screen is the one it was opened from.
+    async fn open_url(&self, generation: u64, url: String) {
+        let links = self.links.clone();
+        let opened = {
+            let url = url.clone();
+            off_thread(move || links.open(&url)).await
+        };
+        let Some(mut state) = self.lock_if_current(generation) else {
+            return;
+        };
+        state.view.status = match opened {
+            Ok(()) => Status::Result(format!("Opened {url}")),
+            Err(reason) => Status::Error(format!("Could not open {url}: {reason}")),
+        };
     }
 
     async fn run_action(&self, generation: u64, component: PathBuf, item_id: String) {
@@ -1294,16 +1609,7 @@ impl Launcher {
                 state.entries = entries;
                 state.open = Some(component);
                 state.screen_generation += 1;
-                state.view = LauncherView {
-                    screen: Screen::Command,
-                    title: view.title,
-                    details: Vec::new(),
-                    selected: first_index(&rows),
-                    rows,
-                    status: Status::Idle,
-                    form: None,
-                    custom_view: None,
-                };
+                state.view = LauncherView::new(Screen::Command, view.title).with_rows(rows);
             }
             Err(error) => state.view.status = Status::Error(error.to_string()),
         }
@@ -1385,15 +1691,13 @@ fn preview_view(
     let package = match checked {
         Ok(package) => package,
         Err(error) => {
+            let details = vec![format!("Folder: {}", folder.display())];
             let view = LauncherView {
-                screen: Screen::Package,
-                title: format!("Cannot install {}", folder_name(folder)),
-                details: vec![format!("Folder: {}", folder.display())],
-                rows: Vec::new(),
-                selected: None,
                 status: Status::Error(error.to_string()),
-                form: None,
-                custom_view: None,
+                ..LauncherView::new(
+                    Screen::Package { details },
+                    format!("Cannot install {}", folder_name(folder)),
+                )
             };
             return (view, Vec::new());
         }
@@ -1404,7 +1708,12 @@ fn preview_view(
         details.push(format!("Version: {version}"));
     }
     let titles: Vec<&str> = manifest.commands.iter().map(|c| c.title.as_str()).collect();
-    details.push(format!("Commands: {}", titles.join(", ")));
+    if !titles.is_empty() {
+        details.push(format!("Commands: {}", titles.join(", ")));
+    }
+    if let Some(operations) = operations::describe(&manifest.operations) {
+        details.push(operations);
+    }
     details.push(format!(
         "Compatible: needs extension API {}, and its components import only WASI 0.3",
         manifest.api_version
@@ -1450,16 +1759,8 @@ fn preview_view(
             (row, Entry::Install(package.folder.clone(), Mode::Install))
         }
     };
-    let view = LauncherView {
-        screen: Screen::Package,
-        title: manifest.title.clone(),
-        details,
-        rows: vec![row],
-        selected: Some(0),
-        status: Status::Idle,
-        form: None,
-        custom_view: None,
-    };
+    let view =
+        LauncherView::new(Screen::Package { details }, manifest.title.clone()).with_rows(vec![row]);
     (view, vec![entry])
 }
 
@@ -1486,19 +1787,13 @@ fn open_form(state: &mut State, item_id: String, form: Form) {
             }
         })
         .collect();
-    let form_view = LauncherView {
-        screen: Screen::Form,
-        title: form.title,
-        details: Vec::new(),
-        rows: Vec::new(),
-        selected: None,
-        status: Status::Idle,
-        form: Some(FormView {
+    let form_view = LauncherView::new(
+        Screen::Form(FormView {
             fields,
             submit_label: form.submit_label,
         }),
-        custom_view: None,
-    };
+        form.title,
+    );
     let return_to = std::mem::replace(&mut state.view, form_view);
     state.form = Some(OpenForm {
         item_id,
@@ -1506,6 +1801,64 @@ fn open_form(state: &mut State, item_id: String, form: Form) {
         submitting: false,
     });
     state.screen_generation += 1;
+}
+
+/// The rows of root search for `query`, and what activating each does: the
+/// results `computed` from it, then the `root` results matching it, best
+/// match first.
+fn root_rows(root: &[RootResult], computed: &[Computed], query: &str) -> (Vec<Row>, Vec<Entry>) {
+    let keys = root.iter().map(|result| &result.keys);
+    let matches = search::ranked_matches(&Query::new(query), keys)
+        .into_iter()
+        .map(|index| (&root[index].row, &root[index].entry));
+    computed
+        .iter()
+        .map(|computed| (&computed.row, &computed.entry))
+        .chain(matches)
+        .map(|(row, entry)| (row.clone(), entry.clone()))
+        .unzip()
+}
+
+/// The rows for `command`'s `answer` to `query`: its results, or one
+/// explaining why it failed.
+fn computed_results(
+    command: CommandRegistration,
+    query: &str,
+    answer: Result<Vec<ComputedResult>, CallError>,
+) -> Vec<Computed> {
+    let computed = |row: Row, entry: Entry| Computed {
+        component: command.component.clone(),
+        row,
+        entry,
+    };
+    match answer {
+        Ok(results) => results
+            .into_iter()
+            .map(|result| {
+                let row = Row {
+                    id: format!("{}:{}", command.id, result.id),
+                    title: result.title,
+                    subtitle: result.subtitle,
+                    unavailable: None,
+                };
+                let entry = match result.action {
+                    RootAction::Copy(text) => Entry::Copy(text),
+                    RootAction::OpenUrl(url) => Entry::OpenUrl(url),
+                };
+                computed(row, entry)
+            })
+            .collect(),
+        Err(error) => {
+            let row = Row {
+                id: format!("{}:failed", command.id),
+                title: command.title.clone(),
+                subtitle: Some(format!("Could not answer: {error}")),
+                unavailable: None,
+            };
+            let problem = format!("{} could not answer “{query}”: {error}", command.title);
+            vec![computed(row, Entry::Broken(problem))]
+        }
+    }
 }
 
 /// Runs blocking file work on its own thread, so the caller's thread (the

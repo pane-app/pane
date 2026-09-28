@@ -1,12 +1,14 @@
 //! Pane's Rust sample command: a list with one action per item, a form, a
-//! color picker the command draws itself, and two actions each declared for
-//! some operating systems only. Items, titles, results, errors and drawings
-//! match the JavaScript and TypeScript samples.
+//! color picker the command draws itself, two actions each declared for
+//! some operating systems only, and a root result computed from the query
+//! ("reverse <text>"). Items, titles, results, errors and drawings match the
+//! JavaScript and TypeScript samples.
 #![no_std]
 
 use core::cell::Cell;
 
 use pane_guest::alloc::{format, string::String, vec, vec::Vec};
+use pane_guest::root::{RootAction, RootResult};
 use pane_guest::{
     Choice, CustomView, CustomViewInfo, CustomViewRole, Field, FieldKind, FieldValue, Form,
     FormError, Frame, Guest, GuestCustomView, Item, Key, Platform, Rect, Shape, Text, TextField,
@@ -337,5 +339,38 @@ impl Guest for Sample {
             return Err(format!("unknown view: {item_id}"));
         }
         Ok(CustomView::new(ColorPicker::new()))
+    }
+}
+
+pane_guest::root::export!(Sample);
+
+/// The query that lists [`WEBSITE`], which invoking opens.
+const WEBSITE_QUERY: &str = "pane website";
+const WEBSITE: &str = "https://github.com/hoangvu12/pane";
+
+impl pane_guest::root::Guest for Sample {
+    /// "reverse <text>" typed into root search lists the text reversed,
+    /// which Enter copies, and "pane website" lists Pane's website, which
+    /// Enter opens; other queries have no results.
+    async fn results_for(query: String) -> Result<Vec<RootResult>, String> {
+        if query == WEBSITE_QUERY {
+            return Ok(vec![RootResult {
+                id: "website".into(),
+                title: "Pane's website".into(),
+                subtitle: Some("Opened by the Rust guest".into()),
+                action: RootAction::OpenUrl(WEBSITE.into()),
+            }]);
+        }
+        let text = query.strip_prefix("reverse ").unwrap_or_default().trim();
+        if text.is_empty() {
+            return Ok(Vec::new());
+        }
+        let reversed: String = text.chars().rev().collect();
+        Ok(vec![RootResult {
+            id: "reversed".into(),
+            title: reversed.clone(),
+            subtitle: Some("Reversed by the Rust guest".into()),
+            action: RootAction::Copy(reversed),
+        }])
     }
 }

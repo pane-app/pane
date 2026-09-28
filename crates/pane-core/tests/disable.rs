@@ -133,7 +133,11 @@ fn manage(launcher: &Launcher) {
     launcher.back();
     select_title(launcher, MANAGE_ROW);
     block_on(launcher.activate_selected());
-    assert_eq!(launcher.view().screen, Screen::Extensions);
+    assert!(
+        matches!(launcher.view().screen, Screen::Extensions { .. }),
+        "{:?}",
+        launcher.view().screen
+    );
 }
 
 /// Enables or disables the package on row `index` of the extension manager.
@@ -290,7 +294,11 @@ fn disabling_through_the_api_closes_the_package_command_and_updating_keeps_it_di
     block_on(launcher.set_enabled(&identity, false));
 
     let view = launcher.view();
-    assert_eq!(view.screen, Screen::Root);
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "{:?}",
+        view.screen
+    );
     assert_eq!(
         view.status,
         Status::Result("Disabled Settings sample".into())
@@ -302,10 +310,10 @@ fn disabling_through_the_api_closes_the_package_command_and_updating_keeps_it_di
     assert!(
         launcher
             .view()
-            .details
+            .details()
             .contains(&"Disabled: enable it in Manage extensions".to_owned()),
         "{:?}",
-        launcher.view().details
+        launcher.view().details()
     );
     block_on(launcher.activate_selected());
     assert_eq!(enabled(&launcher), [(identity.clone(), false)]);
@@ -420,7 +428,11 @@ fn an_action_result_that_arrives_after_its_package_was_disabled_is_not_shown(fix
     block_on(futures::future::join(greeting, disabling));
 
     let view = launcher.view();
-    assert_eq!(view.screen, Screen::Root);
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "{:?}",
+        view.screen
+    );
     assert_eq!(
         view.status,
         Status::Result("Disabled Settings sample".into())

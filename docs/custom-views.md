@@ -93,8 +93,8 @@ and pressing or dragging over the grid chooses the swatch under the pointer
 ## Host behavior
 
 The public host interface is [`pane_core::Launcher`](../crates/pane-core/src/launcher.rs):
-`Screen::CustomView` with `LauncherView::custom_view` (label, role and the
-latest `Frame`), `send_view_event` and `back`. The runtime
+`Screen::CustomView`, which carries the view's snapshot (label, role and
+the latest `Frame`), `send_view_event` and `back`. The runtime
 ([`Runtime`](../crates/pane-core/src/runtime.rs)) keeps each open view's
 resource on its thread and hands out only a `ViewId`: `open_view`,
 `view_event`, `close_view` and, for diagnostics and tests only,

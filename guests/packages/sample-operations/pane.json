@@ -1,0 +1,17 @@
+{
+  "manifestVersion": 1,
+  "title": "Rust operations sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "call",
+      "title": "Call from Rust",
+      "subtitle": "A Rust command calling the JavaScript and TypeScript samples' greet operation",
+      "component": "sample_operations.wasm"
+    }
+  ],
+  "operations": [
+    { "id": "greet", "version": 1, "component": "sample_operations.wasm" }
+  ]
+}

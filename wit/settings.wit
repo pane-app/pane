@@ -22,9 +22,11 @@ interface settings {
   set: func(key: string, value: string) -> result<_, string>;
 }
 
-/// A command that may also use settings. Pane hosts this world; a component
-/// built for `extension` alone runs unchanged.
+/// A command that may also use settings and call other packages'
+/// operations. Pane hosts this world; a component built for `extension`
+/// alone runs unchanged.
 world extension-with-settings {
   include extension;
   import settings;
+  import operations;
 }

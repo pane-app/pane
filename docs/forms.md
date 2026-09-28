@@ -44,7 +44,7 @@ The runnable example is the "Greet someone" item of the three samples
 ## Host behavior
 
 The public host interface is [`pane_core::Launcher`](../crates/pane-core/src/launcher.rs):
-`Screen::Form` with `LauncherView::form` (fields, values and errors),
+`Screen::Form`, which carries the form (fields, values and errors),
 `set_field_value`, `submit_form` and `back`. The window only renders that
 state and maps input to those calls.
 

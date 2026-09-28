@@ -17,6 +17,11 @@ this page is for maintaining the toolchain.
   reseeds `Math.random` and `performance` in each instance after the
   snapshot. Why each is needed, and the evidence, is in
   [the backend validation](../../docs/research/js-backend-validation/README.md).
+  `0003-stub-async-host-imports.patch` lets a world import an `async func`
+  of the embedding host (Pane's `pane:extension/operations`): the pinned
+  Wasmtime 47 stubs unknown imports for the snapshot with sync functions,
+  which an async import refuses. Wasmtime 49 does this itself, so moving
+  componentize-qjs to it would retire the patch.
 - [`p3_build.rs`](p3_build.rs): the componentizer entry point, compiled as an
   example of the patched crate.
 - [`package.json`](package.json) / `package-lock.json`: esbuild 0.28.2 and
@@ -36,7 +41,7 @@ Any change to these files or to the sample sources makes
 `pane_js.py check` (run by CI) report the prebuilt components as stale until
 they are rebuilt. The upstream candidates in the validation report (the
 per-instance reseed, the context-slot fix and a `wasm32-wasip3` build option)
-would each shrink this queue if accepted upstream.
+and a Wasmtime upgrade would each shrink this queue if accepted upstream.
 
 ## Licensing
 

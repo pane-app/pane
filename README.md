@@ -39,7 +39,7 @@ Layout:
 
 - `wit/extension.wit`: the host/guest contract for one extension command: a list view, item actions, [forms](docs/forms.md) and [custom views](docs/custom-views.md).
 - `crates/pane-core`: the launcher model (the public host interface the tests drive), extension packages (manifest, identity, managed copies) and the extension runtime, a Wasmtime 49.0.1 engine registering only WASI 0.3.
-- `crates/pane`: the GPUI CE window.
+- `crates/pane`: the GPUI CE window, with [root search](docs/root-search.md) as its first screen.
 - `guests/`: extension guests, including [the Rust, JavaScript and TypeScript sample commands](guests/README.md), TypeScript declarations for the contract, the prebuilt JS/TS components and test fixtures.
 - `tools/componentize-js`: the JS/TS toolchain, pinned upstream componentize-qjs plus Pane's patch queue, and its build script.
 - `scripts/smoke-*`: native GUI smoke runs used by CI, which uploads their screenshots.

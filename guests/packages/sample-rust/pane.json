@@ -8,7 +8,8 @@
       "id": "sample",
       "title": "Rust sample",
       "subtitle": "A sample command implemented by a Rust extension",
-      "component": "sample_rust.wasm"
+      "component": "sample_rust.wasm",
+      "rootResults": true
     }
   ]
 }

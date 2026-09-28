@@ -4,16 +4,21 @@
 //! input call launcher actions, and each frame draws the launcher's snapshot.
 
 use std::future::Future;
+use std::mem::{Discriminant, discriminant};
 use std::path::{Path, PathBuf};
 
 use gpui::{
-    App, Context, Div, FocusHandle, KeyBinding, PathPromptOptions, Pixels, Role, ScrollHandle,
-    SharedString, Size, Stateful, Window, actions, div, prelude::*, rgb,
+    App, ClipboardItem, Context, Div, FocusHandle, KeyBinding, PathPromptOptions, Pixels, Role,
+    ScrollHandle, SharedString, Size, Stateful, Window, actions, div, prelude::*, rgb,
 };
 use pane_core::{CommandRegistration, Launcher, LauncherView, Row, Screen, Status};
 
 mod custom_view;
 mod form;
+mod links;
+mod root_search;
+
+pub use links::SystemLinks;
 
 actions!(
     launcher,
@@ -39,7 +44,9 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("tab", FocusNext, Some(KEY_CONTEXT)),
         KeyBinding::new("shift-tab", FocusPrevious, Some(KEY_CONTEXT)),
     ]);
-    form::bind_keys(cx);
+    let text_editing = form::bind_text_editing(cx);
+    form::bind_keys(cx, &text_editing);
+    root_search::bind_keys(cx, &text_editing);
     custom_view::bind_keys(cx);
 }
 
@@ -139,7 +146,10 @@ fn env_dir(name: &str) -> Option<PathBuf> {
 /// The launcher window's root view.
 pub struct LauncherWindow {
     launcher: Launcher,
+    /// The list's focus, on screens other than root search.
     focus_handle: FocusHandle,
+    /// Root search's query field, which has focus on root search.
+    query: root_search::QueryField,
     /// The open form's controls; `Some` exactly on the form screen.
     form: Option<form::FormControls>,
     /// The open custom view's focus and layout; `Some` exactly on the
@@ -158,7 +168,8 @@ pub struct LauncherWindow {
 /// list never scrolls back while the user scrolls it.
 #[derive(PartialEq)]
 struct ScrolledFor {
-    screen: Screen,
+    /// Which screen, not its contents (a form's values, a view's drawing).
+    screen: Discriminant<Screen>,
     title: String,
     selected: Option<usize>,
     rows: Vec<Row>,
@@ -169,10 +180,13 @@ struct ScrolledFor {
 impl LauncherWindow {
     pub fn new(launcher: Launcher, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
-        window.focus(&focus_handle, cx);
+        let query = root_search::QueryField::new(cx);
+        // The launcher starts at root search.
+        query.focus(window, cx);
         LauncherWindow {
             launcher,
             focus_handle,
+            query,
             form: None,
             scroll: ScrollHandle::new(),
             scrolled_for: None,
@@ -195,7 +209,7 @@ impl LauncherWindow {
     }
 
     fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
-        if self.launcher.view().screen == Screen::Form {
+        if matches!(self.launcher.view().screen, Screen::Form(_)) {
             self.submit_form(window, cx);
         } else {
             self.activate_selected(window, cx);
@@ -210,26 +224,21 @@ impl LauncherWindow {
 
     /// Shows the package in `folder` with its identity and compatibility,
     /// redrawing when the check finishes.
-    pub fn preview_package(&mut self, folder: &Path, cx: &mut Context<Self>) {
+    pub fn preview_package(&mut self, folder: &Path, window: &mut Window, cx: &mut Context<Self>) {
         let pending = self.launcher.preview_package(folder);
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            pending.await;
-            this.update(cx, |_, cx| cx.notify()).ok();
-        })
-        .detach();
+        self.show_until_done(pending, window, cx);
     }
 
     /// Asks for a package folder with the platform's folder picker, then
     /// previews it. Cancelling leaves root search as it was.
-    fn choose_package_folder(&mut self, cx: &mut Context<Self>) {
+    fn choose_package_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let chosen = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
             multiple: false,
             prompt: Some("Install".into()),
         });
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             let folder = match chosen.await {
                 Ok(Ok(Some(paths))) => paths.into_iter().next(),
                 Ok(Ok(None)) | Err(_) => None,
@@ -244,8 +253,10 @@ impl LauncherWindow {
                 }
             };
             if let Some(folder) = folder {
-                this.update(cx, |this, cx| this.preview_package(&folder, cx))
-                    .ok();
+                this.update_in(cx, |this, window, cx| {
+                    this.preview_package(&folder, window, cx)
+                })
+                .ok();
             }
         })
         .detach();
@@ -263,8 +274,11 @@ impl LauncherWindow {
     /// without blocking the window meanwhile.
     fn activate_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.launcher.selected_asks_for_folder() {
-            self.choose_package_folder(cx);
+            self.choose_package_folder(window, cx);
             return;
+        }
+        if let Some(text) = self.launcher.selected_copy() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
         let pending = self.launcher.activate_selected();
         self.show_until_done(pending, window, cx);
@@ -298,7 +312,7 @@ impl LauncherWindow {
     /// changed since it was last scrolled for (see [`ScrolledFor`]).
     fn keep_selected_visible(&mut self, view: &LauncherView, window: &mut Window) {
         let shown = ScrolledFor {
-            screen: view.screen,
+            screen: discriminant(&view.screen),
             title: view.title.clone(),
             selected: view.selected,
             rows: view.rows.clone(),
@@ -321,11 +335,14 @@ impl LauncherWindow {
         self.scrolled_for = Some(shown);
     }
 
-    /// Makes the form's and custom view's controls, and focus, follow the
-    /// launcher's screen.
+    /// Makes the form's and custom view's controls, root search's query
+    /// field, and focus, follow the launcher's screen.
     fn sync_screen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sync_form(window, cx);
         self.sync_custom_view(window, cx);
+        // Last: coming back to root search, even as a view closes, focuses
+        // the query rather than the list.
+        self.sync_root_search(window, cx);
     }
 
     fn render_row(
@@ -392,28 +409,36 @@ impl Render for LauncherWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = self.launcher.view();
         self.keep_selected_visible(&view, window);
-        let (empty, hint) = match view.screen {
-            Screen::Root => ("No commands are installed.", "↑↓ select · Enter open"),
+        let (empty, hint) = match &view.screen {
+            Screen::Root { .. } => (
+                "No commands are installed.",
+                "Type to search · ↑↓ select · Enter open · Esc clear",
+            ),
             Screen::Command => (
                 "This command has no items.",
                 "↑↓ select · Enter run · Esc back",
             ),
-            Screen::Package => ("Nothing to install.", "Enter confirm · Esc back"),
-            Screen::Form => ("", "Tab next field · Enter submit · Esc back"),
-            Screen::Extensions => (
+            Screen::Package { .. } => ("Nothing to install.", "Enter confirm · Esc back"),
+            Screen::Form(_) => ("", "Tab next field · Enter submit · Esc back"),
+            Screen::Extensions { .. } => (
                 "No extensions are installed.",
                 "↑↓ select · Enter enable or disable · Esc back",
             ),
-            Screen::CustomView => ("", "Keys and pointer go to the view · Esc back"),
+            Screen::CustomView(_) => ("", "Keys and pointer go to the view · Esc back"),
         };
-        let details = view.details.into_iter().enumerate().map(|(index, line)| {
-            div()
-                .id(("detail", index))
-                .debug_selector(|| format!("detail-{line}"))
-                .text_sm()
-                .text_color(rgb(0xaab4c0))
-                .child(line)
-        });
+        let details: Vec<_> = view
+            .details()
+            .iter()
+            .enumerate()
+            .map(|(index, line)| {
+                div()
+                    .id(("detail", index))
+                    .debug_selector(|| format!("detail-{line}"))
+                    .text_sm()
+                    .text_color(rgb(0xaab4c0))
+                    .child(line.clone())
+            })
+            .collect();
         let (status_selector, status_text, status_color): (&str, SharedString, u32) =
             match view.status {
                 Status::Idle => ("status-idle", hint.into(), 0x8a96a3),
@@ -430,29 +455,39 @@ impl Render for LauncherWindow {
                 self.render_row(index, row, selected, cx)
             })
             .collect();
+        let empty = match &view.screen {
+            Screen::Root { query } if !query.trim().is_empty() => div()
+                .id("no-results")
+                .debug_selector(|| "no-results".into())
+                .child(format!("No results for “{}”", query.trim())),
+            _ => div().id("empty").child(empty),
+        };
+        let list = div()
+            .id("rows")
+            .debug_selector(|| "rows".into())
+            .role(Role::ListBox)
+            .aria_label(match view.screen {
+                Screen::Root { .. } => "Results".into(),
+                _ => view.title.clone(),
+            })
+            .flex_1()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll)
+            .children(rows)
+            .when(view.selected.is_none(), |rows| {
+                rows.child(empty.text_color(rgb(0x8a96a3)))
+            });
         // The launcher decides what an item opens; its screen says which.
-        let body = match (view.screen, view.form, view.custom_view) {
-            (Screen::Form, Some(form), _) => self.render_form(view.title.clone(), form, cx),
-            (Screen::CustomView, _, Some(custom_view)) => self.render_custom_view(custom_view, cx),
-            _ => div()
-                .id("rows")
-                .debug_selector(|| "rows".into())
-                // The list holds keyboard focus; the selected row is its
-                // active descendant, and key actions bubble to the root.
-                .track_focus(&self.focus_handle)
-                .role(Role::ListBox)
-                .aria_label(view.title.clone())
-                .flex_1()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .overflow_y_scroll()
-                .track_scroll(&self.scroll)
-                .children(rows)
-                .when(view.selected.is_none(), |rows| {
-                    rows.child(div().text_color(rgb(0x8a96a3)).child(empty))
-                })
-                .into_any_element(),
+        let body = match view.screen {
+            Screen::Form(form) => self.render_form(view.title.clone(), form, cx),
+            Screen::CustomView(custom_view) => self.render_custom_view(custom_view, cx),
+            Screen::Root { query } => self.render_root_search(query, list, cx),
+            // The list holds keyboard focus; the selected row is its active
+            // descendant, and key actions bubble to the root.
+            _ => list.track_focus(&self.focus_handle).into_any_element(),
         };
 
         div()

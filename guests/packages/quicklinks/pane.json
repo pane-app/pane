@@ -1,0 +1,15 @@
+{
+  "manifestVersion": 1,
+  "title": "Quicklinks",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "quicklinks",
+      "title": "Quicklinks",
+      "subtitle": "Save web addresses and open them from root search",
+      "component": "quicklinks.wasm",
+      "rootResults": true
+    }
+  ]
+}

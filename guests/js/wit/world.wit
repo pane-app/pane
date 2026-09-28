@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
 // The world JS/TS commands are componentized against. It exports exactly
-// Pane's contract and imports its settings (wit/extension.wit and
-// wit/settings.wit, copied into deps/ by the build), and declares the WASI 0.3
+// Pane's contract and imports its settings and operations (wit/extension.wit,
+// wit/settings.wit and wit/operations.wit, copied into deps/ by the build), and declares the WASI 0.3
 // imports JS source may use: a JS module can import only what this world
 // declares. The host bindings are unchanged.
 package pane:js-guest@0.1.0;
@@ -10,4 +10,26 @@ package pane:js-guest@0.1.0;
 world js-extension {
   include pane:extension/extension-with-settings@0.1.0;
   import wasi:clocks/monotonic-clock@0.3.0;
+}
+
+// A command that also computes root results (wit/root-results.wit): built
+// against this world when its package.json sets
+// `"pane": { "rootResults": true }`.
+world js-extension-with-root-results {
+  include js-extension;
+  export pane:extension/root-results@0.1.0;
+}
+
+// A command that also serves the operations its package publishes
+// (wit/operations.wit): built against this world when its package.json sets
+// `"pane": { "operations": true }`.
+world js-extension-with-operations {
+  include js-extension;
+  export pane:extension/published-operations@0.1.0;
+}
+
+// Both of the above: `"pane": { "rootResults": true, "operations": true }`.
+world js-extension-with-root-results-and-operations {
+  include js-extension-with-root-results;
+  export pane:extension/published-operations@0.1.0;
 }

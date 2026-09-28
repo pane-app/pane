@@ -92,10 +92,12 @@ fn a_chosen_package_is_previewed_installed_and_run(cx: &mut TestAppContext) {
     assert_eq!(titles(&settle(&window, cx)), [INSTALL_ROW]);
 
     let view = choose_folder(&window, cx, Some(folder));
-    assert_eq!(
-        (view.screen, view.title.as_str()),
-        (Screen::Package, "Hello")
+    assert!(
+        matches!(view.screen, Screen::Package { .. }),
+        "{:?}",
+        view.screen
     );
+    assert_eq!(view.title, "Hello");
     assert!(
         cx.debug_bounds("detail-Version: 1.0.0").is_some(),
         "details are rendered"
@@ -124,7 +126,7 @@ fn cancelling_the_folder_picker_stays_on_root(cx: &mut TestAppContext) {
 
     let view = choose_folder(&window, cx, None);
 
-    assert_eq!((view.screen, view.status), (Screen::Root, Status::Idle));
+    assert_eq!((view.query(), &view.status), (Some(""), &Status::Idle));
 }
 
 #[gpui::test]
@@ -134,7 +136,11 @@ fn an_unsupported_folder_is_explained_and_escape_returns_to_root(cx: &mut TestAp
 
     let view = choose_folder(&window, cx, Some(sources.path().to_path_buf()));
 
-    assert_eq!(view.screen, Screen::Package);
+    assert!(
+        matches!(view.screen, Screen::Package { .. }),
+        "{:?}",
+        view.screen
+    );
     assert!(view.rows.is_empty());
     assert!(
         cx.debug_bounds("status-error").is_some(),
@@ -158,10 +164,12 @@ fn an_installed_package_is_disabled_and_enabled_from_the_extension_list(cx: &mut
 
     cx.simulate_keystrokes("down down enter");
     let view = settle(&window, cx);
-    assert_eq!(
-        (view.screen, view.title.as_str()),
-        (Screen::Extensions, "Extensions")
+    assert!(
+        matches!(view.screen, Screen::Extensions { .. }),
+        "{:?}",
+        view.screen
     );
+    assert_eq!(view.title, "Extensions");
     assert_eq!(titles(&view), ["Hello"]);
     assert!(
         cx.debug_bounds("row-Hello").is_some(),

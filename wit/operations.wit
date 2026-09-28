@@ -1,0 +1,73 @@
+package pane:extension@0.1.0;
+
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// Operations: named, versioned functions an installed package publishes for
+// other extensions to call through Pane. Any command may call one through
+// `operations`, imported by the world Pane hosts: Rust commands through
+// pane-guest, JS/TS commands as the module "pane:extension/operations@0.1.0"
+// (guests/js/operations.d.ts). A package publishes an operation by listing
+// it under `operations` in its pane.json; the component named there exports
+// `published-operations` beside `command` (`pane_guest::publish::export!`
+// in Rust, `"pane": { "operations": true }` in a JS/TS package.json), and a
+// component that publishes none is unchanged.
+// The header follows `package`: comments above it would document the package,
+// which extension.wit already does.
+
+/// Calls an operation another installed package publishes, through Pane.
+interface operations {
+  /// Why a call did not produce the operation's result. `message` explains
+  /// it for people; `kind` tells lifecycle failures from the operation's own
+  /// error.
+  record call-error {
+    kind: call-error-kind,
+    message: string,
+  }
+
+  enum call-error-kind {
+    /// No installed package has that source, or it does not publish that
+    /// operation.
+    not-found,
+    /// The package is disabled. Pane does not enable it for the call.
+    disabled,
+    /// The package publishes the operation at another version, or Pane
+    /// cannot run its component.
+    incompatible,
+    /// The package cannot run here: it does not support this system, or the
+    /// extension runtime is not running.
+    unavailable,
+    /// The operation ran and reported an error; `message` is its own.
+    failed,
+    /// The package crashed while serving the call. The next call starts it
+    /// afresh.
+    crashed,
+    /// Pane refused the call: it would reach a package already serving a
+    /// call in the same chain, the chain is too deep, or the input or result
+    /// is not JSON within Pane's limits.
+    refused,
+  }
+
+  /// Calls `operation` at `version` of the installed package with source
+  /// `source`, and waits for its result. The package is started for the
+  /// call if it is not running. `source` is `local:` followed by the
+  /// package folder's path: absolute, as Pane shows it, or relative to the
+  /// calling package's own source folder, such as `local:../other`. `input`
+  /// and the result are JSON text.
+  call: async func(source: string, operation: string, version: u32, input: string) -> result<string, call-error>;
+}
+
+/// The operations a package publishes, served by the component its
+/// pane.json names for them.
+interface published-operations {
+  /// Serve a call to `operation`, which the package's pane.json publishes,
+  /// on behalf of another extension. Pane calls it only for a published
+  /// operation. `input` and the returned text are JSON; an error is passed
+  /// to the caller as the operation's own.
+  run-operation: async func(operation: string, input: string) -> result<string, string>;
+}
+
+/// The published operations export alone: a component that serves
+/// operations exports it besides the `extension` world's `command`.
+world operations-provider {
+  export published-operations;
+}

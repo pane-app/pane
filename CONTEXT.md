@@ -32,6 +32,18 @@ _Avoid_: Preferences, cache
 The launcher's main search and result view before a specific command is opened.
 _Avoid_: Every integration's internal search
 
+**Root result**:
+One entry root search lists for a query and can invoke, such as an extension command; it is matched by its title, subtitle and, for an installed command, its package's title, and ranked by the core.
+_Avoid_: Item (an item belongs to a command's own list), search hit
+
+**Computed result**:
+A root result an extension command computes from the query itself, such as the calculator's answer to "6*7", rather than one found by matching titles; it is listed above those, and invoking it performs its action, such as copying the answer.
+_Avoid_: Suggestion, answer card, inline result
+
+**Quicklink**:
+A named web address the user saves through the Quicklinks default extension's form and finds in root search, where invoking it opens the address with the system's handler for web links; it is kept in that extension's settings.
+_Avoid_: Bookmark, shortcut, alias
+
 **Search provider**:
 A source of matching results for a query, such as applications, files or an online service.
 _Avoid_: The entire search interface
@@ -67,6 +79,14 @@ _Avoid_: Compatibility rules, target matrix
 **Unavailable action**:
 An action whose supported platforms exclude the current system; Pane keeps it listed, explains why and never runs it, so the extension's other actions stay usable.
 _Avoid_: Hidden action, disabled extension
+
+**Operation**:
+A named, versioned function an installed package publishes in its package manifest for other extensions to call through Pane, with JSON input and result; only published operations are callable, so a command is never one implicitly.
+_Avoid_: API, command (a command is what the user opens), endpoint
+
+**Call chain**:
+The operation calls waiting on one another at one moment, from the command that made the first; each package in it is busy until its call returns, so a call back into one is refused rather than waited on.
+_Avoid_: Call stack (of one guest), workflow
 
 **Form**:
 A set of fields an extension command asks the user to fill in and submit; the launcher renders its standard controls and the extension validates the submitted values.

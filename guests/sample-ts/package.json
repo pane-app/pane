@@ -6,6 +6,9 @@
   "license": "Apache-2.0 OR MIT",
   "type": "module",
   "main": "src/index.ts",
+  "pane": {
+    "rootResults": true
+  },
   "dependencies": {
     "zod": "4.6.5"
   },

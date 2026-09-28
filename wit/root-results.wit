@@ -1,0 +1,49 @@
+package pane:extension@0.1.0;
+
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// Results a command computes from root search's query, such as a
+// calculator's answer. Kept apart from extension.wit so a command that
+// computes none is unchanged: only a command whose `pane.json` entry sets
+// `"rootResults": true` exports this interface, beside `command`. Rust
+// commands export it through pane-guest (`pane_guest::root::export!`).
+// The header follows `package`: comments above it would document the package,
+// which extension.wit already does.
+
+interface root-results {
+  /// What invoking a root result does. Pane performs it; the extension is
+  /// not called again.
+  variant root-action {
+    /// Copies this text to the clipboard.
+    copy(string),
+    /// Opens this web address, an absolute `http://` or `https://` URL, with
+    /// the system's handler for web links, normally the default browser.
+    /// Pane refuses any other kind of address and explains a system that
+    /// cannot open it.
+    open-url(string),
+  }
+
+  /// One result for the query, listed above the results root search finds
+  /// by title.
+  record root-result {
+    /// Identifies the result among this command's results for the query.
+    id: string,
+    title: string,
+    subtitle: option<string>,
+    action: root-action,
+  }
+
+  /// The results for `query`, the text typed into root search, never empty
+  /// or blank, best first. A query the command has no answer for, such as
+  /// ordinary words or an incomplete or invalid expression, has no results:
+  /// that is not an error. An error is the extension failing; Pane shows it
+  /// as a result explaining the failure. Pane asks again on every change of
+  /// the query and discards an answer once the query has changed.
+  results-for: async func(query: string) -> result<list<root-result>, string>;
+}
+
+/// The root results export alone: a command component that computes root
+/// results exports it besides the `extension` world's `command`.
+world root-results-provider {
+  export root-results;
+}

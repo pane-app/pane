@@ -8,7 +8,8 @@
       "id": "sample",
       "title": "TypeScript sample",
       "subtitle": "The same command implemented by a TypeScript extension",
-      "component": "sample_ts.wasm"
+      "component": "sample_ts.wasm",
+      "rootResults": true
     }
   ]
 }

@@ -1,0 +1,15 @@
+{
+  "name": "pane-sample-operations-js",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pane's operations sample in JavaScript",
+  "license": "Apache-2.0 OR MIT",
+  "type": "module",
+  "main": "src/index.js",
+  "devDependencies": {
+    "@pane/extension": "file:../js"
+  },
+  "pane": {
+    "operations": true
+  }
+}

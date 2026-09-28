@@ -3,18 +3,23 @@
 
 mod atomic;
 mod launcher;
+mod links;
+mod operations;
 mod packages;
 mod platform;
 mod runtime;
+mod search;
 mod settings;
 
 pub use launcher::{
     CommandRegistration, CustomViewSnapshot, FormField, FormView, Launcher, LauncherView, Row,
     Screen, Status,
 };
+pub use links::LinkOpener;
+pub use operations::{MAX_CALL_DEPTH, MAX_OPERATION_JSON};
 pub use packages::{
     EXTENSION_API, InstalledPackage, MANIFEST_FILE, MANIFEST_VERSION, Manifest, ManifestCommand,
-    PackageError, PackageIdentity,
+    ManifestOperation, PackageError, PackageIdentity,
 };
 pub use platform::Platform;
 pub use runtime::{

@@ -107,34 +107,40 @@ fn a_previewed_local_package_installs_and_its_command_runs() {
     assert!(!launcher.selected_asks_for_folder());
 
     let view = launcher.view();
-    assert_eq!(
-        (view.screen, view.title.as_str()),
-        (Screen::Package, "Hello")
+    assert!(
+        matches!(view.screen, Screen::Package { .. }),
+        "{:?}",
+        view.screen
     );
+    assert_eq!(view.title, "Hello");
     let identity = PackageIdentity::local(&folder).unwrap();
     assert!(
-        view.details.contains(&format!("Source: {identity}")),
+        view.details().contains(&format!("Source: {identity}")),
         "{:?}",
-        view.details
+        view.details()
     );
     assert!(
-        view.details.contains(&"Version: 1.0.0".to_owned()),
+        view.details().contains(&"Version: 1.0.0".to_owned()),
         "{:?}",
-        view.details
+        view.details()
     );
     assert!(
-        view.details
+        view.details()
             .iter()
             .any(|line| line.starts_with("Compatible:")),
         "{:?}",
-        view.details
+        view.details()
     );
     assert_eq!(titles(&launcher), ["Install"]);
 
     block_on(launcher.activate_selected());
 
     let view = launcher.view();
-    assert_eq!(view.screen, Screen::Root);
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "{:?}",
+        view.screen
+    );
     assert_eq!(titles(&launcher), ["Say hello", INSTALL_ROW, MANAGE_ROW]);
     assert_eq!(view.selected, Some(0));
     assert_eq!(view.status, Status::Result("Installed Hello".into()));
@@ -203,10 +209,10 @@ fn a_new_version_in_the_same_folder_is_an_update_of_the_tracked_package() {
     let view = launcher.view();
     assert_eq!(titles(&launcher), ["Update"]);
     assert!(
-        view.details
+        view.details()
             .contains(&"Installed: version 1.0.0 from this folder".to_owned()),
         "{:?}",
-        view.details
+        view.details()
     );
 
     block_on(launcher.activate_selected());
@@ -431,7 +437,7 @@ fn unsupported_packages_are_explained_and_not_installed() {
 
         block_on(launcher.preview_package(&folder));
         let view = launcher.view();
-        assert_eq!(view.screen, Screen::Package, "{case}");
+        assert!(matches!(view.screen, Screen::Package { .. }), "{case}");
         assert!(view.rows.is_empty(), "{case}: nothing to install");
         let message = error(&launcher);
         assert!(message.contains(explanation), "{case}: {message}");
@@ -756,7 +762,11 @@ fn a_package_only_for_other_systems_is_explained_and_not_installed() {
 
     block_on(launcher.preview_package(&folder));
     let view = launcher.view();
-    assert_eq!(view.screen, Screen::Package);
+    assert!(
+        matches!(view.screen, Screen::Package { .. }),
+        "{:?}",
+        view.screen
+    );
     assert!(view.rows.is_empty(), "nothing to install");
     assert_eq!(error(&launcher), explanation);
 
@@ -791,7 +801,8 @@ fn a_package_for_this_system_shows_its_systems_and_installs() {
     let launcher = dirs.launcher();
 
     block_on(launcher.preview_package(&folder));
-    let details = launcher.view().details;
+    let view = launcher.view();
+    let details = view.details();
     let line = details
         .iter()
         .find(|line| line.starts_with("Supported systems: "))
@@ -836,8 +847,8 @@ fn an_installed_copy_for_other_systems_lists_its_commands_as_unavailable() {
     block_on(restarted.activate_selected());
     let view = restarted.view();
     assert_eq!(
-        (view.screen, view.status),
-        (Screen::Root, Status::Error(explanation))
+        (view.query(), &view.status),
+        (Some(""), &Status::Error(explanation))
     );
 }
 
@@ -895,8 +906,8 @@ fn a_command_for_other_systems_is_listed_with_its_reason_and_others_still_open()
             block_on(launcher.activate_selected());
             let view = launcher.view();
             assert_eq!(
-                (view.screen, view.status),
-                (Screen::Root, Status::Error(reason.clone()))
+                (view.query(), &view.status),
+                (Some(""), &Status::Error(reason.clone()))
             );
         }
         launcher.select(1);
@@ -968,7 +979,11 @@ fn open_installed_color_view(launcher: &Launcher) {
         .expect("the color item is listed");
     launcher.select(color);
     block_on(launcher.activate_selected());
-    assert_eq!(launcher.view().screen, Screen::CustomView);
+    assert!(
+        matches!(launcher.view().screen, Screen::CustomView(_)),
+        "{:?}",
+        launcher.view().screen
+    );
 }
 
 #[test]
@@ -989,12 +1004,8 @@ fn an_update_finishing_while_its_view_is_open_closes_the_view_at_once() {
 
     let view = launcher.view();
     assert_eq!(
-        (view.screen, view.custom_view, view.status),
-        (
-            Screen::Root,
-            None,
-            Status::Result("Updated Hello to 2.0.0".into())
-        )
+        (view.query(), &view.status),
+        (Some(""), &Status::Result("Updated Hello to 2.0.0".into()))
     );
     assert_eq!(block_on(runtime.view_count()), 0);
 }
@@ -1010,8 +1021,8 @@ fn disabling_a_package_closes_its_open_view_at_once() {
 
     let view = launcher.view();
     assert_eq!(
-        (view.screen, view.custom_view, view.status),
-        (Screen::Root, None, Status::Result("Disabled Hello".into()))
+        (view.query(), &view.status),
+        (Some(""), &Status::Result("Disabled Hello".into()))
     );
     assert_eq!(block_on(runtime.view_count()), 0);
 }

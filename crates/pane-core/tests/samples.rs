@@ -2,8 +2,8 @@
 //! in Rust, JavaScript or TypeScript: the same items, answers and errors
 //! through the launcher's public interface, a native WASI 0.3 async wait,
 //! fresh state per instance, a form the guest validates, a color picker the
-//! guest draws and changes on keys and pointer input, and WASI 0.3-only
-//! imports.
+//! guest draws and changes on keys and pointer input, a root result
+//! computed from the query, and WASI 0.3-only imports.
 //!
 //! Components come from `cargo xtask guests`; the JavaScript and TypeScript
 //! ones are the prebuilt components in `guests/prebuilt/`.
@@ -101,7 +101,11 @@ impl Sample {
     fn open_form(&self) -> Launcher {
         let launcher = self.open();
         assert_eq!(self.run(&launcher, "form"), Status::Idle);
-        assert_eq!(launcher.view().screen, Screen::Form);
+        assert!(
+            matches!(launcher.view().screen, Screen::Form(_)),
+            "{:?}",
+            launcher.view().screen
+        );
         launcher
     }
 
@@ -117,7 +121,11 @@ impl Sample {
     fn open_color(&self) -> Launcher {
         let launcher = self.open();
         assert_eq!(self.run(&launcher, "color"), Status::Idle);
-        assert_eq!(launcher.view().screen, Screen::CustomView);
+        assert!(
+            matches!(launcher.view().screen, Screen::CustomView(_)),
+            "{:?}",
+            launcher.view().screen
+        );
         launcher
     }
 
@@ -226,7 +234,7 @@ fn opening_the_form_shows_its_fields(sample: &Sample) {
     let view = sample.open_form().view();
 
     assert_eq!(view.title, "Greet someone");
-    let form = view.form.expect("a form");
+    let form = view.form().expect("a form");
     assert_eq!(form.submit_label, "Greet");
     let choice = |id: &str, label: &str| Choice {
         id: id.into(),
@@ -269,7 +277,11 @@ fn a_valid_form_shows_the_guests_answer(sample: &Sample) {
             sample.language
         ))
     );
-    assert_eq!(launcher.view().screen, Screen::Form);
+    assert!(
+        matches!(launcher.view().screen, Screen::Form(_)),
+        "{:?}",
+        launcher.view().screen
+    );
 }
 
 fn an_invalid_field_is_marked_and_the_form_stays_open(sample: &Sample) {
@@ -279,8 +291,8 @@ fn an_invalid_field_is_marked_and_the_form_stays_open(sample: &Sample) {
 
     assert_eq!(status, Status::Error("Name: Enter a name".into()));
     let view = launcher.view();
-    assert_eq!(view.screen, Screen::Form);
-    let fields = view.form.unwrap().fields;
+    assert!(matches!(view.screen, Screen::Form(_)), "{:?}", view.screen);
+    let fields = &view.form().unwrap().fields;
     assert_eq!(fields[0].error.as_deref(), Some("Enter a name"));
     assert_eq!(fields[1].error, None);
     // The values survive the rejection, and a corrected form is accepted.
@@ -360,12 +372,12 @@ fn a_platform_limited_action_runs_only_on_its_declared_systems(sample: &Sample) 
 
 /// The open color picker's value: the chosen color's name and hex code.
 fn color(launcher: &Launcher) -> String {
-    launcher
-        .view()
-        .custom_view
+    let view = launcher.view();
+    view.custom_view()
         .expect("a view is open")
         .frame
         .value
+        .clone()
 }
 
 /// Sends `event` to the open view and returns the color it then shows.
@@ -387,12 +399,12 @@ fn opening_the_color_view_draws_the_picker(sample: &Sample) {
     let view = sample.open_color().view();
 
     assert_eq!(view.title, "Choose a color");
-    let custom = view.custom_view.expect("a view is open");
+    let custom = view.custom_view().expect("a view is open");
     assert_eq!(
         (custom.label.as_str(), custom.role),
         ("Color", CustomViewRole::ColorWell)
     );
-    let frame = custom.frame;
+    let frame = &custom.frame;
     assert_eq!(
         (frame.width, frame.height, frame.value.as_str()),
         (376, 108, "Blue, #1E88E5")
@@ -434,7 +446,7 @@ fn keys_move_the_chosen_color(sample: &Sample) {
     assert_eq!(press(&launcher, Key::Up), "Light pink, #F48FB1");
     assert_eq!(press(&launcher, Key::Up), "Light pink, #F48FB1");
     // The preview shows the chosen color too.
-    let frame = launcher.view().custom_view.unwrap().frame;
+    let frame = launcher.view().custom_view().unwrap().frame.clone();
     assert!(matches!(
         frame.shapes[25],
         Shape::Rect {
@@ -519,6 +531,79 @@ fn an_unknown_view_is_a_guest_error(sample: &Sample) {
     assert_eq!(block_on(runtime.view_count()), 0);
 }
 
+fn reverse_typed_into_root_search_lists_the_reversed_text_to_copy(sample: &Sample) {
+    // Root results come from installed packages: this sample's package.
+    let data = tempfile::tempdir().unwrap();
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/guests/packages")
+        .join(sample.component.replace('_', "-"));
+    block_on(launcher.install_package(&folder));
+    launcher.back();
+
+    block_on(launcher.set_query("reverse Pané 1"));
+
+    let view = launcher.view();
+    assert_eq!(view.rows[0].title, "1 énaP");
+    assert_eq!(
+        view.rows[0].subtitle,
+        Some(format!("Reversed by the {} guest", sample.language))
+    );
+    assert_eq!(launcher.selected_copy().as_deref(), Some("1 énaP"));
+    block_on(launcher.activate_selected());
+    assert_eq!(
+        launcher.view().status,
+        Status::Result("Copied 1 énaP to the clipboard".into())
+    );
+    // Nothing to reverse is no result, not an error.
+    block_on(launcher.set_query("reverse   "));
+    assert_eq!(launcher.view().rows, []);
+}
+
+/// Records the links it is asked to open, so that no browser opens.
+#[derive(Default)]
+struct RecordedLinks(std::sync::Mutex<Vec<String>>);
+
+impl pane_core::LinkOpener for RecordedLinks {
+    fn open(&self, url: &str) -> Result<(), String> {
+        self.0.lock().unwrap().push(url.into());
+        Ok(())
+    }
+}
+
+fn a_root_result_opens_a_web_link(sample: &Sample) {
+    let data = tempfile::tempdir().unwrap();
+    let links = std::sync::Arc::new(RecordedLinks::default());
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"))
+            .with_link_opener(links.clone());
+    let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/guests/packages")
+        .join(sample.component.replace('_', "-"));
+    block_on(launcher.install_package(&folder));
+    launcher.back();
+
+    block_on(launcher.set_query("pane website"));
+
+    let view = launcher.view();
+    assert_eq!(view.rows[0].title, "Pane's website");
+    assert_eq!(
+        view.rows[0].subtitle,
+        Some(format!("Opened by the {} guest", sample.language))
+    );
+    assert_eq!(launcher.selected_copy(), None, "it copies nothing");
+    block_on(launcher.activate_selected());
+    assert_eq!(
+        *links.0.lock().unwrap(),
+        ["https://github.com/hoangvu12/pane"]
+    );
+    assert_eq!(
+        launcher.view().status,
+        Status::Result("Opened https://github.com/hoangvu12/pane".into())
+    );
+}
+
 /// Declares one test per check for each sample.
 macro_rules! contract {
     ($($check:ident),* $(,)?) => {
@@ -555,6 +640,8 @@ contract!(
     each_opened_color_view_starts_afresh,
     views_open_at_once_keep_their_own_state,
     an_unknown_view_is_a_guest_error,
+    reverse_typed_into_root_search_lists_the_reversed_text_to_copy,
+    a_root_result_opens_a_web_link,
 );
 
 /// The names of the component's imports.
