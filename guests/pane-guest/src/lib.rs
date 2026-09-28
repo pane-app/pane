@@ -3,11 +3,13 @@
 //! An extension implements [`Guest`] and calls [`export!`]. It may keep
 //! values between runs with [`settings`], and its own records, disposable
 //! values and secrets with [`content`], [`cache`] and [`credentials`]. It
-//! may compute results from root search's query with [`root`], call
+//! may compute results from root search's query with [`root`], take a query
+//! the user sends it from root search with [`query`], call
 //! operations other packages publish with [`operations::call`], serve those
 //! its own package publishes with [`publish`], find and open installed
-//! applications with [`applications`] and supply root results ahead of the
-//! query with [`indexed`]. The crate is
+//! applications with [`applications`], supply root results ahead of the
+//! query with [`indexed`] and run its package's native helpers with
+//! [`helpers`]. The crate is
 //! `no_std` so the component imports only WASI 0.3 interfaces; it supplies the
 //! allocator and a panic handler that traps, which the host reports as a
 //! runtime error.
@@ -102,6 +104,28 @@ pub mod root {
     pub use exports::pane::extension::root_results::{Guest, RootAction, RootResult};
 }
 
+/// A command that takes a query (`pane:extension/query-command`): text the
+/// user typed into root search, which Pane sends only when the user invokes
+/// the command through its alias ("ec hello") or chooses it as a fallback.
+/// A command whose `pane.json` entry sets `"takesQuery": true` implements
+/// [`query::Guest`] too and calls [`query::export!`](crate::query::export)
+/// beside [`export!`]:
+///
+/// ```ignore
+/// pane_guest::export!(Echo);
+/// pane_guest::query::export!(Echo);
+/// ```
+pub mod query {
+    wit_bindgen::generate!({
+        path: "../../wit",
+        world: "query-command-provider",
+        pub_export_macro: true,
+        default_bindings_module: "pane_guest::query",
+    });
+
+    pub use exports::pane::extension::query_command::Guest;
+}
+
 /// The applications installed on the system (`pane:extension/applications`),
 /// which Pane finds and opens for the extension: [`applications::installed`] and
 /// [`applications::open`].
@@ -113,6 +137,33 @@ pub mod applications {
     });
 
     pub use pane::extension::applications::{Application, installed, open};
+}
+
+/// Native helpers (`pane:extension/helpers`): prebuilt programs the
+/// command's own package ships, one per system, which Pane runs for it with
+/// [`helpers::run`]. Declare them under `helpers` in `pane.json`. Dropping
+/// the future of a run before it resolves (for example when a timer wins a
+/// race with it) cancels it: Pane ends the helper's process.
+pub mod helpers {
+    wit_bindgen::generate!({
+        path: "../../wit",
+        world: "helpers-user",
+        default_bindings_module: "pane_guest::helpers",
+    });
+
+    pub use pane::extension::helpers::{HelperError, HelperErrorKind, run};
+
+    impl HelperErrorKind {
+        /// The kind's WIT name, such as `not-found`.
+        pub fn name(&self) -> &'static str {
+            match self {
+                HelperErrorKind::NotFound => "not-found",
+                HelperErrorKind::Unavailable => "unavailable",
+                HelperErrorKind::Failed => "failed",
+                HelperErrorKind::Refused => "refused",
+            }
+        }
+    }
 }
 
 /// Root results a command supplies ahead of the query

@@ -290,6 +290,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "sample-dependencies"
+version = "0.1.0"
+dependencies = [
+ "pane-guest",
+ "serde_json",
+]
+
+[[package]]
+name = "sample-helper"
+version = "0.1.0"
+dependencies = [
+ "pane-guest",
+ "wasip3",
+]
+
+[[package]]
 name = "sample-operations"
 version = "0.1.0"
 dependencies = [
@@ -297,6 +313,13 @@ dependencies = [
  "pane-guest",
  "serde_json",
  "wasip3",
+]
+
+[[package]]
+name = "sample-query"
+version = "0.1.0"
+dependencies = [
+ "pane-guest",
 ]
 
 [[package]]

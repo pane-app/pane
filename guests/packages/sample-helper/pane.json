@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 1,
+  "title": "Helper sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "helper",
+      "title": "Helper sample",
+      "subtitle": "Runs a native helper the package ships for each system",
+      "component": "sample_helper.wasm"
+    }
+  ],
+  "helpers": [
+    {
+      "id": "echo",
+      "targets": {
+        "linux-x86_64": "helpers/linux-x86_64/pane-echo",
+        "macos-aarch64": "helpers/macos-aarch64/pane-echo",
+        "windows-x86_64": "helpers/windows-x86_64/pane-echo.exe"
+      }
+    }
+  ]
+}

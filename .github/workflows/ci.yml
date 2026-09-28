@@ -19,6 +19,9 @@ jobs:
       - name: Code compiled into extension components
         working-directory: guests
         run: cargo deny --locked --workspace --exclude-dev check licenses sources
+      - name: Code compiled into the Rust development sample
+        working-directory: guests/hello-rust
+        run: cargo deny --locked --workspace --exclude-dev check licenses sources
 
   check:
     name: Check (${{ matrix.os }})
@@ -109,8 +112,12 @@ jobs:
           key: js-toolchain-${{ runner.os }}-${{ hashFiles('tools/componentize-js/**', 'rust-toolchain.toml') }}
       - name: Rebuild the JS/TS sample components
         run: cargo xtask js-guests
+      # Also development mode's JavaScript and TypeScript builds on save
+      # (crates/pane-core/tests/develop_builds.rs), which need the toolchain.
       - name: Run the tests against the rebuilt components
         run: cargo test --locked --workspace
+        env:
+          PANE_TEST_JS_BUILDS: "1"
       - name: Upload the rebuilt components
         uses: actions/upload-artifact@v4
         with:

@@ -3,19 +3,21 @@
 // The world JS/TS commands are componentized against. It exports exactly
 // Pane's contract and imports its extension data, operations and installed
 // applications (wit/extension.wit, wit/data.wit, wit/operations.wit and
-// wit/applications.wit, copied into deps/ by the build), and declares the
+// wit/applications.wit, copied into deps/ by the build), its native helpers
+// (wit/helpers.wit), and declares the
 // WASI 0.3 imports JS source may use: a JS module can import only what this
 // world declares. The host bindings are unchanged.
 //
 // A command whose package.json sets `"pane": { ... }` options also exports
 // the interfaces they name: `rootResults` (wit/root-results.wit),
-// `indexedResults` (wit/applications.wit) and `operations`
-// (wit/operations.wit). The build writes a world `js-command` including
+// `indexedResults` (wit/applications.wit), `operations`
+// (wit/operations.wit) and `takesQuery` (wit/query.wit). The build writes a world `js-command` including
 // this one with those exports (tools/componentize-js/pane_js.py).
 package pane:js-guest@0.1.0;
 
 world js-extension {
   include pane:extension/extension-with-data@0.1.0;
   import pane:extension/applications@0.1.0;
+  import pane:extension/helpers@0.1.0;
   import wasi:clocks/monotonic-clock@0.3.0;
 }

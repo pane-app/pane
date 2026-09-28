@@ -1,64 +1,13 @@
 //! Operating systems a package or an action declares it supports, and the
 //! explanation Pane gives where one is unavailable. Deliberately simple: a
-//! list of systems, not a rule language.
+//! list of systems, not a rule language. The systems themselves, and the
+//! processors of native helpers, are named in `pane-target`.
 
-use std::fmt;
-
-/// An operating system Pane runs on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Platform {
-    Windows,
-    Macos,
-    Linux,
-}
-
-impl Platform {
-    /// Every platform, in the order Pane lists them.
-    pub const ALL: [Platform; 3] = [Platform::Windows, Platform::Macos, Platform::Linux];
-
-    /// The system this Pane was built for, or `None` on a system other than
-    /// Windows, macOS and Linux.
-    pub fn current() -> Option<Platform> {
-        if cfg!(target_os = "windows") {
-            Some(Platform::Windows)
-        } else if cfg!(target_os = "macos") {
-            Some(Platform::Macos)
-        } else if cfg!(target_os = "linux") {
-            Some(Platform::Linux)
-        } else {
-            None
-        }
-    }
-
-    /// The name used in `pane.json`: `windows`, `macos` or `linux`.
-    pub fn id(self) -> &'static str {
-        match self {
-            Platform::Windows => "windows",
-            Platform::Macos => "macos",
-            Platform::Linux => "linux",
-        }
-    }
-
-    pub(crate) fn from_id(id: &str) -> Option<Platform> {
-        Platform::ALL
-            .into_iter()
-            .find(|platform| platform.id() == id)
-    }
-}
-
-impl fmt::Display for Platform {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Platform::Windows => "Windows",
-            Platform::Macos => "macOS",
-            Platform::Linux => "Linux",
-        })
-    }
-}
+pub use pane_target::Platform;
 
 /// People's names for `platforms`: "Windows", "Windows and Linux",
 /// "Windows, macOS and Linux".
-fn names(platforms: &[Platform]) -> String {
+pub(crate) fn names(platforms: &[Platform]) -> String {
     let names: Vec<String> = platforms.iter().map(Platform::to_string).collect();
     join(&names)
 }

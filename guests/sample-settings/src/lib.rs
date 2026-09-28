@@ -7,6 +7,8 @@
 //! "Save after waiting" shows a call Pane stops: it notes in its settings
 //! that it started, waits ten seconds, then notes that it finished; disabling
 //! or reloading the package meanwhile stops it, so it never finishes.
+//! "Crash" crashes on purpose (a panic traps the guest): three crashes in a
+//! row pause the package until the user retries it, keeping its data.
 #![no_std]
 
 use pane_guest::alloc::{format, string::String, vec, vec::Vec};
@@ -77,6 +79,11 @@ impl Guest for Greeting {
                     "Save after waiting",
                     "Waits 10 seconds, then saves; disabling or reloading stops it",
                 ),
+                item(
+                    "crash",
+                    "Crash",
+                    "Crashes on purpose; three crashes within five minutes pause the extension",
+                ),
             ],
         })
     }
@@ -125,6 +132,9 @@ impl Guest for Greeting {
                 settings::set(SLOW_SAVE, "finished")?;
                 Ok("Saved after waiting 10 seconds".into())
             }
+            // A panic traps the guest: Pane reports a crash, not an error
+            // the extension answered with.
+            "crash" => panic!("crashed on purpose"),
             other => Err(format!("unknown item: {other}")),
         }
     }

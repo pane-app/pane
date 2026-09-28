@@ -2,7 +2,7 @@
 //!
 //! A [`Generation`] is one run of an installed package's code, from when the
 //! package is enabled (or installed, or Pane starts) until it is disabled,
-//! reloaded or updated. Every call into the package, and every guest
+//! reloaded, updated or paused after it failed. Every call into the package, and every guest
 //! instance serving one, belongs to the generation that was current when the
 //! user or another extension asked for it; so does an operation call it
 //! serves for another package's call, which also belongs to its caller's
@@ -31,6 +31,10 @@ pub(crate) enum End {
     Replaced,
     /// The user uninstalled the package.
     Uninstalled,
+    /// Pane paused the package after it failed: it could not start, or it
+    /// crashed too often. Retry, a reload or an update runs
+    /// it in a new generation.
+    Paused,
 }
 
 /// One run of an installed package's code. Cloning shares it.

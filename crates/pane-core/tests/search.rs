@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use futures::executor::block_on;
 use pane_core::{
-    CallError, CommandRegistration, Launcher, PackageIdentity, Runtime, Screen, Status,
+    CallError, CommandRegistration, Launcher, PackageIdentity, Runtime, Screen, Status, Unavailable,
 };
 use tempfile::TempDir;
 
@@ -38,6 +38,7 @@ fn command(title: &str, subtitle: Option<&str>) -> CommandRegistration {
         title: title.into(),
         subtitle: subtitle.map(Into::into),
         component: guest("sample_rust"),
+        takes_query: false,
     }
 }
 
@@ -509,7 +510,10 @@ fn an_unavailable_command_matches_and_explains_why_it_does_not_run() {
     let view = launcher.view();
     assert_eq!(titles(&launcher), ["Native tool"]);
     let reason = platforms::only("this command", &platforms::other_names());
-    assert_eq!(view.rows[0].unavailable.as_ref(), Some(&reason));
+    assert_eq!(
+        view.rows[0].unavailable,
+        Some(Unavailable::OnThisSystem(reason.clone()))
+    );
     block_on(launcher.activate_selected());
     assert_eq!(launcher.view().status, Status::Error(reason));
     assert_eq!(block_on(runtime.running()), Vec::<PathBuf>::new());

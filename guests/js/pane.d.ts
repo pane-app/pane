@@ -7,6 +7,7 @@
 /// <reference path="./data.d.ts" />
 /// <reference path="./operations.d.ts" />
 /// <reference path="./applications.d.ts" />
+/// <reference path="./helpers.d.ts" />
 
 /** One entry in a command's list view. */
 export interface Item {
@@ -196,11 +197,12 @@ export interface CustomView {
  * ```
  *
  * Resolving gives Pane the value. Throwing (rejecting) reports an error to the
- * user: from `getView`, `runAction`, `openView` and a view's `handleEvent` an
- * `Error`'s message, or a thrown string as is; from `submitForm` a
- * {@link FormError} object. Resolving with a value of the wrong type, such as
- * `undefined` instead of a string, or throwing an `Error` from `submitForm`,
- * is a crash: Pane reports it and starts a fresh instance for the next call.
+ * user, never a crash: from `getView`, `runAction`, `openView` and a view's
+ * `handleEvent` an `Error`'s message, or a thrown string as is; from
+ * `submitForm` a {@link FormError} object as is, and an `Error` or string as a
+ * message about the whole form. Resolving with a value of the wrong type, such
+ * as `undefined` instead of a string, is a crash: Pane reports it and starts a
+ * fresh instance for the next call, and repeated crashes pause the extension.
  * A crash closes any open custom view, whose state was in the old instance.
  */
 export interface Command {
@@ -265,6 +267,30 @@ export interface RootResults {
    * query and discards an answer once the query has changed.
    */
   resultsFor(query: string): Promise<RootResult[]>;
+}
+
+/**
+ * A command that takes a query (`pane:extension/query-command` in
+ * wit/query.wit): text the user typed into root search, which Pane sends
+ * only when the user invokes the command through its alias ("ec hello") or
+ * chooses it as a fallback. A command that takes one sets
+ * `"takesQuery": true` on its entry in `pane.json`, and
+ * `"pane": { "takesQuery": true }` in its `package.json` so that it is built
+ * with the interface; its module exports it as `queryCommand`:
+ *
+ * ```ts
+ * export const queryCommand: QueryCommand = {
+ *   async runQuery(command, query) { return `Echo heard “${query}”`; },
+ * };
+ * ```
+ */
+export interface QueryCommand {
+  /**
+   * Runs the command with id `command` (its id in `pane.json`) with `query`,
+   * trimmed and never empty. The text it resolves with is shown to the user
+   * as the result; throwing shows the error as the failure.
+   */
+  runQuery(command: string, query: string): Promise<string>;
 }
 
 /**

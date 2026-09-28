@@ -46,6 +46,7 @@ EXPORT_OPTIONS = {
     "rootResults": "pane:extension/root-results@0.1.0",
     "indexedResults": "pane:extension/indexed-results@0.1.0",
     "operations": "pane:extension/published-operations@0.1.0",
+    "takesQuery": "pane:extension/query-command@0.1.0",
 }
 PREBUILT = REPO / "guests" / "prebuilt"
 MANIFEST = PREBUILT / "manifest.json"
@@ -59,9 +60,14 @@ SAMPLES = [
     ("sample_operations_ts.wasm", "guests/sample-operations-ts"),
     ("sample_applications_js.wasm", "guests/sample-applications-js"),
     ("sample_applications_ts.wasm", "guests/sample-applications-ts"),
+    ("sample_query_js.wasm", "guests/sample-query-js"),
+    ("sample_query_ts.wasm", "guests/sample-query-ts"),
+    ("sample_helper_js.wasm", "guests/sample-helper-js"),
+    ("sample_helper_ts.wasm", "guests/sample-helper-ts"),
 ]
 # Pane's WIT, copied beside the world in guests/js/wit.
-PANE_WIT = ["extension.wit", "data.wit", "root-results.wit", "operations.wit", "applications.wit"]
+PANE_WIT = ["extension.wit", "data.wit", "root-results.wit", "operations.wit", "applications.wit", "query.wit",
+            "helpers.wit"]
 # Toolchain inputs that decide what a component contains.
 TOOL_INPUTS = ["pins.json", "package.json", "package-lock.json", "bundle.mjs", "p3_build.rs", "patches"]
 SKIP_DIRS = {"node_modules", ".git"}
@@ -352,9 +358,14 @@ def build(package: Path, out: Path, toolchain: Toolchain) -> dict:
     modules = toolchain.node / "node_modules"
     if (staged / "tsconfig.json").exists():
         log(f"type-checking {package.name}")
-        run([node, modules / "typescript" / "bin" / "tsc", "-p", staged / "tsconfig.json"])
+        # From the staged package, so errors name its files as the author
+        # does ("src/index.ts(3,7): error ...").
+        run([node, modules / "typescript" / "bin" / "tsc", "-p", staged / "tsconfig.json"], cwd=staged)
     bundle = work / "bundle.mjs"
-    run([node, HERE / "bundle.mjs", modules, staged / entry, bundle])
+    adapted = work / "pane-entry.mjs"
+    adapted.write_text(adapted_entry(staged / entry, types / "adapt.js", manifest.get("pane", {})),
+                       encoding="utf-8")
+    run([node, HERE / "bundle.mjs", modules, adapted, bundle])
 
     wit = types / "wit"
     (wit / "deps" / "pane-extension").mkdir(parents=True, exist_ok=True)
@@ -367,6 +378,33 @@ def build(package: Path, out: Path, toolchain: Toolchain) -> dict:
     result = json.loads(report.strip().splitlines()[-1])
     log(f"built {out} ({result['component_bytes']} bytes in {result['componentize_ms']} ms)")
     return result
+
+
+# The exports the adapter wraps, by `pane` option (None: always), each with
+# the handler that answers errors as text (see guests/js/adapt.js).
+ADAPTED_PROVIDERS = {
+    "rootResults": ("rootResults", "resultsFor"),
+    "indexedResults": ("indexedResults", "results"),
+    "operations": ("publishedOperations", "runOperation"),
+    "takesQuery": ("queryCommand", "runQuery"),
+}
+
+
+def adapted_entry(entry: Path, adapter: Path, options: dict) -> str:
+    """The module bundled for `entry`: its exports, with the ones Pane calls
+    wrapped by `adapter` so that what a handler throws is an error, not a
+    crash."""
+    entry_js, adapter_js = json.dumps(entry.as_posix()), json.dumps(adapter.as_posix())
+    lines = [
+        f"import * as extension from {entry_js};",
+        f"import {{ adaptCommand, adaptProvider }} from {adapter_js};",
+        f"export * from {entry_js};",
+        "export const command = adaptCommand(extension.command);",
+    ]
+    for option, (name, handler) in ADAPTED_PROVIDERS.items():
+        if options.get(option):
+            lines.append(f"export const {name} = adaptProvider(extension.{name}, {json.dumps(handler)});")
+    return "\n".join(lines) + "\n"
 
 
 def command_world(options: dict) -> str:
@@ -465,4 +503,13 @@ def main(argv: list[str]) -> None:
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    try:
+        main(sys.argv[1:])
+    except SystemExit as failure:
+        # A failure is one line starting "pane-js: error:" on standard error,
+        # which Pane's development mode shows as a build's first error.
+        message = failure.code
+        if isinstance(message, str) and message.startswith("pane-js: "):
+            print("pane-js: error: " + message.removeprefix("pane-js: "), file=sys.stderr, flush=True)
+            raise SystemExit(1) from None
+        raise

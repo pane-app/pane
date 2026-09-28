@@ -154,5 +154,10 @@ fn indexed_result(command: &CommandRegistration, result: IndexedResult) -> RootR
         unavailable: None,
     };
     let keys = Keys::new(&row.title, row.subtitle.as_deref(), None);
-    RootResult { row, entry, keys }
+    RootResult {
+        row,
+        entry,
+        keys,
+        target: None,
+    }
 }

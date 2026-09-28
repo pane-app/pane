@@ -1,0 +1,15 @@
+{
+  "manifestVersion": 1,
+  "title": "TypeScript query sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "echo",
+      "title": "Echo",
+      "subtitle": "A TypeScript command that answers the text you send it from root search",
+      "component": "sample_query_ts.wasm",
+      "takesQuery": true
+    }
+  ]
+}

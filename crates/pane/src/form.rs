@@ -1,4 +1,5 @@
-//! The form screen: an extension's form rendered with standard controls.
+//! The form screen: an extension's form, or Pane's own alias form, rendered
+//! with standard controls.
 //!
 //! - A text field is GPUI CE's editable text element (typing, editing keys,
 //!   clipboard, undo and input-method composition) inside a focusable
@@ -144,6 +145,11 @@ impl LauncherWindow {
                 FieldKind::Text { .. } => {
                     let input = cx.new(|cx| EditableTextState::new(StringStorage::default(), cx));
                     input.focus_handle(cx).tab_stop(true);
+                    // An extension's text field starts empty; Pane's own
+                    // forms (an alias) start with the current value.
+                    if !field.value.is_empty() {
+                        input.update(cx, |input, cx| input.emplace(&field.value, cx));
+                    }
                     let id = field.id.clone();
                     subscriptions.push(cx.subscribe(
                         &input,

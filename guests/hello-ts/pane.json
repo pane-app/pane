@@ -1,0 +1,14 @@
+{
+  "manifestVersion": 1,
+  "title": "Hello TypeScript",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "hello",
+      "title": "Hello TypeScript",
+      "subtitle": "Development mode sample in TypeScript",
+      "component": "dist/hello_ts.wasm"
+    }
+  ]
+}

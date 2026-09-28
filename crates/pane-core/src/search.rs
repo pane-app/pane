@@ -22,8 +22,21 @@
 //! query lists every result in that order. This is a deliberately simple
 //! first ranking, not tuned relevance: no typo tolerance, abbreviations,
 //! frequency or recency.
+//!
+//! A query that is the alias the user gave a result ([`Query::is_alias_of`])
+//! is compared caselessly instead ([`same_text`]); the launcher lists such a
+//! result before every other.
 
+use unicase::UniCase;
 use unicode_normalization::UnicodeNormalization;
+
+/// Whether `a` and `b` are the same text caselessly: after NFC and collapsing
+/// whitespace, with full Unicode case folding (so "STRASSE" is "straße" and a
+/// final sigma is a sigma). Folding is not locale-aware: Turkish dotted and
+/// dotless I are not folded together.
+pub(crate) fn same_text(a: &str, b: &str) -> bool {
+    UniCase::unicode(normalize(a)) == UniCase::unicode(normalize(b))
+}
 
 /// How well a result matches a query; lower is better.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -52,6 +65,8 @@ pub(crate) struct Keys {
     title_words: Vec<String>,
     subtitle: String,
     package: String,
+    /// The alias the user gave the result, if any.
+    alias: Option<String>,
 }
 
 impl Keys {
@@ -69,6 +84,15 @@ impl Keys {
             title_words,
             subtitle: subtitle.map(normalize).unwrap_or_default(),
             package: package.map(normalize).unwrap_or_default(),
+            alias: None,
+        }
+    }
+
+    /// These keys, also matched by `alias`, which the user gave the result.
+    pub(crate) fn with_alias(self, alias: Option<&str>) -> Keys {
+        Keys {
+            alias: alias.map(normalize).filter(|alias| !alias.is_empty()),
+            ..self
         }
     }
 }
@@ -87,6 +111,16 @@ impl Query {
             words: words.collect(),
             text,
         }
+    }
+
+    /// Whether this query is the alias the user gave the result with `keys`,
+    /// compared caselessly ([`same_text`]).
+    pub(crate) fn is_alias_of(&self, keys: &Keys) -> bool {
+        !self.text.is_empty()
+            && keys
+                .alias
+                .as_deref()
+                .is_some_and(|alias| UniCase::unicode(alias) == UniCase::unicode(&self.text))
     }
 
     /// How well a result with `keys` matches this non-empty query; `None`

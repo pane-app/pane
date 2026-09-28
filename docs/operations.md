@@ -6,8 +6,8 @@ G2, G4), following [ADR 0011](adr/0011-extension-call-and-result-api.md). An
 for other extensions to call through Pane. This slice is the minimum for one
 extension to reuse another across Rust, JavaScript and TypeScript: one call,
 one JSON input, one JSON result or an explained error. It is not a workflow
-engine, and dependency declarations and installing missing targets are
-[#42](https://github.com/hoangvu12/pane/issues/42).
+engine; [dependency declarations and installing missing targets](dependencies.md)
+came with [#42](https://github.com/hoangvu12/pane/issues/42).
 
 ## Contract
 
@@ -65,7 +65,10 @@ call: async func(source: string, operation: string, version: u32, input: string)
   other than the resolved one, is not an identity and is `not-found`; so is
   another scheme until Pane installs from npm or Git. A caller learns its
   targets' identities from its user or configuration (the samples ask in a
-  form); declared dependencies come with #42.
+  form), or declares them: since #42 `source` may instead be the id of a
+  dependency the caller's `pane.json` declares (for the operations it declares there), which Pane resolves to the
+  identity recorded when the caller was installed
+  ([dependencies](dependencies.md#addressing)).
 - **Input and result** are JSON text (any JSON value), at most 1 MiB each
   (`MAX_OPERATION_JSON`). Pane checks both before passing them on; their
   shape is the operation's documented contract at that version.
@@ -170,9 +173,9 @@ that rejects with an object whose `payload` is `{ kind, message }`
 - One string of JSON in and out; no streams, resources or schemas Pane
   validates beyond JSON syntax. The version is a single integer that must
   match exactly; there is no range or negotiation.
-- No declared dependencies: a caller names its targets in code, so Pane
-  cannot show, install or check them before a call (#42), and disabling a
-  target does not consider its callers (#43).
+- Declared [dependencies](dependencies.md) (#42) are shown, checked and
+  installed with the caller, but disabling a target does not consider its
+  callers yet (#43).
 - No timeouts, and a running operation stops only when a generation in its
   chain ends; one computing without yielding is not preempted (#18,
   [generations](generations.md#what-stopping-cannot-do-yet)).

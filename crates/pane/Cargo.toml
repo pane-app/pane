@@ -19,6 +19,7 @@ gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/gpui-c
 open = "~5.4.4"
 
 [dev-dependencies]
+futures = { version = "0.3", default-features = false, features = ["executor"] }
 serde_json = "1"
 tempfile = "3"
 gpui = { package = "gpui-ce", git = "https://github.com/gpui-ce/gpui-ce", rev = "17d9c8e8fdb30a329d817ca06bff424e8e848f1a", default-features = false, features = ["test-support"] }

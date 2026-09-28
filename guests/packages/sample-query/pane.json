@@ -1,0 +1,15 @@
+{
+  "manifestVersion": 1,
+  "title": "Query sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "echo",
+      "title": "Echo",
+      "subtitle": "Answers the text you send it from root search",
+      "component": "sample_query.wasm",
+      "takesQuery": true
+    }
+  ]
+}

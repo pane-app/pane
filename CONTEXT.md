@@ -49,7 +49,7 @@ Removing an installed package's managed copy, cache and local credentials, and i
 _Avoid_: Disable, delete source
 
 **Retained data**:
-Extension data Pane keeps for a package identity that is not installed, recorded with the title it had; installing the same source again makes it that package's data again.
+Extension data Pane keeps for a package identity that is not installed, recorded with the title it had; installing the same source again makes it that package's data again. Manage extensions lists it per identity, and the user can delete it there without the extension, which Pane does itself.
 _Avoid_: Orphaned data, leftovers (a leftover is a managed folder awaiting removal)
 
 **Local credential**:
@@ -84,6 +84,18 @@ _Avoid_: Bookmark, shortcut, alias
 A key combination the user assigns to an installed command in Pane, which opens that command in Pane's window while any application has focus; Pane keeps it as its own record and registers it with the system only while the command's extension is enabled.
 _Avoid_: Shortcut (any key combination, including Pane's own keys), keybinding, alias
 
+**Alias**:
+A word the user gives an installed command in Pane; typing it in root search lists that command first, and, for a query-taking command, typing it before some text lists a row that sends the text to the command when invoked. Pane keeps it as its own record by command id; a disabled package's commands offer none.
+_Avoid_: Keyword (an author's search term), shortcut, nickname
+
+**Fallback**:
+A query-taking command the user chose to have offered below root search's results for any text typed; it is never chosen by itself, so the text reaches it only when the user invokes it.
+_Avoid_: Default action, catch-all
+
+**Query-taking command**:
+An extension command that declares it takes a query: text typed in root search, which Pane sends it only when the user invokes it through its alias or as a fallback, and whose answer Pane shows.
+_Avoid_: Argument (Raycast's per-field input), search provider (a provider is asked while the user types)
+
 **Search provider**:
 A source of matching results for a query, such as applications, files or an online service.
 _Avoid_: The entire search interface
@@ -97,7 +109,7 @@ A unit of installation: a package manifest plus the built components of the comm
 _Avoid_: Plugin bundle
 
 **Package manifest**:
-The `pane.json` file that declares a package's title, version, required extension API and commands, versioned by its manifest version.
+The `pane.json` file that declares a package's title, version, required extension API, commands, operations and dependencies, versioned by its manifest version.
 _Avoid_: package.json (npm's file)
 
 **Source-only package**:
@@ -116,12 +128,28 @@ _Avoid_: Reinstall
 Replacing an installed package's code from its source folder while Pane and other packages keep running: the replacement is checked as an install would check it, then replaces the managed copy, the old instances stop and the new code starts. Settings are kept; live state is not carried over.
 _Avoid_: Restart, hot swap, update (an update does not start the new code)
 
+**Development mode**:
+An installed local package whose source folder Pane watches while its author works on it: each save runs the package's documented build command in that folder, staging the components under Pane's data folder, and a build that succeeds reloads the package from there, while one that fails keeps its working code and shows the build's diagnostics. It lasts until the author stops it, the package is disabled or uninstalled, or Pane quits, each of which kills a running build with the processes it started; another installed copy of the package is never affected.
+_Avoid_: Watch mode, hot reload, dev copy (a copy is an installation)
+
+**Build failure**:
+A development build that did not succeed: nothing is replaced, and the package keeps running its installed code. Distinct from a startup failure, whose replacement was installed.
+_Avoid_: Crash, startup failure
+
+**Obsolete build**:
+A development build during which the source was saved again: it is never reloaded, what it left in the source folder is replaced with the installed components, and the folder is built again, so an older build cannot replace a newer one; after three in a row, Pane waits for the next save.
+_Avoid_: Cancelled build (it runs to its end)
+
 **Startup failure**:
-A reload whose checked replacement was installed but could not start: a command trapped, or its component could not load or be instantiated (an error the command returns for its view is not one); Pane stops its instances, reports it with Retry and diagnostics and does not restore the earlier code. Distinct from a replacement that fails its checks, which leaves the working code in place.
+A reload whose checked replacement was installed but could not start: a command trapped, or its component could not load or be instantiated (an error the command returns for its view is not one); Pane pauses the package, reporting it with Retry and diagnostics, and does not restore the earlier code. Distinct from a replacement that fails its checks, or a build failure, which leave the working code in place.
 _Avoid_: Build failure, rollback
 
+**Paused extension**:
+An enabled extension Pane stopped running after a failure attributable to it: it could not start, or it crashed three times within five minutes (an error it answers with is not a failure, nor a call stopped because a generation ended). Its commands stay listed, saying why they do not run; its saved data is kept, and the pause holds across restarts until the user retries, reloads, updates, disables or enables it. Distinct from a disabled extension, which is the user's choice.
+_Avoid_: Crashed extension, quarantined, disabled (by Pane)
+
 **Generation**:
-One run of an installed package's code, from when it is installed, enabled or Pane starts until it is disabled or its code is replaced by a reload or an update. Every call into the package belongs to the generation current when it was asked for, and is stopped when that generation ends; its late result is discarded.
+One run of an installed package's code, from when it is installed, enabled or Pane starts until it is disabled, paused or its code is replaced by a reload or an update. Every call into the package belongs to the generation current when it was asked for, and is stopped when that generation ends; its late result is discarded.
 _Avoid_: Version (a package's version is its manifest's), session, instance (one generation can start several), screen or search epoch (the launcher's counters of screens and searches, which only decide whether an answer is shown)
 
 **Supported platforms**:
@@ -136,9 +164,33 @@ _Avoid_: Hidden action, disabled extension
 A named, versioned function an installed package publishes in its package manifest for other extensions to call through Pane, with JSON input and result; only published operations are callable, so a command is never one implicitly.
 _Avoid_: API, command (a command is what the user opens), endpoint
 
+**Dependency**:
+Another package whose operations a package calls, declared in its package manifest with the source it comes from and the operations and versions it calls; the package's code calls it by the declaration's id.
+_Avoid_: Library dependency (an npm or Cargo library bundled into a component), extension pack
+
+**Required dependency**:
+A dependency a package needs: installing the package shows it and installs it first if it is missing, but never replaces an installed copy (which counts as pinned) or enables a disabled one; a required dependency that cannot be installed or does not publish what is called stops the install before anything changes.
+_Avoid_: Hard dependency, prerequisite
+
+**Required dependent**:
+An installed package that requires another on this system, directly or through other installed packages that do (its required dependent closure; optional dependencies never count). Disabling the package it requires first shows the enabled ones, which are disabled together or not at all (Disable all or Cancel); enabling that package again does not enable them.
+_Avoid_: Reverse dependency, child extension
+
+**Optional dependency**:
+A dependency a package uses only when the user installed it; installing the package lists it but never installs it.
+_Avoid_: Soft dependency, suggestion, recommended extension
+
 **Call chain**:
 The operation calls waiting on one another at one moment, from the command that made the first; each package in it is busy until its call returns, so a call back into one is refused rather than waited on.
 _Avoid_: Call stack (of one guest), workflow
+
+**Native helper**:
+A prebuilt program an installed package ships for each target (operating system and processor) it supports, which its commands run through Pane for what a WASI guest cannot do; Pane runs this system's file, never compiles one, and ends its process when the command cancels the run, the call that started it returns, the package's generation ends or Pane quits. Processes the helper starts itself are its own.
+_Avoid_: Plugin binary, native extension (the extension's entry point stays a WASI component), sidecar
+
+**Helper target**:
+The operating system and processor a native helper's file is built for, written `<os>-<arch>` in the package manifest, such as `linux-x86_64` or `macos-aarch64`; Pane runs only the file for its own target.
+_Avoid_: Platform (a supported platform is an operating system alone), triple
 
 **Form**:
 A set of fields an extension command asks the user to fill in and submit; the launcher renders its standard controls and the extension validates the submitted values.

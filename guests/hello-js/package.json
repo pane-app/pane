@@ -1,0 +1,12 @@
+{
+  "name": "pane-hello-js",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A minimal command in JavaScript to develop with Pane's development mode",
+  "license": "Apache-2.0 OR MIT",
+  "type": "module",
+  "main": "src/index.js",
+  "devDependencies": {
+    "@pane/extension": "file:../js"
+  }
+}

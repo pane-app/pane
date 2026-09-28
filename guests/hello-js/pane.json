@@ -1,0 +1,14 @@
+{
+  "manifestVersion": 1,
+  "title": "Hello JavaScript",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "hello",
+      "title": "Hello JavaScript",
+      "subtitle": "Development mode sample in JavaScript",
+      "component": "dist/hello_js.wasm"
+    }
+  ]
+}

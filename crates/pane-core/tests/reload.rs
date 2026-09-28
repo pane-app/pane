@@ -276,21 +276,27 @@ fn a_replacement_that_fails_to_start_is_reported_and_retried() {
             .starts_with("Reloaded Dev, but it failed to start; its earlier code is not restored."),
         "{message}"
     );
-    assert!(message.contains("\"Retry starting Dev\""), "{message}");
+    assert!(message.contains("\"Why Dev is paused\""), "{message}");
     // The failure is listed with Retry and its diagnostics.
     let view = launcher.view();
-    let retry = view
-        .rows
-        .iter()
-        .find(|row| row.title == "Retry starting Dev")
-        .expect("a Retry row");
+    assert!(titles(&launcher).contains(&"Retry starting Dev".to_string()));
     assert!(
-        retry
+        view.rows[0]
             .subtitle
             .as_deref()
-            .is_some_and(|s| s.starts_with("The extension crashed: ")),
-        "{retry:?}"
+            .is_some_and(|s| s.starts_with("Enabled · Failed to start"))
     );
+    press(&launcher, "Why Dev is paused");
+    let details = launcher.view().details().to_vec();
+    assert_eq!(details[0], "Dev could not start.");
+    assert!(
+        details
+            .iter()
+            .any(|line| line.starts_with("The extension crashed: ")),
+        "{details:?}"
+    );
+    manage(&launcher);
+    let view = launcher.view();
     assert!(
         view.rows[0]
             .subtitle

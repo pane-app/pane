@@ -1,0 +1,22 @@
+# The helper sample's native helper: an ordinary program built for each
+# system the package supports (not a WebAssembly component). `cargo xtask
+# guests` builds it for the system it runs on and puts it in the helper
+# sample package; an author ships one build per target. Its own workspace,
+# since the guests workspace builds for wasm32-wasip2.
+[package]
+name = "pane-echo"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0 OR MIT"
+
+[workspace]
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+
+[dependencies]
+# The target names Pane uses, so the answer names the file that ran.
+pane-target = { path = "../../../crates/pane-target" }

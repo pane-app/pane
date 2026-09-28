@@ -44,6 +44,7 @@ fn command(title: &str, guest: &str) -> CommandRegistration {
         title: title.into(),
         subtitle: None,
         component,
+        takes_query: false,
     }
 }
 

@@ -7,7 +7,8 @@ behavior: remove disposable data and keep settings, user content and
 credentials, controlled by Pane rather than by running the extension.
 [#40](https://github.com/hoangvu12/pane/issues/40) adds
 [uninstalling](#uninstalling-an-extension) with a choice to keep or delete
-the saved data.
+the saved data, and [#41](https://github.com/hoangvu12/pane/issues/41)
+[deleting retained data](#deleting-retained-data) afterwards.
 
 ## Four kinds of data
 
@@ -157,8 +158,7 @@ removed yet (<reason>); Pane removes it when it next starts."
 Extension data kept for an identity that is not installed is **retained
 data**. `installed.json` lists it under `retained`, with the source and the
 title the package had, so that it stays manageable without the package
-([#41](https://github.com/hoangvu12/pane/issues/41), which deletes it later,
-reads this list; `Launcher::retained_data` returns it):
+(`Launcher::retained_data` returns it):
 
 ```json
 "retained": [{ "local": "/home/me/greeter", "title": "Greeter" }]
@@ -174,6 +174,77 @@ reads this list; `Launcher::retained_data` returns it):
   in between changes nothing.
 - Another source is another identity, even with the same title: it starts
   with nothing and never sees the retained data.
+
+### Deleting retained data
+
+Added for [#41](https://github.com/hoangvu12/pane/issues/41) (US62, US63,
+US64, T20, G5; contributions). It implements "Remove retained data later"
+of the accepted
+[data policy](extension-policy-proposal.md#disable-cache-data-and-uninstall)
+for one identity at a time; data of different sources is never merged.
+There is no author example or guest API: deleting retained data is done by
+Pane alone, after the extension's code is gone, so an extension has nothing
+to call or handle.
+
+Manage extensions (offered in root search while anything is installed or
+retained) lists, last (after the Uninstall and hotkey rows), a row "Delete retained data of
+<title>" per retained identity, in the order they were uninstalled, whose
+subtitle reads "Not installed · keeps 1 setting and 1 content record ·
+<source>" (or "keeps nothing"; a kind whose file is missing keeps nothing,
+and one whose file cannot be read says so). The counts come from the files as
+they are when the list or the confirmation is shown, so a file repaired
+meanwhile is counted.
+Two identities with the same title are told apart by their source.
+Choosing it asks first, "Delete the retained data of <title>?", with:
+
+- "From <source>";
+- "<title> is not installed. Pane deletes the data it keeps for this source
+  itself; the extension is not downloaded and does not run.";
+- "Retained data: 1 setting and 1 content record" (every kind Pane still
+  keeps for it);
+- "Its source folder <path>, files it saved elsewhere and other extensions'
+  data are not touched."
+
+and two rows: **Cancel** (first and selected, so Enter keeps the data, as
+for uninstalling) and **Delete retained data**. Cancel and Esc return to the
+row. Deleting first reads `installed.json` again, then removes that identity's entry from each kind's
+file (read again first, as Clear cache does, so other identities' values and
+another Pane's writes are kept), then drops its `retained` record, and
+returns to the list with "Deleted the retained data of <title>". Nothing
+runs: the package's code is gone and is not downloaded, so a Pane whose
+runtime did not start deletes the same way. Installing the same source
+afterwards starts with nothing; a restart changes nothing. The same source
+cannot be installed while its data is being deleted.
+
+Another Pane on the same data folder may have changed `installed.json`
+since this one read it. Before deleting anything, Pane checks the file as it
+is now: if the same source was installed again there, its data is that
+package's and nothing is deleted ("<title> was installed again from the
+same source by another Pane using this data folder, so its data is in use and
+nothing was deleted"); if nothing is kept for it any more, "The data of
+<title> is no longer kept, so nothing was deleted". Either way the row goes.
+If the file cannot be read, "Could not delete the retained data of <title>:
+<reason>. Nothing was deleted." Dropping the record also rewrites the file as
+it is now, so another Pane's install records are kept. The files are not
+locked, so a change made by another Pane in the moment between that check
+and the deletion is not seen.
+
+The record is dropped only once every kind is deleted:
+
+- A file that cannot be read or written (such as a malformed or locked
+  `content.json`) leaves that kind's values where they were, and the record
+  stays: "Could not delete all the retained data of <title>: could not
+  delete its content: Cannot read <path>: <reason>. What could not be
+  deleted stays listed: repair or delete that file, then delete it again."
+  The row then shows what remains, and deleting again after the repair
+  finishes, without a restart.
+- If the data is deleted but `installed.json` cannot be written: "Deleted
+  the retained data of <title>, but could not remove it from the list:
+  <reason>. It stays listed, keeping nothing, until it is deleted again."
+  This is checked on macOS and Linux only (a read-only data folder); on
+  Windows a read-only folder still accepts new files, so the test that
+  replaces `installed.json` with a folder fails on reading instead, before
+  anything is deleted.
 
 ## Checks
 
@@ -195,6 +266,25 @@ reads this list; `Launcher::retained_data` returns it):
   smokes, screenshots 49 to 51: the confirmation, the outcome, and after
   reinstalling the same folder its style and note shown, signed out, with
   the files checked in between.
+- Deleting retained data, in `crates/pane-core/tests/uninstall.rs` for each
+  language's settings sample: the row and confirmation after a restart,
+  deleted by a launcher without a runtime, the source folders and a user
+  document unchanged byte for byte, still gone after a restart and a
+  reinstall starting empty; Cancel and Esc; three copies with the same
+  title, one of them installed, where only the chosen retained identity's
+  data goes; an unreadable `content.json` (explained, the rest deleted,
+  still listed, counted again and finished once repaired); a cache an
+  earlier uninstall could not delete deleted with it; a missing kind file
+  counted as empty; an `installed.json` that cannot be read (nothing
+  deleted, on every system) or, on Unix, written (explained, still listed
+  keeping nothing); a second launcher on the same folder that installed the
+  same source again (nothing deleted, its records and data kept) or another
+  package (its record kept); an installed package refused.
+  `crates/pane/tests/install.rs`: the row, confirmation, Esc and outcome in
+  the native window, with Enter on the selected Cancel keeping the data. The
+  native GUI smokes, screenshots 63 to 65: the
+  confirmation, the outcome, and after reinstalling the same folder nothing
+  shown, with the files checked in between.
 - `crates/pane-core/tests/clear_cache.rs`, for each language's settings sample:
   each kind before and after clearing, and after a restart; Cancel and Esc;
   two copies with the same title, with the source folders and a user document
@@ -225,10 +315,12 @@ reads this list; `Launcher::retained_data` returns it):
   elsewhere has to manage them itself.
 - The files are replaced atomically but not locked, as with settings: two
   Pane processes on one data folder can lose each other's last write.
-- Uninstall removes an identity's entry from each file as Clear cache does;
-  deleting retained data ([#41](https://github.com/hoangvu12/pane/issues/41))
-  is not built yet, so retained data can only be deleted by installing the
-  same source again and uninstalling it with "delete".
+- Uninstall and deleting retained data remove an identity's entry from each
+  file as Clear cache does. Deleting is not forensic erasure: copies in
+  backups or on the disk may remain.
+- Only retained data recorded in `installed.json` is listed: values still in
+  the kind files for an identity that was never recorded (as after
+  `installed.json` was lost) are not found.
 - Uninstall does not remove Pane's own compile cache entries: they are keyed
   by the components' bytes, may be shared with another package, and
   Wasmtime's cache trims them itself. They hold no extension data.

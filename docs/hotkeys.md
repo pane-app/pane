@@ -77,7 +77,12 @@ released, reaches Pane no more.
   goes back, in Pane, to what was last recorded, and its registration
   follows.
 - **Uninstall** (#40) releases the package's hotkeys at once and forgets
-  them, whether its saved data is kept or deleted (they are Pane's records).
+  them, whether its saved data is kept or deleted (they are Pane's records):
+  exactly its own, by the package part of the command id (a manifest
+  command id cannot contain `#`), so uninstalling the copy from folder `x`
+  keeps the hotkeys of the copy from `x#y`. A change whose write fails after
+  its package was uninstalled does not bring its hotkey back. The record is
+  kept as the [aliases](aliases.md)' is.
 - A hotkey another application took meanwhile is shown on its row as "Not
   active: another application or the system already uses it" and tried again
   with every change to the installed packages and at the next start; the

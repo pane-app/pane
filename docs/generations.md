@@ -13,8 +13,8 @@ responding (#18), uninstall (#40) and cancelling a pending search (#29, #30).
 
 A **generation** ([glossary](../CONTEXT.md)) is one run of an installed
 package's code: it begins when the package is installed, enabled or Pane
-starts, and ends when the package is disabled or its code is replaced by a
-reload or an update (a reload's or update's new code runs in a new
+starts, and ends when the package is disabled, [paused](pausing.md) after it
+failed, or its code is replaced by a reload or an update (a reload's or update's new code runs in a new
 generation). A disabled package stays in an ended generation until it is
 enabled again. Commands built into Pane have no generation: they run as long
 as Pane.
@@ -67,7 +67,8 @@ generation ends:
    any kind: reading or saving any kind of extension data ("this code of
    the extension was replaced by a reload or an update; its settings are
    kept unchanged", or "the extension is disabled; …"), calling operations
-   (`refused`), and listing or opening applications. This matters only for
+   (`refused`), listing or opening applications, and starting a native
+   helper ([helpers](helpers.md)). This matters only for
    code still running because it did not yield (below): code stopped at an
    `await` never runs again.
 5. **Other packages keep running**, with their instances and open views.
@@ -91,15 +92,17 @@ resume in the store. So:
   reload and update that is intended, since the code stops anyway. Later
   owners that stop calls while the package keeps running pay this cost
   too: cancelling a search's pending provider calls (#29, #30) would drop
-  the provider's instance, losing what it keeps in memory between queries,
-  and stopping a native helper's call (#15) the same way would restart the
-  component that drove it. Such owners may prefer discarding answers to
+  the provider's instance, losing what it keeps in memory between queries.
+  A command cancelling its own [native helper](helpers.md) run (#15) needs
+  no such owner: the guest drops the run, Wasmtime cancels the host task
+  and the process ends, while the instance stays. Such owners may prefer
+  discarding answers to
   stopping calls, or waiting for component-model cancellation of a task
   the host called (`task.cancel` from the host) in a later Wasmtime.
 - **A package serving an operation for a stopped caller restarts fresh**
-  on its next call, although it was not disabled, as after a crash. For
-  #16's detection of repeated failed activations, such a restart is not a
-  failure of that package and must not count as one.
+  on its next call, although it was not disabled, as after a crash. It is
+  not a failure of that package: [pausing](pausing.md) (#16) counts only
+  crashes and failures to start, never a stopped call.
 
 ## What stopping cannot do yet
 
@@ -120,10 +123,12 @@ resume in the store. So:
   stop (a file written through WASI, a request sent) stays done; only what
   it would have done afterwards is prevented. Data it saved before the stop
   is kept (the sample's "started").
-- **Native helper processes** (#15) do not exist yet; when they do, a
-  helper's process belongs to its package's generation and is stopped with
-  it. Nothing in this model assumes one operating system: it lives in the
-  runtime and the launcher, with no platform adapter.
+- **Native helper processes** ([helpers](helpers.md), #15) belong to their
+  package's generation and are ended with it, by a thread that watches the
+  generation itself, so even while the runtime thread is busy; they also
+  end with the call that started them. Processes a helper starts itself are
+  not stopped. Nothing in this model assumes one operating system: it lives
+  in the runtime and the launcher, with no platform adapter.
 - **Background work** (timers, subscriptions, services) is not part of the
   extension API yet; when it is, it belongs to a generation the same way.
 - Measured cleanup is what the runtime reports (`Runtime::running`,

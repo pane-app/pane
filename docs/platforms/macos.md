@@ -156,6 +156,86 @@ compile- and lint-checked for `x86_64-apple-darwin` from Linux; **not run
 on macOS yet**, so registration, delivery on the main run loop and the
 focus transition are unverified natively.
 
+## Deleting retained data (#41)
+
+The smoke's retained-data phase (screenshots 63 to 65, [deleting retained
+data](../extension-data.md#deleting-retained-data)), with a data folder of
+its own, saves a note with the settings sample, uninstalls it keeping its
+saved data, deletes its retained data from the extension list's last row
+(Down from the selected Cancel, then Return), checks that `installed.json`
+and `content.json` no longer hold it, and reinstalls the same folder, which
+must show nothing kept. **Not run on macOS yet.**
+
+## Aliases and fallbacks (#31)
+
+The smoke's alias phase (screenshots 66 to 74, [aliases and fallbacks](../aliases.md#checks))
+gives Echo, the query sample's command, the alias "ec" and makes it a
+fallback in Manage extensions, sends "ec hello" and, from the unselected
+fallback row chosen with Down, "zqx" to it, and checks that with the
+extension disabled "ec hello" lists nothing. Nothing in it is specific to
+macOS (no system API is involved); **not run on macOS yet**.
+
+## Dependencies (#42)
+
+The dependencies phase (screenshots 75 to 77, [dependencies](../dependencies.md#checks)),
+with a data folder of its own, previews the dependencies sample (its
+required JavaScript operations sample and optional Rust one listed),
+installs it with the JavaScript sample and runs "Greet through the required
+greeter", which must answer from the JavaScript guest; `installed.json`
+must then hold exactly two packages and the recorded dependency. The logic
+is platform-independent except path resolution, which uses the same
+`canonicalize` as package identity. **Not run on macOS yet.**
+
+## Native helpers (#15)
+
+The first native-helper phase (screenshots 90 to 93, data folder `helper-data`,
+[native helpers](../helpers.md#checks)) installs the helper sample, whose
+`pane-echo` `cargo xtask guests` builds for the runner (`macos-aarch64` on
+`macos-15`), runs it (the answer must name macOS arm64), cancels a slow run
+after a second, starts the ten-second run, checks with `pgrep` that the
+helper runs from the managed copy, disables the package and checks that the
+process is gone, that the saved "started" note is kept, and that no helper
+outlives Pane. A second phase (screenshot 94, `helper-quit-data`) starts
+the waiting helper, asks Pane to quit with a quit Apple event
+(`NSRunningApplication.terminate`, through Python's ctypes), and checks
+that Pane exits, no helper runs and its heartbeat file stops growing. The
+tests in `crates/pane-core/tests/helpers.rs` (Rust, JavaScript and
+TypeScript samples) and the runner's unit tests (Mach-O headers) run in
+`cargo xtask ci` there, against the `pane-echo` built natively on the
+runner. The runner was only compile- and lint-checked for
+`x86_64-apple-darwin` from Linux; **not run on macOS yet**, so starting,
+ending and reaping a helper natively, and the executable permission of the
+copied file, are unverified there, and whether GPUI runs Pane's quit
+handler for a quit Apple event is unverified until the smoke runs. No macOS x86-64 build was made.
+
+## Development mode (#12, #13)
+
+The smoke's last phase (screenshots 110 to 136, [development
+mode](../development-mode.md#checks)) builds a copy of each development
+sample, develops it from Manage extensions, saves an edit, a change that
+does not build, two saves in a row and, after stopping, one more, checking
+the answers, the error and that nothing is built after stopping. The
+TypeScript and JavaScript samples run only where the JS toolchain is built,
+so CI's smoke runs the Rust one. The platform code (FSEvents through notify, with the folder and event
+paths made canonical, and a process group killed with `SIGKILL`) was only
+compile- and lint-checked for `x86_64-apple-darwin` from Linux; **not run on
+macOS yet**, so the file watcher's events, the build's processes being
+killed and the whole phase are unverified natively. macOS has no parent
+death signal, so a build outlives a Pane that is killed or crashes (one
+that quits kills it).
+
+## Disabling required dependents (#43)
+
+The disable-dependents phase (screenshots 140 to 143, [disabling a required dependency](../dependencies.md#disabling-a-required-dependency)),
+with a data folder of its own, installs the dependencies sample, presses
+Enter on the JavaScript operations sample in Manage extensions, which must
+ask first (the details color), cancels, then chooses Disable all (the
+result color) and enables the JavaScript sample again alone (the result
+color); `installed.json` must then record exactly one disabled package.
+Nothing in it is specific to macOS (no system API is involved; the
+closure reuses the dependency identities recorded at install); **not run on
+macOS yet**.
+
 ## Text input and accessibility findings
 
 - **Text input / IME (#20):** extension forms now have a text field. The

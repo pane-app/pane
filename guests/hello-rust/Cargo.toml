@@ -1,0 +1,24 @@
+[package]
+name = "hello-rust"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0 OR MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Pane's Rust bindings; outside this repository, point `path` at
+# guests/pane-guest in a Pane checkout.
+pane-guest = { path = "../pane-guest" }
+
+# A package of its own, built in its own folder with the documented command
+# `cargo build --release --target wasm32-wasip2`, so that its component is
+# where pane.json says: target/wasm32-wasip2/release/hello_rust.wasm.
+[workspace]
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true

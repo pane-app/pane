@@ -12,6 +12,7 @@ use gpui::{
     Pixels, Role, ScrollHandle, SharedString, Size, Stateful, Window, actions, div, prelude::*,
     rgb,
 };
+use pane_core::changes::Changes;
 use pane_core::hotkeys::Shortcut;
 use pane_core::{CommandRegistration, Launcher, LauncherView, Row, Screen, Status};
 
@@ -92,6 +93,7 @@ pub fn sample_commands() -> Vec<CommandRegistration> {
             title: title.into(),
             subtitle: Some(subtitle.into()),
             component: dir.join(file),
+            takes_query: false,
         })
         .collect()
 }
@@ -188,6 +190,13 @@ impl LauncherWindow {
         let query = root_search::QueryField::new(cx);
         // The launcher starts at root search.
         query.focus(window, cx);
+        // Quitting ends development: its watchers go and a running build
+        // is stopped with the processes it started.
+        cx.on_app_quit(|this: &mut Self, _| {
+            this.launcher.stop_all_development();
+            async {}
+        })
+        .detach();
         LauncherWindow {
             launcher,
             focus_handle,
@@ -202,6 +211,30 @@ impl LauncherWindow {
 
     pub fn launcher(&self) -> &Launcher {
         &self.launcher
+    }
+
+    /// Redraws whenever the launcher changes in the background, as
+    /// `changes` (the other end of the launcher's
+    /// [`with_development`](Launcher::with_development)) reports: a package
+    /// being developed is building, failed to build or was reloaded.
+    pub fn follow_changes(
+        &mut self,
+        mut changes: Changes,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn_in(window, async move |this, cx| {
+            while changes.next().await.is_some() {
+                let shown = this.update_in(cx, |this, window, cx| {
+                    this.sync_screen(window, cx);
+                    cx.notify();
+                });
+                if shown.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     fn select_next(&mut self, _: &SelectNext, _: &mut Window, cx: &mut Context<Self>) {
@@ -431,7 +464,8 @@ impl LauncherWindow {
             .when(selected, |row| {
                 row.aria_active_descendant().bg(rgb(0x364355))
             })
-            .hover(|row| row.bg(rgb(0x2e3a48)))
+            // Hovering never hides which row is selected.
+            .when(!selected, |row| row.hover(|row| row.bg(rgb(0x2e3a48))))
             .child(
                 div()
                     .when(row.unavailable.is_some(), |title| {
@@ -444,18 +478,21 @@ impl LauncherWindow {
             })
             // An unavailable row stays listed and selectable; it says why it
             // cannot run here, on screen and to assistive technology.
-            .when_some(row.unavailable.clone(), |element, reason| {
-                element.aria_disabled(true).child(
-                    div()
-                        .id(("unavailable", index))
-                        .debug_selector(|| reason_selector)
-                        .text_sm()
-                        .text_color(rgb(0xd6a36a))
-                        .child(reason),
-                )
-            })
             .when_some(
-                match (row.subtitle, row.unavailable) {
+                row.unavailable.as_ref().map(|u| u.reason().to_owned()),
+                |element, reason| {
+                    element.aria_disabled(true).child(
+                        div()
+                            .id(("unavailable", index))
+                            .debug_selector(|| reason_selector)
+                            .text_sm()
+                            .text_color(rgb(0xd6a36a))
+                            .child(reason),
+                    )
+                },
+            )
+            .when_some(
+                match (row.subtitle, row.unavailable.map(|u| u.reason().to_owned())) {
                     (Some(subtitle), Some(reason)) => Some(format!("{subtitle}. {reason}")),
                     (subtitle, reason) => subtitle.or(reason),
                 },
@@ -490,6 +527,8 @@ impl Render for LauncherWindow {
             Screen::CustomView(_) => ("", "Keys and pointer go to the view · Esc back"),
             Screen::Confirm { .. } => ("", "↑↓ select · Enter choose · Esc cancel"),
             Screen::Hotkey { .. } => ("", "Press the new hotkey · Enter choose · Esc back"),
+            Screen::PauseDetails { .. } => ("", "Enter retry · Esc back"),
+            Screen::BuildDetails { .. } => ("", "Enter build again · Esc back"),
         };
         let details: Vec<_> = view
             .details()
@@ -508,6 +547,7 @@ impl Render for LauncherWindow {
             match view.status {
                 Status::Idle => ("status-idle", hint.into(), 0x8a96a3),
                 Status::Running => ("status-running", "Running…".into(), 0xd6c27a),
+                Status::Progress(work) => ("status-progress", work.into(), 0xd6c27a),
                 Status::Result(answer) => ("status-result", answer.into(), 0x9fd8a8),
                 Status::Error(message) => ("status-error", message.into(), 0xf08c8c),
             };
@@ -541,10 +581,12 @@ impl Render for LauncherWindow {
             .gap_1()
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
-            .children(rows)
+            // Above the rows: with none selected, the only rows are root
+            // search's fallbacks, listed below "No results".
             .when(view.selected.is_none(), |rows| {
                 rows.child(empty.text_color(rgb(0x8a96a3)))
-            });
+            })
+            .children(rows);
         // The launcher decides what an item opens; its screen says which.
         let body = match view.screen {
             Screen::Form(form) => self.render_form(view.title.clone(), form, cx),

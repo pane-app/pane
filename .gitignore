@@ -7,6 +7,9 @@
 **/target/
 **/node_modules/
 **/__pycache__/
+# The development-mode samples build into their own folders.
+/guests/hello-js/dist/
+/guests/hello-ts/dist/
 *.py[cod]
 .venv/
 

@@ -143,7 +143,8 @@ The same author-facing contract serves all three: an extension receives
 
 ## Limits
 
-- No icons, no localized names, no keywords or aliases (#31), no frequency
+- No icons, no localized names, no keywords or aliases (the user's aliases,
+  [#31](aliases.md), are for installed commands only), no frequency
   ranking; applications are not ranked against commands beyond the title
   rank.
 - The host imports are synchronous: the very first scan runs on the

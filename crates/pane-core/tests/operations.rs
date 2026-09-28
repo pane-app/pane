@@ -593,6 +593,32 @@ fn a_crashed_target_is_reported_and_the_caller_keeps_working() {
 }
 
 #[test]
+fn a_target_that_keeps_crashing_is_paused_and_its_caller_is_not() {
+    let dirs = Dirs::new();
+    let launcher = dirs.a_and_b();
+
+    for _ in 0..3 {
+        assert_error_starts(
+            &fixture_run(&launcher, "Call b's crash"),
+            "crashed: Package b crashed:",
+        );
+    }
+    // The crashes were `b`'s: `b` is paused, while its caller runs on (its
+    // command opens and answers).
+    assert_eq!(
+        fixture_run(&launcher, "Call b's echo"),
+        error("unavailable: Package b is paused after an error; retry it in Manage extensions")
+    );
+
+    block_on(launcher.retry_start(&dirs.identity("b")));
+    assert_eq!(launcher.view().status, result("Started Package b"));
+    assert_eq!(
+        fixture_run(&launcher, "Call b's echo"),
+        result(r#"answered: {"hello":"world"}"#)
+    );
+}
+
+#[test]
 fn input_and_results_that_are_not_json_are_refused() {
     let dirs = Dirs::new();
     let launcher = dirs.a_and_b();
@@ -960,6 +986,29 @@ fn disabling_a_caller_stops_the_operation_it_waits_for() {
 }
 
 #[test]
+fn a_target_stopped_with_its_caller_again_and_again_is_not_paused() {
+    let dirs = Dirs::new();
+    let launcher = dirs.a_and_waiting_b();
+    // Each time, `b`'s instance goes with the stopped call and restarts
+    // afresh on the next call, as after a crash; that is not a crash of
+    // `b`'s.
+    for _ in 0..3 {
+        // `b` saves "started" as it begins waiting; Pane writes the file
+        // afresh from its own copy then, so removing it makes the next
+        // "started" a sign of this iteration's wait.
+        let _ = fs::remove_file(dirs.extensions().join("settings.json"));
+        let (calling, _) = start_waiting(&dirs, &launcher);
+        block_on(launcher.set_enabled(&dirs.identity("a"), false));
+        calling.join().unwrap();
+        block_on(launcher.set_enabled(&dirs.identity("a"), true));
+    }
+    assert_eq!(
+        fixture_run(&launcher, "Call b's echo"),
+        result(r#"answered: {"hello":"world"}"#)
+    );
+}
+
+#[test]
 fn reloading_a_target_stops_the_call_it_serves_and_its_caller_is_told() {
     let dirs = Dirs::new();
     let launcher = dirs.a_and_waiting_b();
@@ -973,11 +1022,17 @@ fn reloading_a_target_stops_the_call_it_serves_and_its_caller_is_told() {
         "{:?}",
         started.elapsed()
     );
-    assert_eq!(
-        launcher.view().status,
-        error(
-            "unavailable: Package b was reloaded or updated while serving the call; call it again"
-        )
+    // The caller's answer and the reload's own both go to the status line,
+    // in whichever order they finish; either is the last one shown.
+    let status = launcher.view().status;
+    assert!(
+        status
+            == error(
+                "unavailable: Package b was reloaded or updated while serving the call; call it \
+                 again"
+            )
+            || status == result("Reloaded Package b"),
+        "{status:?}"
     );
     assert_eq!(dirs.waiting().as_deref(), Some("started"));
 }

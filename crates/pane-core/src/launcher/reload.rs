@@ -11,48 +11,25 @@
 //!    replacement starts: each of its commands available here is started
 //!    and asked for its view. If one fails to initialize (a trap, or a
 //!    component that cannot load or be instantiated; not an error the guest
-//!    answers with, #16), its instances are stopped again and the package
-//!    is reported as failed to start, with Retry; the older code is not
-//!    restored.
+//!    answers with), its instances are stopped again and the package is
+//!    paused as failed to start (see `pausing`), with Retry; the older code
+//!    is not restored.
 //!
 //! Settings belong to the package identity, so they are kept throughout.
 
-use std::collections::HashMap;
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use super::{Changing, Launcher, State, Status, off_thread};
-use crate::packages::{PackageError, PackageIdentity};
+use super::{Changing, Launcher, State, Status, off_thread, pausing};
+use crate::packages::{PackageError, PackageIdentity, Pause, PauseCause};
 use crate::runtime::CallError;
-
-/// Why each package whose reloaded code failed to start failed. Such a
-/// package stays installed with that code, offering Retry; nothing older is
-/// restored. The mark lasts until the package starts, is replaced or is
-/// disabled.
-#[derive(Default)]
-pub(super) struct StartFailures(HashMap<PackageIdentity, String>);
-
-impl StartFailures {
-    pub(super) fn record(&mut self, identity: PackageIdentity, why: String) {
-        self.0.insert(identity, why);
-    }
-
-    pub(super) fn forget(&mut self, identity: &PackageIdentity) {
-        self.0.remove(identity);
-    }
-
-    /// Why the package with `identity` failed to start, if it did.
-    pub(super) fn of(&self, identity: &PackageIdentity) -> Option<&str> {
-        self.0.get(identity).map(String::as_str)
-    }
-}
 
 /// What a reload does.
 #[derive(Clone, Copy)]
 pub(super) enum Attempt {
     /// Replace the package's code from its source folder, then start it.
     Reload,
-    /// Start again the package's code, whose start failed.
+    /// Start again the package's code, which Pane paused after it failed.
     Retry,
 }
 
@@ -60,6 +37,31 @@ pub(super) enum Attempt {
 pub(super) struct Reload {
     identity: PackageIdentity,
     attempt: Attempt,
+    /// Where the replacement is, if not in the package's source folder: a
+    /// development build's staging folder.
+    staged: Option<PathBuf>,
+}
+
+impl Reload {
+    /// A reload of the package with `identity` from the package in
+    /// `staged`, for which the caller has claimed the package.
+    pub(super) fn staged(identity: PackageIdentity, staged: PathBuf) -> Reload {
+        Reload {
+            identity,
+            attempt: Attempt::Reload,
+            staged: Some(staged),
+        }
+    }
+}
+
+/// How a reload ended.
+pub(super) struct Reloaded {
+    /// The screen epoch the outcome belongs to.
+    pub epoch: u64,
+    pub status: Status,
+    /// Whether the replacement became the installed copy (it may then have
+    /// failed to start); not when it failed its checks.
+    pub replaced: bool,
 }
 
 impl Launcher {
@@ -76,8 +78,9 @@ impl Launcher {
         self.reload_as(identity, Attempt::Reload)
     }
 
-    /// Starts again the package with `identity`, whose reloaded code failed
-    /// to start, without reading its source folder again.
+    /// Starts again the package with `identity`, which Pane paused after it
+    /// failed (see `pausing`), without reading its source folder again. Its
+    /// crashes are counted afresh.
     pub fn retry_start(
         &self,
         identity: &PackageIdentity,
@@ -110,48 +113,83 @@ impl Launcher {
         identity: PackageIdentity,
         attempt: Attempt,
     ) -> Option<Reload> {
-        if self.installation.is_none() {
-            let error = PackageError::Storage("this launcher does not install packages".into());
-            state.view.status = Status::Error(error.to_string());
-            return None;
-        }
-        let Some(package) = state.package(&identity) else {
-            state.view.status = Status::Error(PackageError::NotInstalled(identity).to_string());
-            return None;
-        };
-        if !package.enabled {
-            state.view.status = Status::Error(format!(
-                "{} is disabled; enable it to reload it",
-                package.title()
-            ));
+        if let Err(problem) = self.changeable(state, &identity, "reload") {
+            state.view.status = Status::Error(problem);
             return None;
         }
         if !state.claim(&identity, Changing::Reloading) {
             return None;
         }
         state.view.status = Status::Running;
-        Some(Reload { identity, attempt })
+        Some(Reload {
+            identity,
+            attempt,
+            staged: None,
+        })
+    }
+
+    /// Why the package with `identity` cannot be changed by `verb` (reload,
+    /// develop) now: this launcher installs nothing, it is not installed, or
+    /// it is disabled.
+    pub(super) fn changeable(
+        &self,
+        state: &State,
+        identity: &PackageIdentity,
+        verb: &str,
+    ) -> Result<(), String> {
+        if self.installation.is_none() {
+            let error = PackageError::Storage("this launcher does not install packages".into());
+            return Err(error.to_string());
+        }
+        let Some(package) = state.package(identity) else {
+            return Err(PackageError::NotInstalled(identity.clone()).to_string());
+        };
+        if !package.enabled {
+            return Err(format!(
+                "{} is disabled; enable it to {verb} it",
+                package.title()
+            ));
+        }
+        Ok(())
     }
 
     /// Carries out a reload begun by [`Launcher::begin_reload`]. The outcome
     /// is shown if the user is still on the screen it started from, or was
     /// taken to root search because a command of the package closed.
     pub(super) async fn finish_reload(&self, epoch: u64, reload: Reload) {
-        let Reload { identity, attempt } = reload;
+        let identity = reload.identity.clone();
+        let reloaded = self.carry_out(epoch, reload).await;
+        self.end_reload(reloaded.epoch, &identity, reloaded.status);
+    }
+
+    /// Carries out a reload, returning how it ended without showing it or
+    /// releasing the package.
+    pub(super) async fn carry_out(&self, epoch: u64, reload: Reload) -> Reloaded {
+        let Reload {
+            identity,
+            attempt,
+            staged,
+        } = reload;
         let title = self.title_of(&identity);
+        // A Retry ends the pause, remembering it in case the runtime
+        // cannot start the package.
+        let mut before = None;
         let epoch = match attempt {
             Attempt::Retry => {
-                self.lock().failed.forget(&identity);
+                before = self.unpause(&mut self.lock(), &identity);
                 epoch
             }
-            Attempt::Reload => match self.replace(epoch, &identity).await {
+            Attempt::Reload => match self.replace(epoch, &identity, staged.as_deref()).await {
                 Ok(epoch) => epoch,
                 Err(error) => {
                     let message = format!(
                         "{title} was not reloaded: {error}. It keeps running its installed code."
                     );
-                    self.end_reload(epoch, &identity, Status::Error(message));
-                    return;
+                    return Reloaded {
+                        epoch,
+                        status: Status::Error(message),
+                        replaced: false,
+                    };
                 }
             },
         };
@@ -160,50 +198,92 @@ impl Launcher {
         let status = match (self.start(&identity).await, attempt) {
             (Ok(()), Attempt::Reload) => Status::Result(format!("Reloaded {title}")),
             (Ok(()), Attempt::Retry) => Status::Result(format!("Started {title}")),
-            (Err(error), _) => {
+            // Pane's runtime, not the package, failed: nothing is paused for
+            // it, and a Retry leaves the pause as it was.
+            (Err(error @ CallError::RuntimeUnavailable(_)), _) => {
                 let mut state = self.lock();
+                let kept = match before {
+                    Some(pause) => {
+                        self.pause(&mut state, &identity, pause);
+                        "it stays paused"
+                    }
+                    None => "it is not paused",
+                };
+                Status::Error(format!("{title} was not started: {error}; {kept}."))
+            }
+            (Err(error), _) => {
                 let message = error.to_string();
                 // The log: the diagnostics, such as a trap's backtrace, also
                 // go to Pane's standard error.
                 eprintln!("pane: {title} failed to start: {message}");
-                state.failed.record(identity.clone(), message);
+                {
+                    let mut state = self.lock();
+                    // Already paused by its own failure (it could not load)
+                    // or meanwhile: those details are kept.
+                    if !state.paused.is_paused(&identity) {
+                        let pause = Pause {
+                            after: PauseCause::FailedToStart,
+                            why: message,
+                            version: state.package(&identity).and_then(|p| p.version()),
+                        };
+                        self.pause(&mut state, &identity, pause);
+                    }
+                }
+                // The pause is on record before the outcome is shown.
+                self.records_written().await;
                 let failed = match attempt {
                     Attempt::Reload => format!("Reloaded {title}, but it failed to start"),
                     Attempt::Retry => format!("{title} failed to start again"),
                 };
-                // The diagnostics can be long, so they are shown under Retry
-                // in the extension list rather than here.
+                // The diagnostics can be long, so they are shown on their own
+                // screen rather than here.
                 Status::Error(format!(
                     "{failed}; its earlier code is not restored. Retry, or fix it and reload \
-                     it; the diagnostics are under \"Retry starting {title}\"."
+                     it; the diagnostics are under \"{}\".",
+                    pausing::details_title(&title)
                 ))
             }
         };
-        self.end_reload(epoch, &identity, status);
+        Reloaded {
+            epoch,
+            status,
+            replaced: matches!(attempt, Attempt::Reload),
+        }
     }
 
-    /// Checks the package in its source folder and makes it the installed
-    /// copy, stopping the old instances. Returns the screen epoch the
-    /// outcome belongs to: a new one if an open command of the package
-    /// closed for root search.
-    async fn replace(&self, epoch: u64, identity: &PackageIdentity) -> Result<u64, String> {
-        let Some(folder) = identity.local_folder() else {
-            return Err("it has no local source folder to reload from".into());
-        };
-        let folder = folder.to_path_buf();
-        let package = self
-            .read_and_check(folder)
-            .await
-            .map_err(|error| error.to_string())?;
+    /// Checks the package in its source folder (or in `staged`, keeping
+    /// the source's identity) and makes it the installed copy, stopping the
+    /// old instances. Returns the screen epoch the outcome belongs to: a
+    /// new one if an open command of the package closed for root search.
+    async fn replace(
+        &self,
+        epoch: u64,
+        identity: &PackageIdentity,
+        staged: Option<&Path>,
+    ) -> Result<u64, String> {
+        let package = match staged {
+            Some(staged) => {
+                self.read_and_check_staged(staged.to_path_buf(), identity.clone())
+                    .await
+            }
+            None => {
+                let Some(folder) = identity.local_folder() else {
+                    return Err("it has no local source folder to reload from".into());
+                };
+                self.read_and_check(folder.to_path_buf()).await
+            }
+        }
+        .map_err(|error| error.to_string())?;
         let store = self
             .installation
             .as_ref()
             .expect("begin_reload checked there is an installation")
             .store
             .clone();
+        let retire = self.retire(identity);
         let installed = off_thread(move || {
             let mut store = store.lock().unwrap_or_else(|p| p.into_inner());
-            store.update(&package)
+            store.update(&package, retire)
         })
         .await
         .map_err(|error| error.to_string())?;
@@ -222,7 +302,8 @@ impl Launcher {
     /// cannot load or be instantiated), the package's instances are stopped
     /// again, so a retry starts afresh; a view the guest refuses with an
     /// error of its own is not a failure. A package disabled meanwhile
-    /// is not started, and that is not a failure.
+    /// is not started, and that is not a failure; nor is one paused
+    /// meanwhile, which says so itself.
     async fn start(&self, identity: &PackageIdentity) -> Result<(), CallError> {
         let components: Vec<PathBuf> = {
             let state = self.lock();
@@ -266,7 +347,7 @@ impl Launcher {
         }
     }
 
-    fn title_of(&self, identity: &PackageIdentity) -> String {
+    pub(super) fn title_of(&self, identity: &PackageIdentity) -> String {
         self.lock().title_of(identity)
     }
 }

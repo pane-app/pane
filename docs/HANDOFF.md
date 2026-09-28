@@ -23,7 +23,7 @@ The [Pane specification](https://github.com/hoangvu12/pane/issues/1) and [52 imp
 - Default app launching, calculator, quicklinks, file search and optional clipboard history are disableable. AI belongs in extensions.
 - Internet-first runtime/default-feature acquisition is preferred over bundling their payloads in the installer. Ordinary supported-package users install no runtime/compiler manually.
 - Compatible extension updates are automatic with controls; Pane application updates notify the user, who chooses installation.
-- Automatic UI recovery should skip an identified broken extension and notify the user. Detailed attribution/pausing/retry is proposed, not validated; shared runtime crashes may have no identifiable single culprit.
+- Automatic UI recovery skips an identified broken extension and notifies the user: since #16 a package that cannot start or crashes three times within five minutes is [paused](pausing.md) with Retry, across restarts. Shared runtime crashes may have no identifiable single culprit (#17); hangs are #18.
 - Licensing follows Zed's primarily GPL-3.0-or-later direction provisionally; exact component/SDK split and dependency review remain open. This does not prohibit compliant paid forks.
 
 Detailed identity, dependency, disable/data, API stability, search, reload and update decisions are in the [decision index](current-decisions.md). Do not replace them with generic assumptions about Pi, Raycast or VS Code.
@@ -37,7 +37,7 @@ The [validation checkpoint](research/wasi03-validation.md) links the Rust, JS an
 - [Embedded host](research/p3-only-host/README.md): P3-only registration; stock mixed JS rejected.
 - [GPUI Windows probe](research/wasi03-gpui-spike/README.md): guest JSON rendering, JSON replacement and clicks. Not live guest hot reload or production IPC.
 
-Disabling, reloading or updating an extension stops its pending calls since #14 ([generations](generations.md)); remaining validation includes runtime reseeding, preempting a guest that does not yield and timeouts (#18), true concurrency, persistent resource measurements, host/UI integration and macOS/Linux. Benchmark numbers are scoped CLI/prototype measurements, not product budgets.
+Saving a developed local package builds and reloads it since #12/#13 ([development mode](development-mode.md)). Disabling, reloading or updating an extension stops its pending calls since #14 ([generations](generations.md)); remaining validation includes runtime reseeding, preempting a guest that does not yield and timeouts (#18), true concurrency, persistent resource measurements, host/UI integration and macOS/Linux. Benchmark numbers are scoped CLI/prototype measurements, not product budgets.
 
 Tool locations and scratch paths are recorded with the probes, including [P3 tool metadata](research/p3-native-toolchain-local.json). Some compiler/toolchain/checkouts and built binaries live under Windows temporary storage. Their presence is not a durable source-control guarantee. Repository source scripts, reports and the patch are the recovery path; runtime/toolchain installation must not silently alter the user's global Rust default.
 

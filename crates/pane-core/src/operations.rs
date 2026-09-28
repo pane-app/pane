@@ -29,7 +29,9 @@ use tokio::sync::{mpsc, oneshot};
 use wasmtime::component::{Accessor, HasData};
 
 use crate::extension_data::{ExtensionData, PackageData};
-use crate::packages::{InstalledPackage, ManifestOperation, PackageIdentity};
+use crate::packages::{
+    InstalledPackage, ManifestOperation, PackageIdentity, installed_as, paused_reason,
+};
 use crate::platform;
 use crate::runtime::{CallError, GuestState, bindings};
 
@@ -85,6 +87,7 @@ impl OperationError {
                 Unavailable,
                 format!("{title} was uninstalled while serving the call"),
             ),
+            CallError::Paused => (Unavailable, paused_reason(title)),
             CallError::Trap(reason) => (Crashed, format!("{title} crashed: {reason}")),
             CallError::RuntimeUnavailable(_) => (Unavailable, format!("{title}: {error}")),
             CallError::Load(_)
@@ -151,15 +154,24 @@ pub(crate) struct Installed {
 }
 
 impl Installed {
-    /// Resolves a call to the package with identity `source` and its
-    /// `operation` at `version`.
+    /// Resolves a call from `caller`'s component to the package with
+    /// identity `source`, or to the dependency its package declares with id
+    /// `source`, and its `operation` at `version`.
     pub fn resolve(
         &self,
+        caller: &Path,
         source: &str,
         operation: &str,
         version: u32,
     ) -> Result<Target, OperationError> {
         use OperationErrorKind::*;
+        let dependency;
+        let source = if source.contains(':') {
+            source
+        } else {
+            dependency = self.dependency(caller, source, operation, version)?;
+            dependency.as_str()
+        };
         let is_identity = source
             .strip_prefix("local:")
             .is_some_and(|path| Path::new(path).is_absolute());
@@ -236,6 +248,103 @@ impl Installed {
             identity: package.identity.clone(),
             title,
         })
+    }
+
+    /// The identity, as a source, of the dependency that the package of
+    /// `caller`'s component declares with id `id`, if it is installed; else
+    /// why the call cannot reach it.
+    fn dependency(
+        &self,
+        caller: &Path,
+        id: &str,
+        operation: &str,
+        version: u32,
+    ) -> Result<String, OperationError> {
+        use OperationErrorKind::*;
+        let not_identity = || {
+            OperationError::new(
+                NotFound,
+                format!(
+                    "`{id}` is not a package identity; use `local:` followed by the absolute \
+                     folder path Pane shows for the package, or the id of a dependency the \
+                     caller's pane.json declares"
+                ),
+            )
+        };
+        let caller = self
+            .packages
+            .iter()
+            .find(|package| caller.starts_with(&package.location))
+            .ok_or_else(not_identity)?;
+        let manifest = caller.manifest.as_ref().map_err(|_| not_identity())?;
+        let title = caller.title();
+        let Some(declared) = manifest.dependency(id) else {
+            let ids: Vec<String> = manifest
+                .dependencies
+                .iter()
+                .map(|dependency| format!("`{}`", dependency.id))
+                .collect();
+            let declares = match ids.as_slice() {
+                [] => "it declares none".to_owned(),
+                ids => format!("it declares {}", platform::join(ids)),
+            };
+            return Err(OperationError::new(
+                NotFound,
+                format!(
+                    "{title} declares no dependency `{id}` in its pane.json, and `{id}` is not \
+                     a package identity; {declares}"
+                ),
+            ));
+        };
+        // A dependency id reaches only what the caller declared it calls
+        // there, so the declaration is what installing checked.
+        if !declared.calls(operation, version) {
+            let declared_calls: Vec<String> = declared
+                .operations
+                .iter()
+                .map(|o| format!("`{}` version {}", o.id, o.version))
+                .collect();
+            return Err(OperationError::refused(format!(
+                "{title} declares that it calls {} through its dependency `{id}`, not \
+                 `{operation}` version {version}; declare it in its pane.json to call it",
+                platform::join(&declared_calls)
+            )));
+        }
+        let Some(recorded) = caller.dependency_identity(id) else {
+            return Err(OperationError::new(
+                Unavailable,
+                format!(
+                    "{title}'s dependency `{id}` from {} is not a folder Pane can name",
+                    declared.source
+                ),
+            ));
+        };
+        // Recorded before its folder existed, it may since resolve to
+        // another spelling, such as through a link.
+        let identity = std::iter::once(recorded.clone())
+            .chain(recorded.resolved_again())
+            .find(|identity| installed_as(&self.packages, identity).is_some());
+        if let Some(identity) = identity {
+            return Ok(identity.key());
+        }
+        let identity = recorded;
+        let message = if let Some(only_on) = declared.only_on() {
+            return Err(OperationError::new(
+                Unavailable,
+                format!("{title} uses its dependency `{id}` {only_on}, and it is not installed"),
+            ));
+        } else if declared.required {
+            format!(
+                "{title} requires `{id}` from {identity}, which is not installed; install \
+                 {title} again to install it"
+            )
+        } else {
+            format!(
+                "{title}'s optional dependency `{id}` from {identity} is not installed; \
+                 install it to use it"
+            )
+        };
+        Err(OperationError::new(NotFound, message))
     }
 
     /// The identity of the installed package whose managed copy holds

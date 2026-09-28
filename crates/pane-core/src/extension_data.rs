@@ -14,8 +14,9 @@
 //! identity rather than the title or the managed copy. They are kept while
 //! the package is disabled, updated or Pane is not running. The kind decides
 //! what a management action removes, and removing is done here by Pane,
-//! never by running the package. An unreadable file is reported to the guest
-//! and never overwritten.
+//! never by running the package. Deleting retained data (an uninstalled
+//! package's kept data) removes every kind. An unreadable file is reported
+//! to the guest and never overwritten.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -46,7 +47,7 @@ pub(crate) enum DataKind {
 }
 
 impl DataKind {
-    const ALL: [DataKind; 4] = [
+    pub const ALL: [DataKind; 4] = [
         DataKind::Settings,
         DataKind::Content,
         DataKind::Cache,
@@ -87,6 +88,17 @@ impl DataKind {
             DataKind::Content => "the content",
             DataKind::Cache => "the cache value",
             DataKind::LocalCredentials => "the credential",
+        }
+    }
+
+    /// What one value, and several values, of this kind are called when
+    /// counted.
+    fn counted(self) -> (&'static str, &'static str) {
+        match self {
+            DataKind::Settings => ("setting", "settings"),
+            DataKind::Content => ("content record", "content records"),
+            DataKind::Cache => ("cache value", "cache values"),
+            DataKind::LocalCredentials => ("credential", "credentials"),
         }
     }
 
@@ -203,8 +215,30 @@ impl ExtensionData {
             .entry(identity.key())
             .or_insert_with(Generation::new);
         if !enabled {
-            current.end(End::Disabled);
+            end_as(current, End::Disabled);
         } else if current.ended().is_some() {
+            *current = Generation::new();
+        }
+    }
+
+    /// Notes that Pane paused the package with `identity` after it failed:
+    /// its generation ends, which stops its pending calls, and its code can
+    /// no longer read or save values until it is resumed.
+    pub fn pause(&self, identity: &PackageIdentity) {
+        self.lock()
+            .generations
+            .entry(identity.key())
+            .or_insert_with(Generation::new)
+            .end(End::Paused);
+    }
+
+    /// Runs the package with `identity` again in a new generation, if Pane
+    /// had paused it; otherwise changes nothing.
+    pub fn resume(&self, identity: &PackageIdentity) {
+        let mut file = self.lock();
+        if let Some(current) = file.generations.get_mut(&identity.key())
+            && current.ended() == Some(End::Paused)
+        {
             *current = Generation::new();
         }
     }
@@ -218,9 +252,14 @@ impl ExtensionData {
         let Some(current) = file.generations.get_mut(&identity.key()) else {
             return;
         };
-        if current.ended().is_none() {
-            current.end(End::Replaced);
-            *current = Generation::new();
+        match current.ended() {
+            None => {
+                current.end(End::Replaced);
+                *current = Generation::new();
+            }
+            // Paused code is replaced by code that has not failed.
+            Some(End::Paused) => *current = Generation::new(),
+            Some(_) => {}
         }
     }
 
@@ -229,11 +268,12 @@ impl ExtensionData {
     /// longer read or save values. Installing it again starts a new one
     /// ([`ExtensionData::set_enabled`]).
     pub fn uninstall(&self, identity: &PackageIdentity) {
-        self.lock()
+        let mut file = self.lock();
+        let current = file
             .generations
             .entry(identity.key())
-            .or_insert_with(Generation::new)
-            .end(End::Uninstalled);
+            .or_insert_with(Generation::new);
+        end_as(current, End::Uninstalled);
     }
 
     /// Puts back the package with `identity` after its uninstall could not
@@ -279,8 +319,24 @@ impl ExtensionData {
         if saved == SavedData::Delete {
             kinds.extend([DataKind::Settings, DataKind::Content]);
         }
+        self.remove_kinds(identity, &kinds)
+    }
+
+    /// Removes every kind of data Pane keeps for `identity`, a package that
+    /// is not installed, without running it: its retained data. Each kind is
+    /// removed on its own, as [`ExtensionData::remove_uninstalled`] does, and
+    /// other identities' values stay. Returns why each kind that could not be
+    /// removed was not; its values remain where they were.
+    pub fn remove_retained(&self, identity: &PackageIdentity) -> Vec<String> {
+        self.remove_kinds(identity, &DataKind::ALL)
+    }
+
+    /// Removes `kinds` of the data of `identity`, returning why each that
+    /// could not be removed was not.
+    fn remove_kinds(&self, identity: &PackageIdentity, kinds: &[DataKind]) -> Vec<String> {
         kinds
-            .into_iter()
+            .iter()
+            .copied()
             .filter_map(|kind| {
                 let failure = self.remove(kind, identity).err()?;
                 Some(match failure {
@@ -303,6 +359,25 @@ impl ExtensionData {
         DataKind::ALL
             .into_iter()
             .any(|kind| self.count(kind, identity) != Ok(0))
+    }
+
+    /// What Pane keeps of `kinds`, read from their files now, so that a file
+    /// repaired or changed by another Pane since is counted as it is. Each
+    /// file is read once, however many identities are then described.
+    pub fn kept_now(&self, kinds: &[DataKind]) -> Kept {
+        let paths: Vec<(DataKind, PathBuf)> = {
+            let mut store = self.lock();
+            kinds
+                .iter()
+                .map(|&kind| (kind, store.of(kind).path.clone()))
+                .collect()
+        };
+        Kept(
+            paths
+                .into_iter()
+                .map(|(kind, path)| (kind, read(&path)))
+                .collect(),
+        )
     }
 
     /// How many values of `kind` the package with `identity` keeps, as Pane
@@ -340,6 +415,41 @@ impl ExtensionData {
         self.0
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+/// Some kinds' files as they were read at one moment, to say what Pane keeps
+/// for a package.
+pub(crate) struct Kept(Vec<(DataKind, Result<DataJson, String>)>);
+
+impl Kept {
+    /// How many values of each kind Pane keeps for `identity`, such as
+    /// "1 setting and 1 content record", or `None` if it keeps none. A kind
+    /// whose file is missing keeps none; one whose file cannot be read says
+    /// so.
+    pub fn describe(&self, identity: &PackageIdentity) -> Option<String> {
+        let key = identity.key();
+        let parts: Vec<String> = self
+            .0
+            .iter()
+            .filter_map(|(kind, file)| {
+                let (one, many) = kind.counted();
+                let count = file
+                    .as_ref()
+                    .map(|file| file.packages.get(&key).map_or(0, BTreeMap::len));
+                match count {
+                    Ok(0) => None,
+                    Ok(1) => Some(format!("1 {one}")),
+                    Ok(count) => Some(format!("{count} {many}")),
+                    Err(reason) => Some(format!("{many} that cannot be read now ({reason})")),
+                }
+            })
+            .collect();
+        match parts.as_slice() {
+            [] => None,
+            [one] => Some(one.clone()),
+            [rest @ .., last] => Some(format!("{} and {last}", rest.join(", "))),
+        }
     }
 }
 
@@ -382,6 +492,7 @@ impl PackageData {
                 Some("this code of the extension was replaced by a reload or an update")
             }
             End::Uninstalled => Some("the extension was uninstalled"),
+            End::Paused => Some("the extension is paused after an error"),
         }
     }
 
@@ -420,6 +531,16 @@ impl PackageData {
         data.file = Ok(updated);
         Ok(())
     }
+}
+
+/// Ends `current` for `why`. A generation Pane paused is replaced by one
+/// ended for `why`, so its calls say what the user did, not that it was
+/// paused.
+fn end_as(current: &mut Generation, why: End) {
+    if current.ended() == Some(End::Paused) {
+        *current = Generation::new();
+    }
+    current.end(why);
 }
 
 /// Reads one kind's file; a missing file holds no values.

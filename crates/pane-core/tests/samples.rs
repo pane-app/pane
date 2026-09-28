@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use futures::executor::block_on;
 use pane_core::{
     CallError, Choice, CommandRegistration, CustomViewRole, FieldKind, FieldValue, FormError,
-    FormField, Key, Launcher, Point, Rgb, Runtime, Screen, Shape, Status, ViewEvent,
+    FormField, Key, Launcher, Point, Rgb, Runtime, Screen, Shape, Status, Unavailable, ViewEvent,
 };
 use wasmtime::component::Component;
 use wasmtime::{Config, Engine};
@@ -77,6 +77,7 @@ impl Sample {
                 title: format!("{} sample", self.language),
                 subtitle: None,
                 component: self.path(),
+                takes_query: false,
             }],
         );
         block_on(launcher.activate_selected());
@@ -357,7 +358,10 @@ fn a_platform_limited_action_runs_only_on_its_declared_systems(sample: &Sample) 
     let (available, (unavailable, _), explanation) = platforms::sample_items();
 
     assert_eq!(reason(available.0), None);
-    assert_eq!(reason(unavailable), Some(explanation.clone()));
+    assert_eq!(
+        reason(unavailable),
+        Some(Unavailable::OnThisSystem(explanation.clone()))
+    );
     assert_eq!(sample.run(&launcher, available.0), ran(available.1));
     assert_eq!(
         sample.run(&launcher, unavailable),

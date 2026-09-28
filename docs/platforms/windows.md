@@ -134,6 +134,94 @@ adapter was only compile- and lint-checked for `x86_64-pc-windows-gnu` from
 Linux; **not run on Windows yet**, so registration, delivery and the focus
 transition (foreground rules) are unverified natively.
 
+## Deleting retained data (#41)
+
+The smoke's retained-data phase (screenshots 63 to 65, [deleting retained
+data](../extension-data.md#deleting-retained-data)), with a data folder of
+its own, saves a note with the settings sample, uninstalls it keeping its
+saved data, deletes its retained data from the extension list's last row
+(Down from the selected Cancel, then Enter), checks that `installed.json`
+and `content.json` no longer hold it, and reinstalls the same folder, which
+must show nothing kept. **Not run on Windows yet.** A data file locked by
+another program is covered only by the tests' unreadable files, and a
+record that cannot be written after the data is deleted only by a Unix test.
+
+## Aliases and fallbacks (#31)
+
+The smoke's alias phase (screenshots 66 to 74, [aliases and fallbacks](../aliases.md#checks))
+gives Echo, the query sample's command, the alias "ec" and makes it a
+fallback in Manage extensions, sends "ec hello" and, from the unselected
+fallback row chosen with Down, "zqx" to it, and checks that with the
+extension disabled "ec hello" lists nothing. Nothing in it is specific to
+Windows (no system API is involved); **not run on Windows yet**.
+
+## Dependencies (#42)
+
+The dependencies phase (screenshots 75 to 77, [dependencies](../dependencies.md#checks)),
+with a data folder of its own, previews the dependencies sample (its
+required JavaScript operations sample and optional Rust one listed),
+installs it with the JavaScript sample and runs "Greet through the required
+greeter", which must answer from the JavaScript guest; `installed.json`
+must then hold exactly two packages and the recorded dependency. A
+dependency's `local:../…` source is joined to the package folder and
+resolved with the same `canonicalize` (without the `\\?\` prefix) as
+package identity; a folder that does not exist is resolved from its
+spelling. **Not run on Windows yet**, so `..` across drive-letter and UNC
+paths is untested natively.
+
+## Native helpers (#15)
+
+The first native-helper phase (screenshots 90 to 93, data folder `helper-data`,
+[native helpers](../helpers.md#checks)) installs the helper sample, whose
+`pane-echo.exe` `cargo xtask guests` builds for the runner
+(`windows-x86_64` on `windows-2025`), runs it (the answer must name Windows
+x86-64), cancels a slow run after a second, starts the ten-second run,
+checks with `Get-Process` that the helper runs from the managed copy,
+disables the package and checks that the process is gone, that the saved
+"started" note is kept, and that no helper outlives Pane. A second phase
+(screenshot 94, `helper-quit-data`) starts the waiting helper, closes
+Pane's window with `CloseMainWindow` (WM_CLOSE), and checks that Pane
+exits, no helper runs and its heartbeat file stops growing. The tests in
+`crates/pane-core/tests/helpers.rs` (Rust, JavaScript and TypeScript
+samples; a PE header) and the runner's unit tests (the `.exe` rule and
+absolute path are checked on every system) run in `cargo xtask ci` there,
+against the `pane-echo.exe` built natively on the runner. Pane
+starts a helper without a console window (`CREATE_NO_WINDOW`) and ends it
+with `TerminateProcess`; a helper's own children are not in a job object.
+The runner was only compile- and lint-checked for `x86_64-pc-windows-gnu`
+from Linux; **not run on Windows yet**, so starting, ending and reaping a
+helper natively, and the smoke's process checks, are unverified there. An
+update ends the old copy's helpers before removing its folder, so the
+folder is not in use; the removal at the next start remains a fallback.
+No Windows arm64 build was made.
+
+## Development mode (#12, #13)
+
+The smoke's last phase (screenshots 110 to 136, [development
+mode](../development-mode.md#checks)) builds a copy of each development
+sample, develops it from Manage extensions, saves an edit, a change that
+does not build, two saves in a row and, after stopping, one more, checking
+the answers, the error and that nothing is built after stopping. The
+TypeScript and JavaScript samples run only where the JS toolchain is built,
+so CI's smoke runs the Rust one. The platform code (`ReadDirectoryChangesW` through notify, a Job Object
+with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, `CREATE_NEW_PROCESS_GROUP` and
+builds without a console window) was only compile- and lint-checked for
+`x86_64-pc-windows-gnu` from Linux; **not run on Windows yet**, so the file
+watcher's events, the build's processes being killed and the whole phase
+are unverified natively.
+
+## Disabling required dependents (#43)
+
+The disable-dependents phase (screenshots 140 to 143, [disabling a required dependency](../dependencies.md#disabling-a-required-dependency)),
+with a data folder of its own, installs the dependencies sample, presses
+Enter on the JavaScript operations sample in Manage extensions, which must
+ask first (the details color), cancels, then chooses Disable all (the
+result color) and enables the JavaScript sample again alone (the result
+color); `installed.json` must then record exactly one disabled package.
+Nothing in it is specific to Windows (no system API is involved; the
+closure reuses the dependency identities recorded at install); **not run on
+Windows yet**.
+
 ## Text input and accessibility findings
 
 - **Text input / IME (#20):** the smoke now also opens the Rust command's

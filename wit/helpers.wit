@@ -1,0 +1,67 @@
+package pane:extension@0.1.0;
+
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// Native helpers: prebuilt programs a package ships for each operating
+// system and processor it supports, which Pane runs for its commands (a pure
+// WASI guest cannot start a program). A package declares them under
+// `helpers` in its pane.json, one file per target such as `linux-x86_64`;
+// Pane never compiles one. Rust commands call them through pane-guest
+// (`pane_guest::helpers::run`). Kept apart from the other files so a
+// command that runs none is unchanged.
+// The header follows `package`: comments above it would document the package,
+// which extension.wit already does.
+
+/// Runs a native helper program the command's own package ships, and waits
+/// for its answer.
+interface helpers {
+  /// Why a helper run did not produce the helper's output. `message`
+  /// explains it for people; `kind` tells them apart.
+  record helper-error {
+    kind: helper-error-kind,
+    message: string,
+  }
+
+  enum helper-error-kind {
+    /// The package's pane.json declares no helper by that name.
+    not-found,
+    /// The helper cannot run on this system: the package ships no file for
+    /// this operating system and processor, the file is missing, it is a
+    /// program for another system, or the system would not start it.
+    unavailable,
+    /// The helper ran and exited unsuccessfully, or wrote output that is not
+    /// UTF-8 text. `message` holds its exit status and the end of what it
+    /// wrote to its standard error.
+    failed,
+    /// Pane refused or stopped the run: the command's code was stopped
+    /// (disabled, reloaded, updated, paused or uninstalled), the command is
+    /// not an installed package's, or the input, arguments or output are
+    /// over Pane's limits.
+    refused,
+  }
+
+  /// Runs the package's helper `helper` with `args`, writes `input` to its
+  /// standard input and closes it, and resolves with what it wrote to its
+  /// standard output once it exits successfully.
+  ///
+  /// The helper runs in its own folder of the installed package, with
+  /// Pane's environment. Pane stops it (ending its process) when the
+  /// caller drops this call (cancelling it), when the Pane call that
+  /// started it returns, and when the package's code stops: it is disabled,
+  /// reloaded, updated, paused or uninstalled. Processes the helper starts
+  /// itself are its own to stop; Pane does not track them.
+  run: async func(helper: string, args: list<string>, input: string) -> result<string, helper-error>;
+}
+
+/// The helpers import alone, for guest bindings.
+world helpers-user {
+  import helpers;
+}
+
+/// The world Pane hosts: a command that may also use extension data, call
+/// operations, find and open installed applications and run its package's
+/// native helpers.
+world extension-with-helpers {
+  include extension-with-applications;
+  import helpers;
+}

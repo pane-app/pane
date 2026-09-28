@@ -384,6 +384,171 @@ window manager, so raising and focusing Pane's window
 (`_NET_ACTIVE_WINDOW`) is not verified; Wayland is explained as unavailable
 (tested with a fake, not natively), and no real desktop session ran.
 
+### Deleting retained data (#41)
+
+The retained-data phase, after the hotkeys and pausing phases, with a data folder of its own,
+installs the settings sample, saves a note, uninstalls it keeping its saved
+data, then chooses "Delete retained data of Settings sample" (the extension
+list's last row) and confirms with Down from the selected Cancel, then Return,
+waiting for Pane's files to change rather than a fixed time. It checks that `installed.json` no longer has
+a `retained` record and that the note is gone from `content.json`; installs
+the same folder again and shows what Pane keeps, which must differ from
+screenshot 51. Run locally on 2026-09-28 (Ubuntu 26.04.1 LTS, kernel
+7.0.0-31-generic, x86_64, same Xvfb/lavapipe setup): all checks of the whole
+smoke passed.
+
+| Step | Evidence |
+| --- | --- |
+| "Delete the retained data of Settings sample?", its source, "Retained data: 1 content record", what is not touched; Cancel (selected) and Delete retained data | `63-confirm-delete-retained.png` (not committed: it shows the local checkout path) |
+| "Deleted the retained data of Settings sample", the row gone and nothing installed | [64-retained-deleted.png](evidence/linux-x11/64-retained-deleted.png) |
+| Reinstalled: "Style: none · Note: none · Signed in: no · Cached greeting: none" | [65-reinstalled-empty.png](evidence/linux-x11/65-reinstalled-empty.png) |
+
+The macOS and Windows smokes run the same phase (screenshots 63 to 65); it
+has not run there yet. A file locked by another program on Windows is
+covered only by the tests' unreadable and unwritable files, not natively.
+
+### Aliases and fallbacks (#31)
+
+The phase after the retained-data phase ([aliases and fallbacks](../aliases.md#checks)),
+with data folders of its own, installs the query sample, gives Echo the
+alias "ec" in its alias form (typed with real X11 key events) and makes it a
+fallback, then in root search types "ec hello" (the row sending "hello" to
+Echo is listed and selected) and presses Enter ("Echo heard “hello”");
+types "zqx" ("No results", then the fallback, not selected), presses Down
+(now selected) and Enter ("Echo heard “zqx”"). It checks `aliases.json`,
+restarts, disables the extension and types "ec hello": the screen is pixel
+for pixel the one a Pane with nothing installed shows for it. Run locally on
+2026-09-28 (Ubuntu 26.04.1 LTS, kernel 7.0.0-31-generic, x86_64, same
+Xvfb/lavapipe setup): all checks of the whole smoke passed.
+
+| Step | Evidence |
+| --- | --- |
+| "ec hello": the alias row selected, the fallback below | [68-alias-row.png](evidence/linux-x11/68-alias-row.png) |
+| Enter: Echo's answer | [69-alias-answer.png](evidence/linux-x11/69-alias-answer.png) |
+| "zqx": no results, the fallback not selected | [70-fallback-listed.png](evidence/linux-x11/70-fallback-listed.png) |
+| Down and Enter: Echo's answer to "zqx" | [72-fallback-answer.png](evidence/linux-x11/72-fallback-answer.png) |
+| Extension disabled: "ec hello" lists nothing | [73-alias-disabled.png](evidence/linux-x11/73-alias-disabled.png) |
+
+(Screenshots 66 and 67, the extension list after saving the alias and the
+fallback, are checked but not kept here: they show the local package
+paths.)
+
+### Dependencies (#42)
+
+The phase after the alias phase ([dependencies](../dependencies.md#checks)), with a data
+folder of its own, previews the dependencies sample, which requires the
+JavaScript operations sample (`local:../sample-operations-js`) and can use
+the Rust one (optional); the preview lists both. Enter on Install installs
+it with the JavaScript sample only; its command, selected, opens, and "Greet
+through the required greeter" calls `greet` by the dependency id `greeter`.
+Afterwards `installed.json` must hold exactly two packages and the
+recorded dependency. Run locally on 2026-09-28 (same Ubuntu 26.04.1 / Xvfb /
+lavapipe setup): all checks of the whole smoke passed.
+
+| Step | Evidence |
+| --- | --- |
+| The preview: "Requires: JavaScript operations sample, installed with it from local:../sample-operations-js", "Optional: `rust-greeter` from local:../sample-operations, not installed: …" and the Install row | [75-dependencies-preview-cropped.png](evidence/linux-x11/75-dependencies-preview-cropped.png) (cropped below the title and the Source line, which shows the local checkout path; the smoke checks the whole frame) |
+| "Installed Dependencies sample with JavaScript operations sample, which it requires", its command selected | [76-dependencies-installed.png](evidence/linux-x11/76-dependencies-installed.png) |
+| "Hello, Pane, from JavaScript", from the dependency's guest | [77-dependency-answer.png](evidence/linux-x11/77-dependency-answer.png) |
+
+### Native helpers (#15)
+
+The last two phases, after the dependencies phase ([native helpers](../helpers.md#checks)). The first,
+with a data folder of its own (`helper-data`), installs the helper sample,
+whose `pane-echo` `cargo xtask guests` built for `linux-x86_64`, and runs
+it with real X11 key events: the answer names Linux x86-64; "Echo within a
+second" cancels the slow run after one second; "Echo after waiting" starts
+the ten-second run, which `pgrep -f` finds running from the managed copy in
+the data folder; Escape, then disabling the package in Manage extensions,
+ends it: `pgrep` finds no helper, `settings.json` keeps "started" and never
+gets "finished", and no helper outlives Pane. The second (`helper-quit-data`)
+starts the waiting helper again ("Running…"), finds its heartbeat file,
+then quits Pane by sending its window `WM_DELETE_WINDOW`
+([`scripts/close_window.py`](../../scripts/close_window.py), as a window
+manager's close button does; `xdotool windowclose` would destroy the
+window instead): Pane must exit within five seconds, `pgrep` must find no
+helper, and the heartbeat must stop growing. With the app's quit handler
+disabled the phase fails ("a helper outlived Pane quitting"). Run locally
+on 2026-09-28 (Ubuntu 26.04.1 LTS, kernel 7.0.0-31-generic, x86_64, same
+Xvfb/lavapipe setup): all checks of the whole smoke passed.
+
+| Step | Evidence |
+| --- | --- |
+| "Echo through the helper": 'Echoed "hello from Pane" on Linux x86-64' | [90-helper-echoed.png](evidence/linux-x11/90-helper-echoed.png) |
+| "Echo within a second": "Stopped the helper after one second"; no helper runs | [91-helper-cancelled.png](evidence/linux-x11/91-helper-cancelled.png) |
+| "Echo after waiting" running; the helper process runs | [92-helper-waiting.png](evidence/linux-x11/92-helper-waiting.png) |
+| "Disabled Helper sample"; the helper process is gone, the note kept | `93-helper-disabled.png` (not committed: the list's rows show the local checkout path) |
+| "Echo after waiting" running, before Pane is quit | [94-helper-before-quit.png](evidence/linux-x11/94-helper-before-quit.png) |
+
+The tests in `crates/pane-core/tests/helpers.rs` also end the helper by
+reloading, updating, uninstalling and quitting, for the Rust, JavaScript
+and TypeScript samples, and check each ended helper by its heartbeat file,
+not its process id. Only Linux x86-64 ran a helper; `linux-aarch64` was
+not built or run.
+
+### Development mode (#12, #13)
+
+The last phase ([development mode](../development-mode.md#checks)) takes a
+copy of each development sample in `<output-dir>/develop-<sample>`, builds
+it once with its documented command, installs it with a data folder of its
+own and chooses **Develop <title>** in Manage extensions. It then edits the
+greeting in the copy's source as an editor would save it and waits until
+the managed copy holds the new build, and checks the answer; saves a
+greeting that does not compile or type-check and checks the error and that
+the old answer stays, pixel for pixel; saves twice in a row (the second
+while the first builds) and checks the newer greeting; and after **Stop
+developing** saves again and checks that nothing was built. The Rust sample
+builds with `cargo build --release --target wasm32-wasip2` (with cargo's
+JSON messages), the TypeScript and JavaScript samples with `pane_js.py`, each
+into a staging folder under the phase's data folder, and the latter only
+where the JS toolchain is built (not in CI's smoke, which skips them). Run
+locally on 2026-09-28, after the review fixes (Ubuntu 26.04.1 LTS, kernel
+7.0.0-31-generic, x86_64, same Xvfb/lavapipe setup, with the JS toolchain):
+all checks of the whole smoke passed.
+
+| Step | Evidence |
+| --- | --- |
+| Hello Rust as installed | [111-hello-rust-greeting-before.png](evidence/linux-x11/111-hello-rust-greeting-before.png) |
+| Its source saved: "Reloaded Hello Rust", with Pane open | [112-hello-rust-rebuilt.png](evidence/linux-x11/112-hello-rust-rebuilt.png) |
+| The new greeting (`--distinct` from 111) | [113-hello-rust-greeting-after.png](evidence/linux-x11/113-hello-rust-greeting-after.png) |
+| A save that does not compile: "Hello Rust did not build: error[E0308]: mismatched types. It keeps running its installed code; …" | [114-hello-rust-build-failed.png](evidence/linux-x11/114-hello-rust-build-failed.png) |
+| The working code still answers (`--same` as 113) | [115-hello-rust-kept.png](evidence/linux-x11/115-hello-rust-kept.png) |
+| Two saves, the second during the build: the newer greeting | [117-hello-rust-greeting-fixed.png](evidence/linux-x11/117-hello-rust-greeting-fixed.png) |
+| TypeScript: "Hello TypeScript did not build: src/index.ts(12,7): error TS2322: …" | [123-hello-ts-build-failed.png](evidence/linux-x11/123-hello-ts-build-failed.png) |
+| TypeScript after the two saves | [126-hello-ts-greeting-fixed.png](evidence/linux-x11/126-hello-ts-greeting-fixed.png) |
+| JavaScript (checked through JSDoc): "Hello JavaScript did not build: src/index.js(15,7): error TS2322: …" | [132-hello-js-build-failed.png](evidence/linux-x11/132-hello-js-build-failed.png) |
+| JavaScript after the two saves | [135-hello-js-greeting-fixed.png](evidence/linux-x11/135-hello-js-greeting-fixed.png) |
+
+Screenshots 110, 118, 119, 127, 128 and 136 (developing started and stopped, on
+the extension list) are checked but not kept here: they show local package
+paths; the other steps of each language (116, 120 to 122, 124, 125, 129 to 131, 133,
+134) match those above.
+
+### Disabling required dependents (#43)
+
+A phase of its own, after the development-mode phase, with its own data folder
+([disabling a required dependency](../dependencies.md#disabling-a-required-dependency)),
+installs the dependencies sample with the JavaScript operations sample,
+opens Manage extensions and presses Enter on the JavaScript operations
+sample (the first row). Pane asks first, listing the Dependencies sample;
+Down and Enter (Cancel) returns to the list with both enabled; Enter and
+Enter (Disable all 2) disables both; Enter again enables the JavaScript
+operations sample alone. Afterwards `installed.json` must record exactly one
+disabled package. Run locally on 2026-09-28 (same Ubuntu 26.04.1 / Xvfb /
+lavapipe setup): all checks of the whole smoke passed, and frames 140 to
+143 were looked at.
+
+| Step | Evidence |
+| --- | --- |
+| The question: "Disable JavaScript operations sample and the extensions that require it?", "Dependencies sample, which requires JavaScript operations sample", Disable all 2 selected | [140-disable-dependents-asked-masked.png](evidence/linux-x11/140-disable-dependents-asked-masked.png) |
+| Disable all: both rows "Disabled", "Disabled JavaScript operations sample and Dependencies sample, which requires it" | [142-disable-dependents-disabled-masked.png](evidence/linux-x11/142-disable-dependents-disabled-masked.png) |
+| Enter: "Enabled JavaScript operations sample"; the Dependencies sample stays "Disabled" | [143-disable-dependents-enabled-alone-masked.png](evidence/linux-x11/143-disable-dependents-enabled-alone-masked.png) |
+
+(The kept frames are cropped to Pane's window and the local package paths
+are painted over with the background; the smoke checks the whole frames.
+Frame 141, the list after Cancel with both enabled, is checked to differ
+from the others but not kept, as it shows those paths.)
+
 ## Text input and accessibility findings
 
 - **Text input / IME (#20):** extension forms have a text field (GPUI CE's

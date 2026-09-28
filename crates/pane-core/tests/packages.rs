@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use futures::executor::block_on;
 use pane_core::{
     CallError, CommandRegistration, Launcher, PackageIdentity, Platform, Runtime, Screen, Status,
+    Unavailable,
 };
 use tempfile::TempDir;
 
@@ -589,6 +590,7 @@ fn launcher_with_build_command(dirs: &Dirs) -> Launcher {
         title: "JavaScript sample".into(),
         subtitle: None,
         component: guest("sample_js"),
+        takes_query: false,
     };
     Launcher::with_packages(
         Runtime::start(),
@@ -894,7 +896,10 @@ fn an_installed_copy_for_other_systems_lists_its_commands_as_unavailable() {
     assert_eq!(titles(&restarted), ["Say hello", INSTALL_ROW, MANAGE_ROW]);
     let row = restarted.view().rows[0].clone();
     assert_eq!(row.subtitle.as_deref(), Some("Greets you"));
-    assert_eq!(row.unavailable, Some(explanation.clone()));
+    assert_eq!(
+        row.unavailable,
+        Some(Unavailable::OnThisSystem(explanation.clone()))
+    );
     block_on(restarted.activate_selected());
     let view = restarted.view();
     assert_eq!(
@@ -939,7 +944,7 @@ fn a_command_for_other_systems_is_listed_with_its_reason_and_others_still_open()
             .view()
             .rows
             .into_iter()
-            .map(|row| (row.title, row.unavailable))
+            .map(|row| (row.title, row.unavailable.map(|u| u.reason().to_owned())))
             .collect();
         assert_eq!(
             reasons,
