@@ -1,0 +1,196 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// Test fixture: Pane's current contract with one change, `item` without
+// its `custom-view` field, so that every export matches by name and only a
+// type differs, as a later change to a record of API 0.1 would.
+//
+// Host/guest contract for one extension command. This is not the full Pane
+// SDK.
+package pane:extension@0.1.0;
+
+interface command {
+  record item {
+    id: string,
+    title: string,
+    subtitle: option<string>,
+    /// When set, activating the item opens this form instead of running the
+    /// item's action, and submitting the form calls `submit-form`.
+    form: option<form>,
+    /// The operating systems the item's action (or form) works on; none for
+    /// every system Pane runs on. Elsewhere Pane still lists the item but
+    /// shows it as unavailable with the reason, and never calls the command
+    /// for it.
+    platforms: option<list<platform>>,
+  }
+
+  /// An operating system Pane runs on.
+  enum platform {
+    windows,
+    macos,
+    linux,
+  }
+
+  record view {
+    title: string,
+    items: list<item>,
+  }
+
+  /// A form the user fills in and submits to the command.
+  record form {
+    title: string,
+    fields: list<field>,
+    /// The submit button's label.
+    submit-label: string,
+  }
+
+  record field {
+    /// Identifies the field's value in `submit-form`.
+    id: string,
+    /// Names the field on screen and to assistive technology.
+    label: string,
+    kind: field-kind,
+  }
+
+  variant field-kind {
+    /// A single-line text field. It starts empty.
+    text(text-field),
+    /// A choice of exactly one of these options. The first starts chosen.
+    choice(list<choice>),
+  }
+
+  record text-field {
+    /// Shown while the field is empty.
+    placeholder: option<string>,
+  }
+
+  record choice {
+    /// The field's value while this option is chosen.
+    id: string,
+    label: string,
+  }
+
+  /// One field's value when the form is submitted: a text field's text, or
+  /// the chosen option's id.
+  record field-value {
+    id: string,
+    value: string,
+  }
+
+  /// Why a submitted form was not accepted.
+  record form-error {
+    /// The field the message is about; none for the form as a whole.
+    field: option<string>,
+    message: string,
+  }
+
+  /// What Pane shows of an item's custom view besides the view's drawing.
+  record custom-view-info {
+    /// The screen's title.
+    title: string,
+    /// Names the view to assistive technology.
+    label: string,
+    /// What kind of control the view is to assistive technology.
+    role: custom-view-role,
+  }
+
+  enum custom-view-role {
+    /// A color chooser. Its frame's value names the chosen color.
+    color-well,
+  }
+
+  /// A color as 0xRRGGBB.
+  type rgb = u32;
+
+  /// A filled rectangle. Coordinates are logical pixels from the view's
+  /// top-left corner.
+  record rect {
+    x: s32,
+    y: s32,
+    width: u32,
+    height: u32,
+    fill: rgb,
+  }
+
+  /// One line of text in Pane's font, its top-left corner at `x`, `y`.
+  record text {
+    x: s32,
+    y: s32,
+    content: string,
+    color: rgb,
+  }
+
+  variant shape {
+    rect(rect),
+    text(text),
+  }
+
+  /// What a custom view shows: `shapes` painted in order, later ones over
+  /// earlier ones, clipped to `width` x `height` logical pixels.
+  record frame {
+    width: u32,
+    height: u32,
+    shapes: list<shape>,
+    /// The view's current value for assistive technology, such as the
+    /// chosen color's name.
+    value: string,
+  }
+
+  /// A position in the view, in logical pixels from its top-left corner.
+  /// It can lie outside the view while a pointer drag continues outside it.
+  record point {
+    x: s32,
+    y: s32,
+  }
+
+  /// The keys a focused custom view receives. Tab, Enter and Escape stay
+  /// with Pane (focus, confirm and back).
+  enum key {
+    left,
+    right,
+    up,
+    down,
+    home,
+    end,
+  }
+
+  variant view-event {
+    /// A key was pressed while the view had keyboard focus.
+    key(key),
+    /// The primary pointer button was pressed over the view.
+    pointer-down(point),
+    /// The pointer moved while the button pressed over the view is held.
+    pointer-move(point),
+    /// That button was released, over the view or not.
+    pointer-up(point),
+  }
+
+  /// A custom view the user has open. The extension keeps the view's state
+  /// in it. Pane drops it when the view closes, and never uses it again.
+  resource custom-view {
+    /// Draws the view as it is now.
+    render: async func() -> frame;
+    /// Handles the user's input to the view. Pane then calls `render`. An
+    /// error is shown to the user; the view stays open.
+    handle-event: async func(event: view-event) -> result<_, string>;
+  }
+
+  /// Produce the command's list view.
+  get-view: async func() -> result<view, string>;
+
+  /// Run the action of the item with `item-id`; the returned text is shown to
+  /// the user as the action's result.
+  run-action: async func(item-id: string) -> result<string, string>;
+
+  /// Handle the submitted form of the item with `item-id`. `values` holds
+  /// every field of the form, in order. The returned text is shown to the
+  /// user as the result; an error is shown next to its field.
+  submit-form: async func(item-id: string, values: list<field-value>) -> result<string, form-error>;
+
+  /// Open the custom view of the item with `item-id`. Each call opens a new
+  /// view with its own state.
+  open-view: async func(item-id: string) -> result<custom-view, string>;
+}
+
+world extension {
+  export command;
+}

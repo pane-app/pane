@@ -1,0 +1,14 @@
+{
+  "manifestVersion": 1,
+  "title": "TypeScript sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "sample",
+      "title": "TypeScript sample",
+      "subtitle": "The same command implemented by a TypeScript extension",
+      "component": "sample_ts.wasm"
+    }
+  ]
+}

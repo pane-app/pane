@@ -90,11 +90,39 @@ from `PANE_EXTENSIONS_DIR`, or else from `target/guests` in the source tree it
 was built from. That is a development-build assumption, and the installer
 tickets will replace it.
 
+## Platform availability (#19)
+
+The smoke also runs the platform-availability steps (screenshots 13 to 15,
+[platform availability](../platform-availability.md#checks)): the Rust
+command's Windows-only and macOS-and-Linux actions, then a package listing
+only the two other systems. In run [36372625940](https://github.com/wasimysaid/pane/actions/runs/36372625940) (commit `38a95cb`, macOS 15.7.9, arm64) every step passed: the Windows-only action was listed with "Not available on macOS: this action supports only Windows" and did not run, the macOS-and-Linux action answered, and the package for Windows and Linux was refused with "Not available on macOS: this package supports only Windows and Linux". The list scrolled to keep the selected row visible. The later #19 fixes (per-command platforms, re-focusing before these steps) have not run here yet.
+
+| Step | Evidence |
+| --- | --- |
+| Windows-only action | [13-windows-only.png](evidence/macos/13-windows-only.png) |
+| macOS-and-Linux action | [14-not-windows.png](evidence/macos/14-not-windows.png) |
+| Package for the other two systems | [15-no-compatible-package.png](evidence/macos/15-no-compatible-package.png) |
+
 ## Text input and accessibility findings
 
-- **Text input / IME:** the current controls have no text field (root search
-  lists commands but has no query input yet), so text input and IME could not
-  be exercised. They remain open for the ticket that adds query input.
+- **Text input / IME (#20):** extension forms now have a text field. The
+  smoke also opens the Rust command's form, submits it empty (the error color
+  must appear), types "Ada" through System Events `keystroke`, then Tab, Down
+  and Return (the result color must appear, which only happens if the typed
+  text reached the name field). In run [36371205770](https://github.com/wasimysaid/pane/actions/runs/36371205770) (macOS 15.7.9, arm64) every step passed and the result read "Good morning, Ada, from the Rust guest". Composition with a macOS input method (for example
+  Japanese Kana) through `NSTextInputClient` is unverified; the window tests
+  cover composition only on the field's editing state
+  ([what that proves](../forms.md#checks)). Editing bindings
+  follow the element's macOS defaults (Cmd-A/C/V/X/Z, Option-arrow words); only typing, Tab and the arrow keys ran natively.
+
+Screenshots from run [36371205770](https://github.com/wasimysaid/pane/actions/runs/36371205770) (commit `949e35d`), cropped to the window:
+
+| Step | Evidence |
+| --- | --- |
+| Form opened; focus in the name field | [6-form.png](evidence/macos/6-form.png) |
+| Submitted empty; "Enter a name" on the field and status | [7-form-error.png](evidence/macos/7-form-error.png) |
+| Typed "Ada", Tab, Down to "Good morning", submitted | [8-form-result.png](evidence/macos/8-form-result.png) |
+
 - **Accessibility:** the window exposes a `ListBox` labelled with the view
   title, `ListBoxOption` rows with label, description and selected state, the
   selected row as the active descendant, and a `Status` node for the result.
@@ -102,6 +130,37 @@ tickets will replace it.
   (`assistive_technology_sees_the_list_the_selection_and_the_result`), which
   pass on macOS but are platform-independent. **VoiceOver was not run**, so how
   the tree reaches NSAccessibility and what VoiceOver announces are unverified.
+  Forms: see [accessibility of forms](../forms.md#accessibility).
+- **Custom view (#21):** after a final restart the smoke opens the Rust command's
+  color picker, presses Right (key code 124) and clicks the dark green swatch
+  with a Quartz mouse event posted through Python `ctypes`, converting the
+  screenshot's pixels to points (half on Retina). Each step must show the
+  chosen color over at least 3000 pixels. **This phase has not run on macOS
+  yet**; whether posting the Quartz event needs a permission beyond the one
+  System Events has is unverified. Accessibility: see
+  [custom views](../custom-views.md#accessibility).
+
+## Local extension package (#9)
+
+`scripts/smoke-macos.sh` also installs `target/guests/packages/sample-rust` with
+`pane --install <folder>` (with `PANE_DATA_DIR` pointing at a fresh folder),
+runs its command, and restarts Pane. In run [36371205770](https://github.com/wasimysaid/pane/actions/runs/36371205770) (commit `949e35d`) every
+step passed. The `packages` identity tests also passed there: folder paths with
+spaces and Unicode, letter case and Unicode normalization as this file system
+treats them, and symbolic links.
+
+| Step | Evidence |
+| --- | --- |
+| Package screen: source, version, commands, compatibility | [9-package.png](evidence/macos/9-package.png) |
+| Installed; the new command is selected in root search | [10-installed.png](evidence/macos/10-installed.png) |
+| The installed command answers ("Hello from the Rust guest") | [11-installed-result.png](evidence/macos/11-installed-result.png) |
+| Still listed after a restart | [12-restarted.png](evidence/macos/12-restarted.png) |
+
+The installed copy has the same title as the built-in Rust sample, so the
+screenshots can't show which copy opened; the core tests prove the installed
+copy runs. In these screenshots the root list is taller than the window and its
+last row is cut off; since #19 the list scrolls to keep the selected row
+visible.
 
 ## Remaining limits
 

@@ -1,5 +1,6 @@
 //! Compiled extension code is kept in a cache directory owned by the caller,
-//! so a later runtime can reuse it instead of recompiling.
+//! so a later runtime can reuse it instead of recompiling; a component the
+//! runtime is told to forget is loaded again from its file.
 
 use std::path::PathBuf;
 
@@ -56,4 +57,29 @@ fn compiled_code_is_cached_and_reused_by_a_later_runtime() {
 
     let second = Runtime::start_with_cache(cache.clone()).unwrap();
     assert_eq!(block_on(second.get_view(&sample())).unwrap(), view);
+}
+
+fn guest(name: &str) -> PathBuf {
+    sample().with_file_name(format!("{name}.wasm"))
+}
+
+#[test]
+fn a_forgotten_component_is_loaded_again_from_its_file() {
+    let dir = empty_dir("forgotten-component");
+    std::fs::create_dir_all(&dir).unwrap();
+    let component = dir.join("command.wasm");
+    std::fs::copy(guest("sample_rust"), &component).unwrap();
+    let runtime = Runtime::start().unwrap();
+    assert_eq!(
+        block_on(runtime.get_view(&component)).unwrap().title,
+        "Rust sample"
+    );
+
+    std::fs::copy(guest("sample_js"), &component).unwrap();
+    runtime.forget([component.clone()]);
+
+    assert_eq!(
+        block_on(runtime.get_view(&component)).unwrap().title,
+        "JavaScript sample"
+    );
 }

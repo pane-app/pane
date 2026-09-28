@@ -1,7 +1,8 @@
 //! Portable developer commands, run as `cargo xtask <command>`.
 //!
 //! - `guests`: build the Rust guests and copy them, with the prebuilt JS/TS
-//!   sample components from `guests/prebuilt/`, into `target/guests/`.
+//!   sample components from `guests/prebuilt/`, into `target/guests/`, and
+//!   assemble the sample packages into `target/guests/packages/`.
 //! - `js-guests`: rebuild the prebuilt JS/TS sample components with the pinned
 //!   toolchain in `tools/componentize-js` (prerequisites: guests/README.md),
 //!   then run `guests`.
@@ -14,7 +15,12 @@ const GUEST_TARGET: &str = "wasm32-wasip2";
 
 /// Components built by `js-guests` and committed, so that normal builds and
 /// tests need no JavaScript toolchain.
-const PREBUILT: &[&str] = &["sample_js", "sample_ts"];
+const PREBUILT: &[&str] = &[
+    "sample_js",
+    "sample_ts",
+    "sample_settings_js",
+    "sample_settings_ts",
+];
 
 fn main() -> ExitCode {
     let task = std::env::args().nth(1);
@@ -62,7 +68,16 @@ fn guests() -> Result<(), String> {
     std::fs::create_dir_all(&out).map_err(|error| error.to_string())?;
     // (workspace directory, component file names)
     let workspaces: [(&str, &[&str]); 2] = [
-        ("guests", &["sample_rust", "faulty"]),
+        (
+            "guests",
+            &[
+                "sample_rust",
+                "sample_settings",
+                "faulty",
+                "old_api",
+                "mismatched_api",
+            ],
+        ),
         ("guests/fixtures/mixed-p2", &["mixed_p2"]),
     ];
     for (dir, components) in workspaces {
@@ -86,9 +101,39 @@ fn guests() -> Result<(), String> {
         std::fs::copy(&prebuilt, out.join(format!("{name}.wasm")))
             .map_err(|error| format!("copy {} failed: {error}", prebuilt.display()))?;
     }
+    // Ready-to-run sample packages: each manifest in guests/packages with the
+    // component it names.
+    for (package, component) in SAMPLE_PACKAGES {
+        let dest = out.join("packages").join(package);
+        std::fs::create_dir_all(&dest).map_err(|error| error.to_string())?;
+        let copies = [
+            (
+                root.join(format!("guests/packages/{package}/pane.json")),
+                dest.join("pane.json"),
+            ),
+            (
+                out.join(format!("{component}.wasm")),
+                dest.join(format!("{component}.wasm")),
+            ),
+        ];
+        for (from, to) in copies {
+            std::fs::copy(&from, &to)
+                .map_err(|error| format!("copy {} failed: {error}", from.display()))?;
+        }
+    }
     println!("guests built into {}", out.display());
     Ok(())
 }
+
+/// (package folder in `guests/packages`, component) of each sample package.
+const SAMPLE_PACKAGES: [(&str, &str); 6] = [
+    ("sample-rust", "sample_rust"),
+    ("sample-settings", "sample_settings"),
+    ("sample-js", "sample_js"),
+    ("sample-ts", "sample_ts"),
+    ("sample-settings-js", "sample_settings_js"),
+    ("sample-settings-ts", "sample_settings_ts"),
+];
 
 /// Rebuilds `guests/prebuilt/` from the JS/TS sample sources, then refreshes
 /// `target/guests/`. `PYTHON` names the interpreter if the default is absent.

@@ -1,0 +1,14 @@
+{
+  "manifestVersion": 1,
+  "title": "TypeScript settings sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "greeting",
+      "title": "Greeting",
+      "subtitle": "A TypeScript command whose chosen style Pane keeps in its settings",
+      "component": "sample_settings_ts.wasm"
+    }
+  ]
+}

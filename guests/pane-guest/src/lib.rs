@@ -1,21 +1,50 @@
 //! Guest-side bindings for Pane's `pane:extension` contract.
 //!
-//! An extension implements [`Guest`] and calls [`export!`]. The crate is
+//! An extension implements [`Guest`] and calls [`export!`]. It may keep
+//! values between runs with [`settings`]. The crate is
 //! `no_std` so the component imports only WASI 0.3 interfaces; it supplies the
 //! allocator and a panic handler that traps, which the host reports as a
 //! runtime error.
+//!
+//! Without `std` no libc is linked, so the crate also supplies what the
+//! compiler and the component runtime call into libc or `std` for:
+//! `memcmp` and `bcmp`, which the compiler emits for byte and string
+//! comparisons (`==` on `str`, `starts_with`, ...) as soon as a guest compares
+//! strings, and the canonical-ABI `cabi_realloc`.
 #![no_std]
 
 pub extern crate alloc;
 
+use core::ffi::c_void;
+
 wit_bindgen::generate!({
     path: "../../wit",
-    world: "extension",
+    world: "extension-with-settings",
     pub_export_macro: true,
     default_bindings_module: "pane_guest",
 });
 
-pub use exports::pane::extension::command::{Guest, Item, View};
+pub use exports::pane::extension::command::{
+    Choice, CustomView, CustomViewInfo, CustomViewRole, Field, FieldKind, FieldValue, Form,
+    FormError, Frame, Guest, GuestCustomView, Item, Key, Platform, Point, Rect, Shape, Text,
+    TextField, View, ViewEvent,
+};
+pub use pane::extension::settings;
+
+/// The custom view type of a command that has none: `type CustomView =
+/// NoCustomView;` in its `Guest` implementation, with an `open_view` that
+/// returns `Err`. It has no values, so no view of it can be opened.
+pub enum NoCustomView {}
+
+impl GuestCustomView for NoCustomView {
+    async fn render(&self) -> Frame {
+        match *self {}
+    }
+
+    async fn handle_event(&self, _event: ViewEvent) -> Result<(), alloc::string::String> {
+        match *self {}
+    }
+}
 
 #[global_allocator]
 static ALLOC: dlmalloc::GlobalDlmalloc = dlmalloc::GlobalDlmalloc;
@@ -23,6 +52,34 @@ static ALLOC: dlmalloc::GlobalDlmalloc = dlmalloc::GlobalDlmalloc;
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
     core::arch::wasm32::unreachable()
+}
+
+/// Byte comparison, normally supplied by libc. The compiler emits calls to it
+/// for slice and string comparisons (`==` on `str`, `starts_with`, ...).
+///
+/// # Safety
+/// `a` and `b` must be valid for reads of `n` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn memcmp(a: *const c_void, b: *const c_void, n: usize) -> i32 {
+    let (a, b) = (a.cast::<u8>(), b.cast::<u8>());
+    for i in 0..n {
+        // Byte by byte through volatile reads, so that the compiler cannot
+        // turn this loop back into a call to memcmp.
+        let (x, y) = unsafe { (a.add(i).read_volatile(), b.add(i).read_volatile()) };
+        if x != y {
+            return i32::from(x) - i32::from(y);
+        }
+    }
+    0
+}
+
+/// Equality-only form of [`memcmp`], which the compiler may call instead.
+///
+/// # Safety
+/// `a` and `b` must be valid for reads of `n` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn bcmp(a: *const c_void, b: *const c_void, n: usize) -> i32 {
+    unsafe { memcmp(a, b, n) }
 }
 
 /// Canonical-ABI allocation entry point, normally supplied by `std`.

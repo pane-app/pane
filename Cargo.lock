@@ -2302,6 +2302,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpui_ce_elements"
+version = "0.1.0"
+source = "git+https://github.com/gpui-ce/gpui-ce?rev=17d9c8e8fdb30a329d817ca06bff424e8e848f1a#17d9c8e8fdb30a329d817ca06bff424e8e848f1a"
+dependencies = [
+ "gpui-ce",
+ "palette",
+ "smallvec",
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "gpui_ce_linux"
 version = "0.1.0"
 source = "git+https://github.com/gpui-ce/gpui-ce?rev=17d9c8e8fdb30a329d817ca06bff424e8e848f1a#17d9c8e8fdb30a329d817ca06bff424e8e848f1a"
@@ -4156,9 +4167,11 @@ name = "pane"
 version = "0.1.0"
 dependencies = [
  "gpui-ce",
+ "gpui_ce_elements",
  "gpui_ce_platform",
  "pane-core",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -4166,6 +4179,9 @@ name = "pane-core"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "serde",
+ "serde_json",
+ "tempfile",
  "tokio",
  "wasmtime",
  "wasmtime-wasi",
@@ -5699,7 +5715,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5961,7 +5977,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

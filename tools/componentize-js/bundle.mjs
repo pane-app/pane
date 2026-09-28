@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
 // Bundles one JS/TS entry and its npm dependencies into a single ES module
-// for componentize-qjs. `wasi:` imports stay external: the component's world
-// provides them.
+// for componentize-qjs. `wasi:` and `pane:` imports stay external: the
+// component's world provides them.
 //
 // Usage: node bundle.mjs <tool node_modules> <entry> <out.mjs>
 import { createRequire } from "node:module";
@@ -18,7 +18,7 @@ await build({
   format: "esm",
   platform: "neutral",
   target: "es2020",
-  external: ["wasi:*"],
+  external: ["wasi:*", "pane:*"],
   mainFields: ["module", "main"],
   logLevel: "warning",
 });

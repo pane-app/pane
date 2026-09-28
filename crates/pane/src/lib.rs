@@ -3,15 +3,29 @@
 //! The window is a thin renderer over [`pane_core::Launcher`]: key and mouse
 //! input call launcher actions, and each frame draws the launcher's snapshot.
 
-use std::path::PathBuf;
+use std::future::Future;
+use std::path::{Path, PathBuf};
 
 use gpui::{
-    App, Context, Div, FocusHandle, KeyBinding, Role, SharedString, Stateful, Window, actions, div,
-    prelude::*, rgb,
+    App, Context, Div, FocusHandle, KeyBinding, PathPromptOptions, Pixels, Role, ScrollHandle,
+    SharedString, Size, Stateful, Window, actions, div, prelude::*, rgb,
 };
-use pane_core::{CommandRegistration, Launcher, Row, Screen, Status};
+use pane_core::{CommandRegistration, Launcher, LauncherView, Row, Screen, Status};
 
-actions!(launcher, [SelectNext, SelectPrevious, Confirm, Back]);
+mod custom_view;
+mod form;
+
+actions!(
+    launcher,
+    [
+        SelectNext,
+        SelectPrevious,
+        Confirm,
+        Back,
+        FocusNext,
+        FocusPrevious
+    ]
+);
 
 const KEY_CONTEXT: &str = "Launcher";
 
@@ -22,7 +36,11 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("up", SelectPrevious, Some(KEY_CONTEXT)),
         KeyBinding::new("enter", Confirm, Some(KEY_CONTEXT)),
         KeyBinding::new("escape", Back, Some(KEY_CONTEXT)),
+        KeyBinding::new("tab", FocusNext, Some(KEY_CONTEXT)),
+        KeyBinding::new("shift-tab", FocusPrevious, Some(KEY_CONTEXT)),
     ]);
+    form::bind_keys(cx);
+    custom_view::bind_keys(cx);
 }
 
 /// The sample commands: (id, title, subtitle, component file name). Each
@@ -73,26 +91,79 @@ pub fn sample_commands() -> Vec<CommandRegistration> {
 /// `%LOCALAPPDATA%\Pane\cache` on Windows, `~/Library/Caches/Pane` on
 /// macOS and `$XDG_CACHE_HOME/pane` (default `~/.cache/pane`) elsewhere.
 pub fn cache_dir() -> Option<PathBuf> {
-    let env = |name| {
-        std::env::var_os(name)
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-    };
+    platform_dir(
+        r"Pane\cache",
+        "Library/Caches/Pane",
+        ("XDG_CACHE_HOME", ".cache"),
+    )
+}
+
+/// Where Pane keeps installed extension packages: `PANE_DATA_DIR` when set,
+/// otherwise `%LOCALAPPDATA%\Pane\data` on Windows,
+/// `~/Library/Application Support/Pane` on macOS and `$XDG_DATA_HOME/pane`
+/// (default `~/.local/share/pane`) elsewhere. Packages go in its
+/// `extensions` folder.
+pub fn data_dir() -> Option<PathBuf> {
+    env_dir("PANE_DATA_DIR").or_else(|| {
+        platform_dir(
+            r"Pane\data",
+            "Library/Application Support/Pane",
+            ("XDG_DATA_HOME", ".local/share"),
+        )
+    })
+}
+
+/// A per-user folder: `windows` under `%LOCALAPPDATA%`, `macos` under
+/// `$HOME`, and elsewhere `pane` under the XDG variable `xdg.0`, or under
+/// `$HOME/xdg.1` when that is unset.
+fn platform_dir(windows: &str, macos: &str, xdg: (&str, &str)) -> Option<PathBuf> {
     if cfg!(target_os = "windows") {
-        env("LOCALAPPDATA").map(|dir| dir.join("Pane").join("cache"))
+        env_dir("LOCALAPPDATA").map(|dir| dir.join(windows))
     } else if cfg!(target_os = "macos") {
-        env("HOME").map(|home| home.join("Library/Caches/Pane"))
+        env_dir("HOME").map(|home| home.join(macos))
     } else {
-        env("XDG_CACHE_HOME")
-            .or_else(|| env("HOME").map(|home| home.join(".cache")))
+        let (variable, fallback) = xdg;
+        env_dir(variable)
+            .or_else(|| env_dir("HOME").map(|home| home.join(fallback)))
             .map(|dir| dir.join("pane"))
     }
+}
+
+/// The folder in environment variable `name`, if it is set and not empty.
+fn env_dir(name: &str) -> Option<PathBuf> {
+    std::env::var_os(name)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 /// The launcher window's root view.
 pub struct LauncherWindow {
     launcher: Launcher,
     focus_handle: FocusHandle,
+    /// The open form's controls; `Some` exactly on the form screen.
+    form: Option<form::FormControls>,
+    /// The open custom view's focus and layout; `Some` exactly on the
+    /// custom view screen.
+    custom_view: Option<custom_view::CustomViewControls>,
+    /// The list's scroll position.
+    scroll: ScrollHandle,
+    /// What the list was last scrolled for.
+    scrolled_for: Option<ScrolledFor>,
+}
+
+/// What the list was last scrolled for. When any of it changes, the list
+/// scrolls the least it can to keep the selected row visible: the screen,
+/// title or selection; the rows, as reloaded after an install; or the size
+/// of the window or of the list. The mouse wheel changes none of it, so the
+/// list never scrolls back while the user scrolls it.
+#[derive(PartialEq)]
+struct ScrolledFor {
+    screen: Screen,
+    title: String,
+    selected: Option<usize>,
+    rows: Vec<Row>,
+    window: Size<Pixels>,
+    list: Size<Pixels>,
 }
 
 impl LauncherWindow {
@@ -102,6 +173,10 @@ impl LauncherWindow {
         LauncherWindow {
             launcher,
             focus_handle,
+            form: None,
+            scroll: ScrollHandle::new(),
+            scrolled_for: None,
+            custom_view: None,
         }
     }
 
@@ -119,25 +194,138 @@ impl LauncherWindow {
         cx.notify();
     }
 
-    fn confirm(&mut self, _: &Confirm, _: &mut Window, cx: &mut Context<Self>) {
-        self.activate_selected(cx);
+    fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
+        if self.launcher.view().screen == Screen::Form {
+            self.submit_form(window, cx);
+        } else {
+            self.activate_selected(window, cx);
+        }
     }
 
-    fn back(&mut self, _: &Back, _: &mut Window, cx: &mut Context<Self>) {
+    fn back(&mut self, _: &Back, window: &mut Window, cx: &mut Context<Self>) {
         self.launcher.back();
+        self.sync_screen(window, cx);
         cx.notify();
     }
 
-    /// Starts the selected row's action and redraws when the guest answers,
-    /// without blocking the window meanwhile.
-    fn activate_selected(&mut self, cx: &mut Context<Self>) {
-        let pending = self.launcher.activate_selected();
+    /// Shows the package in `folder` with its identity and compatibility,
+    /// redrawing when the check finishes.
+    pub fn preview_package(&mut self, folder: &Path, cx: &mut Context<Self>) {
+        let pending = self.launcher.preview_package(folder);
         cx.notify();
         cx.spawn(async move |this, cx| {
             pending.await;
             this.update(cx, |_, cx| cx.notify()).ok();
         })
         .detach();
+    }
+
+    /// Asks for a package folder with the platform's folder picker, then
+    /// previews it. Cancelling leaves root search as it was.
+    fn choose_package_folder(&mut self, cx: &mut Context<Self>) {
+        let chosen = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Install".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let folder = match chosen.await {
+                Ok(Ok(Some(paths))) => paths.into_iter().next(),
+                Ok(Ok(None)) | Err(_) => None,
+                Ok(Err(error)) => {
+                    this.update(cx, |this, cx| {
+                        this.launcher
+                            .show_error(format!("Could not open a folder picker: {error:#}"));
+                        cx.notify();
+                    })
+                    .ok();
+                    None
+                }
+            };
+            if let Some(folder) = folder {
+                this.update(cx, |this, cx| this.preview_package(&folder, cx))
+                    .ok();
+            }
+        })
+        .detach();
+    }
+
+    fn focus_next(&mut self, _: &FocusNext, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus_next(cx);
+    }
+
+    fn focus_previous(&mut self, _: &FocusPrevious, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus_prev(cx);
+    }
+
+    /// Starts the selected row's action and redraws when the guest answers,
+    /// without blocking the window meanwhile.
+    fn activate_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.launcher.selected_asks_for_folder() {
+            self.choose_package_folder(cx);
+            return;
+        }
+        let pending = self.launcher.activate_selected();
+        self.show_until_done(pending, window, cx);
+    }
+
+    /// Shows the launcher's state now and again when `pending`, a launcher
+    /// action's reply, has been applied, without blocking the window
+    /// meanwhile. Each time the form's and custom view's controls follow the
+    /// launcher's screen (opening a form needs no guest call, so its controls
+    /// appear at once).
+    fn show_until_done(
+        &mut self,
+        pending: impl Future<Output = ()> + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.sync_screen(window, cx);
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            pending.await;
+            this.update_in(cx, |this, window, cx| {
+                this.sync_screen(window, cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Scrolls the list to the selected row when what it shows or its size
+    /// changed since it was last scrolled for (see [`ScrolledFor`]).
+    fn keep_selected_visible(&mut self, view: &LauncherView, window: &mut Window) {
+        let shown = ScrolledFor {
+            screen: view.screen,
+            title: view.title.clone(),
+            selected: view.selected,
+            rows: view.rows.clone(),
+            window: window.viewport_size(),
+            // As laid out in the last frame.
+            list: self.scroll.bounds().size,
+        };
+        let last = self.scrolled_for.as_ref();
+        if last == Some(&shown) {
+            return;
+        }
+        if last.is_some_and(|last| last.window != shown.window) {
+            // The list's new size is known only once this frame is laid out,
+            // so the next frame scrolls again with it.
+            window.request_animation_frame();
+        }
+        if let Some(selected) = view.selected {
+            self.scroll.scroll_to_item(selected);
+        }
+        self.scrolled_for = Some(shown);
+    }
+
+    /// Makes the form's and custom view's controls, and focus, follow the
+    /// launcher's screen.
+    fn sync_screen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_form(window, cx);
+        self.sync_custom_view(window, cx);
     }
 
     fn render_row(
@@ -147,6 +335,7 @@ impl LauncherWindow {
         selected: bool,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
+        let reason_selector = format!("unavailable-reason-{}", row.title);
         div()
             .id(("row", index))
             .debug_selector(|| format!("row-{}", row.title))
@@ -163,29 +352,68 @@ impl LauncherWindow {
                 row.aria_active_descendant().bg(rgb(0x364355))
             })
             .hover(|row| row.bg(rgb(0x2e3a48)))
-            .child(div().child(row.title))
-            .when_some(row.subtitle, |element, subtitle| {
-                element
-                    .aria_description(subtitle.clone())
-                    .child(div().text_sm().text_color(rgb(0xaab4c0)).child(subtitle))
+            .child(
+                div()
+                    .when(row.unavailable.is_some(), |title| {
+                        title.text_color(rgb(0x8a96a3))
+                    })
+                    .child(row.title),
+            )
+            .when_some(row.subtitle.clone(), |element, subtitle| {
+                element.child(div().text_sm().text_color(rgb(0xaab4c0)).child(subtitle))
             })
-            .on_click(cx.listener(move |this, _, _, cx| {
+            // An unavailable row stays listed and selectable; it says why it
+            // cannot run here, on screen and to assistive technology.
+            .when_some(row.unavailable.clone(), |element, reason| {
+                element.aria_disabled(true).child(
+                    div()
+                        .id(("unavailable", index))
+                        .debug_selector(|| reason_selector)
+                        .text_sm()
+                        .text_color(rgb(0xd6a36a))
+                        .child(reason),
+                )
+            })
+            .when_some(
+                match (row.subtitle, row.unavailable) {
+                    (Some(subtitle), Some(reason)) => Some(format!("{subtitle}. {reason}")),
+                    (subtitle, reason) => subtitle.or(reason),
+                },
+                |element, description| element.aria_description(description),
+            )
+            .on_click(cx.listener(move |this, _, window, cx| {
                 this.launcher.select(index);
-                this.activate_selected(cx);
+                this.activate_selected(window, cx);
             }))
     }
 }
 
 impl Render for LauncherWindow {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = self.launcher.view();
+        self.keep_selected_visible(&view, window);
         let (empty, hint) = match view.screen {
             Screen::Root => ("No commands are installed.", "↑↓ select · Enter open"),
             Screen::Command => (
                 "This command has no items.",
                 "↑↓ select · Enter run · Esc back",
             ),
+            Screen::Package => ("Nothing to install.", "Enter confirm · Esc back"),
+            Screen::Form => ("", "Tab next field · Enter submit · Esc back"),
+            Screen::Extensions => (
+                "No extensions are installed.",
+                "↑↓ select · Enter enable or disable · Esc back",
+            ),
+            Screen::CustomView => ("", "Keys and pointer go to the view · Esc back"),
         };
+        let details = view.details.into_iter().enumerate().map(|(index, line)| {
+            div()
+                .id(("detail", index))
+                .debug_selector(|| format!("detail-{line}"))
+                .text_sm()
+                .text_color(rgb(0xaab4c0))
+                .child(line)
+        });
         let (status_selector, status_text, status_color): (&str, SharedString, u32) =
             match view.status {
                 Status::Idle => ("status-idle", hint.into(), 0x8a96a3),
@@ -202,6 +430,30 @@ impl Render for LauncherWindow {
                 self.render_row(index, row, selected, cx)
             })
             .collect();
+        // The launcher decides what an item opens; its screen says which.
+        let body = match (view.screen, view.form, view.custom_view) {
+            (Screen::Form, Some(form), _) => self.render_form(view.title.clone(), form, cx),
+            (Screen::CustomView, _, Some(custom_view)) => self.render_custom_view(custom_view, cx),
+            _ => div()
+                .id("rows")
+                .debug_selector(|| "rows".into())
+                // The list holds keyboard focus; the selected row is its
+                // active descendant, and key actions bubble to the root.
+                .track_focus(&self.focus_handle)
+                .role(Role::ListBox)
+                .aria_label(view.title.clone())
+                .flex_1()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .overflow_y_scroll()
+                .track_scroll(&self.scroll)
+                .children(rows)
+                .when(view.selected.is_none(), |rows| {
+                    rows.child(div().text_color(rgb(0x8a96a3)).child(empty))
+                })
+                .into_any_element(),
+        };
 
         div()
             .key_context(KEY_CONTEXT)
@@ -209,6 +461,8 @@ impl Render for LauncherWindow {
             .on_action(cx.listener(Self::select_previous))
             .on_action(cx.listener(Self::confirm))
             .on_action(cx.listener(Self::back))
+            .on_action(cx.listener(Self::focus_next))
+            .on_action(cx.listener(Self::focus_previous))
             .size_full()
             .flex()
             .flex_col()
@@ -217,24 +471,8 @@ impl Render for LauncherWindow {
             .bg(rgb(0x20252d))
             .text_color(rgb(0xf1f3f5))
             .child(div().text_xl().child(view.title.clone()))
-            .child(
-                div()
-                    .id("rows")
-                    // The list holds keyboard focus; the selected row is its
-                    // active descendant, and key actions bubble to the root.
-                    .track_focus(&self.focus_handle)
-                    .role(Role::ListBox)
-                    .aria_label(view.title.clone())
-                    .flex_1()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .overflow_y_scroll()
-                    .children(rows)
-                    .when(view.selected.is_none(), |rows| {
-                        rows.child(div().text_color(rgb(0x8a96a3)).child(empty))
-                    }),
-            )
+            .children(details)
+            .child(body)
             .child(
                 div()
                     .id("status")

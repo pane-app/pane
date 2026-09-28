@@ -2,7 +2,7 @@
 
 A small, extensible desktop launcher for Windows, macOS and Linux, inspired by Raycast and Pi.
 
-Pane is in early development. There is no installable application yet; the current slice is a native GPUI CE window running one sample command implemented three times, as Rust, JavaScript and TypeScript extensions, through a WASI 0.3 component interface. JavaScript and TypeScript run on a pinned, patched componentize-qjs (QuickJS), which remains provisional.
+Pane is in early development. There is no installable application yet; the current slice is a native GPUI CE window running one sample command implemented three times, as Rust, JavaScript and TypeScript extensions, through a WASI 0.3 component interface, and installing local extension packages from a folder. JavaScript and TypeScript run on a pinned, patched componentize-qjs (QuickJS), which remains provisional.
 
 ## Build, run and test
 
@@ -25,12 +25,20 @@ cargo xtask ci       # build guests, check the prebuilt JS/TS samples, then form
 
 No JavaScript toolchain is needed for these: the JS and TS sample components are committed prebuilt in `guests/prebuilt/`. Rebuilding them from source with `cargo xtask js-guests` also needs Python 3.12+, git and Node.js 22+ on any of the three OSes; see [guests/README.md](guests/README.md#writing-a-javascript-or-typescript-command).
 
-In the window, use the arrow keys to select, Enter to open a command or run an item, and Escape to go back; clicking a row runs it too.
+In the window, use the arrow keys to select, Enter to open a command or run an item, and Escape to go back; clicking a row runs it too. In each sample command, "Greet someone" opens a form: type a name, Tab to the greeting, arrow keys to choose, Enter to submit. "Choose a color", after it, opens a color picker the extension draws itself: arrow keys, Home and End, or a click or drag on the swatches, choose a color. The last two items are declared for some operating systems only; on another system they stay listed with the reason and do not run. **Install extension from folder…** installs a local extension package; see [Packaging and installing a local extension](guests/README.md#packaging-and-installing-a-local-extension). Once a package is installed, **Manage extensions…** after it lists the installed packages; Enter disables or enables the selected one, and a disabled package keeps its settings across restarts.
+
+To try a package without the folder picker, open the launcher on its install screen, then press Enter to install it:
+
+```sh
+cargo run -p pane -- --install target/guests/packages/sample-rust   # pane --install <folder>
+```
+
+Installed packages go in Pane's data folder (`%LOCALAPPDATA%\Pane\data` on Windows, `~/Library/Application Support/Pane` on macOS, `$XDG_DATA_HOME/pane` or `~/.local/share/pane` on Linux). Set `PANE_DATA_DIR` to another folder to keep test installs out of it; the GUI smoke scripts use `<output-dir>/data`.
 
 Layout:
 
-- `wit/extension.wit`: the host/guest contract for one extension command.
-- `crates/pane-core`: the launcher model (the public host interface the tests drive) and the extension runtime, a Wasmtime 49.0.1 engine registering only WASI 0.3.
+- `wit/extension.wit`: the host/guest contract for one extension command: a list view, item actions, [forms](docs/forms.md) and [custom views](docs/custom-views.md).
+- `crates/pane-core`: the launcher model (the public host interface the tests drive), extension packages (manifest, identity, managed copies) and the extension runtime, a Wasmtime 49.0.1 engine registering only WASI 0.3.
 - `crates/pane`: the GPUI CE window.
 - `guests/`: extension guests, including [the Rust, JavaScript and TypeScript sample commands](guests/README.md), TypeScript declarations for the contract, the prebuilt JS/TS components and test fixtures.
 - `tools/componentize-js`: the JS/TS toolchain, pinned upstream componentize-qjs plus Pane's patch queue, and its build script.

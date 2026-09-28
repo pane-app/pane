@@ -1,0 +1,90 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// Test fixture: Pane's contract as it was before #19 added `platforms` to
+// `item`, kept unchanged so that a component built against it has the old
+// shape of the same pre-release API version.
+//
+// Host/guest contract for one extension command. Intentionally minimal: one
+// list view, one action per item, and forms with a text field and a choice.
+// This is not the full Pane SDK.
+package pane:extension@0.1.0;
+
+interface command {
+  record item {
+    id: string,
+    title: string,
+    subtitle: option<string>,
+    /// When set, activating the item opens this form instead of running the
+    /// item's action, and submitting the form calls `submit-form`.
+    form: option<form>,
+  }
+
+  record view {
+    title: string,
+    items: list<item>,
+  }
+
+  /// A form the user fills in and submits to the command.
+  record form {
+    title: string,
+    fields: list<field>,
+    /// The submit button's label.
+    submit-label: string,
+  }
+
+  record field {
+    /// Identifies the field's value in `submit-form`.
+    id: string,
+    /// Names the field on screen and to assistive technology.
+    label: string,
+    kind: field-kind,
+  }
+
+  variant field-kind {
+    /// A single-line text field. It starts empty.
+    text(text-field),
+    /// A choice of exactly one of these options. The first starts chosen.
+    choice(list<choice>),
+  }
+
+  record text-field {
+    /// Shown while the field is empty.
+    placeholder: option<string>,
+  }
+
+  record choice {
+    /// The field's value while this option is chosen.
+    id: string,
+    label: string,
+  }
+
+  /// One field's value when the form is submitted: a text field's text, or
+  /// the chosen option's id.
+  record field-value {
+    id: string,
+    value: string,
+  }
+
+  /// Why a submitted form was not accepted.
+  record form-error {
+    /// The field the message is about; none for the form as a whole.
+    field: option<string>,
+    message: string,
+  }
+
+  /// Produce the command's list view.
+  get-view: async func() -> result<view, string>;
+
+  /// Run the action of the item with `item-id`; the returned text is shown to
+  /// the user as the action's result.
+  run-action: async func(item-id: string) -> result<string, string>;
+
+  /// Handle the submitted form of the item with `item-id`. `values` holds
+  /// every field of the form, in order. The returned text is shown to the
+  /// user as the result; an error is shown next to its field.
+  submit-form: async func(item-id: string, values: list<field-value>) -> result<string, form-error>;
+}
+
+world extension {
+  export command;
+}

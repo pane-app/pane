@@ -41,7 +41,14 @@ WORLD = "js-extension"
 PREBUILT = REPO / "guests" / "prebuilt"
 MANIFEST = PREBUILT / "manifest.json"
 # (component file in guests/prebuilt and target/guests, source package)
-SAMPLES = [("sample_js.wasm", "guests/sample-js"), ("sample_ts.wasm", "guests/sample-ts")]
+SAMPLES = [
+    ("sample_js.wasm", "guests/sample-js"),
+    ("sample_ts.wasm", "guests/sample-ts"),
+    ("sample_settings_js.wasm", "guests/sample-settings-js"),
+    ("sample_settings_ts.wasm", "guests/sample-settings-ts"),
+]
+# Pane's WIT, copied beside the world in guests/js/wit.
+PANE_WIT = ["extension.wit", "settings.wit"]
 # Toolchain inputs that decide what a component contains.
 TOOL_INPUTS = ["pins.json", "package.json", "package-lock.json", "bundle.mjs", "p3_build.rs", "patches"]
 SKIP_DIRS = {"node_modules", ".git"}
@@ -338,7 +345,8 @@ def build(package: Path, out: Path, toolchain: Toolchain) -> dict:
 
     wit = types / "wit"
     (wit / "deps" / "pane-extension").mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(REPO / "wit" / "extension.wit", wit / "deps" / "pane-extension" / "extension.wit")
+    for name in PANE_WIT:
+        shutil.copyfile(REPO / "wit" / name, wit / "deps" / "pane-extension" / name)
     out.parent.mkdir(parents=True, exist_ok=True)
     report = run([toolchain.componentizer, wit, WORLD, bundle, toolchain.runtime, out],
                  env=clean_env(QJS_P3_LIBC=str(toolchain.libc)), capture=True)
@@ -348,7 +356,8 @@ def build(package: Path, out: Path, toolchain: Toolchain) -> dict:
 
 
 def component_inputs(source: str) -> str:
-    return inputs_digest(tool_inputs() + [REPO / "wit" / "extension.wit", REPO / "guests" / "js", REPO / source])
+    pane_wit = [REPO / "wit" / name for name in PANE_WIT]
+    return inputs_digest(tool_inputs() + pane_wit + [REPO / "guests" / "js", REPO / source])
 
 
 def samples() -> None:

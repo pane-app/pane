@@ -1,0 +1,30 @@
+package pane:extension@0.1.0;
+
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// Settings an extension keeps between runs. Kept apart from extension.wit so
+// a component built for the `extension` world alone is unchanged. Rust
+// commands import it through pane-guest, JS/TS commands as the module
+// "pane:extension/settings@0.1.0" (guests/js/settings.d.ts).
+// The header follows `package`: comments above it would document the package,
+// which extension.wit already does.
+
+/// String values the extension saves under keys of its choosing. Pane stores
+/// them for the installed package, owned by its source identity rather than
+/// its title, and keeps them while the package is disabled, updated or Pane
+/// restarts. Only installed packages have settings.
+interface settings {
+  /// The value saved under `key`, if any.
+  get: func(key: string) -> result<option<string>, string>;
+
+  /// Saves `value` under `key`, replacing any earlier value. Fails while the
+  /// package is disabled.
+  set: func(key: string, value: string) -> result<_, string>;
+}
+
+/// A command that may also use settings. Pane hosts this world; a component
+/// built for `extension` alone runs unchanged.
+world extension-with-settings {
+  include extension;
+  import settings;
+}

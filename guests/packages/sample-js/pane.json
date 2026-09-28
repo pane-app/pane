@@ -1,0 +1,14 @@
+{
+  "manifestVersion": 1,
+  "title": "JavaScript sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "sample",
+      "title": "JavaScript sample",
+      "subtitle": "The same command implemented by a JavaScript extension",
+      "component": "sample_js.wasm"
+    }
+  ]
+}

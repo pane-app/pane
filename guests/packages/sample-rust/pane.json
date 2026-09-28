@@ -1,0 +1,14 @@
+{
+  "manifestVersion": 1,
+  "title": "Rust sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "sample",
+      "title": "Rust sample",
+      "subtitle": "A sample command implemented by a Rust extension",
+      "component": "sample_rust.wasm"
+    }
+  ]
+}
