@@ -1,0 +1,56 @@
+//! Drives one component through Pane's real extension runtime, for guests that
+//! are built outside `cargo xtask guests` (such as the JS/TS research guests).
+//!
+//! ```text
+//! cargo run -p pane-core --example run_guest -- <component.wasm> view action:<item-id> ...
+//! ```
+//!
+//! Each operation prints one line: `ok\t<ms>\t<value>` or `err\t<ms>\t<error>`.
+//! One process is one runtime, so every run starts a fresh guest instance.
+
+use std::path::PathBuf;
+use std::process::ExitCode;
+use std::time::Instant;
+
+use futures::executor::block_on;
+use pane_core::Runtime;
+
+fn main() -> ExitCode {
+    let mut args = std::env::args().skip(1);
+    let Some(component) = args.next().map(PathBuf::from) else {
+        eprintln!("usage: run_guest <component.wasm> [view | action:<item-id>]...");
+        return ExitCode::FAILURE;
+    };
+    let runtime = match Runtime::start() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut failed = false;
+    for operation in args {
+        let start = Instant::now();
+        let outcome = if operation == "view" {
+            block_on(runtime.get_view(&component)).map(|view| format!("{view:?}"))
+        } else if let Some(item_id) = operation.strip_prefix("action:") {
+            block_on(runtime.run_action(&component, item_id))
+        } else {
+            eprintln!("unknown operation: {operation}");
+            return ExitCode::FAILURE;
+        };
+        let ms = start.elapsed().as_secs_f64() * 1000.0;
+        match outcome {
+            Ok(value) => println!("ok\t{ms:.3}\t{value}"),
+            Err(error) => {
+                failed = true;
+                println!("err\t{ms:.3}\t{error}");
+            }
+        }
+    }
+    if failed {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}

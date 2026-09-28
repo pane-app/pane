@@ -1,0 +1,102 @@
+Port the componentize-qjs runtime to wasm32-wasip3 with wasi-sdk 34's P3 libc.
+
+Links SDK 34's wasm32-wasip3 libc.so instead of the WASI preview1 adapter
+(named by QJS_P3_LIBC at componentize time), drops the adapter reset, keeps
+the async task pointer in a thread-local because SDK 34's libc owns the
+canonical context slots, and registers only WASI 0.3 while Wizer runs.
+
+Modifies componentize-qjs (Apache-2.0, see LICENSE-componentize-qjs); this
+patch is distributed under the same license.
+
+--- a/crates/runtime/src/lib.rs
++++ b/crates/runtime/src/lib.rs
+@@ -321,7 +321,6 @@
+     })?;
+ 
+     unsafe {
+-        abi::reset_adapter_state();
+         abi::__wasilibc_reset_preopens();
+     }
+ 
+--- a/crates/runtime/src/abi.rs
++++ b/crates/runtime/src/abi.rs
+@@ -309,6 +309,20 @@
+ // Canonical built-in imports
+ #[cfg(feature = "component-model-async")]
+ mod async_builtins {
++    // SDK 34 libc owns canonical context slots for stack/TLS bookkeeping.
++    // Its task hooks preserve this thread-local slot across async suspension.
++    std::thread_local! {
++        static QJS_TASK_CONTEXT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
++    }
++
++    pub(crate) unsafe fn context_get() -> u32 {
++        QJS_TASK_CONTEXT.with(|slot| slot.get())
++    }
++
++    pub(crate) unsafe fn context_set(value: u32) {
++        QJS_TASK_CONTEXT.with(|slot| slot.set(value));
++    }
++
+     #[link(wasm_import_module = "$root")]
+     unsafe extern "C" {
+         #[link_name = "[waitable-set-new]"]
+@@ -333,12 +347,6 @@
+ 
+         #[link_name = "[subtask-cancel]"]
+         pub(crate) fn subtask_cancel(task: u32) -> u32;
+-
+-        #[link_name = "[context-get-0]"]
+-        pub(crate) fn context_get() -> u32;
+-
+-        #[link_name = "[context-set-0]"]
+-        pub(crate) fn context_set(value: u32);
+ 
+         #[link_name = "[thread-yield]"]
+         #[allow(dead_code)]
+@@ -414,13 +422,6 @@
+ 
+ pub(crate) use async_builtins::*;
+ 
+-// WASI adapter state reset that is used during Wizer pre-initialization
+-#[link(wasm_import_module = "wasi_snapshot_preview1")]
+-unsafe extern "C" {
+-    #[link_name = "reset_adapter_state"]
+-    pub(crate) fn reset_adapter_state();
+-}
+-
+ unsafe extern "C" {
+     pub(crate) fn __wasilibc_reset_preopens();
+ }
+--- a/crates/core/src/lib.rs
++++ b/crates/core/src/lib.rs
+@@ -13,7 +13,6 @@
+ use bytes::Bytes;
+ use resolver::Resolver;
+ use stubwasi::{stub_internal_imports, stub_wasi_imports};
+-use wasi_preview1_component_adapter_provider::WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER;
+ use wasmtime::component::{Component as WasmtimeComponent, Linker, ResourceTable};
+ use wasmtime::{Config, Engine, Store};
+ use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
+@@ -144,10 +143,9 @@
+         false,
+     )?;
+     linker.library("wit-dylib.wasm", &wit_dylib, false)?;
+-    linker.encoder().adapter(
+-        "wasi_snapshot_preview1",
+-        WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER,
+-    )?;
++    // Probe: SDK 34's runtime depends on its actual P3 libc shared module.
++    let libc = std::fs::read(std::env::var("QJS_P3_LIBC")?)?;
++    linker.library("libc.so", &libc, false)?;
+ 
+     let pre_wizer_component = linker
+         .encode()
+@@ -245,7 +243,6 @@
+     let mut linker = Linker::new(&engine);
+     linker.allow_shadowing(true);
+     linker.define_unknown_imports_as_traps(&comp)?;
+-    wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
+     wasmtime_wasi::p3::add_to_linker(&mut linker)?;
+ 
+     register_module_loader(&mut linker, resolver.clone())?;

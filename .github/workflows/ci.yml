@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  licenses:
+    name: Licenses and sources
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+      - name: Application dependencies
+        run: cargo deny --locked --workspace --exclude-dev check licenses sources
+      - name: Code compiled into extension components
+        working-directory: guests
+        run: cargo deny --locked --workspace --exclude-dev check licenses sources
+
+  check:
+    name: Check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, macos-15, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libxcb1-dev libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers \
+            xvfb xdotool imagemagick
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            guests
+            guests/fixtures/mixed-p2
+      - name: Build guests, check formatting and lints, run tests
+        run: cargo xtask ci
+      - name: Build the launcher
+        run: cargo build --locked -p pane
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Pillow for screenshot checks
+        run: python -m pip install pillow
+      - name: Native GUI smoke (Linux, Xvfb)
+        if: runner.os == 'Linux'
+        run: bash scripts/smoke-linux.sh smoke
+      - name: Native GUI smoke (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/smoke-windows.ps1 -OutDir smoke
+      - name: Native GUI smoke (macOS)
+        if: runner.os == 'macOS'
+        run: bash scripts/smoke-macos.sh smoke
+      - name: Upload GUI smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gui-smoke-${{ runner.os }}
+          path: smoke
+          if-no-files-found: ignore
+
+  # Rebuilds the JS/TS sample components from source with the pinned toolchain
+  # and runs the same contract tests on them. The rebuilt files are not
+  # byte-identical to the committed ones (the QuickJS snapshot holds build-time
+  # state), so behaviour is compared, not bytes.
+  js-guests:
+    name: JS/TS guests from source (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libxcb1-dev libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+      - name: Committed components match their sources and toolchain pins
+        run: python3 tools/componentize-js/pane_js.py check
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            guests
+      # The built toolchain (runtime, componentizer, npm tools) and the pinned
+      # downloads, in the default PANE_JS_TOOLCHAIN_DIR; the Rust build
+      # directories are not kept.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pane/componentize-js/bin
+            ~/.cache/pane/componentize-js/downloads
+            ~/.cache/pane/componentize-js/node
+          key: js-toolchain-${{ runner.os }}-${{ hashFiles('tools/componentize-js/**', 'rust-toolchain.toml') }}
+      - name: Rebuild the JS/TS sample components
+        run: cargo xtask js-guests
+      - name: Run the tests against the rebuilt components
+        run: cargo test --locked --workspace
+      - name: Upload the rebuilt components
+        uses: actions/upload-artifact@v4
+        with:
+          name: js-guests
+          path: guests/prebuilt

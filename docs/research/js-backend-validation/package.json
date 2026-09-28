@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "dependencies": {
+    "componentize-qjs": "0.4.5",
+    "esbuild": "0.28.2",
+    "fuse.js": "7.5.0",
+    "typescript": "7.0.2",
+    "zod": "4.6.5"
+  }
+}

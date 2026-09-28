@@ -18,4 +18,11 @@ p3-only-host.exe component.wasm query io fixture-directory
 p3-only-host.exe component.wasm queries io fixture-directory 20
 ```
 
+Added for the [Linux validation](../js-backend-validation/README.md) measurements (a `.cwasm` input is deserialized):
+
+```text
+p3-only-host component.wasm precompile out.cwasm
+p3-only-host component.cwasm instantiate 20
+```
+
 The argument layout is deliberately a probe convenience, not a proposed user-facing CLI.

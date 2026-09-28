@@ -1,0 +1,29 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// Host/guest contract for one extension command. Intentionally minimal: one
+// list view and one action per item. This is not the full Pane SDK.
+package pane:extension@0.1.0;
+
+interface command {
+  record item {
+    id: string,
+    title: string,
+    subtitle: option<string>,
+  }
+
+  record view {
+    title: string,
+    items: list<item>,
+  }
+
+  /// Produce the command's list view.
+  get-view: async func() -> result<view, string>;
+
+  /// Run the action of the item with `item-id`; the returned text is shown to
+  /// the user as the action's result.
+  run-action: async func(item-id: string) -> result<string, string>;
+}
+
+world extension {
+  export command;
+}

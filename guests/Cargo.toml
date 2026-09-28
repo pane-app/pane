@@ -1,0 +1,21 @@
+# Extension guests compile to WebAssembly components (`wasm32-wasip2` target,
+# `no_std`, so only WASI 0.3 interfaces are imported). Build them with
+# `cargo xtask guests` from the repository root.
+[workspace]
+resolver = "3"
+members = ["pane-guest", "sample-rust", "fixtures/faulty"]
+# `mixed-p2` deliberately uses std (WASI 0.2) and has its own workspace.
+exclude = ["fixtures/mixed-p2"]
+
+[workspace.package]
+edition = "2024"
+publish = false
+license = "Apache-2.0 OR MIT"
+
+[workspace.dependencies]
+pane-guest = { path = "pane-guest" }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true

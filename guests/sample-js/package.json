@@ -1,0 +1,15 @@
+{
+  "name": "pane-sample-js",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pane's sample command in JavaScript",
+  "license": "Apache-2.0 OR MIT",
+  "type": "module",
+  "main": "src/index.js",
+  "dependencies": {
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@pane/extension": "file:../js"
+  }
+}

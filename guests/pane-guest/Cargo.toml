@@ -1,0 +1,10 @@
+[package]
+name = "pane-guest"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+wit-bindgen = { version = "=0.62.0", default-features = false, features = ["macros", "async"] }
+dlmalloc = { version = "0.2", features = ["global"] }

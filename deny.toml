@@ -1,0 +1,48 @@
+# License and source policy for the application workspace, checked in CI with
+# `cargo deny --locked --workspace --exclude-dev check licenses sources`.
+# See docs/research/licensing-audit.md for the audit behind this list.
+
+[graph]
+targets = [
+  "x86_64-pc-windows-msvc",
+  "aarch64-pc-windows-msvc",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+]
+
+[licenses]
+# Every entry is compatible with the application's GPL-3.0-or-later. Adding a
+# license (notably GPL-2.0-only, AGPL, LGPL, SSPL, BUSL or OFL) needs review.
+allow = [
+  "MIT", "MIT-0", "Apache-2.0", "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib", "Unicode-3.0", "0BSD",
+  "CC0-1.0", "BSL-1.0", "Unlicense", "MPL-2.0",
+]
+confidence-threshold = 0.9
+unused-allowed-license = "allow"
+
+[licenses.private]
+ignore = true
+
+# wgsl-rs declares no license field; its repository LICENSE file is MIT.
+[[licenses.clarify]]
+crate = "wgsl-rs"
+expression = "MIT"
+license-files = [{ path = "../../LICENSE", hash = 0x0 }]
+
+[[licenses.clarify]]
+crate = "wgsl-rs-ir"
+expression = "MIT"
+license-files = [{ path = "../../LICENSE", hash = 0x0 }]
+
+[[licenses.clarify]]
+crate = "wgsl-rs-macros"
+expression = "MIT"
+license-files = [{ path = "../../LICENSE", hash = 0x0 }]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-git = ["https://github.com/gpui-ce/gpui-ce", "https://github.com/schell/wgsl-rs"]

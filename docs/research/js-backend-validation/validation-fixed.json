@@ -1,0 +1,260 @@
+{
+  "variant": "fixed",
+  "pass": true,
+  "checks": [
+    {
+      "check": "p3-capabilities imports only @0.3.0",
+      "pass": true,
+      "detail": {
+        "imports": [
+          "import wasi:cli/environment@0.3.0;",
+          "import wasi:cli/exit@0.3.0;",
+          "import wasi:cli/types@0.3.0;",
+          "import wasi:cli/stdin@0.3.0;",
+          "import wasi:cli/stdout@0.3.0;",
+          "import wasi:cli/stderr@0.3.0;",
+          "import wasi:cli/terminal-input@0.3.0;",
+          "import wasi:cli/terminal-output@0.3.0;",
+          "import wasi:cli/terminal-stdin@0.3.0;",
+          "import wasi:cli/terminal-stdout@0.3.0;",
+          "import wasi:cli/terminal-stderr@0.3.0;",
+          "import wasi:clocks/types@0.3.0;",
+          "import wasi:clocks/monotonic-clock@0.3.0;",
+          "import wasi:clocks/system-clock@0.3.0;",
+          "import wasi:filesystem/types@0.3.0;",
+          "import wasi:filesystem/preopens@0.3.0;",
+          "import wasi:sockets/types@0.3.0;",
+          "import wasi:sockets/ip-name-lookup@0.3.0;",
+          "import wasi:random/random@0.3.0;",
+          "import wasi:random/insecure-seed@0.3.0;"
+        ],
+        "exports": [
+          "export init: func(shim: string, script: string, entry-path: option<string>, disable-gc: bool) -> result<_, string>;",
+          "export query: async func(text: string) -> string;"
+        ]
+      }
+    },
+    {
+      "check": "p3-sample-js imports only @0.3.0 and exports pane:extension/command",
+      "pass": true,
+      "detail": {
+        "imports": [
+          "import wasi:cli/environment@0.3.0;",
+          "import wasi:cli/exit@0.3.0;",
+          "import wasi:cli/types@0.3.0;",
+          "import wasi:cli/stdin@0.3.0;",
+          "import wasi:cli/stdout@0.3.0;",
+          "import wasi:cli/stderr@0.3.0;",
+          "import wasi:cli/terminal-input@0.3.0;",
+          "import wasi:cli/terminal-output@0.3.0;",
+          "import wasi:cli/terminal-stdin@0.3.0;",
+          "import wasi:cli/terminal-stdout@0.3.0;",
+          "import wasi:cli/terminal-stderr@0.3.0;",
+          "import wasi:clocks/types@0.3.0;",
+          "import wasi:clocks/monotonic-clock@0.3.0;",
+          "import wasi:clocks/system-clock@0.3.0;",
+          "import wasi:filesystem/types@0.3.0;",
+          "import wasi:filesystem/preopens@0.3.0;",
+          "import wasi:sockets/types@0.3.0;",
+          "import wasi:sockets/ip-name-lookup@0.3.0;",
+          "import wasi:random/random@0.3.0;",
+          "import wasi:random/insecure-seed@0.3.0;"
+        ],
+        "exports": [
+          "export init: func(shim: string, script: string, entry-path: option<string>, disable-gc: bool) -> result<_, string>;",
+          "export pane:extension/command@0.1.0;"
+        ]
+      }
+    },
+    {
+      "check": "p3-sample-ts imports only @0.3.0 and exports pane:extension/command",
+      "pass": true,
+      "detail": {
+        "imports": [
+          "import wasi:cli/environment@0.3.0;",
+          "import wasi:cli/exit@0.3.0;",
+          "import wasi:cli/types@0.3.0;",
+          "import wasi:cli/stdin@0.3.0;",
+          "import wasi:cli/stdout@0.3.0;",
+          "import wasi:cli/stderr@0.3.0;",
+          "import wasi:cli/terminal-input@0.3.0;",
+          "import wasi:cli/terminal-output@0.3.0;",
+          "import wasi:cli/terminal-stdin@0.3.0;",
+          "import wasi:cli/terminal-stdout@0.3.0;",
+          "import wasi:cli/terminal-stderr@0.3.0;",
+          "import wasi:clocks/types@0.3.0;",
+          "import wasi:clocks/monotonic-clock@0.3.0;",
+          "import wasi:clocks/system-clock@0.3.0;",
+          "import wasi:filesystem/types@0.3.0;",
+          "import wasi:filesystem/preopens@0.3.0;",
+          "import wasi:sockets/types@0.3.0;",
+          "import wasi:sockets/ip-name-lookup@0.3.0;",
+          "import wasi:random/random@0.3.0;",
+          "import wasi:random/insecure-seed@0.3.0;"
+        ],
+        "exports": [
+          "export init: func(shim: string, script: string, entry-path: option<string>, disable-gc: bool) -> result<_, string>;",
+          "export pane:extension/command@0.1.0;"
+        ]
+      }
+    },
+    {
+      "check": "stock-search (stock control) imports WASI 0.2",
+      "pass": true,
+      "detail": {
+        "p2_imports": 18,
+        "p3_imports": 2
+      }
+    },
+    {
+      "check": "stock-sample-ts (stock control) imports WASI 0.2",
+      "pass": true,
+      "detail": {
+        "p2_imports": 18,
+        "p3_imports": 2
+      }
+    },
+    {
+      "check": "host: 20 sequential calls, one instance",
+      "pass": true,
+      "detail": {
+        "invocations": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20
+        ],
+        "distinct_random": 20,
+        "date_advance_ms": 225
+      }
+    },
+    {
+      "check": "host: missing file, fresh instance",
+      "pass": true,
+      "detail": {
+        "fileError": "Error: [object Object] (see error.payload)",
+        "fileErrorPayload": {
+          "tag": "no-entry"
+        }
+      }
+    },
+    {
+      "check": "host: no filesystem grant, fresh instance",
+      "pass": true,
+      "detail": {
+        "fileError": "Error: no-preopens"
+      }
+    },
+    {
+      "check": "host: rejects stock mixed P2/P3 component",
+      "pass": true,
+      "detail": {
+        "exit_code": 1,
+        "error": "Error: component imports instance `wasi:cli/environment@0.2.12`, but a matching implementation was not found in the linker"
+      }
+    },
+    {
+      "check": "REGRESSION host: 5 fresh instances get distinct first Math.random",
+      "pass": true,
+      "detail": {
+        "first_random_per_instance": [
+          0.9615310640019687,
+          0.5681453397135172,
+          0.9898787543930307,
+          0.18565582095748634,
+          0.5925997689788005
+        ],
+        "build_time_random": [
+          0.10172108112438205
+        ]
+      }
+    },
+    {
+      "check": "REGRESSION host: performance.now()/timeOrigin belong to the fresh instance",
+      "pass": true,
+      "detail": [
+        {
+          "perfNow": 12.852075,
+          "timeOrigin": 1790546627246.8135,
+          "dateMs": 1790546627259
+        },
+        {
+          "perfNow": 13.215734999999999,
+          "timeOrigin": 1790546628320.5928,
+          "dateMs": 1790546628333
+        },
+        {
+          "perfNow": 13.391128,
+          "timeOrigin": 1790546629400.7053,
+          "dateMs": 1790546629414
+        },
+        {
+          "perfNow": 11.833216,
+          "timeOrigin": 1790546630477.5688,
+          "dateMs": 1790546630489
+        },
+        {
+          "perfNow": 13.390236999999999,
+          "timeOrigin": 1790546631550.8206,
+          "dateMs": 1790546631564
+        }
+      ]
+    },
+    {
+      "check": "pane-core: JS sample get-view/run-action",
+      "pass": true,
+      "detail": {
+        "lines": [
+          "ok\t1027.047\tView { title: \"JavaScript sample\", items: [Item { id: \"greet\", title: \"Say hello\", subtitle: Some(\"Answer from the JavaScript guest\") }, Item { id: \"wait\", title: \"Wait briefly\", subtitle: Some(\"Await a WASI 0.3 clock, then answer\") }, Item { id: \"random\", title: \"Roll a number\", subtitle: Some(\"Math.random from a fresh instance\") }] }",
+          "ok\t0.087\tHello from the JavaScript guest",
+          "ok\t51.460\tWaited 50 ms inside the JavaScript guest",
+          "ok\t0.312\t0.7469905105628409",
+          "err\t0.339\tThe extension reported an error: unknown item: nope"
+        ]
+      }
+    },
+    {
+      "check": "pane-core: TS sample get-view/run-action",
+      "pass": true,
+      "detail": {
+        "lines": [
+          "ok\t1023.173\tView { title: \"TypeScript sample\", items: [Item { id: \"greet\", title: \"Say hello\", subtitle: Some(\"Answer from the TypeScript guest\") }, Item { id: \"wait\", title: \"Wait briefly\", subtitle: Some(\"Await a WASI 0.3 clock, then answer\") }, Item { id: \"random\", title: \"Roll a number\", subtitle: Some(\"Math.random from a fresh instance\") }] }",
+          "ok\t0.286\tHello from the TypeScript guest",
+          "ok\t51.838\tWaited 50 ms inside the TypeScript guest",
+          "ok\t0.232\t0.1926910620611868",
+          "err\t0.214\tThe extension reported an error: unknown item: nope"
+        ]
+      }
+    },
+    {
+      "check": "REGRESSION pane-core: fresh runtimes get distinct Math.random (TS sample)",
+      "pass": true,
+      "detail": [
+        "0.9961587379094594",
+        "0.5608091269083844",
+        "0.7053658533805092"
+      ]
+    },
+    {
+      "check": "pane-core: rejects stock TS sample as incompatible",
+      "pass": true,
+      "detail": "Incompatible extension: Pane supports only WASI 0.3, but it imports wasi:cli/environment@0.2.12, wasi:cli/exit@0.2.12, wasi:io/error@0.2.12, wasi:io/poll@0.2.12, wasi:io/streams@0.2.12, wasi:cli/stdin@0.2.12, wasi:cli/stdout@0.2.12, wasi:cli/stderr@0.2.12, wasi:cli/terminal-input@0.2.12, wasi:cli/te"
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+[workspace]
+resolver = "3"
+members = ["crates/pane", "crates/pane-core", "xtask"]
+# Guests target WebAssembly and form their own workspace.
+exclude = ["guests"]
+
+[workspace.package]
+edition = "2024"
+publish = false
+rust-version = "1.98"
+license = "GPL-3.0-or-later"
+
+# Extension components are compiled by Cranelift at run time. Unoptimized,
+# Cranelift takes over 10 s for a 4 MB JavaScript component in tests and
+# `cargo run`; optimizing the compiler crates brings that near release speed.
+[profile.dev.package.cranelift-assembler-x64]
+opt-level = 3
+
+[profile.dev.package.cranelift-bforest]
+opt-level = 3
+
+[profile.dev.package.cranelift-codegen]
+opt-level = 3
+
+[profile.dev.package.cranelift-entity]
+opt-level = 3
+
+[profile.dev.package.cranelift-frontend]
+opt-level = 3
+
+[profile.dev.package.regalloc2]
+opt-level = 3
+
+[profile.dev.package.wasmparser]
+opt-level = 3
+
+[profile.dev.package.wasmtime-environ]
+opt-level = 3
+
+[profile.dev.package.wasmtime-internal-cranelift]
+opt-level = 3

@@ -1,0 +1,35 @@
+{
+  "about": "JS/TS sample components used by tests and `cargo run -p pane`; rebuild with `cargo xtask js-guests`. Rebuilds are not byte-identical: the QuickJS snapshot holds build-time state. inputs_sha256 covers the sources and toolchain pins.",
+  "toolchain": {
+    "componentize_qjs": {
+      "repository": "https://github.com/andreiltd/componentize-qjs",
+      "version": "0.4.5",
+      "commit": "e563c6d6ae50b087980414015663ca9c948c09bb"
+    },
+    "patches": {
+      "0001-wasip3-runtime-port.patch": "9501a0f531b94a34b2b9dcc9c01542aa17ba825483c4184a2f0651696f542fbd",
+      "0002-reseed-snapshot-random-state.patch": "3cd7fd913f1e3dfc38214700e499b22c5f0bdfd371d299ab1aab7dc1309611d6"
+    },
+    "runtime_rustc": "rustc 1.101.0-nightly (75a75c3e0 2026-09-26)",
+    "componentizer_rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "wasi_sdk": "34.0",
+    "runtime_sha256": "a602636e6cfd3511c0b3600a1641c46566a6ce7e55a982e4d7e96b80503fe5b6",
+    "built_on": "x86_64-linux",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  },
+  "components": {
+    "sample_js.wasm": {
+      "source": "guests/sample-js",
+      "inputs_sha256": "b0225b47e211940a94f0f37dce0672d799a4a009cc727e51d92db9fab409b897",
+      "bytes": 4297350,
+      "sha256": "ab190bfd724c5ee08e128d670e33ece08ae9d585ab21e141b7ebc8c121919b8c"
+    },
+    "sample_ts.wasm": {
+      "source": "guests/sample-ts",
+      "inputs_sha256": "a3ba4c10d896ef9e87131fd762f36ea1ea5506b35732a1ea7d87361efb708c2f",
+      "bytes": 4296991,
+      "sha256": "0c044e8ce1e6ba97419064e74f4ad49816fcde16fc49144d4ffe0a25462cd31f"
+    }
+  }
+}

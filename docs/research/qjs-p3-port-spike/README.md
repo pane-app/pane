@@ -43,6 +43,8 @@ Same search workload, release Wasmtime CLI 49.0.1, three fresh precompiled runs 
 
 ## Open defect: random state survives snapshotting
 
+> **Update 2026-09-28:** Reproduced on Linux and fixed by a runtime patch with a before/after regression check. `performance.now()` had a related snapshot defect, also fixed. See [Linux validation](../js-backend-validation/README.md). The text below is the original Windows finding.
+
 `Math.random()` produces valid-looking, changing values within an instance, but separate fresh instances of the same snapshotted artifact start with the same value/sequence. The first random value is identical across the three host cases in `host-results.json`. Runtime Date and file input do update normally.
 
 QuickJS initializes `ctx->random_state` during context creation (`rquickjs-sys 0.13.0`, `quickjs.c`); that context is created before the Wizer snapshot. Runtime reseeding or an explicit SDK/runtime random integration must be designed and tested. Do not describe this prototype as having completed randomness initialization or a crypto API. This finding is not proof that P3's host random implementation is defective.

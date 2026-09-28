@@ -1,0 +1,4 @@
+# Prebuilt extension components are binary.
+*.wasm binary
+# Patches must apply to upstream's LF sources on every OS.
+tools/componentize-js/patches/*.patch text eol=lf
