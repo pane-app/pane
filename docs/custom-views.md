@@ -211,7 +211,9 @@ not run yet.
   extension call, since the runtime handles calls one at a time. One
   waiting at an `await` is stopped when its package is disabled, reloaded
   or updated ([generations](generations.md)); one computing without
-  yielding is not, and hang handling is #18.
+  waiting is stopped too, at once then, and after 5 seconds of computing
+  otherwise, as unresponsive (#18,
+  [pausing](pausing.md#when-an-extension-stops-responding)).
 - The contract adds required exports (`open-view` and the `custom-view`
   resource) without changing the extension API version (0.1), as #20 did for
   `submit-form`: components built against the earlier contract must be

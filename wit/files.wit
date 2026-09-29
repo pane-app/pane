@@ -1,0 +1,90 @@
+package pane:extension@0.1.0;
+
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// The files of the one folder the user granted a package, which Pane's host
+// lists for it (a pure WASI guest has no folders to read). The user chooses
+// the folder through Pane's own "Choose folder" row, shown in the commands
+// of a package whose pane.json sets `"folderAccess": true`, with the
+// system's folder picker; Pane records the grant itself, never in the
+// extension's data, and the extension never names a path. It matches the
+// files against root search's query and answers `open-file` results
+// (wit/root-results.wit) with the ids Pane gave the files, which Pane opens
+// with the system's handler once it has checked them again. Rust commands
+// use it through pane-guest (`pane_guest::files`), JS/TS commands as the
+// module "pane:extension/files@0.1.0" (guests/js/files.d.ts), imported only
+// by a command whose package.json sets `"pane": { "files": true }`. Kept
+// apart from the other files so a command that lists none is unchanged.
+// The header follows `package`: comments above it would document the package,
+// which extension.wit already does.
+
+/// Lists the files of the folder the user granted the command's package.
+interface files {
+  /// One file Pane found.
+  record found-file {
+    /// Identifies the file to `open-file`: an opaque id Pane gave it for
+    /// this listing, not a path.
+    id: string,
+    /// Its path below the granted folder, with `/` between names on every
+    /// system, such as `notes/plan.md`.
+    relative: string,
+  }
+
+  /// What Pane found in the granted folder.
+  record folder-listing {
+    /// The files, a folder's own files before its subfolders' (breadth
+    /// first), each folder's entries in name order.
+    files: list<found-file>,
+    /// Pane did not look at everything: it reached one of its limits, or a
+    /// subfolder could not be read.
+    truncated: bool,
+  }
+
+  /// How far Pane lists a granted folder, the same on every system.
+  record scan-limits {
+    /// How many folders below the granted one it enters.
+    depth: u32,
+    /// How many files one listing holds at most.
+    files: u32,
+    /// How many entries (files, folders, links, anything) it looks at.
+    entries: u32,
+  }
+
+  /// Where the granted folder's listing is.
+  variant folder-state {
+    /// The user has not granted the package a folder.
+    not-granted,
+    /// Pane is listing it now, off the extension thread; the call that
+    /// asked will be asked again once it is done.
+    listing,
+    /// The listing Pane keeps for this visit of root search.
+    ready(folder-listing),
+  }
+
+  /// The granted folder's listing, without waiting for it. The first call
+  /// in each visit of root search (and after the grant changes) starts a
+  /// listing on the package's own worker and answers `listing`; later
+  /// calls answer the kept listing, so each keystroke only filters it. Pane
+  /// lists regular files only, and neither lists nor enters hidden entries
+  /// (a name starting with `.`, and on Windows the hidden and system
+  /// attributes), links of any kind, or names that are not Unicode. An
+  /// error explains a folder that can no longer be listed (gone, or no
+  /// longer readable).
+  list-folder: func() -> result<folder-state, string>;
+
+  /// Pane's scan limits, for telling the user.
+  limits: func() -> scan-limits;
+}
+
+/// The files import alone, for guest bindings.
+world files-user {
+  import files;
+}
+
+/// The world Pane hosts: a command that may also use extension data, call
+/// operations, find and open installed applications, run its package's
+/// native helpers and list the folder granted to its package.
+world extension-with-files {
+  include extension-with-helpers;
+  import files;
+}

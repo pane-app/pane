@@ -97,7 +97,10 @@ meanwhile are kept.
 Added for [#40](https://github.com/hoangvu12/pane/issues/40) (US61, US63,
 US64, T20, G5; contributions). It implements the accepted
 [Uninstall](extension-policy-proposal.md#disable-cache-data-and-uninstall)
-behavior for one package; uninstalling required dependents together is #44.
+behavior for one package; uninstalling a package that installed packages
+require asks about them first and uninstalls them together, with the same
+choice ([#44](https://github.com/hoangvu12/pane/issues/44),
+[dependencies](dependencies.md#uninstalling-a-required-dependency)).
 
 Manage extensions lists, after the Clear cache rows, a row "Uninstall
 <title>" per package, whose subtitle names the source. Choosing it asks

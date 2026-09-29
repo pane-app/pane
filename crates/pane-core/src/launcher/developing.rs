@@ -66,6 +66,10 @@ use crate::develop::{
 };
 use crate::packages::{InstalledPackage, Manifest, PackageIdentity, canonical};
 
+mod sources;
+
+use sources::Sources;
+
 /// How long the folder must stay unchanged after a save before it is built,
 /// so that an editor's several writes are one save.
 const SETTLE: Duration = Duration::from_millis(150);
@@ -252,7 +256,8 @@ impl Launcher {
     pub fn with_development(self, builder: Arc<dyn Builder>, changes: ChangeSender) -> Self {
         self.developing.end(None);
         let launcher = Launcher {
-            developing: Arc::new(Developing::new(Some(builder), Some(changes))),
+            developing: Arc::new(Developing::new(Some(builder), Some(changes.clone()))),
+            changes: Some(changes),
             ..self
         };
         // The runtime reports failures to this launcher, not the one it
@@ -366,16 +371,16 @@ impl Launcher {
                 // FSEvents reports canonical paths.
                 let folder = canonical(&folder).unwrap_or(folder);
                 let build = builder.build_for(&folder)?;
-                let watcher = watch(&folder, build.clone(), signals)?;
+                let (watcher, sources) = watch(&folder, build.clone(), signals)?;
                 // What an earlier session left, such as after a crash.
                 let _ = std::fs::remove_dir_all(&work);
-                Ok::<_, String>((folder, build, watcher))
+                Ok::<_, String>((folder, build, watcher, sources))
             })
             .await
         };
         let mut state = self.lock();
         let title = state.title_of(&identity);
-        let (folder, build, watcher) = match prepared {
+        let (folder, build, watcher, sources) = match prepared {
             Ok(prepared) => prepared,
             Err(reason) => {
                 state.view.status = Status::Error(format!("Cannot develop {title}: {reason}"));
@@ -414,6 +419,7 @@ impl Launcher {
             folder: folder.clone(),
             build: build.clone(),
             watcher,
+            sources,
             signals,
             received,
             stop,
@@ -542,7 +548,7 @@ impl Launcher {
             subtitle: Some(format!("Run `{}` now", development.command)),
             unavailable: None,
         };
-        state.screen_epoch += 1;
+        state.next_screen();
         state.entries = vec![Entry::BuildAgain(identity.clone())];
         let screen = Screen::BuildDetails {
             identity: identity.clone(),
@@ -654,19 +660,12 @@ impl Launcher {
         );
     }
 
-    /// Copies the components of the installed copy of the package with
-    /// `identity` to its source folder, replacing what an obsolete build
-    /// left there.
-    fn restore_components(&self, identity: &PackageIdentity, folder: &Path) {
-        let location = {
-            let state = self.lock();
-            state
-                .package(identity)
-                .map(|package| package.location.clone())
-        };
-        if let Some(location) = location {
-            copy_components(&location, folder);
-        }
+    /// Where the installed copy of the package with `identity` is.
+    fn installed_location(&self, identity: &PackageIdentity) -> Option<PathBuf> {
+        let state = self.lock();
+        state
+            .package(identity)
+            .map(|package| package.location.clone())
     }
 }
 
@@ -690,19 +689,22 @@ fn slot(identity: &PackageIdentity) -> String {
 
 /// Copies the components named by `from`'s `pane.json` from `from` to the
 /// same paths in `to`, replacing each file rather than writing through it
-/// (a Rust build's component is a hard link into `target`).
-fn copy_components(from: &Path, to: &Path) {
+/// (a Rust build's component is a hard link into `target`). Returns their
+/// paths, relative to both.
+fn copy_components(from: &Path, to: &Path) -> Vec<PathBuf> {
     let Ok((manifest, _)) = Manifest::read_parsed(from) else {
-        return;
+        return Vec::new();
     };
-    for component in components(&manifest) {
-        let target = to.join(&component);
+    let components = components(&manifest);
+    for component in &components {
+        let target = to.join(component);
         if let Some(parent) = target.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         let _ = std::fs::remove_file(&target);
-        let _ = std::fs::copy(from.join(&component), &target);
+        let _ = std::fs::copy(from.join(component), &target);
     }
+    components
 }
 
 /// `path`, from an event of a watcher of `root` (canonical), relative to
@@ -723,15 +725,21 @@ fn relative_to(root: &Path, path: &Path) -> Option<PathBuf> {
 /// output: the folder itself and every top-level folder that is not the
 /// build's (not `target`, `node_modules`, `dist` or hidden ones), so the
 /// build's own writes are mostly not watched; saves deeper in the tree are
-/// still told apart by [`is_save`]. Each save is sent to `signals`, and each
-/// folder created or moved to the top, to be watched too.
+/// still told apart by [`is_save`], and an event is a save only if its path
+/// changed since last seen (see [`Sources`]), which is returned with the
+/// watcher. Each save is sent to `signals`, and each folder that appeared at
+/// the top, to be watched too.
 fn watch(
     root: &Path,
     build: Arc<dyn Build>,
     signals: Sender<Signal>,
-) -> Result<RecommendedWatcher, String> {
+) -> Result<(RecommendedWatcher, Arc<Mutex<Sources>>), String> {
     let watched = root.to_path_buf();
     let filter = build.clone();
+    // Seen before watching, so that FSEvents telling of earlier writes is
+    // not a save.
+    let sources = Arc::new(Mutex::new(Sources::new(root, build.clone())));
+    let seen = sources.clone();
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
         let Ok(event) = event else { return };
         // Reading a file (as the build does) is not a save.
@@ -743,28 +751,28 @@ fn watch(
         if read {
             return;
         }
-        let saves: Vec<PathBuf> = event
-            .paths
-            .iter()
-            .filter_map(|path| relative_to(&watched, path))
-            .filter(|relative| is_save(relative, &*filter))
-            .collect();
-        if saves.is_empty() {
-            return;
-        }
-        let appeared = matches!(
-            event.kind,
-            EventKind::Create(_) | EventKind::Modify(ModifyKind::Name(_))
-        );
-        if appeared {
-            for relative in &saves {
-                let path = watched.join(relative);
-                if relative.components().count() == 1 && path.is_dir() {
-                    let _ = signals.send(Signal::Folder(path));
-                }
+        let mut sources = seen.lock().unwrap_or_else(|p| p.into_inner());
+        let saved = if event.need_rescan() {
+            sources.rescan()
+        } else {
+            let mut saved = false;
+            for relative in event
+                .paths
+                .iter()
+                .filter_map(|path| relative_to(&watched, path))
+                .filter(|relative| is_save(relative, &*filter))
+            {
+                saved |= sources.changed(&relative);
             }
+            saved
+        };
+        for folder in sources.take_new_folders() {
+            let _ = signals.send(Signal::Folder(folder));
         }
-        let _ = signals.send(Signal::Saved);
+        drop(sources);
+        if saved {
+            let _ = signals.send(Signal::Saved);
+        }
     })
     .map_err(|error| format!("Pane could not watch {}: {error}", root.display()))?;
     let watch = |watcher: &mut RecommendedWatcher, path: &Path, mode| {
@@ -782,7 +790,7 @@ fn watch(
             watch(&mut watcher, &path, RecursiveMode::Recursive)?;
         }
     }
-    Ok(watcher)
+    Ok((watcher, sources))
 }
 
 /// A developed package's thread: waits for saves, builds, and reloads.
@@ -795,6 +803,8 @@ struct Worker {
     folder: PathBuf,
     build: Arc<dyn Build>,
     watcher: RecommendedWatcher,
+    /// What the watcher last saw of the folder.
+    sources: Arc<Mutex<Sources>>,
     signals: Sender<Signal>,
     received: Receiver<Signal>,
     stop: BuildStop,
@@ -920,7 +930,9 @@ impl Worker {
                     let Some(launcher) = self.current() else {
                         return false;
                     };
-                    launcher.restore_components(&self.identity, &self.folder);
+                    if let Some(installed) = launcher.installed_location(&self.identity) {
+                        self.write_components(&installed);
+                    }
                     if obsolete >= MAX_OBSOLETE {
                         let title = launcher.title_of(&self.identity);
                         self.update(|d| d.building = false);
@@ -996,7 +1008,7 @@ impl Worker {
         let reload = Reload::staged(self.identity.clone(), staging.to_path_buf());
         let reloaded = executor.block_on(launcher.carry_out(epoch, reload));
         if reloaded.replaced {
-            copy_components(staging, &self.folder);
+            self.write_components(staging);
         }
         {
             let mut state = launcher.lock();
@@ -1067,6 +1079,16 @@ impl Worker {
                     return None;
                 }
             }
+        }
+    }
+
+    /// Copies the components in `from` to the source folder; the copies
+    /// are not saves.
+    fn write_components(&self, from: &Path) {
+        // Held while writing, so that the watcher sees them as written.
+        let mut sources = self.sources.lock().unwrap_or_else(|p| p.into_inner());
+        for component in copy_components(from, &self.folder) {
+            sources.wrote(&component);
         }
     }
 

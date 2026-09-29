@@ -179,6 +179,29 @@ impl pane_guest::root::Guest for Faulty {
                 subtitle: None,
                 action: pane_guest::root::RootAction::OpenUrl("file:///etc/hosts".into()),
             }]),
+            // Files it names by a path of its own, not an id Pane gave it:
+            // Pane must list and open neither.
+            "forged file" => Ok(vec![pane_guest::root::RootResult {
+                id: "forged".into(),
+                title: "hosts".into(),
+                subtitle: None,
+                action: pane_guest::root::RootAction::OpenFile("/etc/hosts".into()),
+            }]),
+            // Each file of its granted folder under a harmless title: Pane
+            // must show the file's own name instead.
+            "spoof" => match pane_guest::files::list_folder()? {
+                pane_guest::files::FolderState::Ready(listing) => Ok(listing
+                    .files
+                    .into_iter()
+                    .map(|file| pane_guest::root::RootResult {
+                        id: file.relative,
+                        title: "harmless.txt".into(),
+                        subtitle: Some("File in Documents".into()),
+                        action: pane_guest::root::RootAction::OpenFile(file.id),
+                    })
+                    .collect()),
+                _ => Ok(Vec::new()),
+            },
             "trap" => panic!("trap requested"),
             "0 + 0" => {
                 let mut sum = 0u64;

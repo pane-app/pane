@@ -17,17 +17,24 @@
 //! never by running the package. Deleting retained data (an uninstalled
 //! package's kept data) removes every kind. An unreadable file is reported
 //! to the guest and never overwritten.
+//!
+//! Files are written by a thread of their own, one write after another in
+//! the order the changes were made, so the lock on the values is never held
+//! while a file is written and synced (#18): the runtime thread only waits
+//! for its write to finish, and a runtime thread Pane gave up on never holds
+//! the lock the next one needs. A change is made in memory first; if its
+//! write fails and nothing changed since, it is taken back.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak, mpsc};
 
 use serde::{Deserialize, Serialize};
 
 use crate::atomic::{Readers, write_atomically};
-use crate::generation::{End, Generation};
+use crate::generation::{End, Fence, Generation};
 use crate::packages::{PackageIdentity, SavedData};
 
 /// The version of every kind's file.
@@ -122,26 +129,87 @@ struct DataJson {
 
 /// One kind's file as Pane last read or wrote it.
 struct KindFile {
-    kind: DataKind,
     path: PathBuf,
     /// The saved values, or why they could not be read.
     file: Result<DataJson, String>,
+    /// Counts the changes made to `file` in memory, to tell whether a
+    /// failed write may be taken back.
+    changes: u64,
+    /// How many writes of this file are queued and not yet done.
+    pending: usize,
 }
 
 impl KindFile {
     fn open(dir: &Path, kind: DataKind) -> KindFile {
         let path = dir.join(kind.file_name());
         let file = read(&path);
-        KindFile { kind, path, file }
+        KindFile {
+            path,
+            file,
+            changes: 0,
+            pending: 0,
+        }
     }
+}
 
-    /// Replaces the file with `updated` (see [`write_atomically`] for what a
-    /// crash or a second Pane process can do to it), readable only by whom
-    /// its kind allows.
-    fn write(&self, updated: &DataJson) -> io::Result<()> {
-        let text = serde_json::to_string_pretty(updated).map_err(io::Error::other)?;
-        write_atomically(&self.path, text.as_bytes(), self.kind.readers())
+/// One file write for the writer thread: the values of `kind` as they were
+/// changed in memory (`change`), and how to take the change back
+/// (`previous`) if the write fails.
+struct Write {
+    kind: DataKind,
+    path: PathBuf,
+    readers: Readers,
+    updated: DataJson,
+    previous: Result<DataJson, String>,
+    change: u64,
+    done: tokio::sync::oneshot::Sender<io::Result<()>>,
+}
+
+/// What the writer thread does next.
+enum Job {
+    Write(Write),
+    /// Answered once every write queued before it is done.
+    Flush(tokio::sync::oneshot::Sender<()>),
+}
+
+/// Starts the thread writing the files of `data`, one write after another,
+/// which stops once `data` is gone.
+fn start_writer(data: Weak<Mutex<DataFile>>) -> mpsc::Sender<Job> {
+    let (jobs, queue) = mpsc::channel::<Job>();
+    let started = std::thread::Builder::new()
+        .name("pane-data-writer".into())
+        .spawn(move || {
+            for job in queue {
+                let write = match job {
+                    Job::Flush(done) => {
+                        let _ = done.send(());
+                        continue;
+                    }
+                    Job::Write(write) => write,
+                };
+                let written = serde_json::to_string_pretty(&write.updated)
+                    .map_err(io::Error::other)
+                    .and_then(|text| write_atomically(&write.path, text.as_bytes(), write.readers));
+                if let Some(data) = data.upgrade() {
+                    let mut file = lock_file(&data);
+                    let kind = file.of(write.kind);
+                    kind.pending -= 1;
+                    // Taken back, unless something changed since.
+                    if written.is_err() && kind.changes == write.change {
+                        kind.file = write.previous;
+                    }
+                }
+                let _ = write.done.send(written);
+            }
+        });
+    if let Err(error) = started {
+        eprintln!("pane: could not start the thread writing extension data: {error}");
     }
+    jobs
+}
+
+fn lock_file(data: &Mutex<DataFile>) -> std::sync::MutexGuard<'_, DataFile> {
+    data.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Every kind's file, as Pane last read or wrote it, and each package's
@@ -156,6 +224,8 @@ struct DataFile {
     /// launcher keeps it in step with its packages; the runtime reads it
     /// here, on its own thread.
     generations: HashMap<String, Generation>,
+    /// The thread writing the files.
+    writer: Option<mpsc::Sender<Job>>,
 }
 
 impl DataFile {
@@ -167,6 +237,51 @@ impl DataFile {
             DataKind::LocalCredentials => &mut self.local_credentials,
         }
     }
+
+    /// Changes the values of `kind` in memory to `updated` and queues their
+    /// write, whose outcome `done` receives.
+    fn stage(
+        &mut self,
+        kind: DataKind,
+        updated: DataJson,
+    ) -> tokio::sync::oneshot::Receiver<io::Result<()>> {
+        let (done, outcome) = tokio::sync::oneshot::channel();
+        let data = self.of(kind);
+        data.changes += 1;
+        data.pending += 1;
+        let previous = std::mem::replace(&mut data.file, Ok(updated.clone()));
+        let write = Write {
+            kind,
+            path: data.path.clone(),
+            readers: kind.readers(),
+            updated,
+            previous,
+            change: data.changes,
+            done,
+        };
+        let unsent = match &self.writer {
+            Some(writer) => writer
+                .send(Job::Write(write))
+                .err()
+                .map(|mpsc::SendError(job)| job),
+            None => Some(Job::Write(write)),
+        };
+        if let Some(Job::Write(write)) = unsent {
+            // No writer: nothing is written, and the change is taken back.
+            let data = self.of(kind);
+            data.pending -= 1;
+            data.file = write_previous(write);
+        }
+        outcome
+    }
+}
+
+/// What a write that could not be queued takes back.
+fn write_previous(write: Write) -> Result<DataJson, String> {
+    let _ = write.done.send(Err(io::Error::other(
+        "Pane's thread writing extension data has stopped",
+    )));
+    write.previous
 }
 
 /// Every installed package's extension data. Cloning shares the same
@@ -178,13 +293,27 @@ impl ExtensionData {
     /// Opens the data kept in `dir`. Nothing is written until a command
     /// saves a value.
     pub fn open(dir: &Path) -> ExtensionData {
-        ExtensionData(Arc::new(Mutex::new(DataFile {
+        let data = Arc::new(Mutex::new(DataFile {
             settings: KindFile::open(dir, DataKind::Settings),
             content: KindFile::open(dir, DataKind::Content),
             cache: KindFile::open(dir, DataKind::Cache),
             local_credentials: KindFile::open(dir, DataKind::LocalCredentials),
             generations: HashMap::new(),
-        })))
+            writer: None,
+        }));
+        lock_file(&data).writer = Some(start_writer(Arc::downgrade(&data)));
+        ExtensionData(data)
+    }
+
+    /// Waits until every write queued so far is done.
+    fn flush(&self) {
+        let (done, flushed) = tokio::sync::oneshot::channel();
+        let writer = self.lock().writer.clone();
+        if let Some(writer) = writer
+            && writer.send(Job::Flush(done)).is_ok()
+        {
+            let _ = flushed.blocking_recv();
+        }
     }
 
     /// The data of the package with `identity`, as its commands see it,
@@ -202,6 +331,7 @@ impl ExtensionData {
             data: self.clone(),
             owner,
             generation,
+            fence: None,
         }
     }
 
@@ -392,29 +522,54 @@ impl ExtensionData {
     /// nothing else. The file is read again first, so values another Pane
     /// process saved since are kept, and a file the user repaired or deleted
     /// is used without restarting Pane. On failure nothing is removed.
+    ///
+    /// Called off the runtime thread: it waits for the writer. The file is
+    /// read again once no write of it is queued, without the lock held (a
+    /// runtime thread saving meanwhile never waits on the file system), and
+    /// used only if nothing was saved meanwhile, so a value saved just
+    /// before is not lost.
     fn remove(&self, kind: DataKind, identity: &PackageIdentity) -> Result<(), Removal> {
-        let mut store = self.lock();
-        let data = store.of(kind);
-        data.file = read(&data.path);
-        let file = data
-            .file
-            .as_ref()
-            .map_err(|reason| Removal::Unreadable(reason.clone()))?;
-        if !file.packages.contains_key(&identity.key()) {
-            return Ok(());
+        let (outcome, path) = loop {
+            self.flush();
+            let (path, before) = {
+                let mut store = self.lock();
+                let data = store.of(kind);
+                if data.pending > 0 {
+                    continue;
+                }
+                (data.path.clone(), data.changes)
+            };
+            let fresh = read(&path);
+            let mut store = self.lock();
+            let data = store.of(kind);
+            if data.pending > 0 || data.changes != before {
+                continue;
+            }
+            data.file = fresh;
+            data.changes += 1;
+            let file = data
+                .file
+                .as_ref()
+                .map_err(|reason| Removal::Unreadable(reason.clone()))?;
+            if !file.packages.contains_key(&identity.key()) {
+                return Ok(());
+            }
+            let mut updated = file.clone();
+            updated.packages.remove(&identity.key());
+            break (store.stage(kind, updated), path);
+        };
+        match outcome.blocking_recv() {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => Err(Removal::Unwritable(path, error)),
+            Err(_) => Err(Removal::Unwritable(
+                path,
+                io::Error::other("Pane's thread writing extension data has stopped"),
+            )),
         }
-        let mut updated = file.clone();
-        updated.packages.remove(&identity.key());
-        data.write(&updated)
-            .map_err(|error| Removal::Unwritable(data.path.clone(), error))?;
-        data.file = Ok(updated);
-        Ok(())
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, DataFile> {
-        self.0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        lock_file(&self.0)
     }
 }
 
@@ -469,37 +624,53 @@ pub(crate) struct PackageData {
     owner: String,
     /// The generation the call using it belongs to.
     generation: Generation,
+    /// The runtime thread running the code using it: once Pane gave up on
+    /// that thread, the code is stopped as if its generation had ended.
+    fence: Option<Fence>,
 }
 
 impl PackageData {
+    /// The identity key of the package the data belongs to.
+    pub fn owner(&self) -> &str {
+        &self.owner
+    }
+
     /// The generation of the package's code this data was handed out in.
     pub fn generation(&self) -> &Generation {
         &self.generation
     }
 
-    /// Why this data's generation ended, if it has: its commands may no
-    /// longer run or save values.
-    pub fn stopped(&self) -> Option<End> {
-        self.generation.ended()
+    /// This data for code run by the runtime thread whose fence is `fence`
+    /// (see [`Fence`]).
+    pub fn fenced(mut self, fence: Fence) -> PackageData {
+        self.fence = Some(fence);
+        self
     }
 
-    /// Why code of this data's generation may no longer read or save
-    /// values, if its generation has ended.
-    fn refusal(&self) -> Option<&'static str> {
-        match self.stopped()? {
-            End::Disabled => Some("the extension is disabled"),
-            End::Replaced => {
-                Some("this code of the extension was replaced by a reload or an update")
-            }
-            End::Uninstalled => Some("the extension was uninstalled"),
-            End::Paused => Some("the extension is paused after an error"),
-        }
+    /// Why code using this data is stopped, if it is: its generation ended,
+    /// or Pane gave up on the runtime thread running it. Its commands may no
+    /// longer run or save values.
+    pub fn stopped(&self) -> Option<End> {
+        self.stopped_while(self.fence.as_ref().is_some_and(Fence::closed))
+    }
+
+    /// Like [`PackageData::stopped`], with whether the fence is closed.
+    fn stopped_while(&self, fenced: bool) -> Option<End> {
+        self.generation
+            .ended()
+            .or_else(|| fenced.then_some(End::Abandoned))
+    }
+
+    /// Why code using this data may no longer read or save values, if it is
+    /// stopped (see [`PackageData::stopped`]).
+    fn refusal(&self, fenced: bool) -> Option<&'static str> {
+        Some(refusal(self.stopped_while(fenced)?))
     }
 
     /// The value of `kind` saved under `key`, if any, unless this data's
     /// generation has ended: stopped code reads nothing more either.
     pub fn get(&self, kind: DataKind, key: &str) -> Result<Option<String>, String> {
-        if let Some(refusal) = self.refusal() {
+        if let Some(refusal) = self.refusal(self.fence.as_ref().is_some_and(Fence::closed)) {
             return Err(refusal.into());
         }
         let mut store = self.data.lock();
@@ -511,25 +682,48 @@ impl PackageData {
             .cloned())
     }
 
-    /// Saves `value` of `kind` under `key`, unless this data's generation
-    /// has ended: code that was disabled or replaced saves nothing more.
-    pub fn set(&self, kind: DataKind, key: &str, value: &str) -> Result<(), String> {
-        let mut store = self.data.lock();
-        if let Some(refusal) = self.refusal() {
-            return Err(format!("{refusal}; {}", kind.kept_unchanged()));
+    /// Saves `value` of `kind` under `key`, unless code using this data is
+    /// stopped: code that was disabled or replaced, or whose runtime thread
+    /// Pane gave up on, saves nothing more. The change is checked and made
+    /// while the fence is held, so none lands after the thread was given up
+    /// on; the file is written by the writer thread, which this awaits.
+    pub async fn set(&self, kind: DataKind, key: &str, value: &str) -> Result<(), String> {
+        let outcome = {
+            let fence = self.fence.as_ref().map(Fence::hold);
+            let fenced = fence.as_deref() == Some(&true);
+            let mut store = self.data.lock();
+            if let Some(refusal) = self.refusal(fenced) {
+                return Err(format!("{refusal}; {}", kind.kept_unchanged()));
+            }
+            let file = store.of(kind).file.as_ref().map_err(Clone::clone)?;
+            let mut updated = file.clone();
+            updated
+                .packages
+                .entry(self.owner.clone())
+                .or_default()
+                .insert(key.to_owned(), value.to_owned());
+            store.stage(kind, updated)
+        };
+        let failed = |error: io::Error| format!("Could not save {}: {error}", kind.value());
+        match outcome.await {
+            Ok(written) => written.map_err(failed),
+            Err(_) => Err(failed(io::Error::other(
+                "Pane's thread writing extension data has stopped",
+            ))),
         }
-        let data = store.of(kind);
-        let file = data.file.as_ref().map_err(Clone::clone)?;
-        let mut updated = file.clone();
-        updated
-            .packages
-            .entry(self.owner.clone())
-            .or_default()
-            .insert(key.to_owned(), value.to_owned());
-        data.write(&updated)
-            .map_err(|error| format!("Could not save {}: {error}", kind.value()))?;
-        data.file = Ok(updated);
-        Ok(())
+    }
+}
+
+/// Why stopped code may no longer read or save values.
+fn refusal(end: End) -> &'static str {
+    match end {
+        End::Disabled => "the extension is disabled",
+        End::Replaced => "this code of the extension was replaced by a reload or an update",
+        End::Uninstalled => "the extension was uninstalled",
+        End::Paused => "the extension is paused after an error",
+        End::Abandoned => {
+            "Pane's extension runtime stopped responding and was replaced while this code ran"
+        }
     }
 }
 
@@ -570,6 +764,7 @@ fn read(path: &Path) -> Result<DataJson, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::executor::block_on;
 
     /// Code whose generation ended reads and saves nothing more, even though a newer
     /// generation of the same package may.
@@ -584,7 +779,7 @@ mod tests {
         let new = data.owned_by(&identity);
 
         assert_eq!(
-            old.set(DataKind::Settings, "key", "old"),
+            block_on(old.set(DataKind::Settings, "key", "old")),
             Err(
                 "this code of the extension was replaced by a reload or an update; its \
                  settings are kept unchanged"
@@ -595,10 +790,10 @@ mod tests {
             old.get(DataKind::Settings, "key"),
             Err("this code of the extension was replaced by a reload or an update".into())
         );
-        assert_eq!(new.set(DataKind::Settings, "key", "new"), Ok(()));
+        assert_eq!(block_on(new.set(DataKind::Settings, "key", "new")), Ok(()));
         data.set_enabled(&identity, false);
         assert_eq!(
-            new.set(DataKind::Content, "key", "late"),
+            block_on(new.set(DataKind::Content, "key", "late")),
             Err("the extension is disabled; its content is kept unchanged".into())
         );
         assert_eq!(
@@ -611,6 +806,64 @@ mod tests {
         assert_eq!(
             data.owned_by(&identity).get(DataKind::Settings, "key"),
             Ok(Some("new".into()))
+        );
+    }
+
+    /// Code of a runtime thread Pane gave up on saves nothing once the
+    /// thread's fence is closed, while its generation goes on: a save
+    /// already under way when the fence closes lands before the close
+    /// returns, never after, and every save after it is refused.
+    #[test]
+    fn a_save_never_lands_after_the_fence_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = ExtensionData::open(dir.path());
+        let identity = PackageIdentity::local(dir.path()).unwrap();
+        let fence = Fence::default();
+        let fenced = data.owned_by(&identity).fenced(fence.clone());
+        let saving = std::thread::spawn(move || {
+            let mut outcomes = Vec::new();
+            for n in 0.. {
+                let saved = block_on(fenced.set(DataKind::Settings, "n", &n.to_string()));
+                let refused = saved.is_err();
+                outcomes.push(saved);
+                if refused {
+                    return outcomes;
+                }
+            }
+            unreachable!()
+        });
+        let current = data.owned_by(&identity);
+        while current.get(DataKind::Settings, "n") == Ok(None) {
+            std::thread::yield_now();
+        }
+
+        fence.close();
+        let at_close = current.get(DataKind::Settings, "n").unwrap();
+
+        let outcomes = saving.join().unwrap();
+        let (last, landed) = outcomes.split_last().unwrap();
+        assert!(landed.iter().all(Result::is_ok));
+        assert_eq!(
+            last,
+            &Err(
+                "Pane's extension runtime stopped responding and was replaced while this code \
+                 ran; its settings are kept unchanged"
+                    .into()
+            )
+        );
+        data.flush();
+        assert_eq!(current.get(DataKind::Settings, "n").unwrap(), at_close);
+        let file = read(&dir.path().join(DataKind::Settings.file_name())).unwrap();
+        assert_eq!(
+            file.packages[&identity.key()].get("n"),
+            at_close.as_ref(),
+            "the file holds the last save before the close"
+        );
+        // The package's generation goes on: a fresh thread's code saves.
+        assert_eq!(current.stopped(), None);
+        assert_eq!(
+            block_on(current.set(DataKind::Settings, "n", "fresh")),
+            Ok(())
         );
     }
 }

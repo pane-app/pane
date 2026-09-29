@@ -1,0 +1,16 @@
+{
+  "manifestVersion": 1,
+  "title": "Files",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "files",
+      "title": "Files",
+      "subtitle": "Finds and opens the files of a folder you grant it",
+      "component": "files.wasm",
+      "rootResults": true
+    }
+  ],
+  "folderAccess": true
+}

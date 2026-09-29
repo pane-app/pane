@@ -448,7 +448,7 @@ impl Launcher {
             return_to,
             submitting: false,
         });
-        state.screen_epoch += 1;
+        state.next_screen();
     }
 
     /// Applies the alias submitted for `command` in its form: refused, with

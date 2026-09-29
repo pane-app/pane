@@ -16,6 +16,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -764,12 +765,14 @@ fn a_helper_declaration_pane_cannot_use_is_an_invalid_manifest() {
     }
 }
 
-/// Development builds that stage the component already in the folder.
-struct StagingBuilder(&'static str);
+/// Development builds that stage the component already in the folder, and
+/// count how many ran.
+struct StagingBuilder(&'static str, Arc<AtomicUsize>);
 
 struct StageAsIs {
     folder: PathBuf,
     component: &'static str,
+    builds: Arc<AtomicUsize>,
 }
 
 impl pane_core::develop::Builder for StagingBuilder {
@@ -777,6 +780,7 @@ impl pane_core::develop::Builder for StagingBuilder {
         Ok(Arc::new(StageAsIs {
             folder: folder.to_path_buf(),
             component: self.0,
+            builds: self.1.clone(),
         }))
     }
 }
@@ -786,11 +790,14 @@ impl pane_core::develop::Build for StageAsIs {
         "stage as is".into()
     }
 
+    // Not even the component, which Pane copies into the folder after a
+    // reload: that copy is not a save.
     fn ignores(&self, _: &Path) -> bool {
         false
     }
 
     fn run(&self, job: &pane_core::develop::BuildJob) -> pane_core::develop::BuildOutcome {
+        self.builds.fetch_add(1, Ordering::SeqCst);
         fs::copy(
             self.folder.join(self.component),
             job.staging().join(self.component),
@@ -804,29 +811,97 @@ impl pane_core::develop::Build for StageAsIs {
 fn a_development_build_reloaded_while_the_helper_runs_ends_its_process() {
     let mut installed = Installed::new(&RUST);
     let (changes, _) = pane_core::changes::channel();
-    installed.launcher = installed
-        .launcher
-        .clone()
-        .with_development(Arc::new(StagingBuilder(RUST.component)), changes);
+    let builds = Arc::new(AtomicUsize::new(0));
+    installed.launcher = installed.launcher.clone().with_development(
+        Arc::new(StagingBuilder(RUST.component, builds.clone())),
+        changes,
+    );
     block_on(installed.launcher.start_developing(&installed.identity));
     let pending = installed.start("Echo after waiting");
 
     // A save: the build is staged with this system's helper file, and
     // reloading it stops the running helper before its copy is replaced.
     fs::write(installed.folder.join("notes.txt"), "saved").unwrap();
-    pending.assert_stopped(&installed.runtime);
     let started = Instant::now();
     while installed
         .launcher
         .development(&installed.identity)
         .is_none_or(|development| development.finished == 0)
     {
-        assert!(started.elapsed() < STOPPED_WITHIN, "not reloaded");
+        assert!(started.elapsed() < Duration::from_secs(120), "not reloaded");
         thread::sleep(Duration::from_millis(5));
     }
+    // Once reloaded, as after a Reload: until the copy is replaced, a
+    // stopped helper's heartbeat file is still there.
+    pending.assert_stopped(&installed.runtime);
+    // Pane's copy of the component into the folder did not start another
+    // build, which would have been under way by now.
+    thread::sleep(Duration::from_millis(500));
+    let development = installed.launcher.development(&installed.identity).unwrap();
+    assert_eq!(
+        (
+            development.finished,
+            development.building,
+            development.pending
+        ),
+        (1, false, false)
+    );
+    assert_eq!(builds.load(Ordering::SeqCst), 1);
     assert_eq!(
         installed.launcher.view().status,
         Status::Result("Reloaded Helper sample".into())
     );
     assert_eq!(installed.run("Echo through the helper"), echoed());
+}
+
+/// A helper runs no longer than the runtime thread its guest ran on: when
+/// Pane gives up on a stuck thread (a runtime hang, a fault injected in
+/// debug builds), the helpers it started end, the call answers that the
+/// runtime stopped responding, and the command runs its helper again on
+/// the fresh thread.
+#[cfg(debug_assertions)]
+#[test]
+fn a_helper_is_ended_when_its_runtime_thread_is_given_up_on() {
+    use pane_core::{Fault, Limits, RuntimeFailure};
+
+    let long = Duration::from_secs(120);
+    let installed = Installed::new(&RUST);
+    installed.runtime.set_limits(Limits {
+        warn: Duration::from_secs(1),
+        unresponsive: Duration::from_secs(2),
+        ..Limits::default()
+    });
+    let pending = installed.start("Echo after waiting");
+
+    installed.runtime.inject(Fault::Hang);
+
+    pending.thread.join().unwrap();
+    let started = Instant::now();
+    while !installed.runtime.helper_processes().is_empty() {
+        assert!(started.elapsed() < long, "the helper still runs");
+        thread::sleep(Duration::from_millis(5));
+    }
+    let last = beats(&pending.alive);
+    thread::sleep(Duration::from_millis(200));
+    assert_eq!(beats(&pending.alive), last, "the helper still beats");
+    assert_eq!(
+        installed.runtime.status().failure(),
+        Some(RuntimeFailure::Unresponsive)
+    );
+    let Status::Error(said) = installed.launcher.view().status else {
+        panic!(
+            "expected an error, got {:?}",
+            installed.launcher.view().status
+        );
+    };
+    assert!(said.contains("stopped responding"), "{said}");
+    assert_eq!(installed.waiting().as_deref(), Some("started"));
+
+    installed.runtime.inject(Fault::Release);
+    while installed.runtime.abandoned_threads() > 0 {
+        assert!(started.elapsed() < long, "the stuck thread did not end");
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(installed.run("Echo through the helper"), echoed());
+    assert_eq!(installed.waiting().as_deref(), Some("started"));
 }

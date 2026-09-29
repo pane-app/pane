@@ -8,6 +8,7 @@
 /// <reference path="./operations.d.ts" />
 /// <reference path="./applications.d.ts" />
 /// <reference path="./helpers.d.ts" />
+/// <reference path="./files.d.ts" />
 
 /** One entry in a command's list view. */
 export interface Item {
@@ -224,11 +225,14 @@ export interface Command {
 }
 
 /** What invoking a root result does; Pane performs it. */
-export type RootAction = { tag: "copy"; val: string } | { tag: "open-url"; val: string };
+export type RootAction =
+  | { tag: "copy"; val: string }
+  | { tag: "open-url"; val: string }
+  | { tag: "open-file"; val: string };
 
 /**
  * One result computed from root search's query, listed above the results
- * root search finds by title.
+ * root search finds by title (below them for an `open-file` result).
  */
 export interface RootResult {
   /** Identifies the result among this command's results for the query. */
@@ -239,7 +243,10 @@ export interface RootResult {
   /**
    * `{ tag: "copy", val: text }` copies `text` to the clipboard;
    * `{ tag: "open-url", val: url }` opens `url`, an `http://` or `https://`
-   * address, with the system's handler for web links (Pane refuses others).
+   * address, with the system's handler for web links (Pane refuses others);
+   * `{ tag: "open-file", val: path }` opens the file at `path`, an absolute
+   * path such as one `listFolder` found, with the system's handler for its
+   * type (Pane refuses a relative path, a folder or a missing file).
    */
   action: RootAction;
 }
@@ -264,7 +271,9 @@ export interface RootResults {
    * blank, best first. A query the command has no answer for resolves to
    * `[]`: that is not an error. Throwing is the extension failing; Pane
    * lists a result explaining it. Pane asks again on every change of the
-   * query and discards an answer once the query has changed.
+   * query; once the query changes or root search is left, it cancels a call
+   * still waiting (on `listFolder`, say): the instance is dropped, so its
+   * module state is lost, and the next call starts afresh.
    */
   resultsFor(query: string): Promise<RootResult[]>;
 }
@@ -291,6 +300,53 @@ export interface QueryCommand {
    * as the result; throwing shows the error as the failure.
    */
   runQuery(command: string, query: string): Promise<string>;
+}
+
+/** One thing a command's search found, listed as a row of the command. */
+export interface SearchResult {
+  /**
+   * Passed to the command's `runAction` when the user activates the row, so
+   * it should say which result it is (the instance may have been replaced
+   * meanwhile).
+   */
+  id: string;
+  title: string;
+  subtitle?: string;
+}
+
+/**
+ * A command that searches as the user types into its own search field
+ * (`pane:extension/command-search` in wit/search.wit), such as one
+ * searching an online service. Pane asks it only once the user has opened
+ * it, never while they type in root search. It sets `"search": true` on its
+ * entry in `pane.json`, and `"pane": { "search": true }` in its
+ * `package.json` so that it is built with the interface; its module exports
+ * it as `commandSearch`:
+ *
+ * ```ts
+ * import { get } from "@pane/extension/http";
+ *
+ * export const commandSearch: CommandSearch = {
+ *   async search(command, query) {
+ *     const response = await get(`https://example.com/search?q=${encodeURIComponent(query)}`);
+ *     return response.json().results.map((r: { id: string; name: string }) => ({ id: r.id, title: r.name }));
+ *   },
+ * };
+ * ```
+ */
+export interface CommandSearch {
+  /**
+   * Searches for `query`, the text in the search field of the command with
+   * id `command` (its id in `pane.json`), trimmed and never empty. The
+   * results replace the command's list while the text stays; activating one
+   * calls `runAction` with its id. Throwing shows the error in place of
+   * results; it does not count against the extension, so a service that is
+   * down or unreachable is an expected error. Pane stops a search it no
+   * longer needs (the text changed again, the user left) where it waits,
+   * dropping the instance: code after that `await` never runs, and the
+   * instance's memory is lost.
+   */
+  search(command: string, query: string): Promise<SearchResult[]>;
 }
 
 /**

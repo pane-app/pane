@@ -1,11 +1,13 @@
-//! Root search's query field and its results.
+//! Root search's query field and its results, also used as the search field
+//! of an opened command that searches as the user types.
 //!
 //! The query field is GPUI CE's single-line editable text element (typing,
 //! editing keys, clipboard, undo and input-method composition). It has
-//! keyboard focus whenever root search is on screen; every change searches
-//! root at once. Up and Down move the selection through the results instead
-//! of the caret, Enter opens the selected result and Escape clears the
-//! query.
+//! keyboard focus whenever root search, or a command's search, is on screen;
+//! every change searches at once (the launcher decides what: root search's
+//! providers, or only the opened command). Up and Down move the selection
+//! through the results instead of the caret, Enter opens the selected result
+//! and Escape clears the query.
 //!
 //! The field's editing keys are the ones the form's text fields use, bound
 //! once by [`crate::form::bind_text_editing`] without Tab, Enter and
@@ -24,13 +26,15 @@ use gpui::{
 };
 use gpui_elements::editable_text::actions::DEFAULT_INPUT_CONTEXT;
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
-use pane_core::Screen;
 
 use crate::form::TextEditingKeys;
 use crate::{LauncherWindow, SelectNext, SelectPrevious};
 
 const CONTEXT: &str = "RootSearch";
-const PLACEHOLDER: &str = "Search commands";
+/// The query field's placeholder on root search.
+pub(crate) const ROOT_PLACEHOLDER: &str = "Search commands";
+/// The query field's placeholder in an opened command that searches.
+pub(crate) const COMMAND_PLACEHOLDER: &str = "Search";
 
 /// Registers Up and Down in the query field to move the selection. They are
 /// registered after, and so take precedence over, the text element's own
@@ -55,7 +59,8 @@ pub(crate) struct QueryField {
 }
 
 impl QueryField {
-    /// A query field whose every change searches root.
+    /// A query field whose every change searches root, or the opened
+    /// command that searches.
     pub(crate) fn new(cx: &mut Context<LauncherWindow>) -> QueryField {
         let input = cx.new(|cx| EditableTextState::new(StringStorage::default(), cx));
         input.focus_handle(cx).tab_stop(true);
@@ -92,14 +97,12 @@ impl LauncherWindow {
     }
 
     /// Makes the query field follow the launcher: it shows the launcher's
-    /// query (empty again after navigating back to root search or Escape)
-    /// and takes focus when root search comes on screen; focus moves to the
-    /// list when root search leaves the screen.
+    /// query (empty again after navigating back to root search, opening a
+    /// command that searches, or Escape) and takes focus when a screen with
+    /// a search field comes on screen; focus moves to the list when the
+    /// field leaves the screen.
     pub(crate) fn sync_root_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let query = match self.launcher.view().screen {
-            Screen::Root { query } => Some(query),
-            _ => None,
-        };
+        let query = self.launcher.view().search_field().map(str::to_owned);
         let was_shown = self.query.shown;
         self.query.shown = query.is_some();
         match query {
@@ -112,15 +115,21 @@ impl LauncherWindow {
                     self.query.focus(window, cx);
                 }
             }
-            None if was_shown => window.focus(&self.focus_handle, cx),
+            // A form or custom view opened from a command's search has taken
+            // focus already.
+            None if was_shown && self.form.is_none() && self.custom_view.is_none() => {
+                window.focus(&self.focus_handle, cx)
+            }
             None => {}
         }
     }
 
-    /// Root search: the query field above `list`, the results.
-    pub(crate) fn render_root_search(
+    /// Root search, or an opened command's search: the query field, showing
+    /// `placeholder` while empty, above `list`, the results.
+    pub(crate) fn render_search(
         &self,
         query: String,
+        placeholder: &'static str,
         list: Stateful<Div>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -135,7 +144,7 @@ impl LauncherWindow {
             .role(Role::EditableComboBox)
             .aria_label("Search")
             .aria_value(query)
-            .aria_placeholder(PLACEHOLDER)
+            .aria_placeholder(placeholder)
             .flex_1()
             // Lets the results shrink below their content and scroll.
             .min_h(px(0.))
@@ -153,7 +162,7 @@ impl LauncherWindow {
                     .child(
                         text_input("query")
                             .state(input.downgrade())
-                            .placeholder(PLACEHOLDER)
+                            .placeholder(placeholder)
                             .w_full()
                             .whitespace_nowrap()
                             .overflow_x_scroll(),

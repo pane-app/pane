@@ -39,6 +39,7 @@ fn command(title: &str, subtitle: Option<&str>) -> CommandRegistration {
         subtitle: subtitle.map(Into::into),
         component: guest("sample_rust"),
         takes_query: false,
+        search: false,
     }
 }
 

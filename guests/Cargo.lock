@@ -67,6 +67,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "files"
+version = "0.1.0"
+dependencies = [
+ "pane-guest",
+]
+
+[[package]]
 name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -331,6 +338,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sample-search"
+version = "0.1.0"
+dependencies = [
+ "pane-guest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "sample-settings"
 version = "0.1.0"
 dependencies = [
@@ -351,6 +367,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
 dependencies = [
  "serde_core",
+ "serde_derive",
 ]
 
 [[package]]

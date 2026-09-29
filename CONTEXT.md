@@ -65,8 +65,16 @@ One entry root search lists for a query and can invoke, such as an extension com
 _Avoid_: Item (an item belongs to a command's own list), search hit
 
 **Computed result**:
-A root result an extension command computes from the query itself, such as the calculator's answer to "6*7", rather than one found by matching titles; it is listed above those, and invoking it performs its action, such as copying the answer.
+A root result an extension command computes from the query itself, such as the calculator's answer to "6*7", rather than one found by matching titles; it is listed above those (a file result below them), and invoking it performs its action, such as copying the answer. The search it answers owns the call asking for it: a newer query, or leaving root search, cancels a call still pending.
 _Avoid_: Suggestion, answer card, inline result
+
+**Granted folder**:
+The one folder the user grants a package through Pane's own "Choose folder…" row, which Pane records itself (not as extension data) and lists for that package's commands under the scan policy; they name its files only by the ids Pane gave them, and Pane opens one after checking it again. The Files default extension's root results come from it.
+_Avoid_: Search scope, library, preopen, the extension's folder setting
+
+**Scan policy**:
+Pane's fixed bounds on listing a granted folder, the same on every system: regular files only, breadth first in name order, at most 8 folders deep, 5,000 files and 20,000 entries, skipping hidden entries, links and unreadable subfolders; a listing that reaches a bound or skips a subfolder says it is partial. A listing is kept for one visit of root search.
+_Avoid_: Indexer, crawl, whole-disk search
 
 **Indexed result**:
 A root result an extension command supplies ahead of the query, such as an installed application; Pane asks for them once root search is used, keeps them, and matches and ranks them by title like commands, for a query that is not blank.
@@ -95,6 +103,14 @@ _Avoid_: Default action, catch-all
 **Query-taking command**:
 An extension command that declares it takes a query: text typed in root search, which Pane sends it only when the user invokes it through its alias or as a fallback, and whose answer Pane shows.
 _Avoid_: Argument (Raycast's per-field input), search provider (a provider is asked while the user types)
+
+**Command search**:
+The search field an opened command has when it searches as the user types, such as one searching an online service; Pane sends the text typed there only to that command, stops a search the text has replaced, and never asks the command from root search.
+_Avoid_: Search provider (root search asks those), query-taking command (sent text from root search once, when invoked)
+
+**Network use**:
+What Pane shows of an installed package's web requests, which it does not gate: whether its component imports `wasi:http`, and the addresses it tried to reach since Pane started.
+_Avoid_: Network permission (nothing is granted or refused)
 
 **Search provider**:
 A source of matching results for a query, such as applications, files or an online service.
@@ -145,12 +161,28 @@ A reload whose checked replacement was installed but could not start: a command 
 _Avoid_: Build failure, rollback
 
 **Paused extension**:
-An enabled extension Pane stopped running after a failure attributable to it: it could not start, or it crashed three times within five minutes (an error it answers with is not a failure, nor a call stopped because a generation ended). Its commands stay listed, saying why they do not run; its saved data is kept, and the pause holds across restarts until the user retries, reloads, updates, disables or enables it. Distinct from a disabled extension, which is the user's choice.
+An enabled extension Pane stopped running after a failure attributable to it: it could not start, or it crashed or stopped responding three times within five minutes (an error it answers with is not a failure, nor a call stopped because a generation ended). Its commands stay listed, saying why they do not run; its saved data is kept, and the pause holds across restarts until the user retries, reloads, updates, disables or enables it. Distinct from a disabled extension, which is the user's choice.
 _Avoid_: Crashed extension, quarantined, disabled (by Pane)
+
+**Extension runtime**:
+The part of Pane that runs every installed extension's code (the Wasmtime engine; the runtime is a thread in Pane's process today), shared by all extensions; the window, root search's own rows and Manage extensions do not depend on it.
+_Avoid_: Engine (one part of it)
+
+**Runtime crash**:
+A failure of the extension runtime itself, not attributable to any one extension, such as a panic of its thread: every call it held is stopped and none is run again by itself, even if its effect was done and only its answer lost; Pane names and pauses no extension, keeps saved data, ends the native helpers it ran and starts the runtime again, unless it crashed within five minutes before, when it stays stopped until the user restarts it in Manage extensions. Distinct from an extension's crash (a guest trap), which counts towards pausing that extension.
+_Avoid_: Extension crash, paused runtime
+
+**Unresponsive call**:
+A guest call whose extension computed for five seconds in all without finishing, holding every other extension's calls behind it; Pane stops it where the guest yields (every guest yields to the runtime at each epoch tick), drops its instance and says so, and, since the extension's own code was running, counts it towards pausing that extension as a crash. Only the guest's own computing counts: time it spends waiting (on a clock, a save, a helper, another extension), time inside Pane's host calls, time the system gave other threads and starting its instance are not, so a healthy extension is never stopped for them.
+_Avoid_: Timeout (waiting is not limited), hung extension, frozen
+
+**Runtime hang**:
+The extension runtime's shared thread making no progress: inside one piece of its work, outside every guest (which yields each tick) and every host call Pane marks, with its heartbeat still. Pane says it is not responding yet after ten seconds and gives up on it after thirty; which code held it is not known, so no extension is named. Pane gives up on the thread as on a runtime crash (every call it held is answered and none run again, its native helpers end, it is started again unless it failed within five minutes before, nothing is named or paused); the stuck thread cannot be ended, so it is abandoned, fenced so that nothing it still runs changes anything, and runs nothing more if it ever returns. Only the shared thread hangs; one package's slow call is an unresponsive call.
+_Avoid_: Unresponsive call (an extension's own), freeze of Pane (the window keeps working)
 
 **Generation**:
 One run of an installed package's code, from when it is installed, enabled or Pane starts until it is disabled, paused or its code is replaced by a reload or an update. Every call into the package belongs to the generation current when it was asked for, and is stopped when that generation ends; its late result is discarded.
-_Avoid_: Version (a package's version is its manifest's), session, instance (one generation can start several), screen or search epoch (the launcher's counters of screens and searches, which only decide whether an answer is shown)
+_Avoid_: Version (a package's version is its manifest's), session, instance (one generation can start several), screen or search epoch (the launcher's counters of screens and searches, which decide whether an answer is shown; a search also cancels its own pending calls for computed results)
 
 **Supported platforms**:
 The operating systems a package, a command or an action declares it works on: a plain list, not a rule language. A declaration is not evidence of native support.
@@ -173,7 +205,7 @@ A dependency a package needs: installing the package shows it and installs it fi
 _Avoid_: Hard dependency, prerequisite
 
 **Required dependent**:
-An installed package that requires another on this system, directly or through other installed packages that do (its required dependent closure; optional dependencies never count). Disabling the package it requires first shows the enabled ones, which are disabled together or not at all (Disable all or Cancel); enabling that package again does not enable them.
+An installed package that requires another on this system, directly or through other installed packages that do (its required dependent closure; optional dependencies never count). Disabling the package it requires first shows the enabled ones, which are disabled together or not at all (Disable all or Cancel); enabling that package again does not enable them. Uninstalling it first shows all of them, disabled ones too, with their saved data; they are uninstalled together, keeping or deleting their saved data, or not at all (Uninstall all or Cancel), and installing that package again does not install them.
 _Avoid_: Reverse dependency, child extension
 
 **Optional dependency**:
@@ -185,7 +217,7 @@ The operation calls waiting on one another at one moment, from the command that 
 _Avoid_: Call stack (of one guest), workflow
 
 **Native helper**:
-A prebuilt program an installed package ships for each target (operating system and processor) it supports, which its commands run through Pane for what a WASI guest cannot do; Pane runs this system's file, never compiles one, and ends its process when the command cancels the run, the call that started it returns, the package's generation ends or Pane quits. Processes the helper starts itself are its own.
+A prebuilt program an installed package ships for each target (operating system and processor) it supports, which its commands run through Pane for what a WASI guest cannot do; Pane runs this system's file, never compiles one, and ends its process when the command cancels the run, the call that started it returns, the package's generation ends, it has run for thirty seconds (an error the command handles) or Pane quits. Processes the helper starts itself are its own.
 _Avoid_: Plugin binary, native extension (the extension's entry point stays a WASI component), sidecar
 
 **Helper target**:

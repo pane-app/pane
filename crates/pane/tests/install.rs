@@ -653,3 +653,109 @@ fn a_package_that_keeps_crashing_is_paused_and_retried(cx: &mut TestAppContext) 
     cx.simulate_keystrokes("enter");
     assert_eq!(settle(&window, cx).screen, Screen::Command);
 }
+
+/// Writes an operations fixture package titled `title` in `folder`,
+/// publishing `echo` 1 and declaring `dependencies` (JSON array contents).
+fn operations_package(folder: &Path, title: &str, dependencies: &str) -> PathBuf {
+    let guest = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/guests/operations_fixture.wasm");
+    assert!(
+        guest.exists(),
+        "{} is missing; run `cargo xtask guests`",
+        guest.display()
+    );
+    fs::create_dir_all(folder).unwrap();
+    fs::copy(guest, folder.join("fixture.wasm")).unwrap();
+    let manifest = format!(
+        r#"{{
+            "manifestVersion": 1,
+            "title": "{title}",
+            "apiVersion": "0.1",
+            "operations": [{{ "id": "echo", "version": 1, "component": "fixture.wasm" }}],
+            "dependencies": [{dependencies}]
+        }}"#
+    );
+    fs::write(folder.join("pane.json"), manifest).unwrap();
+    folder.to_path_buf()
+}
+
+#[gpui::test]
+fn uninstalling_a_required_dependency_shows_its_dependent_and_the_choices_in_the_window(
+    cx: &mut TestAppContext,
+) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    // Long source paths, as in a real checkout, make the details wrap.
+    let nested = sources
+        .path()
+        .join("code/pane/.claude/worktrees/agent-0123456789abcdef0/target/guests/packages");
+    operations_package(&nested.join("greeter"), "Greeter", "");
+    let caller = operations_package(
+        &nested.join("caller"),
+        "Caller",
+        r#"{ "id": "greeter", "source": "local:../greeter",
+             "operations": [{ "id": "echo", "version": 1 }] }"#,
+    );
+    cx.foreground_executor()
+        .block_on(launcher.install_package(&caller));
+    let (window, cx) =
+        cx.add_window_view(|window, cx| LauncherWindow::new(launcher.clone(), window, cx));
+    cx.simulate_resize(gpui::size(gpui::px(640.), gpui::px(420.)));
+    launcher.back();
+    settle(&window, cx);
+    press_enter_on(&window, cx, MANAGE_ROW);
+
+    let view = press_enter_on(&window, cx, "Uninstall Greeter");
+    assert_eq!(
+        view.title,
+        "Uninstall Greeter and the extensions that require it?"
+    );
+    assert_eq!(
+        titles(&view),
+        [
+            "Uninstall all 2 and keep saved data",
+            "Uninstall all 2 and delete saved data",
+            "Cancel"
+        ]
+    );
+    for _ in 0..2 {
+        window.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    }
+    assert!(
+        cx.debug_bounds("detail-Saved data: Greeter none · Caller none")
+            .is_some(),
+        "the saved data is rendered"
+    );
+    // However long the details, the selected first choice is on screen.
+    assert!(row_is_visible(
+        cx,
+        "row-Uninstall all 2 and keep saved data"
+    ));
+    let list = cx.debug_bounds("rows").expect("the list is rendered");
+    assert!(list.bottom() <= gpui::px(420.), "{list:?}");
+
+    // Escape keeps both installed; the first choice uninstalls both.
+    cx.simulate_keystrokes("escape");
+    assert!(matches!(
+        settle(&window, cx).screen,
+        Screen::Extensions { .. }
+    ));
+    assert_eq!(launcher.packages().len(), 2);
+    cx.simulate_keystrokes("enter");
+    settle(&window, cx);
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert_eq!(
+        view.status,
+        Status::Result(
+            "Uninstalled Greeter and Caller, which requires it; their settings and content are \
+             kept"
+                .into()
+        )
+    );
+    assert!(launcher.packages().is_empty());
+}

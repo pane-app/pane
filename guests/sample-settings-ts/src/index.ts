@@ -9,6 +9,11 @@
 // seconds, then notes that it finished: disabling or reloading the package
 // meanwhile stops the call, so it never finishes. "Crash" crashes on purpose:
 // three crashes within five minutes pause the package until retried.
+// "Stop responding" notes in its settings that it started, then computes
+// without waiting for anything for up to a minute before noting that it
+// finished: Pane stops a call that computes for 5 seconds without waiting,
+// so it never finishes, and it counts towards pausing the package as a
+// crash does.
 import type { Command, CustomView, Item, View } from "@pane/extension";
 import { get, set } from "pane:extension/settings@0.1.0";
 import * as cache from "pane:extension/cache@0.1.0";
@@ -28,6 +33,10 @@ const TOKEN = "token";
 const SLOW_SAVE = "slow-save";
 /** How long "Save after waiting" waits, in nanoseconds. */
 const SLOW_WAIT = 10_000_000_000;
+/** The settings key where "Stop responding" notes how far it got. */
+const BUSY = "busy";
+/** How long "Stop responding" computes at most, in milliseconds: bounded, so that even without Pane stopping it, it ends. */
+const BUSY_FOR = 60_000;
 
 const item = (id: string, title: string, subtitle: string): Item => ({ id, title, subtitle });
 
@@ -57,6 +66,7 @@ async function getView(): Promise<View> {
       item("kept", "Show what Pane keeps", "Settings, content, cache and credential"),
       item("slow", "Save after waiting", "Waits 10 seconds, then saves; disabling or reloading stops it"),
       item("crash", "Crash", "Crashes on purpose; three crashes within five minutes pause the extension"),
+        item("busy", "Stop responding", "Computes without waiting for up to a minute; Pane stops it after 5 seconds"),
     ],
   };
 }
@@ -92,7 +102,18 @@ async function runAction(itemId: string): Promise<string> {
       await waitFor(SLOW_WAIT);
       set(SLOW_SAVE, "finished");
       return "Saved after waiting 10 seconds";
-    case "crash":
+    case "busy": {
+        set(BUSY, "started");
+        // Computes without awaiting anything: the guest never yields to
+        // Pane by itself.
+        const end = Date.now() + BUSY_FOR;
+        while (Date.now() < end) {
+          // busy
+        }
+        set(BUSY, "finished");
+        return "Finished computing after a minute";
+      }
+      case "crash":
       // Resolving with something other than a string is a crash, unlike
       // throwing, which is an error the extension answers with.
       return undefined as unknown as string;

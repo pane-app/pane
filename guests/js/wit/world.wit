@@ -6,13 +6,21 @@
 // wit/applications.wit, copied into deps/ by the build), its native helpers
 // (wit/helpers.wit), and declares the
 // WASI 0.3 imports JS source may use: a JS module can import only what this
-// world declares. The host bindings are unchanged.
+// world declares. WASI's own WIT (wit/deps: clocks, and `wasi:http` for web
+// requests, with the packages it names) is copied into deps/ too. The host
+// bindings are unchanged. `wasi:http`'s client is imported only by a command
+// whose bundle uses it (itself or through `@pane/extension/http`): the build
+// adds it to `js-command`, so a command that makes no web requests does not
+// import it, and Pane does not list it as using the network.
 //
 // A command whose package.json sets `"pane": { ... }` options also exports
 // the interfaces they name: `rootResults` (wit/root-results.wit),
 // `indexedResults` (wit/applications.wit), `operations`
-// (wit/operations.wit) and `takesQuery` (wit/query.wit). The build writes a world `js-command` including
-// this one with those exports (tools/componentize-js/pane_js.py).
+// (wit/operations.wit), `takesQuery` (wit/query.wit) and `search`
+// (wit/search.wit); `files` makes it import the granted folder's listing
+// (wit/files.wit), which no other command imports. The build writes a world
+// `js-command` including this one with those exports and imports
+// (tools/componentize-js/pane_js.py).
 package pane:js-guest@0.1.0;
 
 world js-extension {

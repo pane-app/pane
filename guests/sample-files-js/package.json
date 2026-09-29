@@ -1,0 +1,16 @@
+{
+  "name": "pane-sample-files-js",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pane's files sample in JavaScript: finds and opens the files of a granted folder",
+  "license": "Apache-2.0 OR MIT",
+  "type": "module",
+  "main": "src/index.js",
+  "pane": {
+    "rootResults": true,
+    "files": true
+  },
+  "devDependencies": {
+    "@pane/extension": "file:../js"
+  }
+}

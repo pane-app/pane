@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use gpui::{
     App, ClipboardItem, Context, Div, FocusHandle, KeyBinding, KeyDownEvent, PathPromptOptions,
     Pixels, Role, ScrollHandle, SharedString, Size, Stateful, Window, actions, div, prelude::*,
-    rgb,
+    relative, rgb,
 };
 use pane_core::changes::Changes;
 use pane_core::hotkeys::Shortcut;
@@ -94,6 +94,7 @@ pub fn sample_commands() -> Vec<CommandRegistration> {
             subtitle: Some(subtitle.into()),
             component: dir.join(file),
             takes_query: false,
+            search: false,
         })
         .collect()
 }
@@ -268,6 +269,54 @@ impl LauncherWindow {
         self.show_until_done(pending, window, cx);
     }
 
+    /// Asks for the folder to grant the package with `identity` with the
+    /// platform's folder picker, then has Pane check and record it.
+    /// Cancelling changes nothing. A debug build run by the native smokes
+    /// takes the folder `PANE_TEST_CHOOSE_FOLDER` names instead of showing
+    /// the picker (nothing else sets it; a release build has no such hook).
+    fn choose_granted_folder(
+        &mut self,
+        identity: pane_core::PackageIdentity,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        #[cfg(debug_assertions)]
+        if let Some(folder) = std::env::var_os("PANE_TEST_CHOOSE_FOLDER") {
+            let pending = self.launcher.grant_folder(&identity, Path::new(&folder));
+            self.show_until_done(pending, window, cx);
+            return;
+        }
+        let chosen = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Choose".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let folder = match chosen.await {
+                Ok(Ok(Some(paths))) => paths.into_iter().next(),
+                Ok(Ok(None)) | Err(_) => None,
+                Ok(Err(error)) => {
+                    this.update(cx, |this, cx| {
+                        this.launcher
+                            .show_error(format!("Could not open a folder picker: {error:#}"));
+                        cx.notify();
+                    })
+                    .ok();
+                    None
+                }
+            };
+            if let Some(folder) = folder {
+                this.update_in(cx, |this, window, cx| {
+                    let pending = this.launcher.grant_folder(&identity, &folder);
+                    this.show_until_done(pending, window, cx);
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
     /// Asks for a package folder with the platform's folder picker, then
     /// previews it. Cancelling leaves root search as it was.
     fn choose_package_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -361,6 +410,10 @@ impl LauncherWindow {
     fn activate_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.launcher.selected_asks_for_folder() {
             self.choose_package_folder(window, cx);
+            return;
+        }
+        if let Some(identity) = self.launcher.folder_to_choose() {
+            self.choose_granted_folder(identity, window, cx);
             return;
         }
         if let Some(text) = self.launcher.selected_copy() {
@@ -518,6 +571,10 @@ impl Render for LauncherWindow {
                 "This command has no items.",
                 "↑↓ select · Enter run · Esc back",
             ),
+            Screen::CommandSearch { .. } => (
+                "This command has no items.",
+                "Type to search · ↑↓ select · Enter run · Esc clear, then back",
+            ),
             Screen::Package { .. } => ("Nothing to install.", "Enter confirm · Esc back"),
             Screen::Form(_) => ("", "Tab next field · Enter submit · Esc back"),
             Screen::Extensions { .. } => (
@@ -528,8 +585,11 @@ impl Render for LauncherWindow {
             Screen::Confirm { .. } => ("", "↑↓ select · Enter choose · Esc cancel"),
             Screen::Hotkey { .. } => ("", "Press the new hotkey · Enter choose · Esc back"),
             Screen::PauseDetails { .. } => ("", "Enter retry · Esc back"),
+            Screen::NetworkDetails { .. } => ("", "Esc back"),
+            Screen::RuntimeDetails { .. } => ("", "Enter restart · Esc back"),
             Screen::BuildDetails { .. } => ("", "Enter build again · Esc back"),
         };
+        let confirm = matches!(view.screen, Screen::Confirm { .. });
         let details: Vec<_> = view
             .details()
             .iter()
@@ -543,6 +603,12 @@ impl Render for LauncherWindow {
                     .child(line.clone())
             })
             .collect();
+        // A command's search that failed lists nothing; its error says why,
+        // not "No results".
+        let search_failed = matches!(
+            (&view.screen, &view.status),
+            (Screen::CommandSearch { .. }, Status::Error(_))
+        );
         let (status_selector, status_text, status_color): (&str, SharedString, u32) =
             match view.status {
                 Status::Idle => ("status-idle", hint.into(), 0x8a96a3),
@@ -561,10 +627,15 @@ impl Render for LauncherWindow {
             })
             .collect();
         let empty = match &view.screen {
-            Screen::Root { query } if !query.trim().is_empty() => div()
-                .id("no-results")
-                .debug_selector(|| "no-results".into())
-                .child(format!("No results for “{}”", query.trim())),
+            Screen::CommandSearch { .. } if search_failed => div().id("empty"),
+            Screen::Root { query } | Screen::CommandSearch { query }
+                if !query.trim().is_empty() =>
+            {
+                div()
+                    .id("no-results")
+                    .debug_selector(|| "no-results".into())
+                    .child(format!("No results for “{}”", query.trim()))
+            }
             _ => div().id("empty").child(empty),
         };
         let list = div()
@@ -573,6 +644,7 @@ impl Render for LauncherWindow {
             .role(Role::ListBox)
             .aria_label(match view.screen {
                 Screen::Root { .. } => "Results".into(),
+                Screen::CommandSearch { .. } => format!("{} results", view.title),
                 _ => view.title.clone(),
             })
             .flex_1()
@@ -591,7 +663,13 @@ impl Render for LauncherWindow {
         let body = match view.screen {
             Screen::Form(form) => self.render_form(view.title.clone(), form, cx),
             Screen::CustomView(custom_view) => self.render_custom_view(custom_view, cx),
-            Screen::Root { query } => self.render_root_search(query, list, cx),
+            Screen::Root { query } => {
+                self.render_search(query, root_search::ROOT_PLACEHOLDER, list, cx)
+            }
+            // The opened command's own search field, the same control.
+            Screen::CommandSearch { query } => {
+                self.render_search(query, root_search::COMMAND_PLACEHOLDER, list, cx)
+            }
             // The list holds keyboard focus; the selected row is its active
             // descendant, and key actions bubble to the root.
             _ => list.track_focus(&self.focus_handle).into_any_element(),
@@ -614,7 +692,24 @@ impl Render for LauncherWindow {
             .bg(rgb(0x20252d))
             .text_color(rgb(0xf1f3f5))
             .child(div().text_xl().child(view.title.clone()))
-            .children(details)
+            // A confirmation's long details scroll within 40% of the
+            // window, leaving the rest to its choices, which stay visible.
+            .when(!details.is_empty(), |root| {
+                root.child(
+                    div()
+                        .id("details")
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .when(confirm, |details| {
+                            details
+                                .flex_shrink(1.)
+                                .max_h(relative(0.4))
+                                .overflow_y_scroll()
+                        })
+                        .children(details),
+                )
+            })
             .child(body)
             .child(
                 div()

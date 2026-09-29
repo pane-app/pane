@@ -591,6 +591,7 @@ fn launcher_with_build_command(dirs: &Dirs) -> Launcher {
         subtitle: None,
         component: guest("sample_js"),
         takes_query: false,
+        search: false,
     };
     Launcher::with_packages(
         Runtime::start(),

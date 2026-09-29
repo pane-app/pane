@@ -132,10 +132,12 @@ that rejects with an object whose `payload` is `{ kind, message }`
   call is stopped at once and the caller gets `disabled` or `unavailable`
   instead of its answer; a caller stopped meanwhile stops the operation it
   waits for, whose instance is dropped too (the target stays enabled and
-  the next call starts it afresh). Pane has no timeouts or user
-  cancellation yet (#18), so a target that never returns, or computes
-  without yielding, holds the caller and, as with any hung guest call, the
-  runtime.
+  the next call starts it afresh). A target computing for 5 seconds
+  without finishing is stopped as unresponsive (#18,
+  [pausing](pausing.md#when-an-extension-stops-responding)) and its caller
+  gets `crashed` ("b stopped responding: ..."); a target that waits forever
+  (on a clock, say) has no time limit and holds the caller and, as with any
+  waiting guest call, the runtime. There is no user cancellation yet.
 - **Concurrent calls from one caller** (Rust `join!`, JavaScript
   `Promise.all`) are served one after another in the caller's own frame: each
   frame serves only its own guest's calls, so a second call is never taken
@@ -176,6 +178,8 @@ that rejects with an object whose `payload` is `{ kind, message }`
 - Declared [dependencies](dependencies.md) (#42) are shown, checked and
   installed with the caller, but disabling a target does not consider its
   callers yet (#43).
-- No timeouts, and a running operation stops only when a generation in its
-  chain ends; one computing without yielding is not preempted (#18,
-  [generations](generations.md#what-stopping-cannot-do-yet)).
+- No time limit on waiting: a running operation stops only when a
+  generation in its chain ends, or when it computes for 5 seconds without
+  finishing (#18, [generations](generations.md#what-stopping-cannot-do-yet)).
+  An operation that stops responding answers `crashed`, as the WIT has no
+  kind of its own for it (provisional).

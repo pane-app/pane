@@ -233,6 +233,11 @@ pub struct Manifest {
     /// The other packages whose operations this one calls, required or
     /// optional.
     pub dependencies: Vec<ManifestDependency>,
+    /// The package asks for access to one folder the user chooses
+    /// (`"folderAccess": true`): Pane offers its own "Choose folder" row
+    /// in the package's commands, and lists only that folder for it
+    /// (`pane:extension/files`).
+    pub folder_access: bool,
 }
 
 /// A native helper a package ships: a prebuilt program per target (operating
@@ -351,6 +356,11 @@ pub struct ManifestCommand {
     /// its alias or as a fallback. Its component then also exports
     /// `pane:extension/query-command`.
     pub takes_query: bool,
+    /// Whether the command searches as the user types into its own search
+    /// field once it is open (`"search": true`), such as a command searching
+    /// an online service; root search never asks it. Its component then
+    /// also exports `pane:extension/command-search`.
+    pub search: bool,
 }
 
 #[derive(Deserialize)]
@@ -370,6 +380,8 @@ struct ManifestJson {
     helpers: Vec<HelperJson>,
     #[serde(default)]
     dependencies: Vec<DependencyJson>,
+    #[serde(default)]
+    folder_access: bool,
 }
 
 #[derive(Deserialize)]
@@ -424,6 +436,8 @@ struct CommandJson {
     indexed_results: bool,
     #[serde(default)]
     takes_query: bool,
+    #[serde(default)]
+    search: bool,
 }
 
 impl Manifest {
@@ -526,6 +540,7 @@ impl Manifest {
             root_results: commands().any(|command| command.root_results),
             indexed_results: commands().any(|command| command.indexed_results),
             query_command: commands().any(|command| command.takes_query),
+            search: commands().any(|command| command.search),
             operations: self
                 .operations
                 .iter()
@@ -578,6 +593,15 @@ impl Manifest {
             {
                 return Err(invalid(format!("command id `{}` is repeated", command.id)));
             }
+            // Root search never asks a command that searches inside itself:
+            // results it computed for root search would never be shown.
+            if command.search && command.root_results {
+                return Err(invalid(format!(
+                    "command `{}` sets both `search` and `rootResults`: a command that \
+                     searches inside itself is never asked by root search",
+                    command.id
+                )));
+            }
             let component = inside_package(&command.component, "component")?;
             let platforms = parse_platforms(
                 command.platforms,
@@ -592,6 +616,7 @@ impl Manifest {
                 root_results: command.root_results,
                 indexed_results: command.indexed_results,
                 takes_query: command.takes_query,
+                search: command.search,
             });
         }
         let mut operations: Vec<ManifestOperation> = Vec::new();
@@ -668,6 +693,7 @@ impl Manifest {
             operations,
             helpers,
             dependencies,
+            folder_access: json.folder_access,
         })
     }
 
@@ -931,6 +957,10 @@ pub(crate) struct SourcePackage {
     /// The `pane.json` text `manifest` was validated from; the managed copy
     /// gets exactly this, even if the source changes meanwhile.
     manifest_text: String,
+    /// Whether a component of it imports `wasi:http` (it can make web
+    /// requests), as checking its components found; `false` until they are
+    /// checked.
+    pub network: bool,
 }
 
 impl SourcePackage {
@@ -946,6 +976,7 @@ impl SourcePackage {
             folder: folder.to_path_buf(),
             manifest,
             manifest_text,
+            network: false,
         })
     }
 
@@ -961,6 +992,7 @@ impl SourcePackage {
             folder,
             manifest,
             manifest_text,
+            network: false,
         })
     }
 
@@ -981,6 +1013,9 @@ pub struct InstalledPackage {
     /// Whether the user has left the package enabled. A disabled package
     /// contributes no commands and runs nothing, but keeps its settings.
     pub enabled: bool,
+    /// Whether a component of it imports `wasi:http`, so its code can make
+    /// web requests, as found when it was installed, updated or reloaded.
+    pub uses_network: bool,
     /// The identity each `local:` dependency the manifest declares was
     /// resolved to when the package was installed, by dependency id.
     dependencies: Vec<(String, PackageIdentity)>,
@@ -994,6 +1029,7 @@ impl InstalledPackage {
         identity: PackageIdentity,
         location: PathBuf,
         enabled: bool,
+        uses_network: bool,
         recorded: &[ResolvedJson],
     ) -> InstalledPackage {
         let manifest = Manifest::read_installed(&location);
@@ -1016,6 +1052,7 @@ impl InstalledPackage {
             identity,
             location,
             enabled,
+            uses_network,
             dependencies,
         }
     }
@@ -1074,6 +1111,7 @@ impl InstalledPackage {
                         .or_else(|| Some(manifest.title.clone())),
                     component: self.location.join(&command.component),
                     takes_query: command.takes_query,
+                    search: command.search,
                 };
                 let unavailable = package.clone().or_else(|| {
                     platform::unavailable(command.platforms.as_deref(), "this command")
@@ -1142,6 +1180,13 @@ struct RetainedJson {
     title: String,
 }
 
+/// How to record that Pane keeps a removed package's data: under the title
+/// it had, at a position among the retained records, or last.
+struct Retain {
+    title: String,
+    at: Option<usize>,
+}
+
 /// Whether uninstalling a package keeps its saved data: its extension
 /// settings and content. Its cache and local credentials are removed either
 /// way.
@@ -1202,6 +1247,11 @@ struct RecordJson {
     /// to when it was installed or updated.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     dependencies: Vec<ResolvedJson>,
+    /// Set when a component of its current code imports `wasi:http`;
+    /// absent means none does (or it was installed before Pane recorded
+    /// it, until it is reloaded or updated).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    network: bool,
 }
 
 /// A dependency id and the local source folder it resolved to.
@@ -1265,6 +1315,11 @@ pub(crate) enum PauseCause {
     FailedToStart,
     /// It crashed (trapped) too often.
     Crashes,
+    /// Its calls stopped responding (computed for too long without
+    /// finishing: unresponsive calls) too often (#18).
+    UnresponsiveCalls,
+    /// It crashed or its calls stopped responding too often, some of each.
+    CrashesAndUnresponsiveCalls,
 }
 
 /// Pane's managed location for installed packages:
@@ -1355,6 +1410,7 @@ impl Store {
                     PackageIdentity(Source::Local(record.local.clone())),
                     self.dir.join(PACKAGES_DIR).join(&record.dir),
                     !record.disabled,
+                    record.network,
                     &record.dependencies,
                 )
             })
@@ -1496,20 +1552,6 @@ impl Store {
             .collect()
     }
 
-    /// Uninstalls the package with `identity`: its record goes, then its
-    /// managed copy. With `retain`, the identity is recorded as keeping
-    /// extension data under that title, in the same write. A failure to
-    /// record it leaves everything as it was. A managed folder that cannot
-    /// be removed (one in use on Windows) is listed so that the next start
-    /// removes it, as an update's replaced copy is.
-    pub fn uninstall(
-        &mut self,
-        identity: &PackageIdentity,
-        retain: Option<String>,
-    ) -> Result<Leftover, PackageError> {
-        self.remove(identity, retain.map(|title| (title, None)))
-    }
-
     /// Removes again the package with `identity` that an install added,
     /// putting back, at its place among them, the record that Pane kept its
     /// data under `title` if it had one (`(title, index)`).
@@ -1518,49 +1560,111 @@ impl Store {
         identity: &PackageIdentity,
         retained: Option<(String, usize)>,
     ) -> Result<Leftover, PackageError> {
-        self.remove(identity, retained.map(|(title, at)| (title, Some(at))))
+        let retain = retained.map(|(title, at)| Retain {
+            title,
+            at: Some(at),
+        });
+        self.remove(identity, retain)
     }
 
-    /// Uninstalls as [`Store::uninstall`] does, recording retained data
-    /// under a title, at a position among the retained records if given,
-    /// else last.
+    /// Uninstalls the packages of `removals`, in one write: each record
+    /// goes, and with a title, its identity is recorded as keeping extension
+    /// data under that title. `installed.json` is read again first and only
+    /// those records change in it, so what another Pane on the same data
+    /// folder recorded since is kept. If one is not installed or the record
+    /// cannot be written, nothing changes. Then each managed copy is removed; a
+    /// managed folder that cannot be (one in use on Windows) is listed so
+    /// that the next start removes it, as an update's replaced copy is.
+    /// Returns what is left of each managed copy, in the order given.
+    pub fn uninstall_all(
+        &mut self,
+        removals: &[(PackageIdentity, Option<String>)],
+    ) -> Result<Vec<Leftover>, PackageError> {
+        let removals: Vec<(PackageIdentity, Option<Retain>)> = removals
+            .iter()
+            .map(|(identity, title)| {
+                let retain = title.clone().map(|title| Retain { title, at: None });
+                (identity.clone(), retain)
+            })
+            .collect();
+        self.remove_all(&removals)
+    }
+
+    /// Uninstalls one package as [`Store::uninstall_all`] does, recording
+    /// retained data under a title, at a position among the retained records
+    /// if given, else last.
     fn remove(
         &mut self,
         identity: &PackageIdentity,
-        retain: Option<(String, Option<usize>)>,
+        retain: Option<Retain>,
     ) -> Result<Leftover, PackageError> {
+        let mut left = self.remove_all(&[(identity.clone(), retain)])?;
+        Ok(left.pop().unwrap_or(Leftover::None))
+    }
+
+    /// Uninstalls as [`Store::uninstall_all`] does, each retained record
+    /// under a title at a position among them if given, else last.
+    fn remove_all(
+        &mut self,
+        removals: &[(PackageIdentity, Option<Retain>)],
+    ) -> Result<Vec<Leftover>, PackageError> {
         let registry = self
             .registry
             .as_mut()
             .map_err(|reason| PackageError::Storage(reason.clone()))?;
-        let PackageIdentity(Source::Local(local)) = identity;
+        // The same changes to the records on disk, which another Pane may
+        // have changed since, and to this Pane's.
+        let mut on_disk = read_registry(&self.dir).map_err(PackageError::Storage)?;
         let mut updated = registry.clone();
-        let Some(index) = updated.packages.iter().position(|r| &r.local == local) else {
-            return Err(PackageError::NotInstalled(identity.clone()));
-        };
-        let record = updated.packages.remove(index);
-        if let Some((title, at)) = retain {
-            put_retained(&mut updated, local, title, at);
+        let mut dirs = Vec::new();
+        for (identity, retain) in removals {
+            let PackageIdentity(Source::Local(local)) = identity;
+            let missing = || PackageError::NotInstalled(identity.clone());
+            take_record(&mut updated, local).ok_or_else(missing)?;
+            // Its managed copy as recorded now: another Pane may have
+            // updated it since.
+            let record = take_record(&mut on_disk, local).ok_or_else(missing)?;
+            dirs.push(record.dir);
+            if let Some(Retain { title, at }) = retain {
+                put_retained(&mut updated, local, title.clone(), *at);
+                put_retained(&mut on_disk, local, title.clone(), *at);
+            }
         }
-        write_registry(&self.dir, &updated)
+        write_registry(&self.dir, &on_disk)
             .map_err(|error| PackageError::Storage(error.to_string()))?;
         *registry = updated;
-        let location = self.dir.join(PACKAGES_DIR).join(&record.dir);
-        let Err(error) = fs::remove_dir_all(&location) else {
-            return Ok(Leftover::None);
-        };
-        if error.kind() == io::ErrorKind::NotFound {
-            return Ok(Leftover::None);
-        }
-        let mut listed = registry.clone();
-        listed.leftovers.push(record.dir);
-        Ok(match write_registry(&self.dir, &listed) {
-            Ok(()) => {
-                *registry = listed;
-                Leftover::Listed(location, error.to_string())
+        let failed: Vec<Option<(String, PathBuf, String)>> = dirs
+            .into_iter()
+            .map(|dir| {
+                let location = self.dir.join(PACKAGES_DIR).join(&dir);
+                match fs::remove_dir_all(&location) {
+                    Ok(()) => None,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                    Err(error) => Some((dir, location, error.to_string())),
+                }
+            })
+            .collect();
+        let left: Vec<String> = failed
+            .iter()
+            .flatten()
+            .map(|(dir, ..)| dir.clone())
+            .collect();
+        let recorded = left.is_empty() || {
+            on_disk.leftovers.extend(left.iter().cloned());
+            let written = write_registry(&self.dir, &on_disk).is_ok();
+            if written {
+                registry.leftovers.extend(left);
             }
-            Err(_) => Leftover::Unlisted(location, error.to_string()),
-        })
+            written
+        };
+        Ok(failed
+            .into_iter()
+            .map(|failed| match failed {
+                None => Leftover::None,
+                Some((_, location, error)) if recorded => Leftover::Listed(location, error),
+                Some((_, location, error)) => Leftover::Unlisted(location, error),
+            })
+            .collect())
     }
 
     /// Drops the record that Pane keeps extension data for `identity`, once
@@ -1647,6 +1751,7 @@ impl Store {
                 // New code has not failed.
                 record.paused = None;
                 record.dependencies = dependencies.clone();
+                record.network = package.network;
                 !record.disabled
             }
             None => {
@@ -1659,6 +1764,7 @@ impl Store {
                     disabled: false,
                     paused: None,
                     dependencies: dependencies.clone(),
+                    network: package.network,
                 });
                 true
             }
@@ -1687,6 +1793,7 @@ impl Store {
             package.identity.clone(),
             location,
             enabled,
+            package.network,
             &dependencies,
         ))
     }
@@ -1695,6 +1802,12 @@ impl Store {
 /// Records in `registry` that data is kept for the local source `local`,
 /// last uninstalled as `title`: at position `at` among the records if
 /// given, else last.
+/// Removes and returns the record of the installed package from `local`.
+fn take_record(registry: &mut RegistryJson, local: &str) -> Option<RecordJson> {
+    let index = registry.packages.iter().position(|r| r.local == local)?;
+    Some(registry.packages.remove(index))
+}
+
 fn put_retained(registry: &mut RegistryJson, local: &str, title: String, at: Option<usize>) {
     registry.retained.retain(|record| record.local != local);
     let record = RetainedJson {
@@ -1733,13 +1846,22 @@ fn copy_package(package: &SourcePackage, location: &Path) -> io::Result<()> {
         }
         // Checked when the package was read; a helper file replaced by a
         // link since is not followed.
-        if helper_files.contains(&file) && !fs::symlink_metadata(&source)?.is_file() {
+        let is_helper = helper_files.contains(&file);
+        if is_helper && !fs::symlink_metadata(&source)?.is_file() {
             return Err(io::Error::other(format!(
                 "the helper file {} is no longer a regular file",
                 file.display()
             )));
         }
-        fs::copy(source, target)?;
+        if is_helper {
+            // Closed and renamed into place rather than written straight to
+            // `target`: a helper run soon after this install (or a reinstall
+            // rewriting it while another generation is spawning it) must
+            // never see it half-written and get Linux's `ETXTBSY`.
+            runner::copy_executable(&source, &target)?;
+        } else {
+            fs::copy(source, target)?;
+        }
     }
     for file in helper_files {
         make_executable(&location.join(file))?;

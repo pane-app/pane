@@ -236,6 +236,88 @@ Nothing in it is specific to macOS (no system API is involved; the
 closure reuses the dependency identities recorded at install); **not run on
 macOS yet**.
 
+## Runtime crashes (#17)
+
+The runtime-crash phase (screenshots 200 to 209, data folder
+`runtime-crash-data`, [runtime crashes](../pausing.md#when-the-extension-runtime-itself-crashes))
+installs the helper and settings samples, starts Pane with
+`PANE_TEST_RUNTIME_FAULTS` naming a fault file, runs the settings sample's
+Count, starts the waiting helper and has the runtime crash: the helper must
+be gone (`pgrep`, and its heartbeat must stop growing), the note it saved kept,
+and the status line the error color. A second crash, injected before
+Count's answer, must leave the count at 2 and the runtime stopped; root
+search explains it, Manage extensions shows why (the details color), a
+disable works, **Restart the extension runtime** runs extensions again and
+Count then counts 3; no package may be recorded as paused. Nothing in it is
+specific to macOS (the runtime is a thread; helpers are ended as for a
+disable); **not run on macOS yet**.
+
+## Extensions that stop responding (#18)
+
+The unresponsive phase (screenshots 240 to 248, data folder
+`unresponsive-data`, [extensions that stop responding](../pausing.md#when-an-extension-stops-responding))
+shortens the runtime's limits through the fault file
+(`limits:2,4,15`), installs the settings sample and runs its **Stop
+responding**, which computes without waiting: while it computes, Escape
+and Manage extensions must answer (the details color); run again, the call
+must be stopped after 2 seconds of its own computing (thread CPU time from
+`GetThreadTimes` on Windows, `CLOCK_THREAD_CPUTIME_ID` on macOS) with the
+error color, and the third time pause the package (the error and reason
+colors), with the saved `busy` note still "started"; the pause details and
+Retry must work. Then the runtime thread is made to hang through the fault
+file (`hang`): opening Greeting must first show "not responding yet" (the
+progress color, frame 245), then the error color after Pane gave up on the
+thread, Manage extensions' first row must
+open the runtime's details, and after `release` a fresh thread must save
+the formal greeting; no package may be recorded as paused. Epoch
+interruption and the watchdog are Wasmtime's and Pane's own, with nothing
+specific to macOS; **not run on macOS yet**.
+
+## Uninstalling required dependents (#44)
+
+A phase of the smoke (screenshots 180 to 183, [uninstalling a required dependency](../dependencies.md#uninstalling-a-required-dependency)),
+with a data folder of its own, installs the dependencies sample, presses
+Enter on "Uninstall JavaScript operations sample" in Manage extensions,
+which must ask first (the details color), cancels, then chooses Uninstall
+all 2 keeping saved data (the result color); `installed.json` must then hold
+no package. Pane is started again to install the JavaScript operations
+sample alone, and `installed.json` must then hold exactly one package.
+Removing a managed copy uses the same `remove_dir_all` as a single
+uninstall; a folder still in use is listed and removed at the next start,
+reported against its own package. Nothing else in it is specific to
+macOS; **not run on macOS yet**.
+
+## Files (#29)
+
+The files phase (screenshots 220 to 223, [files](../files.md)), with a data
+folder of its own, installs Files and presses Return on Pane's own "Choose
+folder…" row; a debug build's `PANE_TEST_CHOOSE_FOLDER` names a fixture
+folder "Pane smoke files" (spaces) in the system's temporary folder instead
+of showing the system's picker. It types "plan", which must list "Résumé
+plan ü.txt" selected, and presses Return. A debug build's
+`PANE_TEST_OPEN_FILE_LOG` makes the opener record the path in a file instead
+of running `/usr/bin/open`, so no application of the user's opens it; the
+recorded path, resolved, must be the fixture file's, resolved. Last it types
+"runner" and presses Return on an executable script, which Pane must refuse
+without recording or running it. A positive native open on macOS is
+therefore not run by the smoke. Listing the folder and the scan policy use
+only `std::fs` (case-insensitive APFS sorts names by bytes like the other
+systems; links are skipped); the policy tests with symbolic links and the
+executable bit run on macOS in CI. **Not run on macOS yet.**
+
+## Searching inside a command (#30)
+
+The smoke's search phase (screenshots 160 to 169, [command search](../command-search.md#checks)),
+with a data folder of its own, builds and starts the fixture service on a
+free port of 127.0.0.1 (`fixture_service --port 0`, the port read from its
+log) and installs Package search, the Rust search sample. "aurora" typed in
+root search must leave the service's log without a request; opened, the
+command's "Service address" form is set to the service; its search field
+sends "aurora" (results listed, Enter shows a package's details); "slow" then "ember"
+must log the held search as abandoned; the service's 503, then the service
+stopped, are errors; restarted, a search lists results again.
+**Not run on macOS yet.**
+
 ## Text input and accessibility findings
 
 - **Text input / IME (#20):** extension forms now have a text field. The

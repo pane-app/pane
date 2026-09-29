@@ -78,6 +78,7 @@ impl Sample {
                 subtitle: None,
                 component: self.path(),
                 takes_query: false,
+                search: false,
             }],
         );
         block_on(launcher.activate_selected());

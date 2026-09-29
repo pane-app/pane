@@ -23,7 +23,9 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   cache, held alike by `crates/pane-core/tests/disable.rs` and
   `crates/pane-core/tests/clear_cache.rs`. Their **Crash** item crashes on
   purpose: three crashes within five minutes pause the package until Retry
-  ([pausing](../docs/pausing.md), `crates/pane-core/tests/pausing.rs`).
+  ([pausing](../docs/pausing.md), `crates/pane-core/tests/pausing.rs`); their
+  **Stop responding** item computes without waiting until Pane stops it
+  (`crates/pane-core/tests/unresponsive.rs`).
 - `calculator`: Pane's calculator, a default extension in Rust: an
   arithmetic expression typed into root search lists its answer, which Enter
   copies ([Root results](#root-results-computed-from-the-query),
@@ -35,6 +37,14 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   ([Root results supplied ahead of the query](#root-results-supplied-ahead-of-the-query),
   [applications](../docs/applications.md)). Its package is
   `packages/applications`; held by `crates/pane-core/tests/applications.rs`.
+- `files`: Pane's file search, a default extension in Rust: the user grants
+  it a folder through Pane's own row, and root search finds its files by
+  name and opens one ([Files of a granted folder](#files-of-a-granted-folder),
+  [files](../docs/files.md)).
+  Its package is `packages/files`; held by `crates/pane-core/tests/files.rs`.
+- `sample-files-js`, `sample-files-ts`: the same host import and `open-file`
+  results in JavaScript and TypeScript; held by
+  `crates/pane-core/tests/files.rs`.
 - `sample-helper`, `sample-helper-js`, `sample-helper-ts`: a command in
   Rust, JavaScript and TypeScript running a [native helper](#native-helpers)
   its package ships, `helpers/echo` (`pane-echo`, an ordinary program
@@ -291,8 +301,10 @@ Rust. npm dependencies are bundled into the component; the samples use
 [Zod](https://zod.dev) 4.6.5 (`zod/mini`) and show its validation failure as a
 normal error. Only ECMAScript built-ins are available, not Node.js or browser
 APIs; WASI 0.3 imports declared by [the world](js/wit/world.wit) (currently
-`wasi:clocks/monotonic-clock`) are imported by name and typed in
-[`js/wasi.d.ts`](js/wasi.d.ts). `Math.random`, `Date.now()` and
+`wasi:clocks/monotonic-clock`, and `wasi:http/client` for a command whose
+bundle imports it) are imported by name;
+the clock is typed in [`js/wasi.d.ts`](js/wasi.d.ts), and web requests have
+a typed helper, [`@pane/extension/http`](#searching-inside-a-command). `Math.random`, `Date.now()` and
 `performance.now()` are fresh in each instance.
 
 **Snapshot caveat.** A component is built by running the module once and
@@ -343,8 +355,10 @@ Toolchain used: upstream [componentize-qjs](https://github.com/andreiltd/compone
 QuickJS runtime built with `nightly-2026-09-27` for `wasm32-wasip3` against
 wasi-sdk 34, the componentizer built with Rust 1.98.1, esbuild 0.28.2 and
 TypeScript 7.0.2. Every JS component imports the same 20 WASI 0.3 interfaces
-through its libc, whatever the source uses, and is about 4.3 MB. Only Linux
-x86_64 builds have been run; the scripts avoid OS-specific paths, but Windows
+through its libc, whatever the source uses, and `wasi:http`'s `types` and
+`client` too if its bundle imports `wasi:http` (itself or through
+`@pane/extension/http`), which Pane then lists as using the network; it is
+about 4.4 MB. Only Linux x86_64 builds have been run; the scripts avoid OS-specific paths, but Windows
 and macOS builds are unverified. See
 [tools/componentize-js](../tools/componentize-js/README.md) for the patch queue.
 
@@ -440,6 +454,34 @@ So report expected failures, such as a missing sign-in, as errors, never by
 crashing. The settings samples' **Crash** item shows a crash in each
 language.
 
+Pane's extension runtime itself can crash too (a fault in Pane, not in any
+extension). Pane then stops every call in progress and never runs one again
+by itself, so an action that did its work (saving, sending a request) may
+have lost only its answer: the user sees that the runtime stopped and runs
+it again only if they want it done again
+([runtime crashes](../docs/pausing.md#when-the-extension-runtime-itself-crashes)).
+Write an action whose repetition matters so the user can tell whether it
+ran, as the Rust settings sample's **Count** does by answering the count it
+saved.
+
+Every call Pane makes into a command (opening it, an action, a form, a
+search, a view event) may **compute for 5 seconds in all** (the compute
+limit). Only your own code's computing counts: time spent waiting (a
+clock, a save, a helper, a web request, another extension's operation) and
+time inside Pane's own host calls do not, nor does starting your
+component. The count is per call and cumulative: awaiting between parts of
+a computation does not reset it; only the call finishing does. A call past
+the limit holds every other extension's calls behind it, so Pane stops it
+as **not responding**: its instance goes, the user sees "The extension
+stopped responding", and it counts towards pausing the package as a crash
+does
+([extensions that stop responding](../docs/pausing.md#when-an-extension-stops-responding)).
+So keep each call's own computing well under 5 seconds: split long work
+into several calls (an action that does one part and saves where it got
+to), or run it in a [native helper](#native-helpers), which runs for at
+most 30 seconds. The settings samples' **Stop responding** item shows the
+limit in each language.
+
 ## Actions for some operating systems only
 
 An item can list the operating systems its action (or form) works on. On any
@@ -526,6 +568,74 @@ The three samples answer "reverse <text>" this way, and "pane website"
 with a result whose action opens a link (`RootAction::OpenUrl(url)` in Rust,
 `{ tag: "open-url", val: url }` in JavaScript and TypeScript); their
 packages in [`packages/`](packages) set `rootResults`.
+
+Once the query changes or root search is left, Pane cancels a call still
+pending: one not started is never started, and one waiting inside the
+command (on an async import) is dropped with the command's instance, so
+module or struct state kept between queries is lost and the next query
+starts a fresh instance. Keep what must last in [settings](#keeping-settings)
+or the [cache](#keeping-content-cache-and-credentials).
+
+### Files of a granted folder
+
+A command can find the files of the one folder the user granted its
+package, which a WASI guest cannot read itself, through
+`pane:extension/files` ([`wit/files.wit`](../wit/files.wit)), and answer
+results that open one (`open-file`). The package's `pane.json` sets
+`"folderAccess": true`: Pane then shows its own "Choose folder…" row at the
+top of the package's commands, and records the folder the user picks. The
+command never names or sees a path: `list-folder()` answers that no folder
+is granted, that Pane is listing it (Pane asks the command again once it is
+done, so answer no files for now), or the listing Pane keeps for this visit
+of root search, whose files have an `id` and a `relative` path. An
+`open-file` result gives the `id`; Pane shows the file's own name and folder
+in the row, whatever the result's title says, drops an id it did not give,
+checks the file again when it is invoked and refuses programs and scripts.
+Pane lists the folder under its [scan policy](../docs/files.md#the-scan-policy)
+(`files.limits()` gives its limits); file results are listed after the
+results root search finds by title. The [Files](files) default extension,
+in Rust, works this way; [`sample-files-js`](sample-files-js) and
+[`sample-files-ts`](sample-files-ts) do the same in JavaScript and
+TypeScript.
+
+Rust (`pane_guest::files`):
+
+```rust
+use pane_guest::files::{self, FolderState};
+use pane_guest::root::{RootAction, RootResult};
+
+async fn results_for(query: String) -> Result<Vec<RootResult>, String> {
+    let FolderState::Ready(listing) = files::list_folder()? else {
+        return Ok(Vec::new());
+    };
+    Ok(listing
+        .files
+        .into_iter()
+        .filter(|file| file.relative.contains(query.as_str()))
+        .map(|file| RootResult {
+            id: file.relative.clone(),
+            title: file.relative,
+            subtitle: None,
+            action: RootAction::OpenFile(file.id),
+        })
+        .collect())
+}
+```
+
+JavaScript or TypeScript: add `"files": true` to the `"pane"` options of
+`package.json`, so the build imports the interface (a command without it
+does not), and import it (`listFolder` throws an object whose `payload` is
+the reason; declarations in [`js/files.d.ts`](js/files.d.ts)):
+
+```ts
+import { listFolder } from "pane:extension/files@0.1.0";
+
+const state = listFolder();
+if (state.tag !== "ready") return [];
+return state.val.files
+  .filter((file) => file.relative.includes(query))
+  .map((file) => ({ id: file.relative, title: file.relative, action: { tag: "open-file", val: file.id } }));
+```
 
 ## Root results supplied ahead of the query
 
@@ -641,6 +751,70 @@ export const queryCommand: QueryCommand = {
   },
 };
 ```
+
+## Searching inside a command
+
+A command that searches an online service as the user types sets
+`"search": true` on its entry in `pane.json` and exports
+`pane:extension/command-search` ([wit/search.wit](../wit/search.wit)) beside
+`command`. Pane gives it a search field of its own once the user opens it
+and calls `search(command, query)` with the text typed there (trimmed,
+never empty); the results (`id`, `title`, optional `subtitle`) replace the
+command's list, and activating one calls `run-action` with its id. Root
+search never calls it, so nothing typed there reaches the command or its
+service. Pane waits 150 ms before it starts a search, and stops one it no
+longer needs (the text changed, the user left) where it waits, dropping the
+instance with its web request: code after that `await` never runs and
+in-memory state is lost, so make result ids say which result they are. An
+error it answers with (a service down or unreachable) is shown in place of
+results and never pauses the extension. A command cannot set both
+`"search"` and `"rootResults"`. See
+[docs/command-search.md](../docs/command-search.md).
+
+**Web requests** go through `wasi:http@0.3.0`'s client, which Pane links for
+every command and sends from the host (`http` and `https` over HTTP/1.1,
+trusting the system's certificates, no redirects followed). Pane bounds each
+request, whatever its options ask: 10 s to connect, 20 s for the response
+head, 10 s between two pieces of the body, 30 s in all, a body of at most
+4 MiB, and four connections open at once per package; past a limit the
+request fails with an error saying so. Any address is allowed, this
+computer's and the local network's too; Manage extensions shows which
+packages use the network and the addresses each tried to reach this
+session. The SDKs wrap it:
+
+```rust
+// Rust (no_std): pane_guest::http, the generated wasi:http bindings beside it.
+let response = pane_guest::http::get(&url, &[("accept", "application/json")]).await?;
+if response.status != 200 { return Err(format!("the service answered {}", response.status)); }
+let found: Found = serde_json::from_slice(&response.body).map_err(|e| e.to_string())?;
+```
+
+```ts
+// JS/TS: bundled into the component like any npm module.
+import { get } from "@pane/extension/http";
+const response = await get(url, { accept: "application/json" }); // throws Error("connection refused")...
+const found = response.json();
+```
+
+A failure to get a response is an error whose message says why
+("connection refused", "the address could not be resolved", "the host's
+certificate is not trusted", "the service did not answer in time", "the
+answer is larger than the 4194304 bytes Pane accepts"); any status is a
+response. For other methods, request bodies or streaming, use the
+standard bindings (`pane_guest::http::wasi::http`, or
+`wasi:http/types@0.3.0` and `wasi:http/client@0.3.0` in JS, untyped).
+Libraries built on `wasi:http` work; ones opening sockets themselves, or
+needing Node.js or browser `fetch`, do not. Rust crates must build for
+`no_std` + `alloc` (the sample uses `serde` and `serde_json` that way).
+
+The samples ([Rust](sample-search/src/lib.rs),
+[JavaScript](sample-search-js/src/index.js),
+[TypeScript](sample-search-ts/src/index.ts)) search the fixture service, a
+made-up package registry on this computer: run
+`cargo run -p pane-core --example fixture_service` (port 8740, their
+default address; `-- --port N` for another, which their item "Service
+address" then sets), install
+`target/guests/packages/sample-search`, open Package search and type.
 
 ## Custom views
 
@@ -1190,9 +1364,12 @@ Known limits of local packages so far:
   waits ten seconds, then saves "finished", which a disable or reload
   meanwhile prevents. So save what must survive before awaiting, and do
   not count on code after an `await` running. A command computing without
-  awaiting is not interrupted: it runs until it awaits or returns, and
-  meanwhile Pane refuses it data, operation calls and applications (#18
-  owns hangs).
+  awaiting is interrupted too, at Pane's next epoch tick (10 ms), and one
+  that computes for 5 seconds in all without finishing is stopped as
+  unresponsive, which counts towards pausing its package like a crash
+  (#18, [pausing](../docs/pausing.md#when-an-extension-stops-responding)):
+  waiting does not count, but awaiting does not reset the count either, so
+  split long work into calls. A native helper runs for at most 30 seconds.
 - Background services, timers and hotkeys are not part of the extension
   API yet and come with their own tickets. Disabling does not yet consider
   packages that depend on the disabled one (#43).

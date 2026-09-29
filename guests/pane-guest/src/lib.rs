@@ -8,8 +8,10 @@
 //! operations other packages publish with [`operations::call`], serve those
 //! its own package publishes with [`publish`], find and open installed
 //! applications with [`applications`], supply root results ahead of the
-//! query with [`indexed`] and run its package's native helpers with
-//! [`helpers`]. The crate is
+//! query with [`indexed`], run its package's native helpers with
+//! [`helpers`], list the files of a folder with [`files`], search as the
+//! user types into its own search field with [`search`] and make web
+//! requests with [`http`]. The crate is
 //! `no_std` so the component imports only WASI 0.3 interfaces; it supplies the
 //! allocator and a panic handler that traps, which the host reports as a
 //! runtime error.
@@ -166,6 +168,27 @@ pub mod helpers {
     }
 }
 
+/// The files of the folder the user granted the command's package
+/// (`pane:extension/files`), which Pane lists for it under its scan limits
+/// ([`files::limits`]): [`files::list_folder`] answers at once, with the
+/// listing Pane keeps for this visit of root search, or that it is still
+/// listing (Pane asks the command again when it is done), or that no folder
+/// is granted. The package's `pane.json` sets `"folderAccess": true`; the
+/// user chooses the folder in Pane's own row, and the extension never sees
+/// its path. A command answers `open-file` results
+/// ([`root::RootAction::OpenFile`]) with the files' ids.
+pub mod files {
+    wit_bindgen::generate!({
+        path: "../../wit",
+        world: "files-user",
+        default_bindings_module: "pane_guest::files",
+    });
+
+    pub use pane::extension::files::{
+        FolderListing, FolderState, FoundFile, ScanLimits, limits, list_folder,
+    };
+}
+
 /// Root results a command supplies ahead of the query
 /// (`pane:extension/indexed-results`), such as the installed applications,
 /// which root search matches by title like commands. A command whose
@@ -187,6 +210,30 @@ pub mod indexed {
 
     pub use exports::pane::extension::indexed_results::{Guest, IndexedAction, IndexedResult};
 }
+
+/// A command that searches as the user types into its own search field
+/// (`pane:extension/command-search`), such as one searching an online
+/// service. Pane asks it only once the user has opened it, never while they
+/// type in root search. A command whose `pane.json` entry sets
+/// `"search": true` implements [`search::Guest`] too and calls
+/// [`search::export!`](crate::search::export) beside [`export!`]:
+///
+/// ```ignore
+/// pane_guest::export!(Packages);
+/// pane_guest::search::export!(Packages);
+/// ```
+pub mod search {
+    wit_bindgen::generate!({
+        path: "../../wit",
+        world: "command-search-provider",
+        pub_export_macro: true,
+        default_bindings_module: "pane_guest::search",
+    });
+
+    pub use exports::pane::extension::command_search::{Guest, SearchResult};
+}
+
+pub mod http;
 
 /// The custom view type of a command that has none: `type CustomView =
 /// NoCustomView;` in its `Guest` implementation, with an `open_view` that

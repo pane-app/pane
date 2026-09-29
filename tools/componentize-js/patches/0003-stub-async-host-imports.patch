@@ -9,6 +9,10 @@ those interfaces with func_new_concurrent traps; nothing calls them during the
 snapshot. Wasmtime 49 does this in define_unknown_imports_as_traps itself, so
 moving componentize-qjs to it would retire this patch.
 
+The componentizer defines the WASI 0.3 interfaces of wasmtime-wasi, which
+leave out `wasi:http`, so its client (an async `send`, Pane's web requests)
+is stubbed the same way.
+
 Modifies componentize-qjs (Apache-2.0, see LICENSE-componentize-qjs); this
 patch is distributed under the same license.
 
@@ -34,7 +38,7 @@ patch is distributed under the same license.
 +/// embedding host) could not be instantiated under Wizer. Such an interface
 +/// is replaced whole: async functions with `func_new_concurrent`, others with
 +/// `func_new`, resources with host resources. None of them runs while the
-+/// snapshot is taken. WASI interfaces are left alone; they are defined next.
++/// snapshot is taken. WASI interfaces but `wasi:http` are defined next.
 +fn define_unknown_async_imports_as_traps(
 +    linker: &mut Linker<Ctx>,
 +    engine: &Engine,
@@ -51,7 +55,7 @@ patch is distributed under the same license.
 +        let has_async = instance.exports(engine).any(
 +            |(_, export)| matches!(export.ty, ComponentItem::ComponentFunc(func) if func.async_()),
 +        );
-+        if name.starts_with("wasi:") || !has_async {
++        if (name.starts_with("wasi:") && !name.starts_with("wasi:http/")) || !has_async {
 +            continue;
 +        }
 +        let mut stubs = linker.instance(name)?;

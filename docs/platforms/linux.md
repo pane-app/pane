@@ -549,6 +549,167 @@ are painted over with the background; the smoke checks the whole frames.
 Frame 141, the list after Cancel with both enabled, is checked to differ
 from the others but not kept, as it shows those paths.)
 
+### Runtime crashes (#17)
+
+A phase of its own, after the disable-dependents phase, with its own data
+folder (`runtime-crash-data`, [runtime crashes](../pausing.md#when-the-extension-runtime-itself-crashes)).
+It installs the helper sample and the settings sample (two extensions
+active), and starts Pane with `PANE_TEST_RUNTIME_FAULTS` naming a fault
+file in the output folder: writing `crash` or `crash-before-answer` there
+has Pane's runtime thread panic, which is how the smoke kills it (the
+runtime is a thread, not a process). Count (the settings sample's last
+item) answers "Counted 1"; "Echo after waiting" starts the helper, which
+`pgrep -f` finds; a crash then ends it (`pgrep` finds none and its
+heartbeat stops growing), keeps its "started" note and never saves
+"finished", and the status line explains the crash without naming an
+extension. Count again, with the answer lost to a second crash: the count
+in `content.json` is 2 and stays 2, and the runtime is not restarted.
+Opening Greeting explains that nothing runs; Manage extensions lists
+**Restart the extension runtime** and **Why the extension runtime
+stopped** first; the details screen renders; disabling the helper sample
+works while the runtime is stopped; Restart runs extensions again, and
+Count answers "Counted 3" only when asked. `installed.json` must record the
+disable and no pause, and no helper may outlive Pane. Run locally on
+2026-09-28 (Ubuntu 26.04.1 LTS, kernel 7.0.0-31-generic, x86_64, same
+Xvfb/lavapipe setup): all checks of the whole smoke passed, and frames 200
+to 209 were looked at.
+
+| Step | Evidence |
+| --- | --- |
+| The runtime crashed while the helper waited: the waiting call answers "Extension runtime unavailable: it stopped before answering and was started again; Pane does not run this again by itself" (the crash report's own line, "Pane's extension runtime stopped unexpectedly and was started again; …", shows instead when it arrives last) | [202-runtime-crashed.png](evidence/linux-x11/202-runtime-crashed.png) |
+| Count's answer lost in a second crash: "… it stopped before answering and was not restarted (it crashed twice within 5 minutes; …); Pane does not run this again by itself …" | [203-runtime-stopped.png](evidence/linux-x11/203-runtime-stopped.png) |
+| Manage extensions: Restart the extension runtime, Why the extension runtime stopped | [205-runtime-manage.png](evidence/linux-x11/205-runtime-manage.png) |
+| The details: no extension named, what Pane did, the diagnostics, Restart | [206-runtime-details.png](evidence/linux-x11/206-runtime-details.png) |
+| After Restart, Count asked again: "Counted 3" | [209-runtime-counted-again.png](evidence/linux-x11/209-runtime-counted-again.png) |
+
+Frames 200, 201, 204 and 208 match these; 207 ("Disabled Helper sample")
+is checked but not kept, as its row shows the local package path.
+
+### Extensions that stop responding (#18)
+
+A phase of its own, after the runtime-crash phase, with its own data
+folder (`unresponsive-data`, [extensions that stop responding](../pausing.md#when-an-extension-stops-responding)).
+It shortens the runtime's limits through the fault file
+(`limits:2,4,15`: 2 seconds of a guest's own computing, "not responding
+yet" after 4 seconds without progress, given up on after 15), installs
+the settings sample and runs **Stop responding**, which computes without
+waiting: while it computes, Escape returns to root search and Manage
+extensions opens (frame 240). Run again, the call is stopped after 2
+seconds of its computing (thread CPU time) with its error; the third time
+pauses the package, whose saved `busy` note stays "started"; the pause
+details and Retry work. Then the fault file's `hang` blocks the runtime
+thread: opening Greeting first shows that the runtime is not responding
+yet, then answers that it stopped responding once Pane gave up on it,
+Manage extensions' first row opens the runtime's details, and after
+`release` a fresh thread saves the formal greeting; `installed.json`
+records no pause. Run locally
+on 2026-09-29 (Ubuntu 26.04.1 LTS, kernel 7.0.0-31-generic, x86_64, same
+Xvfb/lavapipe setup): all checks of the whole smoke passed, and frames 240
+to 247 were looked at.
+
+| Step | Evidence |
+| --- | --- |
+| The second run: "The extension stopped responding: it computed for 5 seconds without waiting for anything, so Pane stopped it; other extensions' calls waited meanwhile" | [241-unresponsive-stopped.png](evidence/linux-x11/241-unresponsive-stopped.png) |
+| The third: "Settings sample stopped responding 3 times within 5 minutes and is paused …", Greeting listed with why | [242-unresponsive-paused.png](evidence/linux-x11/242-unresponsive-paused.png) |
+| The runtime thread made to hang: "Extension runtime unavailable: it stopped responding before answering and was started again; Pane does not run this again by itself" | [245-unresponsive-runtime.png](evidence/linux-x11/245-unresponsive-runtime.png) |
+| The runtime's details: stopped responding for 10 seconds, none named or paused, the stuck thread abandoned, what it was doing | [246-unresponsive-runtime-details.png](evidence/linux-x11/246-unresponsive-runtime-details.png) |
+| A fresh thread: "Saved the formal greeting" | [247-unresponsive-runs-again.png](evidence/linux-x11/247-unresponsive-runs-again.png) |
+
+Frames 240 (the extension list while the guest computes), 243 (the pause
+details) and 244 ("Started Settings sample" on the extension list) are
+checked but not kept, as they show the local package path.
+
+### Uninstalling required dependents (#44)
+
+A phase of its own, after the runtime crash phase, with its own data folder
+([uninstalling a required dependency](../dependencies.md#uninstalling-a-required-dependency)),
+installs the dependencies sample with the JavaScript operations sample,
+opens Manage extensions and presses Enter on "Uninstall JavaScript
+operations sample" (the seventh row). Pane asks first, listing the
+Dependencies sample and the saved data of both; Down, Down and Enter
+(Cancel) returns to the list with both installed; Enter and Enter
+(Uninstall all 2 and keep saved data) uninstalls both, and `installed.json`
+must then hold no package. Pane started again installs the JavaScript
+operations sample alone, and `installed.json` must then hold exactly one
+package. Run locally on 2026-09-28 (same Ubuntu 26.04.1 / Xvfb / lavapipe
+setup): all checks of the whole smoke passed, and frames 180 to 183 were
+looked at. A first run showed the question's details pushing its choices
+out of Pane's window; a confirmation's details now scroll within 40% of the
+window, and frame 180 shows the first choice selected.
+
+| Step | Evidence |
+| --- | --- |
+| The question: "Uninstall JavaScript operations sample and the extensions that require it?", "Dependencies sample, which requires JavaScript operations sample", "Uninstall all 2 and keep saved data" selected | [180-uninstall-dependents-asked-masked.png](evidence/linux-x11/180-uninstall-dependents-asked-masked.png) |
+| Uninstall all: "No extensions are installed.", "Uninstalled JavaScript operations sample and Dependencies sample, which requires it; their settings and content are kept" | [182-uninstall-dependents-uninstalled-masked.png](evidence/linux-x11/182-uninstall-dependents-uninstalled-masked.png) |
+
+(The kept frames are cropped to Pane's window and, in frame 180, the local
+package paths are painted over with the background; the smoke checks the
+whole frames. Frames 181, the list after Cancel, and 183, the list after
+installing the JavaScript operations sample again with only it listed, are
+checked to differ from the others but not kept, as they show those paths.)
+
+### Files (#29)
+
+The last phase, with its own data folder ([files](../files.md)), makes a
+fixture folder `/tmp/pane-smoke-files.XXXXXX/Pane smoke files` (spaces;
+outside the home folder, so no frame shows a home path) holding "Résumé
+plan ü.txt", `notes/todo.txt` and an executable `notes/runner.sh`, installs
+Files, opens its command and presses Return on Pane's own "Choose folder…"
+row; a debug build's `PANE_TEST_CHOOSE_FOLDER` names the folder instead of
+showing the system's picker. It then returns to root search, types "plan"
+and presses Return. `xdg-open` runs with no desktop session variables,
+XDG_CONFIG_HOME and XDG_DATA_HOME in the smoke's output folder whose
+`mimeapps.list` makes a recording script the only handler for `text/plain`
+(checked with `xdg-mime query default`), and BROWSER the same script, so no
+program of the user's opens the file; the path the script received,
+resolved, must be the fixture file's, resolved. Last it types "runner" and
+presses Return: Pane must refuse the script, hand nothing to the handler,
+and the script must not run. Run locally on 2026-09-28 (Ubuntu 26.04.1 LTS,
+kernel 7.0.0-31-generic, x86_64, same Xvfb/lavapipe setup): all checks of
+the whole smoke passed, and frames 220 to 223 were looked at.
+
+| Step | Evidence |
+| --- | --- |
+| "Choose folder…": "Files may now list “Pane smoke files”" | [220-files-folder-granted.png](evidence/linux-x11/220-files-folder-granted.png) |
+| "plan" typed: "Résumé plan ü.txt", "File in Pane smoke files", selected | [221-files-found.png](evidence/linux-x11/221-files-found.png) |
+| Return: "Opened Résumé plan ü.txt", the path received by the handler | [222-files-opened.png](evidence/linux-x11/222-files-opened.png) |
+| "runner", Return: "Could not open runner.sh: it is a program or script…" | [223-files-program-refused.png](evidence/linux-x11/223-files-program-refused.png) |
+
+The system's folder picker (the XDG portal) and a real desktop's handler
+(GNOME's `gio open`, a text editor) were not run; cancelling, the slow
+listing and the re-checks at Enter are checked by the launcher tests, not
+natively.
+
+### Searching inside a command (#30)
+
+The last phase ([command search](../command-search.md#checks)), with a data
+folder of its own, builds and starts the fixture service on a free port of
+127.0.0.1 (`fixture_service --port 0`, its log in the smoke's output, the
+port read from it) and installs Package search, the Rust search sample.
+"aurora" typed in root search lists nothing and the service's log must hold
+no request; opened, the command's "Service address" form is set to the
+service; its own search field (the same query field) sends "aurora" (the
+log must hold `GET /search?q=aurora`), Down and Enter show aurora-cli's
+details; "slow" (held by the service) then "ember" must show ember-tz and
+log `ABANDONED /search?q=slow`; "down" shows the service's 503 as an error;
+with the service stopped, "basalt" shows "connection refused"; restarted on
+the same port, "cobalt" lists cobalt-http: the extension was not paused.
+Run locally on 2026-09-29 after the #30 review (Ubuntu 26.04.1 LTS, kernel
+7.0.0-31-generic, x86_64, same Xvfb/lavapipe setup): all checks of the
+whole smoke passed, and frames 160 to 169 were looked at.
+
+| Step | Evidence |
+| --- | --- |
+| Root search, "aurora": no results, nothing sent | [161-root-typed.png](evidence/linux-x11/161-root-typed.png) |
+| Package search opened: its own list, its search field empty | [162-command-opened.png](evidence/linux-x11/162-command-opened.png) |
+| Its "Service address" form set to the fixture service's free port | [163-service-set.png](evidence/linux-x11/163-service-set.png) |
+| "aurora": the service's results | [164-search-results.png](evidence/linux-x11/164-search-results.png) |
+| Enter: aurora-cli's details, fetched from the service | [165-details.png](evidence/linux-x11/165-details.png) |
+| "slow" replaced by "ember": the newer results | [166-newer-search.png](evidence/linux-x11/166-newer-search.png) |
+| "down": the service's 503 as an error | [167-service-error.png](evidence/linux-x11/167-service-error.png) |
+| Service stopped: "connection refused" | [168-offline.png](evidence/linux-x11/168-offline.png) |
+| Service back: results again | [169-back-online.png](evidence/linux-x11/169-back-online.png) |
+
 ## Text input and accessibility findings
 
 - **Text input / IME (#20):** extension forms have a text field (GPUI CE's

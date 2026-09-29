@@ -64,7 +64,7 @@ impl Launcher {
             subtitle: Some(subtitle.into()),
             unavailable: None,
         };
-        state.screen_epoch += 1;
+        state.next_screen();
         // Cancel first, so that Enter keeps the data, as uninstalling does.
         state.entries = vec![Entry::Cancel, Entry::DeleteRetained(identity.clone())];
         let source = match identity.local_folder() {

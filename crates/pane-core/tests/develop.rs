@@ -235,10 +235,26 @@ impl Dev {
 
     /// Waits until `finished` of the package's saves have been acted on.
     fn finished(&self, identity: &PackageIdentity, finished: u64) {
-        wait_until(&format!("{finished} saves acted on"), || {
-            self.launcher
-                .development(identity)
-                .is_some_and(|development| development.finished >= finished)
+        let deadline = Instant::now() + DEADLINE;
+        loop {
+            let development = self.launcher.development(identity);
+            if development.as_ref().is_some_and(|d| d.finished >= finished) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for {finished} saves acted on: {development:?}, builds {:?}",
+                self.probe.runs.lock().unwrap()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Waits until the package's development has no build running or
+    /// waiting, and no save not yet built.
+    fn idle(&self, identity: &PackageIdentity) {
+        self.until(identity, "no build", |d| {
+            !d.building && !d.pending && !d.waiting
         });
     }
 
@@ -265,8 +281,11 @@ impl Dev {
     }
 }
 
+/// How long a wait may take: long, as the tests may share a slow machine.
+const DEADLINE: Duration = Duration::from_secs(120);
+
 fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + DEADLINE;
     while !done() {
         assert!(Instant::now() < deadline, "timed out waiting for {what}");
         std::thread::sleep(Duration::from_millis(20));
@@ -716,16 +735,61 @@ fn a_folder_moved_into_the_source_folder_is_watched() {
     fs::create_dir(&outside).unwrap();
     fs::rename(&outside, folder.join("lib")).unwrap();
     dev.finished(&identity, 1);
+    dev.idle(&identity);
 
+    // A save in it builds. How many events a move and a write are differs
+    // by system, so what is counted is builds since.
+    let finished = dev.launcher.development(&identity).unwrap().finished;
+    let runs = dev.probe.runs_of("Dev");
     fs::write(folder.join("lib/util.txt"), "saved").unwrap();
-    dev.finished(&identity, 2);
-    // Editors' temporary files are not saves.
+    dev.finished(&identity, finished + 1);
+    assert!(dev.probe.runs_of("Dev") > runs);
+    dev.idle(&identity);
+
+    // Editors' temporary files are not saves, although the folder they are
+    // in changes (Windows reports it as modified).
     let clock = dev.clock();
+    let runs = dev.probe.runs_of("Dev");
     fs::write(folder.join("lib/4913"), "").unwrap();
     fs::write(folder.join("lib/util.txt~"), "").unwrap();
     fs::write(folder.join("lib/.util.txt.swp"), "").unwrap();
     dev.tick(&clock, "sample_js");
-    assert_eq!(dev.probe.runs_of("Dev"), 2);
+    assert_eq!(dev.probe.runs_of("Dev"), runs);
+}
+
+#[test]
+fn reading_the_sources_or_changing_only_their_metadata_is_not_a_save() {
+    let dev = Dev::new();
+    let clock = dev.clock();
+    let (folder, identity) = dev.developing("Dev", "sample_rust");
+    fs::create_dir(folder.join("src")).unwrap();
+    fs::write(folder.join("src/lib.txt"), "saved").unwrap();
+    dev.finished(&identity, 1);
+    dev.idle(&identity);
+    let runs = dev.probe.runs_of("Dev");
+
+    // What a build, a copy, a backup or a reload does, and what FSEvents and
+    // ReadDirectoryChangesW report as changes: a file read, its permissions
+    // changed and back, a folder's.
+    fs::read(folder.join("source.txt")).unwrap();
+    for path in [folder.join("source.txt"), folder.join("src")] {
+        let permissions = fs::metadata(&path).unwrap().permissions();
+        let mut readonly = permissions.clone();
+        readonly.set_readonly(true);
+        fs::set_permissions(&path, readonly).unwrap();
+        fs::set_permissions(&path, permissions).unwrap();
+    }
+    fs::copy(folder.join("pane.json"), dev.sources.join("pane.json")).unwrap();
+    dev.tick(&clock, "sample_js");
+    assert_eq!(dev.probe.runs_of("Dev"), runs);
+
+    // A save still builds.
+    save(&folder, "sample_ts");
+    dev.finished(&identity, 2);
+    assert_eq!(
+        run(&dev.launcher, "Open Dev", "Say hello"),
+        Status::Result(TYPESCRIPT.into())
+    );
 }
 
 #[test]

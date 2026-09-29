@@ -50,12 +50,16 @@ impl<T> wit::HostWithStore<T> for Runs {
         args: Vec<String>,
         input: String,
     ) -> Result<String, wit::HelperError> {
-        let started = accessor.with(|mut view| view.get().start_helper(helper, args, input));
-        // Dropped here if the guest cancels the call: the process ends.
-        let result = match started {
-            Ok(running) => running.finish().await,
-            Err(error) => Err(error),
-        };
+        let (started, watch) = accessor.with(|mut view| {
+            let state = view.get();
+            (state.start_helper(helper, args, input), state.watch())
+        });
+        // Waiting for the helper is not the guest's computing, nor a hang:
+        // the runtime thread only awaits it. Dropped here if the guest
+        // cancels the call: the process ends.
+        let result =
+            crate::runtime::deadlines::hosted(watch, async move { started.await?.finish().await })
+                .await;
         result.map_err(wit::HelperError::from)
     }
 }

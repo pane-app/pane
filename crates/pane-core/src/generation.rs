@@ -13,11 +13,15 @@
 //! an operation, any async import) is abandoned and its instance, with
 //! everything the store holds (views, streams, futures, host tasks), is
 //! dropped; a result that completes anyway is discarded; and host imports
-//! refuse the stopped code (saving data, calling operations). What it cannot
-//! stop is a guest computing without yielding: the runtime thread is inside
-//! that guest until it yields or returns (hang recovery is #18).
+//! refuse the stopped code (saving data, calling operations). Since #18 a
+//! guest computing without awaiting yields at each epoch tick, so it is
+//! stopped there too.
+//!
+//! Code of a runtime thread Pane gave up on (a runtime hang, #18) is stopped
+//! the same way, through that thread's [`Fence`]: its generation has not
+//! ended, but nothing it still runs may change anything.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock, RwLockReadGuard};
 
 use tokio::sync::watch;
 
@@ -35,6 +39,45 @@ pub(crate) enum End {
     /// crashed too often. Retry, a reload or an update runs
     /// it in a new generation.
     Paused,
+    /// Not an end of the generation: the runtime thread running this code
+    /// stopped responding and Pane gave up on it (a runtime hang). A fresh
+    /// thread runs the package's next calls; this code changes nothing more.
+    Abandoned,
+}
+
+/// Closed once Pane gives up on a runtime thread: code that thread runs is
+/// then stopped, as if its generation had ended ([`End::Abandoned`]).
+/// Cloning shares it.
+///
+/// A host call that changes something checks it and makes its change while
+/// holding it ([`Fence::hold`]); closing waits for such a change to finish,
+/// so none lands after the thread was given up on. What is held is never
+/// blocking work, so closing never waits long.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Fence(Arc<RwLock<bool>>);
+
+impl Fence {
+    /// Whether the fence was closed.
+    pub fn closed(&self) -> bool {
+        *self.hold()
+    }
+
+    /// Holds the fence open, if it is, until the guard is dropped: a change
+    /// made meanwhile lands before any close. The guard says whether it was
+    /// closed already.
+    pub fn hold(&self) -> RwLockReadGuard<'_, bool> {
+        self.0
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Closes the fence, once no change held it open.
+    pub fn close(&self) {
+        *self
+            .0
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+    }
 }
 
 /// One run of an installed package's code. Cloning shares it.

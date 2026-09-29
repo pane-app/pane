@@ -1,0 +1,15 @@
+{
+  "name": "pane-sample-search-js",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pane's online search sample, Package search, in JavaScript",
+  "license": "Apache-2.0 OR MIT",
+  "type": "module",
+  "main": "src/index.js",
+  "pane": {
+    "search": true
+  },
+  "devDependencies": {
+    "@pane/extension": "file:../js"
+  }
+}

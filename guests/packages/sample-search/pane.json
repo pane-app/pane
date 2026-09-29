@@ -1,0 +1,15 @@
+{
+  "manifestVersion": 1,
+  "title": "Search sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "packages",
+      "title": "Package search",
+      "subtitle": "Searches the fixture package registry as you type",
+      "component": "sample_search.wasm",
+      "search": true
+    }
+  ]
+}

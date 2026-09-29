@@ -16,7 +16,9 @@
 //! in the runtime, and its answer is never shown, even on a screen that is
 //! still current. Leaving a screen only discards its replies; it does not
 //! stop the call. So does pausing a package that keeps failing (see
-//! `pausing`).
+//! `pausing`). The one exception is root search's own calls for results
+//! computed from the query: a search owns them, so a newer query, or
+//! leaving root search, cancels those still pending.
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
@@ -26,31 +28,38 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 mod aliases;
 mod choices;
+mod command_search;
 mod hotkeys;
 mod indexed;
+mod network;
 
+use crate::changes::ChangeSender;
 use crate::dependencies;
 use crate::extension_data::{ExtensionData, PackageData};
+use crate::files::FileAccess;
 use crate::generation::End;
 use crate::helpers;
 use crate::hotkeys::{self as system_hotkeys, Hotkeys};
 use crate::links::{self, LinkOpener, NoOpener};
 use crate::operations::{self, Installed};
 use crate::packages::{
-    InstalledPackage, PackageError, PackageIdentity, PauseCause, RetainedData, SavedData,
-    SourcePackage, Store, folder_name, paused_reason,
+    InstalledPackage, PackageError, PackageIdentity, RetainedData, SavedData, SourcePackage, Store,
+    folder_name, paused_reason,
 };
 use crate::platform::{self, Platform};
 use crate::runtime::{
-    CallError, CustomViewInfo, CustomViewRole, FieldKind, FieldValue, Form, Frame, Point,
-    RootAction, RootResult as ComputedResult, Runtime, ViewEvent, ViewId, WeakRuntime,
+    CallError, CustomViewInfo, CustomViewRole, FieldKind, FieldValue, Form, Frame, Item, Point,
+    ResultListing, RootAction, RootResult as ComputedResult, Runtime, ViewEvent, ViewId,
+    WeakRuntime,
 };
 use crate::search::{self, Keys, Query};
 
 mod dependents;
 mod developing;
+mod files;
 mod install;
 mod pausing;
+mod recovery;
 mod reload;
 mod retained;
 mod uninstall;
@@ -79,6 +88,9 @@ pub struct CommandRegistration {
     /// Whether the command takes a query (`"takesQuery": true`): text typed
     /// into root search, sent to it through its alias or as a fallback.
     pub takes_query: bool,
+    /// Whether the command searches as the user types into its own search
+    /// field once it is open (`"search": true`); root search never asks it.
+    pub search: bool,
 }
 
 impl CommandRegistration {
@@ -97,6 +109,12 @@ pub enum Screen {
     Root { query: String },
     /// An opened command's list view.
     Command,
+    /// An opened command that searches as the user types into its own
+    /// search field, holding `query`, the text typed there: while it is
+    /// blank, the command's list view; otherwise what the command found
+    /// for it. Only the opened command is asked, never root search's
+    /// providers.
+    CommandSearch { query: String },
     /// A package folder's identity and compatibility, before installing it,
     /// as lines of information under the title.
     Package { details: Vec<String> },
@@ -109,6 +127,13 @@ pub enum Screen {
     /// A custom view opened from an item of the command's list view. It has
     /// no rows.
     CustomView(CustomViewSnapshot),
+    /// What an installed package that uses the network did on it this
+    /// session (the addresses it tried to reach), as lines of information
+    /// under the title. It has no rows.
+    NetworkDetails {
+        identity: PackageIdentity,
+        details: Vec<String>,
+    },
     /// Why Pane paused an installed package, as lines of information under
     /// the title, with a row that retries it.
     PauseDetails {
@@ -128,6 +153,10 @@ pub enum Screen {
         question: Question,
         details: Vec<String>,
     },
+    /// Why Pane's extension runtime stopped after its thread crashed, and
+    /// what Pane did, as lines of information under the title, with a row
+    /// that restarts it when Pane did not.
+    RuntimeDetails { details: Vec<String> },
     /// Asks for the keys of a global hotkey that opens the installed command
     /// with id `command` from any application, with lines of information
     /// under the title. The window sends the keys pressed to
@@ -153,6 +182,10 @@ pub enum Question {
     /// Whether to disable the installed package with this identity together
     /// with the enabled packages that require it.
     DisableDependents(PackageIdentity),
+    /// Whether to uninstall the installed package with this identity
+    /// together with the installed packages that require it, and whether to
+    /// keep their saved data.
+    UninstallDependents(PackageIdentity),
 }
 
 /// A selectable row.
@@ -176,6 +209,57 @@ pub enum Unavailable {
     OnThisSystem(String),
     /// Its package is paused after an error until the user retries it.
     Paused(String),
+}
+
+impl Row {
+    /// The row of a result a command answered with (computed or indexed
+    /// root results, search results), available. Its id is the result's,
+    /// under `scope` if given (`<scope>:<id>`), so results of different
+    /// commands among root search's rows cannot share one.
+    fn listed(listing: ResultListing, scope: Option<&str>) -> Row {
+        Row {
+            id: match scope {
+                Some(scope) => format!("{scope}:{}", listing.id),
+                None => listing.id,
+            },
+            title: listing.title,
+            subtitle: listing.subtitle,
+            unavailable: None,
+        }
+    }
+}
+
+/// An opened command's own list: its rows and what activating each does.
+#[derive(Clone, Default)]
+struct CommandList {
+    rows: Vec<Row>,
+    entries: Vec<Entry>,
+}
+
+impl CommandList {
+    /// The list of a command whose list view has `items`.
+    fn of(items: Vec<Item>) -> CommandList {
+        let (rows, entries) = items
+            .into_iter()
+            .map(|item| {
+                let unavailable = platform::unavailable(item.platforms.as_deref(), "this action");
+                let entry = match (&unavailable, item.form, item.custom_view) {
+                    (Some(reason), _, _) => Entry::Unavailable(reason.clone()),
+                    (None, Some(form), _) => Entry::Form(item.id.clone(), form),
+                    (None, None, Some(info)) => Entry::CustomView(item.id.clone(), info),
+                    (None, None, None) => Entry::Run(item.id.clone()),
+                };
+                let row = Row {
+                    id: item.id,
+                    title: item.title,
+                    subtitle: item.subtitle,
+                    unavailable: unavailable.map(Unavailable::OnThisSystem),
+                };
+                (row, entry)
+            })
+            .unzip();
+        CommandList { rows, entries }
+    }
 }
 
 impl Unavailable {
@@ -277,6 +361,16 @@ impl LauncherView {
         }
     }
 
+    /// The text of the search field on screen: root search's query, or the
+    /// search of an open command that searches as the user types; `None` on
+    /// screens without one.
+    pub fn search_field(&self) -> Option<&str> {
+        match &self.screen {
+            Screen::Root { query } | Screen::CommandSearch { query } => Some(query),
+            _ => None,
+        }
+    }
+
     /// Lines of information under the title, such as a package's source and
     /// compatibility; empty on screens without any.
     pub fn details(&self) -> &[String] {
@@ -285,7 +379,9 @@ impl LauncherView {
             | Screen::Extensions { details }
             | Screen::Confirm { details, .. }
             | Screen::PauseDetails { details, .. }
+            | Screen::NetworkDetails { details, .. }
             | Screen::BuildDetails { details, .. }
+            | Screen::RuntimeDetails { details }
             | Screen::Hotkey { details, .. } => details,
             _ => &[],
         }
@@ -322,6 +418,10 @@ pub struct Launcher {
     hotkeys: Arc<dyn Hotkeys>,
     /// The packages being developed: built and reloaded on save.
     developing: Arc<Developing>,
+    /// Tells the window that the launcher changed in the background, such
+    /// as after a runtime crash; given with development
+    /// ([`Launcher::with_development`]).
+    changes: Option<ChangeSender>,
     state: Arc<Mutex<State>>,
 }
 
@@ -334,6 +434,7 @@ struct WeakLauncher {
     links: Arc<dyn LinkOpener>,
     hotkeys: Arc<dyn Hotkeys>,
     developing: std::sync::Weak<Developing>,
+    changes: Option<ChangeSender>,
     state: std::sync::Weak<Mutex<State>>,
 }
 
@@ -351,6 +452,7 @@ impl WeakLauncher {
             links: self.links.clone(),
             hotkeys: self.hotkeys.clone(),
             developing: self.developing.upgrade()?,
+            changes: self.changes.clone(),
             state: self.state.upgrade()?,
         })
     }
@@ -385,8 +487,17 @@ struct State {
     /// Incremented on every search, so that an answer arriving for an
     /// earlier search, even of the same query, is discarded.
     search_epoch: u64,
+    /// Kept while the current search's calls for computed results may run:
+    /// dropping it, when the query changes or root search is left, cancels
+    /// those still pending (see [`State::next_screen`]).
+    search_alive: Option<tokio::sync::oneshot::Sender<()>>,
+    /// The folders granted to packages and their listings, shared with the
+    /// runtime; `None` without a runtime.
+    files: Option<FileAccess>,
     /// The component of the command whose view is open.
     open: Option<PathBuf>,
+    /// The open command's search, when it searches as the user types.
+    searching: Option<command_search::Searching>,
     /// The form on screen, if one is open.
     form: Option<OpenForm>,
     /// The custom view on screen, if one is open.
@@ -421,6 +532,9 @@ struct State {
     /// The newest status of a developed package's builds, kept while
     /// another screen is shown (see `developing`).
     development_status: Option<(PackageIdentity, Status)>,
+    /// While the runtime thread is not responding yet, the status line it
+    /// replaced, put back if the thread carries on (see `recovery`).
+    runtime_slow: Option<Status>,
 }
 
 /// What is happening to a package, which stops another change to it
@@ -524,6 +638,19 @@ impl State {
     fn release(&mut self, identity: &PackageIdentity) {
         self.changing.remove(identity);
     }
+
+    /// Notes that the user left the screen on display: replies for it are
+    /// discarded from now on, and root search's pending calls for computed
+    /// results are cancelled.
+    fn next_screen(&mut self) {
+        self.screen_epoch += 1;
+        self.search_alive = None;
+        // A granted folder is listed again on the next visit, and a
+        // listing being made for this one stops.
+        if let Some(files) = &self.files {
+            files.new_visit();
+        }
+    }
 }
 
 /// An enabling or disabling that has taken effect and is being recorded:
@@ -623,10 +750,22 @@ enum Entry {
     Copy(String),
     /// Open this web address with the link opener (root).
     OpenUrl(String),
+    /// Open the file with id `id` in the latest listing of the package with
+    /// identity key `owner`, named `name` (root).
+    OpenFile {
+        owner: String,
+        id: String,
+        name: String,
+    },
+    /// Nothing in the launcher: the window asks for the folder to grant
+    /// this package, then calls [`Launcher::grant_folder`] (command view).
+    ChooseFolder(PackageIdentity),
+    /// Take back the folder granted to this package (command view).
+    StopSharingFolder(PackageIdentity),
     /// Open the installed application `id`, named `name` (root).
     OpenApplication { id: String, name: String },
-    /// Open the command with this component (root).
-    Open(PathBuf),
+    /// Open this command (root).
+    Open(Opening),
     /// Send a query to a command that takes one, and show its answer
     /// (root: an alias or fallback).
     Send(aliases::Sending),
@@ -660,6 +799,14 @@ enum Entry {
     Retry(PackageIdentity),
     /// Show why Pane paused this package (extension list).
     PauseDetails(PackageIdentity),
+    /// Show what this package did on the network this session (extension
+    /// list).
+    NetworkDetails(PackageIdentity),
+    /// Show why Pane's extension runtime stopped (extension list).
+    RuntimeDetails,
+    /// Start Pane's extension runtime again after it crashed and Pane did
+    /// not restart it (extension list, runtime details).
+    RestartRuntime,
     /// Build and reload this package after each save in its source folder
     /// (extension list).
     Develop(PackageIdentity),
@@ -694,6 +841,10 @@ enum Entry {
     /// Uninstall this installed package, keeping or deleting its saved data
     /// (confirmation).
     Uninstall(PackageIdentity, SavedData),
+    /// Uninstall this installed package and the packages that require it,
+    /// which the confirmation showed, keeping or deleting their saved data
+    /// (confirmation).
+    UninstallAll(PackageIdentity, Vec<PackageIdentity>, SavedData),
     /// Ask whether to delete the retained data of this identity, which is
     /// not installed (extension list).
     AskDeleteRetained(PackageIdentity),
@@ -701,6 +852,27 @@ enum Entry {
     DeleteRetained(PackageIdentity),
     /// Return to the extension list without acting (confirmation).
     Cancel,
+}
+
+/// A command root search can open.
+#[derive(Clone)]
+struct Opening {
+    component: PathBuf,
+    /// Its id in its package manifest, sent with each of its searches.
+    command: String,
+    /// Whether it searches as the user types into its own search field
+    /// ([`CommandRegistration::search`]).
+    search: bool,
+}
+
+impl Opening {
+    fn of(command: &CommandRegistration) -> Opening {
+        Opening {
+            component: command.component.clone(),
+            command: command.manifest_id().to_owned(),
+            search: command.search,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -771,7 +943,10 @@ impl Launcher {
             computed: Vec::new(),
             indexes: indexed::Indexes::default(),
             search_epoch: 0,
+            search_alive: None,
+            files: runtime.as_ref().ok().map(Runtime::file_access),
             open: None,
+            searching: None,
             form: None,
             custom_view: None,
             screen_epoch: 0,
@@ -784,7 +959,11 @@ impl Launcher {
             bindings,
             aliases,
             sent_from: None,
+            runtime_slow: None,
         };
+        if let (Some(installation), Some(files)) = (&installation, &state.files) {
+            files.open_record(&installation.dir);
+        }
         if let Some(installation) = &installation {
             for package in &state.packages {
                 installation
@@ -810,6 +989,7 @@ impl Launcher {
             links: Arc::new(NoOpener),
             hotkeys: system_hotkeys::none(),
             developing: Arc::new(Developing::new(None, None)),
+            changes: None,
             state: Arc::new(Mutex::new(state)),
         };
         if let (Ok(runtime), Some(installation)) = (&launcher.runtime, &launcher.installation) {
@@ -854,6 +1034,7 @@ impl Launcher {
     /// runtime holds it weakly: it does not keep this launcher, or itself,
     /// running.
     fn report_failures(&self) {
+        self.report_runtime_crashes();
         let (Ok(runtime), Some(_)) = (&self.runtime, &self.installation) else {
             return;
         };
@@ -877,6 +1058,7 @@ impl Launcher {
             links: self.links.clone(),
             hotkeys: self.hotkeys.clone(),
             developing: Arc::downgrade(&self.developing),
+            changes: self.changes.clone(),
             state: Arc::downgrade(&self.state),
         }
     }
@@ -933,17 +1115,32 @@ impl Launcher {
     /// their results, matched like titles, when they answer, and they are
     /// kept for later queries. Until then the results kept from before are
     /// listed.
+    ///
+    /// On an open command that searches as the user types, `query` is the
+    /// text of its own search field instead: see
+    /// [`Launcher::search_in_command`]. Root search's providers are not
+    /// asked then, and the opened command never is from root search.
     pub fn set_query(&self, query: &str) -> impl Future<Output = ()> + Send + 'static {
         let mut state = self.lock();
-        let (asked, indexing) = match &state.view.screen {
+        let in_command = match &state.view.screen {
+            Screen::CommandSearch { query: current } if current != query => {
+                self.search_in_command(&mut state, query)
+            }
+            _ => None,
+        };
+        let (asked, indexing, cancelled) = match &state.view.screen {
             Screen::Root { query: current } if current != query => {
-                self.search(&mut state, query);
+                let cancelled = self.search(&mut state, query);
                 let indexing = self.ask_for_indexed_results(&mut state, query);
-                (self.ask_for_root_results(&state, query), indexing)
+                (
+                    self.ask_for_root_results(&state, query),
+                    indexing,
+                    Some(cancelled),
+                )
             }
             // Searching the same query again changes nothing, not even the
             // selection.
-            _ => (Vec::new(), Vec::new()),
+            _ => (Vec::new(), Vec::new(), None),
         };
         let query = query.to_owned();
         let epoch = state.screen_epoch;
@@ -951,12 +1148,30 @@ impl Launcher {
         drop(state);
         let launcher = self.clone();
         async move {
-            if !asked.is_empty() {
-                launcher
-                    .show_root_results(epoch, search, query, asked)
-                    .await
+            if let Some(searching) = in_command {
+                searching.await;
             }
+            let Some(mut cancelled) = cancelled.filter(|_| !asked.is_empty()) else {
+                launcher.show_indexed_results(indexing).await;
+                return;
+            };
+            let listing = launcher
+                .show_root_results(epoch, search, &query, asked, &mut cancelled)
+                .await;
             launcher.show_indexed_results(indexing).await;
+            // Commands whose granted folder was still being listed are asked
+            // again once it is, after every other result was shown.
+            for (command, data, listed) in listing.unwrap_or_default() {
+                if until_cancelled(listed, &mut cancelled).await.is_none() {
+                    return;
+                }
+                let asked = launcher
+                    .show_one_root_result(epoch, search, &query, command, data, &mut cancelled)
+                    .await;
+                if asked.is_none() {
+                    return;
+                }
+            }
         }
     }
 
@@ -1052,9 +1267,14 @@ impl Launcher {
     }
 
     /// Shows the root results matching `query` from metadata alone; results
-    /// computed for an earlier query are gone.
-    fn search(&self, state: &mut State, query: &str) {
+    /// computed for an earlier query are gone, and the calls still asking
+    /// for them are cancelled. Returns what resolves once this search is
+    /// replaced too, or root search is left.
+    fn search(&self, state: &mut State, query: &str) -> tokio::sync::oneshot::Receiver<()> {
         state.search_epoch += 1;
+        let (alive, cancelled) = tokio::sync::oneshot::channel();
+        // Dropping the earlier search's cancels its pending calls.
+        state.search_alive = Some(alive);
         state.computed.clear();
         // A command's answer to the query sent is not an answer to this one.
         if state.sent_from.take().is_some_and(|sent| sent != query) {
@@ -1067,6 +1287,7 @@ impl Launcher {
         state.view.selected = aliases::first_choice(&entries);
         state.view.rows = rows;
         state.entries = entries;
+        cancelled
     }
 
     /// The enabled commands that compute root results, each with its
@@ -1101,42 +1322,90 @@ impl Launcher {
     /// lists each one's as soon as it answers, unless the query, the search
     /// or the screen has changed meanwhile.
     ///
-    /// The runtime serves calls one at a time, so a command that is slow or
-    /// hangs still delays the commands asked after it (cancellation and
-    /// timeouts are #29 and #18); it no longer hides the answers of those
-    /// asked before it.
+    /// Once `cancelled` resolves (the search was replaced, or root search
+    /// was left), the pending call is dropped, which cancels it in the
+    /// runtime, and no further command is asked. The runtime serves calls one
+    /// at a time, so a command that is slow or hangs still delays the
+    /// commands asked after it until then (timeouts are #18); it no longer
+    /// hides the answers of those asked before it.
     async fn show_root_results(
         &self,
         epoch: u64,
         search: u64,
-        query: String,
+        query: &str,
         commands: Vec<(CommandRegistration, Option<PackageData>)>,
-    ) {
+        cancelled: &mut tokio::sync::oneshot::Receiver<()>,
+    ) -> Option<Vec<Listing>> {
+        let mut listing = Vec::new();
         for (command, data) in commands {
-            let answer = match self.runtime() {
-                Ok(runtime) => {
-                    runtime
-                        .root_results_with(&command.component, &query, data.clone())
-                        .await
-                }
-                Err(error) => Err(error),
-            };
-            let Some(mut state) = self.lock_if_current(epoch) else {
-                return;
-            };
-            if state.search_epoch != search || state.view.query() != Some(query.as_str()) {
-                return;
+            let asked = self
+                .show_one_root_result(
+                    epoch,
+                    search,
+                    query,
+                    command.clone(),
+                    data.clone(),
+                    cancelled,
+                )
+                .await?;
+            if let Some(listed) = asked {
+                listing.push((command, data, listed));
             }
-            let state = &mut *state;
-            // A command disabled or replaced meanwhile contributes nothing.
-            if data.as_ref().and_then(PackageData::stopped).is_some() {
-                continue;
-            }
-            state
-                .computed
-                .extend(computed_results(command, &query, answer));
-            relist_root(state, &query);
         }
+        Some(listing)
+    }
+
+    /// Asks `command` for its root results for `query` and lists them in
+    /// place of any it gave before, unless the query, the search or the
+    /// screen changed meanwhile (then `None`: ask nothing more). Answers
+    /// what resolves once the granted folder its package's answer was still
+    /// waiting for is listed, if it was.
+    async fn show_one_root_result(
+        &self,
+        epoch: u64,
+        search: u64,
+        query: &str,
+        command: CommandRegistration,
+        data: Option<PackageData>,
+        cancelled: &mut tokio::sync::oneshot::Receiver<()>,
+    ) -> Option<Option<ListedFuture>> {
+        let answer = match self.runtime() {
+            Ok(runtime) => {
+                let call = runtime.root_results_with(&command.component, query, data.clone());
+                until_cancelled(call, cancelled).await?
+            }
+            Err(error) => Err(error),
+        };
+        let mut state = self.lock_if_current(epoch)?;
+        if state.search_epoch != search || state.view.query() != Some(query) {
+            return None;
+        }
+        let state = &mut *state;
+        // A command disabled or replaced meanwhile contributes nothing.
+        if data.as_ref().and_then(PackageData::stopped).is_some() {
+            return Some(None);
+        }
+        let owner = owner(&state.packages, &command.component).map(|p| p.identity.key());
+        let listed = match (&owner, &state.files) {
+            (Some(owner), Some(files)) => files
+                .listed(owner)
+                .map(|listed| Box::pin(listed) as ListedFuture),
+            _ => None,
+        };
+        let component = command.component.clone();
+        state
+            .computed
+            .retain(|computed| computed.component != component);
+        let files = state.files.clone();
+        state.computed.extend(computed_results(
+            command,
+            owner.as_deref(),
+            files.as_ref(),
+            query,
+            answer,
+        ));
+        relist_root(state, query);
+        Some(listed)
     }
 
     /// Selects the row at `index`, if there is one.
@@ -1182,7 +1451,7 @@ impl Launcher {
         match &state.view.screen {
             Screen::Form(_) => {
                 let form = state.form.take().expect("a form is open");
-                state.screen_epoch += 1;
+                state.next_screen();
                 state.view = LauncherView {
                     status: Status::Idle,
                     ..form.return_to
@@ -1201,6 +1470,13 @@ impl Launcher {
                     |entry| matches!(entry, Entry::PauseDetails(shown) if *shown == identity),
                 );
             }
+            Screen::NetworkDetails { identity, .. } => {
+                let identity = identity.clone();
+                self.show_extensions_at(
+                    &mut state,
+                    |entry| matches!(entry, Entry::NetworkDetails(shown) if *shown == identity),
+                );
+            }
             Screen::BuildDetails { identity, .. } => {
                 let identity = identity.clone();
                 self.show_extensions_at(
@@ -1208,9 +1484,18 @@ impl Launcher {
                     |entry| matches!(entry, Entry::BuildDetails(shown) if *shown == identity),
                 );
             }
-            Screen::Command | Screen::Package { .. } | Screen::Extensions { .. } => {
-                self.show_root(&mut state, None)
+            Screen::RuntimeDetails { .. } => {
+                self.show_extensions_at(&mut state, |entry| matches!(entry, Entry::RuntimeDetails));
             }
+            // Escape clears the command's search before leaving it, as it
+            // clears root search's query.
+            Screen::CommandSearch { query } if !query.is_empty() => {
+                self.clear_search_in_command(&mut state);
+            }
+            Screen::Command
+            | Screen::CommandSearch { .. }
+            | Screen::Package { .. }
+            | Screen::Extensions { .. } => self.show_root(&mut state, None),
             Screen::Root { query } => {
                 if !query.is_empty() {
                     self.search(&mut state, "");
@@ -1240,6 +1525,7 @@ impl Launcher {
         let mut develop = None;
         let mut delete_retained = None;
         let mut install = None;
+        let mut stop_sharing = None;
         // The status line is about this action from now on.
         state.sent_from = None;
         let entry = match entry {
@@ -1276,6 +1562,10 @@ impl Launcher {
                     Some(Entry::OpenUrl(url))
                 }
             },
+            Some(Entry::StopSharingFolder(identity)) => {
+                stop_sharing = Some(identity);
+                None
+            }
             Some(Entry::Manage) => {
                 self.show_extensions(&mut state);
                 None
@@ -1284,8 +1574,20 @@ impl Launcher {
                 self.show_clear_cache(&mut state, &identity);
                 None
             }
+            Some(Entry::NetworkDetails(identity)) => {
+                self.show_network_details(&mut state, &identity);
+                None
+            }
             Some(Entry::PauseDetails(identity)) => {
                 self.show_pause_details(&mut state, &identity);
+                None
+            }
+            Some(Entry::RuntimeDetails) => {
+                self.show_runtime_details(&mut state);
+                None
+            }
+            Some(Entry::RestartRuntime) => {
+                self.restart_runtime(&mut state);
                 None
             }
             Some(Entry::Develop(identity)) => {
@@ -1308,11 +1610,20 @@ impl Launcher {
                 None
             }
             Some(Entry::AskUninstall(identity)) => {
-                self.show_uninstall(&mut state, &identity);
+                let closure = dependencies::required_dependents(&state.packages, &identity);
+                if closure.is_empty() {
+                    self.show_uninstall(&mut state, &identity);
+                } else {
+                    self.show_uninstall_dependents(&mut state, &identity, closure);
+                }
                 None
             }
             Some(Entry::Uninstall(identity, saved)) => {
-                uninstall = self.begin_uninstall(&mut state, identity, saved);
+                uninstall = self.begin_uninstall(&mut state, vec![identity], saved);
+                None
+            }
+            Some(Entry::UninstallAll(identity, shown, saved)) => {
+                uninstall = self.begin_uninstall_all(&mut state, identity, &shown, saved);
                 None
             }
             Some(Entry::AskDeleteRetained(identity)) => {
@@ -1378,7 +1689,7 @@ impl Launcher {
                 install = self.begin_install(&mut state, folder, mode, assumptions);
                 None
             }
-            Some(Entry::InstallFromFolder) | None => None,
+            Some(Entry::InstallFromFolder | Entry::ChooseFolder(_)) | None => None,
             Some(entry) => {
                 state.view.status = Status::Running;
                 Some(entry)
@@ -1389,9 +1700,10 @@ impl Launcher {
         // A call into the package belongs to its generation as of now, not
         // as of when the returned future first runs.
         let called = match &entry {
-            Some(Entry::Open(component) | Entry::Send(aliases::Sending { component, .. })) => {
-                Some(component)
-            }
+            Some(
+                Entry::Open(Opening { component, .. })
+                | Entry::Send(aliases::Sending { component, .. }),
+            ) => Some(component),
             Some(Entry::Run(_) | Entry::CustomView(..)) => open.as_ref(),
             _ => None,
         };
@@ -1423,8 +1735,11 @@ impl Launcher {
             if let Some(install) = install {
                 launcher.finish_install(epoch, install).await;
             }
+            if let Some(identity) = stop_sharing {
+                launcher.stop_sharing_folder(identity).await;
+            }
             match entry {
-                Some(Entry::Open(component)) => launcher.open_command(epoch, component, data).await,
+                Some(Entry::Open(opening)) => launcher.open_command(epoch, opening, data).await,
                 Some(Entry::Send(sending)) => launcher.run_query(epoch, sending, data).await,
                 Some(Entry::OpenApplication { id, name }) => {
                     launcher.open_application(epoch, id, name).await
@@ -1435,6 +1750,9 @@ impl Launcher {
                     }
                 }
                 Some(Entry::OpenUrl(url)) => launcher.open_url(epoch, url).await,
+                Some(Entry::OpenFile { owner, id, name }) => {
+                    launcher.open_file(epoch, owner, id, name).await
+                }
                 Some(Entry::ClearCache(identity)) => launcher.clear_cache(epoch, identity).await,
                 Some(Entry::CustomView(item_id, info)) => {
                     if let Some(component) = open {
@@ -1448,6 +1766,8 @@ impl Launcher {
                     | Entry::Broken(_)
                     | Entry::Unavailable(_)
                     | Entry::InstallFromFolder
+                    | Entry::ChooseFolder(_)
+                    | Entry::StopSharingFolder(_)
                     | Entry::Install(..)
                     | Entry::Manage
                     | Entry::Toggle(_)
@@ -1455,6 +1775,9 @@ impl Launcher {
                     | Entry::Reload(_)
                     | Entry::Retry(_)
                     | Entry::PauseDetails(_)
+                    | Entry::NetworkDetails(_)
+                    | Entry::RuntimeDetails
+                    | Entry::RestartRuntime
                     | Entry::Develop(_)
                     | Entry::StopDeveloping(_)
                     | Entry::BuildDetails(_)
@@ -1467,6 +1790,7 @@ impl Launcher {
                     | Entry::ForgetChoices(_)
                     | Entry::AskUninstall(_)
                     | Entry::Uninstall(..)
+                    | Entry::UninstallAll(..)
                     | Entry::AskDeleteRetained(_)
                     | Entry::DeleteRetained(_)
                     | Entry::Cancel
@@ -1752,8 +2076,8 @@ impl Launcher {
     /// Reads the package in `folder` off the calling thread, then has the
     /// runtime check each component without running it.
     async fn read_and_check(&self, folder: PathBuf) -> Result<SourcePackage, PackageError> {
-        let package = off_thread(move || SourcePackage::read(&folder)).await?;
-        self.check_components(&package).await?;
+        let mut package = off_thread(move || SourcePackage::read(&folder)).await?;
+        package.network = self.check_components(&package).await?;
         Ok(package)
     }
 
@@ -1764,14 +2088,15 @@ impl Launcher {
         folder: PathBuf,
         identity: PackageIdentity,
     ) -> Result<SourcePackage, PackageError> {
-        let package = off_thread(move || SourcePackage::read_staged(&folder, identity)).await?;
-        self.check_components(&package).await?;
+        let mut package = off_thread(move || SourcePackage::read_staged(&folder, identity)).await?;
+        package.network = self.check_components(&package).await?;
         Ok(package)
     }
 
     /// Has the runtime check each component of `package` without running
-    /// it.
-    async fn check_components(&self, package: &SourcePackage) -> Result<(), PackageError> {
+    /// it; whether any imports `wasi:http` (it can make web requests).
+    async fn check_components(&self, package: &SourcePackage) -> Result<bool, PackageError> {
+        let mut network = false;
         let mut checked_components = Vec::new();
         for (name, component) in package.manifest.components() {
             // A component serving several commands or operations is checked
@@ -1786,12 +2111,13 @@ impl Launcher {
                 Ok(runtime) => runtime.check_with(&source, exports).await,
                 Err(error) => Err(error),
             };
-            checked.map_err(|error| PackageError::Component {
+            let checked = checked.map_err(|error| PackageError::Component {
                 command: name.clone(),
                 error,
             })?;
+            network |= checked.network;
         }
-        Ok(())
+        Ok(network)
     }
 
     /// Shows root search with an empty query: this build's commands, then
@@ -1805,9 +2131,9 @@ impl Launcher {
         let (rows, entries) = root_rows(state, "");
         let selected = select
             .and_then(|component| {
-                entries
-                    .iter()
-                    .position(|entry| matches!(entry, Entry::Open(c) if *c == component))
+                entries.iter().position(
+                    |entry| matches!(entry, Entry::Open(opening) if opening.component == component),
+                )
             })
             .or_else(|| aliases::first_choice(&entries));
         self.leave_command(state);
@@ -1836,11 +2162,13 @@ impl Launcher {
             Screen::Root { .. } => self.refresh_root(state),
             Screen::Extensions { .. } => self.refresh_extensions(state),
             Screen::Command
+            | Screen::CommandSearch { .. }
             | Screen::Package { .. }
             | Screen::Form(_)
             | Screen::CustomView(_)
             | Screen::Confirm { .. }
             | Screen::Hotkey { .. } => {}
+            Screen::RuntimeDetails { .. } => self.keep_runtime_details(state),
             // Once the build succeeded or development ended, the extension
             // list; else the latest failure. The screen epoch is kept.
             Screen::BuildDetails { identity, .. } => {
@@ -1862,6 +2190,14 @@ impl Launcher {
                 state.screen_epoch = epoch;
             }
             Screen::PauseDetails { .. } => {}
+            // What it reached since, or the extension list once it is gone,
+            // keeping the screen epoch.
+            Screen::NetworkDetails { identity, .. } => {
+                let identity = identity.clone();
+                let epoch = state.screen_epoch;
+                self.show_network_details(state, &identity);
+                state.screen_epoch = epoch;
+            }
         }
     }
 
@@ -1918,7 +2254,7 @@ impl Launcher {
         let command = |(command, unavailable): (CommandRegistration, Option<Unavailable>)| {
             let entry = match &unavailable {
                 Some(reason) => Entry::Unavailable(reason.reason().to_owned()),
-                None => Entry::Open(command.component),
+                None => Entry::Open(Opening::of(&command)),
             };
             let row = Row {
                 id: command.id,
@@ -2164,8 +2500,8 @@ impl Launcher {
             "Clearing an extension's cache keeps its settings, content and credentials.".into(),
             "Uninstalling an extension asks whether to keep its settings and content.".into(),
             format!(
-                "An extension that cannot start, or crashes {}, is paused until you retry it; \
-                 it keeps its settings.",
+                "An extension that cannot start, or crashes or stops responding {}, is paused \
+                 until you retry it; it keeps its settings.",
                 pausing::within()
             ),
         ];
@@ -2186,7 +2522,16 @@ impl Launcher {
     /// one row per identity with retained data.
     fn extension_rows(&self, state: &State) -> (Vec<Row>, Vec<Entry>) {
         let developed = |identity: &PackageIdentity| self.is_developed(identity);
-        let (mut rows, mut entries) = extension_rows(&state.packages, &state.paused, developed);
+        let (mut rows, mut entries): (Vec<Row>, Vec<Entry>) =
+            self.runtime_rows().into_iter().unzip();
+        let (package_rows, package_entries) =
+            extension_rows(&state.packages, &state.paused, developed);
+        rows.extend(package_rows);
+        entries.extend(package_entries);
+        for (row, entry) in self.network_rows(state) {
+            rows.push(row);
+            entries.push(entry);
+        }
         let development = self.development_rows(&state.packages);
         for (row, entry) in self
             .hotkey_rows(state)
@@ -2218,7 +2563,7 @@ impl Launcher {
         };
         let title = package.title();
         let mut details = vec![
-            format!("{}.", pausing::failure(&title, pause.after)),
+            format!("{}.", pause.after.failure(&title)),
             format!("From {identity}"),
         ];
         if let Some(version) = &pause.version {
@@ -2239,11 +2584,11 @@ impl Launcher {
         );
         let retry = Row {
             id: format!("retry:{}", identity.key()),
-            title: pausing::retry_title(&title, pause.after),
+            title: pause.after.retry_title(&title),
             subtitle: Some("Start it again".into()),
             unavailable: None,
         };
-        state.screen_epoch += 1;
+        state.next_screen();
         state.entries = vec![Entry::Retry(identity.clone())];
         let screen = Screen::PauseDetails {
             identity: identity.clone(),
@@ -2263,7 +2608,7 @@ impl Launcher {
             subtitle: Some(subtitle.into()),
             unavailable: None,
         };
-        state.screen_epoch += 1;
+        state.next_screen();
         state.entries = vec![Entry::ClearCache(identity.clone()), Entry::Cancel];
         let details = vec![
             format!("From {identity}"),
@@ -2306,11 +2651,13 @@ impl Launcher {
                     .collect()
             })
         };
-        let running = match self.runtime() {
-            Ok(runtime) => runtime.running().await,
-            Err(_) => Vec::new(),
+        // Unknown (the runtime did not answer in time) counts as running.
+        let still_running = match self.runtime() {
+            Ok(runtime) => runtime_barrier(runtime)
+                .await
+                .is_none_or(|running| running.iter().any(|path| components.contains(path))),
+            Err(_) => false,
         };
-        let still_running = running.iter().any(|path| components.contains(path));
         let Some(mut state) = self.lock_if_current(epoch) else {
             return;
         };
@@ -2333,10 +2680,11 @@ impl Launcher {
         };
         match question.clone() {
             Question::ClearCache(identity) => self.show_extensions_at_clear_cache(state, &identity),
-            Question::Uninstall(identity) => self.show_extensions_at(
-                state,
-                |entry| matches!(entry, Entry::AskUninstall(asked) if *asked == identity),
-            ),
+            Question::Uninstall(identity) | Question::UninstallDependents(identity) => self
+                .show_extensions_at(
+                    state,
+                    |entry| matches!(entry, Entry::AskUninstall(asked) if *asked == identity),
+                ),
             Question::DeleteRetained(identity) => self.show_extensions_at(
                 state,
                 |entry| matches!(entry, Entry::AskDeleteRetained(asked) if *asked == identity),
@@ -2438,7 +2786,7 @@ impl Launcher {
                     moves_in_flight: 0,
                     waiting_move: None,
                 });
-                state.screen_epoch += 1;
+                state.next_screen();
             }
             Err(error) => state.view.status = Status::Error(error.to_string()),
         }
@@ -2561,7 +2909,7 @@ impl Launcher {
     /// from, with `status`, as a new screen.
     fn return_from_custom_view(&self, state: &mut State, status: Status) {
         let return_to = self.close_custom_view(state).expect("a view is open");
-        state.screen_epoch += 1;
+        state.next_screen();
         state.view = LauncherView {
             status,
             ..return_to
@@ -2573,9 +2921,11 @@ impl Launcher {
     /// the runtime, and replies for the old screen are discarded.
     fn leave_command(&self, state: &mut State) {
         self.close_custom_view(state);
+        // Its search in progress, if any, is stopped.
+        state.searching = None;
         state.open = None;
         state.form = None;
-        state.screen_epoch += 1;
+        state.next_screen();
     }
 
     /// Closes the open custom view, if there is one, and returns the command
@@ -2668,7 +3018,12 @@ impl Launcher {
         };
     }
 
-    async fn open_command(&self, epoch: u64, component: PathBuf, data: Option<PackageData>) {
+    async fn open_command(&self, epoch: u64, opening: Opening, data: Option<PackageData>) {
+        let Opening {
+            component,
+            command,
+            search,
+        } = opening;
         let result = match self.runtime() {
             Ok(runtime) => runtime.get_view_with(&component, data.clone()).await,
             Err(error) => Err(error),
@@ -2712,31 +3067,30 @@ impl Launcher {
         let state = &mut *state;
         match result {
             Ok(view) => {
-                let (rows, entries): (Vec<Row>, Vec<Entry>) = view
-                    .items
-                    .into_iter()
-                    .map(|item| {
-                        let unavailable =
-                            platform::unavailable(item.platforms.as_deref(), "this action");
-                        let entry = match (&unavailable, item.form, item.custom_view) {
-                            (Some(reason), _, _) => Entry::Unavailable(reason.clone()),
-                            (None, Some(form), _) => Entry::Form(item.id.clone(), form),
-                            (None, None, Some(info)) => Entry::CustomView(item.id.clone(), info),
-                            (None, None, None) => Entry::Run(item.id.clone()),
-                        };
-                        let row = Row {
-                            id: item.id,
-                            title: item.title,
-                            subtitle: item.subtitle,
-                            unavailable: unavailable.map(Unavailable::OnThisSystem),
-                        };
-                        (row, entry)
-                    })
-                    .unzip();
+                let CommandList {
+                    mut rows,
+                    mut entries,
+                } = CommandList::of(view.items);
+                if let Some(package) = owner(&state.packages, &component)
+                    && folder_access(package)
+                {
+                    let (pane_rows, pane_entries) = files::folder_rows(state, &package.identity);
+                    rows.splice(0..0, pane_rows);
+                    entries.splice(0..0, pane_entries);
+                }
+                let screen = if search {
+                    state.searching = Some(command_search::Searching::new(command));
+                    Screen::CommandSearch {
+                        query: String::new(),
+                    }
+                } else {
+                    state.searching = None;
+                    Screen::Command
+                };
                 state.entries = entries;
                 state.open = Some(component);
-                state.screen_epoch += 1;
-                state.view = LauncherView::new(Screen::Command, view.title).with_rows(rows);
+                state.next_screen();
+                state.view = LauncherView::new(screen, view.title).with_rows(rows);
             }
             Err(error) => state.view.status = Status::Error(error.to_string()),
         }
@@ -2784,10 +3138,27 @@ impl Launcher {
         (state.screen_epoch == epoch).then_some(state)
     }
 
+    /// Locks the launcher's state. If a thread panicked while holding it
+    /// (such as the runtime thread crashing while it noted a failure), the
+    /// state is taken over and first put back into a known state (see
+    /// [`Launcher::recover_state`]).
     fn lock(&self) -> MutexGuard<'_, State> {
-        self.state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => {
+                let mut state = poisoned.into_inner();
+                self.state.clear_poison();
+                self.recover_state(&mut state);
+                state
+            }
+        }
+    }
+
+    /// Tells the window that the launcher changed in the background.
+    fn changed(&self) {
+        if let Some(changes) = &self.changes {
+            changes.changed();
+        }
     }
 }
 
@@ -2808,6 +3179,8 @@ fn stopped(state: &State, component: &Path, data: &Option<PackageData>) -> Optio
         End::Replaced => Some(CallError::Replaced.to_string()),
         End::Uninstalled => Some(CallError::Uninstalled.to_string()),
         End::Paused => Some(paused(state, component)),
+        // The launcher's data is never fenced: only the runtime's copy is.
+        End::Abandoned => None,
     }
 }
 
@@ -2844,8 +3217,7 @@ fn extension_rows(
         let state = match (package.enabled, failure(package).map(|pause| pause.after)) {
             (false, _) => "Disabled",
             (true, None) => "Enabled",
-            (true, Some(PauseCause::FailedToStart)) => "Enabled · Failed to start",
-            (true, Some(PauseCause::Crashes)) => "Enabled · Paused after crashing",
+            (true, Some(cause)) => cause.state(),
         };
         let developing = if developed(&package.identity) {
             " · Developing"
@@ -2855,7 +3227,15 @@ fn extension_rows(
         let row = Row {
             id: package.identity.key(),
             title: package.title(),
-            subtitle: Some(format!("{state}{developing} · {}", package.identity)),
+            subtitle: Some(format!(
+                "{state}{developing}{network} · {}",
+                package.identity,
+                network = if package.uses_network {
+                    format!(" · {}", network::USES_THE_NETWORK)
+                } else {
+                    String::new()
+                }
+            )),
             unavailable: None,
         };
         (row, Entry::Toggle(package.identity.clone()))
@@ -2880,10 +3260,10 @@ fn extension_rows(
             let paused = failure(package).into_iter().flat_map(move |pause| {
                 let retry = Row {
                     id: format!("retry:{}", package.identity.key()),
-                    title: pausing::retry_title(&title, pause.after),
+                    title: pause.after.retry_title(&title),
                     subtitle: Some(format!(
                         "Paused: {}; start it again",
-                        pausing::failure("it", pause.after)
+                        pause.after.failure("it")
                     )),
                     unavailable: None,
                 };
@@ -3085,14 +3465,14 @@ fn open_form(state: &mut State, item_id: String, form: Form) {
         return_to,
         submitting: false,
     });
-    state.screen_epoch += 1;
+    state.next_screen();
 }
 
 /// The rows of root search for `query`, and what activating each does: the
 /// results computed from it, then the root results matching it, best match
 /// first, with, for a query that is not blank, those supplied ahead of it
-/// (after the others of the same rank), then the rows explaining why a
-/// command could not supply them.
+/// (after the others of the same rank), then the computed results that open
+/// a file, then the rows explaining why a command could not supply them.
 fn root_rows(state: &State, query: &str) -> (Vec<Row>, Vec<Entry>) {
     let blank = query.trim().is_empty();
     let candidates: Vec<&RootResult> = state
@@ -3119,18 +3499,21 @@ fn root_rows(state: &State, query: &str) -> (Vec<Row>, Vec<Entry>) {
         .failures()
         .filter(|_| !blank)
         .map(|(row, entry)| (row.clone(), entry.clone()));
+    let (files, computed): (Vec<&Computed>, Vec<&Computed>) = state
+        .computed
+        .iter()
+        .partition(|computed| matches!(computed.entry, Entry::OpenFile { .. }));
+    let computed_row = |computed: &Computed| (computed.row.clone(), computed.entry.clone());
     // What the user's alias names comes first, even before computed
-    // results; the fallbacks, which the user must choose, come last.
+    // results; files found for the query follow what is found by title,
+    // since a folder can hold many; the fallbacks, which the user must
+    // choose, come last.
     aliases::rows_sending_after_alias(state, query)
         .into_iter()
         .chain(by_alias.into_iter().map(found))
-        .chain(
-            state
-                .computed
-                .iter()
-                .map(|computed| (computed.row.clone(), computed.entry.clone())),
-        )
+        .chain(computed.into_iter().map(computed_row))
         .chain(matches.into_iter().map(found))
+        .chain(files.into_iter().map(computed_row))
         .chain(failures)
         .chain(aliases::fallback_rows(state, query))
         .unzip()
@@ -3155,9 +3538,14 @@ fn relist_root(state: &mut State, query: &str) {
 }
 
 /// The rows for `command`'s `answer` to `query`: its results, or one
-/// explaining why it failed.
+/// explaining why it failed. A result that opens a file is shown with the
+/// file's own name and folder, as the host found it in the latest listing
+/// of `owner`'s granted folder, whatever the extension titled it; one the
+/// host does not know is left out.
 fn computed_results(
     command: CommandRegistration,
+    owner: Option<&str>,
+    files: Option<&FileAccess>,
     query: &str,
     answer: Result<Vec<ComputedResult>, CallError>,
 ) -> Vec<Computed> {
@@ -3169,18 +3557,28 @@ fn computed_results(
     match answer {
         Ok(results) => results
             .into_iter()
-            .map(|result| {
-                let row = Row {
-                    id: format!("{}:{}", command.id, result.id),
-                    title: result.title,
-                    subtitle: result.subtitle,
-                    unavailable: None,
+            .filter_map(|result| {
+                let ComputedResult { listing, action } = result;
+                let (listing, entry) = match action {
+                    RootAction::Copy(text) => (listing, Entry::Copy(text)),
+                    RootAction::OpenUrl(url) => (listing, Entry::OpenUrl(url)),
+                    RootAction::OpenFile(id) => {
+                        let owner = owner?;
+                        let known = files?.known(owner, &id)?;
+                        let entry = Entry::OpenFile {
+                            owner: owner.to_owned(),
+                            id,
+                            name: known.name.clone(),
+                        };
+                        let listing = ResultListing {
+                            id: listing.id,
+                            title: known.name.clone(),
+                            subtitle: Some(format!("File in {}", known.within)),
+                        };
+                        (listing, entry)
+                    }
                 };
-                let entry = match result.action {
-                    RootAction::Copy(text) => Entry::Copy(text),
-                    RootAction::OpenUrl(url) => Entry::OpenUrl(url),
-                };
-                computed(row, entry)
+                Some(computed(Row::listed(listing, Some(&command.id)), entry))
             })
             .collect(),
         Err(error) => {
@@ -3194,6 +3592,55 @@ fn computed_results(
             vec![computed(row, Entry::Broken(problem))]
         }
     }
+}
+
+/// What resolves once a granted folder's listing ends.
+type ListedFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
+
+/// A command whose answer waited for its granted folder's listing, its
+/// data, and what resolves once the listing ends.
+type Listing = (CommandRegistration, Option<PackageData>, ListedFuture);
+
+/// Whether `package` asks for access to a folder the user grants it.
+fn folder_access(package: &InstalledPackage) -> bool {
+    package
+        .manifest
+        .as_ref()
+        .is_ok_and(|manifest| manifest.folder_access)
+}
+
+/// Awaits `call`, unless `cancelled` resolves first (its sender was used or
+/// dropped): then `call` is dropped unfinished, and the answer is `None`.
+async fn until_cancelled<T>(
+    call: impl Future<Output = T>,
+    cancelled: &mut tokio::sync::oneshot::Receiver<()>,
+) -> Option<T> {
+    let mut call = std::pin::pin!(call);
+    std::future::poll_fn(|cx| {
+        if Pin::new(&mut *cancelled).poll(cx).is_ready() {
+            return std::task::Poll::Ready(None);
+        }
+        call.as_mut().poll(cx).map(Some)
+    })
+    .await
+}
+
+/// The components with a live instance, once the runtime handled every
+/// request sent before this; `None` when it cannot say (it stopped, or its
+/// thread failed) or does not within [`crate::runtime::UNRESPONSIVE_LIMIT`]
+/// (a guest call ahead of it waits for long), so that a management action
+/// waiting on it never waits forever.
+async fn runtime_barrier(runtime: &Runtime) -> Option<Vec<PathBuf>> {
+    let running = runtime.try_running();
+    let timer = off_thread(|| std::thread::sleep(crate::runtime::UNRESPONSIVE_LIMIT));
+    let (mut running, mut timer) = (std::pin::pin!(running), std::pin::pin!(timer));
+    std::future::poll_fn(|cx| {
+        if let std::task::Poll::Ready(running) = running.as_mut().poll(cx) {
+            return std::task::Poll::Ready(running.ok());
+        }
+        timer.as_mut().poll(cx).map(|()| None)
+    })
+    .await
 }
 
 /// Runs blocking file work on its own thread, so the caller's thread (the

@@ -13,9 +13,11 @@ gpui = { package = "gpui-ce", git = "https://github.com/gpui-ce/gpui-ce", rev = 
 gpui_elements = { package = "gpui_ce_elements", git = "https://github.com/gpui-ce/gpui-ce", rev = "17d9c8e8fdb30a329d817ca06bff424e8e848f1a" }
 # font-kit is the macOS text system; without it no text renders on macOS.
 gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/gpui-ce/gpui-ce", rev = "17d9c8e8fdb30a329d817ca06bff424e8e848f1a", features = ["font-kit"] }
-# Opens web links (quicklinks) with the system's handler.
-# 5.4 passes the target to its PowerShell opener through an environment
-# variable, not the command line; review the Windows path before widening this.
+# Opens web links (quicklinks) and files (file search) with the system's
+# handler. On Windows 5.4.4 passes the target to its PowerShell opener through
+# an environment variable, not the command line, and opens an existing path
+# with `Invoke-Item -LiteralPath` (anything else with `Start-Process`); review
+# the Windows path before widening this.
 open = "~5.4.4"
 
 [dev-dependencies]

@@ -11,7 +11,7 @@
 //! the only thread of a run, and it ends once it has reaped the process.
 
 use std::fmt;
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use pane_target::{Platform, Target};
 use tokio::sync::oneshot;
 
-use crate::generation::{End, Generation};
+use crate::generation::{End, Fence, Generation};
 use crate::platform;
 
 /// The largest input a helper run takes, in bytes.
@@ -47,6 +47,13 @@ const STDERR_KEPT: u64 = 2048;
 
 /// How often a supervising thread checks its process when nothing wakes it.
 const TICK: Duration = Duration::from_millis(10);
+
+/// How long a helper may run before Pane ends it (#18): a helper that
+/// never exits would otherwise hold its command's call, and every other
+/// extension's call behind it, until its package stops. Ending it is an
+/// error the command handles like any other failure of its helper, not a
+/// crash. An explicit choice (provisional).
+pub const HELPER_TIME_LIMIT: Duration = Duration::from_secs(30);
 
 /// How long stopping helpers waits for their supervising threads to reap
 /// them, all together.
@@ -144,6 +151,43 @@ pub(crate) fn check_file(folder: &Path, file: &Path, target: Target) -> Result<P
         Some(problem) => Err(problem),
         None => Ok(program),
     }
+}
+
+/// Distinguishes [`copy_executable`]'s temporary names within one process.
+static NEXT_COPY: AtomicU64 = AtomicU64::new(0);
+
+/// Copies the executable file at `source` to `target`: to a fresh temporary
+/// file beside `target` first, then renamed into place, so `target`'s name
+/// never exists half-written.
+///
+/// This closes the classic Linux `ETXTBSY` race: the kernel refuses to
+/// `exec` a file that any process, anywhere, still has open for writing, so
+/// writing straight onto the path a helper is about to run under (a fresh
+/// install run soon after, or a reinstall rewriting a helper another thread
+/// is starting) can make that `exec` fail while the copy is still in
+/// flight. `fs::copy` already opens its files the way Rust's `File` always
+/// does, with `O_CLOEXEC`, so an unrelated fork mid-copy never hands a
+/// child that descriptor across its own `exec`; what remains is `target`'s
+/// own name being exec'd while its bytes are still arriving, which the
+/// rename removes by only ever publishing a whole, already-closed file.
+/// [`Helpers::start`]'s retry is the remaining backstop, for a race this
+/// does not cover.
+pub(crate) fn copy_executable(source: &Path, target: &Path) -> io::Result<()> {
+    let dir = target.parent().unwrap_or_else(|| Path::new("."));
+    let name = target
+        .file_name()
+        .ok_or_else(|| io::Error::other(format!("{} names no file", target.display())))?;
+    let temporary = dir.join(format!(
+        ".{}.{}-{}.tmp",
+        name.to_string_lossy(),
+        std::process::id(),
+        NEXT_COPY.fetch_add(1, Ordering::Relaxed)
+    ));
+    let copied = fs::copy(source, &temporary).and_then(|_| fs::rename(&temporary, target));
+    if copied.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    copied.map(|_| ())
 }
 
 /// What a file is, as far as starting it goes, from its first bytes.
@@ -315,11 +359,28 @@ pub(crate) fn stopped_code(end: End) -> HelperError {
         End::Replaced => "this code of the extension was replaced by a reload or an update",
         End::Uninstalled => "the extension was uninstalled",
         End::Paused => "the extension is paused after an error",
+        End::Abandoned => {
+            "Pane's extension runtime stopped responding and was replaced while this code ran"
+        }
     };
     HelperError::new(
         HelperErrorKind::Refused,
         format!("{why}; its helpers do not run"),
     )
+}
+
+/// Why the code running `spec` is stopped, if it is: its generation ended,
+/// or Pane gave up on its runtime thread.
+fn stopped(spec: &Spec) -> Option<End> {
+    spec.generation
+        .as_ref()
+        .and_then(Generation::ended)
+        .or_else(|| {
+            spec.fence
+                .as_ref()
+                .is_some_and(Fence::closed)
+                .then_some(End::Abandoned)
+        })
 }
 
 /// Refuses input or arguments over Pane's limits.
@@ -360,8 +421,13 @@ pub(crate) struct Spec {
     /// The generation of the code running it: when it ends, so does the
     /// process.
     pub generation: Option<Generation>,
+    /// The fence of the runtime thread running that code: once Pane gives
+    /// up on the thread, the process ends too.
+    pub fence: Option<Fence>,
     /// The guest instance that started it (see [`Helpers::stop_owned_by`]).
     pub owner: u64,
+    /// How long it may run before Pane ends it ([`HELPER_TIME_LIMIT`]).
+    pub limit: Duration,
 }
 
 /// The helper processes of one runtime, for stopping and diagnostics.
@@ -416,6 +482,34 @@ impl Run {
                 .wait_timeout(done, left)
                 .unwrap_or_else(|p| p.into_inner())
                 .0;
+        }
+    }
+}
+
+/// How many times starting a helper retries after the system refuses to run
+/// its file because another process still has it open for writing
+/// (`ETXTBSY`), and the backoff before each retry, growing by `10ms` each time:
+/// the standard mitigation for this Linux race, also used by cargo and
+/// rustup. [`copy_executable`] closes the window for Pane's own writes, but
+/// not one held open a moment longer by an antivirus scanner or another
+/// writer entirely.
+const SPAWN_BUSY_RETRIES: u32 = 5;
+const SPAWN_BUSY_BACKOFF: Duration = Duration::from_millis(10);
+
+/// Spawns `command`, retrying with [`SPAWN_BUSY_BACKOFF`] while the system
+/// answers `ETXTBSY`.
+fn spawn_retrying_busy(command: &mut Command) -> io::Result<Child> {
+    let mut attempt = 0;
+    loop {
+        match command.spawn() {
+            Err(error)
+                if attempt < SPAWN_BUSY_RETRIES
+                    && error.kind() == io::ErrorKind::ExecutableFileBusy =>
+            {
+                attempt += 1;
+                thread::sleep(SPAWN_BUSY_BACKOFF * attempt);
+            }
+            result => return result,
         }
     }
 }
@@ -477,12 +571,60 @@ impl Helpers {
         stop_and_wait(&all);
     }
 
+    /// Ends every helper process running now and waits (briefly) until each
+    /// is reaped, without keeping later ones from starting: after the
+    /// runtime thread crashed, when every run belonged to its guests.
+    pub fn stop_running(&self) {
+        let all = self.lock().runs.clone();
+        stop_and_wait(&all);
+    }
+
+    /// Whether Pane is quitting ([`Helpers::stop_all`]).
+    pub fn quitting(&self) -> bool {
+        self.lock().quitting
+    }
+
     fn lock(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(|p| p.into_inner())
     }
 
+    /// Starts the helper that `spec` finds, on a thread of its own: finding
+    /// its file and starting a process may block, and the runtime thread
+    /// only awaits. A run whose caller is gone by then ends at once.
+    pub fn start_off_thread<S>(
+        &self,
+        spec: S,
+    ) -> impl std::future::Future<Output = Result<Running, HelperError>> + Send + 'static + use<S>
+    where
+        S: FnOnce() -> Result<Spec, HelperError> + Send + 'static,
+    {
+        let helpers = self.clone();
+        let (reply, started) = oneshot::channel();
+        let spawned = thread::Builder::new()
+            .name("pane-helper-start".into())
+            .spawn(move || {
+                // Dropped with the run, ending it, if nobody waits for it.
+                let _ = reply.send(spec().and_then(|spec| helpers.start(spec)));
+            });
+        async move {
+            spawned.map_err(|error| {
+                HelperError::new(
+                    HelperErrorKind::Unavailable,
+                    format!("Pane could not start a helper: {error}"),
+                )
+            })?;
+            started.await.unwrap_or_else(|_| {
+                Err(HelperError::new(
+                    HelperErrorKind::Unavailable,
+                    "Pane's thread starting the helper stopped",
+                ))
+            })
+        }
+    }
+
     /// Starts the helper of `spec`. The returned run ends the process when
-    /// it is dropped before it finishes.
+    /// it is dropped before it finishes. It may block (the system starts a
+    /// process); the helpers' lock is not held meanwhile.
     pub fn start(&self, spec: Spec) -> Result<Running, HelperError> {
         let name = spec.name.clone();
         let unavailable = |what: &str, error: io::Error| {
@@ -517,20 +659,31 @@ impl Helpers {
             use windows::Win32::System::Threading::CREATE_NO_WINDOW;
             command.creation_flags(CREATE_NO_WINDOW.0);
         }
-        // Registered under the lock, so that quitting either sees this run
-        // or keeps it from starting.
-        let mut state = self.lock();
-        if state.quitting {
-            return Err(HelperError::new(
+        let quitting = || {
+            HelperError::new(
                 HelperErrorKind::Refused,
                 format!("Pane is quitting; helper `{name}` does not start"),
-            ));
+            )
+        };
+        if self.quitting() {
+            return Err(quitting());
         }
+        // Started without the lock held, which stopping helpers takes: a
+        // start the system is slow with (or never finishes) holds up no one.
         let child = Owned(
-            command
-                .spawn()
+            spawn_retrying_busy(&mut command)
                 .map_err(|error| unavailable("the system did not start", error))?,
         );
+        // Registered under the lock, so that quitting, or ending the helpers
+        // of a runtime thread Pane gave up on, either sees this run or keeps
+        // it from running on: the process is ended (by `Owned`) here then.
+        let mut state = self.lock();
+        if state.quitting {
+            return Err(quitting());
+        }
+        if let Some(end) = stopped(&spec) {
+            return Err(stopped_code(end));
+        }
         let run = Arc::new(Run {
             owner: spec.owner,
             pid: child.0.id(),
@@ -696,10 +849,12 @@ enum Ended {
     Generation(End),
     Stopped,
     TooMuchOutput,
+    TimedOut,
 }
 
-/// Ends the process when asked to, when its generation ends or when it
-/// writes too much, reaps it, then reads what it wrote.
+/// Ends the process when asked to, when its generation ends, when it
+/// writes too much or runs longer than its limit, reaps it, then reads what
+/// it wrote.
 fn supervise(
     mut child: Owned,
     spec: &Spec,
@@ -710,13 +865,16 @@ fn supervise(
     let name = &spec.name;
     let child = &mut child.0;
     let written = |file: &File| file.metadata().map_or(0, |metadata| metadata.len());
+    let started = Instant::now();
     let status: Result<ExitStatus, Ended> = loop {
         let ended = if run.stop.load(Ordering::SeqCst) {
             Some(Ended::Stopped)
-        } else if let Some(end) = spec.generation.as_ref().and_then(Generation::ended) {
+        } else if let Some(end) = stopped(spec) {
             Some(Ended::Generation(end))
         } else if written(&output) > MAX_HELPER_OUTPUT as u64 {
             Some(Ended::TooMuchOutput)
+        } else if started.elapsed() >= spec.limit {
+            Some(Ended::TimedOut)
         } else {
             None
         };
@@ -754,6 +912,15 @@ fn supervise(
             ));
         }
         Err(Ended::TooMuchOutput) => return Err(too_much()),
+        Err(Ended::TimedOut) => {
+            return Err(HelperError::new(
+                HelperErrorKind::Failed,
+                format!(
+                    "helper `{name}` did not finish within {} seconds; Pane ended it",
+                    spec.limit.as_secs()
+                ),
+            ));
+        }
     };
     // What it wrote by the time it exited; a process it started may still
     // write, and is not waited for.
@@ -1114,12 +1281,14 @@ mod tests {
 
     fn spec(args: &[&str], generation: Option<Generation>, owner: u64) -> Spec {
         Spec {
+            fence: None,
             name: "echo".into(),
             program: echo(),
             args: args.iter().map(|arg| (*arg).to_owned()).collect(),
             input: "hi".into(),
             generation,
             owner,
+            limit: HELPER_TIME_LIMIT,
         }
     }
 
@@ -1168,6 +1337,31 @@ mod tests {
 
         assert!(dropped.elapsed() < Duration::from_millis(100));
         until_none_run(&helpers);
+    }
+
+    /// A helper that runs past its time limit is ended, and the run fails
+    /// saying so: an error the command handles, not a crash.
+    #[test]
+    fn a_helper_running_past_its_time_limit_is_ended() {
+        let helpers = runs();
+        let mut spec = spec(&["--wait", WAIT], None, 0);
+        spec.limit = Duration::from_secs(1);
+        let started = Instant::now();
+
+        let running = helpers.start(spec).unwrap();
+
+        let error = futures::executor::block_on(running.finish()).unwrap_err();
+        assert_eq!(error.kind, HelperErrorKind::Failed);
+        assert_eq!(
+            error.message,
+            "helper `echo` did not finish within 1 seconds; Pane ended it"
+        );
+        assert!(started.elapsed() >= Duration::from_secs(1));
+        assert!(
+            started.elapsed() < Duration::from_secs(4),
+            "it ran its wait out"
+        );
+        assert_eq!(helpers.running(), Vec::<u32>::new());
     }
 
     /// No one polls the run: its supervising thread sees the generation end
@@ -1286,6 +1480,58 @@ mod tests {
             error.message
         );
         assert_eq!(helpers.running(), Vec::<u32>::new());
+    }
+
+    /// The classic Linux `ETXTBSY` race: a helper file rewritten (a fresh
+    /// install run soon after, or a reinstall) while it, or another
+    /// generation of it, is being spawned elsewhere. Many threads copy and
+    /// spawn the same few files at once; `copy_executable`'s rename and
+    /// `spawn_retrying_busy`'s retry (see [`super::spawn_retrying_busy`])
+    /// must mean none of it ever fails. Unix only: Windows refuses to
+    /// replace a running program at all, which is why Pane stops a
+    /// generation's helpers before replacing their files.
+    #[cfg(unix)]
+    #[test]
+    fn many_threads_copying_and_spawning_the_same_helper_never_see_it_busy() {
+        let helpers = runs();
+        let file = exe("pane-echo");
+        // A few shared paths, so copies and spawns collide on the same
+        // file repeatedly rather than each getting its own.
+        let dirs: Vec<tempfile::TempDir> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
+        let paths: Vec<PathBuf> = dirs
+            .iter()
+            .map(|dir| {
+                let path = dir.path().join(&file);
+                copy_executable(&echo(), &path).unwrap();
+                path
+            })
+            .collect();
+
+        thread::scope(|scope| {
+            for path in &paths {
+                scope.spawn(move || {
+                    for _ in 0..30 {
+                        copy_executable(&echo(), path).unwrap();
+                    }
+                });
+            }
+            for path in &paths {
+                let helpers = &helpers;
+                for _ in 0..4 {
+                    scope.spawn(move || {
+                        for _ in 0..10 {
+                            let mut one = spec(&[], None, 0);
+                            one.program = path.clone();
+                            let running = helpers.start(one).unwrap();
+                            let answer = futures::executor::block_on(running.finish()).unwrap();
+                            assert!(answer.starts_with("Echoed"), "{answer}");
+                        }
+                    });
+                }
+            }
+        });
+
+        until_none_run(&helpers);
     }
 
     #[test]

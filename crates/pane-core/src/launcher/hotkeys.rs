@@ -24,7 +24,9 @@ use std::path::Path;
 use serde_json::{Map, Value};
 
 use super::choices::{Choices, Record};
-use super::{Entry, Launcher, LauncherView, Row, Screen, State, Status, Unavailable, off_thread};
+use super::{
+    Entry, Launcher, LauncherView, Opening, Row, Screen, State, Status, Unavailable, off_thread,
+};
 use crate::hotkeys::Shortcut;
 use crate::launcher::CommandRegistration;
 use crate::packages::{InstalledPackage, PackageIdentity};
@@ -214,19 +216,19 @@ impl Launcher {
             .iter()
             .find(|(_, registered)| *registered == shortcut)
             .map(|(command, _)| command.clone())?;
-        let component = offered(&state.packages)
+        let opening = offered(&state.packages)
             .into_iter()
             .find(|(offered, unavailable)| offered.id == command && unavailable.is_none())
-            .map(|(offered, _)| offered.component)?;
-        self.show_root(&mut state, Some(component.clone()));
+            .map(|(offered, _)| Opening::of(&offered))?;
+        self.show_root(&mut state, Some(opening.component.clone()));
         state.view.status = Status::Running;
         // Its data as the package is now, so a disable or reload meanwhile
         // stops the opening.
-        let data = self.data_in(&state, &component);
+        let data = self.data_in(&state, &opening.component);
         let epoch = state.screen_epoch;
         drop(state);
         let launcher = self.clone();
-        Some(async move { launcher.open_command(epoch, component, data).await })
+        Some(async move { launcher.open_command(epoch, opening, data).await })
     }
 
     /// The hotkey rows of the extension list: one per command of each
@@ -309,7 +311,7 @@ impl Launcher {
             ),
             None => (Vec::new(), Vec::new()),
         };
-        state.screen_epoch += 1;
+        state.next_screen();
         state.entries = entries;
         let screen = Screen::Hotkey {
             command: command.to_owned(),

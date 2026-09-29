@@ -983,4 +983,364 @@ check 143-disable-dependents-enabled-alone.png 9fd8a8   # "Enabled JavaScript op
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{140-disable-dependents-asked,141-disable-dependents-cancelled,142-disable-dependents-disabled,143-disable-dependents-enabled-alone}.png
 stop_pane
 [ "$(grep -c '"disabled": true' "$PANE_DATA_DIR/extensions/installed.json")" = 1 ] || { echo "not exactly the dependent left disabled"; exit 1; }
+
+# Recovering from a crash of Pane's extension runtime (#17): the runtime is
+# a thread of Pane, so the smoke has it panic on purpose through a fault
+# file (PANE_TEST_RUNTIME_FAULTS; nothing else sets it). With the settings
+# sample and the helper sample installed and the helper running, a crash
+# ends the helper, keeps the saved note and restarts the runtime; Count (the
+# settings sample's last item) then saves and loses its answer in a second
+# crash, which stops the runtime: the count is not run again. Root search
+# explains that nothing runs, Manage extensions shows why (its first rows),
+# a disable still works, and Restart runs extensions again, Count only when
+# asked. A data folder of its own keeps the rows in a known order.
+export PANE_DATA_DIR=$out/runtime-crash-data
+rm -rf "$PANE_DATA_DIR"
+fault=$out/runtime-fault
+rm -f "$fault" "$fault.tmp"
+# Asks Pane to inject a fault; it takes the file within 100 ms.
+inject() {
+  printf %s "$1" >"$fault.tmp"
+  mv "$fault.tmp" "$fault"
+  for _ in $(seq 50); do [ -e "$fault" ] || break; sleep 0.1; done
+  [ ! -e "$fault" ] || { echo "Pane did not take the fault"; exit 1; }
+  sleep 2
+}
+# The count Count keeps in the settings sample's content.
+count() {
+  python3 - "$PANE_DATA_DIR/extensions/content.json" <<'PY'
+import json, sys
+packages = json.load(open(sys.argv[1], encoding="utf-8"))["packages"]
+print(next((values["count"] for values in packages.values() if "count" in values), "none"))
+PY
+}
+helpers_running() { pgrep -f "$PANE_DATA_DIR/extensions/packages/.*/pane-echo" >/dev/null; }
+start_pane --install target/guests/packages/sample-helper
+key 36; sleep 2   # Install
+stop_pane
+export PANE_TEST_RUNTIME_FAULTS=$fault
+start_pane --install target/guests/packages/sample-settings
+key 36; sleep 2   # Install; Greeting is selected
+key 36; sleep 2   # open Greeting
+for ((i = 0; i < 8; i++)); do key 125; done   # Count
+key 36; sleep 2
+capture 200-runtime-counted.png
+check 200-runtime-counted.png 9fd8a8   # "Counted 1"
+[ "$(count)" = 1 ] || { echo "Count did not count once"; exit 1; }
+key 53; sleep 1
+type_text helper; sleep 1
+key 36; sleep 2   # open Helper sample
+key 125; key 36; sleep 2   # Echo after waiting
+helpers_running || { echo "the waiting helper is not running"; exit 1; }
+capture 201-runtime-helper-waiting.png
+check 201-runtime-helper-waiting.png d6c27a   # "Running…"
+alive=$(find "$PANE_DATA_DIR/extensions/packages" -name pane-echo.alive | head -1)
+[ -n "$alive" ] || { echo "the waiting helper does not beat"; exit 1; }
+inject crash
+capture 202-runtime-crashed.png
+check 202-runtime-crashed.png f08c8c   # "Pane's extension runtime stopped unexpectedly and was started again; ..."
+if helpers_running; then echo "the helper outlived the crashed runtime"; exit 1; fi
+beats=$(stat -f %z "$alive"); sleep 0.5
+[ "$(stat -f %z "$alive")" = "$beats" ] || { echo "the helper still beats after the crash"; exit 1; }
+grep -q '"helper-wait": "started"' "$PANE_DATA_DIR/extensions/settings.json" || { echo "saved note lost"; exit 1; }
+if grep -q '"helper-wait": "finished"' "$PANE_DATA_DIR/extensions/settings.json"; then echo "the stopped call finished"; exit 1; fi
+key 53; sleep 1
+type_text greet; sleep 1
+key 36; sleep 2   # open Greeting in the restarted runtime
+for ((i = 0; i < 8; i++)); do key 125; done   # Count
+inject crash-before-answer:count
+key 36; sleep 3   # counts, then the runtime crashes before answering
+capture 203-runtime-stopped.png
+check 203-runtime-stopped.png f08c8c   # the runtime stopped; its answer is lost
+[ "$(count)" = 2 ] || { echo "Count did not run once before the crash"; exit 1; }
+key 53; sleep 1
+type_text greet; sleep 1
+key 36; sleep 2   # Greeting: nothing runs
+capture 204-runtime-refused.png
+check 204-runtime-refused.png f08c8c   # "Extension runtime unavailable: it stopped after crashing ..."
+key 53; sleep 1   # clears the query
+for ((i = 0; i < 10; i++)); do key 125; done   # Manage extensions…
+key 36; sleep 1
+capture 205-runtime-manage.png   # Restart the extension runtime, Why the extension runtime stopped
+key 125; key 36; sleep 1   # Why the extension runtime stopped
+capture 206-runtime-details.png
+check 206-runtime-details.png aab4c0   # the details
+key 53; sleep 1   # back at its row
+key 125; key 36; sleep 2   # disable Helper sample, the first package
+capture 207-runtime-disabled.png
+check 207-runtime-disabled.png 9fd8a8   # "Disabled Helper sample"
+key 126; key 126; key 36; sleep 2   # Restart the extension runtime
+capture 208-runtime-restarted.png
+check 208-runtime-restarted.png 9fd8a8   # "Restarted the extension runtime"
+[ "$(count)" = 2 ] || { echo "Count was run again without asking"; exit 1; }
+key 53; sleep 1
+type_text greet; sleep 1
+key 36; sleep 2   # open Greeting
+for ((i = 0; i < 8; i++)); do key 125; done   # Count
+key 36; sleep 2
+capture 209-runtime-counted-again.png
+check 209-runtime-counted-again.png 9fd8a8   # "Counted 3"
+[ "$(count)" = 3 ] || { echo "Count did not count once more"; exit 1; }
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{200-runtime-counted,202-runtime-crashed,203-runtime-stopped,204-runtime-refused,205-runtime-manage,206-runtime-details,207-runtime-disabled,208-runtime-restarted,209-runtime-counted-again}.png
+stop_pane
+unset PANE_TEST_RUNTIME_FAULTS
+if helpers_running; then echo "a helper outlived Pane"; exit 1; fi
+grep -q '"disabled": true' "$PANE_DATA_DIR/extensions/installed.json" || { echo "disable not recorded"; exit 1; }
+if grep -q '"paused"' "$PANE_DATA_DIR/extensions/installed.json"; then echo "a package was paused for the runtime's crash"; exit 1; fi
+# Recovering from an extension that stops responding (#18). The settings
+# sample's last item, Stop responding, computes without waiting for up to a
+# minute. The phase shortens the runtime's limits through the fault file
+# (PANE_TEST_RUNTIME_FAULTS): 2 seconds of a guest's own computing, "not
+# responding yet" after 4 seconds without progress, given up on after 15.
+# While it computes, the window answers keys: Escape returns to root search
+# and Manage extensions opens. Pane stops the call after 2 seconds of its
+# computing, says why, and the third time pauses the package (a failure of
+# its own); Retry starts it again. Then the runtime thread itself is made to
+# hang through the fault file: the status line says it is not responding
+# yet, then Pane gives up on it, names and pauses no extension, and Manage
+# extensions says the runtime stopped responding; a fresh thread runs the
+# next call. A data folder of its own keeps the rows in a known order.
+export PANE_DATA_DIR=$out/unresponsive-data
+rm -rf "$PANE_DATA_DIR"
+fault=$out/unresponsive-fault
+rm -f "$fault" "$fault.tmp"
+# What the settings sample saved under $1, or "none".
+saved() {
+  python3 - "$PANE_DATA_DIR/extensions/settings.json" "$1" <<'PY'
+import json, sys
+packages = json.load(open(sys.argv[1], encoding="utf-8"))["packages"]
+print(next((values[sys.argv[2]] for values in packages.values() if sys.argv[2] in values), "none"))
+PY
+}
+export PANE_TEST_RUNTIME_FAULTS=$fault
+start_pane --install target/guests/packages/sample-settings
+inject limits:2,4,15
+key 36; sleep 2   # Install; Greeting is selected
+key 36; sleep 2   # open Greeting
+for ((i = 0; i < 9; i++)); do key 125; done   # Stop responding
+key 36; sleep 1   # it computes
+[ "$(saved busy)" = started ] || { echo "Stop responding did not start"; exit 1; }
+key 53; sleep 1   # root search answers meanwhile
+for ((i = 0; i < 10; i++)); do key 125; done   # Manage extensions…
+key 36; sleep 1
+capture 240-unresponsive-window-answers.png   # the extension list, while the guest computes
+check 240-unresponsive-window-answers.png aab4c0   # its rows' subtitles
+key 53; sleep 6   # it is stopped meanwhile (its answer is not shown here)
+type_text greet; sleep 1
+key 36; sleep 2   # open Greeting
+for ((i = 0; i < 9; i++)); do key 125; done   # Stop responding
+key 36; sleep 8
+capture 241-unresponsive-stopped.png
+check 241-unresponsive-stopped.png f08c8c   # "The extension stopped responding: it computed for 2 seconds ..."
+key 36; sleep 8   # the third time
+type_text greet; sleep 1   # Greeting and its reason at the top
+capture 242-unresponsive-paused.png
+check 242-unresponsive-paused.png f08c8c   # "Settings sample stopped responding 3 times within 5 minutes and is paused ..."
+check 242-unresponsive-paused.png d6a36a   # Greeting: "Settings sample is paused after an error; ..."
+[ "$(saved busy)" = started ] || { echo "Stop responding finished or was lost"; exit 1; }
+key 53; sleep 1   # clears the query
+for ((i = 0; i < 10; i++)); do key 125; done   # Manage extensions…
+key 36; sleep 1
+key 125; key 125; key 125; key 36; sleep 1   # "Why Settings sample is paused"
+capture 243-unresponsive-pause-details.png
+check 243-unresponsive-pause-details.png aab4c0   # the details
+key 36; sleep 2   # Retry Settings sample
+capture 244-unresponsive-retried.png
+check 244-unresponsive-retried.png 9fd8a8   # "Started Settings sample"
+key 53; sleep 1
+inject hang
+type_text greet; sleep 1
+key 36; sleep 4   # open Greeting: the stuck runtime is not responding yet
+capture 245-unresponsive-not-yet.png
+check 245-unresponsive-not-yet.png d6c27a   # "Pane's extension runtime is not responding yet. ..."
+sleep 14   # Pane gives up on it
+capture 246-unresponsive-runtime.png
+check 246-unresponsive-runtime.png f08c8c   # the runtime stopped responding and was started again
+key 53; sleep 1   # clears the query
+for ((i = 0; i < 10; i++)); do key 125; done   # Manage extensions…
+key 36; sleep 1
+key 36; sleep 1   # Why the extension runtime stopped, its first row
+capture 247-unresponsive-runtime-details.png
+check 247-unresponsive-runtime-details.png aab4c0   # the details
+inject release
+key 53; key 53; sleep 1
+type_text greet; sleep 1
+key 36; sleep 2   # open Greeting on a fresh runtime thread
+key 36; sleep 2   # Use a formal greeting
+capture 248-unresponsive-runs-again.png
+check 248-unresponsive-runs-again.png 9fd8a8   # "Saved the formal greeting"
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{240-unresponsive-window-answers,241-unresponsive-stopped,242-unresponsive-paused,243-unresponsive-pause-details,244-unresponsive-retried,245-unresponsive-not-yet,246-unresponsive-runtime,247-unresponsive-runtime-details,248-unresponsive-runs-again}.png
+stop_pane
+unset PANE_TEST_RUNTIME_FAULTS
+[ "$(saved busy)" = started ] || { echo "Stop responding finished after it was stopped"; exit 1; }
+[ "$(saved greeting-style)" = formal ] || { echo "the fresh runtime did not save"; exit 1; }
+if grep -q '"paused"' "$PANE_DATA_DIR/extensions/installed.json"; then echo "a package was paused for the runtime's hang"; exit 1; fi
+
+# Uninstalling a required dependency: installed with the dependencies sample
+# (whose install and data folder are this phase's own), the JavaScript
+# operations sample's Uninstall row is the seventh of Manage extensions.
+# Enter asks first, listing the Dependencies sample, which requires it, and
+# each one's saved data, with Uninstall all keeping or deleting saved data
+# and Cancel; Cancel changes nothing, Uninstall all 2 (keeping) uninstalls
+# both, and installing the JavaScript operations sample again installs it
+# alone: the Dependencies sample is not restored, on record too.
+export PANE_DATA_DIR=$out/uninstall-dependents-data
+rm -rf "$PANE_DATA_DIR"
+start_pane --install target/guests/packages/sample-dependencies
+key 36; sleep 3   # Install
+for ((i = 0; i < 10; i++)); do key 125; done   # Manage extensions…
+key 36; sleep 1
+for ((i = 0; i < 6; i++)); do key 125; done   # Uninstall JavaScript operations sample
+key 36; sleep 1   # asks first
+capture 180-uninstall-dependents-asked.png
+check 180-uninstall-dependents-asked.png aab4c0   # "Dependencies sample, which requires JavaScript operations sample · …"
+key 125; key 125; key 36; sleep 1   # Cancel
+capture 181-uninstall-dependents-cancelled.png   # both still installed
+key 36; sleep 1   # asks again
+key 36; sleep 3   # Uninstall all 2 and keep saved data
+capture 182-uninstall-dependents-uninstalled.png
+check 182-uninstall-dependents-uninstalled.png 9fd8a8   # "Uninstalled JavaScript operations sample and Dependencies sample, which requires it; …"
+stop_pane
+[ "$(grep -c '"dir"' "$PANE_DATA_DIR/extensions/installed.json")" = 0 ] || { echo "not both uninstalled"; exit 1; }
+start_pane --install target/guests/packages/sample-operations-js
+key 36; sleep 3   # Install the dependency alone
+for ((i = 0; i < 10; i++)); do key 125; done   # Manage extensions…
+key 36; sleep 1
+capture 183-uninstall-dependents-reinstalled-alone.png   # only the JavaScript operations sample is listed
+check 183-uninstall-dependents-reinstalled-alone.png aab4c0
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{180-uninstall-dependents-asked,181-uninstall-dependents-cancelled,182-uninstall-dependents-uninstalled,183-uninstall-dependents-reinstalled-alone}.png
+stop_pane
+[ "$(grep -c '"dir"' "$PANE_DATA_DIR/extensions/installed.json")" = 1 ] || { echo "not the dependency alone reinstalled"; exit 1; }
+
+# File search (#29): Files, a default extension (its data folder is this
+# phase's own; Files is selected once installed, and Pane's own "Choose
+# folder…" row is the first of its command). Enter on it would show the
+# system's folder picker; the smoke names the folder in
+# PANE_TEST_CHOOSE_FOLDER instead (a debug build's hook). The fixture folder's
+# path has spaces, and a file in it has non-ASCII letters too; typing "plan"
+# lists that file, selected, and Enter hands it to Pane's handler for files,
+# which PANE_TEST_OPEN_FILE_LOG (a debug build's hook) makes record the path
+# instead of asking /usr/bin/open, since any application that opened it would
+# be the user's own. An executable script in the folder is found but refused.
+# The fixture is in the system's temporary folder, so no screenshot shows a
+# home path.
+export PANE_DATA_DIR=$out/files-data
+rm -rf "$PANE_DATA_DIR"
+files_fixture=$(mktemp -d "${TMPDIR:-/tmp}/pane-smoke-files.XXXXXX")
+files_folder="$files_fixture/Pane smoke files"
+mkdir -p "$files_folder/notes"
+printf 'plan\n' >"$files_folder/Résumé plan ü.txt"
+printf 'todo\n' >"$files_folder/notes/todo.txt"
+printf '#!/bin/sh\ntouch "%s/runner-ran"\n' "$files_fixture" >"$files_folder/notes/runner.sh"
+chmod +x "$files_folder/notes/runner.sh"
+rm -f "$out/opened-file.txt"
+export PANE_TEST_CHOOSE_FOLDER=$files_folder PANE_TEST_OPEN_FILE_LOG=$out/opened-file.txt
+start_pane --install target/guests/packages/files
+key 36; sleep 2   # Install; Files is selected
+key 36; sleep 3   # open Files; "Choose folder…" is selected
+key 36; sleep 2   # the folder PANE_TEST_CHOOSE_FOLDER names
+capture 220-files-folder-granted.png
+check 220-files-folder-granted.png 9fd8a8   # "Files may now list “Pane smoke files”"
+key 53; sleep 1
+type_text 'plan'; sleep 3
+capture 221-files-found.png
+check 221-files-found.png 364355 3000   # the selected file row, "Résumé plan ü.txt"
+key 36; sleep 3
+capture 222-files-opened.png
+check 222-files-opened.png 9fd8a8   # "Opened Résumé plan ü.txt"
+[ -f "$out/opened-file.txt" ] || { echo "the handler for files was not asked to open anything"; exit 1; }
+[ "$(cd "$(dirname "$(head -1 "$out/opened-file.txt")")" && pwd -P)/$(basename "$(head -1 "$out/opened-file.txt")")" = "$(cd "$files_folder" && pwd -P)/Résumé plan ü.txt" ] || { echo "the handler for files was not asked to open the found file"; exit 1; }
+rm -f "$out/opened-file.txt"
+key 53; sleep 1
+type_text 'runner'; sleep 3
+key 36; sleep 2
+capture 223-files-program-refused.png
+check 223-files-program-refused.png f08c8c   # "Could not open runner.sh: it is a program or script, ..."
+[ ! -e "$out/opened-file.txt" ] || { echo "the script was handed to the handler"; exit 1; }
+[ ! -e "$files_fixture/runner-ran" ] || { echo "the script ran"; exit 1; }
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{220-files-folder-granted,221-files-found,222-files-opened,223-files-program-refused}.png
+stop_pane
+unset PANE_TEST_CHOOSE_FOLDER PANE_TEST_OPEN_FILE_LOG
+rm -rf "$files_fixture"
+
+# Searching an online service inside its command: Package search, the Rust
+# search sample, queries the fixture service (a made-up package registry on
+# a free port of 127.0.0.1, set as the sample's address through its form;
+# nothing leaves this computer), whose log lists each request. Typed into
+# root search, "aurora" finds nothing and sends the service nothing. Opened,
+# the command's own search field sends it: its results are listed, Enter
+# shows a package's details. A search the service holds ("slow...") is stopped when the text
+# changes: the service sees its client hang up and the newer results show.
+# The service's own error, then the service stopped (offline), are errors in
+# place of results; once it is back, searching works again: the extension
+# was not paused. A data folder of its own keeps the rows in a known order.
+export PANE_DATA_DIR=$out/search-data
+rm -rf "$PANE_DATA_DIR"
+cargo build --locked --quiet -p pane-core --example fixture_service
+service_log=$out/fixture-service.log
+service_pid=
+service_port=0
+# Starts the fixture service, the `$1`th time: first on a free port, which
+# it prints, then on that same port again.
+start_service() {
+  target/debug/examples/fixture_service --port "$service_port" >>"$service_log" 2>&1 &
+  service_pid=$!
+  for _ in $(seq 50); do
+    if [ "$(grep -c 'listening on' "$service_log" 2>/dev/null)" -ge "$1" ]; then
+      service_port=$(sed -n 's#.*listening on http://127\.0\.0\.1:\([0-9]*\).*#\1#p' "$service_log" | tail -n 1)
+      return
+    fi
+    kill -0 "$service_pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  echo "the fixture service did not start (see $service_log)"; exit 1
+}
+stop_service() { kill "$service_pid"; wait "$service_pid" 2>/dev/null || true; service_pid=; }
+trap '[ -z "$service_pid" ] || kill "$service_pid" 2>/dev/null || true; [ -n "$pid" ] && kill "$pid" 2>/dev/null || true' EXIT
+rm -f "$service_log"
+start_service 1
+start_pane --install target/guests/packages/sample-search
+key 36; sleep 2   # Install; Package search is selected
+capture 160-search-installed.png
+check 160-search-installed.png 9fd8a8   # "Installed Search sample"
+type_text aurora; sleep 2
+capture 161-root-typed.png   # root search: "No results for “aurora”"
+if grep -q '^GET' "$service_log"; then echo "root search reached the service"; exit 1; fi
+key 53; sleep 1   # clears the query
+type_text 'package search'; sleep 1
+key 36; sleep 3   # open Package search
+capture 162-command-opened.png   # its own list, its search field empty
+check 162-command-opened.png 364355 3000   # its first row, selected
+key 125; key 36; sleep 2   # Service address: its form
+type_text "http://127.0.0.1:$service_port"
+key 36; sleep 2   # Save
+capture 163-service-set.png   # "Searching http://127.0.0.1:<port> from now on"
+check 163-service-set.png 9fd8a8
+key 53; sleep 1   # back to the command, its search field empty
+type_text aurora; sleep 3
+capture 164-search-results.png   # aurora-charts, selected, and aurora-cli
+check 164-search-results.png 364355 3000
+grep -q '^GET /search?q=aurora$' "$service_log" || { echo "the command's search did not reach the service"; exit 1; }
+key 125; key 36; sleep 3   # aurora-cli's details
+capture 165-details.png
+check 165-details.png 9fd8a8   # "aurora-cli 0.9.3 (Apache-2.0): Command-line parsing with subcommands"
+command_key a; type_text slow; sleep 2   # held by the service
+command_key a; type_text ember; sleep 3
+capture 166-newer-search.png   # ember-tz, not what "slow" would list
+check 166-newer-search.png 364355 3000
+grep -q '^ABANDONED /search?q=slow$' "$service_log" || { echo "the replaced search was not stopped"; exit 1; }
+command_key a; type_text down; sleep 3
+capture 167-service-error.png
+check 167-service-error.png f08c8c   # "... The service answered 503: the registry is down for maintenance"
+stop_service
+command_key a; type_text basalt; sleep 3
+capture 168-offline.png
+check 168-offline.png f08c8c   # "... Could not reach the service at http://127.0.0.1:<port>: connection refused"
+start_service 2
+command_key a; type_text cobalt; sleep 3
+capture 169-back-online.png   # cobalt-http, selected: not paused
+check 169-back-online.png 364355 3000
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{161-root-typed,162-command-opened,163-service-set,164-search-results,165-details,166-newer-search,167-service-error,168-offline,169-back-online}.png
+stop_pane
+stop_service
 echo "screenshots in $out"

@@ -68,7 +68,17 @@ Development is turned on per installed, enabled package, from its **Develop
    hidden files and folders (`.git`); and editors' temporary files (vim's
    `4913` probe and `.swp`/`.swo`/`.swx` swap files, `name~` backups,
    JetBrains' `___jb_tmp___` and `___jb_old___`, Emacs's `.#name` and
-   `#name#`). Reading a file is not a save.
+   `#name#`). Reading a file is not a save, and neither is an event that
+   changed nothing Pane can see: each is checked against what Pane last saw
+   of that path (from when development started), and a save is a file
+   whose modification time or size changed (or, when it was written within
+   the clock's resolution of when Pane last looked, its bytes), or a file
+   or folder that appeared or went. So a change of metadata alone
+   (permissions, a copy by cloning, which FSEvents reports), a folder that
+   Windows reports as modified because its entries changed, FSEvents
+   telling of a write from before development started, and Pane's own copy
+   of the components into the folder after a reload are not saves; when
+   the watcher lost events, the whole folder is looked at again.
 2. **Building.** After a save, once nothing more is saved for 150 ms (an
    editor's several writes are one save), Pane copies `pane.json` and the
    files of the [helpers](helpers.md) the package ships for this system
@@ -239,7 +249,8 @@ These are implementation choices of #12/#13, not user decisions:
   the launcher each stop the running build and the watcher; a status does
   not replace an open command's answer and is shown back at root search; a
   folder moved into the source folder is watched, and editors' temporary
-  files are not saves; a published copy keeps its identity and code; the
+  files are not saves; reading the sources or changing only their
+  metadata (a file's or a folder's) is not a save; a published copy keeps its identity and code; the
   rows in Manage extensions; the window is told of each change.
 - [`crates/pane-core/tests/develop_builds.rs`](../crates/pane-core/tests/develop_builds.rs)
   runs the real builds on copies of the samples: an edit is built and
@@ -258,6 +269,14 @@ These are implementation choices of #12/#13, not user decisions:
   command kills what it started at once, a command whose child keeps the
   pipes open still returns, and one whose daemon (outside the group) keeps
   them open returns after the 2-second drain.
+- Unit tests in [`sources.rs`](../crates/pane-core/src/launcher/developing/sources.rs):
+  what was already there, a read and a change of permissions are not
+  saves; other bytes of the same size written at once are, once; a file or
+  folder appearing or going is, and a folder that appears is watched;
+  what Pane wrote is not; a rescan finds what changed.
+- [`crates/pane-core/tests/helpers.rs`](../crates/pane-core/tests/helpers.rs):
+  Pane's copy of the component into the folder after a reload starts no
+  build, even for a build that ignores nothing.
 - [`crates/pane/tests/develop.rs`](../crates/pane/tests/develop.rs): the
   window redraws by itself when a background build fails and when the fix
   is reloaded, and renders the diagnostics.

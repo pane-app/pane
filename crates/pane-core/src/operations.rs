@@ -89,14 +89,20 @@ impl OperationError {
             ),
             CallError::Paused => (Unavailable, paused_reason(title)),
             CallError::Trap(reason) => (Crashed, format!("{title} crashed: {reason}")),
+            // The operation kinds have no kind of its own: the target failed
+            // while running, as a crash does (provisional).
+            CallError::Unresponsive(reason) => {
+                (Crashed, format!("{title} stopped responding: {reason}"))
+            }
             CallError::RuntimeUnavailable(_) => (Unavailable, format!("{title}: {error}")),
             CallError::Load(_)
             | CallError::Incompatible(_)
             | CallError::Interface(_)
             | CallError::OlderApiShape(_) => (Incompatible, format!("{title}: {error}")),
             // A form's rejection answers only `submit-form`, and a live
-            // instance (started just before the call) is never missing.
-            CallError::Form(_) | CallError::ViewClosed => {
+            // instance (started just before the call) is never missing, and
+            // only root search's own calls are cancelled.
+            CallError::Form(_) | CallError::ViewClosed | CallError::Cancelled => {
                 unreachable!("an operation call cannot end with {error:?}")
             }
         };
@@ -394,12 +400,12 @@ impl<T> operations::HostWithStore<T> for Calls {
             if !state.serving {
                 return Err(outside_a_call());
             }
-            // Code whose generation ended starts no more work.
-            if state.stopped().is_some() {
-                return Err(OperationError::refused(
-                    "this code of the extension was stopped (disabled, reloaded or updated)",
-                ));
+            // Stopped code starts no more work.
+            if let Some(end) = state.stopped() {
+                return Err(OperationError::refused(crate::runtime::stopped_code(end)));
             }
+            // The operation is served by the runtime's loop while this
+            // waits, not inside this host call.
             state
                 .calls
                 .send(OperationCall {

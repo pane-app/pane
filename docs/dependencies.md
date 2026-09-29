@@ -10,9 +10,11 @@ optional, disabled, paused and already installed dependencies are left as
 they are. Disabling a required dependency first shows the packages that
 require it, with Disable all and Cancel
 ([#43](https://github.com/hoangvu12/pane/issues/43),
-[below](#disabling-a-required-dependency)). Uninstalling one together with
-its dependents is [#44](https://github.com/hoangvu12/pane/issues/44); npm
-sources are [#45](https://github.com/hoangvu12/pane/issues/45).
+[below](#disabling-a-required-dependency)), and uninstalling one shows them
+with their saved data, with Uninstall all and Cancel
+([#44](https://github.com/hoangvu12/pane/issues/44),
+[below](#uninstalling-a-required-dependency)); npm sources are
+[#45](https://github.com/hoangvu12/pane/issues/45).
 
 ## Declaring
 
@@ -253,6 +255,77 @@ dependents (and ends the pause, as disabling does).
 `Launcher::set_enabled` remains the single-package switch it was: it
 disables only the package given, without asking.
 
+## Uninstalling a required dependency
+
+Added for [#44](https://github.com/hoangvu12/pane/issues/44) (US30, US31,
+US61, US63, T13, T20, G4, G5; contributions). Choosing "Uninstall <title>"
+in **Manage extensions** for a package that installed packages require
+does not show the [single uninstall](extension-data.md#uninstalling-an-extension)
+question. Pane shows "Uninstall <title> and the extensions that require
+it?" with:
+
+- its source; "These extensions require <title>, directly or through each
+  other, so they are uninstalled with it; installing <title> again does not
+  install them again:"; then every package of its required dependent closure (the
+  same closure as [disabling](#disabling-a-required-dependency)), each as
+  "<title>, which requires <what brought it in> · <identity>", nearest
+  first. Unlike disabling, disabled dependents are uninstalled too, shown
+  as "<title> (disabled), which requires …": without the package they
+  require they could never work again;
+- "Saved data: Greeter none · Caller 1 setting and 1 content record", each
+  package's settings and content (the one asked about first), the data the
+  choice is about;
+- "Pane removes the installed copy, cache and credentials of each, without
+  running it; their source folders and files they saved elsewhere are not
+  touched. Deleting a credential does not sign you out of an online
+  service.";
+- the rows **Uninstall all N and keep saved data** (first and selected, as
+  in the single uninstall), **Uninstall all N and delete saved data** and
+  **Cancel** ("Keep them all installed"; Esc too).
+
+Cancel, or Back, returns to the extension list with the Uninstall row
+selected; nothing was removed, stopped or recorded. Uninstall all applies
+the chosen row to every package shown, exactly as uninstalling each alone
+would (their commands leave root search, their instances stop, their
+managed copies, caches and credentials go, and their settings and content
+are kept as [retained data](extension-data.md#retained-data) or deleted),
+except that their records leave `installed.json` in **one write**, read
+again first so that only those records change and what another Pane on the
+same data folder recorded meanwhile is kept: all of them or, if it cannot
+be written, none ("Could not uninstall A, B and C:
+<reason>. They are all still installed and nothing was deleted."). With
+Keep, each package that has saved data gets its own retained record;
+another does not. The outcome is "Uninstalled Greeter and Caller, which
+requires it; their settings and content are kept", or "…, and deleted their
+saved data".
+
+**Partial removal.** Once recorded, every package shown is uninstalled.
+Removing each managed copy and each kind of data can still fail
+afterwards; then the outcome is an error that names each package with what
+is left of it, and only those: "Uninstalled Greeter and Caller, which
+requires it, but for Caller, its installed copy in <path> could not be
+removed yet (<reason>); Pane removes it when it next starts." Data that
+could not be deleted stays on record as retained data of its own identity,
+as for a single uninstall.
+
+If, when Uninstall all is chosen, a package that was not shown requires it
+(one was installed, or reloaded to require it, meanwhile), nothing is
+uninstalled and the question is shown again with "What uninstalling <title>
+affects changed since it was shown; check it again and choose Uninstall all
+once more". A dependent uninstalled meanwhile is simply skipped. If the
+package itself was uninstalled meanwhile, the question closes.
+
+**Installing again.** Installing the package that was asked about installs
+it alone: nothing records that its dependents were uninstalled with it, so
+they come back only when the user installs each (installing a dependent
+installs its missing required dependencies, as always), finding its own
+retained settings and content if they were kept. A package that only
+optionally uses it is never in the set and stays installed; its calls to
+it answer `not-found` meanwhile.
+
+`Launcher::uninstall` remains the single-package uninstall it was: it
+uninstalls only the package given, without asking.
+
 ## For later slices
 
 A plan (`crates/pane-core/src/dependencies.rs`) is data: its required edges
@@ -263,7 +336,9 @@ recorded graph (`InstalledPackage::dependency_identity`) without the
 wording. `dependencies::required_dependents` is that traversal: every
 installed package in the required dependent closure, disabled ones included
 (each with `enabled` and the package that brought it in), which #43 filters
-to the enabled ones and #44 can use whole for Uninstall all.
+to the enabled ones and #44 uses whole for Uninstall all. Both confirmations
+check the set again when chosen with one step (`still_shown` in
+`launcher/dependents.rs`).
 
 ## Checks
 
@@ -298,18 +373,50 @@ to the enabled ones and #44 can use whole for Uninstall all.
 - The native smokes' own phase (frames 140 to 143;
   [Linux](platforms/linux.md#disabling-required-dependents-43)) asks,
   cancels, disables both with Disable all and enables the dependency alone.
+- [`crates/pane-core/tests/uninstall_dependents.rs`](../crates/pane-core/tests/uninstall_dependents.rs)
+  drives uninstalling a required dependency through the extension list:
+  the question listing the closure (through a dependent of a dependent)
+  with each one's saved data before anything changes, an optional user not
+  in it, Cancel and Back changing nothing (also after a restart), Uninstall
+  all keeping saved data (only the package with some retained, managed
+  copies gone, instances stopped, source folders kept) and deleting it,
+  installing the dependency again alone (after a restart) and then a
+  dependent finding its settings, a disabled dependent uninstalled with it,
+  cycles, a dependent appearing (by a reload) or uninstalled while the
+  question is shown, the dependency uninstalled alone meanwhile, a record
+  that cannot be written (none uninstalled), a second launcher on the same
+  data folder installing a package meanwhile (its record and copy kept), and,
+  on Unix, one dependent's
+  managed copy that cannot be removed, reported against it alone and
+  removed at the next start.
+- [`crates/pane/tests/install.rs`](../crates/pane/tests/install.rs): the
+  question in the native window at Pane's size with long source paths,
+  whose first choice stays visible (a confirmation's details scroll within
+  40% of the window), Escape keeping both and Enter uninstalling both.
+- The native smokes' own phase (frames 180 to 183;
+  [Linux](platforms/linux.md#uninstalling-required-dependents-44)) asks,
+  cancels, uninstalls both with Uninstall all and installs the dependency
+  again alone.
 
 ## Limits
 
 - Local folders only; npm and Git (#45 and later) keep these semantics.
 - One copy per source, no version ranges and no multi-version solving.
 - No Pane-side view yet of installed packages whose required dependency was
-  disabled (other than through Disable all) or removed later; their calls
-  explain it (#44).
+  disabled (other than through Disable all) or removed (other than through
+  Uninstall all, as by `Launcher::uninstall`); their calls explain it.
 - Only the extension list asks about dependents; `Launcher::set_enabled`
-  (used by tests and internal callers) disables one package. The extension
-  list offers no way to disable a required dependency while keeping its
-  dependents enabled.
+  and `Launcher::uninstall` (used by tests and internal callers) change one
+  package. The extension list offers no way to disable or uninstall a
+  required dependency while keeping its dependents.
+- Uninstall all applies one saved-data choice to the whole set; keeping one
+  package's data while deleting another's means uninstalling them one at a
+  time, dependents first.
+- A dependency's record and its dependents' leave `installed.json` in one
+  write, but their managed copies and data are removed one package after
+  another afterwards; a Pane stopped in between leaves them as a failed
+  removal would (listed copies removed at the next start, data on record as
+  retained).
 - A second install relying on a package an install in progress has claimed
   is refused rather than waiting.
 - The symbolic-link tests are skipped where the system does not allow

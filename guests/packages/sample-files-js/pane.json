@@ -1,0 +1,16 @@
+{
+  "manifestVersion": 1,
+  "title": "JavaScript files sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "find-files",
+      "title": "Find files (JavaScript)",
+      "subtitle": "A JavaScript command that finds and opens the files of a folder you grant it",
+      "component": "sample_files_js.wasm",
+      "rootResults": true
+    }
+  ],
+  "folderAccess": true
+}

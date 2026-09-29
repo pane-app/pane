@@ -1030,4 +1030,393 @@ if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: disabling with depend
 Stop-Pane $process
 $record = Join-Path $data "extensions/installed.json"
 if ((Select-String -SimpleMatch '"disabled": true' $record).Count -ne 1) { throw "not exactly the dependent left disabled" }
+
+# Recovering from a crash of Pane's extension runtime (#17): the runtime is
+# a thread of Pane, so the smoke has it panic on purpose through a fault
+# file (PANE_TEST_RUNTIME_FAULTS; nothing else sets it). With the settings
+# sample and the helper sample installed and the helper running, a crash
+# ends the helper, keeps the saved note and restarts the runtime; Count (the
+# settings sample's last item) then saves and loses its answer in a second
+# crash, which stops the runtime: the count is not run again. Root search
+# explains that nothing runs, Manage extensions shows why (its first rows),
+# a disable still works, and Restart runs extensions again, Count only when
+# asked. A data folder of its own keeps the rows in a known order.
+$data = Join-Path $OutDir "runtime-crash-data"
+if (Test-Path $data) { Remove-Item -Recurse -Force $data }
+$env:PANE_DATA_DIR = $data
+$packages = [System.IO.Path]::GetFullPath((Join-Path $data "extensions/packages"))
+$fault = [System.IO.Path]::GetFullPath((Join-Path $OutDir "runtime-fault"))
+Remove-Item -Force -ErrorAction SilentlyContinue $fault, "$fault.tmp"
+# Asks Pane to inject a fault; it takes the file within 100 ms.
+function Inject-Fault($what) {
+    Set-Content -NoNewline -Path "$fault.tmp" -Value $what
+    Move-Item -Force "$fault.tmp" $fault
+    for ($i = 0; $i -lt 50 -and (Test-Path $fault); $i++) { Start-Sleep -Milliseconds 100 }
+    if (Test-Path $fault) { throw "Pane did not take the fault" }
+    Start-Sleep -Seconds 2
+}
+# The count Count keeps in the settings sample's content.
+function Saved-Count {
+    $content = Get-Content -Raw (Join-Path $data "extensions/content.json") | ConvertFrom-Json
+    foreach ($package in $content.packages.PSObject.Properties) {
+        if ($package.Value.count) { return $package.Value.count }
+    }
+    "none"
+}
+function Helpers-Running {
+    [bool](Get-Process -Name "pane-echo" -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -and $_.Path.StartsWith($packages, [System.StringComparison]::OrdinalIgnoreCase) })
+}
+$process = Start-Pane "stderr-runtime-crash-install.log" @("--install", "target/guests/packages/sample-helper")
+Send "{ENTER}"; Start-Sleep -Seconds 2   # Install
+Stop-Pane $process
+$env:PANE_TEST_RUNTIME_FAULTS = $fault
+$process = Start-Pane "stderr-runtime-crash.log" @("--install", "target/guests/packages/sample-settings")
+Send "{ENTER}"; Start-Sleep -Seconds 2   # Install; Greeting is selected
+Send "{ENTER}"; Start-Sleep -Seconds 2   # open Greeting
+Send "{DOWN 8}"   # Count
+Send "{ENTER}"; Start-Sleep -Seconds 2
+Capture "200-runtime-counted.png"
+Check "200-runtime-counted.png" "9fd8a8"   # "Counted 1"
+if ((Saved-Count) -ne "1") { throw "Count did not count once" }
+Send "{ESC}"; Start-Sleep -Seconds 1
+Send "helper"; Start-Sleep -Seconds 1
+Send "{ENTER}"; Start-Sleep -Seconds 2   # open Helper sample
+Send "{DOWN}{ENTER}"; Start-Sleep -Seconds 2   # Echo after waiting
+if (-not (Helpers-Running)) { throw "the waiting helper is not running" }
+Capture "201-runtime-helper-waiting.png"
+Check "201-runtime-helper-waiting.png" "d6c27a"   # "Running…"
+$alive = Get-ChildItem -Recurse -Filter "pane-echo.alive" $packages | Select-Object -First 1
+if (-not $alive) { throw "the waiting helper does not beat" }
+Inject-Fault "crash"
+Capture "202-runtime-crashed.png"
+Check "202-runtime-crashed.png" "f08c8c"   # "Pane's extension runtime stopped unexpectedly and was started again; ..."
+if (Helpers-Running) { throw "the helper outlived the crashed runtime" }
+$beats = (Get-Item $alive.FullName).Length; Start-Sleep -Milliseconds 500
+if ((Get-Item $alive.FullName).Length -ne $beats) { throw "the helper still beats after the crash" }
+$settings = Join-Path $data "extensions/settings.json"
+if (-not (Select-String -Quiet -SimpleMatch '"helper-wait": "started"' $settings)) { throw "saved note lost" }
+if (Select-String -Quiet -SimpleMatch '"helper-wait": "finished"' $settings) { throw "the stopped call finished" }
+Send "{ESC}"; Start-Sleep -Seconds 1
+Send "greet"; Start-Sleep -Seconds 1
+Send "{ENTER}"; Start-Sleep -Seconds 2   # open Greeting in the restarted runtime
+Send "{DOWN 8}"   # Count
+Inject-Fault "crash-before-answer:count"
+Send "{ENTER}"; Start-Sleep -Seconds 3   # counts, then the runtime crashes before answering
+Capture "203-runtime-stopped.png"
+Check "203-runtime-stopped.png" "f08c8c"   # the runtime stopped; its answer is lost
+if ((Saved-Count) -ne "2") { throw "Count did not run once before the crash" }
+Send "{ESC}"; Start-Sleep -Seconds 1
+Send "greet"; Start-Sleep -Seconds 1
+Send "{ENTER}"; Start-Sleep -Seconds 2   # Greeting: nothing runs
+Capture "204-runtime-refused.png"
+Check "204-runtime-refused.png" "f08c8c"   # "Extension runtime unavailable: it stopped after crashing ..."
+Send "{ESC}"; Start-Sleep -Seconds 1   # clears the query
+Send "{DOWN 10}"   # Manage extensions…
+Send "{ENTER}"; Start-Sleep -Seconds 1
+Capture "205-runtime-manage.png"   # Restart the extension runtime, Why the extension runtime stopped
+Send "{DOWN}{ENTER}"; Start-Sleep -Seconds 1   # Why the extension runtime stopped
+Capture "206-runtime-details.png"
+Check "206-runtime-details.png" "aab4c0"   # the details
+Send "{ESC}"; Start-Sleep -Seconds 1   # back at its row
+Send "{DOWN}{ENTER}"; Start-Sleep -Seconds 2   # disable Helper sample, the first package
+Capture "207-runtime-disabled.png"
+Check "207-runtime-disabled.png" "9fd8a8"   # "Disabled Helper sample"
+Send "{UP 2}{ENTER}"; Start-Sleep -Seconds 2   # Restart the extension runtime
+Capture "208-runtime-restarted.png"
+Check "208-runtime-restarted.png" "9fd8a8"   # "Restarted the extension runtime"
+if ((Saved-Count) -ne "2") { throw "Count was run again without asking" }
+Send "{ESC}"; Start-Sleep -Seconds 1
+Send "greet"; Start-Sleep -Seconds 1
+Send "{ENTER}"; Start-Sleep -Seconds 2   # open Greeting
+Send "{DOWN 8}"   # Count
+Send "{ENTER}"; Start-Sleep -Seconds 2
+Capture "209-runtime-counted-again.png"
+Check "209-runtime-counted-again.png" "9fd8a8"   # "Counted 3"
+if ((Saved-Count) -ne "3") { throw "Count did not count once more" }
+$shots = "200-runtime-counted", "202-runtime-crashed", "203-runtime-stopped", "204-runtime-refused", "205-runtime-manage", "206-runtime-details", "207-runtime-disabled", "208-runtime-restarted", "209-runtime-counted-again" | ForEach-Object { Join-Path $OutDir "$_.png" }
+python "$PSScriptRoot/check_screenshot.py" --distinct @shots
+if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: recovering from a runtime crash changed nothing" }
+Stop-Pane $process
+Remove-Item Env:PANE_TEST_RUNTIME_FAULTS
+if (Helpers-Running) { throw "a helper outlived Pane" }
+$record = Join-Path $data "extensions/installed.json"
+if (-not (Select-String -Quiet -SimpleMatch '"disabled": true' $record)) { throw "disable not recorded" }
+if (Select-String -Quiet -SimpleMatch '"paused"' $record) { throw "a package was paused for the runtime's crash" }
+# Recovering from an extension that stops responding (#18). The settings
+# sample's last item, Stop responding, computes without waiting for up to a
+# minute. The phase shortens the runtime's limits through the fault file
+# (PANE_TEST_RUNTIME_FAULTS): 2 seconds of a guest's own computing, "not
+# responding yet" after 4 seconds without progress, given up on after 15.
+# While it computes, the window answers keys: Escape returns to root search
+# and Manage extensions opens. Pane stops the call after 2 seconds of its
+# computing, says why, and the third time pauses the package (a failure of
+# its own); Retry starts it again. Then the runtime thread itself is made to
+# hang through the fault file: the status line says it is not responding
+# yet, then Pane gives up on it, names and pauses no extension, and Manage
+# extensions says the runtime stopped responding; a fresh thread runs the
+# next call. A data folder of its own keeps the rows in a known order.
+$data = Join-Path $OutDir "unresponsive-data"
+if (Test-Path $data) { Remove-Item -Recurse -Force $data }
+$env:PANE_DATA_DIR = $data
+$fault = [System.IO.Path]::GetFullPath((Join-Path $OutDir "unresponsive-fault"))
+Remove-Item -Force -ErrorAction SilentlyContinue $fault, "$fault.tmp"
+# What the settings sample saved under $key, or "none".
+function Saved-Setting($key) {
+    $settings = Get-Content -Raw (Join-Path $data "extensions/settings.json") | ConvertFrom-Json
+    foreach ($package in $settings.packages.PSObject.Properties) {
+        if ($package.Value.$key) { return $package.Value.$key }
+    }
+    "none"
+}
+$env:PANE_TEST_RUNTIME_FAULTS = $fault
+$process = Start-Pane "stderr-unresponsive.log" @("--install", "target/guests/packages/sample-settings")
+Inject-Fault "limits:2,4,15"
+Send "{ENTER}"; Start-Sleep -Seconds 2   # Install; Greeting is selected
+Send "{ENTER}"; Start-Sleep -Seconds 2   # open Greeting
+Send "{DOWN 9}"   # Stop responding
+Send "{ENTER}"; Start-Sleep -Seconds 1   # it computes
+if ((Saved-Setting "busy") -ne "started") { throw "Stop responding did not start" }
+Send "{ESC}"; Start-Sleep -Seconds 1   # root search answers meanwhile
+Send "{DOWN 10}"   # Manage extensions…
+Send "{ENTER}"; Start-Sleep -Seconds 1
+Capture "240-unresponsive-window-answers.png"   # the extension list, while the guest computes
+Check "240-unresponsive-window-answers.png" "aab4c0"   # its rows' subtitles
+Send "{ESC}"; Start-Sleep -Seconds 6   # it is stopped meanwhile (its answer is not shown here)
+Send "greet"; Start-Sleep -Seconds 1
+Send "{ENTER}"; Start-Sleep -Seconds 2   # open Greeting
+Send "{DOWN 9}"   # Stop responding
+Send "{ENTER}"; Start-Sleep -Seconds 8
+Capture "241-unresponsive-stopped.png"
+Check "241-unresponsive-stopped.png" "f08c8c"   # "The extension stopped responding: it computed for 2 seconds ..."
+Send "{ENTER}"; Start-Sleep -Seconds 8   # the third time
+Send "greet"; Start-Sleep -Seconds 1   # Greeting and its reason at the top
+Capture "242-unresponsive-paused.png"
+Check "242-unresponsive-paused.png" "f08c8c"   # "Settings sample stopped responding 3 times within 5 minutes and is paused ..."
+Check "242-unresponsive-paused.png" "d6a36a"   # Greeting: "Settings sample is paused after an error; ..."
+if ((Saved-Setting "busy") -ne "started") { throw "Stop responding finished or was lost" }
+Send "{ESC}"; Start-Sleep -Seconds 1   # clears the query
+Send "{DOWN 10}"   # Manage extensions…
+Send "{ENTER}"; Start-Sleep -Seconds 1
+Send "{DOWN 3}{ENTER}"; Start-Sleep -Seconds 1   # "Why Settings sample is paused"
+Capture "243-unresponsive-pause-details.png"
+Check "243-unresponsive-pause-details.png" "aab4c0"   # the details
+Send "{ENTER}"; Start-Sleep -Seconds 2   # Retry Settings sample
+Capture "244-unresponsive-retried.png"
+Check "244-unresponsive-retried.png" "9fd8a8"   # "Started Settings sample"
+Send "{ESC}"; Start-Sleep -Seconds 1
+Inject-Fault "hang"
+Send "greet"; Start-Sleep -Seconds 1
+Send "{ENTER}"; Start-Sleep -Seconds 4   # open Greeting: the stuck runtime is not responding yet
+Capture "245-unresponsive-not-yet.png"
+Check "245-unresponsive-not-yet.png" "d6c27a"   # "Pane's extension runtime is not responding yet. ..."
+Start-Sleep -Seconds 14   # Pane gives up on it
+Capture "246-unresponsive-runtime.png"
+Check "246-unresponsive-runtime.png" "f08c8c"   # the runtime stopped responding and was started again
+Send "{ESC}"; Start-Sleep -Seconds 1   # clears the query
+Send "{DOWN 10}"   # Manage extensions…
+Send "{ENTER}"; Start-Sleep -Seconds 1
+Send "{ENTER}"; Start-Sleep -Seconds 1   # Why the extension runtime stopped, its first row
+Capture "247-unresponsive-runtime-details.png"
+Check "247-unresponsive-runtime-details.png" "aab4c0"   # the details
+Inject-Fault "release"
+Send "{ESC}{ESC}"; Start-Sleep -Seconds 1
+Send "greet"; Start-Sleep -Seconds 1
+Send "{ENTER}"; Start-Sleep -Seconds 2   # open Greeting on a fresh runtime thread
+Send "{ENTER}"; Start-Sleep -Seconds 2   # Use a formal greeting
+Capture "248-unresponsive-runs-again.png"
+Check "248-unresponsive-runs-again.png" "9fd8a8"   # "Saved the formal greeting"
+$shots = "240-unresponsive-window-answers", "241-unresponsive-stopped", "242-unresponsive-paused", "243-unresponsive-pause-details", "244-unresponsive-retried", "245-unresponsive-not-yet", "246-unresponsive-runtime", "247-unresponsive-runtime-details", "248-unresponsive-runs-again" | ForEach-Object { Join-Path $OutDir "$_.png" }
+python "$PSScriptRoot/check_screenshot.py" --distinct @shots
+if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: recovering from an extension that stops responding changed nothing" }
+Stop-Pane $process
+Remove-Item Env:PANE_TEST_RUNTIME_FAULTS
+if ((Saved-Setting "busy") -ne "started") { throw "Stop responding finished after it was stopped" }
+if ((Saved-Setting "greeting-style") -ne "formal") { throw "the fresh runtime did not save" }
+$record = Join-Path $data "extensions/installed.json"
+if (Select-String -Quiet -SimpleMatch '"paused"' $record) { throw "a package was paused for the runtime's hang" }
+
+# Uninstalling a required dependency: installed with the dependencies sample
+# (whose install and data folder are this phase's own), the JavaScript
+# operations sample's Uninstall row is the seventh of Manage extensions.
+# Enter asks first, listing the Dependencies sample, which requires it, and
+# each one's saved data, with Uninstall all keeping or deleting saved data
+# and Cancel; Cancel changes nothing, Uninstall all 2 (keeping) uninstalls
+# both, and installing the JavaScript operations sample again installs it
+# alone: the Dependencies sample is not restored, on record too.
+$data = Join-Path $OutDir "uninstall-dependents-data"
+if (Test-Path $data) { Remove-Item -Recurse -Force $data }
+$env:PANE_DATA_DIR = $data
+$process = Start-Pane "stderr-uninstall-dependents.log" @("--install", "target/guests/packages/sample-dependencies")
+Send "{ENTER}"; Start-Sleep -Seconds 3   # Install
+for ($i = 0; $i -lt 10; $i++) { Send "{DOWN}" }   # Manage extensions...
+Send "{ENTER}"; Start-Sleep -Seconds 1
+for ($i = 0; $i -lt 6; $i++) { Send "{DOWN}" }   # Uninstall JavaScript operations sample
+Send "{ENTER}"; Start-Sleep -Seconds 1   # asks first
+Capture "180-uninstall-dependents-asked.png"
+Check "180-uninstall-dependents-asked.png" "aab4c0"   # "Dependencies sample, which requires JavaScript operations sample ..."
+Send "{DOWN}{DOWN}{ENTER}"; Start-Sleep -Seconds 1   # Cancel
+Capture "181-uninstall-dependents-cancelled.png"   # both still installed
+Send "{ENTER}"; Start-Sleep -Seconds 1   # asks again
+Send "{ENTER}"; Start-Sleep -Seconds 3   # Uninstall all 2 and keep saved data
+Capture "182-uninstall-dependents-uninstalled.png"
+Check "182-uninstall-dependents-uninstalled.png" "9fd8a8"   # "Uninstalled JavaScript operations sample and Dependencies sample, which requires it; ..."
+Stop-Pane $process
+$record = Join-Path $data "extensions/installed.json"
+if ((Select-String -SimpleMatch '"dir"' $record).Count -ne 0) { throw "not both uninstalled" }
+$process = Start-Pane "stderr-uninstall-dependents-again.log" @("--install", "target/guests/packages/sample-operations-js")
+Send "{ENTER}"; Start-Sleep -Seconds 3   # Install the dependency alone
+for ($i = 0; $i -lt 10; $i++) { Send "{DOWN}" }   # Manage extensions...
+Send "{ENTER}"; Start-Sleep -Seconds 1
+Capture "183-uninstall-dependents-reinstalled-alone.png"   # only the JavaScript operations sample is listed
+Check "183-uninstall-dependents-reinstalled-alone.png" "aab4c0"
+$shots = "180-uninstall-dependents-asked", "181-uninstall-dependents-cancelled", "182-uninstall-dependents-uninstalled", "183-uninstall-dependents-reinstalled-alone" | ForEach-Object { Join-Path $OutDir "$_.png" }
+python "$PSScriptRoot/check_screenshot.py" --distinct @shots
+if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: uninstalling with dependents changed nothing" }
+Stop-Pane $process
+if ((Select-String -SimpleMatch '"dir"' $record).Count -ne 1) { throw "not the dependency alone reinstalled" }
+
+# File search (#29): Files, a default extension (its data folder is this
+# phase's own; Files is selected once installed, and Pane's own "Choose
+# folder..." row is the first of its command). Enter on it would show the
+# system's folder picker; the smoke names the folder in
+# PANE_TEST_CHOOSE_FOLDER instead (a debug build's hook). The fixture folder's
+# path has spaces, and a file in it has non-ASCII letters too; typing "plan"
+# lists that file, selected, and Enter hands it to Pane's handler for files,
+# which PANE_TEST_OPEN_FILE_LOG (a debug build's hook) makes record the path
+# instead of running Invoke-Item, which could show the "Open with" dialog or
+# open the user's own program. A batch file in the folder is found but
+# refused.
+$data = Join-Path $OutDir "files-data"
+if (Test-Path $data) { Remove-Item -Recurse -Force $data }
+$env:PANE_DATA_DIR = $data
+$filesFixture = Join-Path $OutDir "files-fixture"
+if (Test-Path $filesFixture) { Remove-Item -Recurse -Force $filesFixture }
+$filesFolder = Join-Path $filesFixture "Pane smoke files"
+New-Item -ItemType Directory -Force (Join-Path $filesFolder "notes") | Out-Null
+$planName = "R$([char]0xE9)sum$([char]0xE9) plan $([char]0xFC).txt"
+Set-Content -Encoding UTF8 -LiteralPath (Join-Path $filesFolder $planName) "plan"
+Set-Content -Encoding UTF8 -LiteralPath (Join-Path $filesFolder "notes/todo.txt") "todo"
+Set-Content -Encoding ASCII -LiteralPath (Join-Path $filesFolder "notes/runner.bat") "@echo ran > `"$filesFixture\runner-ran`""
+$openLog = Join-Path $OutDir "opened-file.txt"
+if (Test-Path $openLog) { Remove-Item -Force $openLog }
+$env:PANE_TEST_CHOOSE_FOLDER = (Resolve-Path -LiteralPath $filesFolder).Path
+$env:PANE_TEST_OPEN_FILE_LOG = $openLog
+$process = Start-Pane "stderr-files.log" @("--install", "target/guests/packages/files")
+Send "{ENTER}"; Start-Sleep -Seconds 2   # Install; Files is selected
+Send "{ENTER}"; Start-Sleep -Seconds 3   # open Files; "Choose folder..." is selected
+Send "{ENTER}"; Start-Sleep -Seconds 2   # the folder PANE_TEST_CHOOSE_FOLDER names
+Capture "220-files-folder-granted.png"
+Check "220-files-folder-granted.png" "9fd8a8"   # "Files may now list "Pane smoke files""
+Send "{ESC}"; Start-Sleep -Seconds 1
+Send "plan"; Start-Sleep -Seconds 3
+Capture "221-files-found.png"
+Check "221-files-found.png" "364355" 3000   # the selected file row
+Send "{ENTER}"; Start-Sleep -Seconds 3
+Capture "222-files-opened.png"
+Check "222-files-opened.png" "9fd8a8"   # "Opened Resume plan u.txt"
+if (-not (Test-Path $openLog)) { throw "the handler for files was not asked to open anything" }
+$recorded = (Get-Content -Encoding UTF8 -LiteralPath $openLog | Select-Object -First 1)
+$expected = (Resolve-Path -LiteralPath (Join-Path $filesFolder $planName)).Path
+if ((Resolve-Path -LiteralPath $recorded).Path -ne $expected) { throw "the handler for files was not asked to open the found file: $recorded" }
+Remove-Item -Force $openLog
+Send "{ESC}"; Start-Sleep -Seconds 1
+Send "runner"; Start-Sleep -Seconds 3
+Send "{ENTER}"; Start-Sleep -Seconds 2
+Capture "223-files-program-refused.png"
+Check "223-files-program-refused.png" "f08c8c"   # "Could not open runner.bat: it is a program or script, ..."
+if (Test-Path $openLog) { throw "the batch file was handed to the handler" }
+if (Test-Path (Join-Path $filesFixture "runner-ran")) { throw "the batch file ran" }
+$shots = "220-files-folder-granted", "221-files-found", "222-files-opened", "223-files-program-refused" | ForEach-Object { Join-Path $OutDir "$_.png" }
+python "$PSScriptRoot/check_screenshot.py" --distinct @shots
+if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: file search changed nothing" }
+Stop-Pane $process
+Remove-Item Env:PANE_TEST_CHOOSE_FOLDER
+Remove-Item Env:PANE_TEST_OPEN_FILE_LOG
+Remove-Item -Recurse -Force $filesFixture
+
+# Searching an online service inside its command: Package search, the Rust
+# search sample, queries the fixture service (a made-up package registry on
+# a free port of 127.0.0.1, set as the sample's address through its form;
+# nothing leaves this computer), whose log lists each request. Typed into
+# root search, "aurora" finds nothing and sends the service nothing. Opened,
+# the command's own search field sends it: its results are listed, Enter
+# shows a package's details. A search the service holds ("slow...") is stopped when the text
+# changes: the service sees its client hang up and the newer results show.
+# The service's own error, then the service stopped (offline), are errors in
+# place of results; once it is back, searching works again: the extension
+# was not paused. A data folder of its own keeps the rows in a known order.
+$data = Join-Path $OutDir "search-data"
+if (Test-Path $data) { Remove-Item -Recurse -Force $data }
+$env:PANE_DATA_DIR = $data
+cargo build --locked --quiet -p pane-core --example fixture_service
+if ($LASTEXITCODE -ne 0) { throw "could not build the fixture service" }
+# Starts the fixture service on `$port` (0: a free one), logging to `$log`;
+# the process, and sets $servicePort to the port it listens on.
+function Start-FixtureService($log, $port) {
+    $path = Join-Path $OutDir $log
+    $service = Start-Process -FilePath "target/debug/examples/fixture_service.exe" -ArgumentList "--port", "$port" `
+        -PassThru -RedirectStandardOutput $path -RedirectStandardError "$path.err"
+    for ($i = 0; $i -lt 50; $i++) {
+        $listening = if (Test-Path $path) { Select-String -Pattern 'listening on http://127\.0\.0\.1:(\d+)' $path }
+        if ($listening) {
+            $script:servicePort = $listening.Matches[0].Groups[1].Value
+            return $service
+        }
+        if ($service.HasExited) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "the fixture service did not start (see $path)"
+}
+$serviceLog = Join-Path $OutDir "fixture-service.log"
+$service = Start-FixtureService "fixture-service.log" 0
+try {
+    $process = Start-Pane "stderr-search.log" @("--install", "target/guests/packages/sample-search")
+    Send "{ENTER}"; Start-Sleep -Seconds 2   # Install; Package search is selected
+    Capture "160-search-installed.png"
+    Check "160-search-installed.png" "9fd8a8"   # "Installed Search sample"
+    Send "aurora"; Start-Sleep -Seconds 2
+    Capture "161-root-typed.png"   # root search: "No results for “aurora”"
+    if (Select-String -Quiet -Pattern '^GET' $serviceLog) { throw "root search reached the service" }
+    Send "{ESC}"; Start-Sleep -Seconds 1   # clears the query
+    Send "package search"; Start-Sleep -Seconds 1
+    Send "{ENTER}"; Start-Sleep -Seconds 3   # open Package search
+    Capture "162-command-opened.png"   # its own list, its search field empty
+    Check "162-command-opened.png" "364355" 3000   # its first row, selected
+    Send "{DOWN}{ENTER}"; Start-Sleep -Seconds 2   # Service address: its form
+    Send "http://127.0.0.1:$servicePort"
+    Send "{ENTER}"; Start-Sleep -Seconds 2   # Save
+    Capture "163-service-set.png"   # "Searching http://127.0.0.1:<port> from now on"
+    Check "163-service-set.png" "9fd8a8"
+    Send "{ESC}"; Start-Sleep -Seconds 1   # back to the command, its search field empty
+    Send "aurora"; Start-Sleep -Seconds 3
+    Capture "164-search-results.png"   # aurora-charts, selected, and aurora-cli
+    Check "164-search-results.png" "364355" 3000
+    if (-not (Select-String -Quiet -Pattern '^GET /search\?q=aurora$' $serviceLog)) { throw "the command's search did not reach the service" }
+    Send "{DOWN}{ENTER}"; Start-Sleep -Seconds 3   # aurora-cli's details
+    Capture "165-details.png"
+    Check "165-details.png" "9fd8a8"   # "aurora-cli 0.9.3 (Apache-2.0): Command-line parsing with subcommands"
+    Send "^a"; Send "slow"; Start-Sleep -Seconds 2   # held by the service
+    Send "^a"; Send "ember"; Start-Sleep -Seconds 3
+    Capture "166-newer-search.png"   # ember-tz, not what "slow" would list
+    Check "166-newer-search.png" "364355" 3000
+    if (-not (Select-String -Quiet -Pattern '^ABANDONED /search\?q=slow$' $serviceLog)) { throw "the replaced search was not stopped" }
+    Send "^a"; Send "down"; Start-Sleep -Seconds 3
+    Capture "167-service-error.png"
+    Check "167-service-error.png" "f08c8c"   # "... The service answered 503: the registry is down for maintenance"
+    Stop-Process -Id $service.Id; $service.WaitForExit()
+    Send "^a"; Send "basalt"; Start-Sleep -Seconds 6   # Windows retries a refused connection for about two seconds
+    Capture "168-offline.png"
+    Check "168-offline.png" "f08c8c"   # "... Could not reach the service at http://127.0.0.1:<port>: connection refused"
+    $service = Start-FixtureService "fixture-service-again.log" $servicePort
+    Send "^a"; Send "cobalt"; Start-Sleep -Seconds 3
+    Capture "169-back-online.png"   # cobalt-http, selected: not paused
+    Check "169-back-online.png" "364355" 3000
+    $shots = "161-root-typed", "162-command-opened", "163-service-set", "164-search-results", "165-details", "166-newer-search", "167-service-error", "168-offline", "169-back-online" | ForEach-Object { Join-Path $OutDir "$_.png" }
+    python "$PSScriptRoot/check_screenshot.py" --distinct @shots
+    if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: searching inside the command changed nothing" }
+    Stop-Pane $process
+} finally {
+    if (-not $service.HasExited) { Stop-Process -Id $service.Id }
+}
 Write-Output "screenshots in $OutDir"

@@ -144,15 +144,10 @@ fn indexed_result(command: &CommandRegistration, result: IndexedResult) -> RootR
     let entry = match result.action {
         IndexedAction::OpenApplication(id) => Entry::OpenApplication {
             id,
-            name: result.title.clone(),
+            name: result.listing.title.clone(),
         },
     };
-    let row = Row {
-        id: format!("{}:{}", command.id, result.id),
-        title: result.title,
-        subtitle: result.subtitle,
-        unavailable: None,
-    };
+    let row = Row::listed(result.listing, Some(&command.id));
     let keys = Keys::new(&row.title, row.subtitle.as_deref(), None);
     RootResult {
         row,

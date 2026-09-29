@@ -47,6 +47,13 @@ EXPORT_OPTIONS = {
     "indexedResults": "pane:extension/indexed-results@0.1.0",
     "operations": "pane:extension/published-operations@0.1.0",
     "takesQuery": "pane:extension/query-command@0.1.0",
+    "search": "pane:extension/command-search@0.1.0",
+}
+# `"pane"` option -> the interface a command setting it also imports, beyond
+# what every command may import (`js-extension`): a command that sets none
+# of them does not import it at all.
+IMPORT_OPTIONS = {
+    "files": "pane:extension/files@0.1.0",
 }
 PREBUILT = REPO / "guests" / "prebuilt"
 MANIFEST = PREBUILT / "manifest.json"
@@ -62,12 +69,19 @@ SAMPLES = [
     ("sample_applications_ts.wasm", "guests/sample-applications-ts"),
     ("sample_query_js.wasm", "guests/sample-query-js"),
     ("sample_query_ts.wasm", "guests/sample-query-ts"),
+    ("sample_search_js.wasm", "guests/sample-search-js"),
+    ("sample_search_ts.wasm", "guests/sample-search-ts"),
     ("sample_helper_js.wasm", "guests/sample-helper-js"),
     ("sample_helper_ts.wasm", "guests/sample-helper-ts"),
+    ("sample_files_js.wasm", "guests/sample-files-js"),
+    ("sample_files_ts.wasm", "guests/sample-files-ts"),
 ]
 # Pane's WIT, copied beside the world in guests/js/wit.
 PANE_WIT = ["extension.wit", "data.wit", "root-results.wit", "operations.wit", "applications.wit", "query.wit",
-            "helpers.wit"]
+            "search.wit", "helpers.wit", "files.wit"]
+# WASI's WIT (clocks, and `wasi:http` with the packages it names), copied from
+# wit/deps into the world's deps/.
+WASI_WIT = sorted((REPO / "wit" / "deps").glob("*.wit"))
 # Toolchain inputs that decide what a component contains.
 TOOL_INPUTS = ["pins.json", "package.json", "package-lock.json", "bundle.mjs", "p3_build.rs", "patches"]
 SKIP_DIRS = {"node_modules", ".git"}
@@ -371,8 +385,11 @@ def build(package: Path, out: Path, toolchain: Toolchain) -> dict:
     (wit / "deps" / "pane-extension").mkdir(parents=True, exist_ok=True)
     for name in PANE_WIT:
         shutil.copyfile(REPO / "wit" / name, wit / "deps" / "pane-extension" / name)
+    for path in WASI_WIT:
+        shutil.copyfile(path, wit / "deps" / path.name)
     out.parent.mkdir(parents=True, exist_ok=True)
-    (wit / "command.wit").write_text(command_world(manifest.get("pane", {})), encoding="utf-8")
+    world = command_world(manifest.get("pane", {}), uses_http(bundle.read_text(encoding="utf-8")))
+    (wit / "command.wit").write_text(world, encoding="utf-8")
     report = run([toolchain.componentizer, wit, COMMAND_WORLD, bundle, toolchain.runtime, out],
                  env=clean_env(QJS_P3_LIBC=str(toolchain.libc)), capture=True)
     result = json.loads(report.strip().splitlines()[-1])
@@ -387,6 +404,7 @@ ADAPTED_PROVIDERS = {
     "indexedResults": ("indexedResults", "results"),
     "operations": ("publishedOperations", "runOperation"),
     "takesQuery": ("queryCommand", "runQuery"),
+    "search": ("commandSearch", "search"),
 }
 
 
@@ -407,18 +425,36 @@ def adapted_entry(entry: Path, adapter: Path, options: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def command_world(options: dict) -> str:
-    """The world `js-command`: `js-extension` exporting what `options` name."""
-    unknown = sorted(set(options) - set(EXPORT_OPTIONS))
+# `wasi:http`'s client, which a command imports only if its bundle uses it
+# (itself, or through `@pane/extension/http`), as a Rust command's component
+# imports only what its code calls: Pane lists a package whose component
+# imports it as one that uses the network.
+HTTP_IMPORT = "wasi:http/client@0.3.0"
+
+
+def uses_http(bundle: str) -> bool:
+    """Whether the bundled module imports any `wasi:http` interface."""
+    return re.search(r"""(?:from|import)\s*\(?\s*["']wasi:http/""", bundle) is not None
+
+
+def command_world(options: dict, http: bool) -> str:
+    """The world `js-command`: `js-extension` exporting and importing what
+    `options` name, and importing `wasi:http`'s client if `http`."""
+    unknown = sorted(set(options) - set(EXPORT_OPTIONS) - set(IMPORT_OPTIONS))
     if unknown:
         raise SystemExit(f"pane-js: unknown \"pane\" options in package.json: {', '.join(unknown)}")
     exports = "".join(f"  export {interface};\n" for option, interface in EXPORT_OPTIONS.items()
                       if options.get(option))
-    return f"package pane:js-guest@0.1.0;\n\nworld {COMMAND_WORLD} {{\n  include {WORLD};\n{exports}}}\n"
+    imports = "".join(f"  import {interface};\n" for option, interface in IMPORT_OPTIONS.items()
+                      if options.get(option))
+    if http:
+        imports += f"  import {HTTP_IMPORT};\n"
+    return (f"package pane:js-guest@0.1.0;\n\nworld {COMMAND_WORLD} {{\n  include {WORLD};\n"
+            f"{imports}{exports}}}\n")
 
 
 def component_inputs(source: str) -> str:
-    pane_wit = [REPO / "wit" / name for name in PANE_WIT]
+    pane_wit = [REPO / "wit" / name for name in PANE_WIT] + WASI_WIT
     return inputs_digest(tool_inputs() + pane_wit + [REPO / "guests" / "js", REPO / source])
 
 

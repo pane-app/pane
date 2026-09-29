@@ -17,7 +17,10 @@ applications as a default extension.
 address. [#31](https://github.com/hoangvu12/pane/issues/31) adds
 [aliases and fallbacks](aliases.md), which the user gives installed
 commands; [global hotkeys](hotkeys.md) (#32 to #34) open a command from any
-application. File search (#29, #30) is not part of it.
+application. [#29](https://github.com/hoangvu12/pane/issues/29) adds
+[file search](files.md) within one folder the user chose, whose file
+results are computed results listed after the title matches, and makes a
+search cancel its pending calls for computed results.
 
 ## What is searched
 
@@ -135,15 +138,24 @@ comes from the extension, through the same guest boundary as its command:
   extension. Answers for an older query or an earlier search of the same
   query (or after leaving root search) are discarded; until a command
   answers, the new query lists none of its results, never an older
-  query's. The guest's work for an older query is not cancelled, and calls
-  run one at a time on the runtime thread, so a slow or hung command still
-  delays every command asked after it, for this query and the next ones
-  ([#29](https://github.com/hoangvu12/pane/issues/29) owns cancellation,
-  [#18](https://github.com/hoangvu12/pane/issues/18) timeouts).
+  query's. Since [#29](https://github.com/hoangvu12/pane/issues/29) the
+  search owns these calls: once the query changes or root search is left,
+  a call still pending is cancelled, never started if it was queued, and
+  dropped with the command's instance if it was waiting inside the guest
+  (on an async import); that is not a failure
+  for [pausing](pausing.md), and the next query starts a fresh instance
+  ([cancelling](files.md#cancelling-a-pending-search)). Calls still run one
+  at a time on the runtime thread; since
+  [#18](https://github.com/hoangvu12/pane/issues/18) every guest yields at
+  each epoch tick, so a computing command is cancelled within a tick too,
+  and one that computes for 5 seconds without finishing is stopped as an
+  unresponsive call ([pausing](pausing.md#when-an-extension-stops-responding)).
 - Computed results are listed **above** every title match, in the order the
   commands and their answers give them; they are not ranked against titles
   (provisional, pending user confirmation; see
-  [current decisions](current-decisions.md) item 10).
+  [current decisions](current-decisions.md) item 10). Those that open a
+  file (**open-file**, since #29) are listed **after** the title matches
+  instead, since a folder can hold many files matching a short query.
   When each command's results arrive the first row is selected again, unless the user had
   moved the selection, which stays on its row.
 - A computed result has an id (`<command id>:<result id>`), title, optional
@@ -153,7 +165,11 @@ comes from the extension, through the same guest boundary as its command:
   status says "Copied … to the clipboard". **open-url** (since #28): Enter
   opens an `http://` or `https://` address with the launcher's link opener,
   the system's handler in the window; any other address is refused
-  ([opening a link](quicklinks.md#opening-a-link)).
+  ([opening a link](quicklinks.md#opening-a-link)). **open-file** (since
+  #29): Enter opens a file of the package's granted folder, named by the id
+  the host gave it, with the system's handler for its type, once the host
+  has checked it again; the row shows the host's name for the file
+  ([opening a file](files.md#opening-a-file)).
 - **No result is not a failure**: a query the command cannot answer (words,
   an incomplete or invalid expression) gives no results and the status is
   untouched. An error or crash of the extension is shown as a row titled
@@ -275,22 +291,23 @@ to plug in:
 Since #24 to #26 a third provider kind exists:
 [results supplied ahead of the query](#results-supplied-ahead-of-the-query),
 which the core keeps and ranks like titles (the installed applications).
-What is *not* settled here, and is left to the tickets that need it: results
-from a provider that must search something per query outside Pane (files),
-provider-supplied ranks and how they mix with title matching,
-cancelling a provider's work, and online providers, which stay inside their
-own command (US11, T03): nothing in root search queries an online service.
+Since #29 a computed result can come from a provider that searches outside
+Pane per query (the [files](files.md) of a granted folder, listed by the
+host off the extension thread, the command asked again once the listing
+ends), and a search cancels its providers' pending work. What is *not*
+settled here, and is left to the tickets that need it: provider-supplied
+ranks and how they mix with title matching, and online providers, which
+stay inside their own command (US11, T03): nothing in root search queries
+an online service.
 
 ### Open: extension points later tickets need
 
 Results computed from the query exist since #27 (above), with discarding of
-late answers but no ranks of their own and no cancellation. Still open, to be
-designed by their tickets:
-
-- **Asynchronous, cancellable providers** ([#29](https://github.com/hoangvu12/pane/issues/29)):
-  a provider that must run to answer (files), whose late
-  answers for an older query are discarded and whose work is cancelled when
-  the query changes.
+late answers but no ranks of their own; since
+[#29](https://github.com/hoangvu12/pane/issues/29) a search cancels their
+pending calls when the query changes or root search is left, and file
+results are listed after the title matches; since #18 a provider computing
+for 5 seconds without finishing is stopped. Still open: provider ranks.
 
 Aliases and fallbacks exist since [#31](aliases.md): the user's words that
 find an installed command, and commands taking a query offered for any

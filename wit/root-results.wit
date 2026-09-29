@@ -21,10 +21,18 @@ interface root-results {
     /// Pane refuses any other kind of address and explains a system that
     /// cannot open it.
     open-url(string),
+    /// Opens the file with this id, as `files.list-folder` gave it in the
+    /// package's latest listing, with the system's handler for its type.
+    /// Pane shows the file's own name and folder in the row, whatever the
+    /// result's title and subtitle say, checks again when it is invoked
+    /// that it is a regular file inside the granted folder, not a link, and
+    /// refuses programs and scripts. Root search lists these results after
+    /// the results it finds by title.
+    open-file(string),
   }
 
   /// One result for the query, listed above the results root search finds
-  /// by title.
+  /// by title (below them for an `open-file` result).
   record root-result {
     /// Identifies the result among this command's results for the query.
     id: string,
@@ -38,7 +46,11 @@ interface root-results {
   /// ordinary words or an incomplete or invalid expression, has no results:
   /// that is not an error. An error is the extension failing; Pane shows it
   /// as a result explaining the failure. Pane asks again on every change of
-  /// the query and discards an answer once the query has changed.
+  /// the query. Once the query changes or root search is left, Pane
+  /// cancels a call still pending: one not started is not started, and one
+  /// waiting inside the extension (on an async import) is dropped with the
+  /// extension's instance, whose memory is lost; the next call starts a
+  /// fresh one.
   results-for: async func(query: string) -> result<list<root-result>, string>;
 }
 
