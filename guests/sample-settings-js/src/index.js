@@ -77,7 +77,7 @@ export const command = {
         item("sign-in", "Sign in", "Keeps a token as a local credential"),
         item("kept", "Show what Pane keeps", "Settings, content, cache and credential"),
         item("slow", "Save after waiting", "Waits 10 seconds, then saves; disabling or reloading stops it"),
-      item("crash", "Crash", "Crashes on purpose; three crashes within five minutes pause the extension"),
+        item("crash", "Crash", "Crashes on purpose; three crashes within five minutes pause the extension"),
         item("busy", "Stop responding", "Computes without waiting for up to a minute; Pane stops it after 5 seconds"),
       ],
     };

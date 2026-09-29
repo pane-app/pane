@@ -13,6 +13,11 @@ use pane::LauncherWindow;
 use pane_core::{Launcher, LauncherView, Limits, PackageIdentity, Runtime, Screen, Status};
 use tempfile::TempDir;
 
+#[path = "support/settle.rs"]
+mod settle;
+
+use settle::settle;
+
 const MANAGE_ROW: &str = "Manage extensions…";
 
 /// Copies the assembled Rust settings sample into `folder`.
@@ -59,19 +64,6 @@ fn open<'a>(
 fn view(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> LauncherView {
     cx.run_until_parked();
     cx.read_entity(window, |window, _| window.launcher().view())
-}
-
-/// Lets the window apply what arrives from the runtime thread.
-fn settle(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> LauncherView {
-    let deadline = Instant::now() + Duration::from_secs(60);
-    loop {
-        let view = view(window, cx);
-        if view.status != Status::Running {
-            return view;
-        }
-        assert!(Instant::now() < deadline, "the launcher did not finish");
-        std::thread::sleep(Duration::from_millis(5));
-    }
 }
 
 fn press_enter_on(

@@ -6,12 +6,16 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
 use gpui::{Entity, TestAppContext, VisualTestContext, prelude::*};
 use pane::LauncherWindow;
 use pane_core::{Launcher, LauncherView, Runtime, Screen, Status};
+
+#[path = "support/settle.rs"]
+mod settle;
+
+use settle::settle;
 
 /// Copies the assembled query sample to `folder`.
 fn package(folder: &Path) -> PathBuf {
@@ -28,20 +32,6 @@ fn package(folder: &Path) -> PathBuf {
         fs::copy(entry.path(), folder.join(entry.file_name())).unwrap();
     }
     folder.to_path_buf()
-}
-
-/// Lets the window apply replies that arrive from other threads.
-fn settle(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> LauncherView {
-    let deadline = Instant::now() + Duration::from_secs(60);
-    loop {
-        cx.run_until_parked();
-        let view = cx.read_entity(window, |window, _| window.launcher().view());
-        if view.status != Status::Running {
-            return view;
-        }
-        assert!(Instant::now() < deadline, "the launcher did not finish");
-        std::thread::sleep(Duration::from_millis(5));
-    }
 }
 
 fn titles(view: &LauncherView) -> Vec<&str> {

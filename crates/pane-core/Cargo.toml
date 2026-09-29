@@ -31,13 +31,24 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 # The native file watcher of development mode (inotify, FSEvents,
 # ReadDirectoryChangesW), which builds a local package on save.
 notify = "8.2"
+# Installing npm packages (#45): the gzipped tarball and its sha512
+# integrity, both already in the tree (image, Cranelift); the registry is
+# reached through `http` above.
+flate2 = "1"
+tar = { version = "0.4.44", default-features = false }
+sha2 = "0.10"
+# Installing packages from Git repositories (#46): object ids are SHA-1,
+# computed with collision detection as Git itself does (RustCrypto, MIT OR
+# Apache-2.0); the pack's zlib streams are read with `flate2` above.
+sha1-checked = { version = "0.10", default-features = false }
 
 # Listing the Apps folder and opening a shortcut or packaged app as Explorer
-# does, global hotkeys (`RegisterHotKey`), and the Job Object that stops a
-# development build with every process it started; already in the dependency tree
-# through GPUI CE.
+# does, global hotkeys (`RegisterHotKey`), the Job Object that stops a
+# development build with every process it started, and the clipboard format
+# listener of clipboard history (a message-only window, the clipboard and its
+# global memory); already in the dependency tree through GPUI CE.
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Com", "Win32_System_JobObjects", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_DataExchange", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
 
 # Global hotkeys on X11 (key grabs on the root window); already in the
 # dependency tree through GPUI's X11 platform.

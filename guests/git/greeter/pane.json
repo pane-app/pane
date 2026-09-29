@@ -1,0 +1,17 @@
+{
+  "manifestVersion": 1,
+  "title": "Greeter from Git",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "sample",
+      "title": "Greeter from Git",
+      "subtitle": "A Rust command installed from a Git repository",
+      "component": "dist/git_greeter.wasm"
+    }
+  ],
+  "operations": [
+    { "id": "greet", "version": 1, "component": "dist/git_greeter.wasm" }
+  ]
+}

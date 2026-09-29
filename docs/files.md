@@ -112,7 +112,11 @@ extension's results; only its own files arrive later.
 A listing stops (its answer is dropped) when root search is left, when the
 grant changes, and when the package's generation ends (disable, reload,
 update, pause, uninstall). A new query does not restart it: the new search
-waits for the same listing, and the older search's wait is cancelled.
+waits for the same listing, and the older search's wait is cancelled. A
+search whose extension was told the folder is listing waits for its own
+visit's listing (or a newer one), even if it ended before the search began
+waiting (Files is then asked again at once); a listing of a visit already
+left that stops late does not end that wait.
 
 **A hung folder** (an unresponsive disk or a network mount the host could
 not tell apart) holds only its package's worker: no new thread is started
@@ -229,7 +233,12 @@ with a simpler match (every word in the name).
   query's file shown; leaving root search stopping the listing and the next
   visit listing again; disabling stopping it, with nothing arriving once it
   has returned (waited on, not slept); a new grant stopping the old
-  listing.
+  listing. Unit tests in
+  [`pane_core::files`](../crates/pane-core/src/files.rs) hold a left
+  visit's listing until the next visit's is queued and waited for (its late
+  end must not end that wait), and let a listing end before the wait for it
+  is made (the wait must end at once); each race failed a run of the tests
+  above once (#29).
 - Native GUI smokes, one phase per system (screenshots 220 to 223), with a
   data folder of its own and a fixture folder "Pane smoke files" (spaces)
   holding "Résumé plan ü.txt" (non-ASCII) and an executable script or batch

@@ -45,6 +45,10 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
 - `sample-files-js`, `sample-files-ts`: the same host import and `open-file`
   results in JavaScript and TypeScript; held by
   `crates/pane-core/tests/files.rs`.
+- `sample-clipboard-js`, `sample-clipboard-ts`: the Clipboard History
+  command in JavaScript and TypeScript, over the same host import
+  ([Clipboard history](#clipboard-history)); held by
+  `crates/pane-core/tests/clipboard.rs`.
 - `sample-helper`, `sample-helper-js`, `sample-helper-ts`: a command in
   Rust, JavaScript and TypeScript running a [native helper](#native-helpers)
   its package ships, `helpers/echo` (`pane-echo`, an ordinary program
@@ -69,6 +73,33 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   calling each by its dependency id; installing it installs the JavaScript
   sample too ([Dependencies](#dependencies-on-other-extensions)); held by
   `crates/pane-core/tests/dependencies.rs`.
+- `npm/greeter`: `@pane-samples/greeter`, the npm-distributed sample: an
+  npm package holding a `pane.json` and one JavaScript component,
+  `sample_npm_js.wasm` (from `sample-npm-js`, prebuilt like the other
+  JavaScript samples), whose command answers "Hello from the npm package"
+  and whose `greet` operation answers "Hello, <name>, from the npm package",
+  so it is plain which copy runs. `"private": true` keeps `npm publish` from
+  publishing it;
+  `cargo xtask guests` assembles it in `target/guests/npm/greeter/` and packs
+  it as `npm pack` does into `target/guests/npm/pane-samples-greeter-0.1.0.tgz`
+  ([Publishing a package to npm](#publishing-a-package-to-npm)).
+  `packages/sample-dependencies-npm` is the dependencies sample's component
+  requiring it as `npm:@pane-samples/greeter`; held by
+  `crates/pane-core/tests/npm.rs` and `crates/pane/tests/npm.rs`, from a
+  local registry.
+- `git/greeter`: the Git-distributed sample, a Rust package's **source**
+  (`pane.json` naming `dist/git_greeter.wasm`, `Cargo.toml`, `src/lib.rs`
+  and a README of the author's steps), whose command answers "Hello from the
+  Git repository" and whose `greet` operation answers "Hello, <name>, from
+  the Git repository". `cargo xtask guests` builds it and assembles it in
+  `target/guests/git/greeter/` with its component under `dist/`, as a
+  release revision holds it. The tests and smokes make its repository with
+  `git`: the source alone on `main` (a source-only revision) and the build
+  on the branch `release`, tagged `v0.1.0`
+  ([Publishing a package from a Git repository](#publishing-a-package-from-a-git-repository));
+  held by `crates/pane-core/tests/repositories.rs` and
+  `crates/pane/tests/repositories.rs`, from a repository served on
+  127.0.0.1.
 - `sample-query`, `sample-query-js`, `sample-query-ts`: Echo, the smallest
   command that takes a query, in Rust, JavaScript and TypeScript:
   it answers the text the user sends it from root search through its alias
@@ -704,6 +735,63 @@ The [JavaScript](sample-applications-js) and
 their commands list the applications and open one with `open(id)`; their
 packages in [`packages/`](packages) set `indexedResults`.
 
+## Clipboard history
+
+A Rust command can keep clipboard history through Pane
+(`pane_guest::clipboard_history`, the `pane:extension/clipboard-history`
+import, [`wit/clipboard.wit`](../wit/clipboard.wit)): Pane itself watches
+the clipboard and keeps the text the user copies for the command's package,
+once the command turned it on, and only while the package runs and the
+history is not paused. The package does not run while text is copied; it
+reads what Pane kept:
+
+```rust
+use pane_guest::clipboard_history::{self as history, Capture};
+
+// From an action the user chose, never on its own: history starts off.
+history::set_capture(Capture::On)?;
+for entry in history::entries()? {
+    // entry.text, entry.age_seconds, entry.source ("notepad.exe")
+}
+```
+
+`status()` says whether it is on, why Pane cannot watch the clipboard (such
+as on a system without an adapter), the excluded programs, the count and
+the retention; `set-excluded` replaces the excluded programs, `copy(id)`
+puts an item on the clipboard again, `clear()` deletes every item and keeps
+history on, `delete-items(ids)` deletes some, and `turn-off-and-clear()`
+turns history off and deletes every item at once. Pane keeps plain text
+only, never text marked by its application as not to be kept, and nothing
+while the package is disabled. Each item is kept for the retention after
+it was copied (7 days unless `set-retention(seconds)` chose 1 minute to
+365 days), and Pane deletes it then itself, whether the command runs or
+not: `entries()` never lists an expired item, so a command needs no expiry
+of its own. The [Clipboard History](clipboard-history)
+default extension is the example; see [clipboard history](../docs/clipboard-history.md).
+Only Windows has a clipboard adapter so far, so its package declares
+`"platforms": ["windows"]`.
+
+A JavaScript or TypeScript command imports it when its package.json sets
+`"pane": { "clipboardHistory": true }` (declared in
+[`js/clipboard.d.ts`](js/clipboard.d.ts)); a command that does not set it
+does not import it. Each function throws, on failure, an object whose
+`payload` is the reason:
+
+```ts
+import * as history from "pane:extension/clipboard-history@0.1.0";
+
+history.setCapture("on");
+history.setRetention(86400); // keep each item for a day
+for (const entry of history.entries()) {
+  // entry.text, entry.ageSeconds, entry.source ("notepad.exe")
+}
+history.deleteItems(["7"]); // `delete-items`: `delete` is a JavaScript keyword
+```
+
+[`sample-clipboard-js`](sample-clipboard-js) and
+[`sample-clipboard-ts`](sample-clipboard-ts) implement the Clipboard History
+command in JavaScript and TypeScript.
+
 ## A command that takes a query
 
 The user can give any installed command an alias in Manage extensions, and
@@ -1002,8 +1090,17 @@ installing it installs what it needs
   folder a link to it points to) or absolute, with `/` between folders on
   every system: `\`, drive letters and `//server` shares are refused. Pane
   resolves it as it resolves an installed folder and keeps what it resolved
-  to, so moving your source folder later does not change it. Other sources
-  (npm, Git) are not supported yet.
+  to, so moving your source folder later does not change it. Or `npm:` and
+  an npm package name, optionally with an exact version
+  (`npm:@pane-samples/greeter@0.1.0`), which Pane downloads when it is
+  missing ([npm](../docs/npm.md#dependencies-from-npm)); a version pins it,
+  so an installed copy of another version is a conflict Pane explains
+  rather than a version your package did not ask for. Or `git:` and a Git
+  repository,
+  optionally with `@` and a branch, tag or commit
+  (`git:https://github.com/owner/repo@v1.0.0`), which Pane fetches when it
+  is missing ([Git](../docs/git.md#dependencies-from-git)). A package
+  published to npm or Git can use only `npm:` and `git:` sources.
 - `optional` (default `false`): a required dependency is installed with your
   package when it is missing; an optional one never is, and a call to it
   when it is not installed is `not-found` (the
@@ -1347,6 +1444,110 @@ affected: a copy of the package installed from another folder keeps its own
 code. The `hello-rust`, `hello-js` and `hello-ts` samples are ready to try;
 [development mode](../docs/development-mode.md) has the steps, what is
 watched and the limits.
+
+## Publishing a package to npm
+
+A Pane package can be published to npm, so that users install it by name
+with **Install extension from npm…** (or `pane --install npm:<name>`),
+without Node.js or npm ([details](../docs/npm.md)). Pane installs the
+package's tarball exactly as it installs a folder, and runs nothing else in
+it: publish what is **built**.
+
+1. **Build first.** Build every component `pane.json` names, and each native
+   helper for every target you support, before packing: Pane never runs npm
+   install scripts (`preinstall`, `install`, `postinstall`, `prepare`…) and
+   never installs your npm `dependencies`, so a component bundling a library
+   must have it built in. A package published without its components is
+   explained to users as source-only.
+2. **Add a `package.json`** beside `pane.json`, whose `files` lists
+   `pane.json` and what it names, and nothing Pane would not use:
+
+   ```json
+   {
+     "name": "@your-scope/your-extension",
+     "version": "1.0.0",
+     "description": "…",
+     "license": "…",
+     "keywords": ["pane-extension"],
+     "files": ["pane.json", "dist/command.wasm", "helpers/"]
+   }
+   ```
+
+   Its `name` is the package's identity in Pane (every version is the same
+   package), and each version you publish is what users install by
+   `name@version` or as the latest. Keep `pane.json` at the package's root.
+   Its dependencies on other Pane packages are `npm:` sources.
+3. **Check the tarball** with `npm pack --dry-run`: it lists what users
+   will download. Helpers keep their files; Pane sets their mode itself.
+   Symbolic links, and names some system reads differently or cannot write
+   (`\ : < > " | ? *`, a name ending in `.` or a space, `con`, `nul`,
+   `com1`…, on every system alike), make Pane refuse the whole tarball.
+4. **Try it before publishing**: `npm pack` makes the `.tgz`; serve it from
+   a registry on this computer and point a development build of Pane at it
+   with `PANE_NPM_REGISTRY=http://127.0.0.1:<port>/`
+   ([`scripts/npm_registry.py`](../scripts/npm_registry.py) serves the
+   tarballs of a folder), then install it by name.
+5. **Publish** with `npm publish` (`--access public` for a scoped name).
+   Pane needs the registry's sha512 integrity, which npm gives every
+   version it publishes.
+
+The sample [`npm/greeter`](npm/greeter) is such a package, kept
+`"private": true` so that it is never published. `cargo xtask guests`
+assembles and packs it on each contributor system, without npm; `npm pack`
+in the assembled `target/guests/npm/greeter` makes the same list of files,
+and its tarball installs alike.
+
+## Publishing a package from a Git repository
+
+A Pane package can also be installed from a public Git repository, with
+**Install extension from Git…** (or `pane --install git:<address>`), without
+Git, a compiler or any other tool on the user's computer
+([details](../docs/git.md)). Pane fetches the one revision the user names
+over HTTPS and installs its files exactly as it installs a folder; it builds
+nothing and runs nothing from the repository (no hooks, no submodules, no
+Git LFS). So what users install must be a **release revision**: a commit
+whose tree holds the built components.
+
+1. **Keep `pane.json` at the repository's root**, naming each component
+   where the release revision will hold it, such as `dist/command.wasm`.
+   A revision without them (your development branch, if you keep build
+   outputs out of it) is explained to users as source-only.
+2. **Build, then commit the build on a release reference.** For example:
+
+   ```sh
+   cargo build --release --target wasm32-wasip2
+   mkdir -p dist && cp target/wasm32-wasip2/release/command.wasm dist/
+   git switch -c release            # or: git switch release
+   git add -f dist                  # -f if dist/ is in .gitignore
+   git commit -m "Release 1.0.0"
+   git tag v1.0.0
+   git push origin release v1.0.0
+   ```
+
+   Commit every native helper for each target you support, too; files are
+   installed without their execute bit, and Pane sets a helper's mode
+   itself.
+3. **Tell users what to name**: `https://<host>/<owner>/<repo>@v1.0.0` (a
+   tag: pinned to it) or `…@release` (a branch: tracked, each update
+   fetching its newest commit). Without a reference, Pane installs the
+   repository's default branch, which is only right if that branch holds
+   the build.
+4. **Keep the tree portable**: symbolic links, submodules, a `.git` entry,
+   two names in a folder that differ only in case, and names some system
+   reads differently or cannot write (`\ : < > " | ? *`, a name ending in
+   `.` or a space, `con`, `nul`, `com1`…) make Pane refuse the revision on
+   every system.
+5. **Try it before pushing**: serve the repository on this computer
+   ([`scripts/repository_server.py`](../scripts/repository_server.py)
+   `serve <folder> <port-file>`) and name
+   `http://127.0.0.1:<port>/<repo>.git@<reference>` in a development build
+   of Pane, which alone accepts a plain `http://` address on a loopback
+   address.
+
+The repository's identity is its host and path (`github.com/owner/repo`),
+whatever the reference: moving it to another host or path makes another
+package. Its dependencies on other Pane packages are `npm:` or `git:`
+sources. The sample [`git/greeter`](git/greeter) is such a package's source.
 
 Uninstalling is not implemented yet.
 

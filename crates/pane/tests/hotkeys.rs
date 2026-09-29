@@ -8,13 +8,17 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
-use gpui::{Entity, TestAppContext, VisualTestContext, prelude::*};
+use gpui::TestAppContext;
 use pane::LauncherWindow;
 use pane_core::hotkeys::{HotkeyError, Hotkeys, Shortcut};
-use pane_core::{Launcher, LauncherView, Runtime, Screen, Status};
+use pane_core::{Launcher, Runtime, Screen, Status};
 use tempfile::TempDir;
+
+#[path = "support/settle.rs"]
+mod settle;
+
+use settle::settle;
 
 #[derive(Default)]
 struct FakeSystem {
@@ -64,20 +68,6 @@ fn package(folder: &Path) -> PathBuf {
     folder.to_path_buf()
 }
 
-/// Lets the window apply replies that arrive from other threads.
-fn settle(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> LauncherView {
-    let deadline = Instant::now() + Duration::from_secs(60);
-    loop {
-        cx.run_until_parked();
-        let view = cx.read_entity(window, |window, _| window.launcher().view());
-        if view.status != Status::Running {
-            return view;
-        }
-        assert!(Instant::now() < deadline, "the launcher did not finish");
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
-
 #[gpui::test]
 fn pressing_keys_on_the_hotkey_screen_assigns_them_and_the_hotkey_opens_the_command(
     cx: &mut TestAppContext,
@@ -100,10 +90,10 @@ fn pressing_keys_on_the_hotkey_screen_assigns_them_and_the_hotkey_opens_the_comm
     cx.simulate_keystrokes("enter");
     settle(&window, cx);
 
-    // Root lists Say hello, the install row, then Manage extensions…; the
+    // Root lists Say hello, the install rows, then Manage extensions…; the
     // extension list holds Hello's state, reload, cache and uninstall rows, then the
     // hotkey of Say hello.
-    cx.simulate_keystrokes("down down enter");
+    cx.simulate_keystrokes("down down down down enter");
     settle(&window, cx);
     cx.simulate_keystrokes("down down down down enter");
     let view = settle(&window, cx);

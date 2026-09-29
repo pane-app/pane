@@ -1,8 +1,9 @@
 # Notice for the prebuilt JS/TS sample components
 
 The components in this folder (`sample_js.wasm`, `sample_ts.wasm`,
-`sample_settings_js.wasm`, `sample_settings_ts.wasm` and the operations and
-applications samples) are built by `cargo xtask js-guests`
+`sample_settings_js.wasm`, `sample_settings_ts.wasm`, the operations and
+applications samples, and `sample_npm_js.wasm`, the component of the npm
+sample, from `guests/sample-npm-js`) are built by `cargo xtask js-guests`
 (inputs in [manifest.json](manifest.json)). Each component combines:
 
 | Part | License |

@@ -12,6 +12,8 @@ use pane_core::{CallError, Launcher, PackageIdentity, Runtime, Screen, Status};
 use tempfile::TempDir;
 
 const INSTALL_ROW: &str = "Install extension from folder…";
+const NPM_ROW: &str = "Install extension from npm…";
+const GIT_ROW: &str = "Install extension from Git…";
 const MANAGE_ROW: &str = "Manage extensions…";
 
 /// A settings sample package: the same command in each language.
@@ -161,7 +163,10 @@ fn a_disabled_package_leaves_root_search_and_stays_disabled_after_a_restart(fixt
     let folder = settings_package(fixture, &dirs.source("settings"), "Settings sample");
     let launcher = dirs.launcher();
     block_on(launcher.install_package(&folder));
-    assert_eq!(titles(&launcher), ["Greeting", INSTALL_ROW, MANAGE_ROW]);
+    assert_eq!(
+        titles(&launcher),
+        ["Greeting", INSTALL_ROW, NPM_ROW, GIT_ROW, MANAGE_ROW]
+    );
 
     manage(&launcher);
     let identity = PackageIdentity::local(&folder).unwrap();
@@ -188,12 +193,18 @@ fn a_disabled_package_leaves_root_search_and_stays_disabled_after_a_restart(fixt
     );
     assert!(subtitles(&launcher)[0].starts_with("Disabled"));
     launcher.back();
-    assert_eq!(titles(&launcher), [INSTALL_ROW, MANAGE_ROW]);
+    assert_eq!(
+        titles(&launcher),
+        [INSTALL_ROW, NPM_ROW, GIT_ROW, MANAGE_ROW]
+    );
 
     // A restart without a runtime: listing runs no guest and keeps the choice.
     let unavailable = Err(CallError::RuntimeUnavailable("no engine".into()));
     let restarted = Launcher::with_packages(unavailable, vec![], dirs.packages_dir());
-    assert_eq!(titles(&restarted), [INSTALL_ROW, MANAGE_ROW]);
+    assert_eq!(
+        titles(&restarted),
+        [INSTALL_ROW, NPM_ROW, GIT_ROW, MANAGE_ROW]
+    );
     assert_eq!(enabled(&restarted), [(identity.clone(), false)]);
     manage(&restarted);
     assert!(subtitles(&restarted)[0].starts_with("Disabled"));
@@ -224,7 +235,10 @@ fn re_enabling_after_a_restart_restores_the_saved_settings(fixture: &Fixture) {
         Status::Result("Enabled Settings sample".into())
     );
     restarted.back();
-    assert_eq!(titles(&restarted), ["Greeting", INSTALL_ROW, MANAGE_ROW]);
+    assert_eq!(
+        titles(&restarted),
+        ["Greeting", INSTALL_ROW, NPM_ROW, GIT_ROW, MANAGE_ROW]
+    );
     assert_eq!(
         run(&restarted, "Greeting", "Greet me"),
         Status::Result("Good day to you".into())
@@ -298,7 +312,10 @@ fn copies_with_the_same_title_are_enabled_and_keep_settings_by_identity(fixture:
 
     toggle(&launcher, 0);
     let restarted = dirs.launcher();
-    assert_eq!(titles(&restarted), [INSTALL_ROW, MANAGE_ROW]);
+    assert_eq!(
+        titles(&restarted),
+        [INSTALL_ROW, NPM_ROW, GIT_ROW, MANAGE_ROW]
+    );
     // Enabling one copy leaves the other disabled.
     toggle(&restarted, 1);
     assert_eq!(
@@ -334,7 +351,10 @@ fn disabling_through_the_api_closes_the_package_command_and_updating_keeps_it_di
         view.status,
         Status::Result("Disabled Settings sample".into())
     );
-    assert_eq!(titles(&launcher), [INSTALL_ROW, MANAGE_ROW]);
+    assert_eq!(
+        titles(&launcher),
+        [INSTALL_ROW, NPM_ROW, GIT_ROW, MANAGE_ROW]
+    );
 
     // An update replaces the code, not the user's choice.
     block_on(launcher.preview_package(&folder));
@@ -348,7 +368,10 @@ fn disabling_through_the_api_closes_the_package_command_and_updating_keeps_it_di
     );
     block_on(launcher.activate_selected());
     assert_eq!(enabled(&launcher), [(identity.clone(), false)]);
-    assert_eq!(titles(&launcher), [INSTALL_ROW, MANAGE_ROW]);
+    assert_eq!(
+        titles(&launcher),
+        [INSTALL_ROW, NPM_ROW, GIT_ROW, MANAGE_ROW]
+    );
     assert_eq!(enabled(&dirs.launcher()), [(identity, false)]);
 }
 

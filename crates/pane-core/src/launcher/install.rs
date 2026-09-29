@@ -19,13 +19,109 @@ use std::path::PathBuf;
 
 use super::{Changing, Launcher, Mode, State, Status, off_thread};
 use crate::dependencies::{self, Assumptions, Plan, RequiredState};
-use crate::packages::{InstalledPackage, PackageError, PackageIdentity, SourcePackage};
+use crate::git::{self as git_source, GitSpec};
+use crate::npm::{self, NpmSpec, Registry};
+use crate::packages::{InstalledPackage, PackageError, PackageIdentity, SourcePackage, SourceSpec};
 use crate::platform;
+
+/// Where a package to preview or install comes from.
+#[derive(Clone, Debug)]
+pub(in crate::launcher) enum Request {
+    /// A local package folder.
+    Folder(PathBuf),
+    /// A package from npm, at the version named or else the latest.
+    Npm(NpmSpec),
+    /// A package from a Git repository, at the reference named or else its
+    /// default branch.
+    Git(GitSpec),
+}
+
+impl Request {
+    /// How the preview names what was asked for when it cannot be read:
+    /// "Folder: …" or "npm package: …", and the title's name for it.
+    pub(in crate::launcher) fn describe(&self) -> (String, String) {
+        match self {
+            Request::Folder(folder) => (
+                format!("Folder: {}", folder.display()),
+                crate::packages::folder_name(folder),
+            ),
+            Request::Npm(spec) => (format!("npm package: {spec}"), spec.name.clone()),
+            Request::Git(spec) => (
+                format!("Git repository: {spec}"),
+                spec.repository.name().to_owned(),
+            ),
+        }
+    }
+}
+
+/// Reads packages from their sources: local folders, npm packages, which it
+/// downloads from its registry, and Git repositories, which it fetches, into
+/// its downloads folder.
+#[derive(Clone)]
+pub(in crate::launcher) struct Sources {
+    pub registry: Registry,
+    /// Where downloaded packages are unpacked; `None` when this launcher
+    /// installs nothing, and so downloads nothing.
+    pub downloads: Option<PathBuf>,
+}
+
+impl Sources {
+    /// Reads and validates the package `request` names. Blocks on the file
+    /// system, and for npm and Git on the network.
+    pub fn read(&self, request: &Request) -> Result<SourcePackage, PackageError> {
+        match request {
+            Request::Folder(folder) => SourcePackage::read(folder),
+            Request::Npm(spec) => self.fetch(spec),
+            Request::Git(spec) => self.fetch_git(spec),
+        }
+    }
+
+    /// Reads the package with `identity`, a dependency declared with the
+    /// source `source` (for npm, possibly naming a version; for Git, a
+    /// reference).
+    pub fn read_dependency(
+        &self,
+        identity: &PackageIdentity,
+        source: &str,
+    ) -> Result<SourcePackage, PackageError> {
+        match (identity.local_folder(), SourceSpec::parse(source)) {
+            (Some(folder), _) => SourcePackage::read(folder),
+            (None, Ok(SourceSpec::Npm(spec))) => self.fetch(&spec),
+            (None, Ok(SourceSpec::Git(spec))) => self.fetch_git(&spec),
+            (None, _) => Err(PackageError::Npm(format!(
+                "{identity} is not a source Pane can install from"
+            ))),
+        }
+    }
+
+    fn fetch(&self, spec: &NpmSpec) -> Result<SourcePackage, PackageError> {
+        let Some(downloads) = &self.downloads else {
+            return Err(PackageError::Storage(
+                "this launcher does not install packages".into(),
+            ));
+        };
+        // Its download is removed with the package read from it, or at once
+        // if it cannot be read.
+        let fetched = npm::fetch(&self.registry, spec, downloads).map_err(PackageError::Npm)?;
+        SourcePackage::read_npm(fetched)
+    }
+
+    fn fetch_git(&self, spec: &GitSpec) -> Result<SourcePackage, PackageError> {
+        let Some(downloads) = &self.downloads else {
+            return Err(PackageError::Storage(
+                "this launcher does not install packages".into(),
+            ));
+        };
+        // As for npm, its download goes with the package read from it.
+        let fetched = git_source::fetch(spec, downloads).map_err(PackageError::Git)?;
+        SourcePackage::read_git(fetched)
+    }
+}
 
 /// An install begun by choosing Install or Update on a preview, or asked
 /// for without one.
 pub(in crate::launcher) struct Begun {
-    folder: PathBuf,
+    request: Request,
     mode: Mode,
     /// The assumptions of the plan the preview showed, if there was one.
     shown: Option<Assumptions>,
@@ -34,10 +130,10 @@ pub(in crate::launcher) struct Begun {
 }
 
 impl Begun {
-    /// An install of the package in `folder` without a preview.
-    pub(in crate::launcher) fn unplanned(folder: PathBuf) -> Begun {
+    /// An install of the package `request` names without a preview.
+    pub(in crate::launcher) fn unplanned(request: Request) -> Begun {
         Begun {
-            folder,
+            request,
             mode: Mode::Install,
             shown: None,
             claimed: Vec::new(),
@@ -128,13 +224,13 @@ fn changed(title: &str) -> String {
 }
 
 impl Launcher {
-    /// Begins installing the package in `folder` as the preview's plan with
-    /// `assumptions` showed it: claims what it relies on, or explains why
-    /// not and returns `None`.
+    /// Begins installing the package `request` names as the preview's plan
+    /// with `assumptions` showed it: claims what it relies on, or explains
+    /// why not and returns `None`.
     pub(in crate::launcher) fn begin_install(
         &self,
         state: &mut State,
-        folder: PathBuf,
+        request: Request,
         mode: Mode,
         assumptions: Assumptions,
     ) -> Option<Begun> {
@@ -154,7 +250,7 @@ impl Launcher {
         };
         state.view.status = Status::Running;
         Some(Begun {
-            folder,
+            request,
             mode,
             shown: Some(assumptions),
             claimed,
@@ -165,13 +261,13 @@ impl Launcher {
     /// is missing, or explains why not, or shows how its plan changed.
     pub(in crate::launcher) async fn finish_install(&self, epoch: u64, begun: Begun) {
         let Begun {
-            folder,
+            request,
             mode,
             shown,
             mut claimed,
         } = begun;
         let result = self
-            .install_planned(folder.clone(), &mode, shown.as_ref(), &mut claimed)
+            .install_planned(request.clone(), &mode, shown.as_ref(), &mut claimed)
             .await;
         let mut state = self.lock();
         for identity in &claimed {
@@ -227,7 +323,7 @@ impl Launcher {
                 let (package, plan) = *changed_plan;
                 if current {
                     let title = package.manifest.title.clone();
-                    self.show_preview(&mut state, &folder, Ok((package, plan)));
+                    self.show_preview(&mut state, &request, Ok((package, plan)));
                     state.view.status = Status::Error(changed(&title));
                 }
             }
@@ -256,14 +352,16 @@ impl Launcher {
         }
     }
 
-    /// Reads and checks the package in `folder`, plans its dependencies and,
-    /// if the plan is the one `shown` (when a preview showed one) and can be
-    /// installed, claims what it relies on (unless `claimed` already holds
-    /// it), then installs or updates it with those it is missing: all of
-    /// them or, removing again what it installed when one fails, none.
+    /// Reads and checks the package `request` names, plans its dependencies
+    /// and, if the plan is the one `shown` (when a preview showed one) and
+    /// can be installed, claims what it relies on (unless `claimed` already
+    /// holds it), then installs or updates it with those it is missing: all
+    /// of them or, removing again what it installed when one fails, none.
+    /// What it downloaded from npm or Git is removed with the packages read
+    /// from it, once they are installed or not.
     async fn install_planned(
         &self,
-        folder: PathBuf,
+        request: Request,
         mode: &Mode,
         shown: Option<&Assumptions>,
         claimed: &mut Vec<PackageIdentity>,
@@ -273,8 +371,23 @@ impl Launcher {
                 "this launcher does not install packages".into(),
             )));
         };
-        let package = self.read_and_check(folder).await.map_err(failed)?;
+        let package = self.read_and_check(request).await.map_err(failed)?;
         let (package, plan) = self.plan_dependencies(package).await;
+        self.install_plan(store, package, plan, mode, shown, claimed)
+            .await
+    }
+
+    /// Installs `package` with `plan`, as [`Launcher::install_planned`]
+    /// describes, once it has been read and planned.
+    async fn install_plan(
+        &self,
+        store: std::sync::Arc<std::sync::Mutex<crate::packages::Store>>,
+        package: SourcePackage,
+        plan: Plan,
+        mode: &Mode,
+        shown: Option<&Assumptions>,
+        claimed: &mut Vec<PackageIdentity>,
+    ) -> Result<Outcome, Stopped> {
         if shown.is_some_and(|shown| *shown != plan.assumptions) {
             return Err(Stopped::Changed(Box::new((package, plan))));
         }
@@ -313,7 +426,8 @@ impl Launcher {
     /// Works out what installing `package` means for its dependencies (see
     /// `dependencies`) against the installed packages, reading the folders
     /// of those it would install off the calling thread and having the
-    /// runtime check their components without running them.
+    /// runtime check their components without running them (noting whether
+    /// they use the network, as for the package itself).
     pub(in crate::launcher) async fn plan_dependencies(
         &self,
         package: SourcePackage,
@@ -328,28 +442,39 @@ impl Launcher {
                 .collect();
             (state.packages.clone(), paused)
         };
+        let sources = self.sources.clone();
         let (package, mut plan) = off_thread(move || {
-            let plan = dependencies::plan(&package, &installed, &paused, SourcePackage::read);
+            let read = |identity: &PackageIdentity, source: &str| {
+                sources.read_dependency(identity, source)
+            };
+            let plan = dependencies::plan(&package, &installed, &paused, read);
             (package, plan)
         })
         .await;
-        for dependency in &plan.install {
-            if let Err(error) = self.check_components(dependency).await {
-                let required = plan
-                    .required
-                    .iter()
-                    .find(|required| required.target.identity == dependency.identity)
-                    .expect("a package to install is a required dependency");
-                plan.problems.push(dependencies::Problem {
-                    dependent: required.dependent.clone(),
-                    id: required.id.clone(),
-                    kind: dependencies::ProblemKind::CannotInstall {
-                        folder: dependency.folder.clone(),
-                        error,
-                    },
-                });
+        let mut problems = Vec::new();
+        for dependency in &mut plan.install {
+            match self.check_components(dependency).await {
+                // Recorded as the package's own is: whether it can make web
+                // requests.
+                Ok(network) => dependency.network = network,
+                Err(error) => {
+                    let required = plan
+                        .required
+                        .iter()
+                        .find(|required| required.target.identity == dependency.identity)
+                        .expect("a package to install is a required dependency");
+                    problems.push(dependencies::Problem {
+                        dependent: required.dependent.clone(),
+                        id: required.id.clone(),
+                        kind: dependencies::ProblemKind::CannotInstall {
+                            from: dependencies::source_name(&dependency.identity),
+                            error,
+                        },
+                    });
+                }
             }
         }
+        plan.problems.extend(problems);
         (package, plan)
     }
 }

@@ -564,15 +564,14 @@ fn a_package_is_called_by_its_identity_only() {
         fixture_run(&launcher, "Call a relative source"),
         error(
             "not-found: `local:../b` is not a package identity; use `local:` followed by \
-             the absolute folder path Pane shows for the package"
+             the absolute folder path Pane shows for the package, `npm:` followed by its npm \
+             package name, or `git:` followed by its repository"
         )
     );
     assert_eq!(
         fixture_run(&launcher, "Call a source that is not local"),
-        error(
-            "not-found: `npm:left-pad` is not a package identity; use `local:` followed by \
-             the absolute folder path Pane shows for the package"
-        )
+        // An npm package is named by its name, as installed.
+        error("not-found: no installed extension has the source npm:left-pad")
     );
 }
 
@@ -769,7 +768,12 @@ fn a_package_that_only_publishes_operations_adds_no_command() {
 
     assert_eq!(
         titles(&launcher),
-        ["Install extension from folder…", "Manage extensions…"]
+        [
+            "Install extension from folder…",
+            "Install extension from npm…",
+            "Install extension from Git…",
+            "Manage extensions…"
+        ]
     );
 }
 

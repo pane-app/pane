@@ -60,7 +60,7 @@ pub use supervisor::{RuntimeFailure, RuntimeStatus};
 pub(crate) mod bindings {
     wasmtime::component::bindgen!({
         path: "../../wit",
-        world: "extension-with-files",
+        world: "extension-with-clipboard",
         imports: {
             "pane:extension/operations": store,
             "pane:extension/helpers": store,
@@ -123,14 +123,17 @@ mod operations_bindings {
 }
 
 use bindings::exports::pane::extension::command;
-use bindings::pane::extension::{applications, cache, content, credentials, settings};
+use bindings::pane::extension::{
+    applications, cache, clipboard_history, content, credentials, settings,
+};
 use indexed_bindings::exports::pane::extension::indexed_results;
 use root_bindings::exports::pane::extension::root_results;
 
 use crate::applications::Applications;
+use crate::clipboard::{self, Capture, CaptureState};
 use crate::extension_data::{DataKind, PackageData};
 use crate::files::{FileAccess, Folders};
-use crate::generation::{End, Generation};
+use crate::generation::{End, Fence, Generation};
 use crate::helpers;
 use crate::helpers::runner::{self, HelperError, HelperErrorKind, Helpers, Running, Spec};
 use crate::operations::{self, Directory, OperationCall, OperationError, Target};
@@ -188,11 +191,27 @@ impl SearchStopped {
         !matches!(self.0.try_recv(), Err(oneshot::error::TryRecvError::Empty))
     }
 
-    /// Waits up to `wait` for the search to be stopped; whether it was.
-    async fn stopped_within(&mut self, wait: std::time::Duration) -> bool {
-        tokio::time::timeout(wait, &mut self.0).await.is_ok()
+    /// Waits until the search is stopped or `wait` ends, whichever comes
+    /// first; whether it was stopped (also when both are).
+    async fn stopped_before(&mut self, wait: impl Future<Output = ()>) -> bool {
+        let mut wait = std::pin::pin!(wait);
+        std::future::poll_fn(|context| {
+            if std::pin::Pin::new(&mut self.0).poll(context).is_ready() {
+                return std::task::Poll::Ready(true);
+            }
+            wait.as_mut().poll(context).map(|()| false)
+        })
+        .await
     }
 }
+
+/// What a search waits on before it starts, given [`SEARCH_DEBOUNCE`]: the
+/// clock's sleep, unless a test sets another
+/// (`Runtime::set_search_timer`, in debug builds).
+#[cfg(any(test, debug_assertions))]
+type SearchTimer = Arc<
+    dyn Fn(std::time::Duration) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync,
+>;
 
 /// How long the runtime waits before it starts a search: one the user
 /// replaces by typing on within it is stopped before its command is asked
@@ -259,6 +278,11 @@ pub(crate) struct Exports {
 /// The system's applications as the runtime's guests and the launcher see
 /// them; replaceable, for tests.
 type SharedApplications = Arc<Mutex<Arc<dyn Applications>>>;
+
+/// Where the runtime's guests keep clipboard history, once the launcher
+/// said (see [`Runtime::set_clipboard`]); held weakly, since the launcher
+/// owns it and Pane stops watching the clipboard once it is dropped.
+type SharedClipboard = Arc<Mutex<Option<std::sync::Weak<Capture>>>>;
 
 /// The installed packages as the launcher has them, once it has said, for
 /// resolving operation calls and finding a guest's helpers.
@@ -793,6 +817,22 @@ impl Runtime {
         self.shared.network.set_limits(limits);
     }
 
+    /// Has every search the runtime starts from now on wait for the future
+    /// `timer` returns (given [`SEARCH_DEBOUNCE`]) instead of the clock, so
+    /// a test decides when the wait ends, and sees each search reach it,
+    /// however slow the machine is. For tests only; debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn set_search_timer(
+        &self,
+        timer: impl Fn(std::time::Duration) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>>
+        + Send
+        + Sync
+        + 'static,
+    ) {
+        *lock(&self.shared.search_timer) = Some(Arc::new(timer));
+    }
+
     /// `host:port` of every address the package with identity key `owner`
     /// tried to reach this session, sorted.
     pub(crate) fn contacted(&self, owner: &str) -> Vec<String> {
@@ -978,6 +1018,13 @@ impl Runtime {
     /// Finds and opens the system's applications.
     pub(crate) fn applications(&self) -> Arc<dyn Applications> {
         lock(&self.shared.applications).clone()
+    }
+
+    /// Has the runtime's guests keep clipboard history through `capture`
+    /// from now on; until then they are told that this Pane does not watch
+    /// the clipboard.
+    pub(crate) fn set_clipboard(&self, capture: &Arc<Capture>) {
+        *lock(&self.shared.clipboard) = Some(Arc::downgrade(capture));
     }
 
     /// Asks the command in `component`, which computes root results, for
@@ -1376,6 +1423,17 @@ pub(crate) fn stopped_code(end: End) -> String {
     }
 }
 
+/// Why code is stopped, if it is: the one check every host interface goes
+/// through ([`GuestState::stopped`], and the web requests' sender, which
+/// holds no `GuestState`). Code of an installed package is stopped once its
+/// generation ended (which says why first); any code, once `fence`, its
+/// runtime thread's, closed, whether or not its data was fenced with it
+/// ([`PackageData::stopped`] checks that fence too).
+pub(crate) fn code_stopped(data: Option<&PackageData>, fence: &Fence) -> Option<End> {
+    data.and_then(PackageData::stopped)
+        .or_else(|| fence.closed().then_some(End::Abandoned))
+}
+
 /// How a call answers that ran on a runtime thread Pane gave up on.
 fn given_up() -> CallError {
     CallError::RuntimeUnavailable("it stopped responding and was replaced".into())
@@ -1405,6 +1463,8 @@ pub(crate) struct GuestState {
     limits: StoreLimits,
     /// The granted folders and their listings.
     files: FileAccess,
+    /// Keeps clipboard history for the guest's package.
+    clipboard: SharedClipboard,
     /// The installed packages, for finding the guest's helpers.
     directory: SharedDirectory,
     /// The runtime's helper processes; those of this instance are ended
@@ -1488,11 +1548,9 @@ impl GuestState {
     /// call operations or start any other host work: every host interface
     /// checks this one fence.
     pub(crate) fn stopped(&self) -> Option<End> {
-        match &self.data {
-            // Fenced with this thread's fence ([`PackageData::fenced`]).
-            Some(data) => data.stopped(),
-            None => self.watch.fence().closed().then_some(End::Abandoned),
-        }
+        // The data is fenced with this thread's fence
+        // ([`PackageData::fenced`]).
+        code_stopped(self.data.as_ref(), self.watch.fence())
     }
 
     /// Marks a host call on the runtime thread until the guard is dropped
@@ -1564,11 +1622,12 @@ impl GuestState {
 
 impl applications::Host for GuestState {
     fn installed(&mut self) -> Result<Vec<applications::Application>, String> {
-        // Stopped code starts no more work.
+        // Stopped code starts no more work: checked once the host call is
+        // marked, from when Pane no longer decides to give up on the thread.
+        let _host = self.host();
         if let Some(end) = self.stopped() {
             return Err(stopped_code(end));
         }
-        let _host = self.host();
         Ok(self
             .applications()
             .installed()?
@@ -1582,12 +1641,121 @@ impl applications::Host for GuestState {
     }
 
     fn open(&mut self, id: String) -> Result<(), String> {
-        // Stopped code starts no more work.
+        // Stopped code opens nothing: checked once the host call is
+        // marked, from when Pane no longer decides to give up on the thread.
+        let _host = self.host();
         if let Some(end) = self.stopped() {
             return Err(stopped_code(end));
         }
-        let _host = self.host();
         self.applications().open(&id)
+    }
+}
+
+impl GuestState {
+    /// Runs `call` with what the guest's package does with its clipboard
+    /// history, as one host call. Stopped code ([`GuestState::stopped`],
+    /// the one check every host interface goes through) reads and changes
+    /// nothing more, and the call is marked ([`GuestState::host`]), so its
+    /// time (the history's lock and file, the system's clipboard) is
+    /// Pane's, never the guest's.
+    fn clipboard<R>(
+        &self,
+        call: impl FnOnce(clipboard::Commands<'_>) -> Result<R, String>,
+    ) -> Result<R, String> {
+        let _host = self.host();
+        // Checked once the call is marked, as applications' are.
+        if let Some(end) = self.stopped() {
+            return Err(stopped_code(end));
+        }
+        let data = self.data.as_ref().ok_or(
+            "only installed packages keep clipboard history; this command is built into Pane",
+        )?;
+        let capture = lock(&self.clipboard)
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade);
+        call(clipboard::Commands { data, capture })
+    }
+}
+
+impl From<CaptureState> for clipboard_history::Capture {
+    fn from(state: CaptureState) -> Self {
+        match state {
+            CaptureState::Off => clipboard_history::Capture::Off,
+            CaptureState::On => clipboard_history::Capture::On,
+            CaptureState::Paused => clipboard_history::Capture::Paused,
+        }
+    }
+}
+
+impl From<clipboard_history::Capture> for CaptureState {
+    fn from(capture: clipboard_history::Capture) -> Self {
+        match capture {
+            clipboard_history::Capture::Off => CaptureState::Off,
+            clipboard_history::Capture::On => CaptureState::On,
+            clipboard_history::Capture::Paused => CaptureState::Paused,
+        }
+    }
+}
+
+/// A count for a guest, which cannot exceed `u32` in practice.
+fn count(count: usize) -> u32 {
+    u32::try_from(count).unwrap_or(u32::MAX)
+}
+
+impl clipboard_history::Host for GuestState {
+    fn status(&mut self) -> Result<clipboard_history::HistoryStatus, String> {
+        let status = self.clipboard(|history| history.status())?;
+        Ok(clipboard_history::HistoryStatus {
+            capture: status.capture.into(),
+            problem: status.problem,
+            excluded: status.excluded.into_iter().map(String::from).collect(),
+            items: count(status.items),
+            retention_seconds: status.retention_seconds,
+        })
+    }
+
+    fn set_capture(&mut self, wanted: clipboard_history::Capture) -> Result<(), String> {
+        self.clipboard(|history| history.set_capture(wanted.into()))
+    }
+
+    fn set_excluded(&mut self, programs: Vec<String>) -> Result<(), String> {
+        self.clipboard(|history| history.set_excluded(&programs))
+    }
+
+    fn set_retention(&mut self, seconds: u64) -> Result<(), String> {
+        self.clipboard(|history| history.set_retention(seconds))
+    }
+
+    fn entries(&mut self) -> Result<Vec<clipboard_history::Entry>, String> {
+        let (items, now) = self.clipboard(|history| history.items())?;
+        Ok(items
+            .into_iter()
+            .map(|item| clipboard_history::Entry {
+                id: item.id.to_string(),
+                text: item.text,
+                copied_at: item.copied_at,
+                age_seconds: now.saturating_sub(item.copied_at) / 1000,
+                source: item.source,
+            })
+            .collect())
+    }
+
+    fn copy(&mut self, id: String) -> Result<(), String> {
+        self.clipboard(|history| history.copy(&id))
+    }
+
+    fn clear(&mut self) -> Result<u32, String> {
+        Ok(count(self.clipboard(|history| history.clear())?))
+    }
+
+    fn delete_items(&mut self, ids: Vec<String>) -> Result<u32, String> {
+        Ok(count(self.clipboard(|history| history.delete(&ids))?))
+    }
+
+    fn turn_off_and_clear(&mut self) -> Result<u32, String> {
+        Ok(count(
+            self.clipboard(|history| history.turn_off_and_clear())?,
+        ))
     }
 }
 
@@ -1613,7 +1781,7 @@ impl WasiHttpView for GuestState {
 /// A running guest instance of one component.
 struct Instance {
     store: Store<GuestState>,
-    bindings: bindings::ExtensionWithFiles,
+    bindings: bindings::ExtensionWithClipboard,
     /// Its root results export, if it has one.
     root_results: Option<root_bindings::RootResultsProvider>,
     /// Its indexed results export, if it has one.
@@ -1684,6 +1852,12 @@ struct Host {
     network: Arc<http::Network>,
     /// The granted folders and their listings.
     files: FileAccess,
+    /// What a search waits on before it starts, if a test replaced the
+    /// clock. A release build has none.
+    #[cfg(any(test, debug_assertions))]
+    search_timer: Arc<Mutex<Option<SearchTimer>>>,
+    /// Keeps clipboard history for guests' packages.
+    clipboard: SharedClipboard,
 }
 
 impl Code {
@@ -1715,6 +1889,11 @@ impl Code {
             state
         })
         .expect("registering applications in a fresh linker cannot conflict");
+        clipboard_history::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
+            &mut linker,
+            |state| state,
+        )
+        .expect("registering clipboard history in a fresh linker cannot conflict");
         bindings::pane::extension::helpers::add_to_linker::<_, helpers::Runs>(
             &mut linker,
             |state| state,
@@ -1845,7 +2024,7 @@ impl Code {
                 ))
             })?;
         }
-        bindings::ExtensionWithFilesPre::new(pre).map_err(interface)?;
+        bindings::ExtensionWithClipboardPre::new(pre).map_err(interface)?;
         Ok(Checked { network })
     }
 }
@@ -1880,6 +2059,9 @@ impl Host {
             applications: shared.applications.clone(),
             network: shared.network.clone(),
             files: shared.files.clone(),
+            #[cfg(any(test, debug_assertions))]
+            search_timer: shared.search_timer.clone(),
+            clipboard: shared.clipboard.clone(),
         }
     }
 
@@ -2280,7 +2462,14 @@ impl Host {
     ) -> Result<Vec<SearchResult>, CallError> {
         // Replaced while it waited in the queue, or soon after: it is not
         // started.
-        if stopped.stopped() || stopped.stopped_within(SEARCH_DEBOUNCE).await {
+        #[cfg(any(test, debug_assertions))]
+        let wait = match lock(&self.search_timer).clone() {
+            Some(timer) => timer(SEARCH_DEBOUNCE),
+            None => Box::pin(tokio::time::sleep(SEARCH_DEBOUNCE)),
+        };
+        #[cfg(not(any(test, debug_assertions)))]
+        let wait = tokio::time::sleep(SEARCH_DEBOUNCE);
+        if stopped.stopped() || stopped.stopped_before(wait).await {
             return Err(CallError::Cancelled);
         }
         let instance = self.instance(path, data).await?;
@@ -2770,6 +2959,7 @@ impl Host {
                 serving: false,
                 applications: self.applications.clone(),
                 files: self.files.clone(),
+                clipboard: self.clipboard.clone(),
                 directory: self.directory.clone(),
                 owner: self.helpers.new_owner(),
                 helpers: self.helpers.clone(),
@@ -2811,7 +3001,8 @@ impl Host {
             })
             .await?
         };
-        let bindings = bindings::ExtensionWithFiles::new(&mut store, &instance).map_err(load)?;
+        let bindings =
+            bindings::ExtensionWithClipboard::new(&mut store, &instance).map_err(load)?;
         // Only a command that computes root results exports them.
         let root_results = root_bindings::RootResultsProvider::new(&mut store, &instance).ok();
         // Only a command that supplies results ahead of the query exports
@@ -3144,6 +3335,26 @@ mod tests {
         (packages, identity)
     }
 
+    /// The one check every host interface goes through stops code whose
+    /// runtime thread's fence closed, also through package data that was
+    /// not fenced with it; a generation that ended says why first.
+    #[test]
+    fn code_is_stopped_by_its_thread_s_fence_with_or_without_data() {
+        let data = tempfile::tempdir().unwrap();
+        let (packages, identity) = settings_package(&data);
+        let unfenced = packages.owned_by(&identity);
+        let fence = Fence::default();
+        assert_eq!(code_stopped(Some(&unfenced), &fence), None);
+        assert_eq!(code_stopped(None, &fence), None);
+
+        fence.close();
+
+        assert_eq!(code_stopped(Some(&unfenced), &fence), Some(End::Abandoned));
+        assert_eq!(code_stopped(None, &fence), Some(End::Abandoned));
+        packages.set_enabled(&identity, false);
+        assert_eq!(code_stopped(Some(&unfenced), &fence), Some(End::Disabled));
+    }
+
     /// What the settings sample saved under `key` in `identity`'s settings.
     fn saved(packages: &ExtensionData, identity: &PackageIdentity, key: &str) -> Option<String> {
         packages
@@ -3227,7 +3438,7 @@ mod tests {
         let Err(CallError::Unresponsive(reason)) = &busy else {
             panic!("expected it stopped as unresponsive, got {busy:?}");
         };
-        assert!(reason.contains("computed for 1 seconds"), "{reason}");
+        assert!(reason.contains("computed for 1 second without"), "{reason}");
         assert_eq!(
             saved(&packages, &identity, "busy").as_deref(),
             Some("started")
@@ -3295,6 +3506,35 @@ mod tests {
         ));
 
         assert_eq!(saved_note, Ok("Saved a note".into()));
+        assert!(lock(&reported).is_empty(), "{:?}", lock(&reported));
+        assert_eq!(runtime.status(), RuntimeStatus::Running);
+        assert_eq!(runtime.abandoned_threads(), 0);
+        assert_eq!(block_on(runtime.running()), vec![component]);
+    }
+
+    /// Clipboard history's host calls (#35) are marked like every other
+    /// host call: the slow host call computes inside the view's first one,
+    /// so the view takes at least that long, yet the guest is never stopped
+    /// or blamed and the thread is never given up on.
+    #[test]
+    fn a_guest_whose_clipboard_host_calls_are_slow_is_never_stopped_or_blamed() {
+        let data = tempfile::tempdir().unwrap();
+        let (packages, identity) = settings_package(&data);
+        let component = guest("clipboard_history.wasm");
+        let (runtime, reported) = watched_runtime();
+        let slow = short_limits().compute * 3;
+        assert!(slow > short_limits().unresponsive);
+
+        runtime.inject(Fault::SlowHostCall(slow));
+        let started = std::time::Instant::now();
+        let view = block_on(runtime.get_view_with(&component, Some(packages.owned_by(&identity))));
+
+        assert_eq!(view.expect("the view is shown").title, "Clipboard History");
+        assert!(
+            started.elapsed() >= slow,
+            "the slow host call was not one of clipboard history's: {:?}",
+            started.elapsed()
+        );
         assert!(lock(&reported).is_empty(), "{:?}", lock(&reported));
         assert_eq!(runtime.status(), RuntimeStatus::Running);
         assert_eq!(runtime.abandoned_threads(), 0);

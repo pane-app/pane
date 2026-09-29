@@ -2,7 +2,6 @@
 //! and mouse events dispatch to the window, which runs real guest components.
 
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
 
 use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, prelude::*, px};
 use pane::LauncherWindow;
@@ -10,6 +9,10 @@ use pane_core::{CommandRegistration, Launcher, Runtime, Screen, Status};
 
 #[path = "../../pane-core/tests/support/platforms.rs"]
 mod platforms;
+#[path = "support/settle.rs"]
+mod settle;
+
+use settle::{settle, until};
 
 /// A sample command: its component and the language it is written in.
 struct Sample {
@@ -75,24 +78,6 @@ fn open_launcher(
     cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx))
 }
 
-/// Lets the window apply guest replies, which arrive from the runtime thread.
-fn wait_for_answer(
-    window: &Entity<LauncherWindow>,
-    cx: &mut VisualTestContext,
-) -> pane_core::LauncherView {
-    // Generous: opening a JS command compiles a 4 MB component first.
-    let deadline = Instant::now() + Duration::from_secs(60);
-    loop {
-        cx.run_until_parked();
-        let view = cx.read_entity(window, |window, _| window.launcher().view());
-        if view.status != Status::Running {
-            return view;
-        }
-        assert!(Instant::now() < deadline, "the guest did not answer");
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
-
 /// Opens the sample's command with Enter and clicks the row whose debug
 /// selector is `row` (`row-<title>`).
 fn click_row(
@@ -101,17 +86,17 @@ fn click_row(
     row: &'static str,
 ) -> pane_core::LauncherView {
     cx.simulate_keystrokes("enter");
-    wait_for_answer(window, cx);
+    settle(window, cx);
     let row = cx.debug_bounds(row).expect("row rendered");
     cx.simulate_click(row.center(), Modifiers::none());
-    wait_for_answer(window, cx)
+    settle(window, cx)
 }
 
 fn the_keyboard_opens_the_sample_and_runs_an_action(cx: &mut TestAppContext, sample: &Sample) {
     let (window, cx) = open(cx, sample);
 
     cx.simulate_keystrokes("enter");
-    let view = wait_for_answer(&window, cx);
+    let view = settle(&window, cx);
     assert_eq!(view.screen, Screen::Command);
     assert_eq!(view.title, format!("{} sample", sample.language));
     assert!(
@@ -120,7 +105,7 @@ fn the_keyboard_opens_the_sample_and_runs_an_action(cx: &mut TestAppContext, sam
     );
 
     cx.simulate_keystrokes("enter");
-    let view = wait_for_answer(&window, cx);
+    let view = settle(&window, cx);
     assert_eq!(
         view.status,
         Status::Result(format!("Hello from the {} guest", sample.language))
@@ -132,9 +117,9 @@ fn the_keyboard_opens_the_sample_and_runs_an_action(cx: &mut TestAppContext, sam
 
     cx.simulate_keystrokes("escape");
     assert!(
-        matches!(wait_for_answer(&window, cx).screen, Screen::Root { .. }),
+        matches!(settle(&window, cx).screen, Screen::Root { .. }),
         "{:?}",
-        wait_for_answer(&window, cx).screen
+        settle(&window, cx).screen
     );
 }
 
@@ -172,9 +157,9 @@ fn a_validation_error_is_rendered(cx: &mut TestAppContext, sample: &Sample) {
 /// item) with the keyboard.
 fn open_form(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) {
     cx.simulate_keystrokes("enter");
-    wait_for_answer(window, cx);
+    settle(window, cx);
     cx.simulate_keystrokes("down down down down enter");
-    let view = wait_for_answer(window, cx);
+    let view = settle(window, cx);
     assert!(matches!(view.screen, Screen::Form(_)), "{:?}", view.screen);
     assert_eq!(view.title, "Greet someone");
 }
@@ -192,7 +177,7 @@ fn the_keyboard_fills_in_and_submits_the_form(cx: &mut TestAppContext, sample: &
     cx.simulate_input("Ada");
     cx.simulate_keystrokes("tab down enter");
 
-    let view = wait_for_answer(&window, cx);
+    let view = settle(&window, cx);
     assert_eq!(
         view.status,
         Status::Result(format!(
@@ -205,7 +190,7 @@ fn the_keyboard_fills_in_and_submits_the_form(cx: &mut TestAppContext, sample: &
         "the answer is rendered"
     );
     cx.simulate_keystrokes("escape");
-    let view = wait_for_answer(&window, cx);
+    let view = settle(&window, cx);
     assert_eq!((view.screen, view.selected), (Screen::Command, Some(4)));
 }
 
@@ -216,7 +201,7 @@ fn a_rejected_field_shows_its_error_and_takes_focus(cx: &mut TestAppContext, sam
     // Submit from the greeting with the name left empty.
     cx.simulate_keystrokes("tab enter");
 
-    let view = wait_for_answer(&window, cx);
+    let view = settle(&window, cx);
     assert_eq!(view.status, Status::Error("Name: Enter a name".into()));
     assert!(
         cx.debug_bounds("field-error-name").is_some(),
@@ -233,7 +218,7 @@ fn a_rejected_field_shows_its_error_and_takes_focus(cx: &mut TestAppContext, sam
     cx.simulate_input("Grace");
     cx.simulate_keystrokes("enter");
     assert_eq!(
-        wait_for_answer(&window, cx).status,
+        settle(&window, cx).status,
         Status::Result(format!("Hello, Grace, from the {} guest", sample.language))
     );
 }
@@ -247,7 +232,7 @@ fn an_unavailable_action_is_listed_with_its_reason_and_others_still_run(
     let (window, cx) = open(cx, sample);
     cx.simulate_resize(gpui::size(gpui::px(640.), gpui::px(420.)));
     cx.simulate_keystrokes("enter");
-    let view = wait_for_answer(&window, cx);
+    let view = settle(&window, cx);
     let index = |title: &str| view.rows.iter().position(|row| row.title == title).unwrap();
 
     // Select the unavailable item with the keyboard: it is still listed,
@@ -276,7 +261,7 @@ fn an_unavailable_action_is_listed_with_its_reason_and_others_still_run(
 
     // Enter explains instead of running the action.
     cx.simulate_keystrokes("enter");
-    let view = wait_for_answer(&window, cx);
+    let view = settle(&window, cx);
     assert_eq!(
         (view.screen, view.status),
         (Screen::Command, Status::Error(reason.clone()))
@@ -291,13 +276,13 @@ fn an_unavailable_action_is_listed_with_its_reason_and_others_still_run(
         cx.simulate_keystrokes(key);
     }
     cx.simulate_keystrokes("enter");
-    assert_eq!(wait_for_answer(&window, cx).status, Status::Result(answer));
+    assert_eq!(settle(&window, cx).status, Status::Result(answer));
     for _ in 0..index(available) {
         cx.simulate_keystrokes("up");
     }
     cx.simulate_keystrokes("enter");
     assert_eq!(
-        wait_for_answer(&window, cx).status,
+        settle(&window, cx).status,
         Status::Result(format!("Hello from the {} guest", sample.language))
     );
 }
@@ -427,7 +412,7 @@ fn input_method_composition_commits_into_the_text_field(cx: &mut TestAppContext)
 
     cx.simulate_keystrokes("enter");
     assert_eq!(
-        wait_for_answer(&window, cx).status,
+        settle(&window, cx).status,
         Status::Result("Hello, 日本, from the Rust guest".into())
     );
 }
@@ -447,7 +432,7 @@ fn clicking_a_choice_and_the_submit_button_submits_the_form(cx: &mut TestAppCont
     cx.simulate_click(submit.center(), Modifiers::none());
 
     assert_eq!(
-        wait_for_answer(&window, cx).status,
+        settle(&window, cx).status,
         Status::Result("Welcome, Ada, from the Rust guest".into())
     );
 }
@@ -461,7 +446,7 @@ fn the_focused_submit_button_submits_with_space(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("tab tab space");
 
     assert_eq!(
-        wait_for_answer(&window, cx).status,
+        settle(&window, cx).status,
         Status::Result("Hello, Ada, from the Rust guest".into())
     );
 }
@@ -512,7 +497,7 @@ fn assistive_technology_sees_the_forms_labelled_controls_and_values(cx: &mut Tes
 #[gpui::test]
 fn the_launcher_offers_the_rust_javascript_and_typescript_samples(cx: &mut TestAppContext) {
     let (window, cx) = open_with(cx, pane::sample_commands());
-    let root = wait_for_answer(&window, cx);
+    let root = settle(&window, cx);
     let titles: Vec<&str> = root.rows.iter().map(|row| row.title.as_str()).collect();
     assert_eq!(
         titles,
@@ -521,14 +506,14 @@ fn the_launcher_offers_the_rust_javascript_and_typescript_samples(cx: &mut TestA
 
     for (index, title) in titles.iter().enumerate() {
         cx.simulate_keystrokes("enter");
-        let view = wait_for_answer(&window, cx);
+        let view = settle(&window, cx);
         assert_eq!(
             (view.screen, view.title.as_str()),
             (Screen::Command, *title)
         );
 
         cx.simulate_keystrokes("escape");
-        let view = wait_for_answer(&window, cx);
+        let view = settle(&window, cx);
         assert!(
             matches!(view.screen, Screen::Root { .. }),
             "{:?}",
@@ -544,12 +529,12 @@ fn the_launcher_offers_the_rust_javascript_and_typescript_samples(cx: &mut TestA
 fn arrow_keys_move_the_selection(cx: &mut TestAppContext) {
     let (window, cx) = open(cx, &RUST);
     cx.simulate_keystrokes("enter");
-    wait_for_answer(&window, cx);
+    settle(&window, cx);
 
     cx.simulate_keystrokes("down");
-    assert_eq!(wait_for_answer(&window, cx).selected, Some(1));
+    assert_eq!(settle(&window, cx).selected, Some(1));
     cx.simulate_keystrokes("up");
-    assert_eq!(wait_for_answer(&window, cx).selected, Some(0));
+    assert_eq!(settle(&window, cx).selected, Some(0));
 }
 
 /// A debug selector as GPUI's test context takes it, from a name a test
@@ -587,7 +572,7 @@ fn the_list_scrolls_to_keep_the_selected_row_visible(cx: &mut TestAppContext) {
         cx.simulate_keystrokes("down");
     }
     cx.run_until_parked();
-    assert_eq!(wait_for_answer(&window, cx).selected, Some(11));
+    assert_eq!(settle(&window, cx).selected, Some(11));
     assert!(
         row_is_visible(cx, "row-Row 12"),
         "the last row is scrolled into view"
@@ -616,7 +601,7 @@ fn the_selected_row_stays_visible_when_the_window_shrinks(cx: &mut TestAppContex
         cx.simulate_keystrokes("down");
     }
     cx.run_until_parked();
-    assert_eq!(wait_for_answer(&window, cx).selected, Some(3));
+    assert_eq!(settle(&window, cx).selected, Some(3));
     assert!(row_is_visible(cx, "row-Row 4"));
 
     cx.simulate_resize(gpui::size(gpui::px(640.), gpui::px(200.)));
@@ -710,7 +695,7 @@ fn a_rejected_extension_shows_an_error_and_navigation_keeps_working(cx: &mut Tes
     );
 
     cx.simulate_keystrokes("enter");
-    let view = wait_for_answer(&window, cx);
+    let view = settle(&window, cx);
     assert!(
         matches!(view.screen, Screen::Root { .. }),
         "{:?}",
@@ -722,7 +707,7 @@ fn a_rejected_extension_shows_an_error_and_navigation_keeps_working(cx: &mut Tes
     );
 
     cx.simulate_keystrokes("down enter");
-    assert_eq!(wait_for_answer(&window, cx).title, "Rust sample");
+    assert_eq!(settle(&window, cx).title, "Rust sample");
 }
 
 /// The window's accessibility tree, as (role, label, description) per node,
@@ -765,7 +750,7 @@ fn has(nodes: &[(String, String, String)], role: &str, label: &str) -> bool {
 fn assistive_technology_sees_the_list_the_selection_and_the_result(cx: &mut TestAppContext) {
     let (window, cx) = open(cx, &RUST);
     cx.simulate_keystrokes("enter");
-    wait_for_answer(&window, cx);
+    settle(&window, cx);
 
     let (nodes, focused) = accessibility_tree(cx);
     assert!(has(&nodes, "ListBox", "Rust sample"), "{nodes:?}");
@@ -780,7 +765,7 @@ fn assistive_technology_sees_the_list_the_selection_and_the_result(cx: &mut Test
     assert_eq!(focused.as_deref(), Some("Say hello"));
 
     cx.simulate_keystrokes("down enter");
-    wait_for_answer(&window, cx);
+    settle(&window, cx);
     let (nodes, focused) = accessibility_tree(cx);
     assert_eq!(focused.as_deref(), Some("Wait briefly"));
     assert!(
@@ -793,9 +778,9 @@ fn assistive_technology_sees_the_list_the_selection_and_the_result(cx: &mut Test
 /// the sixth item) with the keyboard.
 fn open_color(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) {
     cx.simulate_keystrokes("enter");
-    wait_for_answer(window, cx);
+    settle(window, cx);
     cx.simulate_keystrokes("down down down down down enter");
-    let view = wait_for_answer(window, cx);
+    let view = settle(window, cx);
     assert!(
         matches!(view.screen, Screen::CustomView(_)),
         "{:?}",
@@ -807,21 +792,9 @@ fn open_color(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) {
 /// Waits until the open view shows `expected` as its value, which it does
 /// once the guest's answer to the last event has arrived.
 fn wait_for_color(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, expected: &str) {
-    let deadline = Instant::now() + Duration::from_secs(60);
-    loop {
-        cx.run_until_parked();
-        let view = cx.read_entity(window, |window, _| window.launcher().view());
-        let shown = view.custom_view().map(|view| view.frame.value.as_str());
-        if shown == Some(expected) {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "the view shows {shown:?}, not {expected:?}; status {:?}",
-            view.status
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    until(window, cx, |view| {
+        view.custom_view().map(|view| view.frame.value.as_str()) == Some(expected)
+    });
 }
 
 /// The color picker's accessibility node.
@@ -870,7 +843,7 @@ fn keys_change_the_color_the_view_shows(cx: &mut TestAppContext, sample: &Sample
     cx.simulate_keystrokes("shift-tab");
     assert_eq!(focused_label(cx).as_deref(), Some("Color"));
     cx.simulate_keystrokes("escape");
-    let view = wait_for_answer(&window, cx);
+    let view = settle(&window, cx);
     assert_eq!((view.screen, view.selected), (Screen::Command, Some(5)));
     assert_eq!(focused_label(cx).as_deref(), Some("Choose a color"));
 }
@@ -907,9 +880,9 @@ fn open_counter(
     cx: &mut VisualTestContext,
 ) -> gpui::Point<gpui::Pixels> {
     cx.simulate_keystrokes("enter");
-    wait_for_answer(window, cx);
+    settle(window, cx);
     cx.simulate_keystrokes("down down down down down enter");
-    let view = wait_for_answer(window, cx);
+    let view = settle(window, cx);
     assert!(
         matches!(view.screen, Screen::CustomView(_)),
         "{:?}",
@@ -999,14 +972,14 @@ fn typing_in_root_search_narrows_the_results_and_enter_opens_the_best_match(
     );
 
     cx.simulate_input("typescr");
-    let view = wait_for_answer(&window, cx);
+    let view = settle(&window, cx);
     assert_eq!(view.query(), Some("typescr"));
     assert_eq!(row_titles(&window, cx), ["TypeScript sample"]);
     assert!(cx.debug_bounds("row-TypeScript sample").is_some());
     assert!(cx.debug_bounds("row-Rust sample").is_none());
 
     cx.simulate_keystrokes("enter");
-    let view = wait_for_answer(&window, cx);
+    let view = settle(&window, cx);
     assert_eq!(
         (view.screen, view.title.as_str()),
         (Screen::Command, "TypeScript sample")
@@ -1023,34 +996,34 @@ fn arrow_keys_move_through_the_matches_while_the_query_keeps_focus(cx: &mut Test
     );
 
     cx.simulate_keystrokes("down");
-    assert_eq!(wait_for_answer(&window, cx).selected, Some(1));
+    assert_eq!(settle(&window, cx).selected, Some(1));
     cx.simulate_keystrokes("up");
-    assert_eq!(wait_for_answer(&window, cx).selected, Some(0));
+    assert_eq!(settle(&window, cx).selected, Some(0));
     assert!(query_has_focus(&window, cx));
     // Editing keys still edit the query.
     cx.simulate_keystrokes("backspace backspace backspace");
-    assert_eq!(wait_for_answer(&window, cx).query(), Some("scr"));
+    assert_eq!(settle(&window, cx).query(), Some("scr"));
 
     cx.simulate_keystrokes("down enter");
-    assert_eq!(wait_for_answer(&window, cx).title, "TypeScript sample");
+    assert_eq!(settle(&window, cx).title, "TypeScript sample");
 }
 
 #[gpui::test]
 fn a_query_that_matches_nothing_says_so_and_escape_clears_it(cx: &mut TestAppContext) {
     let (window, cx) = open_with(cx, pane::sample_commands());
     cx.simulate_input("zzz");
-    let view = wait_for_answer(&window, cx);
+    let view = settle(&window, cx);
     assert!(view.rows.is_empty());
     assert!(
         cx.debug_bounds("no-results").is_some(),
         "the empty state is shown"
     );
     cx.simulate_keystrokes("enter");
-    assert_eq!(wait_for_answer(&window, cx).status, Status::Idle);
+    assert_eq!(settle(&window, cx).status, Status::Idle);
     assert!(cx.debug_bounds("status-idle").is_some(), "nothing failed");
 
     cx.simulate_keystrokes("escape");
-    let view = wait_for_answer(&window, cx);
+    let view = settle(&window, cx);
     assert_eq!(view.query(), Some(""));
     assert_eq!(row_titles(&window, cx).len(), 3);
     let text = cx.read_entity(&window, |window, cx| {
@@ -1064,13 +1037,13 @@ fn coming_back_to_root_search_starts_an_empty_search_with_focus(cx: &mut TestApp
     let (window, cx) = open_with(cx, pane::sample_commands());
     cx.simulate_input("rust");
     cx.simulate_keystrokes("enter");
-    assert_eq!(wait_for_answer(&window, cx).screen, Screen::Command);
+    assert_eq!(settle(&window, cx).screen, Screen::Command);
     assert!(!query_has_focus(&window, cx));
     // Typing in a command does not search root.
     cx.simulate_input("x");
 
     cx.simulate_keystrokes("escape");
-    let view = wait_for_answer(&window, cx);
+    let view = settle(&window, cx);
     assert_eq!(view.query(), Some(""));
     assert!(query_has_focus(&window, cx));
     cx.simulate_input("java");
@@ -1099,7 +1072,7 @@ fn input_method_composition_searches_root(cx: &mut TestAppContext) {
         })
     });
     assert_eq!(
-        wait_for_answer(&window, cx).query(),
+        settle(&window, cx).query(),
         Some("にほ"),
         "composing text is searched as it is typed"
     );
@@ -1112,14 +1085,14 @@ fn input_method_composition_searches_root(cx: &mut TestAppContext) {
     assert_eq!(row_titles(&window, cx), ["日本語の辞書"]);
 
     cx.simulate_keystrokes("enter");
-    assert_eq!(wait_for_answer(&window, cx).title, "Rust sample");
+    assert_eq!(settle(&window, cx).title, "Rust sample");
 }
 
 #[gpui::test]
 fn assistive_technology_sees_the_search_field_and_the_selected_result(cx: &mut TestAppContext) {
     let (window, cx) = open_with(cx, pane::sample_commands());
     cx.simulate_input("script");
-    wait_for_answer(&window, cx);
+    settle(&window, cx);
 
     let nodes = accessible_nodes(cx);
     let search = node(&nodes, "EditableComboBox", "Search");
@@ -1160,19 +1133,12 @@ fn with_calculator(cx: &mut TestAppContext, data: &std::path::Path) -> Launcher 
 /// Lets the window apply answers computed from the query until the rows
 /// are `expected`.
 fn wait_for_rows(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, expected: &[&str]) {
-    let deadline = Instant::now() + Duration::from_secs(60);
-    loop {
-        cx.run_until_parked();
-        if row_titles(window, cx) == expected {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "rows stayed {:?}",
-            row_titles(window, cx)
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    until(window, cx, |view| {
+        view.rows
+            .iter()
+            .map(|row| row.title.as_str())
+            .eq(expected.iter().copied())
+    });
 }
 
 #[gpui::test]
@@ -1193,7 +1159,7 @@ fn typing_an_expression_shows_its_answer_and_enter_copies_it(cx: &mut TestAppCon
     wait_for_rows(&window, cx, &["43"]);
 
     cx.simulate_keystrokes("enter");
-    let view = wait_for_answer(&window, cx);
+    let view = settle(&window, cx);
     assert_eq!(
         view.status,
         Status::Result("Copied 43 to the clipboard".into())
@@ -1259,7 +1225,7 @@ fn typing_an_applications_name_shows_it_and_enter_opens_it(cx: &mut TestAppConte
     assert_eq!(focused.as_deref(), Some("Firefox"), "the selected result");
 
     cx.simulate_keystrokes("enter");
-    let view = wait_for_answer(&window, cx);
+    let view = settle(&window, cx);
     assert_eq!(view.status, Status::Result("Opened Firefox".into()));
     assert_eq!(*system.opened.lock().unwrap(), ["/apps/Firefox.desktop"]);
     assert!(query_has_focus(&window, cx), "typing goes on in the field");
@@ -1294,16 +1260,16 @@ fn a_quicklink_created_in_its_form_is_found_and_opened_from_root_search(cx: &mut
 
     // Quicklinks is the first row; its first item creates a quicklink.
     cx.simulate_keystrokes("enter");
-    wait_for_answer(&window, cx);
+    settle(&window, cx);
     cx.simulate_keystrokes("enter");
-    let view = wait_for_answer(&window, cx);
+    let view = settle(&window, cx);
     assert_eq!(view.title, "Create quicklink");
     // An address without a scheme is rejected on its field.
     cx.simulate_input("Pane issues");
     cx.simulate_keystrokes("tab");
     cx.simulate_input("github.com/hoangvu12/pane/issues");
     cx.simulate_keystrokes("enter");
-    let view = wait_for_answer(&window, cx);
+    let view = settle(&window, cx);
     assert_eq!(
         view.status,
         Status::Error("URL: Enter a web address starting with http:// or https://".into())
@@ -1317,7 +1283,7 @@ fn a_quicklink_created_in_its_form_is_found_and_opened_from_root_search(cx: &mut
     });
     cx.simulate_input("https://");
     cx.simulate_keystrokes("enter");
-    let view = wait_for_answer(&window, cx);
+    let view = settle(&window, cx);
     assert_eq!(
         view.status,
         Status::Result("Saved quicklink “Pane issues”".into())
@@ -1327,7 +1293,7 @@ fn a_quicklink_created_in_its_form_is_found_and_opened_from_root_search(cx: &mut
     cx.simulate_input("pane iss");
     wait_for_rows(&window, cx, &["Pane issues"]);
     cx.simulate_keystrokes("enter");
-    let view = wait_for_answer(&window, cx);
+    let view = settle(&window, cx);
     assert_eq!(
         view.status,
         Status::Result("Opened https://github.com/hoangvu12/pane/issues".into())

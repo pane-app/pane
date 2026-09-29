@@ -17,6 +17,11 @@ use pane_core::develop::Toolchains;
 use pane_core::{Fault, Launcher, LauncherView, Runtime, RuntimeStatus, Screen, Status};
 use tempfile::TempDir;
 
+#[path = "support/settle.rs"]
+mod settle;
+
+use settle::settle;
+
 /// Writes a package folder whose one command is the Rust sample.
 fn package(folder: &Path) -> PathBuf {
     let guest =
@@ -63,20 +68,6 @@ fn open<'a>(
         launcher
     });
     (window, cx, runtime)
-}
-
-/// Lets the window apply what arrives from other threads.
-fn settle(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> LauncherView {
-    let deadline = Instant::now() + Duration::from_secs(60);
-    loop {
-        cx.run_until_parked();
-        let view = cx.read_entity(window, |window, _| window.launcher().view());
-        if view.status != Status::Running {
-            return view;
-        }
-        assert!(Instant::now() < deadline, "the launcher did not finish");
-        std::thread::sleep(Duration::from_millis(5));
-    }
 }
 
 /// Waits until the runtime reports its crash as `wanted`, and the window

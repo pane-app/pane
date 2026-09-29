@@ -167,6 +167,10 @@ pub struct LauncherWindow {
     /// Whether the next frame scrolls to the selected row again, once the
     /// list changed in this one has been laid out.
     scroll_again: bool,
+    /// The launcher's view as the last frame drew it, for tests (see
+    /// [`LauncherWindow::drawn_view`]). Test and debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    drawn: Option<LauncherView>,
 }
 
 /// What the list was last scrolled for. When any of it changes, the list
@@ -207,11 +211,24 @@ impl LauncherWindow {
             scrolled_for: None,
             scroll_again: false,
             custom_view: None,
+            #[cfg(any(test, debug_assertions))]
+            drawn: None,
         }
     }
 
     pub fn launcher(&self) -> &Launcher {
         &self.launcher
+    }
+
+    /// Test support: the launcher's view as the window last drew it; `None`
+    /// before the first frame. The launcher changes on other threads (a
+    /// crash pausing a package, a build) before the window is told to
+    /// redraw, so a test compares this with [`Launcher::view`] to know that
+    /// a frame shows what the launcher holds. Test and debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn drawn_view(&self) -> Option<&LauncherView> {
+        self.drawn.as_ref()
     }
 
     /// Redraws whenever the launcher changes in the background, as
@@ -266,6 +283,20 @@ impl LauncherWindow {
     /// redrawing when the check finishes.
     pub fn preview_package(&mut self, folder: &Path, window: &mut Window, cx: &mut Context<Self>) {
         let pending = self.launcher.preview_package(folder);
+        self.show_until_done(pending, window, cx);
+    }
+
+    /// Downloads and shows the npm package `spec` names, as
+    /// [`LauncherWindow::preview_package`] shows a folder.
+    pub fn preview_npm(&mut self, spec: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let pending = self.launcher.preview_npm(spec);
+        self.show_until_done(pending, window, cx);
+    }
+
+    /// Fetches and shows the revision of the Git repository `spec` names,
+    /// as [`LauncherWindow::preview_package`] shows a folder.
+    pub fn preview_git(&mut self, spec: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let pending = self.launcher.preview_git(spec);
         self.show_until_done(pending, window, cx);
     }
 
@@ -561,6 +592,10 @@ impl LauncherWindow {
 impl Render for LauncherWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = self.launcher.view();
+        #[cfg(any(test, debug_assertions))]
+        {
+            self.drawn = Some(view.clone());
+        }
         self.keep_selected_visible(&view, window);
         let (empty, hint) = match &view.screen {
             Screen::Root { .. } => (
@@ -589,7 +624,14 @@ impl Render for LauncherWindow {
             Screen::RuntimeDetails { .. } => ("", "Enter restart · Esc back"),
             Screen::BuildDetails { .. } => ("", "Enter build again · Esc back"),
         };
-        let confirm = matches!(view.screen, Screen::Confirm { .. });
+        // A confirmation, and a package preview offering Install or Update
+        // (an npm or Git package's has several more lines), keep their choices in
+        // view.
+        let preview = matches!(view.screen, Screen::Package { .. }) && !view.rows.is_empty();
+        let confirm = matches!(view.screen, Screen::Confirm { .. }) || preview;
+        // A preview has one or two rows (Install or Update) and more lines
+        // to read, which may take more of the window than a confirmation's.
+        let details_share = if preview { 0.62 } else { 0.4 };
         let details: Vec<_> = view
             .details()
             .iter()
@@ -692,8 +734,9 @@ impl Render for LauncherWindow {
             .bg(rgb(0x20252d))
             .text_color(rgb(0xf1f3f5))
             .child(div().text_xl().child(view.title.clone()))
-            // A confirmation's long details scroll within 40% of the
-            // window, leaving the rest to its choices, which stay visible.
+            // A confirmation's or preview's long details scroll within 40%
+            // (a preview's 62%) of the window, leaving the rest to its
+            // choices, which stay visible.
             .when(!details.is_empty(), |root| {
                 root.child(
                     div()
@@ -704,7 +747,7 @@ impl Render for LauncherWindow {
                         .when(confirm, |details| {
                             details
                                 .flex_shrink(1.)
-                                .max_h(relative(0.4))
+                                .max_h(relative(details_share))
                                 .overflow_y_scroll()
                         })
                         .children(details),

@@ -451,12 +451,16 @@ impl Launcher {
         self.developing.is_developed(identity)
     }
 
-    /// The extension list's development rows: for each enabled package,
+    /// The extension list's development rows: for each enabled local package,
     /// one that develops it or stops developing it, and one that shows why
     /// its last build failed, if it did.
     pub(super) fn development_rows(&self, packages: &[InstalledPackage]) -> Vec<(Row, Entry)> {
         let mut rows = Vec::new();
-        for package in packages.iter().filter(|package| package.enabled) {
+        // Only a local package has a source folder to build.
+        let developable = |package: &&InstalledPackage| {
+            package.enabled && package.identity.local_folder().is_some()
+        };
+        for package in packages.iter().filter(developable) {
             let identity = &package.identity;
             let title = package.title();
             let source = match identity.local_folder() {

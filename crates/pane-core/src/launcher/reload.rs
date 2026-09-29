@@ -270,7 +270,8 @@ impl Launcher {
                 let Some(folder) = identity.local_folder() else {
                     return Err("it has no local source folder to reload from".into());
                 };
-                self.read_and_check(folder.to_path_buf()).await
+                self.read_and_check(super::install::Request::Folder(folder.to_path_buf()))
+                    .await
             }
         }
         .map_err(|error| error.to_string())?;

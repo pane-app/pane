@@ -8,12 +8,16 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use gpui::{Entity, TestAppContext, VisualTestContext, prelude::*};
 use pane::LauncherWindow;
 use pane_core::develop::{Build, BuildJob, BuildOutcome, Builder};
-use pane_core::{Launcher, LauncherView, Runtime, Screen, Status};
+use pane_core::{Launcher, Runtime, Screen, Status};
+
+#[path = "support/settle.rs"]
+mod settle;
+
+use settle::until;
 
 const MANAGE_ROW: &str = "Manage extensions…";
 
@@ -75,25 +79,6 @@ fn package(folder: &Path) -> PathBuf {
     fs::write(folder.join("source.txt"), "sample_rust").unwrap();
     fs::copy(guest("sample_rust"), folder.join("hello.wasm")).unwrap();
     folder.to_path_buf()
-}
-
-/// Runs the window until `done` holds for the launcher's view, which a
-/// background change reaches.
-fn until(
-    window: &Entity<LauncherWindow>,
-    cx: &mut VisualTestContext,
-    mut done: impl FnMut(&LauncherView) -> bool,
-) -> LauncherView {
-    let deadline = Instant::now() + Duration::from_secs(60);
-    loop {
-        cx.run_until_parked();
-        let view = cx.read_entity(window, |window, _| window.launcher().view());
-        if done(&view) {
-            return view;
-        }
-        assert!(Instant::now() < deadline, "timed out at {view:?}");
-        std::thread::sleep(Duration::from_millis(10));
-    }
 }
 
 fn select(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, title: &str) {

@@ -35,8 +35,9 @@ for it come first, once they arrive):
    applications, after them;
 3. an enabled installed package whose managed copy cannot be read, as one row
    explaining the problem;
-4. Pane's own rows: "Install extension from folder…" and "Manage
-   extensions…".
+4. Pane's own rows: "Install extension from folder…", "Install extension
+   from npm…" ([npm](npm.md)), "Install extension from Git…" ([Git](git.md))
+   and "Manage extensions…".
 
 For a query that is not blank, a command whose [alias](aliases.md) the
 query is, or starts with, comes before everything (computed results

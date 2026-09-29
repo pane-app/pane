@@ -66,7 +66,7 @@ async function getView(): Promise<View> {
       item("kept", "Show what Pane keeps", "Settings, content, cache and credential"),
       item("slow", "Save after waiting", "Waits 10 seconds, then saves; disabling or reloading stops it"),
       item("crash", "Crash", "Crashes on purpose; three crashes within five minutes pause the extension"),
-        item("busy", "Stop responding", "Computes without waiting for up to a minute; Pane stops it after 5 seconds"),
+      item("busy", "Stop responding", "Computes without waiting for up to a minute; Pane stops it after 5 seconds"),
     ],
   };
 }
@@ -103,17 +103,17 @@ async function runAction(itemId: string): Promise<string> {
       set(SLOW_SAVE, "finished");
       return "Saved after waiting 10 seconds";
     case "busy": {
-        set(BUSY, "started");
-        // Computes without awaiting anything: the guest never yields to
-        // Pane by itself.
-        const end = Date.now() + BUSY_FOR;
-        while (Date.now() < end) {
-          // busy
-        }
-        set(BUSY, "finished");
-        return "Finished computing after a minute";
+      set(BUSY, "started");
+      // Computes without awaiting anything: the guest never yields to
+      // Pane by itself.
+      const end = Date.now() + BUSY_FOR;
+      while (Date.now() < end) {
+        // busy
       }
-      case "crash":
+      set(BUSY, "finished");
+      return "Finished computing after a minute";
+    }
+    case "crash":
       // Resolving with something other than a string is a crash, unlike
       // throwing, which is an error the extension answers with.
       return undefined as unknown as string;

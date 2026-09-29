@@ -13,8 +13,11 @@ require it, with Disable all and Cancel
 [below](#disabling-a-required-dependency)), and uninstalling one shows them
 with their saved data, with Uninstall all and Cancel
 ([#44](https://github.com/hoangvu12/pane/issues/44),
-[below](#uninstalling-a-required-dependency)); npm sources are
-[#45](https://github.com/hoangvu12/pane/issues/45).
+[below](#uninstalling-a-required-dependency)). Since
+[#45](https://github.com/hoangvu12/pane/issues/45) a dependency can also
+come from npm ([npm](npm.md#dependencies-from-npm)), and since
+[#46](https://github.com/hoangvu12/pane/issues/46) from a Git repository
+([Git](git.md#dependencies-from-git)), with the same plan.
 
 ## Declaring
 
@@ -38,7 +41,7 @@ with their saved data, with Uninstall all and Cancel
 | Field | Meaning |
 | --- | --- |
 | `id` | The name the package's code calls the dependency by, unique in the package: lowercase letters, digits and `-`. It has no `:`, so it is never mistaken for a package identity. |
-| `source` | `local:` and a folder path, relative to the declaring package's folder or absolute. Anything else, `npm:` and `git:` included, is an invalid manifest ("… must be `local:` followed by a folder path; other sources are not supported yet"): #45 defines npm sources. |
+| `source` | `local:` and a folder path, relative to the declaring package's folder or absolute; `npm:` and an npm package name, optionally with an exact version (`npm:@pane-samples/greeter@0.1.0`, #45); or `git:` and a Git repository, optionally with `@` and a branch, tag or commit (`git:https://github.com/owner/repo@v1.0.0`, #46). A package from npm or Git can name only `npm:` and `git:` sources. Anything else is an invalid manifest ("… must be `local:` followed by a folder path, `npm:` followed by a package name or `git:` followed by a repository; other sources are not supported yet"). |
 | `optional` | `false` (the default) for a required dependency, `true` for an optional one. |
 | `operations` | Every operation the package calls there, each with the version it calls; at least one. This is the compatibility requirement (an operation's version is the version of its input and result, [operations](operations.md#publishing)), and the only operations a call through the id reaches. |
 | `platforms` | Optional: the systems on which the package needs it. Elsewhere it is neither installed nor checked, and a call to it that finds it missing is `unavailable`. |
@@ -75,6 +78,25 @@ moved or deleted after installing changes nothing. If no installed package
 has the recorded identity, a call resolves the recorded folder again, so a
 folder that became a link to an installed package after the dependent was
 installed still reaches it.
+
+An `npm:` source is the npm package it names, whatever version it gives:
+its identity is the name (`npm:<name>`), recorded as
+`{ "id": "greeter", "npm": "<name>" }`. A version in the source is a pin:
+Pane installs that version, pinned, and the one copy must have it, so an
+installed copy of another version, or another dependent pinning another
+version, is a conflict rather than a version the dependent did not ask for
+([npm](npm.md#dependencies-from-npm)). Without a version, an installed copy
+is used whatever its version.
+
+A `git:` source is the repository it names, whatever reference it gives:
+its identity is the repository (`git:<host>/<path>`, [Git](git.md#identity)),
+recorded as `{ "id": "greeter", "git": "<host>/<path>" }`. A reference in
+the source is the revision to install when the repository is missing (a
+branch tracked, a tag or commit pinned), and the one copy must be at it: an
+installed copy from another branch, tag or commit, or another dependent
+naming another one, is a conflict. Without a reference, an installed copy is
+used whatever its revision, and a missing one is installed from the default
+branch.
 
 A guest calls a dependency with its id where it would give an identity:
 
@@ -152,9 +174,18 @@ the preview is then titled "Cannot install <title>" with no Install row, and
 the status (also for an install without preview) starts "Nothing was
 installed:", listing each:
 
-- **Unavailable**: its folder is missing or not a package, it is
+- **Unavailable**: its folder is missing or not a package, its npm package
+  cannot be downloaded or unpacked ([npm](npm.md#what-is-refused)), it is
   source-only, it is for other systems, or its components do not pass
   Pane's checks.
+- **Local from npm or Git**: a package from npm or Git names a `local:`
+  folder, which is on its author's computer.
+- **Git revision**: a `git:` source names a branch, tag or commit the plan's
+  one copy is not at: the installed one, or the one fetched for another
+  dependent.
+- **npm version**: an `npm:` source pins a version the plan's one copy does
+  not have: the installed one, the one another dependent pins, or the
+  latest one taken for a dependent that pins none.
 - **Incompatible**: it does not publish an operation the dependent calls, or
   publishes it at another version, or not on this system.
 - **Pinned**: an installed dependency that is incompatible is not replaced.
@@ -389,6 +420,18 @@ check the set again when chosen with one step (`still_shown` in
   on Unix, one dependent's
   managed copy that cannot be removed, reported against it alone and
   removed at the next start.
+- [`crates/pane-core/tests/npm.rs`](../crates/pane-core/tests/npm.rs)
+  drives npm dependencies from a local registry: a local package requiring
+  an npm one, installed with it and called by id, an installed one used as
+  it is and a disabled one kept, a pinned source, a pin conflicting with the
+  installed version or with another dependent's, one using the network,
+  one that cannot be downloaded, and an npm package naming a local folder
+  ([npm](npm.md#checks)).
+- [`crates/pane-core/tests/repositories.rs`](../crates/pane-core/tests/repositories.rs)
+  drives Git dependencies from a repository served on 127.0.0.1: a local
+  package requiring a Git one at a tag, installed with it and called by id,
+  a source naming another revision than the installed one, and a Git
+  package naming a local folder ([Git](git.md#checks)).
 - [`crates/pane/tests/install.rs`](../crates/pane/tests/install.rs): the
   question in the native window at Pane's size with long source paths,
   whose first choice stays visible (a confirmation's details scroll within
@@ -400,7 +443,7 @@ check the set again when chosen with one step (`still_shown` in
 
 ## Limits
 
-- Local folders only; npm and Git (#45 and later) keep these semantics.
+- Local folders, npm (#45) and Git (#46), with these semantics.
 - One copy per source, no version ranges and no multi-version solving.
 - No Pane-side view yet of installed packages whose required dependency was
   disabled (other than through Disable all) or removed (other than through

@@ -1,0 +1,15 @@
+{
+  "name": "pane-sample-npm-js",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pane's npm-distributed sample in JavaScript: the component of @pane-samples/greeter",
+  "license": "Apache-2.0 OR MIT",
+  "type": "module",
+  "main": "src/index.js",
+  "devDependencies": {
+    "@pane/extension": "file:../js"
+  },
+  "pane": {
+    "operations": true
+  }
+}

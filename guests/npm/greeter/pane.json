@@ -1,0 +1,17 @@
+{
+  "manifestVersion": 1,
+  "title": "Greeter from npm",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "sample",
+      "title": "Greeter from npm",
+      "subtitle": "A JavaScript command installed from an npm package",
+      "component": "sample_npm_js.wasm"
+    }
+  ],
+  "operations": [
+    { "id": "greet", "version": 1, "component": "sample_npm_js.wasm" }
+  ]
+}

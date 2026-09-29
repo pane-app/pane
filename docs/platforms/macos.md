@@ -256,11 +256,13 @@ disable); **not run on macOS yet**.
 
 The unresponsive phase (screenshots 240 to 248, data folder
 `unresponsive-data`, [extensions that stop responding](../pausing.md#when-an-extension-stops-responding))
-shortens the runtime's limits through the fault file
-(`limits:2,4,15`), installs the settings sample and runs its **Stop
-responding**, which computes without waiting: while it computes, Escape
-and Manage extensions must answer (the details color); run again, the call
-must be stopped after 2 seconds of its own computing (thread CPU time from
+sets the runtime's limits through the fault file, first `limits:60,4,15`
+(a minute of a guest's own computing), installs the settings sample and
+runs its **Stop responding**, which computes without waiting: while it
+still computes (Pane's standard error has stopped no call yet), Escape and
+Manage extensions must answer (the details color, frame 240); then
+`limits:2,4,15` must stop that call at once, as it computed longer; run
+again, the call must be stopped after 2 seconds of its own computing (thread CPU time from
 `GetThreadTimes` on Windows, `CLOCK_THREAD_CPUTIME_ID` on macOS) with the
 error color, and the third time pause the package (the error and reason
 colors), with the saved `busy` note still "started"; the pause details and
@@ -286,6 +288,64 @@ Removing a managed copy uses the same `remove_dir_all` as a single
 uninstall; a folder still in use is listed and removed at the next start,
 reported against its own package. Nothing else in it is specific to
 macOS; **not run on macOS yet**.
+
+## npm packages (#45)
+
+A phase of the smoke (screenshots 260 to 266, [npm packages](../npm.md)),
+with a data folder of its own, starts `scripts/npm_registry.py` on
+127.0.0.1 serving the npm sample `cargo xtask guests` packed, and points the
+development build at it with `PANE_NPM_REGISTRY`: it installs the local
+Dependencies from npm sample, which downloads and installs the npm package
+it requires, calls its `greet` operation, then names the npm package in
+"Install extension from npm…" (two rows up from the last row), updates it and runs
+its command, which answers "Hello from the npm package"; `installed.json`
+must then record `"npm": "@pane-samples/greeter"` at `"npmVersion":
+"0.1.0"` with both packages. The real registry would be reached through the
+HTTP client guests' requests use, trusting the certificates rustls-native-certs
+reads from the system keychains, which no check exercises (the smoke never
+reaches the network; [by hand](../npm.md#trying-the-real-registry-by-hand),
+not run); nothing else in it is specific to macOS.
+The packing, in `cargo xtask guests`, runs in CI on macOS. The phase's
+first run, in CI (run 36536816781 of the fork `wasimysaid/pane`, at
+ca9563b), stopped before Pane started: "the local npm registry did not
+start", with nothing in `npm-registry.log` and no port file after the
+smoke's 5 s wait. The likely cause, not confirmed on macOS: Python's
+`HTTPServer.server_bind` looks the address up in reverse DNS
+(`socket.getfqdn`) before it listens, which is reported to take many
+seconds on macOS runners. Both local servers (`npm_registry.py` and
+`repository_server.py`) now skip that lookup, whose name nothing uses, and
+the smoke waits up to 60 s for the port file, stopping early if the server
+exits. The fix was checked by reading only, and on Linux with reverse
+lookups slowed to 8 s (the old servers then failed the same way). **Not run
+on macOS yet.**
+
+## Git packages (#46)
+
+A phase of the smoke (screenshots 300 to 304, [Git packages](../git.md)),
+with a data folder of its own, makes the Git sample's repository with
+`scripts/repository_server.py make-sample` (the source on `main`, the build
+on `release`, tagged `v0.1.0`; `git` runs there with none of the user's
+configuration) and serves it on 127.0.0.1 with `scripts/repository_server.py
+serve`, which runs `git upload-pack`: `--install git:<address>` explains the
+default branch as source-only (300, captured again every half second until
+the explanation's color shows, for up to 60 s, rather than after a fixed
+delay), then "Install extension from Git…"
+(root's last row there, with nothing installed) takes `<address>@v0.1.0`
+(301), previews the tag, pinned (302), installs it (303) and runs its
+command, which answers "Hello from the Git repository" (304);
+`installed.json`, read as JSON (`scripts/check_git_record.py` on macOS), must then
+record one package from Git with `"gitRef": "refs/tags/v0.1.0"`, `pinned`
+and the `gitCommit` the tag points to (`repository_server.py commit`), and
+the downloads folder must be empty. Pane itself runs no
+`git`; the address is plain `http://` on a loopback address, which only a
+development build fetches, so the smoke never reaches the network, and the
+HTTPS path to a real host ([by hand](../git.md#trying-a-real-host-by-hand))
+is not exercised. Tree names are refused alike on every system (the same
+rules as npm's, plus `.git`, `git~1` and names differing only in case).
+The phase types the address with System Events. Its repository server
+skips the reverse DNS lookup the npm phase's first run stopped on (above)
+and is waited for as long; checked by reading only. **Not run on macOS
+yet.**
 
 ## Files (#29)
 
@@ -317,6 +377,28 @@ sends "aurora" (results listed, Enter shows a package's details); "slow" then "e
 must log the held search as abandoned; the service's 503, then the service
 stopped, are errors; restarted, a search lists results again.
 **Not run on macOS yet.**
+
+## Clipboard history (#35)
+
+Pane has no clipboard adapter on macOS yet (#37). The smoke's clipboard
+phase (screenshots 280 and 281), with a data folder of its own, installs
+Clipboard History, whose command is then listed in root search as "Not
+available on macOS: this command supports only Windows" (the unavailable
+color); Enter shows that as the error and does not open it, and no
+`clipboard-history.json` appears. No clipboard is read. **Not run on macOS
+yet.**
+
+## Clipboard history expiry (#36)
+
+The clipboard phase goes on (screenshots 400 to 402) where the command never
+runs: with Pane stopped, the smoke writes the history of the installed
+package as a downtime would leave it (`scripts/clipboard_history.py`):
+history on, one item copied 8 days ago and one a day ago. Once Pane starts,
+the old one is gone from the file, and the uninstall confirmation counts
+"Saved data: 1 clipboard history item"; kept as retained data and made 8
+days old while Pane is stopped, it is gone once Pane starts again, the
+extension list's last row reading "keeps clipboard history settings". No
+clipboard is read. **Not run on macOS yet.**
 
 ## Text input and accessibility findings
 

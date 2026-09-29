@@ -24,4 +24,8 @@ open = "~5.4.4"
 futures = { version = "0.3", default-features = false, features = ["executor"] }
 serde_json = "1"
 tempfile = "3"
-gpui = { package = "gpui-ce", git = "https://github.com/gpui-ce/gpui-ce", rev = "17d9c8e8fdb30a329d817ca06bff424e8e848f1a", default-features = false, features = ["test-support"] }
+# The local npm registry of the tests (pane-core's test support).
+sha2 = "0.10"
+tar = { version = "0.4.44", default-features = false }
+flate2 = "1"
+gpui ={ package = "gpui-ce", git = "https://github.com/gpui-ce/gpui-ce", rev = "17d9c8e8fdb30a329d817ca06bff424e8e848f1a", default-features = false, features = ["test-support"] }

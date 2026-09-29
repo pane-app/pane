@@ -3,7 +3,10 @@
 //! - `guests`: build the Rust guests and copy them, with the prebuilt JS/TS
 //!   sample components from `guests/prebuilt/`, into `target/guests/`, and
 //!   assemble the sample packages into `target/guests/packages/`, with the
-//!   helper sample's native helper built for this system.
+//!   helper sample's native helper built for this system, the npm sample
+//!   into `target/guests/npm/`, packed as npm packs it, and the Git sample
+//!   into `target/guests/git/greeter/`, its source with its built component
+//!   under `dist/`, as a release revision holds it.
 //! - `js-guests`: rebuild the prebuilt JS/TS sample components with the pinned
 //!   toolchain in `tools/componentize-js` (prerequisites: guests/README.md),
 //!   then run `guests`.
@@ -33,6 +36,9 @@ const PREBUILT: &[&str] = &[
     "sample_helper_ts",
     "sample_files_js",
     "sample_files_ts",
+    "sample_clipboard_js",
+    "sample_clipboard_ts",
+    "sample_npm_js",
 ];
 
 fn main() -> ExitCode {
@@ -90,6 +96,7 @@ fn guests() -> Result<(), String> {
                 "applications",
                 "quicklinks",
                 "files",
+                "clipboard_history",
                 "sample_operations",
                 "sample_dependencies",
                 "sample_query",
@@ -101,6 +108,7 @@ fn guests() -> Result<(), String> {
                 "mismatched_api",
                 "failing_start",
                 "refusing_view",
+                "git_greeter",
             ],
         ),
         ("guests/fixtures/mixed-p2", &["mixed_p2"]),
@@ -147,6 +155,8 @@ fn guests() -> Result<(), String> {
         }
     }
     echo_helper(&root, &out)?;
+    npm_sample(&root, &out)?;
+    git_sample(&root, &out)?;
     println!("guests built into {}", out.display());
     Ok(())
 }
@@ -180,10 +190,93 @@ fn echo_helper(root: &Path, out: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Assembles the npm sample (`guests/npm/greeter`: its `package.json`, its
+/// `pane.json` and the components it names) into `target/guests/npm/greeter/`
+/// and packs it into `target/guests/npm/pane-samples-greeter-0.1.0.tgz`, the
+/// tarball `npm pack` makes of that folder: every file under `package/`, in a
+/// gzipped tar. The tarball is the same on every system (fixed times, owners
+/// and modes, files in name order), so the local registry of the tests and
+/// smokes serves one integrity everywhere. It is never published.
+fn npm_sample(root: &Path, out: &Path) -> Result<(), String> {
+    let source = root.join("guests/npm/greeter");
+    let dest = out.join("npm/greeter");
+    let _ = std::fs::remove_dir_all(&dest);
+    std::fs::create_dir_all(&dest).map_err(|error| error.to_string())?;
+    let mut files = vec!["package.json".to_owned(), "pane.json".to_owned()];
+    let manifest = std::fs::read_to_string(source.join("package.json"))
+        .map_err(|error| format!("read the npm sample's package.json failed: {error}"))?;
+    // Its one component, the prebuilt `sample_npm_js`.
+    let component = "sample_npm_js.wasm";
+    if !manifest.contains(component) {
+        return Err(format!(
+            "the npm sample's package.json does not list {component}"
+        ));
+    }
+    files.push(component.to_owned());
+    for file in &files {
+        let from = match file.ends_with(".wasm") {
+            true => out.join(file),
+            false => source.join(file),
+        };
+        std::fs::copy(&from, dest.join(file))
+            .map_err(|error| format!("copy {} failed: {error}", from.display()))?;
+    }
+    files.sort();
+    // npm's own fixed time for packed files, 1985-10-26T08:15:00Z.
+    const NPM_MTIME: u64 = 499_162_500;
+    let mut tar = tar::Builder::new(Vec::new());
+    for file in &files {
+        let contents = std::fs::read(dest.join(file)).map_err(|error| error.to_string())?;
+        let mut header = tar::Header::new_ustar();
+        header.set_size(contents.len() as u64);
+        header.set_mode(0o644);
+        header.set_mtime(NPM_MTIME);
+        header.set_uid(0);
+        header.set_gid(0);
+        header.set_entry_type(tar::EntryType::Regular);
+        tar.append_data(&mut header, format!("package/{file}"), contents.as_slice())
+            .map_err(|error| error.to_string())?;
+    }
+    let tar = tar.into_inner().map_err(|error| error.to_string())?;
+    let mut gz = flate2::GzBuilder::new()
+        .mtime(0)
+        .write(Vec::new(), flate2::Compression::best());
+    std::io::Write::write_all(&mut gz, &tar).map_err(|error| error.to_string())?;
+    let tgz = gz.finish().map_err(|error| error.to_string())?;
+    let packed = out.join("npm/pane-samples-greeter-0.1.0.tgz");
+    std::fs::write(&packed, tgz)
+        .map_err(|error| format!("write {} failed: {error}", packed.display()))?;
+    Ok(())
+}
+
+/// Assembles the Git sample (`guests/git/greeter`) into
+/// `target/guests/git/greeter/`: its source files (`pane.json`,
+/// `Cargo.toml`, `README.md`, `src/lib.rs`) and, under `dist/`, the
+/// component built from them, `dist/git_greeter.wasm`. The tests and smokes
+/// commit the source files as a source-only revision and then `dist/` as a
+/// release revision of a repository they make; it is never pushed anywhere.
+fn git_sample(root: &Path, out: &Path) -> Result<(), String> {
+    let source = root.join("guests/git/greeter");
+    let dest = out.join("git/greeter");
+    let _ = std::fs::remove_dir_all(&dest);
+    for file in ["pane.json", "Cargo.toml", "README.md", "src/lib.rs"] {
+        let to = dest.join(file);
+        std::fs::create_dir_all(to.parent().expect("inside the sample"))
+            .map_err(|error| error.to_string())?;
+        std::fs::copy(source.join(file), &to)
+            .map_err(|error| format!("copy {file} of the Git sample failed: {error}"))?;
+    }
+    let built = out.join("git_greeter.wasm");
+    std::fs::create_dir_all(dest.join("dist")).map_err(|error| error.to_string())?;
+    std::fs::copy(&built, dest.join("dist/git_greeter.wasm"))
+        .map_err(|error| format!("copy {} failed: {error}", built.display()))?;
+    Ok(())
+}
+
 /// (package folder in `guests/packages`, component) of each sample package,
 /// and of the default extensions (the calculator, applications and
 /// quicklinks).
-const SAMPLE_PACKAGES: [(&str, &str); 27] = [
+const SAMPLE_PACKAGES: [(&str, &str); 31] = [
     ("sample-rust", "sample_rust"),
     ("sample-settings", "sample_settings"),
     ("sample-js", "sample_js"),
@@ -194,10 +287,12 @@ const SAMPLE_PACKAGES: [(&str, &str); 27] = [
     ("applications", "applications"),
     ("quicklinks", "quicklinks"),
     ("files", "files"),
+    ("clipboard-history", "clipboard_history"),
     ("sample-operations", "sample_operations"),
     ("sample-operations-js", "sample_operations_js"),
     ("sample-operations-ts", "sample_operations_ts"),
     ("sample-dependencies", "sample_dependencies"),
+    ("sample-dependencies-npm", "sample_dependencies"),
     ("sample-applications-js", "sample_applications_js"),
     ("sample-applications-ts", "sample_applications_ts"),
     ("sample-query", "sample_query"),
@@ -211,6 +306,8 @@ const SAMPLE_PACKAGES: [(&str, &str); 27] = [
     ("sample-helper-ts", "sample_helper_ts"),
     ("sample-files-js", "sample_files_js"),
     ("sample-files-ts", "sample_files_ts"),
+    ("sample-clipboard-js", "sample_clipboard_js"),
+    ("sample-clipboard-ts", "sample_clipboard_ts"),
 ];
 
 /// Rebuilds `guests/prebuilt/` from the JS/TS sample sources, then refreshes

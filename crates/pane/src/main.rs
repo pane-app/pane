@@ -8,13 +8,34 @@ use pane::LauncherWindow;
 use pane_core::develop::Toolchains;
 use pane_core::{Launcher, Runtime};
 
-/// `pane [--install <folder>]`: `--install` opens with the package in
-/// `<folder>` shown for installation, as if chosen with the folder picker.
-fn package_to_preview() -> Option<PathBuf> {
+/// What `--install` asks to show for installation.
+enum ToPreview {
+    Folder(PathBuf),
+    /// `npm:<name>` or `npm:<name>@<version>`.
+    Npm(String),
+    /// `git:<repository>` or `git:<repository>@<branch, tag or commit>`.
+    Git(String),
+}
+
+/// `pane [--install <folder> | --install npm:<package>[@<version>] |
+/// --install git:<repository>[@<reference>]]`: `--install` opens with the
+/// package in `<folder>` shown for installation, as if chosen with the
+/// folder picker, the npm package, as if named in "Install extension from
+/// npm…", or the Git repository, as if named in "Install extension from
+/// Git…".
+fn package_to_preview() -> Option<ToPreview> {
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
         if arg == "--install" {
-            return args.next().map(PathBuf::from);
+            let source = args.next()?;
+            let text = source.to_str();
+            if let Some(spec) = text.and_then(|s| s.strip_prefix("npm:")) {
+                return Some(ToPreview::Npm(spec.to_owned()));
+            }
+            if let Some(spec) = text.and_then(|s| s.strip_prefix("git:")) {
+                return Some(ToPreview::Git(spec.to_owned()));
+            }
+            return Some(ToPreview::Folder(PathBuf::from(source)));
         }
     }
     None
@@ -53,10 +74,26 @@ fn main() {
             None => Launcher::new(runtime, pane::sample_commands()),
         }
         .with_link_opener(Arc::new(pane::SystemLinks));
+        // Development builds can download npm packages from a registry on
+        // this computer instead (the tests' and smokes' own); release builds
+        // always use registry.npmjs.org.
+        #[cfg(debug_assertions)]
+        let launcher = match pane_core::npm::Registry::from_dev_env() {
+            Some(Ok(registry)) => launcher.with_npm_registry(registry),
+            Some(Err(why)) => {
+                eprintln!("PANE_NPM_REGISTRY: {why}");
+                launcher.show_error(format!("PANE_NPM_REGISTRY: {why}"));
+                launcher
+            }
+            None => launcher,
+        };
         // Global hotkeys: the system's adapter is made on the main thread,
         // whose run loop receives the presses on macOS.
         let (press_sender, mut presses) = pane_core::hotkeys::channel();
         let launcher = launcher.with_hotkeys(pane_core::hotkeys::native(press_sender));
+        // Clipboard history: Pane watches the clipboard only while an
+        // enabled package keeps history the user turned on.
+        let launcher = launcher.with_clipboard(pane_core::clipboard::native());
         // Development mode builds with the author's tools; a JavaScript or
         // TypeScript package with this checkout's build unless
         // PANE_COMPONENTIZE_JS names another.
@@ -79,8 +116,13 @@ fn main() {
                 cx.new(|cx| {
                     let mut launcher = LauncherWindow::new(launcher, window, cx);
                     launcher.follow_changes(changes, window, cx);
-                    if let Some(folder) = &preview {
-                        launcher.preview_package(folder, window, cx);
+                    match &preview {
+                        Some(ToPreview::Folder(folder)) => {
+                            launcher.preview_package(folder, window, cx)
+                        }
+                        Some(ToPreview::Npm(spec)) => launcher.preview_npm(spec, window, cx),
+                        Some(ToPreview::Git(spec)) => launcher.preview_git(spec, window, cx),
+                        None => {}
                     }
                     launcher
                 })

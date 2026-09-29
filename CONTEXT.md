@@ -41,7 +41,7 @@ Extension data the extension can compute or download again, which the user can c
 _Avoid_: Temporary files, managed copy
 
 **Saved data**:
-An extension's settings and content: the extension data a user chooses to keep or delete when uninstalling it. Its cache and local credentials are removed either way.
+An extension's settings and content, and the clipboard history Pane keeps for it: the extension data a user chooses to keep or delete when uninstalling it. Its cache and local credentials are removed either way.
 _Avoid_: All extension data, durable data (in UI text)
 
 **Uninstall**:
@@ -88,6 +88,14 @@ _Avoid_: App (ambiguous with Pane itself), program
 A named web address the user saves through the Quicklinks default extension's form and finds in root search, where invoking it opens the address with the system's handler for web links; it is kept in that extension's content.
 _Avoid_: Bookmark, shortcut, alias
 
+**Clipboard history**:
+The text a user copies, which Pane keeps on this computer for an installed package once the user turned it on in the package's command, watching the clipboard only while the history is on and the package runs; a copy its application marks as not to be kept (as password managers do), or from a program the user excluded, is not kept. Each item is kept for the package's retention after it was copied, then Pane deletes it, whether the package runs or not. It is that package's extension data of a kind of its own, written by Pane, never sent anywhere; the Clipboard History default extension shows it.
+_Avoid_: Clipboard (the system's current contents, which deleting history never changes), clipboard log, paste history
+
+**Retention**:
+How long Pane keeps each clipboard history item after it was copied (7 days unless the user chose otherwise), counted from the copy, so disabling or re-enabling the package or stopping Pane never extends it. Clearing history deletes the items and keeps history on; turning it off and deleting it (the specification's Disable and delete history) also stops keeping what is copied.
+_Avoid_: Expiry date (an item's deadline follows from its copy and the retention), TTL
+
 **Global hotkey**:
 A key combination the user assigns to an installed command in Pane, which opens that command in Pane's window while any application has focus; Pane keeps it as its own record and registers it with the system only while the command's extension is enabled.
 _Avoid_: Shortcut (any key combination, including Pane's own keys), keybinding, alias
@@ -129,8 +137,28 @@ The `pane.json` file that declares a package's title, version, required extensio
 _Avoid_: package.json (npm's file)
 
 **Source-only package**:
-A package whose manifest names components that have not been built; Pane explains it rather than installing it.
+A package whose manifest names components that have not been built, in a folder, published to npm without them, or a Git revision holding only the source; Pane explains it rather than installing it, and never builds it.
 _Avoid_: Broken install
+
+**npm-distributed package**:
+An extension package published to the npm registry: a tarball holding its package manifest and built components, identified by its npm name without version. Pane downloads it itself, checks its integrity and unpacks only its files and folders; the unpacked package is then installed like a local package, into a managed copy, while it keeps its npm source identity. Pane runs none of its npm install scripts and installs none of its npm dependencies.
+_Avoid_: Node package, npm module (Pane runs no Node code), plugin from npm
+
+**Git-distributed package**:
+An extension package distributed as a Git repository whose root holds its package manifest, identified by its repository (host and path, without `.git` or a reference; the path in lowercase on github.com, gitlab.com, bitbucket.org and codeberg.org, which ignore its case, and as written elsewhere): the same repository written as an HTTPS, SSH or scheme-less address is one package. Pane fetches the one revision asked for itself, over HTTPS, checks every object against its id and writes out only its files and folders, then installs it like a local package, into a managed copy, while it keeps its Git source identity. Pane runs nothing from the repository: no build, hook, filter or submodule.
+_Avoid_: Cloned extension, repository checkout (Pane keeps no repository)
+
+**Release revision**:
+A Git revision of a Git-distributed package whose commit holds the built components its manifest names, such as a release tag or a release branch its author commits the built files to; only a release revision can be installed. A revision holding only the source is a source-only package.
+_Avoid_: Release (a Pane release), build
+
+**Tracked reference**:
+The branch a Git-distributed package was installed from (the repository's default branch when none was named): an update fetches that branch again, whatever commit it has moved to. A tag or a commit named by its id is a pinned revision instead, which an update keeps; naming another reference changes either.
+_Avoid_: Channel, floating version
+
+**Pinned version**:
+The exact npm version the user, or a dependency's source, named when a package from npm was installed or updated, recorded so that it is not taken for the latest; updating without a version keeps it, and naming another version changes it. A dependency's source that names a version must get that version: an installed copy of another version is a conflict, since installing another package never replaces an installed required dependency.
+_Avoid_: Locked version, version range
 
 **Managed copy**:
 Pane's own copy of an installed package's manifest and components, kept in Pane's data folder, separate from the user-owned source.

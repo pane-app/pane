@@ -94,6 +94,8 @@ fn titles(launcher: &Launcher) -> Vec<String> {
 }
 
 const INSTALL_ROW: &str = "Install extension from folder…";
+const NPM_ROW: &str = "Install extension from npm…";
+const GIT_ROW: &str = "Install extension from Git…";
 const MANAGE_ROW: &str = "Manage extensions…";
 
 #[test]
@@ -101,7 +103,7 @@ fn a_previewed_local_package_installs_and_its_command_runs() {
     let dirs = Dirs::new();
     let folder = package(&dirs.source("hello"), "Hello", "1.0.0", "sample_rust");
     let launcher = dirs.launcher();
-    assert_eq!(titles(&launcher), [INSTALL_ROW]);
+    assert_eq!(titles(&launcher), [INSTALL_ROW, NPM_ROW, GIT_ROW]);
     assert!(launcher.selected_asks_for_folder());
 
     block_on(launcher.preview_package(&folder));
@@ -142,7 +144,10 @@ fn a_previewed_local_package_installs_and_its_command_runs() {
         "{:?}",
         view.screen
     );
-    assert_eq!(titles(&launcher), ["Say hello", INSTALL_ROW, MANAGE_ROW]);
+    assert_eq!(
+        titles(&launcher),
+        ["Say hello", INSTALL_ROW, NPM_ROW, GIT_ROW, MANAGE_ROW]
+    );
     assert_eq!(view.selected, Some(0));
     assert_eq!(view.status, Status::Result("Installed Hello".into()));
     // Row ids come from the identity's stable key, not its display text.
@@ -194,7 +199,10 @@ fn a_second_explicit_install_of_the_same_folder_is_rejected() {
         "{message}"
     );
     assert_eq!(installed(&launcher).len(), 1);
-    assert_eq!(titles(&launcher), ["Say hello", INSTALL_ROW, MANAGE_ROW]);
+    assert_eq!(
+        titles(&launcher),
+        ["Say hello", INSTALL_ROW, NPM_ROW, GIT_ROW, MANAGE_ROW]
+    );
 }
 
 #[test]
@@ -258,7 +266,14 @@ fn copies_in_different_folders_are_distinct_packages_despite_the_same_title() {
     );
     assert_eq!(
         titles(&launcher),
-        ["Say hello", "Say hello", INSTALL_ROW, MANAGE_ROW]
+        [
+            "Say hello",
+            "Say hello",
+            INSTALL_ROW,
+            NPM_ROW,
+            GIT_ROW,
+            MANAGE_ROW
+        ]
     );
     // Each runs its own copy.
     for (index, answer) in [(0, "Rust"), (1, "JavaScript")] {
@@ -335,7 +350,10 @@ fn installed_commands_are_listed_after_a_restart_without_running_any_guest() {
         Launcher::with_packages(unavailable, vec![], dirs.data.path().join("extensions"));
 
     let view = restarted.view();
-    assert_eq!(titles(&restarted), ["Say hello", INSTALL_ROW, MANAGE_ROW]);
+    assert_eq!(
+        titles(&restarted),
+        ["Say hello", INSTALL_ROW, NPM_ROW, GIT_ROW, MANAGE_ROW]
+    );
     assert_eq!(view.rows[0].subtitle.as_deref(), Some("Greets you"));
     assert_eq!(
         installed(&restarted),
@@ -448,7 +466,7 @@ fn unsupported_packages_are_explained_and_not_installed() {
         assert!(launcher.packages().is_empty(), "{case}");
 
         launcher.back();
-        assert_eq!(titles(&launcher), [INSTALL_ROW], "{case}");
+        assert_eq!(titles(&launcher), [INSTALL_ROW, NPM_ROW, GIT_ROW], "{case}");
     }
 }
 
@@ -555,7 +573,14 @@ fn a_damaged_installed_copy_is_listed_with_its_problem_and_others_still_run() {
 
     assert_eq!(
         titles(&restarted),
-        ["Say hello", "broken", INSTALL_ROW, MANAGE_ROW]
+        [
+            "Say hello",
+            "broken",
+            INSTALL_ROW,
+            NPM_ROW,
+            GIT_ROW,
+            MANAGE_ROW
+        ]
     );
     restarted.select(1);
     block_on(restarted.activate_selected());
@@ -642,7 +667,14 @@ fn an_install_finishing_in_the_background_keeps_the_selected_row() {
 
     assert_eq!(
         titles(&launcher),
-        ["JavaScript sample", "Say hello", INSTALL_ROW, MANAGE_ROW]
+        [
+            "JavaScript sample",
+            "Say hello",
+            INSTALL_ROW,
+            NPM_ROW,
+            GIT_ROW,
+            MANAGE_ROW
+        ]
     );
     assert_eq!(selected_title(&launcher).as_deref(), Some(INSTALL_ROW));
 }
@@ -875,7 +907,10 @@ fn a_package_for_this_system_shows_its_systems_and_installs() {
         launcher.view().status,
         Status::Result("Installed Hello".into())
     );
-    assert_eq!(titles(&launcher), ["Say hello", INSTALL_ROW, MANAGE_ROW]);
+    assert_eq!(
+        titles(&launcher),
+        ["Say hello", INSTALL_ROW, NPM_ROW, GIT_ROW, MANAGE_ROW]
+    );
 }
 
 #[test]
@@ -894,7 +929,10 @@ fn an_installed_copy_for_other_systems_lists_its_commands_as_unavailable() {
 
     let restarted = dirs.launcher();
 
-    assert_eq!(titles(&restarted), ["Say hello", INSTALL_ROW, MANAGE_ROW]);
+    assert_eq!(
+        titles(&restarted),
+        ["Say hello", INSTALL_ROW, NPM_ROW, GIT_ROW, MANAGE_ROW]
+    );
     let row = restarted.view().rows[0].clone();
     assert_eq!(row.subtitle.as_deref(), Some("Greets you"));
     assert_eq!(
@@ -954,6 +992,8 @@ fn a_command_for_other_systems_is_listed_with_its_reason_and_others_still_open()
                 ("Here".into(), None),
                 ("Nowhere".into(), Some(nowhere.clone())),
                 (INSTALL_ROW.into(), None),
+                (NPM_ROW.into(), None),
+                (GIT_ROW.into(), None),
                 (MANAGE_ROW.into(), None),
             ]
         );

@@ -668,6 +668,12 @@ impl Helpers {
         if self.quitting() {
             return Err(quitting());
         }
+        // Code stopped since it asked (its generation ended, or Pane gave up
+        // on its runtime thread) has no process started; one that stops
+        // while the process starts is caught below, and the process ended.
+        if let Some(end) = stopped(&spec) {
+            return Err(stopped_code(end));
+        }
         // Started without the lock held, which stopping helpers takes: a
         // start the system is slow with (or never finishes) holds up no one.
         let child = Owned(
@@ -916,8 +922,8 @@ fn supervise(
             return Err(HelperError::new(
                 HelperErrorKind::Failed,
                 format!(
-                    "helper `{name}` did not finish within {} seconds; Pane ended it",
-                    spec.limit.as_secs()
+                    "helper `{name}` did not finish within {}; Pane ended it",
+                    crate::runtime::deadlines::seconds(spec.limit)
                 ),
             ));
         }
@@ -1257,6 +1263,8 @@ mod tests {
     /// How long a test's waiting helper waits: short, so that one left
     /// behind by a failing test ends soon by itself.
     const WAIT: &str = "5";
+    /// Seconds a helper waits when only Pane's ending it may stop it first.
+    const LONG_WAIT: &str = "120";
 
     /// The runs of one test, whose processes all end with the test, even
     /// when it fails.
@@ -1344,7 +1352,9 @@ mod tests {
     #[test]
     fn a_helper_running_past_its_time_limit_is_ended() {
         let helpers = runs();
-        let mut spec = spec(&["--wait", WAIT], None, 0);
+        // Waits far longer than its limit, so that ending it is told apart
+        // from its own end however slowly processes start.
+        let mut spec = spec(&["--wait", LONG_WAIT], None, 0);
         spec.limit = Duration::from_secs(1);
         let started = Instant::now();
 
@@ -1354,11 +1364,11 @@ mod tests {
         assert_eq!(error.kind, HelperErrorKind::Failed);
         assert_eq!(
             error.message,
-            "helper `echo` did not finish within 1 seconds; Pane ended it"
+            "helper `echo` did not finish within 1 second; Pane ended it"
         );
         assert!(started.elapsed() >= Duration::from_secs(1));
         assert!(
-            started.elapsed() < Duration::from_secs(4),
+            started.elapsed() < Duration::from_secs(LONG_WAIT.parse().unwrap()),
             "it ran its wait out"
         );
         assert_eq!(helpers.running(), Vec::<u32>::new());
@@ -1381,6 +1391,35 @@ mod tests {
             futures::executor::block_on(running.finish()),
             Err(stopped_code(End::Disabled))
         );
+    }
+
+    /// Stopped code (its generation ended, or its runtime thread's fence
+    /// closed) has no helper process started at all: the check comes before
+    /// the system is asked to start one, here a file that does not exist,
+    /// whose start the system would refuse with another error.
+    #[test]
+    fn stopped_code_has_no_helper_process_started() {
+        let helpers = runs();
+        let dir = tempfile::tempdir().unwrap();
+        let generation = Generation::new();
+        generation.end(End::Disabled);
+        let mut ended = spec(&[], Some(generation), 0);
+        ended.program = dir.path().join("never-started");
+        let fence = Fence::default();
+        fence.close();
+        let mut fenced = spec(&[], None, 0);
+        fenced.program = dir.path().join("never-started");
+        fenced.fence = Some(fence);
+
+        assert_eq!(
+            helpers.start(ended).err(),
+            Some(stopped_code(End::Disabled))
+        );
+        assert_eq!(
+            helpers.start(fenced).err(),
+            Some(stopped_code(End::Abandoned))
+        );
+        assert_eq!(helpers.running(), Vec::<u32>::new());
     }
 
     #[test]

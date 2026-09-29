@@ -14,10 +14,24 @@ export PANE_DATA_DIR=$out/data
 { sw_vers; uname -m; } >"$out/system.txt"   # the tested OS version and architecture
 
 pid=
-trap '[ -n "$pid" ] && kill "$pid" 2>/dev/null || true' EXIT
+npm_registry_pid=
+repository_server_pid=
+trap '[ -n "$pid" ] && kill "$pid" 2>/dev/null; [ -n "$npm_registry_pid" ] && kill "$npm_registry_pid" 2>/dev/null; [ -n "$repository_server_pid" ] && kill "$repository_server_pid" 2>/dev/null || true' EXIT
 
 capture() { screencapture -x "$out/$1"; }
 check() { python3 "$(dirname "$0")/check_screenshot.py" "$out/$1" "$2" ${3:+"$3"}; }
+# Captures screenshot $1 until it shows text in color $2, for at most $3
+# seconds, then checks it: for a view that appears once work in the
+# background ends, whenever that is.
+capture_until() {
+  local deadline=$((SECONDS + $3))
+  while :; do
+    capture "$1"
+    check "$1" "$2" >/dev/null 2>&1 && return 0
+    [ "$SECONDS" -lt "$deadline" ] || { check "$1" "$2"; return 1; }
+    sleep 0.5
+  done
+}
 # Prints "x y": where the screenshot shows the given color.
 locate() { python3 "$(dirname "$0")/check_screenshot.py" --locate "$out/$1" "$2"; }
 # Clicks the primary button at x y in the pixels of screenshot $3: Quartz
@@ -40,7 +54,7 @@ for event in (1, 2):  # left mouse down, left mouse up
     cg.CGEventPost(0, cg.CGEventCreateMouseEvent(None, event, at, 0))
 PY
 }
-key() {  # macOS virtual key codes: 36 Return, 125 Down, 124 Right, 53 Escape, 48 Tab
+key() {  # macOS virtual key codes: 36 Return, 125 Down, 126 Up, 124 Right, 53 Escape, 48 Tab
   osascript -e "tell application \"System Events\" to key code $1"
 }
 type_text() { osascript -e "tell application \"System Events\" to keystroke \"$1\""; }
@@ -168,7 +182,7 @@ key 36; sleep 2   # "Use a formal greeting"
 capture 16-setting-saved.png
 check 16-setting-saved.png 9fd8a8   # "Saved the formal greeting"
 key 53; sleep 1
-for ((i = 0; i < 10; i++)); do key 125; done   # the last row
+for ((i = 0; i < 14; i++)); do key 125; done   # the last row
 key 36; sleep 1
 key 125; key 36; sleep 2
 capture 17-disabled.png
@@ -185,7 +199,7 @@ start_pane
 capture 18-restarted-disabled.png
 check 18-restarted-disabled.png 8a96a3
 python3 "$(dirname "$0")/check_screenshot.py" --same "$out/12-restarted.png" "$out/18-restarted-disabled.png"
-for ((i = 0; i < 10; i++)); do key 125; done
+for ((i = 0; i < 14; i++)); do key 125; done
 key 36; sleep 1
 key 125; key 36; sleep 2
 capture 19-enabled.png
@@ -516,7 +530,7 @@ export PANE_DATA_DIR=$out/hotkeys-data
 rm -rf "$PANE_DATA_DIR"
 start_pane --install target/guests/packages/sample-settings
 key 36; sleep 2   # Install; Greeting is selected
-for ((i = 0; i < 10; i++)); do key 125; done   # Manage extensions…
+for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…
 key 36; sleep 1
 key 125; key 125; key 125; key 125; key 36; sleep 1   # "Hotkey for Greeting"
 capture 52-hotkey-screen.png
@@ -542,7 +556,7 @@ capture 56-hotkey-after-restart.png
 check 56-hotkey-after-restart.png 364355 3000   # Greeting's first item, selected
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{53-hotkey-assigned,56-hotkey-after-restart}.png
 key 53; sleep 1
-for ((i = 0; i < 10; i++)); do key 125; done   # Manage extensions…
+for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…
 key 36; sleep 1
 key 36; sleep 2   # disable Settings sample
 key 53; sleep 1
@@ -580,7 +594,7 @@ type_text greet; sleep 1
 capture 60-paused-after-restart.png
 check 60-paused-after-restart.png d6a36a   # Greeting is still paused
 key 53; sleep 1   # Escape clears the query
-for ((i = 0; i < 10; i++)); do key 125; done   # Manage extensions…
+for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…
 key 36; sleep 1
 key 125; key 125; key 125; key 36; sleep 1   # "Why Settings sample is paused"
 capture 61-pause-details.png
@@ -618,7 +632,7 @@ for ((i = 0; i < 3; i++)); do key 125; done
 key 36   # "Save a note"
 wait_for "$PANE_DATA_DIR/extensions/content.json" '"note": "Water the plants"' present
 key 53; sleep 1   # root search
-for ((i = 0; i < 10; i++)); do key 125; done   # Manage extensions…
+for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…
 key 36; sleep 1
 for ((i = 0; i < 3; i++)); do key 125; done
 key 36; sleep 1   # "Uninstall Settings sample"
@@ -659,7 +673,7 @@ export PANE_DATA_DIR=$out/aliases-data
 rm -rf "$PANE_DATA_DIR"
 start_pane --install target/guests/packages/sample-query
 key 36; sleep 2   # Install; Echo is selected
-for ((i = 0; i < 10; i++)); do key 125; done   # Manage extensions…
+for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…
 key 36; sleep 1
 for ((i = 0; i < 5; i++)); do key 125; done   # "Alias for Echo"
 key 36; sleep 1
@@ -693,7 +707,7 @@ stop_pane
 grep -q '"ec"' "$PANE_DATA_DIR/extensions/aliases.json" || { echo "alias not recorded"; exit 1; }
 grep -q '#echo"' "$PANE_DATA_DIR/extensions/aliases.json" || { echo "fallback not recorded"; exit 1; }
 start_pane
-for ((i = 0; i < 10; i++)); do key 125; done   # Manage extensions…
+for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…
 key 36; sleep 1
 key 36; sleep 2   # disable Query sample
 key 53; sleep 1
@@ -760,7 +774,7 @@ key 126; key 36; sleep 2   # Up: Echo after waiting
 helpers_running || { echo "the waiting helper is not running"; exit 1; }
 capture 92-helper-waiting.png
 key 53; sleep 1   # root search; the helper keeps running
-for ((i = 0; i < 10; i++)); do key 125; done   # Manage extensions…
+for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…
 key 36; sleep 1
 key 36; sleep 2   # disable Helper sample
 capture 93-helper-disabled.png
@@ -879,9 +893,9 @@ PY
   local built=$copy/$component before=$out/develop-$sample-before.wasm
   start_pane --install "$copy"
   key 36; sleep 2   # Install
-  for ((i = 0; i < 10; i++)); do key 125; done   # Manage extensions…
+  for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…
   key 36; sleep 1
-  for ((i = 0; i < 10; i++)); do key 125; done   # Develop <title>
+  for ((i = 0; i < 14; i++)); do key 125; done   # Develop <title>
   key 36; sleep 2
   capture "$n-$sample-develop-started.png"
   check "$n-$sample-develop-started.png" 9fd8a8   # "Developing <title>: each save in ..."
@@ -931,9 +945,9 @@ PY
   key 53; sleep 1
 
   # Stopped: a save builds nothing.
-  for ((i = 0; i < 10; i++)); do key 125; done   # Manage extensions…
+  for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…
   key 36; sleep 1
-  for ((i = 0; i < 10; i++)); do key 125; done   # Stop developing <title>
+  for ((i = 0; i < 14; i++)); do key 125; done   # Stop developing <title>
   key 36; sleep 2
   capture "$((n + 8))-$sample-stopped.png"
   check "$((n + 8))-$sample-stopped.png" 9fd8a8   # "Stopped developing <title>"
@@ -966,7 +980,7 @@ export PANE_DATA_DIR=$out/disable-dependents-data
 rm -rf "$PANE_DATA_DIR"
 start_pane --install target/guests/packages/sample-dependencies
 key 36; sleep 3   # Install
-for ((i = 0; i < 10; i++)); do key 125; done   # Manage extensions…
+for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…
 key 36; sleep 1
 key 36; sleep 1   # disable JavaScript operations sample: asks first
 capture 140-disable-dependents-asked.png
@@ -1059,7 +1073,7 @@ key 36; sleep 2   # Greeting: nothing runs
 capture 204-runtime-refused.png
 check 204-runtime-refused.png f08c8c   # "Extension runtime unavailable: it stopped after crashing ..."
 key 53; sleep 1   # clears the query
-for ((i = 0; i < 10; i++)); do key 125; done   # Manage extensions…
+for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…
 key 36; sleep 1
 capture 205-runtime-manage.png   # Restart the extension runtime, Why the extension runtime stopped
 key 125; key 36; sleep 1   # Why the extension runtime stopped
@@ -1089,17 +1103,20 @@ grep -q '"disabled": true' "$PANE_DATA_DIR/extensions/installed.json" || { echo 
 if grep -q '"paused"' "$PANE_DATA_DIR/extensions/installed.json"; then echo "a package was paused for the runtime's crash"; exit 1; fi
 # Recovering from an extension that stops responding (#18). The settings
 # sample's last item, Stop responding, computes without waiting for up to a
-# minute. The phase shortens the runtime's limits through the fault file
-# (PANE_TEST_RUNTIME_FAULTS): 2 seconds of a guest's own computing, "not
-# responding yet" after 4 seconds without progress, given up on after 15.
-# While it computes, the window answers keys: Escape returns to root search
-# and Manage extensions opens. Pane stops the call after 2 seconds of its
-# computing, says why, and the third time pauses the package (a failure of
-# its own); Retry starts it again. Then the runtime thread itself is made to
-# hang through the fault file: the status line says it is not responding
-# yet, then Pane gives up on it, names and pauses no extension, and Manage
-# extensions says the runtime stopped responding; a fresh thread runs the
-# next call. A data folder of its own keeps the rows in a known order.
+# minute. The phase sets the runtime's limits through the fault file
+# (PANE_TEST_RUNTIME_FAULTS): "not responding yet" after 4 seconds without
+# progress, given up on after 15, and a guest's own computing at first a
+# minute, so that the first Stop responding still computes when frame 240
+# is taken (Pane's standard error has stopped no call yet): meanwhile the
+# window answers keys, Escape returns to root search and Manage extensions
+# opens. The compute limit then becomes 2 seconds, which the running call
+# has passed, so Pane stops it at once; each later call is stopped after 2
+# seconds of its computing, says why, and the third time pauses the
+# package (a failure of its own); Retry starts it again. Then the runtime
+# thread itself is made to hang through the fault file: the status line
+# says it is not responding yet, then Pane gives up on it, names and
+# pauses no extension, and Manage extensions says the runtime stopped
+# responding; a fresh thread runs the next call. A data folder of its own keeps the rows in a known order.
 export PANE_DATA_DIR=$out/unresponsive-data
 rm -rf "$PANE_DATA_DIR"
 fault=$out/unresponsive-fault
@@ -1112,9 +1129,13 @@ packages = json.load(open(sys.argv[1], encoding="utf-8"))["packages"]
 print(next((values[sys.argv[2]] for values in packages.values() if sys.argv[2] in values), "none"))
 PY
 }
+# How many calls Pane stopped as unresponsive since this phase began, as
+# its standard error says.
+stderr_before=$(cat "$out/stderr.log" 2>/dev/null | wc -l)
+stopped_calls() { tail -n +"$((stderr_before + 1))" "$out/stderr.log" | grep -c "stopped responding" || true; }
 export PANE_TEST_RUNTIME_FAULTS=$fault
 start_pane --install target/guests/packages/sample-settings
-inject limits:2,4,15
+inject limits:60,4,15   # a minute of computing: frame 240 is taken while it computes
 key 36; sleep 2   # Install; Greeting is selected
 key 36; sleep 2   # open Greeting
 for ((i = 0; i < 9; i++)); do key 125; done   # Stop responding
@@ -1125,7 +1146,11 @@ for ((i = 0; i < 10; i++)); do key 125; done   # Manage extensions…
 key 36; sleep 1
 capture 240-unresponsive-window-answers.png   # the extension list, while the guest computes
 check 240-unresponsive-window-answers.png aab4c0   # its rows' subtitles
-key 53; sleep 6   # it is stopped meanwhile (its answer is not shown here)
+[ "$(stopped_calls)" = 0 ] || { echo "Stop responding was stopped before frame 240"; exit 1; }
+inject limits:2,4,15   # it has computed longer: Pane stops it at its next tick
+for _ in $(seq 300); do [ "$(stopped_calls)" -ge 1 ] && break; sleep 0.1; done
+[ "$(stopped_calls)" -ge 1 ] || { echo "Stop responding was not stopped at the shorter limit"; exit 1; }
+key 53; sleep 1   # its answer is not shown here
 type_text greet; sleep 1
 key 36; sleep 2   # open Greeting
 for ((i = 0; i < 9; i++)); do key 125; done   # Stop responding
@@ -1174,7 +1199,14 @@ stop_pane
 unset PANE_TEST_RUNTIME_FAULTS
 [ "$(saved busy)" = started ] || { echo "Stop responding finished after it was stopped"; exit 1; }
 [ "$(saved greeting-style)" = formal ] || { echo "the fresh runtime did not save"; exit 1; }
-if grep -q '"paused"' "$PANE_DATA_DIR/extensions/installed.json"; then echo "a package was paused for the runtime's hang"; exit 1; fi
+# No package record of installed.json holds a pause (read as JSON, not as text).
+paused_packages=$(python3 - "$PANE_DATA_DIR/extensions/installed.json" <<'PY'
+import json, sys
+record = json.load(open(sys.argv[1], encoding="utf-8"))
+print(sum(1 for package in record["packages"] if "paused" in package))
+PY
+)
+[ "$paused_packages" = 0 ] || { echo "a package was paused for the runtime's hang"; exit 1; }
 
 # Uninstalling a required dependency: installed with the dependencies sample
 # (whose install and data folder are this phase's own), the JavaScript
@@ -1188,7 +1220,7 @@ export PANE_DATA_DIR=$out/uninstall-dependents-data
 rm -rf "$PANE_DATA_DIR"
 start_pane --install target/guests/packages/sample-dependencies
 key 36; sleep 3   # Install
-for ((i = 0; i < 10; i++)); do key 125; done   # Manage extensions…
+for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…
 key 36; sleep 1
 for ((i = 0; i < 6; i++)); do key 125; done   # Uninstall JavaScript operations sample
 key 36; sleep 1   # asks first
@@ -1204,13 +1236,110 @@ stop_pane
 [ "$(grep -c '"dir"' "$PANE_DATA_DIR/extensions/installed.json")" = 0 ] || { echo "not both uninstalled"; exit 1; }
 start_pane --install target/guests/packages/sample-operations-js
 key 36; sleep 3   # Install the dependency alone
-for ((i = 0; i < 10; i++)); do key 125; done   # Manage extensions…
+for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…
 key 36; sleep 1
 capture 183-uninstall-dependents-reinstalled-alone.png   # only the JavaScript operations sample is listed
 check 183-uninstall-dependents-reinstalled-alone.png aab4c0
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{180-uninstall-dependents-asked,181-uninstall-dependents-cancelled,182-uninstall-dependents-uninstalled,183-uninstall-dependents-reinstalled-alone}.png
 stop_pane
 [ "$(grep -c '"dir"' "$PANE_DATA_DIR/extensions/installed.json")" = 1 ] || { echo "not the dependency alone reinstalled"; exit 1; }
+
+# npm packages (#45), from a local registry on 127.0.0.1 serving the npm
+# sample `cargo xtask guests` packed (scripts/npm_registry.py; nothing reaches
+# the network), with a data folder of its own. Installing the local
+# Dependencies from npm sample shows the npm package it requires and
+# installs both; its command calls the npm package's greet operation. Then
+# "Install extension from npm…" (root's third-to-last row) asks for the
+# npm package in a form; naming the installed one offers Update, and its
+# command runs: "Hello from the npm package".
+export PANE_DATA_DIR=$out/npm-data
+rm -rf "$PANE_DATA_DIR"
+rm -f "$out/npm-registry.port"
+python3 "$(dirname "$0")/npm_registry.py" target/guests/npm "$out/npm-registry.port" 2>>"$out/npm-registry.log" &
+npm_registry_pid=$!
+# Generous: a slow runner may take seconds to start Python.
+for _ in $(seq 600); do [ -s "$out/npm-registry.port" ] && break; kill -0 "$npm_registry_pid" 2>/dev/null || break; sleep 0.1; done
+[ -s "$out/npm-registry.port" ] || { echo "the local npm registry did not start (see $out/npm-registry.log)"; exit 1; }
+export PANE_NPM_REGISTRY=http://127.0.0.1:$(cat "$out/npm-registry.port")/
+start_pane --install target/guests/packages/sample-dependencies-npm
+capture 260-npm-dependency-preview.png
+check 260-npm-dependency-preview.png aab4c0   # "Requires: Greeter from npm, installed with it from npm:@pane-samples/greeter"
+key 36; sleep 3   # Install; Greet through an npm dependency is selected
+capture 261-npm-dependency-installed.png
+check 261-npm-dependency-installed.png 9fd8a8   # "Installed Dependencies from npm sample with Greeter from npm, which it requires"
+key 36; sleep 3   # open it
+key 36; sleep 3   # "Greet through the required greeter"
+capture 262-npm-dependency-called.png
+check 262-npm-dependency-called.png 9fd8a8   # "Hello, Pane, from the npm package"
+key 53; sleep 1
+for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…, the last row
+key 126; key 126; key 36; sleep 1   # Install extension from npm…
+capture 263-npm-form.png
+check 263-npm-form.png 8a96a3   # the form's hint line
+type_text @pane-samples/greeter
+key 36; sleep 3
+capture 264-npm-preview.png
+check 264-npm-preview.png aab4c0   # "Source: npm package @pane-samples/greeter", "npm version: 0.1.0, the latest", …
+key 36; sleep 3   # Update; Greeter from npm is selected
+capture 265-npm-updated.png
+check 265-npm-updated.png 9fd8a8   # "Updated Greeter from npm to 0.1.0"
+key 36; sleep 3   # open Greeter from npm
+key 36; sleep 2   # "Say hello"
+capture 266-npm-command-ran.png
+check 266-npm-command-ran.png 9fd8a8   # "Hello from the npm package"
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{260-npm-dependency-preview,261-npm-dependency-installed,262-npm-dependency-called,263-npm-form,264-npm-preview,265-npm-updated,266-npm-command-ran}.png
+stop_pane
+kill "$npm_registry_pid"; wait "$npm_registry_pid" 2>/dev/null || true; npm_registry_pid=
+unset PANE_NPM_REGISTRY
+grep -q '"npm": "@pane-samples/greeter"' "$PANE_DATA_DIR/extensions/installed.json" || { echo "npm package not recorded"; exit 1; }
+grep -q '"npmVersion": "0.1.0"' "$PANE_DATA_DIR/extensions/installed.json" || { echo "npm version not recorded"; exit 1; }
+[ "$(grep -c '"dir"' "$PANE_DATA_DIR/extensions/installed.json")" = 2 ] || { echo "not both installed"; exit 1; }
+
+# Git packages (#46), from a repository the smoke makes with git from the
+# Git sample `cargo xtask guests` assembled (target/guests/git/greeter: its
+# source on main, its built component on the branch release, tagged v0.1.0),
+# served over Git's smart HTTP protocol from 127.0.0.1
+# (scripts/repository_server.py; nothing reaches the network), with a data
+# folder of its own. `--install git:<address>` names the default branch,
+# which holds the source only: explained, nothing offered. Then "Install
+# extension from Git…" (root's last row: with nothing installed in this data
+# folder, there is no Manage extensions… yet) asks for the repository
+# in a form; naming the tag previews the release revision, pinned, and
+# installs it, and its command runs: "Hello from the Git repository".
+export PANE_DATA_DIR=$out/git-data
+rm -rf "$PANE_DATA_DIR" "$out/git-repositories"
+python3 "$(dirname "$0")/repository_server.py" make-sample target/guests/git/greeter "$out/git-repositories/greeter"
+rm -f "$out/repository-server.port"
+python3 "$(dirname "$0")/repository_server.py" serve "$out/git-repositories" "$out/repository-server.port" 2>>"$out/repository-server.log" &
+repository_server_pid=$!
+for _ in $(seq 600); do [ -s "$out/repository-server.port" ] && break; kill -0 "$repository_server_pid" 2>/dev/null || break; sleep 0.1; done
+[ -s "$out/repository-server.port" ] || { echo "the local repository server did not start (see $out/repository-server.log)"; exit 1; }
+repository=http://127.0.0.1:$(cat "$out/repository-server.port")/greeter.git
+start_pane --install "git:$repository"
+# The fetch runs after the window shows: capture until its explanation does.
+capture_until 300-git-source-only.png f08c8c 60   # "The default branch, main (commit …) of the Git repository … holds only the source of …"
+key 53; sleep 1
+for ((i = 0; i < 14; i++)); do key 125; done   # the last row
+key 36; sleep 1   # Install extension from Git…
+capture 301-git-form.png
+check 301-git-form.png 8a96a3   # the form's hint line
+type_text "$repository@v0.1.0"
+key 36; sleep 3
+capture 302-git-preview.png
+check 302-git-preview.png aab4c0   # "Source: Git repository 127.0.0.1:<port>/greeter", "Revision: tag v0.1.0, which you named: …"
+key 36; sleep 3   # Install; Greeter from Git is selected
+capture 303-git-installed.png
+check 303-git-installed.png 9fd8a8   # "Installed Greeter from Git"
+key 36; sleep 3   # open Greeter from Git
+key 36; sleep 2   # "Say hello"
+capture 304-git-command-ran.png
+check 304-git-command-ran.png 9fd8a8   # "Hello from the Git repository"
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{300-git-source-only,301-git-form,302-git-preview,303-git-installed,304-git-command-ran}.png
+stop_pane
+kill "$repository_server_pid"; wait "$repository_server_pid" 2>/dev/null || true; repository_server_pid=
+release=$(python3 "$(dirname "$0")/repository_server.py" commit "$out/git-repositories/greeter" v0.1.0)
+python3 "$(dirname "$0")/check_git_record.py" "$PANE_DATA_DIR/extensions/installed.json" "$release" || { echo "Git package not recorded as installed from v0.1.0"; exit 1; }
+[ -z "$(ls -A "$PANE_DATA_DIR/extensions/downloads" 2>/dev/null)" ] || { echo "a Git download was left"; exit 1; }
 
 # File search (#29): Files, a default extension (its data folder is this
 # phase's own; Files is selected once installed, and Pane's own "Choose
@@ -1343,4 +1472,66 @@ check 169-back-online.png 364355 3000
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{161-root-typed,162-command-opened,163-service-set,164-search-results,165-details,166-newer-search,167-service-error,168-offline,169-back-online}.png
 stop_pane
 stop_service
+
+# Clipboard history (#35): Pane watches the clipboard only on Windows so
+# far, so here the Clipboard History default extension installs and its
+# command is listed with why it does not run (in amber); Enter explains it
+# (the error line) and runs nothing, and no history file appears. A data
+# folder of its own. No clipboard is read: Pane has no clipboard adapter on
+# macOS.
+export PANE_DATA_DIR=$out/clipboard-data
+rm -rf "$PANE_DATA_DIR"
+start_pane --install target/guests/packages/clipboard-history
+key 36   # Install
+wait_for "$PANE_DATA_DIR/extensions/installed.json" clipboard-history present; sleep 1
+type_text clipboard; sleep 1
+capture 280-clipboard-unavailable.png
+check 280-clipboard-unavailable.png d6a36a   # "Not available on macOS: this command supports only Windows"
+key 36; sleep 2
+capture 281-clipboard-explained.png
+check 281-clipboard-explained.png f08c8c   # the reason as the error; the command did not open
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{280-clipboard-unavailable,281-clipboard-explained}.png
+stop_pane
+if [ -e "$PANE_DATA_DIR/extensions/clipboard-history.json" ]; then echo "clipboard history was kept on macOS"; exit 1; fi
+
+# Clipboard history expiry (#36): items expire after their package's
+# retention (7 days unless the user chose otherwise), whether or not the
+# extension runs; here its command never runs at all. With Pane stopped, the
+# smoke writes the history file as Pane would have left it before a
+# downtime, for the package just installed: history on, one item copied 8
+# days ago and one a day ago. Once Pane starts, before anything shows it, the
+# old one is gone from the file, and uninstalling counts only the other
+# ("Saved data: 1 clipboard history item"; its Uninstall row follows its
+# state, Reload and Clear cache rows). Kept as retained data and made 8 days
+# old while Pane is stopped again, it is gone once Pane starts: the retained
+# data keeps only the clipboard history settings (the extension list's last
+# row). No clipboard is read or written.
+extensions=$PANE_DATA_DIR/extensions
+kept_texts() { python3 "$(dirname "$0")/clipboard_history.py" texts "$extensions"; }
+python3 "$(dirname "$0")/clipboard_history.py" seed "$extensions" pane-smoke-expired=8 pane-smoke-kept=1
+[ "$(kept_texts)" = pane-smoke-kept,pane-smoke-expired ] || { echo "seeded: $(kept_texts)"; exit 1; }
+start_pane
+[ "$(kept_texts)" = pane-smoke-kept ] || { echo "kept after starting: $(kept_texts)"; exit 1; }
+type_text manage; sleep 1
+key 36; sleep 1   # Manage extensions…
+key 125; key 125; key 125; key 36; sleep 1   # "Uninstall Clipboard History"
+capture 400-clipboard-expired-uninstall.png
+check 400-clipboard-expired-uninstall.png aab4c0   # "Saved data: 1 clipboard history item"
+key 36   # "Uninstall and keep saved data"
+wait_for "$extensions/installed.json" '"retained"' present; sleep 1
+capture 401-clipboard-uninstalled-kept.png
+check 401-clipboard-uninstalled-kept.png 9fd8a8   # "Uninstalled Clipboard History; its settings and content are kept"
+stop_pane
+python3 "$(dirname "$0")/clipboard_history.py" backdate "$extensions" 8
+start_pane
+[ -z "$(kept_texts)" ] || { echo "retained after starting: $(kept_texts)"; exit 1; }
+[ "$(python3 "$(dirname "$0")/clipboard_history.py" field "$extensions" capture)" = on ] || { echo "the choice was not kept"; exit 1; }
+type_text manage; sleep 1
+key 36; sleep 1   # Manage extensions…
+for ((i = 0; i < 40; i++)); do key 125; done
+sleep 1
+capture 402-clipboard-retained-expired.png   # "Delete retained data of Clipboard History", "keeps clipboard history settings"
+check 402-clipboard-retained-expired.png 364355 3000   # the selected row
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{400-clipboard-expired-uninstall,401-clipboard-uninstalled-kept,402-clipboard-retained-expired}.png
+stop_pane
 echo "screenshots in $out"

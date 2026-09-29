@@ -282,7 +282,7 @@ fn a_row_the_user_moved_to_stays_selected_when_the_answers_arrive() {
 
     assert_eq!(
         selected_title(&launcher).as_deref(),
-        Some("Manage extensions…")
+        Some("Install extension from npm…")
     );
 }
 

@@ -1,0 +1,27 @@
+{
+  "manifestVersion": 1,
+  "title": "Dependencies from npm sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "greet",
+      "title": "Greet through an npm dependency",
+      "subtitle": "Calls the greet operation of the npm package this one requires",
+      "component": "sample_dependencies.wasm"
+    }
+  ],
+  "dependencies": [
+    {
+      "id": "greeter",
+      "source": "npm:@pane-samples/greeter",
+      "operations": [{ "id": "greet", "version": 1 }]
+    },
+    {
+      "id": "rust-greeter",
+      "source": "local:../sample-operations",
+      "optional": true,
+      "operations": [{ "id": "greet", "version": 1 }]
+    }
+  ]
+}

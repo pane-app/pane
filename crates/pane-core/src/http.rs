@@ -103,7 +103,8 @@ impl Network {
     }
 
     /// Sets the limits of requests started from now on. A package's
-    /// connection limit is set when it first connects.
+    /// connection limit is set when it first connects. For tests only.
+    #[cfg(any(test, debug_assertions))]
     pub(crate) fn set_limits(&self, limits: HttpLimits) {
         *lock(&self.limits) = limits;
     }
@@ -168,13 +169,10 @@ impl Sender {
     }
 
     /// Whether the code sending is stopped: its generation ended, or Pane
-    /// gave up on its runtime thread.
+    /// gave up on its runtime thread (the check every host interface makes,
+    /// `runtime::code_stopped`).
     fn stopped(&self) -> bool {
-        match &self.data {
-            // Fenced with the thread's fence.
-            Some(data) => data.stopped().is_some(),
-            None => self.watch.fence().closed(),
-        }
+        crate::runtime::code_stopped(self.data.as_ref(), self.watch.fence()).is_some()
     }
 }
 
@@ -195,15 +193,17 @@ impl WasiHttpHooks for Sender {
             .data
             .as_ref()
             .map_or_else(String::new, |data| data.owner().to_owned());
-        let network = self.network.clone();
-        // Sending is host work: its polls are not the guest's computing.
+        let (network, watch) = (self.network.clone(), self.watch.clone());
+        // Sending is host work: its polls are not the guest's computing, nor
+        // are those receiving the response (see `send`).
         Box::new(crate::runtime::deadlines::hosted(
             self.watch.clone(),
             async move {
                 let limits = network.limits();
                 let target = Target::of(&request)?;
                 let permit = network.connect(&owner, target.address())?;
-                send(request, target, Ceilings::new(limits, options), permit).await
+                let ceilings = Ceilings::new(limits, options);
+                send(request, target, ceilings, permit, watch).await
             },
         ))
     }
@@ -218,7 +218,10 @@ struct Target {
 
 impl Target {
     fn of(request: &http::Request<WasiBody>) -> Result<Target, Error> {
-        let uri = request.uri();
+        Target::of_uri(request.uri())
+    }
+
+    fn of_uri(uri: &http::Uri) -> Result<Target, Error> {
         let tls = uri.scheme() == Some(&Scheme::HTTPS);
         let authority = uri.authority().ok_or(Error::HttpRequestUriInvalid)?;
         let host = authority
@@ -277,38 +280,60 @@ impl Ceilings {
 trait Connection: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static {}
 impl<T: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static> Connection for T {}
 
-/// Connects to `target` and sends `request`, resolving once the response's
-/// head has arrived; its body follows as it is received, within
-/// `ceilings`. The connection holds `permit` until it closes.
-async fn send(
-    mut request: http::Request<WasiBody>,
-    target: Target,
-    ceilings: Ceilings,
-    permit: OwnedSemaphorePermit,
-) -> Result<(http::Response<WasiBody>, Receiving), Error> {
+/// A connection's sending half, and the connection, which does the reading
+/// and writing while it is driven.
+type Connected<B> = (
+    hyper::client::conn::http1::SendRequest<B>,
+    hyper::client::conn::http1::Connection<TokioIo<Box<dyn Connection>>, B>,
+);
+
+/// Connects to `target` (TLS for `https`, trusting the system's
+/// certificates) and starts HTTP/1.1 on the connection, by `by`.
+async fn connect<B>(target: &Target, by: Instant) -> Result<Connected<B>, Error>
+where
+    B: Body + 'static,
+    B::Data: Send,
+    B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
     let connecting = TcpStream::connect((target.host.as_str(), target.port));
-    let stream = match timeout_at(ceilings.within(ceilings.connect), connecting).await {
+    let stream = match timeout_at(by, connecting).await {
         Ok(stream) => stream.map_err(Error::Connect)?,
         Err(_) => return Err(Error::ConnectionTimeout),
     };
     let stream: Box<dyn Connection> = if target.tls {
         let config = tls_config().map_err(|problem| Error::InternalError(Some(problem)))?;
-        let name = rustls::pki_types::ServerName::try_from(target.host)
+        let name = rustls::pki_types::ServerName::try_from(target.host.clone())
             .map_err(|_| Error::HttpRequestUriInvalid)?;
         let connecting = tokio_rustls::TlsConnector::from(config).connect(name, stream);
-        match timeout_at(ceilings.within(ceilings.connect), connecting).await {
+        match timeout_at(by, connecting).await {
             Ok(stream) => Box::new(stream.map_err(tls_error)?),
             Err(_) => return Err(Error::ConnectionTimeout),
         }
     } else {
         Box::new(stream)
     };
-    let (mut sender, connection) = timeout_at(
-        ceilings.within(ceilings.connect),
+    timeout_at(
+        by,
         hyper::client::conn::http1::handshake(TokioIo::new(stream)),
     )
     .await
-    .map_err(|_| Error::ConnectionTimeout)??;
+    .map_err(|_| Error::ConnectionTimeout)?
+    .map_err(Error::from)
+}
+
+/// Connects to `target` and sends `request`, resolving once the response's
+/// head has arrived; its body follows as it is received, within
+/// `ceilings`. The connection holds `permit` until it closes. Driving the
+/// connection and reading the body are host work on `watch`'s runtime
+/// thread, never the guest's computing.
+async fn send(
+    mut request: http::Request<WasiBody>,
+    target: Target,
+    ceilings: Ceilings,
+    permit: OwnedSemaphorePermit,
+    watch: Arc<Watch>,
+) -> Result<(http::Response<WasiBody>, Receiving), Error> {
+    let (mut sender, connection) = connect(&target, ceilings.within(ceilings.connect)).await?;
 
     // The request line names only the path: the host travels in its Host
     // header, which Wasmtime set.
@@ -358,28 +383,33 @@ async fn send(
         return Err(Error::HttpResponseBodySize(Some(ceilings.body)));
     }
     let deadline = ceilings.deadline;
-    let receiving: Receiving = Box::new(async move {
-        // Given back once the connection closes.
-        let _permit = permit;
-        let Some(connection) = connection else {
-            return Ok(());
-        };
-        match timeout_at(deadline, connection).await {
-            Ok(finished) => finished.map_err(Error::from),
-            Err(_) => Err(Error::HttpResponseTimeout),
-        }
-    });
+    let receiving: Receiving = Box::new(crate::runtime::deadlines::hosted(
+        watch.clone(),
+        async move {
+            // Given back once the connection closes.
+            let _permit = permit;
+            let Some(connection) = connection else {
+                return Ok(());
+            };
+            match timeout_at(deadline, connection).await {
+                Ok(finished) => finished.map_err(Error::from),
+                Err(_) => Err(Error::HttpResponseTimeout),
+            }
+        },
+    ));
     Ok((
-        response.map(|body| Limited::new(body, ceilings).boxed_unsync()),
+        response.map(|body| Limited::new(body, ceilings, watch).boxed_unsync()),
         receiving,
     ))
 }
 
 /// A response body read within a request's ceilings: it ends with an error
 /// once it grows past the size limit, once the next piece takes too long,
-/// or at the request's deadline.
+/// or at the request's deadline. Reading it is host work on the runtime
+/// thread `watch` follows (see [`Watch::host`]).
 struct Limited {
     body: Incoming,
+    watch: Arc<Watch>,
     received: u64,
     most: u64,
     between_bytes: Duration,
@@ -391,9 +421,10 @@ struct Limited {
 }
 
 impl Limited {
-    fn new(body: Incoming, ceilings: Ceilings) -> Limited {
+    fn new(body: Incoming, ceilings: Ceilings, watch: Arc<Watch>) -> Limited {
         Limited {
             body,
+            watch,
             received: 0,
             most: ceilings.body,
             between_bytes: ceilings.between_bytes,
@@ -421,6 +452,9 @@ impl Body for Limited {
         if this.failed {
             return Poll::Ready(None);
         }
+        // Pane's work, not the guest's computing.
+        let watch = this.watch.clone();
+        let _host = watch.host();
         match Pin::new(&mut this.body).poll_frame(cx) {
             Poll::Ready(Some(Ok(frame))) => {
                 if let Some(data) = frame.data_ref() {
@@ -506,6 +540,165 @@ fn system_tls_config() -> Result<Arc<rustls::ClientConfig>, String> {
         .with_safe_default_protocol_versions()
         .map(|config| Arc::new(config.with_root_certificates(roots).with_no_client_auth()))
         .map_err(|error| error.to_string())
+}
+
+/// The ceilings of a request Pane sends for itself ([`get_blocking`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct OwnLimits {
+    /// Connecting, the TLS handshake included.
+    pub connect: Duration,
+    /// The wait for the response's head, and then for each piece of its
+    /// body.
+    pub between_bytes: Duration,
+    /// The whole request.
+    pub deadline: Duration,
+}
+
+/// The answer to a request Pane sent for itself.
+pub(crate) struct Answer {
+    pub status: u16,
+    pub body: Vec<u8>,
+}
+
+/// Why a request Pane sent for itself has no answer.
+#[derive(Debug)]
+pub(crate) enum GetError {
+    /// It could not be sent, or its answer not received: why.
+    Failed(String),
+    /// Its body is larger than the most asked for.
+    TooLarge,
+}
+
+/// Sends a GET for `url`, with `headers`, for Pane itself rather than for
+/// a guest (downloading npm and Git packages), and receives its answer,
+/// whose body may be at most `most` bytes, within `limits`. It connects as a
+/// guest's request does, trusting the system's certificates for `https`,
+/// follows no redirect (a `3xx` is the answer) and uses no proxy. A
+/// `User-Agent` among `headers` replaces Pane's own. Blocks the calling
+/// thread, which must not be running an async runtime, on a runtime of its
+/// own.
+pub(crate) fn get_blocking(
+    url: &str,
+    headers: &[(&str, &str)],
+    most: u64,
+    limits: OwnLimits,
+) -> Result<Answer, GetError> {
+    send_blocking(http::Method::GET, url, headers, None, most, limits)
+}
+
+/// Like [`get_blocking`], a POST of `body` (Git's `git-upload-pack`
+/// requests).
+pub(crate) fn post_blocking(
+    url: &str,
+    headers: &[(&str, &str)],
+    body: Vec<u8>,
+    most: u64,
+    limits: OwnLimits,
+) -> Result<Answer, GetError> {
+    send_blocking(http::Method::POST, url, headers, Some(body), most, limits)
+}
+
+fn send_blocking(
+    method: http::Method,
+    url: &str,
+    headers: &[(&str, &str)],
+    body: Option<Vec<u8>>,
+    most: u64,
+    limits: OwnLimits,
+) -> Result<Answer, GetError> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| GetError::Failed(error.to_string()))?;
+    runtime.block_on(own_request(method, url, headers, body, most, limits))
+}
+
+async fn own_request(
+    method: http::Method,
+    url: &str,
+    headers: &[(&str, &str)],
+    body: Option<Vec<u8>>,
+    most: u64,
+    limits: OwnLimits,
+) -> Result<Answer, GetError> {
+    let failed = |error: Error| GetError::Failed(error.to_string());
+    let uri: http::Uri = url
+        .parse()
+        .map_err(|_| GetError::Failed(format!("`{url}` is not a web address")))?;
+    if !matches!(uri.scheme_str(), Some("http" | "https")) {
+        return Err(GetError::Failed(format!("`{url}` is not a web address")));
+    }
+    let target = Target::of_uri(&uri).map_err(failed)?;
+    let deadline = Instant::now() + limits.deadline;
+    let within = |after: Duration| (Instant::now() + after).min(deadline);
+    let (mut sender, connection) =
+        connect::<http_body_util::Full<Bytes>>(&target, within(limits.connect))
+            .await
+            .map_err(failed)?;
+    // The connection does the reading and writing; it ends with the
+    // request, or is stopped below.
+    let driving = tokio::spawn(connection);
+    let host = uri.authority().map_or("", |authority| authority.as_str());
+    let mut request = http::Request::builder()
+        .method(method)
+        .uri(uri.path_and_query().map_or("/", |path| path.as_str()))
+        .header(http::header::HOST, host);
+    if !headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
+    {
+        request = request.header(
+            http::header::USER_AGENT,
+            concat!("pane/", env!("CARGO_PKG_VERSION")),
+        );
+    }
+    for (name, value) in headers {
+        request = request.header(*name, *value);
+    }
+    let request = request
+        .body(http_body_util::Full::new(Bytes::from(
+            body.unwrap_or_default(),
+        )))
+        .map_err(|error| GetError::Failed(error.to_string()))?;
+    let answered = async {
+        let response = timeout_at(within(limits.between_bytes), sender.send_request(request))
+            .await
+            .map_err(|_| failed(Error::ConnectionReadTimeout))?
+            .map_err(|error| failed(Error::from(error)))?;
+        let status = response.status().as_u16();
+        let announced = response
+            .headers()
+            .get(http::header::CONTENT_LENGTH)
+            .and_then(|length| length.to_str().ok()?.parse::<u64>().ok());
+        if announced.is_some_and(|length| length > most) {
+            return Err(GetError::TooLarge);
+        }
+        let mut body = response.into_body();
+        let mut received = Vec::new();
+        loop {
+            let piece = match timeout_at(within(limits.between_bytes), body.frame()).await {
+                Err(_) if Instant::now() >= deadline => {
+                    return Err(failed(Error::HttpResponseTimeout));
+                }
+                Err(_) => return Err(failed(Error::ConnectionReadTimeout)),
+                Ok(None) => break,
+                Ok(Some(piece)) => piece.map_err(|error| failed(Error::from(error)))?,
+            };
+            if let Ok(data) = piece.into_data() {
+                if received.len() as u64 + data.len() as u64 > most {
+                    return Err(GetError::TooLarge);
+                }
+                received.extend_from_slice(&data);
+            }
+        }
+        Ok(Answer {
+            status,
+            body: received,
+        })
+    }
+    .await;
+    driving.abort();
+    answered
 }
 
 #[cfg(test)]

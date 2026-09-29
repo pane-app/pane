@@ -17,6 +17,8 @@ use tempfile::TempDir;
 mod platforms;
 
 const INSTALL_ROW: &str = "Install extension from folder…";
+const NPM_ROW: &str = "Install extension from npm…";
+const GIT_ROW: &str = "Install extension from Git…";
 const MANAGE_ROW: &str = "Manage extensions…";
 
 fn guest(name: &str) -> PathBuf {
@@ -362,7 +364,7 @@ fn many_installed_commands_are_searched_without_running_them_and_only_the_chosen
     // A restart: listing and searching read only the managed manifests.
     let runtime = dirs.runtime();
     let launcher = Launcher::with_packages(Ok(runtime.clone()), vec![], dirs.packages_dir());
-    assert_eq!(launcher.view().rows.len(), 14);
+    assert_eq!(launcher.view().rows.len(), 16);
     block_on(launcher.set_query("tool 1"));
     assert_eq!(
         titles(&launcher),
@@ -403,7 +405,10 @@ fn an_installed_command_is_found_by_its_title_or_its_package_title() {
     // Pane's own rows are searched like commands: the manager's subtitle
     // ("Enable or disable installed extensions") matches too, below.
     block_on(launcher.set_query("install"));
-    assert_eq!(titles(&launcher), [INSTALL_ROW, MANAGE_ROW]);
+    assert_eq!(
+        titles(&launcher),
+        [INSTALL_ROW, NPM_ROW, GIT_ROW, MANAGE_ROW]
+    );
 }
 
 /// A manifest for a package titled `title` with one command titled

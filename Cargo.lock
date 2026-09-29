@@ -1733,6 +1733,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "filetime"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
+dependencies = [
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4365,6 +4375,7 @@ checksum = "6e6eb142958d64335fb0e345c5b9ead2ecd6fc438c307e9d7d3c4fd428dbaf12"
 name = "pane"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "futures",
  "gpui-ce",
  "gpui_ce_elements",
@@ -4372,6 +4383,8 @@ dependencies = [
  "open",
  "pane-core",
  "serde_json",
+ "sha2",
+ "tar",
  "tempfile",
 ]
 
@@ -4380,6 +4393,7 @@ name = "pane-core"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "flate2",
  "futures",
  "global-hotkey",
  "http",
@@ -4393,6 +4407,9 @@ dependencies = [
  "rustls-native-certs",
  "serde",
  "serde_json",
+ "sha1-checked",
+ "sha2",
+ "tar",
  "tempfile",
  "tokio",
  "tokio-rustls",
@@ -5560,6 +5577,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1"
+version = "0.10.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a978451301f4db1d02937a4ab3ccce137717b81826e79b7d49ffe3244a13c3b8"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.2.17",
+ "digest",
+]
+
+[[package]]
+name = "sha1-checked"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "89f599ac0c323ebb1c6082821a54962b839832b03984598375bff3975b804423"
+dependencies = [
+ "digest",
+ "sha1",
+]
+
+[[package]]
 name = "sha1_smol"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6001,6 +6039,16 @@ dependencies = [
  "serde",
  "slotmap",
  "smallvec",
+]
+
+[[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
 ]
 
 [[package]]
@@ -7982,7 +8030,9 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 name = "xtask"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "pane-target",
+ "tar",
 ]
 
 [[package]]

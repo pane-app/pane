@@ -30,7 +30,7 @@ use wasmtime::component::{Accessor, HasData};
 
 use crate::extension_data::{ExtensionData, PackageData};
 use crate::packages::{
-    InstalledPackage, ManifestOperation, PackageIdentity, installed_as, paused_reason,
+    InstalledPackage, ManifestOperation, PackageIdentity, SourceSpec, installed_as, paused_reason,
 };
 use crate::platform;
 use crate::runtime::{CallError, GuestState, bindings};
@@ -178,22 +178,32 @@ impl Installed {
             dependency = self.dependency(caller, source, operation, version)?;
             dependency.as_str()
         };
-        let is_identity = source
-            .strip_prefix("local:")
-            .is_some_and(|path| Path::new(path).is_absolute());
-        if !is_identity {
+        // An identity names a package, not a version of it. A repository
+        // may be written in any of its equivalent forms.
+        let key = match SourceSpec::parse(source) {
+            Ok(SourceSpec::Local(path)) if Path::new(&path).is_absolute() => {
+                Some(source.to_owned())
+            }
+            Ok(SourceSpec::Npm(spec)) if spec.version.is_none() => Some(source.to_owned()),
+            Ok(SourceSpec::Git(spec)) if spec.reference.is_none() => {
+                Some(crate::packages::PackageIdentity::git(&spec.repository).key())
+            }
+            _ => None,
+        };
+        let Some(key) = key else {
             return Err(OperationError::new(
                 NotFound,
                 format!(
                     "`{source}` is not a package identity; use `local:` followed by the \
-                     absolute folder path Pane shows for the package"
+                     absolute folder path Pane shows for the package, `npm:` followed by its \
+                     npm package name, or `git:` followed by its repository"
                 ),
             ));
-        }
+        };
         let Some(package) = self
             .packages
             .iter()
-            .find(|package| package.identity.key() == source)
+            .find(|package| package.identity.key() == key)
         else {
             return Err(OperationError::new(
                 NotFound,
@@ -272,7 +282,8 @@ impl Installed {
                 NotFound,
                 format!(
                     "`{id}` is not a package identity; use `local:` followed by the absolute \
-                     folder path Pane shows for the package, or the id of a dependency the \
+                     folder path Pane shows for the package, `npm:` followed by its npm package \
+                     name, `git:` followed by its repository, or the id of a dependency the \
                      caller's pane.json declares"
                 ),
             )

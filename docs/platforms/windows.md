@@ -242,11 +242,13 @@ disable); **not run on Windows yet**.
 
 The unresponsive phase (screenshots 240 to 248, data folder
 `unresponsive-data`, [extensions that stop responding](../pausing.md#when-an-extension-stops-responding))
-shortens the runtime's limits through the fault file
-(`limits:2,4,15`), installs the settings sample and runs its **Stop
-responding**, which computes without waiting: while it computes, Escape
-and Manage extensions must answer (the details color); run again, the call
-must be stopped after 2 seconds of its own computing (thread CPU time from
+sets the runtime's limits through the fault file, first `limits:60,4,15`
+(a minute of a guest's own computing), installs the settings sample and
+runs its **Stop responding**, which computes without waiting: while it
+still computes (Pane's standard error has stopped no call yet), Escape and
+Manage extensions must answer (the details color, frame 240); then
+`limits:2,4,15` must stop that call at once, as it computed longer; run
+again, the call must be stopped after 2 seconds of its own computing (thread CPU time from
 `GetThreadTimes` on Windows, `CLOCK_THREAD_CPUTIME_ID` on macOS) with the
 error color, and the third time pause the package (the error and reason
 colors), with the saved `busy` note still "started"; the pause details and
@@ -272,6 +274,58 @@ Removing a managed copy uses the same `remove_dir_all` as a single
 uninstall; a folder still in use (a file open on Windows) is listed and removed at the next start,
 reported against its own package. Nothing else in it is specific to
 Windows; **not run on Windows yet**.
+
+## npm packages (#45)
+
+A phase of the smoke (screenshots 260 to 266, [npm packages](../npm.md)),
+with a data folder of its own, starts `scripts/npm_registry.py` (with
+`python`) on 127.0.0.1 serving the npm sample `cargo xtask guests` packed,
+and points the development build at it with `PANE_NPM_REGISTRY`: it installs
+the local Dependencies from npm sample, which downloads and installs the npm
+package it requires, calls its `greet` operation, then names the npm package
+in "Install extension from npm…" (two rows up from the last row; SendKeys types
+`@pane-samples/greeter`), updates it and runs its command, which answers
+"Hello from the npm package"; `installed.json` must then record `"npm":
+"@pane-samples/greeter"` at `"npmVersion": "0.1.0"` with both packages.
+Unpacking refuses, on every system alike, the names Windows reads
+differently or cannot write: `\ : < > " | ? *`, control characters,
+trailing dots and spaces, and device names such as `con`, `conin$`,
+`conout$`, `com1` or `lpt³` (compared by character, with any extension), so
+a tarball Linux accepts never fails or writes elsewhere on Windows; the
+real registry would be reached through the HTTP client guests' requests
+use, trusting the certificates rustls-native-certs reads from the Windows
+certificate store, which no check exercises (the smoke never reaches the
+network; [by hand](../npm.md#trying-the-real-registry-by-hand), not run). The packing, in `cargo xtask guests`, runs in CI on
+Windows. After the macOS smoke's first run ([macOS](macos.md#npm-packages-45)),
+the registry and the Git phase's repository server skip a reverse DNS
+lookup before they listen, and the smoke waits up to 60 s for their port
+files, stopping early if a server exits; on Windows that change was checked
+by reading only. **Not run on Windows yet.**
+
+## Git packages (#46)
+
+A phase of the smoke (screenshots 300 to 304, [Git packages](../git.md)),
+with a data folder of its own, makes the Git sample's repository with
+`scripts/repository_server.py make-sample` (the source on `main`, the build
+on `release`, tagged `v0.1.0`; `git` runs there with none of the user's
+configuration) and serves it on 127.0.0.1 with `scripts/repository_server.py
+serve`, which runs `git upload-pack`: `--install git:<address>` explains the
+default branch as source-only (300, captured again every half second until
+the explanation's color shows, for up to 60 s, rather than after a fixed
+delay), then "Install extension from Git…"
+(root's last row there, with nothing installed) takes `<address>@v0.1.0`
+(301), previews the tag, pinned (302), installs it (303) and runs its
+command, which answers "Hello from the Git repository" (304);
+`installed.json`, read as JSON (`scripts/check_git_record.py`'s checks, done with `ConvertFrom-Json`), must then
+record one package from Git with `"gitRef": "refs/tags/v0.1.0"`, `pinned`
+and the `gitCommit` the tag points to (`repository_server.py commit`), and
+the downloads folder must be empty. Pane itself runs no
+`git`; the address is plain `http://` on a loopback address, which only a
+development build fetches, so the smoke never reaches the network, and the
+HTTPS path to a real host ([by hand](../git.md#trying-a-real-host-by-hand))
+is not exercised. Tree names are refused alike on every system (the same
+rules as npm's, plus `.git`, `git~1` and names differing only in case).
+The phase runs the script with `python` and needs `git` on `PATH` (as the tests do); SendKeys types the address, which holds no SendKeys special character. A failure in the phase stops Pane in its `finally` block, as well as the server. **Not run on Windows yet.**
 
 ## Files (#29)
 
@@ -304,7 +358,65 @@ command's "Service address" form is set to the service; its search field
 sends "aurora" (results listed, Enter shows a package's details); "slow" then "ember"
 must log the held search as abandoned; the service's 503, then the service
 stopped, are errors; restarted, a search lists results again. Windows retries a refused connection for about two seconds, so the offline step waits longer.
+The phase's first run, in CI (run 36536816781 of the fork
+`wasimysaid/pane`, at ca9563b), passed up to 168 and failed at 169, "the
+Pane window is not visible": `Start-Process` without `-NoNewWindow` gave
+the restarted fixture service a console window of its own, which came to
+the front over Pane and took the keys typed next (the restarted service
+logged no search; the screenshot shows its console window). The service now
+starts with `-NoNewWindow`, as the npm registry and the repository server
+do. The fix was checked by reading only (no PowerShell or Windows here).
 **Not run on Windows yet.**
+
+## Clipboard history (#35)
+
+The smoke's clipboard phase (screenshots 280 to 285, [clipboard history](../clipboard-history.md#checks)),
+with a data folder of its own, installs Clipboard History and checks
+`clipboard-history.json` at each step: text copied before it is turned on is
+not kept; once turned on (its first row) plain text is kept, while text
+carrying `ExcludeClipboardContentFromMonitorProcessing`,
+`CanIncludeInClipboardHistory` = 0 or `CanUploadToCloudClipboard` = 0 is
+not; nothing is kept while paused, or while disabled, also after a restart;
+Enter on a kept item puts it on the clipboard again and moves it to the
+front; enabled again, text is kept, also after a restart, before the command
+is opened. The smoke copies only its own `pane-smoke-...` text, through the
+clipboard API from PowerShell, and so replaces what was on the clipboard,
+without reading or restoring it. `clipboard_adapter.rs` checks the adapter
+alone: plain text reported with its owner (the test's process), each marker
+read and withholding the text, a written text reported, and nothing once
+the watch is dropped; it too replaces the clipboard, so it runs only with
+`PANE_TEST_REAL_CLIPBOARD=1`, which CI's Windows job sets. `atomic.rs`'s
+Windows unit test checks the owner-only DACL of `clipboard-history.json`
+and `credentials.json`.
+
+The adapter, the shared message thread (also the hotkey adapter's), the
+DACL and these tests were only compile- and lint-checked for
+`x86_64-pc-windows-gnu` from Linux; **not run on Windows yet**. They run in
+CI (`cargo xtask ci` with `PANE_TEST_REAL_CLIPBOARD=1`, then
+`smoke-windows.ps1`) on `windows-2025`, and the next green Windows run of
+the branch is their evidence: until then the listener's delivery, the
+retry and stop paths, the markers as real password managers set them, the
+owner lookup and the DACL are unverified natively.
+
+## Clipboard history expiry and deletion (#36)
+
+The clipboard phase goes on (screenshots 400 to 404, [clipboard
+history](../clipboard-history.md#checks)) with the history it kept. With
+Pane stopped, the smoke makes `pane-smoke-kept` 8 days old and
+`pane-smoke-enabled` 2 hours old in `clipboard-history.json`
+(`scripts/clipboard_history.py`), as a downtime would; once Pane starts,
+the first is gone from the file and the list before the command shows
+anything. Then, in the command: Enter on `pane-smoke-second` and "Delete
+it" deletes that item alone, and the clipboard is unchanged; Delete recent
+items (the last hour) deletes the two copied minutes before and keeps
+`pane-smoke-enabled`; keeping items for 1 hour deletes it at once; after
+one more copy, Turn off and delete clipboard history deletes that and turns
+history off (no `capture` in the file), the clipboard still holding the
+copied text, and a later copy is not kept. The #35 step that copies an item
+again now takes Enter on the item, then Enter on "Copy it again". Written
+on Linux without PowerShell, so it was only reviewed by reading: **not run
+or even parsed yet**; CI's next green Windows run of the branch is its
+evidence.
 
 ## Text input and accessibility findings
 

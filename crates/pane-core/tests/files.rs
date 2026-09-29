@@ -192,6 +192,8 @@ fn grant(launcher: &Launcher, title: &str, folder: &Path) -> Status {
 ///   notes/todo.txt
 /// ```
 struct Fixture {
+    // Keeps the folder alive; only the Unix-only link tests read it.
+    #[cfg_attr(not(unix), allow(dead_code))]
     dir: TempDir,
     root: PathBuf,
 }
