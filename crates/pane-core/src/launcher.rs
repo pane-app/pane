@@ -19,6 +19,15 @@
 //! `pausing`). The one exception is root search's own calls for results
 //! computed from the query: a search owns them, so a newer query, or
 //! leaving root search, cancels those still pending.
+//!
+//! Scheduled work follows the same model (see `launcher/schedules`): a
+//! command whose manifest declares a schedule runs its item's action every
+//! interval while the package's code may run, each run a call into the
+//! generation current when the scheduler asked for it. Continuing services
+//! do too (see `launcher/services`): a command whose manifest declares one
+//! runs its cycles while the package's code may run, at the cadence the
+//! service itself answers with, each cycle a call into the generation
+//! current when the services thread asked for it.
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
@@ -26,6 +35,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+mod acquire;
 mod aliases;
 mod choices;
 mod command_search;
@@ -63,14 +73,19 @@ mod pausing;
 mod recovery;
 mod reload;
 mod retained;
+mod schedules;
+mod services;
 mod uninstall;
 
+use acquire::{Acquisitions, Defaults};
 use aliases::AliasChoices;
 use choices::Record;
 use developing::Developing;
 pub use developing::{BuildFailure, Development};
 use hotkeys::Bindings;
 use pausing::{Pauses, Recorder};
+use schedules::Schedules;
+use services::Services;
 
 /// The id of the root row that installs a package from a local folder.
 const INSTALL_FROM_FOLDER: &str = "pane.install-from-folder";
@@ -78,6 +93,12 @@ const INSTALL_FROM_FOLDER: &str = "pane.install-from-folder";
 /// The folder beside the managed copies where packages downloaded from npm
 /// or Git are written until they are installed.
 const DOWNLOADS_DIR: &str = "downloads";
+
+/// The folder beside the managed copies where the payloads of default
+/// extensions are cached, named by version and integrity, so an
+/// interrupted first setup can acquire again without downloading what it
+/// already holds (see `acquire`).
+const ACQUIRED_DIR: &str = "acquired";
 
 /// The id of the root row that installs a package from npm.
 const INSTALL_FROM_NPM: &str = "pane.install-from-npm";
@@ -431,6 +452,10 @@ pub struct Launcher {
     commands: Arc<[CommandRegistration]>,
     /// Where installed packages are kept, when installing packages is on.
     installation: Option<Installation>,
+    /// The default extensions this build acquires at first setup, and
+    /// where their payloads come from; `None` when this launcher
+    /// installs none.
+    defaults: Option<Defaults>,
     /// Opens the web links of computed results.
     links: Arc<dyn LinkOpener>,
     /// Registers the global hotkeys the user assigns with the system.
@@ -438,6 +463,16 @@ pub struct Launcher {
     /// Keeps the clipboard history of the packages that keep one, given
     /// with the system's clipboard ([`Launcher::with_clipboard`]).
     clipboard: Option<Arc<Capture>>,
+    /// Runs the scheduled work of the installed commands whose manifests
+    /// declare a schedule, by the launcher's clock
+    /// ([`Launcher::with_clock`]). Only a launcher that installs packages
+    /// schedules anything.
+    schedules: Option<Arc<Schedules>>,
+    /// Runs the continuing services of the installed commands whose
+    /// manifests declare one, by the launcher's clock
+    /// ([`Launcher::with_clock`]). Only a launcher that installs packages
+    /// runs any.
+    services: Option<Arc<Services>>,
     /// Reads packages from folders and downloads them from npm.
     sources: install::Sources,
     /// The packages being developed: built and reloaded on save.
@@ -451,15 +486,23 @@ pub struct Launcher {
 
 /// A launcher that does not keep itself or its runtime running, for the
 /// runtime to hold.
+#[derive(Clone)]
 struct WeakLauncher {
     runtime: Result<WeakRuntime, CallError>,
     commands: Arc<[CommandRegistration]>,
     installation: Option<Installation>,
+    defaults: Option<Defaults>,
     links: Arc<dyn LinkOpener>,
     hotkeys: Arc<dyn Hotkeys>,
     /// Held weakly, so that Pane stops watching the clipboard as soon as
     /// the launcher is dropped.
     clipboard: Option<std::sync::Weak<Capture>>,
+    /// Held weakly, so that Pane stops running scheduled work as soon as
+    /// the launcher is dropped.
+    schedules: Option<std::sync::Weak<Schedules>>,
+    /// Held weakly, so that Pane stops running continuing services as soon
+    /// as the launcher is dropped.
+    services: Option<std::sync::Weak<Services>>,
     sources: install::Sources,
     developing: std::sync::Weak<Developing>,
     changes: Option<ChangeSender>,
@@ -481,9 +524,12 @@ impl WeakLauncher {
             runtime,
             commands: self.commands.clone(),
             installation: self.installation.clone(),
+            defaults: self.defaults.clone(),
             links: self.links.clone(),
             hotkeys: self.hotkeys.clone(),
             clipboard,
+            schedules: self.schedules.as_ref().and_then(std::sync::Weak::upgrade),
+            services: self.services.as_ref().and_then(std::sync::Weak::upgrade),
             sources: self.sources.clone(),
             developing: self.developing.upgrade()?,
             changes: self.changes.clone(),
@@ -559,6 +605,10 @@ struct State {
     bindings: Bindings,
     /// The aliases and fallbacks the user gave commands.
     aliases: Record<AliasChoices>,
+    /// Acquiring Pane's default extensions: what the status line says of
+    /// the one being acquired, and which failed and can be tried again
+    /// (see `acquire`).
+    acquisitions: Acquisitions,
     /// The query root search showed when the status line began showing a
     /// command's answer to a query sent from it (or its sending), so that
     /// changing the query clears it.
@@ -818,6 +868,8 @@ enum Entry {
     AskNpm,
     /// Ask which Git repository to install from (root).
     AskGit,
+    /// Acquire this default extension again, after Pane could not (root).
+    Acquire(String),
     /// Run the open command's item with this id.
     Run(String),
     /// Open this form of the open command's item with this id.
@@ -1010,6 +1062,7 @@ impl Launcher {
             paused: Pauses::default(),
             bindings,
             aliases,
+            acquisitions: Acquisitions::default(),
             sent_from: None,
             runtime_slow: None,
         };
@@ -1038,13 +1091,16 @@ impl Launcher {
             registry: crate::npm::Registry::npmjs(),
             downloads: installation.as_ref().map(|i| i.dir.join(DOWNLOADS_DIR)),
         };
-        let launcher = Launcher {
+        let mut launcher = Launcher {
             runtime,
             commands: commands.into(),
             installation,
+            defaults: None,
             links: Arc::new(NoOpener),
             hotkeys: system_hotkeys::none(),
             clipboard: None,
+            schedules: None,
+            services: None,
             sources,
             developing: Arc::new(Developing::new(None, None)),
             changes: None,
@@ -1061,6 +1117,19 @@ impl Launcher {
                 }),
                 data: Some(data.clone()),
             }));
+        }
+        // Scheduled work and continuing services follow the system's clock
+        // until a test or a development build gives the launcher another
+        // one.
+        if let Some(installation) = &launcher.installation {
+            let schedules =
+                Schedules::start(Arc::new(crate::clipboard::SystemClock), &installation.data);
+            schedules.run(launcher.downgrade());
+            launcher.schedules = Some(schedules);
+            let services =
+                Services::start(Arc::new(crate::clipboard::SystemClock), &installation.data);
+            services.run(launcher.downgrade());
+            launcher.services = Some(services);
         }
         launcher.report_failures();
         launcher.show_root(&mut launcher.lock(), None);
@@ -1089,22 +1158,29 @@ impl Launcher {
         Launcher { sources, ..self }
     }
 
-    /// This launcher telling the time for clipboard history by `clock`
-    /// rather than the system's clock, for tests and development builds:
-    /// items are kept and expire by it. Items that already expired by the
-    /// system's clock were removed when the launcher started, so `clock`
-    /// should not stand before it. Release builds have no way to replace
-    /// the system's clock.
+    /// This launcher telling the time for clipboard history, scheduled work
+    /// and continuing services by `clock` rather than the system's clock,
+    /// for tests and development builds: clipboard items are kept and
+    /// expire by it, scheduled commands run by it, their intervals
+    /// restarting from its now, and services cycle by it, their cadence
+    /// restarting from its now. Items that already expired by the system's
+    /// clock were removed when the launcher started. Release builds have
+    /// no way to replace the system's clock.
     #[cfg(any(test, debug_assertions))]
     pub fn with_clock(self, clock: Arc<dyn crate::clipboard::Clock>) -> Self {
         if let Some(installation) = &self.installation {
             let history = installation.data.clipboard_history();
-            history.set_clock(clock);
+            history.set_clock(clock.clone());
             history.sweep();
+        }
+        if let Some(schedules) = &self.schedules {
+            schedules.follow(clock.clone());
+        }
+        if let Some(services) = &self.services {
+            services.follow(clock);
         }
         self
     }
-
     /// Waits until Pane's clipboard history expiry thread swept after every
     /// change of the history and of the clock so far; `false` if it did not
     /// within `limit`. For tests and development builds, which so wait for
@@ -1115,6 +1191,32 @@ impl Launcher {
         self.installation
             .as_ref()
             .is_some_and(|installation| installation.data.clipboard_history().wait_swept(limit))
+    }
+
+    /// Waits until the scheduler looked at every change of the clock and of
+    /// the installed packages so far, and every scheduled run it started
+    /// has reported; `false` if it did not within `limit`. For tests and
+    /// development builds, which so wait for scheduled work without timing
+    /// it.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn wait_for_schedules(&self, limit: std::time::Duration) -> bool {
+        self.schedules
+            .as_ref()
+            .is_some_and(|schedules| schedules.settled(limit))
+    }
+
+    /// Waits until the services thread looked at every change of the clock
+    /// and of the installed packages so far, and every service cycle it
+    /// started has reported; `false` if it did not within `limit`. For tests
+    /// and development builds, which so wait for continuing services
+    /// without timing it.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn wait_for_services(&self, limit: std::time::Duration) -> bool {
+        self.services
+            .as_ref()
+            .is_some_and(|services| services.settled(limit))
     }
 
     /// This launcher registering the global hotkeys the user assigns with
@@ -1178,9 +1280,12 @@ impl Launcher {
                 .map_err(Clone::clone),
             commands: self.commands.clone(),
             installation: self.installation.clone(),
+            defaults: self.defaults.clone(),
             links: self.links.clone(),
             hotkeys: self.hotkeys.clone(),
             clipboard: self.clipboard.as_ref().map(Arc::downgrade),
+            schedules: self.schedules.as_ref().map(Arc::downgrade),
+            services: self.services.as_ref().map(Arc::downgrade),
             sources: self.sources.clone(),
             developing: Arc::downgrade(&self.developing),
             changes: self.changes.clone(),
@@ -1650,6 +1755,7 @@ impl Launcher {
         let mut develop = None;
         let mut delete_retained = None;
         let mut install = None;
+        let mut acquire = None;
         let mut stop_sharing = None;
         // The status line is about this action from now on.
         state.sent_from = None;
@@ -1814,6 +1920,11 @@ impl Launcher {
                 install = self.begin_install(&mut state, request, mode, assumptions);
                 None
             }
+            Some(Entry::Acquire(id)) => {
+                acquire = Some(id);
+                state.view.status = Status::Running;
+                None
+            }
             Some(Entry::AskNpm) => {
                 self.show_npm_form(&mut state);
                 None
@@ -1868,6 +1979,9 @@ impl Launcher {
             if let Some(install) = install {
                 launcher.finish_install(epoch, install).await;
             }
+            if let Some(id) = acquire {
+                launcher.retry_acquiring(&id).await;
+            }
             if let Some(identity) = stop_sharing {
                 launcher.stop_sharing_folder(identity).await;
             }
@@ -1901,6 +2015,7 @@ impl Launcher {
                     | Entry::InstallFromFolder
                     | Entry::AskNpm
                     | Entry::AskGit
+                    | Entry::Acquire(_)
                     | Entry::ChooseFolder(_)
                     | Entry::StopSharingFolder(_)
                     | Entry::Install(..)
@@ -2647,6 +2762,20 @@ impl Launcher {
                 unavailable: None,
             };
             add(row, Entry::AskGit, None, None);
+        }
+        // A default extension Pane could not acquire can be tried again;
+        // the row is gone while one is being acquired, or once it is
+        // installed.
+        if self.defaults.is_some() {
+            for (id, title, why) in state.acquisitions.retryable() {
+                let row = Row {
+                    id: format!("acquire:{id}"),
+                    title: format!("Set up {title}"),
+                    subtitle: Some(why),
+                    unavailable: None,
+                };
+                add(row, Entry::Acquire(id), None, None);
+            }
         }
         // Retained data is managed there too, while nothing is installed.
         if self.installation.is_some() && !(state.packages.is_empty() && state.retained.is_empty())

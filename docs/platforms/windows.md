@@ -536,9 +536,84 @@ copy runs. In these screenshots the root list is taller than the window and its
 last row is cut off; since #19 the list scrolls to keep the selected row
 visible.
 
+## Installing Pane and acquiring its calculator (#51)
+
+A final phase, after the clipboard-expiry one, proves the whole outcome of
+[#51](https://github.com/hoangvu12/pane/issues/51)
+([installer](../installer.md)), the Windows half of what
+[#53](linux.md#installing-pane-and-acquiring-its-calculator-53) proved on
+Linux. `cargo xtask package-windows --dev` builds the Windows package — a
+zip, because a Windows user unzips with whatever is at hand — holding
+`pane.exe`, `install.ps1` and a README (the development profile, so its
+program accepts the controlled artifact source) and the default
+extensions' payloads; the smoke serves `target/dist/artifacts` from
+127.0.0.1 with `scripts/artifact_server.py` (nothing reaches the network
+or Pane's published downloads). The package is unzipped into a folder of
+its own and its install script runs with a **clean machine's**
+environment: a fresh user profile (`LOCALAPPDATA` and `APPDATA` pointing
+into the smoke's output folder, so the install, Pane's data and the
+shortcut touch nothing of the runner's user) that holds no data. It
+installs `pane.exe` to `%LOCALAPPDATA%\Pane` and a `Pane` shortcut to the
+user's Start menu, and runs `pane --version` (its exit code) to check
+what it installed; no administrator rights are involved. The installed
+Pane then starts with a PATH that holds nothing at all (an empty folder,
+checked with `Get-Command` of cargo, rustc, node, npm, git, cc, clang and
+make; a running process's own environment cannot be read on Windows, so
+what is checked is the environment `Start-Process` hands the child),
+pointed at the controlled source with `PANE_ARTIFACTS`. It acquires the
+calculator and the helper sample by itself (`installed.json` must record
+both under `"default"`), root search lists their commands, "6*7" answers
+42 and Enter copies it, and the Helper sample's "Echo through the helper"
+runs the payload's prebuilt `pane-echo.exe` ("Echoed \"hello from Pane\"
+on Windows x86-64"), from the managed copy, with no developer tool
+reachable. The acquired payloads must be cached, the downloads folder
+empty, and no helper process left running. The program files are removed
+again at the phase's end, so the uploaded evidence is the screenshots and
+records (frames 500 to 503), not the program. CI builds the
+release-profile package after the smoke and uploads it with the artifacts
+of the job (`windows-package`).
+
+**Recorded 2026-09-29, this branch's machine (headless aarch64 Linux —
+no Windows, and no PowerShell to parse the scripts):** what ran locally
+is everything that machine can run: `cargo check`, `clippy`, `fmt` and
+the unit tests of `xtask` with its zip writer (whose bytes are pinned by
+a test and were first decoded with Python's `zipfile`: the names, sizes,
+CRCs, the fixed 1985-10-26 08:15 time and the round-tripped contents);
+`cargo xtask package-windows` far enough to assemble the whole artifact
+tree, before it refuses with the message that only a Windows checkout
+builds `pane.exe`; and `cargo xtask package-linux` end-to-end in both
+profiles as the shared packaging's regression (the dev package unpacked,
+its install script run into a temporary home with a scrubbed PATH:
+`pane --version` answered). The acquisition the installed Pane
+does is the same platform-independent code `crates/pane-core/tests/installer.rs`
+checks (rerun here, all passing, including the prebuilt helper running
+from the managed copy — this machine's payload names `linux-aarch64`,
+which CI's Windows run assembles as `windows-x86_64`). The PowerShell
+install script, the smoke phase, the zip package itself and the
+release-profile package are **pending CI**: they need the Windows build
+and interactive desktop only the `windows-2025` runner provides. The
+smoke's clean machine is a fresh profile on that runner, not a fresh
+machine; no Windows 10 or 11 client, ARM64 or real desktop install has
+been tried; and nothing is signed (no Authenticode credentials exist),
+so Windows may warn about an unknown publisher when `pane.exe` runs and
+PowerShell may refuse the install script until the policy question the
+README answers is answered.
+
+| Step | Evidence |
+| --- | --- |
+| The clean machine's Pane acquired both default extensions and lists their commands | pending CI (frame 500) |
+| "6*7" answers 42 | pending CI (frame 501) |
+| Enter copies the answer | pending CI (frame 502) |
+| The helper sample's prebuilt helper answers | pending CI (frame 503) |
+
 ## Remaining limits
 
 - Only a CI runner (Windows Server) was used, not a Windows 10/11 desktop.
+- The installer (#51, [above](#installing-pane-and-acquiring-its-calculator-51))
+  has run nowhere yet: its PowerShell script and smoke phase were written
+  without PowerShell on hand, and its runtime evidence is CI's Windows
+  leg. Nothing is signed, so an unknown-publisher warning and
+  PowerShell's policy question are expected, not errors.
 - No screen reader (Narrator/NVDA) was run. The accessibility tree is verified
   only through GPUI in the platform-independent window tests.
 - The smoke confirms that text appears in the expected colors and that the

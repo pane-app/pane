@@ -542,6 +542,58 @@ fn system_tls_config() -> Result<Arc<rustls::ClientConfig>, String> {
         .map_err(|error| error.to_string())
 }
 
+/// `(scheme, authority, rest)` of an `http://` or `https://` URL without
+/// user information: how Pane reads the addresses of its own requests,
+/// the npm registry's and the artifact source's.
+pub(crate) fn split_url(url: &str) -> Option<(&str, &str, &str)> {
+    let (scheme, rest) = url.split_once("://")?;
+    if scheme != "http" && scheme != "https" {
+        return None;
+    }
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, rest) = rest.split_at(end);
+    if authority.is_empty() || authority.contains('@') {
+        return None;
+    }
+    Some((scheme, authority, rest))
+}
+
+/// The base address of a source on this computer — `url`, ending with `/`
+/// — for tests and development builds only: `url` must be `http://` or
+/// `https://` on a loopback address written as one (`127.0.0.1`, any
+/// `127.x.y.z`, or `[::1]`), with an optional port and path. `refusal`
+/// names the source when it is not, so each source that can be replaced
+/// (the npm registry, Pane's artifact source) says what it is. Any other
+/// address is refused, `localhost` included (a name could resolve
+/// elsewhere), so that nothing but the real source is ever reached over
+/// the network.
+#[cfg(any(test, debug_assertions))]
+pub(crate) fn loopback_base(url: &str, refusal: impl Fn() -> String) -> Result<String, String> {
+    let (_, authority, _) = split_url(url).ok_or_else(&refusal)?;
+    let host = match authority.rsplit_once(':') {
+        Some((host, port)) if !host.ends_with(':') && port.chars().all(|c| c.is_ascii_digit()) => {
+            host
+        }
+        _ => authority,
+    };
+    let literal = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host);
+    let loopback = literal
+        .parse::<std::net::IpAddr>()
+        .is_ok_and(|address| address.is_loopback());
+    // `[::1]` in brackets, `127.0.0.1` without.
+    if !loopback || (literal.contains(':') && literal == host) {
+        return Err(refusal());
+    }
+    let mut base = url.to_owned();
+    if !base.ends_with('/') {
+        base.push('/');
+    }
+    Ok(base)
+}
+
 /// The ceilings of a request Pane sends for itself ([`get_blocking`]).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct OwnLimits {
@@ -583,7 +635,28 @@ pub(crate) fn get_blocking(
     most: u64,
     limits: OwnLimits,
 ) -> Result<Answer, GetError> {
-    send_blocking(http::Method::GET, url, headers, None, most, limits)
+    send_blocking(http::Method::GET, url, headers, None, most, limits, &|_| {})
+}
+
+/// Like [`get_blocking`], telling `progress` of the bytes of the answer's
+/// body so far (acquiring a default extension's payload, whose size the
+/// artifact index gives, so the window can say how far it has come).
+pub(crate) fn get_blocking_progressing(
+    url: &str,
+    headers: &[(&str, &str)],
+    most: u64,
+    limits: OwnLimits,
+    progress: &(dyn Fn(u64) + Send + Sync),
+) -> Result<Answer, GetError> {
+    send_blocking(
+        http::Method::GET,
+        url,
+        headers,
+        None,
+        most,
+        limits,
+        progress,
+    )
 }
 
 /// Like [`get_blocking`], a POST of `body` (Git's `git-upload-pack`
@@ -595,7 +668,15 @@ pub(crate) fn post_blocking(
     most: u64,
     limits: OwnLimits,
 ) -> Result<Answer, GetError> {
-    send_blocking(http::Method::POST, url, headers, Some(body), most, limits)
+    send_blocking(
+        http::Method::POST,
+        url,
+        headers,
+        Some(body),
+        most,
+        limits,
+        &|_| {},
+    )
 }
 
 fn send_blocking(
@@ -605,14 +686,18 @@ fn send_blocking(
     body: Option<Vec<u8>>,
     most: u64,
     limits: OwnLimits,
+    progress: &(dyn Fn(u64) + Send + Sync),
 ) -> Result<Answer, GetError> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|error| GetError::Failed(error.to_string()))?;
-    runtime.block_on(own_request(method, url, headers, body, most, limits))
+    runtime.block_on(own_request(
+        method, url, headers, body, most, limits, progress,
+    ))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn own_request(
     method: http::Method,
     url: &str,
@@ -620,6 +705,7 @@ async fn own_request(
     body: Option<Vec<u8>>,
     most: u64,
     limits: OwnLimits,
+    progress: &(dyn Fn(u64) + Send + Sync),
 ) -> Result<Answer, GetError> {
     let failed = |error: Error| GetError::Failed(error.to_string());
     let uri: http::Uri = url
@@ -689,6 +775,7 @@ async fn own_request(
                     return Err(GetError::TooLarge);
                 }
                 received.extend_from_slice(&data);
+                progress(received.len() as u64);
             }
         }
         Ok(Answer {

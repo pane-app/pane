@@ -417,3 +417,52 @@ export interface PublishedOperations {
    */
   runOperation(operation: string, input: string): Promise<string>;
 }
+
+/** What one cycle of a continuing service answers. */
+export interface Cycle {
+  /** The status to show on the command's screen while it is open. */
+  status: string;
+  /**
+   * How long to wait before the next cycle, in seconds: at least 1 and at
+   * most 2592000 (30 days); Pane clamps anything else (provisional bounds,
+   * as scheduled work's). 0 is not "at once": a service that always asks
+   * for the shortest wait runs every second.
+   */
+  nextSeconds: number;
+}
+
+/**
+ * A continuing service a command runs while its package's code may run
+ * (`pane:extension/service` in wit/service.wit): not on an interval its
+ * `pane.json` entry declares, but at the cadence the service itself
+ * chooses, cycle by cycle. A command that runs one sets
+ * `"service": true` on its entry in `pane.json`, and
+ * `"pane": { "service": true }` in its `package.json` so that it is built
+ * with the interface; its module exports it as `service`:
+ *
+ * ```ts
+ * export const service: Service = {
+ *   async runCycle(command) { return { status: "Watching", nextSeconds: 2 }; },
+ * };
+ * ```
+ */
+export interface Service {
+  /**
+   * Run one cycle of the continuing service of the command with
+   * `command` (its id in `pane.json`, so one component can serve several
+   * commands' services). Pane calls it only while the package's code may
+   * run: from when it is installed (enabled), enabled, replaced by a reload
+   * or an update, or Pane starts, until it is disabled, uninstalled, paused
+   * after failures or its code is replaced. Each cycle does a slice of the
+   * service's work and answers what to show and when to run it again; the
+   * module's state lives for that whole time and goes when the generation
+   * ends, so the task's state a disable ends is not there when the code
+   * runs again. Throwing is an error the service answers with (Pane shows
+   * it and runs the next cycle after a second), never a crash; resolving
+   * with a value of the wrong type is a crash, and three crashes within
+   * five minutes pause the package, which ends the service. Waiting inside
+   * the cycle is the service's to do, but it holds every other extension's
+   * calls behind it, exactly as an action's wait does.
+   */
+  runCycle(command: string): Promise<Cycle>;
+}

@@ -19,8 +19,12 @@
 //!
 //! - Windows: a clipboard format listener (`AddClipboardFormatListener`,
 //!   `WM_CLIPBOARDUPDATE`) on a thread of Pane's own ([`windows`]);
-//! - macOS and Linux: none yet (#37, #38), so clipboard history is
-//!   unavailable there and says why.
+//! - Linux: the X11 `CLIPBOARD` selection, watched through XFIXES on a
+//!   thread of Pane's own ([`linux`]); a Wayland session or a display that
+//!   does not answer says so instead;
+//! - macOS: the pasteboard's change count, polled on a thread of Pane's
+//!   own ([`macos`]);
+//! - any other system: clipboard history is unavailable there and says why.
 //!
 //! An adapter watches the clipboard only while Pane holds the [`Watch`] it
 //! returned, which Pane does exactly while some package keeps clipboard
@@ -44,10 +48,24 @@ use serde::{Deserialize, Serialize};
 use crate::extension_data::{ExtensionData, PackageData};
 
 pub(crate) mod history;
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
 
 pub use history::Item;
+#[cfg(target_os = "linux")]
+pub use linux::LinuxClipboard;
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+pub use linux::testing;
+#[cfg(target_os = "macos")]
+pub use macos::MacosClipboard;
+#[cfg(target_os = "macos")]
+#[doc(hidden)]
+pub use macos::testing;
 #[cfg(target_os = "windows")]
 pub use windows::WindowsClipboard;
 #[cfg(target_os = "windows")]
@@ -285,19 +303,32 @@ pub trait ClipboardSystem: Send + Sync + 'static {
     fn write_text(&self, text: &str) -> Result<(), String>;
 }
 
-/// This system's adapter: Windows' clipboard format listener, or one that
-/// explains why clipboard history is unavailable here.
+/// This system's adapter: Windows' clipboard format listener, Linux's
+/// watcher of the X11 CLIPBOARD selection, macOS's watcher of the
+/// pasteboard's change count, or one that explains why clipboard history
+/// is unavailable here.
 pub fn native() -> Arc<dyn ClipboardSystem> {
     #[cfg(target_os = "windows")]
     {
         Arc::new(WindowsClipboard)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    {
+        match linux::native() {
+            Ok(clipboard) => Arc::new(clipboard),
+            Err(reason) => Arc::new(Unavailable(reason)),
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Arc::new(MacosClipboard)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
         let here = crate::platform::Platform::current()
             .map_or_else(|| std::env::consts::OS.to_string(), |p| p.to_string());
         Arc::new(Unavailable(format!(
-            "Not available on {here}: Pane watches the clipboard only on Windows so far"
+            "Not available on {here}: Pane watches the clipboard only on Windows, macOS and Linux"
         )))
     }
 }
@@ -326,14 +357,18 @@ impl ClipboardSystem for Unavailable {
     }
 }
 
-/// Tells the time for clipboard history: when an item was copied and
-/// whether it expired.
+/// Tells the time for the work Pane does by its own clock rather than the
+/// user's asking: clipboard history (when an item was copied and whether
+/// it expired) and scheduled work (when a run is due). Tests and
+/// development builds give the launcher another clock
+/// ([`crate::Launcher::with_clock`]); release builds keep the system's.
 pub trait Clock: Send + Sync + 'static {
     /// Now, in milliseconds since the Unix epoch.
     fn now(&self) -> u64;
 
     /// Has `changed` called whenever this clock is set other than by time
-    /// passing (the system's never is), so that expiry is looked at again.
+    /// passing (the system's never is), so that expiry and due scheduled
+    /// work are looked at again.
     fn on_change(&self, changed: Box<dyn Fn() + Send + Sync>) {
         let _ = changed;
     }

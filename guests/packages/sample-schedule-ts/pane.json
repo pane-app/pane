@@ -1,0 +1,18 @@
+{
+  "manifestVersion": 1,
+  "title": "TypeScript schedule sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "counting",
+      "title": "Counting (TypeScript)",
+      "subtitle": "Pane runs its “Run now” item on a schedule while it is enabled",
+      "component": "sample_schedule_ts.wasm",
+      "schedule": {
+        "everySeconds": 60,
+        "item": "count"
+      }
+    }
+  ]
+}

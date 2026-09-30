@@ -249,8 +249,10 @@ struct DataFile {
     /// The thread writing the files.
     writer: Option<mpsc::Sender<Job>>,
     /// Told after a generation or a clipboard capture state changed, with
-    /// the files unlocked (see `clipboard::Capture`).
-    changed: Option<Changed>,
+    /// the files unlocked (see `clipboard::Capture`, and the launcher's
+    /// scheduled work). Each is called in turn; each watcher registers one,
+    /// once.
+    changed: Vec<Changed>,
 }
 
 /// What [`ExtensionData::set_changed`] calls.
@@ -336,7 +338,7 @@ impl ExtensionData {
             local_credentials: KindFile::open(dir, DataKind::LocalCredentials),
             generations: HashMap::new(),
             writer: None,
-            changed: None,
+            changed: Vec::new(),
         }));
         lock_file(&files).writer = Some(start_writer(Arc::downgrade(&files)));
         ExtensionData {
@@ -467,15 +469,16 @@ impl ExtensionData {
     }
 
     /// Has `changed` called after each change of a package's generation or
-    /// clipboard capture state, with the files unlocked.
+    /// clipboard capture state, with the files unlocked. Call it once per
+    /// watcher: every `changed` so far is called in turn.
     pub fn set_changed(&self, changed: Changed) {
-        self.lock().changed = Some(changed);
+        self.lock().changed.push(changed);
     }
 
-    /// Calls what [`ExtensionData::set_changed`] set, if anything.
+    /// Calls each what [`ExtensionData::set_changed`] set.
     pub fn changed(&self) {
         let changed = self.lock().changed.clone();
-        if let Some(changed) = changed {
+        for changed in changed {
             changed();
         }
     }

@@ -41,6 +41,9 @@ sha2 = "0.10"
 # computed with collision detection as Git itself does (RustCrypto, MIT OR
 # Apache-2.0); the pack's zlib streams are read with `flate2` above.
 sha1-checked = { version = "0.10", default-features = false }
+# Awaiting a scheduled run's answer on its own thread, off the window's
+# thread and the scheduler's (already in the tree through the `pane` crate).
+futures = { version = "0.3", default-features = false, features = ["executor"] }
 
 # Listing the Apps folder and opening a shortcut or packaged app as Explorer
 # does, global hotkeys (`RegisterHotKey`), the Job Object that stops a
@@ -50,21 +53,28 @@ sha1-checked = { version = "0.10", default-features = false }
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_DataExchange", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
 
-# Global hotkeys on X11 (key grabs on the root window); already in the
-# dependency tree through GPUI's X11 platform.
+# Global hotkeys on X11 (key grabs on the root window) and the X11
+# clipboard of clipboard history (XFIXES selection events, selection
+# transfers); already in the dependency tree through GPUI's X11 platform.
 # Stopping a development build with the processes it started (a process
 # group); already in the dependency tree.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-x11rb = { version = "0.13", features = ["xkb"] }
+x11rb = { version = "0.13", features = ["xkb", "xfixes"] }
 
 # Global hotkeys on macOS through Carbon's RegisterEventHotKey, which needs no
 # Accessibility permission.
 [target.'cfg(target_os = "macos")'.dependencies]
 global-hotkey = "0.8"
+# The pasteboard of clipboard history on macOS (NSPasteboard's change count,
+# types, string and data, read inside an autorelease pool): pure Rust
+# bindings with no build script, already in the dependency tree through GPUI
+# CE's and global-hotkey's AppKit code.
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSPasteboard"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSData", "NSString", "std"] }
 
 [dev-dependencies]
-futures = { version = "0.3", default-features = false, features = ["executor"] }
 tempfile = "3"

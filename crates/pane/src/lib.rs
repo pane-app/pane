@@ -55,6 +55,7 @@ pub fn bind_keys(cx: &mut App) {
 
 /// The sample commands: (id, title, subtitle, component file name). Each
 /// implements the same command in a different extension language.
+#[cfg(debug_assertions)]
 const SAMPLES: [(&str, &str, &str, &str); 3] = [
     (
         "rust-sample",
@@ -76,38 +77,82 @@ const SAMPLES: [(&str, &str, &str, &str); 3] = [
     ),
 ];
 
-/// The commands this build offers: the Rust, JavaScript and TypeScript
-/// sample commands.
+/// The commands this build offers from the development checkout: the
+/// Rust, JavaScript and TypeScript sample commands. A release build offers
+/// none: their components live in the build's `target/guests` folder,
+/// which an installed Pane does not have — its features come from the
+/// default extensions it acquires at first setup instead.
 ///
 /// Their components are read from `PANE_EXTENSIONS_DIR` when set, otherwise
 /// from the development build output `target/guests`. A missing component
 /// leaves its command listed; opening it explains what is missing.
 pub fn sample_commands() -> Vec<CommandRegistration> {
-    let dir = std::env::var_os("PANE_EXTENSIONS_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests"));
-    SAMPLES
-        .iter()
-        .map(|&(id, title, subtitle, file)| CommandRegistration {
-            id: id.into(),
-            title: title.into(),
-            subtitle: Some(subtitle.into()),
-            component: dir.join(file),
-            takes_query: false,
-            search: false,
-        })
-        .collect()
+    #[cfg(not(debug_assertions))]
+    return Vec::new();
+    #[cfg(debug_assertions)]
+    {
+        let dir = std::env::var_os("PANE_EXTENSIONS_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests")
+            });
+        SAMPLES
+            .iter()
+            .map(|&(id, title, subtitle, file)| CommandRegistration {
+                id: id.into(),
+                title: title.into(),
+                subtitle: Some(subtitle.into()),
+                component: dir.join(file),
+                takes_query: false,
+                search: false,
+            })
+            .collect()
+    }
+}
+
+/// The default extensions this build of Pane acquires at first setup, from
+/// Pane's own downloads (see
+/// [`pane_core::defaults`]): the installer carries none of their payloads.
+/// The calculator is the one whose acquisition the installer slices prove
+/// ([#53](https://github.com/hoangvu12/pane/issues/53)); in development
+/// builds the prebuilt-helper sample is acquired with it, so a payload
+/// carrying a native helper is acquired and its helper runs without any
+/// developer tool. A release build acquires the calculator alone.
+pub fn default_extensions() -> Vec<pane_core::DefaultExtension> {
+    let calculator = pane_core::DefaultExtension {
+        id: "calculator".into(),
+        title: "Calculator".into(),
+    };
+    #[cfg(debug_assertions)]
+    {
+        vec![
+            calculator,
+            pane_core::DefaultExtension {
+                id: "helper-sample".into(),
+                title: "Helper sample".into(),
+            },
+        ]
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        vec![calculator]
+    }
 }
 
 /// Where Pane keeps disposable cached data, such as compiled extension code:
 /// `%LOCALAPPDATA%\Pane\cache` on Windows, `~/Library/Caches/Pane` on
 /// macOS and `$XDG_CACHE_HOME/pane` (default `~/.cache/pane`) elsewhere.
 pub fn cache_dir() -> Option<PathBuf> {
+    // Wasmtime's compile cache needs an absolute directory: a relative
+    // HOME or XDG_CACHE_HOME (the smokes' clean home is one) would otherwise
+    // stop the runtime from starting, so the path is made absolute against
+    // the folder Pane was started in.
     platform_dir(
         r"Pane\cache",
         "Library/Caches/Pane",
         ("XDG_CACHE_HOME", ".cache"),
     )
+    .and_then(|dir| std::path::absolute(dir).ok())
 }
 
 /// Where Pane keeps installed extension packages: `PANE_DATA_DIR` when set,

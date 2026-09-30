@@ -104,30 +104,7 @@ impl Registry {
                  127.0.0.1 or [::1] can replace it, for tests and development"
             )
         };
-        let (_, authority, _) = split_url(url).ok_or_else(refused)?;
-        let host = match authority.rsplit_once(':') {
-            Some((host, port))
-                if !host.ends_with(':') && port.chars().all(|c| c.is_ascii_digit()) =>
-            {
-                host
-            }
-            _ => authority,
-        };
-        let literal = host
-            .strip_prefix('[')
-            .and_then(|host| host.strip_suffix(']'))
-            .unwrap_or(host);
-        let loopback = literal
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|address| address.is_loopback());
-        // `[::1]` in brackets, `127.0.0.1` without.
-        if !loopback || (literal.contains(':') && literal == host) {
-            return Err(refused());
-        }
-        let mut base = url.to_owned();
-        if !base.ends_with('/') {
-            base.push('/');
-        }
+        let base = crate::http::loopback_base(url, refused)?;
         Ok(Registry {
             base,
             loopback: true,
@@ -176,8 +153,9 @@ impl Registry {
     /// Why Pane does not download `url` for this registry, if it does not:
     /// a tarball must come from the registry's own scheme, host and port.
     fn refusal(&self, url: &str) -> Option<String> {
-        let (scheme, authority, _) = split_url(&self.base).expect("a registry address is a URL");
-        match split_url(url) {
+        let (scheme, authority, _) =
+            crate::http::split_url(&self.base).expect("a registry address is a URL");
+        match crate::http::split_url(url) {
             Some((s, a, _)) if s == scheme && a.eq_ignore_ascii_case(authority) => None,
             _ => Some(format!(
                 "its tarball address {url} is not on the registry {}: Pane downloads a package \
@@ -191,21 +169,6 @@ impl Registry {
             )),
         }
     }
-}
-
-/// `(scheme, authority, rest)` of an `http://` or `https://` URL without
-/// user information.
-fn split_url(url: &str) -> Option<(&str, &str, &str)> {
-    let (scheme, rest) = url.split_once("://")?;
-    if scheme != "http" && scheme != "https" {
-        return None;
-    }
-    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    let (authority, rest) = rest.split_at(end);
-    if authority.is_empty() || authority.contains('@') {
-        return None;
-    }
-    Some((scheme, authority, rest))
 }
 
 /// An npm package to install, as the user or a dependency names it: a name,
@@ -533,11 +496,53 @@ fn read_package_json(folder: &Path) -> Result<PackageJson, String> {
 
 /// The base64 values of the sha512 hashes in the integrity string
 /// `integrity` (space-separated `<algorithm>-<base64>[?options]`).
-fn sha512_values(integrity: &str) -> impl Iterator<Item = &str> {
+pub(crate) fn sha512_values(integrity: &str) -> impl Iterator<Item = &str> {
     integrity.split_whitespace().filter_map(|hash| {
         let value = hash.strip_prefix("sha512-")?;
         Some(value.split('?').next().unwrap_or(value))
     })
+}
+
+/// Whether `integrity` names a sha512 hash at all (used by the default
+/// extensions' index, which Pane checks before it downloads anything).
+pub(crate) fn has_sha512(integrity: &str) -> bool {
+    sha512_values(integrity).next().is_some()
+}
+
+/// The sha512 digest `integrity` names, decoded, or `None` when it names
+/// none or one that is not the digest's 64 bytes: the first bytes of it
+/// name a downloaded payload in Pane's cache.
+pub(crate) fn sha512_digest(integrity: &str) -> Option<[u8; 64]> {
+    let value = sha512_values(integrity).next()?;
+    let mut digest = [0u8; 64];
+    let mut filled = 0usize;
+    // The six bits each character holds, and how many of them are still
+    // waiting for a character to complete a byte.
+    let (mut bits, mut held) = (0u32, 0u32);
+    for byte in value.bytes() {
+        let digit = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            // Padding, which only ends the value.
+            b'=' => break,
+            _ => return None,
+        };
+        bits = (bits << 6) | u32::from(digit);
+        held += 6;
+        if held >= 8 {
+            held -= 8;
+            if filled == 64 {
+                return None;
+            }
+            digest[filled] = (bits >> held) as u8;
+            filled += 1;
+        }
+        bits &= (1 << held) - 1;
+    }
+    (filled == 64).then_some(digest)
 }
 
 /// Checks `bytes` against the sha512 hashes of `integrity`: they match when
@@ -558,7 +563,7 @@ pub(crate) fn check_integrity(bytes: &[u8], integrity: &str) -> Result<(), Strin
 }
 
 /// Standard base64 with padding.
-fn base64(bytes: &[u8]) -> String {
+pub(crate) fn base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut text = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
@@ -815,6 +820,27 @@ fn inside(raw: &[u8], is_dir: bool) -> Result<Option<PathBuf>, &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_named_sha512_decodes_to_its_digest() {
+        let digest = Sha512::digest(b"the payload");
+        let named = format!("sha512-{}", base64(&digest));
+        assert_eq!(
+            sha512_digest(&named).as_ref().map(|digest| &digest[..]),
+            Some(&digest[..])
+        );
+        assert!(has_sha512(&named));
+        // Neither another algorithm nor a damaged value names one.
+        assert!(!has_sha512("sha1-abc"));
+        assert_eq!(sha512_digest("sha1-abc"), None);
+        assert_eq!(sha512_digest("sha512-sh?rt"), None);
+        // A second hash is not read; the first is used.
+        let two = format!("{named} sha512-{}", base64(&Sha512::digest(b"other")));
+        assert_eq!(
+            sha512_digest(&two).as_ref().map(|digest| &digest[..]),
+            Some(&digest[..])
+        );
+    }
 
     /// A gzipped tarball of `entries`: `(path, kind, contents)`, written
     /// header by header so that paths `tar::Builder` refuses can be made.

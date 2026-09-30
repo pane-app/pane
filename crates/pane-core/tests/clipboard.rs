@@ -12,18 +12,18 @@
 //! set, also while the package is disabled or uninstalled and while Pane is
 //! stopped; they can be deleted one at a time, the recent ones together,
 //! all of them (Clear, which keeps history on) or all of them with history
-//! turned off. The packages are the ones `cargo
-//! xtask guests` assembles in `target/guests/packages`; since only Windows
-//! has a clipboard adapter so far, the tests install a copy whose manifest
-//! declares every system, so the same checks run everywhere. The system's
-//! real clipboard is never used here.
-
-#[path = "support/platforms.rs"]
-mod platforms;
+//! turned off. The packages are the ones `cargo xtask guests` assembles in
+//! `target/guests/packages`; the tests give Pane a fake system clipboard
+//! and install a copy whose manifest declares every system, so the same
+//! checks run everywhere (the real adapters are checked by
+//! `clipboard_adapter.rs` on Windows, `clipboard_adapter_linux.rs` where
+//! an X11 display is given and `clipboard_adapter_macos.rs` on macOS).
+//! The system's real clipboard is never used here.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
@@ -31,7 +31,7 @@ use pane_core::clipboard::{
     ClipboardSystem, Clock, Content, MAX_ITEMS, MAX_TEXT_BYTES, ManualClock, Markers, Observation,
     Sink, SystemClock, Ticket, Watch,
 };
-use pane_core::{Launcher, Runtime, Screen, Status, Unavailable};
+use pane_core::{Launcher, Runtime, Screen, Status};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -79,6 +79,17 @@ const TYPESCRIPT: Fixture = Fixture {
     title: "TypeScript clipboard sample",
     command: "Clipboard history (TypeScript)",
 };
+
+/// Waits until `what` holds, for up to 10 seconds: the expiry sweep writes
+/// the history file from its own thread, so a test that just moved the
+/// clock may read the disk before that write lands.
+fn wait_until(what: &str, is_so: impl Fn() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !is_so() {
+        assert!(Instant::now() < deadline, "{what}");
+        thread::sleep(Duration::from_millis(5));
+    }
+}
 
 fn built(path: &str) -> PathBuf {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -223,7 +234,7 @@ impl Pane {
 
     fn with(fixture: &'static Fixture, clipboard: FakeClipboard) -> Pane {
         let source = tempfile::tempdir().unwrap();
-        copy_package(fixture, source.path(), true);
+        copy_package(fixture, source.path());
         Pane {
             fixture,
             data: tempfile::tempdir().unwrap(),
@@ -390,10 +401,10 @@ fn install(launcher: &Launcher, folder: &Path) {
     launcher.back();
 }
 
-/// Copies the assembled package of `fixture` into `folder`; with
-/// `everywhere`, its command declares every system, so it is available
-/// where these tests run.
-fn copy_package(fixture: &Fixture, folder: &Path, everywhere: bool) {
+/// Copies the assembled package of `fixture` into `folder` as it was
+/// assembled: its command declares every system with an adapter, so it is
+/// available where these tests run.
+fn copy_package(fixture: &Fixture, folder: &Path) {
     let package = built(&format!("packages/{}", fixture.package));
     fs::copy(
         package.join(fixture.component),
@@ -401,14 +412,13 @@ fn copy_package(fixture: &Fixture, folder: &Path, everywhere: bool) {
     )
     .unwrap();
     let manifest = fs::read_to_string(package.join("pane.json")).unwrap();
-    let mut manifest: Value = serde_json::from_str(&manifest).unwrap();
+    let manifest: Value = serde_json::from_str(&manifest).unwrap();
+    // The packages declare the systems with an adapter (#35 Windows,
+    // #38 Linux, #37 macOS); nothing is rewritten here.
     assert_eq!(
         manifest["commands"][0]["platforms"],
-        serde_json::json!(["windows"])
+        serde_json::json!(["windows", "macos", "linux"])
     );
-    if everywhere {
-        manifest["commands"][0]["platforms"] = serde_json::json!(["windows", "macos", "linux"]);
-    }
     fs::write(folder.join("pane.json"), manifest.to_string()).unwrap();
 }
 
@@ -879,10 +889,10 @@ fn without_a_clipboard_pane_keeps_nothing_and_says_so(fixture: &'static Fixture)
     );
 }
 
-fn the_package_is_offered_only_on_windows_so_far(fixture: &'static Fixture) {
+fn the_package_is_offered_only_where_an_adapter_exists(fixture: &'static Fixture) {
     let data = tempfile::tempdir().unwrap();
     let source = tempfile::tempdir().unwrap();
-    copy_package(fixture, source.path(), false);
+    copy_package(fixture, source.path());
     let launcher =
         Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"))
             .with_clipboard(pane_core::clipboard::none());
@@ -894,17 +904,12 @@ fn the_package_is_offered_only_on_windows_so_far(fixture: &'static Fixture) {
         .into_iter()
         .find(|row| row.title == fixture.command)
         .expect("the command is listed");
-    if platforms::this_system() == pane_core::Platform::Windows {
-        assert_eq!(row.unavailable, None);
-    } else {
-        assert_eq!(
-            row.unavailable,
-            Some(Unavailable::OnThisSystem(platforms::only(
-                "this command",
-                "Windows"
-            )))
-        );
-    }
+    // Every system Pane runs on now has an adapter (Windows #35, Linux
+    // #38, macOS #37), so the command is offered everywhere. This Pane
+    // watches none, but availability is the package's declaration; where
+    // a real adapter refuses to watch, the command's own rows say so (the
+    // checks above).
+    assert_eq!(row.unavailable, None, "{:?}", row);
 }
 
 fn items_expire_after_the_retention_also_while_disabled_or_stopped(fixture: &'static Fixture) {
@@ -924,8 +929,12 @@ fn items_expire_after_the_retention_also_while_disabled_or_stopped(fixture: &'st
     pane.clock.advance(4 * DAY);
     let launcher = pane.start();
     // Gone from the file once Pane starts, before the package runs or
-    // anything shows it.
-    assert_eq!(pane.kept_on_disk(), ["new"]);
+    // anything shows it. The sweep that expires writes the file off the
+    // caller's thread, so the disk is polled until it agrees, with a
+    // deadline that still fails if the expired item were kept.
+    wait_until("the expired item is gone from the file", || {
+        pane.kept_on_disk() == ["new".to_owned()]
+    });
     block_on(launcher.set_enabled(&identity, true));
     assert_eq!(pane.listed(&launcher), ["new"]);
     // Enabling it again did not start its time again: "new" goes 7 days
@@ -934,7 +943,9 @@ fn items_expire_after_the_retention_also_while_disabled_or_stopped(fixture: &'st
     assert_eq!(pane.listed(&launcher), ["new"]);
     pane.clock.advance(MINUTE);
     assert!(pane.listed(&launcher).is_empty());
-    assert!(pane.kept_on_disk().is_empty());
+    wait_until("the expired items are gone from the file", || {
+        pane.kept_on_disk().is_empty()
+    });
     // History is still on.
     assert!(pane.clipboard.copy("after", None));
     assert_eq!(pane.listed(&launcher), ["after"]);
@@ -1117,7 +1128,11 @@ fn retained_history_expires_without_the_extension(fixture: &'static Fixture) {
     drop(launcher);
     pane.clock.advance(7 * DAY);
     let launcher = pane.start();
-    assert!(pane.kept_on_disk().is_empty());
+    // The sweep that expires writes the file off the caller's thread, so
+    // the disk is polled until it agrees (see wait_until).
+    wait_until("the expired retained items are gone from the file", || {
+        pane.kept_on_disk().is_empty()
+    });
     select_title(&launcher, MANAGE_ROW);
     block_on(launcher.activate_selected());
     let retained = subtitle(
@@ -1160,7 +1175,7 @@ contract!(
     uninstalling_and_keeping_the_history_keeps_it_for_a_reinstall,
     where_the_clipboard_cannot_be_watched_history_stays_off_and_says_why,
     without_a_clipboard_pane_keeps_nothing_and_says_so,
-    the_package_is_offered_only_on_windows_so_far,
+    the_package_is_offered_only_where_an_adapter_exists,
     items_expire_after_the_retention_also_while_disabled_or_stopped,
     the_retention_can_be_changed_and_applies_to_kept_items,
     expired_items_leave_the_file_while_pane_runs_without_the_extension,

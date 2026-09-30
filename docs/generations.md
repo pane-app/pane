@@ -134,8 +134,13 @@ resume in the store. So:
   end with the call that started them. Processes a helper starts itself are
   not stopped. Nothing in this model assumes one operating system: it lives
   in the runtime and the launcher, with no platform adapter.
-- **Background work** (timers, subscriptions, services) is not part of the
-  extension API yet; when it is, it belongs to a generation the same way.
+- **Background work** the host runs without the user asking —
+  [scheduled work](schedules.md) since #47 and a [continuing
+  service](services.md) since #48 — belongs to a generation the same way:
+  a disable, pause, uninstall or code replacement stops a run still
+  pending and its late answer is discarded. Other kinds of background
+  work (timers, subscriptions a guest keeps by itself) are not part of
+  the extension API yet; when they are, they belong the same way.
 - Measured cleanup is what the runtime reports (`Runtime::running`,
   `Runtime::view_count`); memory returned to the operating system after a
   dropped store is not measured.

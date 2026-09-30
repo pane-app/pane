@@ -113,6 +113,15 @@ mod search_bindings {
     });
 }
 
+/// The `service` export of a command that runs a continuing service.
+mod service_bindings {
+    wasmtime::component::bindgen!({
+        path: "../../wit",
+        world: "service-provider",
+        exports: { default: async | store },
+    });
+}
+
 /// The `published-operations` export of a component serving operations.
 mod operations_bindings {
     wasmtime::component::bindgen!({
@@ -160,6 +169,9 @@ const OPERATIONS_INTERFACE: &str = "pane:extension/published-operations@0.1.0";
 
 /// The interface a command that searches as the user types also exports.
 const COMMAND_SEARCH_INTERFACE: &str = "pane:extension/command-search@0.1.0";
+
+/// The interface a command that runs a continuing service also exports.
+const SERVICE_INTERFACE: &str = "pane:extension/service@0.1.0";
 
 /// What a result a command answers with shows as a row: the fields its
 /// computed root results, indexed results and search results share (each
@@ -273,6 +285,9 @@ pub(crate) struct Exports {
     /// `command-search`: it searches as the user types into its own search
     /// field.
     pub search: bool,
+    /// `service`: it runs a continuing service while the package's code
+    /// may run.
+    pub service: bool,
 }
 
 /// The system's applications as the runtime's guests and the launcher see
@@ -494,6 +509,18 @@ pub struct View {
     pub items: Vec<Item>,
 }
 
+/// What one cycle of a continuing service answers: the status to show on
+/// the command's screen and how long Pane waits before the next cycle
+/// (`pane:extension/service`, which the launcher's services thread runs
+/// while the package's code may run).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Cycle {
+    /// The status to show, as an action's answer is shown.
+    pub status: String,
+    /// How long to wait before the next cycle, in seconds.
+    pub next_seconds: u64,
+}
+
 /// Why a call into an extension did not produce a result.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CallError {
@@ -643,6 +670,12 @@ enum Request {
         item_id: String,
         data: Option<PackageData>,
         reply: oneshot::Sender<Result<String, CallError>>,
+    },
+    RunCycle {
+        component: PathBuf,
+        command: String,
+        data: Option<PackageData>,
+        reply: oneshot::Sender<Result<Cycle, CallError>>,
     },
     IndexedResults {
         component: PathBuf,
@@ -1065,6 +1098,34 @@ impl Runtime {
                 component: component.to_path_buf(),
                 command: command.to_owned(),
                 query: query.to_owned(),
+                data,
+                reply,
+            },
+            response,
+        )
+        .await
+    }
+
+    /// Runs one cycle of the continuing service of the command with
+    /// manifest id `command` in `component`, which reads and saves `data`.
+    /// The launcher's services thread asks for each cycle while the
+    /// package's code may run, taking the generation current when it does:
+    /// a disable, reload, update, uninstall or pause that happens while the
+    /// cycle runs stops it (see `Runtime::run_action_with`, whose stopping
+    /// is the same), and its late answer is discarded. An error the service
+    /// answers with is an expected error; a trap, or a cycle that computes
+    /// without finishing, is a crash of the package like any call's.
+    pub(crate) async fn run_cycle_with(
+        &self,
+        component: &Path,
+        command: &str,
+        data: Option<PackageData>,
+    ) -> Result<Cycle, CallError> {
+        let (reply, response) = oneshot::channel();
+        self.call(
+            Request::RunCycle {
+                component: component.to_path_buf(),
+                command: command.to_owned(),
                 data,
                 reply,
             },
@@ -1792,6 +1853,8 @@ struct Instance {
     operations: Option<operations_bindings::OperationsProvider>,
     /// Its search export, if it searches as the user types.
     command_search: Option<search_bindings::CommandSearchProvider>,
+    /// Its continuing-service export, if it runs one.
+    service: Option<service_bindings::ServiceProvider>,
 }
 
 /// A custom view open in a guest instance.
@@ -2024,6 +2087,14 @@ impl Code {
                 ))
             })?;
         }
+        if exports.service {
+            service_bindings::ServiceProviderPre::new(pre.clone()).map_err(|error| {
+                CallError::Interface(format!(
+                    "its manifest says it runs a continuing service, but it does not export \
+                     {SERVICE_INTERFACE} with the functions Pane calls: {error:#}"
+                ))
+            })?;
+        }
         bindings::ExtensionWithClipboardPre::new(pre).map_err(interface)?;
         Ok(Checked { network })
     }
@@ -2108,6 +2179,15 @@ impl Host {
                     // An injected fault may lose this answer, after the
                     // action ran.
                     self.faults.before_answer(&item_id);
+                    let _ = reply.send(result);
+                }
+                Request::RunCycle {
+                    component,
+                    command,
+                    data,
+                    reply,
+                } => {
+                    let result = self.run_cycle(&component, command, data).await;
                     let _ = reply.send(result);
                 }
                 Request::IndexedResults {
@@ -2452,6 +2532,37 @@ impl Host {
         self.settle(path, result, CallError::Guest)
     }
 
+    /// Runs one cycle of the continuing service of the command with
+    /// manifest id `command` in `component` (see `Runtime::run_cycle_with`).
+    async fn run_cycle(
+        &mut self,
+        path: &Path,
+        command: String,
+        data: Option<PackageData>,
+    ) -> Result<Cycle, CallError> {
+        let instance = self.instance(path, data).await?;
+        let service = instance
+            .service
+            .as_ref()
+            .map(|provider| provider.pane_extension_service().clone())
+            .ok_or_else(|| {
+                CallError::Interface(format!("it does not export {SERVICE_INTERFACE}"))
+            })?;
+        let result = self
+            .run_guest(path, async |instance| {
+                instance
+                    .store
+                    .run_concurrent(async |store| service.call_run_cycle(store, command).await)
+                    .await
+            })
+            .await?;
+        self.settle(path, result, CallError::Guest)
+            .map(|cycle| Cycle {
+                status: cycle.status,
+                next_seconds: cycle.next_seconds,
+            })
+    }
+
     async fn search(
         &mut self,
         path: &Path,
@@ -2756,18 +2867,18 @@ impl Host {
     }
 
     /// Serves one operation call a guest made, answering it.
-    async fn serve_operation(&mut self, call: OperationCall) {
+    async fn serve_operation(&mut self, mut call: OperationCall) {
         // Its caller gave up on it before it started: it is not started.
         if call.reply.is_closed() {
             return;
         }
-        let result = self.operation(&call).await;
+        let result = self.operation(&mut call).await;
         let _ = call.reply.send(result);
     }
 
     /// Serves `call`: checks it, resolves its target, runs the operation
     /// (starting the target if it is not running) and checks the answer.
-    async fn operation(&mut self, call: &OperationCall) -> Result<String, OperationError> {
+    async fn operation(&mut self, call: &mut OperationCall) -> Result<String, OperationError> {
         self.check_call(call)?;
         let target = self.resolve_target(call)?;
         // Disabled or replaced while it was serving the call, it was
@@ -2821,16 +2932,22 @@ impl Host {
     async fn run_operation(
         &mut self,
         target: &Target,
-        call: &OperationCall,
+        call: &mut OperationCall,
     ) -> Result<String, OperationError> {
         let failed = |error| OperationError::from_call(&target.title, error);
-        let instance = self
+        // Its caller gave up on it: the check the call was sent with can
+        // miss a give-up that lands while the call waits to be served, so
+        // the check is made again just before the operation runs, and the
+        // instance the call started for it is dropped again.
+        if call.reply.is_closed() {
+            return Err(failed(CallError::Cancelled));
+        }
+        let provider = self
             .instance(&target.component, target.data.clone())
             .await
-            .map_err(failed)?;
-        // The install check requires the export, so only a component replaced
-        // behind Pane's back lacks it.
-        let provider = instance
+            .map_err(failed)?
+            // The install check requires the export, so only a component
+            // replaced behind Pane's back lacks it.
             .operations
             .as_ref()
             .map(|provider| provider.pane_extension_published_operations().clone())
@@ -2839,16 +2956,27 @@ impl Host {
                     "it does not export {OPERATIONS_INTERFACE}"
                 )))
             })?;
+        if call.reply.is_closed() {
+            self.drop_instance(&target.component);
+            return Err(failed(CallError::Cancelled));
+        }
         let (name, input) = (call.operation.clone(), call.input.clone());
+        // A call whose caller gives up on it while it runs is stopped, as
+        // a search's call is (the caller is gone; the answer has nowhere
+        // to go).
         let result = self
-            .run_guest(&target.component, async |instance| {
-                instance
-                    .store
-                    .run_concurrent(async |store| {
-                        provider.call_run_operation(store, name, input).await
-                    })
-                    .await
-            })
+            .run_guest_until(
+                &target.component,
+                async |instance| {
+                    instance
+                        .store
+                        .run_concurrent(async |store| {
+                            provider.call_run_operation(store, name, input).await
+                        })
+                        .await
+                },
+                call.reply.closed(),
+            )
             .await
             .map_err(failed)?;
         self.settle(&target.component, result, CallError::Guest)
@@ -3016,6 +3144,8 @@ impl Host {
         // Only a command that searches as the user types exports it.
         let command_search =
             search_bindings::CommandSearchProvider::new(&mut store, &instance).ok();
+        // Only a command that runs a continuing service exports it.
+        let service = service_bindings::ServiceProvider::new(&mut store, &instance).ok();
         self.instances.insert(
             path.to_path_buf(),
             Instance {
@@ -3026,6 +3156,7 @@ impl Host {
                 query_command,
                 operations,
                 command_search,
+                service,
             },
         );
         Ok(())

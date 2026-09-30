@@ -809,42 +809,127 @@ whole smoke passed, and frames 160 to 169 were looked at.
 | Service stopped: "connection refused" | [168-offline.png](evidence/linux-x11/168-offline.png) |
 | Service back: results again | [169-back-online.png](evidence/linux-x11/169-back-online.png) |
 
-### Clipboard history (#35)
+### Clipboard history (#35, #38)
 
-Pane has no clipboard adapter on Linux yet (#38). A phase of its own, last,
-with its own data folder ([clipboard history](../clipboard-history.md#checks)),
-installs Clipboard History and types "clipboard": its command is listed as
-unavailable with its reason, and Enter shows the reason as the error and
-does not open it; no `clipboard-history.json` appears. No clipboard is read
-(Xvfb is the smoke's own display, and Pane has no adapter here). Run locally
-on 2026-09-29 as a phase alone (same Ubuntu 26.04.1 / Xvfb / lavapipe
-setup), and within the whole smoke (see below): its checks passed, and both
-frames were looked at.
+The X11 adapter ([`clipboard/linux.rs`](../../crates/pane-core/src/clipboard/linux.rs))
+watches the `CLIPBOARD` selection through XFIXES on a thread of Pane's own
+and reads each new owner's text through a selection transfer; no permission
+is needed. It was written, compile- and lint-checked, and its pure parts
+unit-tested (the session's refusals, Latin-1, the `WM_CLASS` and `/proc`
+reads) on this machine; the machine has no display, so the real-X11 test
+([`clipboard_adapter_linux.rs`](../../crates/pane-core/tests/clipboard_adapter_linux.rs),
+run by CI under `xvfb-run` with `PANE_TEST_REAL_CLIPBOARD=1`) and the smoke
+phases have **not run locally**. CI's next green Linux run of the branch is
+their evidence: until then the watcher's delivery, the selection transfers
+(including `INCR`), the owner lookup and the write-back through Pane's own
+serving window are unverified natively.
+
+The smoke's clipboard phase (screenshots 280 to 287, [clipboard
+history](../clipboard-history.md#checks)), with a data folder of its own,
+installs Clipboard History, whose command now runs here, and checks
+`clipboard-history.json` at each step: text copied before it is turned on is
+not kept; once turned on (its first row) the smoke's own copies are kept,
+newest first; nothing is kept while paused, or while disabled, also after a
+restart; once enabled again, text is kept, also after a restart, before the
+command is opened; Enter on a kept item and its first choice copies it again
+and the item moves to the front, the pasted text proving the clipboard holds
+it. The smoke copies only its own `pane-smoke-...` text, by typing it into
+root search and copying it with Ctrl+A and Ctrl+C through the window's X11
+clipboard (Xvfb is the smoke's own display), and so replaces what is on the
+clipboard without reading or putting it back. X11 has no marker formats a
+password manager could set, so no marked copy is checked; a copy no text can
+be read from and an unknown owner are the adapter test's checks.
 
 | Step | Evidence |
 | --- | --- |
-| Listed: "Clipboard History", "Keeps the text you copy, once you turn it on", "Not available on Linux: this command supports only Windows" | [280-clipboard-unavailable.png](evidence/linux-x11/280-clipboard-unavailable.png) |
-| Enter: the reason as the error, root search still shown | [281-clipboard-explained.png](evidence/linux-x11/281-clipboard-explained.png) |
+| The command opened: "Off · Pane keeps nothing you copy until you turn it on" | 280-clipboard-off.png |
+| Enter on "Turn on clipboard history": "Clipboard history is on" | 281-clipboard-on.png |
+| Two kept items, newest first, with their rows | 282-clipboard-kept.png |
+| Enter on an item, "Copy it again": "Copied to the clipboard" | 283-clipboard-copied.png |
+| Pasting into root search shows the copied item | 284-clipboard-pasted.png |
+| Typing the same text (the same frame) | 285-clipboard-typed.png |
+| "Disabled Clipboard History", after which nothing is kept | 286-clipboard-disabled.png |
+| Kept again across a restart, before the command is opened | 287-clipboard-after-restart.png |
 
-(Cropped to Pane's window; the smoke checks the whole frames.)
+(Cropped to Pane's window; the smoke checks the whole frames. The frames
+will be kept under `evidence/linux-x11/` once they have run, as the earlier
+ones are.)
 
 ### Clipboard history expiry (#36)
 
-The clipboard phase goes on (screenshots 400 to 402, [clipboard
-history](../clipboard-history.md#checks)) where the command never runs:
-with Pane stopped, the smoke writes the history of the installed package as
-a downtime would leave it (`scripts/clipboard_history.py`): history on, one
-item copied 8 days ago and one a day ago. Once Pane starts, the old one is
-gone from the file (checked by parsing it), and the uninstall confirmation
-reads "Saved data: 1 clipboard history item"; kept as retained data and made
-8 days old while Pane is stopped, it is gone once Pane starts again, with
-the capture choice kept, and the extension list's last row reads "Delete
-retained data of Clipboard History", "Not installed · keeps clipboard
-history settings". No clipboard is read. Run locally on 2026-09-29 as a
-phase alone and within the whole smoke (same Ubuntu 26.04.1 / Xvfb /
-lavapipe setup): its checks passed, and frames 400 and 402 were looked at.
-The frames show this computer's source folder, so they are not kept as
-evidence here.
+The phase goes on (screenshots 400 to 406, [clipboard
+history](../clipboard-history.md#checks)) with the history it kept: with
+Pane stopped, the smoke makes `pane-smoke-kept` 8 days old and
+`pane-smoke-enabled` 2 hours old (`scripts/clipboard_history.py`), as a
+downtime would; once Pane starts, the first is gone from the file and the
+list before the command shows anything. Then, in the command: Enter on
+`pane-smoke-second` and "Delete it" deletes that item alone, and the
+clipboard is unchanged; Delete recent items (the last hour) deletes the two
+copied in this smoke's last minutes and keeps `pane-smoke-enabled`; keeping
+items for 1 hour deletes it at once; after one more copy, Turn off and
+delete clipboard history deletes that and turns history off (no `capture` in
+the file), a later copy is not kept, and pasting into root search still
+shows the copied text, so the clipboard still holds it (Windows reads the
+clipboard API directly; on Linux, where reading means a paste, this is
+checked once, at the end, as after the copy in phase 280 to 287). As the
+#35 phase, **not run locally**; CI's next green Linux run is its evidence.
+
+| Step | Evidence |
+| --- | --- |
+| After the restart, the 8-day-old item is gone | 400-clipboard-expired.png |
+| "Deleted the kept item" | 401-clipboard-item-deleted.png |
+| "Deleted 2 kept items" (the recent ones) | 402-clipboard-recent-deleted.png |
+| "Items are kept for 1 hour; deleted 1 older item" | 403-clipboard-retention-changed.png |
+| "Clipboard history is off; deleted 1 kept item" | 404-clipboard-turned-off-and-deleted.png |
+| Pasting into root search still shows the copied text | 405-clipboard-still-held.png |
+| Typing the same text (the same frame) | 406-clipboard-held-typed.png |
+
+### Installing Pane and acquiring its calculator (#53)
+
+A final phase, after the clipboard-expiry one, proves the whole outcome of
+[#53](https://github.com/hoangvu12/pane/issues/53)
+([installer](../installer.md)). `cargo xtask package-linux --dev` builds the
+Linux package (the development profile, so its program accepts the
+controlled artifact source) and the default extensions' payloads; the
+smoke serves `target/dist/artifacts` from 127.0.0.1 with
+`scripts/artifact_server.py` (nothing reaches the network or Pane's
+published downloads). The package is unpacked into a folder of its own and
+its install script runs with a **clean machine's** environment: a fresh
+home folder and `PATH=/usr/bin:/bin`, so the home holds no data and no
+development tool is configured. The installed Pane
+(`~/.local/bin/pane` of that home) then starts with a PATH that holds
+nothing at all (an empty folder, checked by `command -v` of cargo, rustc,
+node, npm, git, cc, clang and make, and by reading the running process's
+`PATH`), pointed at the controlled source with `PANE_ARTIFACTS`. It
+acquires the calculator and the helper sample by itself
+(`installed.json` must record both under `"default"`), root search lists
+their commands, "6*7" answers 42 and Enter copies it, and the Helper
+sample's "Echo through the helper" runs the payload's prebuilt `pane-echo`
+("Echoed \"hello from Pane\" on Linux x86-64"), from the managed copy,
+with no developer tool reachable. The acquired payloads must be cached,
+the downloads folder empty, and no helper process left running. The
+program files are removed again at the phase's end, so the uploaded
+evidence is the screenshots and records (frames 500 to 503), not the
+program.
+
+**Recorded 2026-09-29, this machine (Ubuntu aarch64, no display — the GUI
+cannot run here):** what ran locally is everything short of the GUI: the
+packaging task in both profiles, the install script into a temporary home
+with a scrubbed PATH (`pane --version` answered), and the acquisition and
+its recovery through the launcher's public interface
+(`crates/pane-core/tests/installer.rs`, ten checks, all passing, including
+the helper running from the managed copy — this machine's payload names
+`linux-aarch64`, which CI's x86_64 runner builds as `linux-x86_64`). The
+smoke phase itself, and the release-profile package on x86_64, are
+**pending CI**: they need the Xvfb smoke and the x86_64 build only CI's
+runner provides.
+
+| Step | Evidence |
+| --- | --- |
+| The clean machine's Pane acquired both default extensions and lists their commands | pending CI (frame 500) |
+| "6*7" answers 42 | pending CI (frame 501) |
+| Enter copies the answer | pending CI (frame 502) |
+| The helper sample's prebuilt helper answers | pending CI (frame 503) |
 
 ## Text input and accessibility findings
 
@@ -879,6 +964,14 @@ evidence here.
 ## Remaining limits
 
 - Wayland, a real desktop session and hardware GPU drivers are untested.
+- Clipboard history works through X11 only: on Wayland (with or without
+  XWayland) it says why it cannot watch, and only the X11 combination
+  (Xvfb in CI) is claimed; a real desktop's programs, password managers and
+  selection transfers have not been run.
+- aarch64 has now built and checked headlessly (the #53 package and its
+  acquisition, above), but no aarch64 GUI has run: Xvfb, the smoke and the
+  window tests on aarch64 remain untested, and the prebuilt-helper fixture
+  the smoke installs is built for the system that builds it.
 - The GUI smoke now also asserts that text is drawn in the expected colors and
   that the three result screens differ (`scripts/check_screenshot.py`). Which
   command and guest each screenshot shows is still checked by inspection.

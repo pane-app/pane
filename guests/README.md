@@ -109,6 +109,15 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   `packages/sample-query-js` and `packages/sample-query-ts`; held alike by
   `crates/pane-core/tests/aliases.rs`, and the Rust one by
   `crates/pane/tests/aliases.rs`.
+- `sample-schedule`, `sample-schedule-js`, `sample-schedule-ts`: the
+  schedule sample in Rust, JavaScript and TypeScript, whose Counting
+  command declares a `schedule`, so Pane runs its "Run now" item every 60
+  seconds while the package is enabled, without the user asking
+  ([Scheduled work](#scheduled-work)); its "Run slowly" item waits ten
+  seconds, so a disable or reload while it runs stops it, "Answer an
+  error" answers an error, and "Crash" traps, each for Pane's checks.
+  Their packages are `packages/sample-schedule` and its `-js`/`-ts`
+  copies; held alike by `crates/pane-core/tests/schedules.rs`.
 - `hello-rust`, `hello-js`, `hello-ts`: one "Say hello" command each, a
   package built in its own folder, as an author's would be, for
   [development mode](../docs/development-mode.md): Pane builds and reloads
@@ -735,6 +744,126 @@ The [JavaScript](sample-applications-js) and
 their commands list the applications and open one with `open(id)`; their
 packages in [`packages/`](packages) set `indexedResults`.
 
+## Scheduled work
+
+A command can declare that Pane runs one of its items on a schedule, so
+it does work without the user asking: add a `schedule` to its `pane.json`
+entry naming how often to run and which item's action to run.
+
+```json
+{
+  "id": "check",
+  "title": "Check something",
+  "component": "check.wasm",
+  "schedule": { "everySeconds": 900, "item": "check-now" }
+}
+```
+
+- `everySeconds` (required): the interval, from 1 second to 30 days
+  (provisional bounds, pending the user's decision). Anything outside
+  them, or any other field in `schedule`, is refused when the package is
+  previewed or installed, before anything is installed.
+- `item` (required): the id of the item whose action runs, the same
+  action Enter runs from the command's list, at most 256 characters. The
+  command usually lists the item, so the user can run it too, and its
+  answer is what Pane shows: the returned text on the command's screen
+  while it is open, an error the action answers with as an error, and a
+  trap as a crash of the package (three within five minutes pause it, as
+  for any action).
+
+The schedule runs only while the package's code may run — it is enabled
+and not paused: installation alone schedules nothing that is not enabled,
+and Pane activates the command (starting its instance) only when a run is
+due, never another package. Disabling the package, uninstalling it, Pane
+pausing it after failures, or replacing its code by a reload or an update
+ends the schedule, stopping a run still pending and discarding its late
+answer; enabling the package, replacing its code or restarting Pane
+starts it again, from a full interval, without replaying work that fell
+due meanwhile. At most one run of a command is asked for at a time; ticks
+that fall due while one runs are coalesced into the next run after it
+answers.
+
+The scheduled run is an ordinary `run-action` call: the guest needs no
+new interface, and everything an action may do — read and save data, call
+helpers, make requests, wait — works the same. See
+[scheduled work](../docs/schedules.md) for the full contract, and the
+samples ([`sample-schedule`](sample-schedule) in Rust,
+[JavaScript](sample-schedule-js) and [TypeScript](sample-schedule-ts))
+for complete examples.
+
+## Continuing services
+
+A command can declare that it runs a continuing service, so it works
+without the user asking and at no interval the manifest declares: set
+`"service": true` on its entry in `pane.json`, and export
+`pane:extension/service` (`run-cycle`) beside `command`. Pane calls
+`run-cycle` in a cycle while the package's code may run — it is enabled
+and not paused — starting the moment it may (installing an enabled
+package, enabling, replacing the code, or Pane starting) and ending when
+it may not (disabled, uninstalled, paused after failures, replaced). The
+service paces itself: each cycle answers the status to show and how long
+to wait before the next.
+
+```rust
+use pane_guest::service::Cycle;
+
+pane_guest::export!(Watching);
+pane_guest::service::export!(Watching);
+
+impl pane_guest::service::Guest for Watching {
+    async fn run_cycle(command: String) -> Result<Cycle, String> {
+        // One slice of the service's work: check what it watches, then
+        // say what to show and when to run it again.
+        let seen = content::get("events")?;
+        Ok(Cycle {
+            status: format!("Watching: {seen:?}"),
+            next_seconds: 2,
+        })
+    }
+}
+```
+
+- Each cycle is an ordinary guest call, stopped when the package's
+  [generation](../docs/generations.md) ends: a disable, reload, update,
+  uninstall or pause while it runs stops it, its late answer is
+  discarded, and the instance — whatever the service keeps in it, its
+  task's state — goes with it, so enabling the package starts a fresh
+  task. Keep each cycle short: waiting inside one holds every other
+  extension's calls for as long as it waits, as any call does.
+- A trap, or a cycle that computes for too long and Pane stops, is a
+  crash of the package like any call's (three within five minutes pause
+  it); an error the cycle answers with never pauses it, however often,
+  and the next cycle runs a second later, so one broken cycle never ends
+  the service.
+- `next_seconds` is at least 1 and at most 2592000 (30 days); anything
+  outside is clamped (provisional bounds, as scheduled work's). Time
+  that passes while a cycle runs is not replayed: the next cycle runs
+  one cadence after its answer lands.
+- The status shows on the command's screen while it is open, as an
+  action's answer does, and the cycle runs whether or not it is.
+
+A JavaScript or TypeScript command sets `"pane": { "service": true }`
+in its `package.json` so that it is built with the interface, and
+exports `runCycle` as `service` (typed `Service` and `Cycle` in
+[`js/pane.d.ts`](js/pane.d.ts)):
+
+```ts
+import type { Cycle, Service } from "@pane/extension";
+
+export const service: Service = {
+  async runCycle(command: string): Promise<Cycle> {
+    return { status: "Watching", nextSeconds: 2 };
+  },
+};
+```
+
+See [continuing services](../docs/services.md) for the full contract,
+and the samples ([`sample-service`](sample-service) in Rust,
+[JavaScript](sample-service-js) and [TypeScript](sample-service-ts)) for
+complete examples, including the ways a cycle can end (wait, fail,
+crash, stop responding) and cadences beyond the bounds that Pane clamps
+(0 seconds, 31 days).
+
 ## Clipboard history
 
 A Rust command can keep clipboard history through Pane
@@ -1260,6 +1389,9 @@ and TypeScript: Pane sees only components.
   ([root search](../docs/root-search.md#matching-and-ranking)). Optional
   `rootResults: true` says the command also computes
   [root results from the query](#root-results-computed-from-the-query).
+  Optional `schedule` declares [scheduled work](#scheduled-work): an
+  interval and the item whose action Pane runs while the package is
+  enabled.
 - `operations` (optional): the [operations](#operations) the package
   publishes; `commands` may then be empty.
 - `dependencies` (optional): the other packages whose operations it calls,

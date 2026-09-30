@@ -15,7 +15,7 @@ package's current generation, failed on its own.
 | Failure | Paused | Why |
 | --- | --- | --- |
 | A component could not be loaded or instantiated, or a reload's new code trapped as it started (a [startup failure](../CONTEXT.md)) | At once | Starting it again would fail the same way. |
-| A guest call trapped (a crash): opening a command, an action, a form, a custom view's event, drawing or destructor, root results, indexed results, a query sent to a command through its alias or as a fallback, or an operation another package called | On the **3rd crash within 5 minutes** | A broken command stops failing soon; one bad input does not stop an extension that otherwise works. |
+| A guest call trapped (a crash): opening a command, an action, a form, a custom view's event, drawing or destructor, root results, indexed results, a query sent to a command through its alias or as a fallback, an operation another package called, a scheduled run or a continuing service's cycle | On the **3rd crash within 5 minutes** | A broken command stops failing soon; one bad input does not stop an extension that otherwise works. |
 | A guest call computed for 5 seconds without finishing and Pane stopped it (it **stopped responding**, [below](#when-an-extension-stops-responding), #18) | Counted as a crash, in the same count: the 3rd failure within 5 minutes pauses | Wasmtime was running that package's code, so the failure is known to be its own (provisional). |
 
 These are explicit choices, not measurements (`CRASHES_BEFORE_PAUSE` and

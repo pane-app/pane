@@ -54,9 +54,13 @@ package itself does not support this system, the package's reason is shown
 instead.
 
 The [Clipboard History](clipboard-history.md) default extension (#35) is the
-first package to use this: its command lists only Windows, the one system
-with a clipboard adapter so far, so on macOS and Linux it is installed and
-explained rather than opened (smoke frames 280 and 281 there).
+first package to use this: its command lists the systems with a clipboard
+adapter — Windows since #35, Linux since #38, macOS since #37 — so its
+command runs wherever Pane runs. Within one system the command is not
+refused further: on Linux under Wayland the command opens and its capture
+row explains why Pane cannot watch the clipboard there, while the command's
+other rows still work (the clipboard adapter's own unavailability, checked
+in [clipboard history](clipboard-history.md#per-platform)).
 
 The components themselves are the same WASI 0.3 components on every system;
 the declaration is the author's statement of where the package works, and it

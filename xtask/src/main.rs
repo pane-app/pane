@@ -11,11 +11,32 @@
 //!   toolchain in `tools/componentize-js` (prerequisites: guests/README.md),
 //!   then run `guests`.
 //! - `ci`: build guests, then check formatting, lints and tests.
+//! - `package-linux`: build Pane's Linux package and the artifacts its
+//!   default extensions are acquired from, under `target/dist/` (with
+//!   `--dev`, the package's program is the development profile; see
+//!   `package.rs`).
+//! - `package-windows`: build Pane's Windows package and the same
+//!   artifacts, under `target/dist/` (`--dev` as for `package-linux`;
+//!   `package.rs` assembles the artifacts everywhere and builds the
+//!   package itself only on Windows).
+//! - `package-macos`: build Pane's macOS package and the same artifacts,
+//!   under `target/dist/` (`--dev` as for `package-linux`; `package.rs`
+//!   assembles the artifacts everywhere and builds the package itself
+//!   only on macOS).
+
+mod package;
+mod zip;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 const GUEST_TARGET: &str = "wasm32-wasip2";
+
+/// npm's own fixed time for packed files, 1985-10-26T08:15:00Z: the
+/// tarballs this repository packs (the npm sample, the default
+/// extensions' payloads, the Linux package) are the same on every system,
+/// so a source serves one integrity everywhere.
+pub(crate) const PACKED_MTIME: u64 = 499_162_500;
 
 /// Components built by `js-guests` and committed, so that normal builds and
 /// tests need no JavaScript toolchain.
@@ -39,15 +60,26 @@ const PREBUILT: &[&str] = &[
     "sample_clipboard_js",
     "sample_clipboard_ts",
     "sample_npm_js",
+    "sample_schedule_js",
+    "sample_schedule_ts",
+    "sample_service_js",
+    "sample_service_ts",
 ];
 
 fn main() -> ExitCode {
     let task = std::env::args().nth(1);
+    let dev = std::env::args().any(|arg| arg == "--dev");
     let result = match task.as_deref() {
         Some("guests") => guests(),
         Some("js-guests") => js_guests(),
         Some("ci") => ci(),
-        _ => Err("usage: cargo xtask <guests|js-guests|ci>".into()),
+        Some("package-linux") => package::linux(dev),
+        Some("package-windows") => package::windows(dev),
+        Some("package-macos") => package::macos(dev),
+        _ => Err(
+            "usage: cargo xtask <guests|js-guests|ci|package-linux|package-windows|package-macos>"
+                .into(),
+        ),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -101,6 +133,8 @@ fn guests() -> Result<(), String> {
                 "sample_dependencies",
                 "sample_query",
                 "sample_search",
+                "sample_schedule",
+                "sample_service",
                 "sample_helper",
                 "faulty",
                 "operations_fixture",
@@ -222,15 +256,13 @@ fn npm_sample(root: &Path, out: &Path) -> Result<(), String> {
             .map_err(|error| format!("copy {} failed: {error}", from.display()))?;
     }
     files.sort();
-    // npm's own fixed time for packed files, 1985-10-26T08:15:00Z.
-    const NPM_MTIME: u64 = 499_162_500;
     let mut tar = tar::Builder::new(Vec::new());
     for file in &files {
         let contents = std::fs::read(dest.join(file)).map_err(|error| error.to_string())?;
         let mut header = tar::Header::new_ustar();
         header.set_size(contents.len() as u64);
         header.set_mode(0o644);
-        header.set_mtime(NPM_MTIME);
+        header.set_mtime(PACKED_MTIME);
         header.set_uid(0);
         header.set_gid(0);
         header.set_entry_type(tar::EntryType::Regular);
@@ -276,7 +308,7 @@ fn git_sample(root: &Path, out: &Path) -> Result<(), String> {
 /// (package folder in `guests/packages`, component) of each sample package,
 /// and of the default extensions (the calculator, applications and
 /// quicklinks).
-const SAMPLE_PACKAGES: [(&str, &str); 31] = [
+const SAMPLE_PACKAGES: [(&str, &str); 37] = [
     ("sample-rust", "sample_rust"),
     ("sample-settings", "sample_settings"),
     ("sample-js", "sample_js"),
@@ -299,6 +331,12 @@ const SAMPLE_PACKAGES: [(&str, &str); 31] = [
     ("sample-query-js", "sample_query_js"),
     ("sample-query-ts", "sample_query_ts"),
     ("sample-search", "sample_search"),
+    ("sample-schedule", "sample_schedule"),
+    ("sample-service", "sample_service"),
+    ("sample-schedule-js", "sample_schedule_js"),
+    ("sample-schedule-ts", "sample_schedule_ts"),
+    ("sample-service-js", "sample_service_js"),
+    ("sample-service-ts", "sample_service_ts"),
     ("sample-search-js", "sample_search_js"),
     ("sample-search-ts", "sample_search_ts"),
     ("sample-helper", "sample_helper"),

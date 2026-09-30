@@ -56,10 +56,11 @@ function Focus-Pane($process) {
     Start-Sleep -Milliseconds 500
 }
 # Starts Pane with the given arguments, writing its errors to $log, and
-# brings its window to the front.
-function Start-Pane($log, [string[]]$arguments) {
+# brings its window to the front. The program is the smoke's own debug
+# build unless one is given (the installed Pane of the #51 phase).
+function Start-Pane($log, [string[]]$arguments, $program = "target/debug/pane.exe") {
     $options = @{
-        FilePath = "target/debug/pane.exe"
+        FilePath = $program
         PassThru = $true
         RedirectStandardError = (Join-Path $OutDir $log)
     }
@@ -630,9 +631,12 @@ if (Select-String -Quiet -SimpleMatch '"paused"' (Join-Path $data "extensions/in
 $data = Join-Path $OutDir "retained-data"
 if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 $env:PANE_DATA_DIR = $data
-# Waits until $file contains $text ($present) or no longer does (-not $present).
-function Wait-For($file, $text, [bool]$present) {
-    for ($i = 0; $i -lt 100; $i++) {
+# Waits until $file contains $text ($present) or no longer does (-not
+# $present), trying $tries times (100 by default: 10 seconds; the first
+# setup of the installed Pane needs far more, as a payload's components
+# are checked one at a time).
+function Wait-For($file, $text, [bool]$present, $tries = 100) {
+    for ($i = 0; $i -lt $tries; $i++) {
         $found = (Test-Path $file) -and (Select-String -Quiet -SimpleMatch $text $file)
         if ($found -eq $present) { return }
         Start-Sleep -Milliseconds 100
@@ -1820,4 +1824,119 @@ if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: clipboard history exp
 Stop-Pane $process
 if ((Kept-Joined) -ne "") { throw "kept: $(Kept-Joined)" }
 if ((History-Field "retentionSeconds") -ne "3600") { throw "retention: $(History-Field 'retentionSeconds')" }
+
+# Installing Pane and acquiring its calculator (#51): the package
+# `cargo xtask package-windows --dev` builds is installed on a clean
+# machine — a fresh user profile (LOCALAPPDATA and APPDATA pointing into
+# the smoke's own output folder, so the install, Pane's data and the
+# shortcut touch nothing of the runner's user) and a PATH that holds
+# nothing at all, so no Rust, Node, npm, Git or compiler can be reached —
+# and Pane, started from what the install script installed, acquires its
+# default extensions (the calculator, and the prebuilt-helper sample with
+# it) from the artifact source this smoke serves on 127.0.0.1
+# (scripts/artifact_server.py, the payloads `cargo xtask package-windows`
+# assembled; nothing reaches the network or Pane's published downloads).
+# The calculator answers "6*7" with 42, and the helper sample's pane-echo
+# runs: a prebuilt program from the acquired payload, no developer tool
+# anywhere. The package is the development profile, because only a
+# development build takes its artifact source from PANE_ARTIFACTS; a
+# release build uses Pane's published downloads, which no controlled
+# source may replace. (The program files are removed again at the end of
+# the phase: the uploaded evidence is the screenshots and records, not the
+# program.)
+# The task's own output goes to CI's log, as the smoke's other cargo runs'
+# do (the runner's console), not to a file of the smoke's.
+cargo xtask package-windows --dev
+if ($LASTEXITCODE -ne 0) { throw "the package was not built" }
+$package = Get-ChildItem "target/dist/pane-*-windows-*-dev.zip" | Select-Object -First 1
+if (-not $package) { throw "the package was not built" }
+# Not $PROFILE: PowerShell fills that variable with the user's own
+# profile script's path.
+$cleanProfile = Join-Path $OutDir "clean-profile"
+$unpack = Join-Path $OutDir "package-unpacked"
+foreach ($folder in $cleanProfile, $unpack) { if (Test-Path $folder) { Remove-Item -Recurse -Force $folder } }
+New-Item -ItemType Directory -Force -Path $cleanProfile, $unpack | Out-Null
+$portFile = Join-Path $OutDir "artifact-server.port"
+if (Test-Path $portFile) { Remove-Item -Force $portFile }
+$server = Start-Process python -PassThru -NoNewWindow `
+    -ArgumentList @("`"$PSScriptRoot/artifact_server.py`"", "target/dist/artifacts", "`"$portFile`"") `
+    -RedirectStandardError (Join-Path $OutDir "artifact-server.log")
+# What a clean machine's environment is: saved, put back in the finally
+# below. PANE_DATA_DIR comes off, so the installed Pane keeps its data
+# where a real one does, in the fresh profile's LOCALAPPDATA.
+$realAppData = $env:APPDATA; $realLocal = $env:LOCALAPPDATA; $realPath = $env:PATH
+Remove-Item Env:PANE_DATA_DIR -ErrorAction SilentlyContinue
+try {
+    # Generous: a slow runner may take seconds to start Python.
+    for ($i = 0; $i -lt 600 -and -not (Test-Path $portFile) -and -not $server.HasExited; $i++) { Start-Sleep -Milliseconds 100 }
+    if (-not (Test-Path $portFile)) { throw "the local artifact source did not start (see artifact-server.log)" }
+    Expand-Archive -Path $package.FullName -DestinationPath $unpack
+    $env:LOCALAPPDATA = Join-Path $cleanProfile "Local"
+    $env:APPDATA = Join-Path $cleanProfile "Roaming"
+    New-Item -ItemType Directory -Force -Path $env:LOCALAPPDATA, $env:APPDATA | Out-Null
+    # As the README says a user runs it (nothing is signed, so the policy
+    # is bypassed for this one script); PowerShell 5.1 stands in if this
+    # smoke is not run with pwsh.
+    $shell = if (Get-Command pwsh -ErrorAction SilentlyContinue) { "pwsh" } else { "powershell" }
+    & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $unpack "pane\install.ps1") *>> (Join-Path $OutDir "install.log")
+    if ($LASTEXITCODE -ne 0) { throw "the install script failed (see install.log)" }
+    $install = Join-Path $env:LOCALAPPDATA "Pane"
+    $installed = Join-Path $install "pane.exe"
+    if (-not (Test-Path $installed)) { throw "the install script installed no pane" }
+    if (-not (Test-Path (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Pane.lnk"))) { throw "the install script made no shortcut" }
+    # Nothing can be reached at all from the PATH Pane runs with: an empty
+    # folder, so no development tool resolves (Start-Process hands the
+    # child this process's environment, which was checked; a running
+    # process's own environment cannot be read on Windows).
+    $cleanBin = Join-Path $OutDir "clean-bin"
+    if (Test-Path $cleanBin) { Remove-Item -Recurse -Force $cleanBin }
+    New-Item -ItemType Directory -Force -Path $cleanBin | Out-Null
+    $env:PATH = $cleanBin
+    $tools = Get-Command cargo, rustc, node, npm, git, cc, clang, make -ErrorAction SilentlyContinue
+    if ($tools) { throw "the clean machine still reaches a development tool" }
+    $env:PANE_ARTIFACTS = "http://127.0.0.1:$((Get-Content $portFile).Trim())/"
+    $process = Start-Pane "stderr-installed.log" @() $installed
+    $env:PATH = $realPath
+    $extensions = Join-Path $install "data\extensions"
+    # Generous: a slow runner may take a while to check both payloads'
+    # components (120 s each).
+    if ($process.HasExited) { throw "the installed Pane exited during setup" }
+    Wait-For (Join-Path $extensions "installed.json") '"default": "calculator"' $true 1200
+    Wait-For (Join-Path $extensions "installed.json") '"default": "helper-sample"' $true 1200
+    Start-Sleep -Seconds 1
+    Capture "500-installed-root.png"
+    Check "500-installed-root.png" "aab4c0"   # root search: the calculator and Helper sample commands are listed
+    Send "6*7"; Start-Sleep -Seconds 2
+    Capture "501-calculator-answer.png"
+    Check "501-calculator-answer.png" "364355" 3000   # "42", the calculator's selected answer row
+    Send "{ENTER}"; Start-Sleep -Seconds 1
+    Capture "502-calculator-copied.png"
+    Check "502-calculator-copied.png" "9fd8a8"   # "Copied 42 to the clipboard"
+    Send "^a"; Send "helper"; Start-Sleep -Seconds 1
+    Send "{ENTER}"; Start-Sleep -Seconds 2   # Helper sample
+    Send "{ENTER}"; Start-Sleep -Seconds 3   # "Echo through the helper"
+    Capture "503-helper-echoed.png"
+    Check "503-helper-echoed.png" "9fd8a8"   # 'Echoed "hello from Pane" on Windows x86-64'
+    if (-not (Get-ChildItem (Join-Path $extensions "packages\*\helpers\*\pane-echo.exe") -ErrorAction SilentlyContinue)) {
+        throw "the acquired payload's helper was not installed"
+    }
+    if (Get-Process -Name "pane-echo" -ErrorAction SilentlyContinue) { throw "a helper is still running" }
+    if ((Get-ChildItem (Join-Path $extensions "acquired\calculator")).Count -ne 1) { throw "the calculator's payload is not cached" }
+    $downloads = Join-Path $extensions "downloads"
+    if ((Test-Path $downloads) -and (Get-ChildItem $downloads)) { throw "downloads were left behind" }
+    $shots = "500-installed-root", "501-calculator-answer", "503-helper-echoed" | ForEach-Object { Join-Path $OutDir "$_.png" }
+    python "$PSScriptRoot/check_screenshot.py" --distinct @shots
+    if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the installed Pane changed nothing" }
+    Stop-Pane $process
+    # The program files go again: the evidence is the screenshots, the
+    # installed.json record and the logs.
+    Remove-Item -Force $installed
+    Remove-Item -Force (Join-Path $unpack "pane\pane.exe")
+} finally {
+    Stop-Process -Id $server.Id -ErrorAction SilentlyContinue
+    Remove-Item Env:PANE_ARTIFACTS -ErrorAction SilentlyContinue
+    $env:PATH = $realPath
+    $env:APPDATA = $realAppData
+    $env:LOCALAPPDATA = $realLocal
+}
 Write-Output "screenshots in $OutDir"

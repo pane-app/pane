@@ -142,18 +142,18 @@ impl Begun {
 }
 
 /// What an install added.
-struct Outcome {
+pub(in crate::launcher) struct Outcome {
     /// The required dependencies installed with it, first installed first.
-    dependencies: Vec<InstalledPackage>,
-    package: InstalledPackage,
+    pub(in crate::launcher) dependencies: Vec<InstalledPackage>,
+    pub(in crate::launcher) package: InstalledPackage,
     /// Titles of required dependencies the user disabled, which stay so.
-    disabled: Vec<String>,
+    pub(in crate::launcher) disabled: Vec<String>,
     /// Titles of required dependencies Pane paused, which stay so.
-    paused: Vec<String>,
+    pub(in crate::launcher) paused: Vec<String>,
 }
 
 /// Why an install installed nothing, or not all of it.
-enum Stopped {
+pub(in crate::launcher) enum Stopped {
     Failed(dependencies::Failure),
     /// The plan is not the one the preview showed: this is the new one.
     Changed(Box<(SourcePackage, Plan)>),
@@ -328,23 +328,7 @@ impl Launcher {
                 }
             }
             Err(Stopped::Failed(failure)) => {
-                let mut message = failure.error;
-                if !failure.left_installed.is_empty() {
-                    let left: Vec<String> = failure
-                        .left_installed
-                        .iter()
-                        .map(|(package, why)| format!("{} ({why})", package.title()))
-                        .collect();
-                    message.push_str(&format!(
-                        ". Pane could not remove again what it had installed, which stays \
-                         installed: {}",
-                        platform::join(&left)
-                    ));
-                    for (package, _) in failure.left_installed {
-                        self.put_installed(&mut state, package);
-                    }
-                    self.refresh(&mut state);
-                }
+                let message = self.install_left_behind(&mut state, &failure);
                 if current {
                     state.view.status = Status::Error(message);
                 }
@@ -379,7 +363,7 @@ impl Launcher {
 
     /// Installs `package` with `plan`, as [`Launcher::install_planned`]
     /// describes, once it has been read and planned.
-    async fn install_plan(
+    pub(in crate::launcher) async fn install_plan(
         &self,
         store: std::sync::Arc<std::sync::Mutex<crate::packages::Store>>,
         package: SourcePackage,
@@ -476,5 +460,34 @@ impl Launcher {
         }
         plan.problems.extend(problems);
         (package, plan)
+    }
+    /// What an install that stopped partway leaves: the message for the
+    /// status line, with the packages it had already installed put back
+    /// and the state refreshed, so the caller shows the message as its
+    /// screen allows (an install the user chose, a default extension's
+    /// acquisition).
+    pub(in crate::launcher) fn install_left_behind(
+        &self,
+        state: &mut State,
+        failure: &dependencies::Failure,
+    ) -> String {
+        let mut message = failure.error.clone();
+        if !failure.left_installed.is_empty() {
+            let left: Vec<String> = failure
+                .left_installed
+                .iter()
+                .map(|(package, why)| format!("{} ({why})", package.title()))
+                .collect();
+            message.push_str(&format!(
+                ". Pane could not remove again what it had installed, which stays \
+                 installed: {}",
+                platform::join(&left)
+            ));
+            for (package, _) in failure.left_installed.clone() {
+                self.put_installed(state, package);
+            }
+            self.refresh(state);
+        }
+        message
     }
 }

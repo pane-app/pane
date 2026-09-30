@@ -1,0 +1,15 @@
+{
+  "manifestVersion": 1,
+  "title": "Service sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "watching",
+      "title": "Watching",
+      "subtitle": "Pane runs its continuing service while it is enabled",
+      "component": "sample_service.wasm",
+      "service": true
+    }
+  ]
+}

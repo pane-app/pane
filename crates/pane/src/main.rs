@@ -22,10 +22,15 @@ enum ToPreview {
 /// package in `<folder>` shown for installation, as if chosen with the
 /// folder picker, the npm package, as if named in "Install extension from
 /// npm…", or the Git repository, as if named in "Install extension from
-/// Git…".
+/// Git…". `pane --version` prints Pane's version and exits without opening
+/// a window, so an installation can check what it installed.
 fn package_to_preview() -> Option<ToPreview> {
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
+        if arg == "--version" {
+            println!("Pane {}", env!("CARGO_PKG_VERSION"));
+            std::process::exit(0);
+        }
         if arg == "--install" {
             let source = args.next()?;
             let text = source.to_str();
@@ -87,6 +92,26 @@ fn main() {
             }
             None => launcher,
         };
+        // Pane's default extensions are acquired at first setup from Pane's
+        // own downloads, which the installer carries none of. A release
+        // build acquires them from Pane's published downloads; a development
+        // build only where PANE_ARTIFACTS names a source on this computer
+        // (the tests' and smokes' own), so that a development checkout
+        // installs nothing over the network by itself.
+        #[cfg(debug_assertions)]
+        let artifact_source = pane_core::defaults::ArtifactSource::from_dev_env();
+        #[cfg(not(debug_assertions))]
+        let artifact_source: Option<Result<pane_core::defaults::ArtifactSource, String>> =
+            Some(Ok(pane_core::defaults::ArtifactSource::published()));
+        let launcher = match artifact_source {
+            Some(Ok(source)) => launcher.with_defaults(source, pane::default_extensions()),
+            Some(Err(why)) => {
+                eprintln!("PANE_ARTIFACTS: {why}");
+                launcher.show_error(format!("PANE_ARTIFACTS: {why}"));
+                launcher
+            }
+            None => launcher,
+        };
         // Global hotkeys: the system's adapter is made on the main thread,
         // whose run loop receives the presses on macOS.
         let (press_sender, mut presses) = pane_core::hotkeys::channel();
@@ -102,6 +127,9 @@ fn main() {
             .join("../../tools/componentize-js/pane_js.py");
         let toolchains = Toolchains::from_env(Some(default_js));
         let launcher = launcher.with_development(Arc::new(toolchains), change_sender);
+        // The window takes the launcher; acquiring the default extensions
+        // keeps a clone, started below once the window exists.
+        let acquiring = launcher.clone();
         let bounds = Bounds::centered(None, size(px(640.), px(420.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -138,6 +166,14 @@ fn main() {
                     break;
                 }
             }
+        })
+        .detach();
+        // Acquiring the default extensions goes on in the background: the
+        // window, root search and Manage extensions stay usable, and the
+        // status line says what it is doing (the changes channel redraws
+        // the window as it goes, as for development builds).
+        cx.spawn(async move |_| {
+            acquiring.acquire_defaults().await;
         })
         .detach();
         cx.activate(true);

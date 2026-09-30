@@ -123,6 +123,17 @@ pub(crate) fn check_part(part: &str) -> Result<(), &'static str> {
     if part.contains(['/', '\\']) {
         return Err("whose name holds `/` or `\\`, which would put it in another folder");
     }
+    // The characters Windows does not allow are checked before the
+    // plain-name check below, so a name such as `a:b` is refused with the
+    // same words on every system (on Windows, `Path::components` would
+    // otherwise read its `:` as a drive and report it as more than one
+    // name first).
+    if part
+        .chars()
+        .any(|c| matches!(c, '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*') || c.is_control())
+    {
+        return Err("whose name has a character Windows does not allow, such as `\\`, `:` or `?`");
+    }
     // Whatever this system reads as more than one plain name (a prefix, a
     // root, `.` or `..`) is refused too, not only what the checks above know.
     let mut components = Path::new(part).components();
@@ -131,12 +142,6 @@ pub(crate) fn check_part(part: &str) -> Result<(), &'static str> {
         (Some(std::path::Component::Normal(_)), None)
     ) {
         return Err("whose name is not one plain name");
-    }
-    if part
-        .chars()
-        .any(|c| matches!(c, '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*') || c.is_control())
-    {
-        return Err("whose name has a character Windows does not allow, such as `\\`, `:` or `?`");
     }
     if part.ends_with('.') || part.ends_with(' ') {
         return Err("whose name ends with `.` or a space");

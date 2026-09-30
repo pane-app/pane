@@ -1,6 +1,6 @@
 # Pane
 
-A general-purpose launcher for Windows, macOS and Linux whose users can install and create extensions around a small core. Pane is the user-selected product name; current prototype testing covers Windows only.
+A general-purpose launcher for Windows, macOS and Linux whose users can install and create extensions around a small core. Pane is the user-selected product name; native evidence so far covers Linux (X11) and Windows, with macOS still to run.
 
 ## Language
 
@@ -19,6 +19,14 @@ _Avoid_: Plugin, add-on
 **Default extension**:
 An extension provided by default to supply an everyday feature; the user can disable it individually. It may be acquired automatically during initial setup rather than shipped inside the installer.
 _Avoid_: Mandatory feature, core feature
+
+**Artifact source**:
+Where Pane reads the index of its default extensions and downloads their payloads from: Pane's own downloads, distinct from npm and the Git hosts. A development build can name one on this computer instead, for tests and smokes; a release build cannot.
+_Avoid_: Registry (npm's), repository (Git's), update server (Pane's application updates)
+
+**Acquired artifact**:
+A default extension's payload Pane downloads itself at first setup: a tarball its index names by version, file, size and sha512 integrity, unpacked and checked as an npm package's tarball is and installed through the same path into a managed copy, whose identity is the default extension's own. Pane keeps what it downloaded in its payload cache only while it still matches that integrity.
+_Avoid_: Installer payload (the installer carries none), bundled feature, runtime download (the extension runtime is part of Pane)
 
 **Disabled extension**:
 An installed extension whose execution and contributed functionality are switched off, while its settings and unexpired saved data are retained.
@@ -211,6 +219,14 @@ _Avoid_: Unresponsive call (an extension's own), freeze of Pane (the window keep
 **Generation**:
 One run of an installed package's code, from when it is installed, enabled or Pane starts until it is disabled, paused or its code is replaced by a reload or an update. Every call into the package belongs to the generation current when it was asked for, and is stopped when that generation ends; its late result is discarded.
 _Avoid_: Version (a package's version is its manifest's), session, instance (one generation can start several), screen or search epoch (the launcher's counters of screens and searches, which decide whether an answer is shown; a search also cancels its own pending calls for computed results)
+
+**Scheduled work**:
+Work Pane runs for an installed package without the user asking: a command's `pane.json` entry declares a schedule, an interval and the item whose action runs, and Pane runs that action each interval while the package's code may run, taking the generation current when the run is due. A disable, an uninstall, a pause or a code replacement ends it; enabling the package, replacing its code or restarting Pane starts it again, from a full interval, never replaying work that fell due meanwhile.
+_Avoid_: Timer, cron job, trigger, background service (an explicit continuing service is another activation model), watcher
+
+**Continuing service**:
+Work Pane runs for an installed package without the user asking or without an interval: a command's `pane.json` entry declares a service, and Pane calls its component's `run-cycle` in a cycle while the package's code may run, each cycle answering the status to show and how long to wait before the next, so the service paces itself. It begins at once when the code may run (installed or enabled, Pane started, code replaced) and ends when it may not, its pending cycle stopped with the generation and its task's state — the guest instance's — dropped with it; a pause, a disable, an uninstall or a code replacement ends it, and enabling, replacing or restarting Pane starts it again with a fresh task.
+_Avoid_: Background task, daemon, worker, watcher, scheduled work (an interval the manifest declares is another activation model), long-lived call
 
 **Supported platforms**:
 The operating systems a package, a command or an action declares it works on: a plain list, not a rule language. A declaration is not evidence of native support.

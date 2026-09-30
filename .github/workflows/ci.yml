@@ -50,10 +50,21 @@ jobs:
       - name: Build guests, check formatting and lints, run tests
         run: cargo xtask ci
         env:
-          # The Windows clipboard adapter's test replaces what is on the
-          # clipboard, so it runs only where this is set: on CI's runner,
-          # never by default on a developer's computer.
-          PANE_TEST_REAL_CLIPBOARD: ${{ runner.os == 'Windows' && '1' || '' }}
+          # The Windows and macOS clipboard adapters' tests replace what is
+          # on the clipboard, so they run only where this is set: on CI's
+          # runners (the macOS one has the runner's logged-in WindowServer
+          # session, so the pasteboard is live), never by default on a
+          # developer's computer.
+          PANE_TEST_REAL_CLIPBOARD: ${{ runner.os != 'Linux' && '1' || '' }}
+      # The Linux (X11) clipboard adapter's test also replaces what is on
+      # the clipboard, and needs a display to watch: the same opt-in, run
+      # under Xvfb (the step above runs without a display, so the test
+      # skips itself there).
+      - name: Run the Linux clipboard adapter test (Xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a cargo test --locked -p pane-core --test clipboard_adapter_linux
+        env:
+          PANE_TEST_REAL_CLIPBOARD: "1"
       - name: Build the launcher
         run: cargo build --locked -p pane
       - uses: actions/setup-python@v5
@@ -64,13 +75,43 @@ jobs:
       - name: Native GUI smoke (Linux, Xvfb)
         if: runner.os == 'Linux'
         run: bash scripts/smoke-linux.sh smoke
+      - name: Build the Linux package (release, x86_64)
+        if: runner.os == 'Linux'
+        run: cargo xtask package-linux
+      - name: Upload the Linux package and its artifacts
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-package
+          path: target/dist/
+          if-no-files-found: error
       - name: Native GUI smoke (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/smoke-windows.ps1 -OutDir smoke
+      - name: Build the Windows package (release, x86_64)
+        if: runner.os == 'Windows'
+        run: cargo xtask package-windows
+      - name: Upload the Windows package and its artifacts
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-package
+          path: target/dist/
+          if-no-files-found: error
       - name: Native GUI smoke (macOS)
         if: runner.os == 'macOS'
         run: bash scripts/smoke-macos.sh smoke
+      - name: Build the macOS package (release, aarch64)
+        if: runner.os == 'macOS'
+        run: cargo xtask package-macos
+      - name: Upload the macOS package and its artifacts
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-package
+          path: target/dist/
+          if-no-files-found: error
       - name: Upload GUI smoke evidence
         if: always()
         uses: actions/upload-artifact@v4

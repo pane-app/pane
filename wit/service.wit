@@ -1,0 +1,50 @@
+package pane:extension@0.1.0;
+
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// A continuing service a command runs while its package's code may run
+// (see docs/services.md): not on an interval its `pane.json` entry
+// declares, but at the cadence the service itself chooses, cycle by cycle.
+// Kept apart from extension.wit so a command that runs none is unchanged:
+// only a command whose `pane.json` entry sets `"service": true` exports
+// this interface, beside `command`. Rust commands export it through
+// pane-guest (`pane_guest::service::export!`). The header follows
+// `package`: comments above it would document the package, which
+// extension.wit already does.
+
+interface service {
+  /// What one cycle of the service answers: the status to show and how
+  /// long Pane waits before running the next cycle.
+  record cycle {
+    /// The status to show on the command's screen while it is open, as an
+    /// action's answer is.
+    status: string,
+    /// How long to wait before the next cycle, in seconds: at least 1 and
+    /// at most 2592000 (30 days); Pane clamps anything else (provisional
+    /// bounds, as scheduled work's). 0 is not "at once": a service that
+    /// always asks for the shortest wait runs every second.
+    next-seconds: u64,
+  }
+
+  /// Run one cycle of the continuing service of the command with `command`
+  /// (its id in `pane.json`, so one component can serve several commands'
+  /// services). Pane calls it only while the package's code may run: from
+  /// when it is installed (enabled), enabled, replaced by a reload or an
+  /// update, or Pane starts, until it is disabled, uninstalled, paused
+  /// after failures or its code is replaced. Each cycle does a slice of
+  /// the service's work and answers what to show and when to run it again;
+  /// the instance, and whatever the service keeps in it (its task's state),
+  /// lives for that whole time and goes when the generation ends. An error
+  /// is the service's own to report (Pane shows it and runs the next cycle
+  /// after a second); a trap, or computing without finishing, is a crash of
+  /// the package like any call's. Waiting inside the cycle is the service's
+  /// to do, but it holds every other extension's calls behind it, exactly
+  /// as an action's wait does.
+  run-cycle: async func(command: string) -> result<cycle, string>;
+}
+
+/// The continuing-service export alone: a command that runs one exports it
+/// besides the `extension` world's `command`.
+world service-provider {
+  export service;
+}

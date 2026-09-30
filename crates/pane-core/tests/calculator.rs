@@ -11,7 +11,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
-use pane_core::{Launcher, PackageIdentity, Runtime, Status};
+use pane_core::{Launcher, Limits, PackageIdentity, Runtime, Status};
 use tempfile::TempDir;
 
 fn built(path: &str) -> PathBuf {
@@ -384,7 +384,17 @@ fn a_command_that_fails_to_answer_is_explained_and_other_results_stay() {
 #[test]
 fn the_answer_is_listed_while_a_command_asked_after_it_is_still_answering() {
     let dirs = Dirs::new();
-    let launcher = dirs.launcher(dirs.runtime());
+    let runtime = dirs.runtime();
+    // The slow fixture computes for about a second, which a loaded
+    // machine can stretch past the default 5-second computing limit, and
+    // Pane stopping it as unresponsive would answer the query twice
+    // ("Slow answers"). Waiting longer is this test's own business; the
+    // calculator's answer is not affected.
+    runtime.set_limits(Limits {
+        compute: Duration::from_secs(30),
+        ..Limits::default()
+    });
+    let launcher = dirs.launcher(runtime);
     // Installed after the calculator, so asked after it.
     let slow = dirs.package(
         "slow",

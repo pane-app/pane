@@ -378,27 +378,138 @@ must log the held search as abandoned; the service's 503, then the service
 stopped, are errors; restarted, a search lists results again.
 **Not run on macOS yet.**
 
-## Clipboard history (#35)
+## Clipboard history (#35, #37)
 
-Pane has no clipboard adapter on macOS yet (#37). The smoke's clipboard
-phase (screenshots 280 and 281), with a data folder of its own, installs
-Clipboard History, whose command is then listed in root search as "Not
-available on macOS: this command supports only Windows" (the unavailable
-color); Enter shows that as the error and does not open it, and no
-`clipboard-history.json` appears. No clipboard is read. **Not run on macOS
-yet.**
+macOS gets the pasteboard adapter of clipboard history
+([`macos.rs`](../../crates/pane-core/src/clipboard/macos.rs)) behind the
+same `ClipboardSystem` trait as the Windows and Linux ones: a thread of
+Pane's own polls the pasteboard's `changeCount` every 250 ms (macOS'
+`NSPasteboardDidChangeNotification` needs a run loop Pane's own threads do
+not run; the count is the established mechanism without one) and, when the
+count moved, reads the pasteboard's types first, then the text
+(`NSPasteboardTypeString`) only if no type is
+`org.nspasteboard.ConcealedType`, the nspasteboard.org convention that
+password managers such as 1Password and Strongbox set — honored, with the
+text never read when it is present. The pasteboard never names the program
+that copied, so every report's owner is unknown and no program can be
+excluded by name (an excluded name never matches, as the contract says of
+an unknown owner). `write_text` puts the text in the pasteboard server
+(`clearContents` + `setString:forType:`), which holds it for whoever pastes
+beyond the watch; no permission is needed. What is kept is decided by the
+same `clipboard::accept`, unchanged, and the retention/storage contract is
+reused as is (the fake-clipboard tests cover it).
+
+The smoke's clipboard phase (screenshots 280 to 287, on the pattern of the
+Windows and Linux ones), with a data folder of its own, turns history on
+after checking nothing is kept while off, keeps the smoke's own copies
+(put on the pasteboard with AppleScript's `set the clipboard to`), pauses,
+resumes, copies a kept item again and checks the pasteboard with `pbpaste`
+and by pasting into root search, disables, restarts disabled, enables and
+keeps again across a restart, with `clipboard-history.json` checked at each
+step. The expiry and deletion phase (400 to 404) backdates the kept items
+through `scripts/clipboard_history.py`, checks the expired one is gone
+after the restart, deletes one item, the recent ones, all through the
+retention form and all with history turned off, and checks the pasteboard
+still holds what was copied last (`pbpaste`). No marked copy is made in
+the smoke (AppleScript cannot set a custom type); the concealed marker is
+checked by the adapter test instead.
+
+**Not run on macOS yet.** The adapter was written on this headless Linux
+machine, where macOS code cannot build: it was reviewed by reading and
+type-checked against the real `objc2`/`objc2-app-kit` bindings by compiling
+the adapter and its test for `aarch64-apple-darwin` in a scratch crate with
+the bindings from this lock file (checking only, no linking or running).
+CI's macOS leg is the compile and runtime evidence:
+`clipboard_adapter_macos.rs` (opt-in through `PANE_TEST_REAL_CLIPBOARD=1`,
+set for the macOS runner) runs against the runner's pasteboard, and the
+next green macOS run of the smoke is the native-capture evidence. A
+password manager's own copies (1Password, Strongbox) have not been run
+anywhere; the convention's type name is what the test checks.
 
 ## Clipboard history expiry (#36)
 
-The clipboard phase goes on (screenshots 400 to 402) where the command never
-runs: with Pane stopped, the smoke writes the history of the installed
-package as a downtime would leave it (`scripts/clipboard_history.py`):
-history on, one item copied 8 days ago and one a day ago. Once Pane starts,
-the old one is gone from the file, and the uninstall confirmation counts
-"Saved data: 1 clipboard history item"; kept as retained data and made 8
-days old while Pane is stopped, it is gone once Pane starts again, the
-extension list's last row reading "keeps clipboard history settings". No
-clipboard is read. **Not run on macOS yet.**
+Covered by the same smoke phase (screenshots 400 to 404, above) since the
+command now runs on macOS: items expire after their package's retention
+whether or not the extension runs, and the phase backdates and deletes
+items exactly as the Linux one does, with the pasteboard checked directly
+(`pbpaste`). **Not run on macOS yet.**
+
+## Installing Pane and acquiring its calculator (#52)
+
+A final phase, after the clipboard-expiry one, proves the whole outcome of
+[#52](https://github.com/hoangvu12/pane/issues/52)
+([installer](../installer.md)), the macOS half of what
+[#53](linux.md#installing-pane-and-acquiring-its-calculator-53) proved on
+Linux and [#51](windows.md#installing-pane-and-acquiring-its-calculator-51)
+on Windows. `cargo xtask package-macos --dev` builds the macOS package —
+a zip, like the Windows one, opened with one double-click in Finder and
+written by the same fixed-bytes writer — holding the `pane` program, the
+bash `install.sh`, a README and the bundle's `Info.plist` (the development
+profile, so its program accepts the controlled artifact source) and the
+default extensions' payloads; the smoke serves `target/dist/artifacts`
+from 127.0.0.1 with `scripts/artifact_server.py` (nothing reaches the
+network or Pane's published downloads). The package is unzipped into a
+folder of its own and its install script runs with a **clean machine's**
+environment: a fresh home folder and `PATH=/usr/bin:/bin`, so the home
+holds no data and no development tool is configured. It builds the
+`Pane.app` bundle in that home's `~/Applications` (the user's own folder,
+so no administrator rights) from the program and the `Info.plist`, and
+runs `pane --version` to check what it installed. The installed Pane then
+starts — the bundle's `Contents/MacOS/pane` — with a PATH that holds
+nothing at all (an empty folder, checked with `command -v` of cargo,
+rustc, node, npm, git, cc, clang and make), pointed at the controlled
+source with `PANE_ARTIFACTS`. It acquires the calculator and the helper
+sample by itself (`installed.json` must record both under `"default"`),
+root search lists their commands, "6*7" answers 42 and Enter copies it,
+and the Helper sample's "Echo through the helper" runs the payload's
+prebuilt `pane-echo` ("Echoed \"hello from Pane\" on macOS arm64"),
+built for `macos-aarch64` (the packaging rewrote the payload's manifest
+to that target), from the managed copy, with no developer tool
+reachable. The acquired payloads must be cached, the downloads folder
+empty, and no helper process left running. The program files are removed
+again at the phase's end, so the uploaded evidence is the screenshots and
+records (frames 500 to 503, and the `clean-home-records` folder), not the
+program. CI builds the release-profile package after the smoke and
+uploads it with the artifacts of the job (`macos-package`). Nothing is
+signed (no Apple Developer credentials exist): the smoke's binaries are
+built on the runner, so they carry no Gatekeeper quarantine mark; a
+package downloaded from the internet would, and its first launch would
+be blocked until allowed in System Settings — recorded as an execution
+prerequisite in [the installer's limits](../installer.md#limits-and-prerequisites).
+
+**Recorded 2026-09-30, this branch's machine (headless aarch64 Linux —
+no Apple toolchain, so the macOS `pane` program and its package cannot
+be built here):** what ran locally is everything that machine can run:
+`cargo check`, `clippy`, `fmt` and the unit tests of `xtask`; `cargo
+xtask package-macos` far enough to assemble the whole artifact tree
+(the helper sample's payload manifest rewritten to this machine's
+target, `linux-aarch64`, by the same shared code a macOS run rewrites
+to `macos-aarch64`), before it refuses with the message that only a
+macOS checkout builds the program — the same refusal `package-windows`
+makes here; and `cargo xtask package-linux` end-to-end as the shared
+packaging's regression. The install script is bash, so it was linted
+(`bash -n`) and dry-run on this machine with a fake `pane` binary
+through its logic paths: the per-user `Pane.app` install with a clean
+environment, the `--app-dir` override, the missing-file and usage
+errors, and the `--version` check propagating the program's exit code;
+its one macOS-specific claim — that Gatekeeper does not stop the
+script's direct run — is read-reviewed. The acquisition the installed
+Pane does is the same platform-independent code
+`crates/pane-core/tests/installer.rs` checks (rerun here, all passing,
+including the prebuilt helper running from the managed copy). The
+`Info.plist` the package ships was generated and parsed back
+(`plistlib`) with the keys Launch Services reads. The bash smoke phase
+is syntax-checked and reviewed only; the zip package itself, the
+release-profile package and the smoke phase are **pending CI**: they
+need the macOS build and interactive desktop only the `macos-15`
+runner provides.
+
+| Step | Evidence |
+| --- | --- |
+| The clean machine's Pane acquired both default extensions and lists their commands | pending CI (frame 500) |
+| "6*7" answers 42 | pending CI (frame 501) |
+| Enter copies the answer | pending CI (frame 502) |
+| The helper sample's prebuilt helper answers | pending CI (frame 503) |
 
 ## Text input and accessibility findings
 

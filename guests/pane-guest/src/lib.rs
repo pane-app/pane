@@ -4,7 +4,8 @@
 //! values between runs with [`settings`], and its own records, disposable
 //! values and secrets with [`content`], [`cache`] and [`credentials`]. It
 //! may compute results from root search's query with [`root`], take a query
-//! the user sends it from root search with [`query`], call
+//! the user sends it from root search with [`query`], run a continuing
+//! service while its package's code may run with [`service`], call
 //! operations other packages publish with [`operations::call`], serve those
 //! its own package publishes with [`publish`], find and open installed
 //! applications with [`applications`], supply root results ahead of the
@@ -251,6 +252,31 @@ pub mod search {
     });
 
     pub use exports::pane::extension::command_search::{Guest, SearchResult};
+}
+
+/// A continuing service a command runs while its package's code may run
+/// (`pane:extension/service`), at the cadence the service itself chooses:
+/// Pane calls `run-cycle` from when the code may run (the package is
+/// installed enabled, enabled again, replaced, or Pane starts) until it
+/// may not (disabled, uninstalled, paused, replaced), each cycle answering
+/// the status to show and how long to wait before the next. A command whose
+/// `pane.json` entry sets `"service": true` implements
+/// [`service::Guest`] too and calls
+/// [`service::export!`](crate::service::export) beside [`export!`]:
+///
+/// ```ignore
+/// pane_guest::export!(Watching);
+/// pane_guest::service::export!(Watching);
+/// ```
+pub mod service {
+    wit_bindgen::generate!({
+        path: "../../wit",
+        world: "service-provider",
+        pub_export_macro: true,
+        default_bindings_module: "pane_guest::service",
+    });
+
+    pub use exports::pane::extension::service::{Cycle, Guest};
 }
 
 pub mod http;
