@@ -20,7 +20,7 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 
-use super::{Changing, Launcher, State, Status, off_thread, pausing};
+use super::{Changing, Launcher, State, Status, off_thread, owner, pausing};
 use crate::packages::{PackageError, PackageIdentity, Pause, PauseCause};
 use crate::runtime::CallError;
 
@@ -126,6 +126,28 @@ impl Launcher {
             attempt,
             staged: None,
         })
+    }
+
+    /// Why the command in `component` cannot be started now: its package's
+    /// managed copy is being replaced by the update Pane applied by itself,
+    /// which would stop the call the user is about to wait on. `None` when
+    /// it can be started. The user is never interrupted mid-command by an
+    /// automatic update: one waits for the package to be quiet, and this
+    /// keeps a call started in the moment between that check and the
+    /// replacement from being stopped by it. An update the user chose
+    /// (the preview's Update row) replaces anyway, exactly as a reload
+    /// does: opening the command is allowed and the replacement closes
+    /// it.
+    pub(super) fn updating(&self, component: &std::path::Path) -> Option<String> {
+        let state = self.lock();
+        let package = owner(&state.packages, component)?;
+        match state.changing.get(&package.identity) {
+            Some(Changing::BackgroundUpdating) => Some(format!(
+                "{} is updating; open it again once that is done",
+                package.title()
+            )),
+            _ => None,
+        }
     }
 
     /// Why the package with `identity` cannot be changed by `verb` (reload,

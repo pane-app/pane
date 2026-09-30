@@ -57,6 +57,9 @@ struct Planned {
 struct Served {
     /// By default extension id: (version, file, published).
     payloads: BTreeMap<String, Published>,
+    /// The application package the index's `application` entry names, and
+    /// its bytes, served as the entry's `file`.
+    application: Option<(Value, Vec<u8>)>,
     /// The index document itself, served as written; `None` for the one
     /// the payloads describe.
     index: Option<String>,
@@ -130,10 +133,47 @@ impl Artifacts {
             .insert(id.to_owned(), Published { tarball, entry });
     }
 
+    /// Publishes the application package `zip` as `version` of Pane for
+    /// `target` (such as `windows-x86_64`), in the index's `application`
+    /// entry with its sha512 integrity and size, tagged as Pane's own
+    /// downloads name the application package an update comes from.
+    pub fn publish_application(&self, version: &str, target: &str, zip: &[u8]) {
+        let file = format!("pane-{version}-{target}.zip");
+        let entry = json!({
+            "version": version,
+            "file": file,
+            "integrity": integrity(zip),
+            "size": zip.len(),
+            "target": target,
+        });
+        self.served().application = Some((entry, zip.to_vec()));
+    }
+
+    /// As [`Artifacts::publish_application`], but the package is the
+    /// gzipped tarball the Linux package is (`pane-<version>-<target>
+    /// `.tar.gz`), served as the entry's `file` the same way.
+    pub fn publish_application_tgz(&self, version: &str, target: &str, tarball: &[u8]) {
+        let file = format!("pane-{version}-{target}.tar.gz");
+        let entry = json!({
+            "version": version,
+            "file": file,
+            "integrity": integrity(tarball),
+            "size": tarball.len(),
+            "target": target,
+        });
+        self.served().application = Some((entry, tarball.to_vec()));
+    }
+
     /// Serves `index` as the index document itself, whatever it says: the
     /// document a broken source would give.
     pub fn serve_index(&self, index: String) {
         self.served().index = Some(index);
+    }
+
+    /// Serves the index the payloads and the application package describe
+    /// again, after one was served as written.
+    pub fn derived_index(&self) {
+        self.served().index = None;
     }
 
     /// Answers the next `times` requests for a path ending in `path` with
@@ -199,6 +239,19 @@ impl Artifacts {
         published.tarball = damaged;
     }
 
+    /// Damages the stored application package: its bytes no longer match
+    /// the integrity its index entry gives.
+    pub fn corrupt_application(&self) {
+        let mut served = self.served();
+        let Some((_, zip)) = served.application.as_mut() else {
+            panic!("no application package published");
+        };
+        let mut damaged = zip.clone();
+        let at = damaged.len() / 2;
+        damaged[at] = damaged[at].wrapping_add(1);
+        *zip = damaged;
+    }
+
     /// Every path asked for so far, in order.
     pub fn requests(&self) -> Vec<String> {
         self.served().requests.clone()
@@ -237,7 +290,11 @@ fn index_of(served: &Served) -> String {
         .values()
         .map(|published| &published.entry)
         .collect();
-    json!({ "formatVersion": 1, "defaults": defaults }).to_string()
+    let mut index = json!({ "formatVersion": 1, "defaults": defaults });
+    if let Some((entry, _)) = &served.application {
+        index["application"] = entry.clone();
+    }
+    index.to_string()
 }
 
 /// The path a request's first line names.
@@ -335,12 +392,18 @@ fn answer_behavior(served: &Served, path: &str, behavior: &Behavior) -> (&'stati
     }
 }
 
-/// What `path` asks for: the index document, or a published payload.
+/// What `path` asks for: the index document, a published payload, or the
+/// application package the index names.
 fn answer_payload(served: &Served, path: &str) -> (&'static str, Vec<u8>) {
     let path = path.trim_start_matches('/');
     if path == INDEX_FILE {
         let index = served.index.clone().unwrap_or_else(|| index_of(served));
         return ("200 OK", index.into_bytes());
+    }
+    if let Some((entry, zip)) = &served.application
+        && entry["file"] == path
+    {
+        return ("200 OK", zip.clone());
     }
     let found = served
         .payloads
@@ -379,17 +442,103 @@ fn base64(bytes: &[u8]) -> String {
 /// A gzipped tarball holding `files` (path in the package, contents)
 /// under `package/`, as Pane's own downloads pack a payload.
 pub fn pack(files: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    pack_under("package", files)
+}
+
+/// A gzipped tarball holding `files` (path in the package, contents)
+/// under `pane/`, as Pane's own downloads pack its Linux package: what a
+/// Pane application update on Linux downloads and unpacks.
+pub fn pack_tgz(files: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    pack_under("pane", files)
+}
+
+/// A gzipped tarball holding `files` under the folder `top`.
+fn pack_under(top: &str, files: &[(&str, Vec<u8>)]) -> Vec<u8> {
     let mut tar = tar::Builder::new(Vec::new());
     for (path, contents) in files {
         let mut header = tar::Header::new_ustar();
         header.set_size(contents.len() as u64);
         header.set_mode(0o644);
         header.set_entry_type(tar::EntryType::Regular);
-        tar.append_data(&mut header, format!("package/{path}"), contents.as_slice())
+        tar.append_data(&mut header, format!("{top}/{path}"), contents.as_slice())
             .unwrap();
     }
     let tar = tar.into_inner().unwrap();
     let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
     gz.write_all(&tar).unwrap();
     gz.finish().unwrap()
+}
+
+/// A zip holding `files` (path in the archive, contents) under `pane/`,
+/// as Pane's own downloads pack its Windows package: every entry
+/// deflated, no directory entries, the same shape `xtask`'s zip writer
+/// packs. (A hand-rolled writer rather than reusing `xtask`'s, because
+/// the tests cannot reach into the xtask crate; the pane-core reader's
+/// unit tests pin the reading of both methods, stored and deflated.)
+pub fn pack_zip(files: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    let mut zip: Vec<u8> = Vec::new();
+    // (name, crc, size, deflated bytes, where the local header is).
+    let mut entries: Vec<(String, u32, u64, Vec<u8>, u64)> = Vec::new();
+    for (path, contents) in files {
+        let name = format!("pane/{path}");
+        let mut deflated =
+            flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::fast());
+        deflated.write_all(contents).unwrap();
+        let packed = deflated.finish().unwrap();
+        let crc = crc32fast::hash(contents);
+        let at = zip.len() as u64;
+        push_u32(&mut zip, 0x0403_4b50);
+        push_u16(&mut zip, 20);
+        push_u16(&mut zip, 0);
+        push_u16(&mut zip, 8);
+        push_u16(&mut zip, 0);
+        push_u16(&mut zip, 0);
+        push_u32(&mut zip, crc);
+        push_u32(&mut zip, packed.len() as u32);
+        push_u32(&mut zip, contents.len() as u32);
+        push_u16(&mut zip, name.len() as u16);
+        push_u16(&mut zip, 0);
+        zip.extend_from_slice(name.as_bytes());
+        zip.extend_from_slice(&packed);
+        entries.push((name, crc, contents.len() as u64, packed, at));
+    }
+    let directory_at = zip.len() as u64;
+    for (name, crc, size, packed, at) in &entries {
+        push_u32(&mut zip, 0x0201_4b50);
+        push_u16(&mut zip, 20);
+        push_u16(&mut zip, 20);
+        push_u16(&mut zip, 0);
+        push_u16(&mut zip, 8);
+        push_u16(&mut zip, 0);
+        push_u16(&mut zip, 0);
+        push_u32(&mut zip, *crc);
+        push_u32(&mut zip, packed.len() as u32);
+        push_u32(&mut zip, *size as u32);
+        push_u16(&mut zip, name.len() as u16);
+        push_u16(&mut zip, 0);
+        push_u16(&mut zip, 0);
+        push_u16(&mut zip, 0);
+        push_u16(&mut zip, 0);
+        push_u32(&mut zip, 0);
+        push_u32(&mut zip, *at as u32);
+        zip.extend_from_slice(name.as_bytes());
+    }
+    let directory_size = (zip.len() as u64 - directory_at) as u32;
+    push_u32(&mut zip, 0x0605_4b50);
+    push_u16(&mut zip, 0);
+    push_u16(&mut zip, 0);
+    push_u16(&mut zip, entries.len() as u16);
+    push_u16(&mut zip, entries.len() as u16);
+    push_u32(&mut zip, directory_size);
+    push_u32(&mut zip, directory_at as u32);
+    push_u16(&mut zip, 0);
+    zip
+}
+
+fn push_u16(out: &mut Vec<u8>, value: u16) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_u32(out: &mut Vec<u8>, value: u32) {
+    out.extend_from_slice(&value.to_le_bytes());
 }

@@ -69,15 +69,36 @@ const PREBUILT: &[&str] = &[
 fn main() -> ExitCode {
     let task = std::env::args().nth(1);
     let dev = std::env::args().any(|arg| arg == "--dev");
-    let result = match task.as_deref() {
-        Some("guests") => guests(),
-        Some("js-guests") => js_guests(),
-        Some("ci") => ci(),
-        Some("package-linux") => package::linux(dev),
-        Some("package-windows") => package::windows(dev),
-        Some("package-macos") => package::macos(dev),
+    // The version a package names its program by, when it is not this
+    // workspace's own: dotted numbers, as Pane reads versions.
+    let version = std::env::args()
+        .position(|arg| arg == "--package-version")
+        .and_then(|at| std::env::args().nth(at + 1))
+        .map(|version| {
+            version
+                .split('.')
+                .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+                .then_some(version.clone())
+                .ok_or_else(|| {
+                    format!(
+                        "--package-version must be dotted numbers such as 99.0.0, not \
+                         `{version}`: it is the version the packaged program reports and \
+                         Pane's index names"
+                    )
+                })
+        })
+        .transpose();
+    let result = match (task.as_deref(), version) {
+        (Some("guests"), _) => guests(),
+        (Some("js-guests"), _) => js_guests(),
+        (Some("ci"), _) => ci(),
+        (Some("package-linux"), Ok(version)) => package::linux(dev, version),
+        (Some("package-windows"), Ok(version)) => package::windows(dev, version),
+        (Some("package-macos"), Ok(version)) => package::macos(dev, version),
+        (_, Err(why)) => Err(why),
         _ => Err(
-            "usage: cargo xtask <guests|js-guests|ci|package-linux|package-windows|package-macos>"
+            "usage: cargo xtask <guests|js-guests|ci|package-linux|package-windows|package-macos> \
+             [--dev] [--package-version <version>]"
                 .into(),
         ),
     };
@@ -368,9 +389,8 @@ fn pane_js(subcommand: &str) -> Command {
 }
 
 fn ci() -> Result<(), String> {
-    guests()?;
-    // The prebuilt JS/TS samples must match their sources and pins.
-    run(&mut pane_js("check"))?;
+    // Formatting first: it is free, so a formatting error is seen at once
+    // instead of after the guests and the checks have been built.
     let root = root();
     run(cargo().current_dir(&root).args(["fmt", "--all", "--check"]))?;
     for dir in [
@@ -383,6 +403,9 @@ fn ci() -> Result<(), String> {
             .current_dir(root.join(dir))
             .args(["fmt", "--all", "--check"]))?;
     }
+    // The prebuilt JS/TS samples must match their sources and pins.
+    run(&mut pane_js("check"))?;
+    guests()?;
     let clippy = [
         "clippy",
         "--locked",

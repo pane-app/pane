@@ -160,7 +160,7 @@ pub(in crate::launcher) enum Stopped {
 }
 
 /// Why packages cannot be claimed for an install.
-enum Refusal {
+pub(in crate::launcher) enum Refusal {
     /// One of them is busy; the message says which and how.
     Busy(String),
     /// They are not as the plan assumed.
@@ -179,13 +179,56 @@ fn failed(error: impl ToString) -> Stopped {
     })
 }
 
+/// The message for an install or update that installed `outcome` as `mode`
+/// asked: what was installed or updated, with which required dependencies,
+/// and which of them the user left disabled or Pane left paused.
+pub(in crate::launcher) fn outcome_message(mode: &Mode, outcome: &Outcome) -> String {
+    let title = outcome.package.title();
+    let mut message = match (mode, outcome.package.version()) {
+        (Mode::Install, _) => format!("Installed {title}"),
+        (Mode::Update(_), Some(version)) => format!("Updated {title} to {version}"),
+        (Mode::Update(_), None) => format!("Updated {title}"),
+    };
+    if !outcome.dependencies.is_empty() {
+        let titles: Vec<String> = outcome
+            .dependencies
+            .iter()
+            .map(InstalledPackage::title)
+            .collect();
+        message.push_str(&format!(
+            " with {}, which it requires",
+            platform::join(&titles)
+        ));
+    }
+    if !outcome.disabled.is_empty() {
+        message.push_str(&format!(
+            "; {} stays disabled: enable it in Manage extensions for {title} to use it",
+            platform::join(&outcome.disabled)
+        ));
+    }
+    if !outcome.paused.is_empty() {
+        message.push_str(&format!(
+            "; {} stays paused after an error: retry it in Manage extensions for {title} to \
+             use it",
+            platform::join(&outcome.paused)
+        ));
+    }
+    message
+}
+
 /// Claims for an install in `mode` the requested package and every package
 /// the plan with `assumptions` relies on, if they are as it assumed and
-/// nothing else is happening to them.
-fn claim(
+/// nothing else is happening to them. The updated package is claimed as
+/// `updating`: [`Changing::Updating`] for an update the user chose, and
+/// [`Changing::BackgroundUpdating`] for the one the updater applies by
+/// itself — which is what tells the two apart to a call the user makes into
+/// the package in the moment between the boundary check and the
+/// replacement (see [`Launcher::open_command`]).
+pub(in crate::launcher) fn claim(
     state: &mut State,
     mode: &Mode,
     assumptions: &Assumptions,
+    updating: Changing,
 ) -> Result<Vec<PackageIdentity>, Refusal> {
     if !assumptions.hold(&state.packages, |identity| state.paused.is_paused(identity)) {
         return Err(Refusal::Changed);
@@ -198,7 +241,7 @@ fn claim(
         .iter()
         .map(|identity| {
             let what = match mode {
-                Mode::Update(updated) if updated == identity => Changing::Updating,
+                Mode::Update(updated) if updated == identity => updating,
                 _ => Changing::Installing,
             };
             (identity.clone(), what)
@@ -239,7 +282,7 @@ impl Launcher {
             state.view.status = Status::Error(error.to_string());
             return None;
         }
-        let claimed = match claim(state, &mode, &assumptions) {
+        let claimed = match claim(state, &mode, &assumptions, Changing::Updating) {
             Ok(claimed) => claimed,
             Err(Refusal::Busy(message)) => {
                 state.view.status = Status::Error(message);
@@ -276,36 +319,7 @@ impl Launcher {
         let current = state.screen_epoch == epoch;
         match result {
             Ok(outcome) => {
-                let title = outcome.package.title();
-                let mut message = match (&mode, outcome.package.version()) {
-                    (Mode::Install, _) => format!("Installed {title}"),
-                    (Mode::Update(_), Some(version)) => format!("Updated {title} to {version}"),
-                    (Mode::Update(_), None) => format!("Updated {title}"),
-                };
-                if !outcome.dependencies.is_empty() {
-                    let titles: Vec<String> = outcome
-                        .dependencies
-                        .iter()
-                        .map(InstalledPackage::title)
-                        .collect();
-                    message.push_str(&format!(
-                        " with {}, which it requires",
-                        platform::join(&titles)
-                    ));
-                }
-                if !outcome.disabled.is_empty() {
-                    message.push_str(&format!(
-                        "; {} stays disabled: enable it in Manage extensions for {title} to use it",
-                        platform::join(&outcome.disabled)
-                    ));
-                }
-                if !outcome.paused.is_empty() {
-                    message.push_str(&format!(
-                        "; {} stays paused after an error: retry it in Manage extensions for \
-                         {title} to use it",
-                        platform::join(&outcome.paused)
-                    ));
-                }
+                let message = outcome_message(&mode, &outcome);
                 for dependency in outcome.dependencies {
                     self.put_installed(&mut state, dependency);
                 }
@@ -380,7 +394,7 @@ impl Launcher {
         }
         if claimed.is_empty() {
             let mut state = self.lock();
-            match claim(&mut state, mode, &plan.assumptions) {
+            match claim(&mut state, mode, &plan.assumptions, Changing::Updating) {
                 Ok(identities) => *claimed = identities,
                 Err(Refusal::Busy(message)) => return Err(failed(message)),
                 Err(Refusal::Changed) => return Err(failed(changed(&package.manifest.title))),
@@ -416,6 +430,18 @@ impl Launcher {
         &self,
         package: SourcePackage,
     ) -> (SourcePackage, Plan) {
+        self.plan_dependencies_from(self.sources.clone(), package)
+            .await
+    }
+
+    /// Like [`Launcher::plan_dependencies`], reading the dependencies the
+    /// plan installs from `sources` rather than this launcher's own: the
+    /// updater's thread (see [`Launcher::read_and_check_from`]).
+    pub(in crate::launcher) async fn plan_dependencies_from(
+        &self,
+        sources: Sources,
+        package: SourcePackage,
+    ) -> (SourcePackage, Plan) {
         let (installed, paused) = {
             let state = self.lock();
             let paused: Vec<PackageIdentity> = state
@@ -426,7 +452,6 @@ impl Launcher {
                 .collect();
             (state.packages.clone(), paused)
         };
-        let sources = self.sources.clone();
         let (package, mut plan) = off_thread(move || {
             let read = |identity: &PackageIdentity, source: &str| {
                 sources.read_dependency(identity, source)

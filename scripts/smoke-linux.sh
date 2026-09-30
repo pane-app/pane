@@ -1350,12 +1350,32 @@ check 265-npm-updated.png 9fd8a8   # "Updated Greeter from npm to 0.1.0"
 "$xdotool" key Return; sleep 2   # "Say hello"
 capture 266-npm-command-ran.png
 check 266-npm-command-ran.png 9fd8a8   # "Hello from the npm package"
-python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{260-npm-dependency-preview,261-npm-dependency-installed,262-npm-dependency-called,263-npm-form,264-npm-preview,265-npm-updated,266-npm-command-ran}.png
+
+# #49: the update Pane applies by itself. A 0.2.0 of the sample is
+# published into the registry this phase serves (it reads its folder on
+# request, so publishing is dropping the tarball in), and Pane is stopped
+# and started again: the first check, a second after the start, finds the
+# newer version and replaces the installed copy — unpinned, and nothing
+# of it running, so the safe boundary is at once — saying so in the status
+# line. The new copy's command runs as the old one did.
+python3 "$(dirname "$0")/npm_publish.py" target/guests/npm/pane-samples-greeter-0.1.0.tgz 0.2.0
+stop_pane
+start_pane
+"$xdotool" windowfocus --sync "$window"
+# The check a second after the start, then the download and the apply:
+# capture until the status line says the update landed, whenever that is,
+# so a slow runner is waited for rather than slept past.
+capture_until 267-npm-updated-automatically.png 9fd8a8 60   # "Updated Greeter from npm to 0.2.0"
+"$xdotool" key Return; sleep 3   # open Greeter from npm, the new copy
+"$xdotool" key Return; sleep 2   # "Say hello"
+capture 268-npm-new-copy-ran.png
+check 268-npm-new-copy-ran.png 9fd8a8   # "Hello from the npm package"
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{260-npm-dependency-preview,261-npm-dependency-installed,262-npm-dependency-called,263-npm-form,264-npm-preview,265-npm-updated,266-npm-command-ran,267-npm-updated-automatically,268-npm-new-copy-ran}.png
 stop_pane
 kill "$npm_registry_pid"; wait "$npm_registry_pid" 2>/dev/null || true; npm_registry_pid=
 unset PANE_NPM_REGISTRY
 grep -q '"npm": "@pane-samples/greeter"' "$PANE_DATA_DIR/extensions/installed.json" || { echo "npm package not recorded"; exit 1; }
-grep -q '"npmVersion": "0.1.0"' "$PANE_DATA_DIR/extensions/installed.json" || { echo "npm version not recorded"; exit 1; }
+grep -q '"npmVersion": "0.2.0"' "$PANE_DATA_DIR/extensions/installed.json" || { echo "the automatic update was not recorded"; exit 1; }
 [ "$(grep -c '"dir"' "$PANE_DATA_DIR/extensions/installed.json")" = 2 ] || { echo "not both installed"; exit 1; }
 
 # Git packages (#46), from a repository the smoke makes with git from the
@@ -1400,9 +1420,44 @@ capture 304-git-command-ran.png
 check 304-git-command-ran.png 9fd8a8   # "Hello from the Git repository"
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{300-git-source-only,301-git-form,302-git-preview,303-git-installed,304-git-command-ran}.png
 stop_pane
-kill "$repository_server_pid"; wait "$repository_server_pid" 2>/dev/null || true; repository_server_pid=
 release=$(python3 "$(dirname "$0")/repository_server.py" commit "$out/git-repositories/greeter" v0.1.0)
 python3 "$(dirname "$0")/check_git_record.py" "$PANE_DATA_DIR/extensions/installed.json" "$release" || { echo "Git package not recorded as installed from v0.1.0"; exit 1; }
+[ -z "$(ls -A "$PANE_DATA_DIR/extensions/downloads" 2>/dev/null)" ] || { echo "a Git download was left"; exit 1; }
+
+# Git packages update themselves (#50): a second repository of the same
+# sample, made in the folder the same server serves (it answers each
+# request from the folder as it is), installed in a data folder of its own
+# from its tracked release branch -- `--install` naming the branch, so the
+# copy is tracked, not pinned -- with its command run; the branch then
+# moves to a 0.2.0 (repository_server.py move-sample) while Pane is
+# stopped, and the check a second after the restart replaces the installed
+# copy by itself, the new code running. Nothing reaches the network.
+export PANE_DATA_DIR=$out/git-update-data
+rm -rf "$PANE_DATA_DIR"
+python3 "$(dirname "$0")/repository_server.py" make-sample target/guests/git/greeter "$out/git-repositories/greeter-tracked"
+tracked=http://127.0.0.1:$(cat "$out/repository-server.port")/greeter-tracked.git
+start_pane --install "git:$tracked@release"
+"$xdotool" windowfocus --sync "$window"
+capture_until 305-git-tracked-preview.png aab4c0 60   # "Revision: branch release, tracked: an update fetches that branch again"
+"$xdotool" key Return; sleep 3   # Install; Greeter from Git is selected
+capture 306-git-tracked-installed.png
+check 306-git-tracked-installed.png 9fd8a8   # "Installed Greeter from Git"
+python3 "$(dirname "$0")/repository_server.py" move-sample "$out/git-repositories/greeter-tracked" 0.2.0
+stop_pane
+start_pane
+"$xdotool" windowfocus --sync "$window"
+# The check a second after the start, then the fetch and the apply: capture
+# until the status line says the update landed, whenever that is.
+capture_until 307-git-updated-automatically.png 9fd8a8 60   # "Updated Greeter from Git to 0.2.0"
+"$xdotool" key Return; sleep 3   # open Greeter from Git, the new copy
+"$xdotool" key Return; sleep 2   # "Say hello"
+capture 308-git-new-copy-ran.png
+check 308-git-new-copy-ran.png 9fd8a8   # "Hello from the Git repository"
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{305-git-tracked-preview,306-git-tracked-installed,307-git-updated-automatically,308-git-new-copy-ran}.png
+stop_pane
+kill "$repository_server_pid"; wait "$repository_server_pid" 2>/dev/null || true; repository_server_pid=
+moved=$(python3 "$(dirname "$0")/repository_server.py" commit "$out/git-repositories/greeter-tracked" release)
+python3 "$(dirname "$0")/check_git_record.py" --ref refs/heads/release --unpinned "$PANE_DATA_DIR/extensions/installed.json" "$moved" || { echo "the tracked Git package was not recorded at its moved branch"; exit 1; }
 [ -z "$(ls -A "$PANE_DATA_DIR/extensions/downloads" 2>/dev/null)" ] || { echo "a Git download was left"; exit 1; }
 
 # File search (#29): Files, a default extension (its data folder is this
@@ -1875,4 +1930,157 @@ kill "$artifact_server_pid"; wait "$artifact_server_pid" 2>/dev/null || true; ar
 # installed.json record and the logs.
 record_setup_state
 rm -f "$home/.local/bin/pane" "$unpack/pane/pane"
+
+# Installing a Pane application update by the user's choice (#56): a
+# second package is built with --package-version 99.0.0, whose program
+# reports 99.0.0 and whose index entry names it (the two runnable builds
+# the update goes between); the 0.1.0 package the #53 phase built is
+# installed on another clean home, and its Pane, running from
+# ~/.local/bin/pane, is told by the check it makes at start that 99.0.0
+# exists: a row in root search with the version, and a word on the
+# status line. Nothing is downloaded until that row is chosen; the
+# choice is proven by the artifact server's log, which must hold no
+# request for the package until then. A corrupted package is explained
+# first (its bytes do not match the sha512 its index gives), everything
+# untouched and the row ready to try again; then the real install
+# downloads the tarball, checks it, and swaps the running pane — the old
+# one renamed pane.old, removed on a later start — so the new version is
+# used the next time Pane starts (Pane never restarts itself). The new
+# Pane, started again, reports 99.0.0, with the old version's data (the
+# calculator acquired at first setup) and the extension the user
+# disabled kept, and with nothing of the update left in the bin folder.
+cargo xtask package-linux --dev --package-version 99.0.0 >/dev/null
+newer=$(ls target/dist/pane-99.0.0-linux-*-dev.tar.gz | head -1)
+older=$(ls target/dist/pane-0.1.0-linux-*-dev.tar.gz | head -1)
+[ -n "$newer" ] && [ -n "$older" ] || { echo "the two packages were not built"; exit 1; }
+update_home=$PWD/$out/update-home
+unpack_old=$PWD/$out/update-unpacked-old
+unpack_new=$PWD/$out/update-unpacked-new
+rm -rf "$update_home" "$unpack_old" "$unpack_new"
+mkdir -p "$update_home" "$unpack_old" "$unpack_new"
+rm -f "$out/update-artifact-server.port" "$out/update-artifact-server.log"
+python3 "$(dirname "$0")/artifact_server.py" target/dist/artifacts "$out/update-artifact-server.port" \
+  2>>"$out/update-artifact-server.log" &
+artifact_server_pid=$!
+for _ in $(seq 600); do [ -s "$out/update-artifact-server.port" ] && break; kill -0 "$artifact_server_pid" 2>/dev/null || break; sleep 0.1; done
+[ -s "$out/update-artifact-server.port" ] \
+  || { echo "the update artifact source did not start (see $out/update-artifact-server.log)"; exit 1; }
+tar -xzf "$older" -C "$unpack_old"
+tar -xzf "$newer" -C "$unpack_new"
+# The 0.1.0 package installed on another clean home, as the #53 phase
+# installed it: the install script, the empty PATH, the data under
+# ~/.local/share/pane of that home.
+env -i HOME="$update_home" PATH="/usr/bin:/bin" bash "$unpack_old/pane/install.sh" \
+  >>"$out/update-install.log" 2>&1 \
+  || { echo "the install script failed (see $out/update-install.log)"; exit 1; }
+[ -x "$update_home/.local/bin/pane" ] || { echo "the install script installed no pane"; exit 1; }
+update_program=$update_home/.local/bin/pane
+update_registry=$update_home/.local/share/pane/extensions/installed.json
+update_log=$out/update-artifact-server.log
+# Starts the installed Pane of the update home, with the PATH that holds
+# nothing and the controlled artifact source, as the #53 phase's
+# start_installed does for its own home.
+start_update_pane() {
+  env -i HOME="$update_home" PATH="$clean_bin" DISPLAY="$display" \
+    PANE_ARTIFACTS="http://127.0.0.1:$(cat "$out/update-artifact-server.port")/" \
+    "$update_program" "$@" 2>>"$out/update-stderr.log" &
+  pane_pid=$!
+  window=
+  for _ in $(seq 100); do
+    window=$("$xdotool" search --onlyvisible --pid "$pane_pid" 2>/dev/null | head -1) && [ -n "$window" ] && break
+    sleep 0.2
+  done
+  [ -n "$window" ] || { echo "the installed Pane window did not appear"; exit 1; }
+  sleep 2
+}
+start_update_pane
+"$xdotool" windowfocus --sync "$window"
+# First setup: the default extensions are acquired (2 index reads), and
+# Pane's own check reads the index once more — its request is the third.
+for _ in $(seq 2000); do
+  [ "$(grep -c pane-defaults.json "$update_log" 2>/dev/null || true)" -ge 3 ] && break
+  kill -0 "$pane_pid" 2>/dev/null || { echo "the installed Pane exited during setup"; exit 1; }
+  sleep 0.1
+done
+[ "$(grep -c pane-defaults.json "$update_log" 2>/dev/null || true)" -ge 3 ] \
+  || { echo "Pane never checked for its own update"; exit 1; }
+wait_for "$update_registry" '"default": "calculator"' present 6000
+wait_for "$update_registry" '"default": "helper-sample"' present 6000
+# The check has told the user what it found; nothing has been downloaded.
+capture_until 600-notification.png 9fd8a8 30   # "Pane 99.0.0 is available" (or the setup's own outcome)
+"$xdotool" key ctrl+a; "$xdotool" type --delay 50 update; sleep 1
+capture_until 601-offered.png aab4c0 30   # the offer row: "Your extensions and settings are kept; ..."
+check 601-offered.png 364355 3000   # the row, selected
+# Taking no action downloads nothing: no package was asked for.
+[ -z "$(grep "\.tar\.gz" "$update_log")" ] || { echo "a package was downloaded without the user choosing it"; exit 1; }
+
+# Disable the Helper sample first: an extension the user disabled before
+# the update must stay disabled after it.
+"$xdotool" key ctrl+a; "$xdotool" type --delay 50 manage; sleep 1
+"$xdotool" key Return; sleep 1   # Manage extensions…
+"$xdotool" key Down Return; sleep 2   # Helper sample: disabled
+wait_for "$update_registry" '"disabled": true' present 600
+"$xdotool" key Escape; sleep 1
+
+# A package that does not match the integrity its index gives is
+# explained and not installed: the bytes of the served package are
+# damaged, and the program keeps running the one it was.
+served=target/dist/artifacts/$(basename "$newer")
+python3 - "$served" <<'EOF'
+import sys
+with open(sys.argv[1], "rb") as file:
+    package = bytearray(file.read())
+package[len(package) // 2] ^= 1
+with open(sys.argv[1], "wb") as file:
+    file.write(package)
+EOF
+"$xdotool" key ctrl+a; "$xdotool" type --delay 50 update; sleep 1
+"$xdotool" key Return
+capture_until 602-corrupt-package.png f08c8c 60   # "Could not update Pane to 99.0.0: ... does not match the sha512 integrity"
+[ ! -e "$update_home/.local/bin/pane.old" ] || { echo "a failed install replaced the program"; exit 1; }
+cmp -s "$update_program" "$unpack_old/pane/pane" || { echo "a failed install changed the program"; exit 1; }
+[ ! -e "$update_home/.local/bin/update" ] || { echo "a failed install left its staging behind"; exit 1; }
+
+# The source works again; the row that stays tries again, and the update
+# is installed: the new program takes the old one's name and place, the
+# old one is renamed out of its way.
+cp "$newer" "$served"
+"$xdotool" key ctrl+a; "$xdotool" type --delay 50 update; sleep 1
+"$xdotool" key Return
+for _ in $(seq 1200); do
+  kill -0 "$pane_pid" 2>/dev/null || { echo "Pane exited while updating itself"; exit 1; }
+  [ -e "$update_home/.local/bin/pane.old" ] && break
+  sleep 0.2
+done
+[ -e "$update_home/.local/bin/pane.old" ] || { echo "the update was not installed"; exit 1; }
+capture_until 603-installed.png 9fd8a8 30   # "Installed Pane 99.0.0; the new version is used the next time Pane starts"
+cmp -s "$update_program" "$unpack_new/pane/pane" || { echo "the new program was not installed"; exit 1; }
+cmp -s "$update_home/.local/bin/pane.old" "$unpack_old/pane/pane" \
+  || { echo "the old program was not kept out of the new one's way"; exit 1; }
+[ ! -e "$update_home/.local/bin/update" ] || { echo "the install left its staging behind"; exit 1; }
+# The package was downloaded once for each attempt: the damaged one and
+# the one that installed.
+[ "$(grep -c "\.tar\.gz" "$update_log")" = 2 ] || { echo "the package was not downloaded exactly twice"; exit 1; }
+stop_pane
+
+# The next start runs the new version: it reports 99.0.0, removes what
+# the update left, and the old version's data is kept — the calculator
+# answers and the Helper sample stays disabled.
+version=$("$update_program" --version) || { echo "the new pane --version failed"; exit 1; }
+[ "$version" = "Pane 99.0.0" ] || { echo "the new program reports the wrong version: $version"; exit 1; }
+start_update_pane
+"$xdotool" windowfocus --sync "$window"
+for _ in $(seq 500); do [ ! -e "$update_home/.local/bin/pane.old" ] && break; sleep 0.2; done
+[ ! -e "$update_home/.local/bin/pane.old" ] || { echo "the old program's file was not removed on the new start"; exit 1; }
+"$xdotool" key ctrl+a; "$xdotool" type --delay 50 '6*7'
+capture_until 604-answer-after-update.png 364355 30   # "42", the calculator's selected answer row
+"$xdotool" key Return
+capture_until 605-copied-after-update.png 9fd8a8 10   # "Copied 42 to the clipboard"
+wait_for "$update_registry" '"disabled": true' present
+python3 "$(dirname "$0")/check_screenshot.py" --distinct \
+  "$out"/{600-notification,601-offered,602-corrupt-package,603-installed,604-answer-after-update}.png
+stop_pane
+# The program files go again, as the #53 phase's do.
+rm -f "$update_program" "$unpack_old/pane/pane" "$unpack_new/pane/pane"
+kill "$artifact_server_pid"; wait "$artifact_server_pid" 2>/dev/null || true; artifact_server_pid=
 echo "screenshots in $out"

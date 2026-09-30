@@ -1287,12 +1287,31 @@ key 36; sleep 3   # open Greeter from npm
 key 36; sleep 2   # "Say hello"
 capture 266-npm-command-ran.png
 check 266-npm-command-ran.png 9fd8a8   # "Hello from the npm package"
-python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{260-npm-dependency-preview,261-npm-dependency-installed,262-npm-dependency-called,263-npm-form,264-npm-preview,265-npm-updated,266-npm-command-ran}.png
+
+# #49: the update Pane applies by itself. A 0.2.0 of the sample is
+# published into the registry this phase serves (it reads its folder on
+# request, so publishing is dropping the tarball in), and Pane is stopped
+# and started again: the first check, a second after the start, finds the
+# newer version and replaces the installed copy — unpinned, and nothing
+# of it running, so the safe boundary is at once — saying so in the status
+# line. The new copy's command runs as the old one did.
+python3 "$(dirname "$0")/npm_publish.py" target/guests/npm/pane-samples-greeter-0.1.0.tgz 0.2.0
+stop_pane
+start_pane
+# The check a second after the start, then the download and the apply:
+# capture until the status line says the update landed, whenever that is,
+# so a slow runner is waited for rather than slept past.
+capture_until 267-npm-updated-automatically.png 9fd8a8 60   # "Updated Greeter from npm to 0.2.0"
+key 36; sleep 3   # open Greeter from npm, the new copy
+key 36; sleep 2   # "Say hello"
+capture 268-npm-new-copy-ran.png
+check 268-npm-new-copy-ran.png 9fd8a8   # "Hello from the npm package"
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{260-npm-dependency-preview,261-npm-dependency-installed,262-npm-dependency-called,263-npm-form,264-npm-preview,265-npm-updated,266-npm-command-ran,267-npm-updated-automatically,268-npm-new-copy-ran}.png
 stop_pane
 kill "$npm_registry_pid"; wait "$npm_registry_pid" 2>/dev/null || true; npm_registry_pid=
 unset PANE_NPM_REGISTRY
 grep -q '"npm": "@pane-samples/greeter"' "$PANE_DATA_DIR/extensions/installed.json" || { echo "npm package not recorded"; exit 1; }
-grep -q '"npmVersion": "0.1.0"' "$PANE_DATA_DIR/extensions/installed.json" || { echo "npm version not recorded"; exit 1; }
+grep -q '"npmVersion": "0.2.0"' "$PANE_DATA_DIR/extensions/installed.json" || { echo "the automatic update was not recorded"; exit 1; }
 [ "$(grep -c '"dir"' "$PANE_DATA_DIR/extensions/installed.json")" = 2 ] || { echo "not both installed"; exit 1; }
 
 # Git packages (#46), from a repository the smoke makes with git from the
@@ -1336,9 +1355,42 @@ capture 304-git-command-ran.png
 check 304-git-command-ran.png 9fd8a8   # "Hello from the Git repository"
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{300-git-source-only,301-git-form,302-git-preview,303-git-installed,304-git-command-ran}.png
 stop_pane
-kill "$repository_server_pid"; wait "$repository_server_pid" 2>/dev/null || true; repository_server_pid=
 release=$(python3 "$(dirname "$0")/repository_server.py" commit "$out/git-repositories/greeter" v0.1.0)
 python3 "$(dirname "$0")/check_git_record.py" "$PANE_DATA_DIR/extensions/installed.json" "$release" || { echo "Git package not recorded as installed from v0.1.0"; exit 1; }
+[ -z "$(ls -A "$PANE_DATA_DIR/extensions/downloads" 2>/dev/null)" ] || { echo "a Git download was left"; exit 1; }
+
+# Git packages update themselves (#50): a second repository of the same
+# sample, made in the folder the same server serves (it answers each
+# request from the folder as it is), installed in a data folder of its own
+# from its tracked release branch -- `--install` naming the branch, so the
+# copy is tracked, not pinned -- with its command run; the branch then
+# moves to a 0.2.0 (repository_server.py move-sample) while Pane is
+# stopped, and the check a second after the restart replaces the installed
+# copy by itself, the new code running. Nothing reaches the network.
+export PANE_DATA_DIR=$out/git-update-data
+rm -rf "$PANE_DATA_DIR"
+python3 "$(dirname "$0")/repository_server.py" make-sample target/guests/git/greeter "$out/git-repositories/greeter-tracked"
+tracked=http://127.0.0.1:$(cat "$out/repository-server.port")/greeter-tracked.git
+start_pane --install "git:$tracked@release"
+capture_until 305-git-tracked-preview.png aab4c0 60   # "Revision: branch release, tracked: an update fetches that branch again"
+key 36; sleep 3   # Install; Greeter from Git is selected
+capture 306-git-tracked-installed.png
+check 306-git-tracked-installed.png 9fd8a8   # "Installed Greeter from Git"
+python3 "$(dirname "$0")/repository_server.py" move-sample "$out/git-repositories/greeter-tracked" 0.2.0
+stop_pane
+start_pane
+# The check a second after the start, then the fetch and the apply: capture
+# until the status line says the update landed, whenever that is.
+capture_until 307-git-updated-automatically.png 9fd8a8 60   # "Updated Greeter from Git to 0.2.0"
+key 36; sleep 3   # open Greeter from Git, the new copy
+key 36; sleep 2   # "Say hello"
+capture 308-git-new-copy-ran.png
+check 308-git-new-copy-ran.png 9fd8a8   # "Hello from the Git repository"
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{305-git-tracked-preview,306-git-tracked-installed,307-git-updated-automatically,308-git-new-copy-ran}.png
+stop_pane
+kill "$repository_server_pid"; wait "$repository_server_pid" 2>/dev/null || true; repository_server_pid=
+moved=$(python3 "$(dirname "$0")/repository_server.py" commit "$out/git-repositories/greeter-tracked" release)
+python3 "$(dirname "$0")/check_git_record.py" --ref refs/heads/release --unpinned "$PANE_DATA_DIR/extensions/installed.json" "$moved" || { echo "the tracked Git package was not recorded at its moved branch"; exit 1; }
 [ -z "$(ls -A "$PANE_DATA_DIR/extensions/downloads" 2>/dev/null)" ] || { echo "a Git download was left"; exit 1; }
 
 # File search (#29): Files, a default extension (its data folder is this
@@ -1765,5 +1817,188 @@ kill "$artifact_server_pid"; wait "$artifact_server_pid" 2>/dev/null || true; ar
 # installed.json record and the logs.
 record_setup_state
 rm -f "$home/Applications/Pane.app/Contents/MacOS/pane" "$unpack/pane/pane"
+
+# Installing a Pane application update by the user's choice (#55, the
+# macOS half of #54): a second package is built with --package-version
+# 99.0.0, whose program reports 99.0.0 and whose index entry names it for
+# macos-aarch64 (the two runnable builds the update goes between); the
+# 0.1.0 package the #52 phase built is installed on another clean home,
+# and its Pane, running from the Pane.app bundle's own binary
+# (Contents/MacOS/pane — what CFBundleExecutable names, so the swap
+# replaces the binary inside the bundle and the bundle itself stays), is
+# told by the check it makes at start that 99.0.0 exists: a row in root
+# search with the version, and a word on the status line. Nothing is
+# downloaded until that row is chosen; the choice is proven by the
+# artifact server's log, which must hold no request for the package
+# until then. A corrupted package is explained first (its bytes do not
+# match the sha512 its index gives), everything untouched and the row
+# ready to try again; then the real install downloads the package,
+# checks it, and swaps the running binary — the old one renamed pane.old
+# beside it in Contents/MacOS, removed on a later start — so the new
+# version is used the next time Pane starts (Pane never restarts
+# itself). The new Pane, started again, reports 99.0.0, with the old
+# version's data (the calculator acquired at first setup) and the
+# extension the user disabled kept, and with nothing of the update left
+# in the bundle.
+update_server_pid=
+# Every server's arm again, plus this phase's own: nothing is lost
+# whatever order the phases run in.
+trap '[ -n "$pid" ] && kill "$pid" 2>/dev/null; [ -n "$npm_registry_pid" ] && kill "$npm_registry_pid" 2>/dev/null; [ -n "$repository_server_pid" ] && kill "$repository_server_pid" 2>/dev/null; [ -n "$service_pid" ] && kill "$service_pid" 2>/dev/null; [ -n "$artifact_server_pid" ] && kill "$artifact_server_pid" 2>/dev/null; [ -n "$update_server_pid" ] && kill "$update_server_pid" 2>/dev/null || true' EXIT
+cargo xtask package-macos --dev --package-version 99.0.0
+older=$(ls target/dist/pane-0.1.0-macos-*-dev.zip | head -1)
+newer=$(ls target/dist/pane-99.0.0-macos-*-dev.zip | head -1)
+[ -n "$older" ] && [ -n "$newer" ] || { echo "the two packages were not built"; exit 1; }
+update_home=$out/update-home
+unpack_old=$out/update-unpacked-old
+unpack_new=$out/update-unpacked-new
+rm -rf "$update_home" "$unpack_old" "$unpack_new"
+mkdir -p "$update_home" "$unpack_old" "$unpack_new"
+unzip -q "$older" -d "$unpack_old"
+unzip -q "$newer" -d "$unpack_new"
+rm -f "$out/update-artifact-server.port"
+python3 "$(dirname "$0")/artifact_server.py" target/dist/artifacts "$out/update-artifact-server.port" 2>>"$out/update-artifact-server.log" &
+update_server_pid=$!
+for _ in $(seq 600); do [ -s "$out/update-artifact-server.port" ] && break; kill -0 "$update_server_pid" 2>/dev/null || break; sleep 0.1; done
+[ -s "$out/update-artifact-server.port" ] || { echo "the update artifact source did not start (see $out/update-artifact-server.log)"; exit 1; }
+# The 0.1.0 package installed on another clean home, as the #52 phase
+# installed it.
+env -i HOME="$update_home" PATH="/usr/bin:/bin" bash "$unpack_old/pane/install.sh" >>"$out/update-install.log" 2>&1 \
+  || { echo "the install script failed (see $out/update-install.log)"; exit 1; }
+binary=$update_home/Applications/Pane.app/Contents/MacOS/pane
+[ -x "$binary" ] || { echo "the install script installed no pane"; exit 1; }
+update_clean_bin=$out/update-clean-bin
+rm -rf "$update_clean_bin"; mkdir -p "$update_clean_bin"
+# Pane's own data in the update home (its path holds a space, so it is
+# quoted).
+update_installed="$update_home/Library/Application Support/Pane/extensions"
+update_registry=$update_installed/installed.json
+start_updated() {
+  env -i HOME="$update_home" PATH="$update_clean_bin" \
+    PANE_ARTIFACTS="http://127.0.0.1:$(cat "$out/update-artifact-server.port")/" \
+    "$binary" "$@" 2>>"$out/update-stderr.log" &
+  pid=$!
+  sleep 8
+  focus_pane
+}
+# A wait that fails records the screen and the update home's records,
+# where the artifact upload can see them (as the #52 phase's does).
+record_update_state() {
+  rm -rf "$out/update-home-records"
+  mkdir -p "$out/update-home-records"
+  cp -f "$update_registry" "$out/update-home-records/" 2>/dev/null || true
+  cp -f "$out/update-artifact-server.log" "$out/update-home-records/" 2>/dev/null || true
+  cp -f "$out/update-stderr.log" "$out/update-home-records/" 2>/dev/null || true
+}
+update_recorded() {
+  for _ in $(seq 3000); do
+    grep -q "$1" "$update_registry" 2>/dev/null && return
+    sleep 0.1
+  done
+  echo "$update_registry: $1 is not present"
+  capture 599-update-problem.png
+  record_update_state
+  exit 1
+}
+start_updated
+kill -0 "$pid" 2>/dev/null || { echo "the installed Pane exited during setup"; exit 1; }
+update_recorded '"default": "calculator"'
+update_recorded '"default": "helper-sample"'
+# The check has read the index (its request is the third, after the two
+# acquisitions): the offer is in root search. The status line tells what
+# it found; nothing has been downloaded.
+for _ in $(seq 100); do
+  [ "$(grep -c pane-defaults.json "$out/update-artifact-server.log")" -ge 3 ] && break
+  sleep 0.1
+done
+[ "$(grep -c pane-defaults.json "$out/update-artifact-server.log")" -ge 3 ] \
+  || { echo "Pane never checked for its own update"; exit 1; }
+sleep 2
+capture 600-notification.png
+check 600-notification.png 9fd8a8   # "Pane 99.0.0 is available" (or the setup's own outcome)
+command_key a; type_text update; sleep 1
+capture 601-offered.png
+check 601-offered.png aab4c0   # the offer row: "Your extensions and settings are kept; ..."
+check 601-offered.png 364355 3000   # the row, selected
+# Taking no action downloads nothing: no package was asked for.
+[ -z "$(grep "\.zip" "$out/update-artifact-server.log")" ] \
+  || { echo "a package was downloaded without the user choosing it"; exit 1; }
+
+# Disable the Helper sample first: an extension the user disabled before
+# the update must stay disabled after it.
+command_key a; type_text manage; sleep 1
+key 36; sleep 1   # Manage extensions…
+key 125; key 36; sleep 2   # Helper sample: disabled
+for _ in $(seq 100); do grep -q '"disabled": true' "$update_registry" 2>/dev/null && break; sleep 0.1; done
+grep -q '"disabled": true' "$update_registry" || { echo "the Helper sample was not disabled"; exit 1; }
+key 53; sleep 1
+
+# A package that does not match the integrity its index gives is
+# explained and not installed: the bytes of the served package are
+# damaged, and the program keeps running the one it was.
+served=target/dist/artifacts/$(basename "$newer")
+python3 - "$served" <<'PY'
+import sys
+with open(sys.argv[1], "rb") as f:
+    package = bytearray(f.read())
+package[len(package) // 2] ^= 1
+with open(sys.argv[1], "wb") as f:
+    f.write(package)
+PY
+command_key a; type_text update; sleep 1
+key 36   # the offer, tried: the damaged package is explained
+capture_until 602-corrupt-package.png f08c8c 60   # "Could not update Pane to 99.0.0: ... does not match the sha512 integrity"
+[ -e "$binary.old" ] && { echo "a failed install replaced the program"; exit 1; }
+cmp -s "$binary" "$unpack_old/pane/pane" || { echo "a failed install changed the program"; exit 1; }
+[ -e "$binary/../update" ] && { echo "a failed install left its staging behind"; exit 1; }
+
+# The source works again; the row that stays tries again, and the update
+# is installed: the new binary takes the old one's name and place inside
+# the bundle, the old one renamed out of its way.
+cp "$newer" "$served"
+command_key a; type_text update; sleep 1
+key 36
+for _ in $(seq 1200); do
+  [ -e "$binary.old" ] && break
+  kill -0 "$pid" 2>/dev/null || { echo "Pane exited while updating itself"; exit 1; }
+  sleep 0.2
+done
+[ -e "$binary.old" ] || { echo "the update was not installed"; exit 1; }
+sleep 2
+capture 603-installed.png
+check 603-installed.png 9fd8a8   # "Installed Pane 99.0.0; the new version is used the next time Pane starts"
+cmp -s "$binary" "$unpack_new/pane/pane" || { echo "the new program was not installed"; exit 1; }
+cmp -s "$binary.old" "$unpack_old/pane/pane" || { echo "the old program was not kept out of the new one's way"; exit 1; }
+[ -e "$binary/../update" ] && { echo "the install left its staging behind"; exit 1; }
+# The package was downloaded once for each attempt: the damaged one and
+# the one that installed.
+[ "$(grep -c "\.zip" "$out/update-artifact-server.log")" = 2 ] \
+  || { echo "the package was not downloaded exactly twice"; exit 1; }
+stop_pane
+
+# The next start runs the new version: it reports 99.0.0, removes what
+# the update left, and the old version's data is kept — the calculator
+# answers and the Helper sample stays disabled.
+env -i HOME="$update_home" PATH="/usr/bin:/bin" "$binary" --version >"$out/update-version.txt" 2>>"$out/update-stderr.log" \
+  || { echo "the new pane --version failed"; exit 1; }
+[ "$(cat "$out/update-version.txt")" = "Pane 99.0.0" ] \
+  || { echo "the new program reports the wrong version"; exit 1; }
+start_updated
+for _ in $(seq 100); do [ ! -e "$binary.old" ] && break; sleep 0.1; done
+[ ! -e "$binary.old" ] || { echo "the old program's file was not removed on the new start"; exit 1; }
+command_key a; type_text '6*7'; sleep 2
+capture 604-answer-after-update.png
+check 604-answer-after-update.png 364355 3000   # "42", the calculator's answer
+key 36; sleep 1
+capture 605-copied-after-update.png
+check 605-copied-after-update.png 9fd8a8   # "Copied 42 to the clipboard"
+[ "$(pbpaste)" = "42" ] || { echo "the pasteboard holds: $(pbpaste)"; exit 1; }
+grep -q '"disabled": true' "$update_registry" || { echo "the disabled extension did not stay disabled"; exit 1; }
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{600-notification,601-offered,602-corrupt-package,603-installed,604-answer-after-update}.png
+stop_pane
+kill "$update_server_pid"; wait "$update_server_pid" 2>/dev/null || true; update_server_pid=
+# The program files go again, as the #52 phase's do: the evidence is the
+# screenshots and the update-home-records folder, not the program.
+record_update_state
+rm -f "$binary" "$binary.old" "$unpack_old/pane/pane" "$unpack_new/pane/pane"
 
 echo "screenshots in $out"

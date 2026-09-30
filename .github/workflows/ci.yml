@@ -5,6 +5,13 @@ on:
   pull_request:
   workflow_dispatch:
 
+# One run per branch: a superseded run is cancelled instead of finishing
+# (each leg holds a shared runner for the better part of an hour, and
+# parallel runs on one branch only ever answer for the newest commit).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   licenses:
     name: Licenses and sources
@@ -23,6 +30,29 @@ jobs:
         working-directory: guests/hello-rust
         run: cargo deny --locked --workspace --exclude-dev check licenses sources
 
+  # What changed, so the JS/TS guests job can skip a push that touches
+  # nothing it rebuilds (it is a second full Linux build and test run).
+  changes:
+    name: What changed
+    runs-on: ubuntu-24.04
+    permissions:
+      pull-requests: read
+    outputs:
+      js-guests: ${{ steps.filter.outputs.js-guests }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            js-guests:
+              - 'guests/**'
+              - 'tools/**'
+              - 'wit/**'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.github/workflows/ci.yml'
+
   check:
     name: Check (${{ matrix.os }})
     strategy:
@@ -30,6 +60,13 @@ jobs:
       matrix:
         os: [windows-2025, macos-15, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
+    env:
+      # The many test binaries each link Pane's whole dependency tree, so
+      # the Linux legs link them with mold (Windows and macOS link with
+      # their own linkers; the empty value keeps the cache key uniform
+      # per operating system). The matrix is what a job-level env may read:
+      # the runner context exists only inside a step.
+      RUSTFLAGS: ${{ matrix.os == 'ubuntu-24.04' && '-C link-arg=-fuse-ld=mold' || '' }}
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux build dependencies
@@ -38,7 +75,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
             libxcb1-dev libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers \
-            xvfb xdotool imagemagick
+            xvfb xdotool imagemagick mold
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
@@ -65,19 +102,70 @@ jobs:
         run: xvfb-run -a cargo test --locked -p pane-core --test clipboard_adapter_linux
         env:
           PANE_TEST_REAL_CLIPBOARD: "1"
-      - name: Build the launcher
-        run: cargo build --locked -p pane
+
+  # The native GUI smokes and the packages, in their own jobs so they run
+  # beside the tests instead of after them: the tests need not finish
+  # before the smoke starts, and a failing test no longer skips the
+  # evidence a smoke would have collected.
+  smoke:
+    name: Smoke (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, macos-15, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    env:
+      # As in the check job: the matrix is what a job-level env may read.
+      RUSTFLAGS: ${{ matrix.os == 'ubuntu-24.04' && '-C link-arg=-fuse-ld=mold' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libxcb1-dev libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers \
+            xvfb xdotool imagemagick mold
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            guests
+            guests/fixtures/mixed-p2
+      # The launcher the smokes drive, and the guest packages they install
+      # (the installer phases build their own packages besides).
+      - name: Build the launcher and the guests
+        run: |
+          cargo build --locked -p pane
+          cargo xtask guests
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: Install Pillow for screenshot checks
         run: python -m pip install pillow
+      # The JavaScript and TypeScript development phases of each smoke
+      # skip themselves here as before: this job holds no JS toolchain.
       - name: Native GUI smoke (Linux, Xvfb)
         if: runner.os == 'Linux'
         run: bash scripts/smoke-linux.sh smoke
+      - name: Native GUI smoke (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/smoke-windows.ps1 -OutDir smoke
+      - name: Native GUI smoke (macOS)
+        if: runner.os == 'macOS'
+        run: bash scripts/smoke-macos.sh smoke
       - name: Build the Linux package (release, x86_64)
         if: runner.os == 'Linux'
         run: cargo xtask package-linux
+      - name: Build the Windows package (release, x86_64)
+        if: runner.os == 'Windows'
+        run: cargo xtask package-windows
+      - name: Build the macOS package (release, aarch64)
+        if: runner.os == 'macOS'
+        run: cargo xtask package-macos
       - name: Upload the Linux package and its artifacts
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
@@ -85,13 +173,6 @@ jobs:
           name: linux-package
           path: target/dist/
           if-no-files-found: error
-      - name: Native GUI smoke (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./scripts/smoke-windows.ps1 -OutDir smoke
-      - name: Build the Windows package (release, x86_64)
-        if: runner.os == 'Windows'
-        run: cargo xtask package-windows
       - name: Upload the Windows package and its artifacts
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
@@ -99,12 +180,6 @@ jobs:
           name: windows-package
           path: target/dist/
           if-no-files-found: error
-      - name: Native GUI smoke (macOS)
-        if: runner.os == 'macOS'
-        run: bash scripts/smoke-macos.sh smoke
-      - name: Build the macOS package (release, aarch64)
-        if: runner.os == 'macOS'
-        run: cargo xtask package-macos
       - name: Upload the macOS package and its artifacts
         if: runner.os == 'macOS'
         uses: actions/upload-artifact@v4
@@ -123,17 +198,22 @@ jobs:
   # Rebuilds the JS/TS sample components from source with the pinned toolchain
   # and runs the same contract tests on them. The rebuilt files are not
   # byte-identical to the committed ones (the QuickJS snapshot holds build-time
-  # state), so behaviour is compared, not bytes.
+  # state), so behaviour is compared, not bytes. A push that changes nothing
+  # under the paths it rebuilds skips it (a manual run always runs it).
   js-guests:
     name: JS/TS guests from source (Linux)
+    needs: changes
+    if: needs.changes.outputs.js-guests == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
+    env:
+      RUSTFLAGS: -C link-arg=-fuse-ld=mold
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
-            libxcb1-dev libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers
+            libxcb1-dev libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers mold
       - uses: actions/setup-node@v4
         with:
           node-version: 24

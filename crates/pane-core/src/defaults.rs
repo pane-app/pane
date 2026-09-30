@@ -60,10 +60,10 @@ const INDEX_FILE: &str = "pane-defaults.json";
 
 /// How many times Pane tries to acquire one default extension before it
 /// explains the failure and offers the row that tries again.
-const ATTEMPTS: usize = 3;
+pub(crate) const ATTEMPTS: usize = 3;
 
 /// How long Pane waits before trying an interrupted acquisition again.
-const RETRY_AFTER: [Duration; 2] = [Duration::from_millis(500), Duration::from_secs(1)];
+pub(crate) const RETRY_AFTER: [Duration; 2] = [Duration::from_millis(500), Duration::from_secs(1)];
 
 /// Where Pane's default extensions' payloads are acquired from. Release
 /// builds use only [`ArtifactSource::published`]; tests and development
@@ -137,7 +137,7 @@ impl ArtifactSource {
     /// The address of the payload file `file` of an index entry: `file` is
     /// one plain name (checked when the index was read), so the address
     /// stays on this source.
-    fn payload_url(&self, file: &str) -> String {
+    pub(crate) fn payload_url(&self, file: &str) -> String {
         format!("{}{file}", self.base)
     }
 
@@ -146,7 +146,7 @@ impl ArtifactSource {
     /// the connections Pane's own requests use
     /// ([`crate::http::get_blocking_progressing`]): only over HTTPS unless
     /// the source is on this computer.
-    fn get(
+    pub(crate) fn get(
         &self,
         url: &str,
         headers: &[(&str, &str)],
@@ -237,44 +237,51 @@ pub(crate) fn fetch(
     acquired: &Path,
     progress: &(dyn Fn(u64, u64) + Send + Sync),
 ) -> Result<Fetched, Failed> {
+    // The failure's own message names the source; the launcher frames
+    // whose set-up failed.
+    with_retries(|| acquire(source, id, downloads, acquired, progress)).map_err(Failed)
+}
+
+/// Why one attempt at acquiring a payload failed, and whether trying again
+/// can help (a connection that failed, not a payload that was refused).
+pub(crate) struct Failure {
+    pub(crate) why: String,
+    pub(crate) retry: bool,
+}
+
+/// Tries `once` up to [`ATTEMPTS`] times: a failure that says to retry
+/// sleeps [`RETRY_AFTER`] first, and a failure that stays is explained
+/// with how many attempts were made. The three retry loops — a default
+/// extension's payload, an update check, an update's download — share it.
+pub(crate) fn with_retries<T>(mut once: impl FnMut() -> Result<T, Failure>) -> Result<T, String> {
     let mut attempt = 0;
     loop {
         attempt += 1;
-        match acquire(source, id, downloads, acquired, progress) {
-            Ok(fetched) => return Ok(fetched),
+        match once() {
+            Ok(answer) => return Ok(answer),
             Err(failure) if failure.retry && attempt < ATTEMPTS => {
-                let wait = RETRY_AFTER[attempt.min(RETRY_AFTER.len()) - 1];
-                thread::sleep(wait);
+                thread::sleep(RETRY_AFTER[attempt.min(RETRY_AFTER.len()) - 1]);
             }
             Err(failure) => {
                 let tried = if attempt > 1 {
-                    format!(" (Pane tried {} times)", ATTEMPTS)
+                    format!(" (Pane tried {ATTEMPTS} times)")
                 } else {
                     String::new()
                 };
-                // The failure's own message names the source; the launcher
-                // frames whose set-up failed.
-                return Err(Failed(format!("{}{tried}", failure.why)));
+                return Err(format!("{}{tried}", failure.why));
             }
         }
     }
 }
 
-/// Why one attempt at acquiring a payload failed, and whether trying again
-/// can help (a connection that failed, not a payload that was refused).
-struct Failure {
-    why: String,
-    retry: bool,
-}
-
-fn failed(why: impl Into<String>) -> Failure {
+pub(crate) fn failed(why: impl Into<String>) -> Failure {
     Failure {
         why: why.into(),
         retry: false,
     }
 }
 
-fn interrupted(why: impl Into<String>) -> Failure {
+pub(crate) fn interrupted(why: impl Into<String>) -> Failure {
     Failure {
         why: why.into(),
         retry: true,
@@ -336,13 +343,19 @@ fn acquire(
 
 /// The index document an artifact source serves, as Pane read and checked
 /// it.
-struct Index {
-    entries: Vec<Entry>,
+pub(crate) struct Index {
+    pub(crate) entries: Vec<Entry>,
+    /// What the index says of Pane's own application package, whose
+    /// updates Pane offers the user ([`crate::application_update`]): read
+    /// but neither parsed nor validated here, so that an application
+    /// entry this Pane cannot take never keeps it from acquiring its
+    /// default extensions.
+    pub(crate) application: Option<serde_json::Value>,
 }
 
 /// One entry of the index: what identifies a default extension's payload.
 #[derive(Clone)]
-struct Entry {
+pub(crate) struct Entry {
     id: String,
     version: String,
     /// The payload's file name, one plain name.
@@ -375,7 +388,7 @@ impl Index {
 }
 
 /// Reads and checks the index document of `source`.
-fn read_index(source: &ArtifactSource) -> Result<Index, Failure> {
+pub(crate) fn read_index(source: &ArtifactSource) -> Result<Index, Failure> {
     let index_url = source.index_url();
     let read = source
         .get(&index_url, &[], MAX_INDEX, &|_| {})
@@ -440,7 +453,10 @@ fn read_index(source: &ArtifactSource) -> Result<Index, Failure> {
             size: entry.size,
         });
     }
-    Ok(Index { entries })
+    Ok(Index {
+        entries,
+        application: index.application,
+    })
 }
 
 /// Downloads the payload `entry` describes into the cache folder `cache`
@@ -487,7 +503,7 @@ fn download(
 /// Why a status other than 200 was answered for the index or a payload:
 /// trying again may fix a server that failed, never a payload that is
 /// simply not there.
-fn answer(status: u16, why: String) -> Failure {
+pub(crate) fn answer(status: u16, why: String) -> Failure {
     if matches!(status, 403 | 500 | 502 | 503 | 504) {
         interrupted(why)
     } else {
@@ -567,13 +583,21 @@ pub(crate) fn remove_abandoned_parts(acquired: &Path, now: std::time::SystemTime
     }
 }
 
-/// The index document as it is served: `formatVersion` and `defaults`.
+/// The index document as it is served: `formatVersion`, `defaults` and,
+/// optionally, the `application` entry naming Pane's own package.
 #[derive(Deserialize)]
 struct IndexJson {
     #[serde(rename = "formatVersion")]
     format_version: u64,
     #[serde(default)]
     defaults: Vec<EntryJson>,
+    /// Pane's own application package (see [`crate::application_update`]),
+    /// read as it is written: parsed where it is used, so a broken entry
+    /// is explained there rather than making the whole index unreadable.
+    /// Optional, because a source that serves none (one built before the
+    /// application entry existed) still serves the default extensions.
+    #[serde(default)]
+    application: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]

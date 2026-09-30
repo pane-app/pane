@@ -172,6 +172,10 @@ _Avoid_: Locked version, version range
 Pane's own copy of an installed package's manifest and components, kept in Pane's data folder, separate from the user-owned source.
 _Avoid_: Cache (it is not disposable)
 
+**Application update**:
+A newer version of Pane itself, which Pane finds out about from its artifact source's index when it starts and tells the user of, as a row in root search; Pane downloads and installs it only when the user chooses, replacing the program in the install folder (the running one renamed aside) so the new version is used on the next start — which the user does, since Pane never restarts itself. Pane's data, and the extensions it installed, are untouched by one.
+_Avoid_: Self-update, auto-update (nothing is automatic), app update
+
 **Update**:
 Replacing the managed copy of an installed package from its source while keeping its package identity. A second explicit install of the same identity is rejected instead.
 _Avoid_: Reinstall
@@ -179,6 +183,10 @@ _Avoid_: Reinstall
 **Reload**:
 Replacing an installed package's code from its source folder while Pane and other packages keep running: the replacement is checked as an install would check it, then replaces the managed copy, the old instances stop and the new code starts. Settings are kept; live state is not carried over.
 _Avoid_: Restart, hot swap, update (an update does not start the new code)
+
+**Automatic updates**:
+Pane replacing the managed copy of an eligible installed package with a newer compatible version from its source, without the user asking: an npm package takes the registry's latest version, a Git one the newer commit of the tracked branch it was installed from; the package must be unpinned (a tag or commit named for a Git package counts as pinned), enabled, not paused and not turned off by the user's controls, and the newer revision is downloaded and checked as an install checks a package before anything is replaced. The replacement waits for a safe activation boundary — never during a command the user asked for that has not answered, nor while one of the package's screens is on display — and it ends the old generation as a reload does, keeping the identity, the saved data, the disabled state, the hotkeys and the aliases. The controls are a global choice and a per-package opt-out; a pinned version or revision, a local folder's copy and a development copy are never updated by themselves.
+_Avoid_: App update (the application's own, #54–56), forced update
 
 **Development mode**:
 An installed local package whose source folder Pane watches while its author works on it: each save runs the package's documented build command in that folder, staging the components under Pane's data folder, and a build that succeeds reloads the package from there, while one that fails keeps its working code and shows the build's diagnostics. It lasts until the author stops it, the package is disabled or uninstalled, or Pane quits, each of which kills a running build with the processes it started; another installed copy of the package is never affected.

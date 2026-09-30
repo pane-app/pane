@@ -10,6 +10,11 @@ Usage:
   repository_server.py commit <repository-folder> <reference>
       Prints the id of the commit <reference> (such as v0.1.0) points to, to
       check the one Pane records.
+  repository_server.py move-sample <repository-folder> <version>
+      On the branch `release`, commits a new release of the sample at
+      <version> (its pane.json's version field), leaving `main` and the
+      tags where they were: a tracked branch moving, as the smoke's
+      automatic-update phase needs.
   repository_server.py serve <repositories-folder> <port-file>
       Serves each repository in the folder as /<name>.git on a free port,
       writes the port to <port-file> once listening, and serves until it is
@@ -160,11 +165,38 @@ class Listener(http.server.ThreadingHTTPServer):
         self.server_name, self.server_port = self.server_address[:2]
 
 
+def move_sample(repository, version):
+    """On the branch `release`, commits a new release of the sample at
+    <version> (its pane.json's version field), leaving `main` and the tags
+    where they were: a tracked branch moving, as the smoke's automatic
+    update phase needs."""
+    home = os.path.join(os.path.dirname(os.path.abspath(repository)), ".home")
+    env = git_env(home)
+
+    def git(*args):
+        subprocess.run(["git", *args], cwd=repository, env=env, check=True, stdout=subprocess.DEVNULL)
+
+    git("switch", "--quiet", "release")
+    manifest = os.path.join(repository, "pane.json")
+    with open(manifest, encoding="utf-8") as f:
+        text = f.read()
+    replaced = text.replace('"version": "0.1.0"', '"version": "%s"' % version)
+    if replaced == text:
+        sys.exit("the sample's pane.json has no 0.1.0 version to move")
+    with open(manifest, "w", encoding="utf-8") as f:
+        f.write(replaced)
+    git("add", "--all")
+    git("commit", "--quiet", "-m", "Release %s" % version)
+    git("switch", "--quiet", "main")
+
+
 if __name__ == "__main__":
     if sys.argv[1:2] == ["make-sample"] and len(sys.argv) == 4:
         make_sample(sys.argv[2], sys.argv[3])
     elif sys.argv[1:2] == ["commit"] and len(sys.argv) == 4:
         commit(sys.argv[2], sys.argv[3])
+    elif sys.argv[1:2] == ["move-sample"] and len(sys.argv) == 4:
+        move_sample(sys.argv[2], sys.argv[3])
     elif sys.argv[1:2] == ["serve"] and len(sys.argv) == 4:
         serve(sys.argv[2], sys.argv[3])
     else:

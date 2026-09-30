@@ -343,14 +343,10 @@ struct PackageJson {
     dependencies: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
-/// Downloads the package `spec` from `registry` and unpacks it into a new
-/// folder in `downloads`, or explains why it cannot. Blocks on the network.
-pub(crate) fn fetch(
-    registry: &Registry,
-    spec: &NpmSpec,
-    downloads: &Path,
-) -> Result<Fetched, String> {
-    let name = &spec.name;
+/// Reads the package `name`'s metadata from `registry` — its versions and
+/// `latest` tag — or why it cannot: the package is not there, the registry
+/// cannot be reached, or the answer cannot be read. Blocks on the network.
+fn metadata(registry: &Registry, name: &str) -> Result<MetadataJson, String> {
     let metadata_url = registry.metadata_url(name);
     let unreachable = |why: String| {
         format!(
@@ -389,9 +385,41 @@ pub(crate) fn fetch(
             ));
         }
     }
-    let metadata: MetadataJson = serde_json::from_slice(&response.body).map_err(|error| {
+    serde_json::from_slice(&response.body).map_err(|error| {
         format!("The npm registry's description of {name} cannot be read: {error}")
-    })?;
+    })
+}
+
+/// The version the registry tags `latest` for package `name`, or why it
+/// cannot be read: the package is not there, the registry cannot be
+/// reached, or no version is tagged. Blocks on the network and downloads
+/// nothing: it is the check for a newer version of an installed copy (the
+/// launcher's `updates`) before anything is fetched.
+pub(crate) fn latest_version(registry: &Registry, name: &str) -> Result<String, String> {
+    let metadata = metadata(registry, name)?;
+    metadata.dist_tags.get("latest").cloned().ok_or_else(|| {
+        format!(
+            "npm package {name} has no version tagged latest; name the version to install, \
+             such as {name}@1.0.0"
+        )
+    })
+}
+
+/// Downloads the package `spec` from `registry` and unpacks it into a new
+/// folder in `downloads`, or explains why it cannot. Blocks on the network.
+pub(crate) fn fetch(
+    registry: &Registry,
+    spec: &NpmSpec,
+    downloads: &Path,
+) -> Result<Fetched, String> {
+    let name = &spec.name;
+    let metadata = metadata(registry, name)?;
+    let unreachable = |why: String| {
+        format!(
+            "Could not reach the npm registry {} for {name}: {why}",
+            registry.url()
+        )
+    };
     let latest = metadata.dist_tags.get("latest").cloned();
     let version = match (&spec.version, &latest) {
         (Some(version), _) => version.clone(),
@@ -595,10 +623,17 @@ pub(crate) fn base64(bytes: &[u8]) -> String {
 /// and a size a PAX header gives must be the one the entry's own header
 /// gives, so that no two readers can see different files in one tarball.
 pub(crate) fn unpack(tgz: &[u8], dest: &Path) -> Result<(), String> {
+    unpack_within(tgz, dest, MAX_UNPACKED)
+}
+
+/// As [`unpack`], within `max_unpacked` bytes instead of npm's own bound: a
+/// package larger than an npm package's tarball — Pane's own application
+/// package, a whole program — unpacks with the bound its reader gives.
+pub(crate) fn unpack_within(tgz: &[u8], dest: &Path, max_unpacked: u64) -> Result<(), String> {
     fs::create_dir(dest).map_err(|error| error.to_string())?;
     // The decompressed stream is limited too, so a small tarball cannot
     // expand without bound (headers and padding take some of it).
-    let stream = flate2::read::GzDecoder::new(tgz).take(MAX_UNPACKED + (MAX_UNPACKED >> 2));
+    let stream = flate2::read::GzDecoder::new(tgz).take(max_unpacked + (max_unpacked >> 2));
     let mut archive = tar::Archive::new(stream);
     let mut total: u64 = 0;
     let mut count = 0;
@@ -615,10 +650,10 @@ pub(crate) fn unpack(tgz: &[u8], dest: &Path) -> Result<(), String> {
         let size = entry.size();
         let add = |total: &mut u64, size: u64| {
             *total = total.saturating_add(size);
-            if *total > MAX_UNPACKED {
+            if *total > max_unpacked {
                 return Err(format!(
                     "it unpacks to more than the {} MiB Pane allows",
-                    MAX_UNPACKED >> 20
+                    max_unpacked >> 20
                 ));
             }
             Ok(())
@@ -792,12 +827,13 @@ impl Described {
     }
 }
 
-/// The path of tarball entry `raw` inside the package, without the
-/// tarball's top folder; `None` for the top folder itself. Refuses, with
+/// The path of archive entry `raw` inside the package, without the
+/// archive's top folder; `None` for the top folder itself. Refuses, with
 /// why, a path that is absolute, climbs out (`..`), has an empty or `.`
 /// part, or has a part that some system reads differently or cannot write
-/// (see [`check_part`]).
-fn inside(raw: &[u8], is_dir: bool) -> Result<Option<PathBuf>, &'static str> {
+/// (see [`check_part`]). Read for npm's tarballs and Pane's application
+/// package's zip alike, so both unpack with the same discipline.
+pub(crate) fn inside(raw: &[u8], is_dir: bool) -> Result<Option<PathBuf>, &'static str> {
     let text = std::str::from_utf8(raw).map_err(|_| "whose name is not valid UTF-8")?;
     if text.starts_with('/') {
         return Err("an absolute path");

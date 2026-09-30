@@ -37,6 +37,9 @@ notify = "8.2"
 flate2 = "1"
 tar = { version = "0.4.44", default-features = false }
 sha2 = "0.10"
+# Reading the zip of Pane's Windows package, which an application update
+# downloads (#54): its CRC32 check; already in the tree through `flate2`.
+crc32fast = "1"
 # Installing packages from Git repositories (#46): object ids are SHA-1,
 # computed with collision detection as Git itself does (RustCrypto, MIT OR
 # Apache-2.0); the pack's zlib streams are read with `flate2` above.

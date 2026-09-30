@@ -50,6 +50,7 @@
 //! thread stuck inside it would have stopped the launcher too.
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
@@ -225,11 +226,30 @@ pub(super) struct Shared {
     handled: watch::Sender<u64>,
     /// The threads Pane gave up on, until each returns.
     abandoned: Mutex<Vec<Arc<Watch>>>,
+    /// The components whose calls the user asked for and that have not
+    /// answered yet, with how many: sent, queued or running (see
+    /// [`Runtime::busy`]). The replacement of a package's code waits for
+    /// them, so that an update never interrupts a command mid-run.
+    pub(super) busy: Mutex<HashMap<PathBuf, Busy>>,
     /// The threads made to hang, for releasing them.
     #[cfg(any(test, debug_assertions))]
     hung: Mutex<Vec<Arc<Faults>>>,
     cache_dir: Option<PathBuf>,
     current: Mutex<Current>,
+}
+
+/// The calls of one generation of a component that have not answered yet,
+/// and which generation they belong to: `Runtime::forget` ends a
+/// generation, so a call of an ended generation whose counting ends late
+/// (its future is dropped after a newer generation began counting) cannot
+/// touch the newer generation's count (see [`super::Runtime::busy`]).
+#[derive(Default)]
+pub(super) struct Busy {
+    /// How many calls of this generation have not answered yet.
+    pub(super) calls: usize,
+    /// Which generation of the component the count is of; `forget` moves it
+    /// on, never reusing a number.
+    pub(super) generation: u64,
 }
 
 /// Why a request was not sent to the runtime thread.
@@ -321,6 +341,7 @@ impl Shared {
             limits: Arc::default(),
             handled: watch::Sender::new(0),
             abandoned: Mutex::default(),
+            busy: Mutex::default(),
             #[cfg(any(test, debug_assertions))]
             hung: Mutex::default(),
             cache_dir,

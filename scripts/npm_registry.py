@@ -3,7 +3,10 @@ the npm tarballs in a folder (such as target/guests/npm, where
 `cargo xtask guests` packs the npm sample) as npm's registry does: each
 package's abbreviated metadata, with its sha512 integrity, at /<name> (a
 scoped name's `/` written %2f), and each tarball at /<name>/-/<file>. Every
-tarball is the latest version of its package. Nothing reaches the network.
+tarball is the latest version of its package. The folder is read again on
+request, so a smoke can publish a newer version into it while Pane runs
+(or, as the update phase does, while Pane is stopped, to be found by the
+check at its next start). Nothing reaches the network.
 
 Usage: npm_registry.py <tarball-folder> <port-file>
 It listens on a free port, writes it to <port-file> once it is listening and
@@ -17,28 +20,42 @@ import os
 import socketserver
 import sys
 import tarfile
+import threading
 
 folder, port_file = sys.argv[1], sys.argv[2]
 
-packages = {}  # name -> {"latest": version, "versions": {version: (file, bytes)}}
-for file in sorted(os.listdir(folder)):
-    if not file.endswith(".tgz"):
-        continue
-    path = os.path.join(folder, file)
-    with tarfile.open(path, "r:gz") as tar:
-        manifest = json.load(tar.extractfile("package/package.json"))
-    name, version = manifest["name"], manifest["version"]
-    with open(path, "rb") as f:
-        tarball = f.read()
-    entry = packages.setdefault(name, {"latest": version, "versions": {}})
-    entry["versions"][version] = (name.rsplit("/", 1)[-1] + "-" + version + ".tgz", tarball)
-    entry["latest"] = version
+scan_lock = threading.Lock()
+
+
+def scan():
+    """The packages the folder holds now: each tarball's name and version,
+    and which version is each package's latest (the highest one, as the
+    last in sorted order)."""
+    packages = {}  # name -> {"latest": version, "versions": {version: (file, bytes)}}
+    with scan_lock:
+        for file in sorted(os.listdir(folder)):
+            if not file.endswith(".tgz"):
+                continue
+            path = os.path.join(folder, file)
+            try:
+                with tarfile.open(path, "r:gz") as tar:
+                    manifest = json.load(tar.extractfile("package/package.json"))
+            except (OSError, tarfile.TarError, json.JSONDecodeError, KeyError):
+                continue  # a tarball still being written
+            name, version = manifest["name"], manifest["version"]
+            with open(path, "rb") as f:
+                tarball = f.read()
+            entry = packages.setdefault(name, {"latest": version, "versions": {}})
+            entry["versions"][version] = (name.rsplit("/", 1)[-1] + "-" + version + ".tgz", tarball)
+            entry["latest"] = version
+    return packages
 
 
 class Registry(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         base = "http://127.0.0.1:%d/" % self.server.server_address[1]
         path = self.path.lstrip("/")
+        packages = scan()
         if "/-/" in path:
             name, file = path.split("/-/", 1)
             versions = packages.get(name, {}).get("versions", {})

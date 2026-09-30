@@ -71,9 +71,8 @@ packages, and every version of one name is one package.
   Updating a pinned package without naming a version keeps its pin (the
   preview offers the pinned version again); naming another version changes
   the pin. There is no way to unpin other than uninstalling and installing
-  without a version. Nothing updates a package by itself yet (automatic
-  updates of unpinned packages, Q21, are later work); the pin is recorded
-  for them.
+  without a version. An automatic update never touches a pinned copy
+  ([below](#updating-by-itself)); the pin is recorded for them.
 - A version is exact (`1.2.3`, `1.2.3-beta.1`, `1.2.3+build`); ranges
   (`^1.0.0`) and other tags (`next`) are refused before anything is asked of
   the registry. There is no picker of earlier versions (Q32).
@@ -82,6 +81,92 @@ packages, and every version of one name is one package.
   disable, clear cache, uninstall and retained data work as for a folder;
   kept data stays with the npm name and installing it again, at any
   version, finds it.
+
+## Updating by itself
+
+An eligible npm package updates by itself (what makes one eligible is
+[below](#which-packages-update)): Pane's updater, a background thread of the
+launcher's, checks the registry and replaces the managed copy with a
+compatible newer version, at a safe moment, without the user asking
+(US72–US75; #49). The same updater, cadence, controls and safe boundary
+update a tracked Git package from the newer commit of its branch
+([git](git.md#updating-by-itself); #50).
+
+**When it checks.** Once shortly after Pane starts (a second after, so
+that a development build's registry is in place first) and then every 24
+hours while Pane runs, by the launcher's clock
+([`Launcher::with_clock`](../crates/pane-core/src/launcher.rs), the
+system's in release builds). A check reads only the registry's metadata
+for each eligible package's name: nothing is downloaded while the latest
+version is the installed one. Both the cadence and the initial wait are
+provisional, as the spec leaves the delivery timing open.
+
+**What a newer version goes through.** Exactly what an install does:
+downloading and checking the tarball (its integrity and everything the
+refusals below cover), reading the `pane.json` (the manifest, the
+extension API it needs, its platforms and its helpers for this system)
+and working out its dependencies as a plan. A newer version that cannot
+is explained in the status line — "Settings from npm was not updated:
+Incompatible package: it needs Pane extension API 0.2, but this Pane
+provides 0.1. It keeps running its installed code." — and the installed
+copy is left exactly as it is; the next check tries it again. What was
+downloaded stays staged, holding its download folder, until it is
+applied.
+
+**The safe boundary.** A staged update applies when the package is
+quiet: no screen of one of its commands is on display (a command, its
+search, a form or a custom view — a call the user is waiting on runs
+with one open, and the user may be reading its answer), and no call of
+it the user asked for is still running (opening a command, running an
+item, a query sent from root, a command's search, a form submission).
+The running command always finishes first: while one is running, or its
+screen is open, the update waits and is tried again every second.
+Managed background work is not waited for: a replacement ends it with
+the package's generation and the new code starts it again, exactly as a
+reload does ([generations](generations.md)). In the moment between the
+boundary check and the replacement itself, opening one of the package's
+commands is refused with "Settings from npm is updating; open it again
+once that is done" — only then, and only for the update Pane applies by
+itself; an update the user chose replaces anyway, as a reload does. The
+retry timing, and not waiting for the calls other packages make into
+the updated one (they answer that it was updated and may be made again),
+are provisional choices.
+
+**What an update is.** The same update the preview's **Update** row
+makes: the identity, the saved data (settings, content, credentials),
+the disabled state, the hotkeys and the aliases are kept; the old code's
+generation ends, stopping what is still pending of it; and the new code
+runs from the next call, as an update starts no code itself. The outcome
+says so in the status line of root search or the extension list ("Updated
+Settings from npm to 0.2.0"); another screen keeps its own status, and
+the list shows the new version.
+
+### Which packages update
+
+Eligible is an installed npm package that is
+not pinned (a pinned version stays whatever the latest is), enabled,
+not paused after a failure, and not turned off; the latest version can
+be older than the installed one (an author retagging `latest`), and Pane
+follows it, as an unpinned copy tracks the tag. A local folder's or a
+development copy's code is never replaced here, and neither is a
+disabled or paused one — updating a paused package would unpause it,
+which is the user's choice to make (Retry); a disabled one is the user
+switched off, and the code it does not run does not change under it.
+These last two are provisional choices.
+
+**The controls.** Manage extensions ends with **Update extensions
+automatically** ("On · every eligible extension updates by itself, at
+its source's newer version" / "Off · no extension updates by itself;
+choose Update on a package's preview"), and each installed npm package
+that is not pinned has **Update Settings from npm automatically** after
+its reload rows would be ("On · a compatible newer npm version replaces
+it once no command of it runs" / "Off · replace it yourself with Update
+on its preview"). Choosing a row turns it on or off at once; turning
+updates on checks at once. A per-package choice cannot turn updates back
+on while the global one is off. The choices are recorded in
+`extensions/updates.json` beside `installed.json`, as the hotkeys and
+aliases are; a record Pane cannot read means the defaults (on), and the
+next choice the user makes writes it anew.
 
 ## Dependencies from npm
 
@@ -209,24 +294,44 @@ is a local package requiring it.
   when dropped; only those begun long ago removed at a start).
 - [`crates/pane-core/tests/npm.rs`](../crates/pane-core/tests/npm.rs), with
   a local registry: preview, install, running its command and after a
-  restart without downloading again; the form; the identity (a second
-  install refused, Update, a pin kept by an update without a version and
-  changed by naming another); a local package requiring an npm one,
-  installed with it and called by id; an installed one used as it is (no
-  newer tarball fetched) and a disabled one kept disabled; a pinned
-  dependency source, one conflicting with the installed version and two
-  dependents pinning different versions; an npm dependency using the
-  network recorded as such; a dependency that cannot be downloaded; an npm
-  package naming a local folder; every refusal in the table, an unreachable
-  registry (its port kept bound) and one whose certificate the system does
-  not trust; nothing left downloaded after a preview, an install or a
-  component failing its check, and a start keeping a download in progress;
-  install scripts never run; kept data reclaimed by the name; no Reload or
+  restart without downloading again (a start's check for a newer version
+  reads the metadata, and downloads nothing while the latest is the
+  installed one); the form; the identity (a second install refused,
+  Update, a pin kept by an update without a version and changed by naming
+  another); a local package requiring an npm one, installed with it and
+  called by id; an installed one used as it is (no newer tarball fetched)
+  and a disabled one kept disabled; a pinned dependency source, one
+  conflicting with the installed version and two dependents pinning
+  different versions; an npm dependency using the network recorded as
+  such; a dependency that cannot be downloaded; an npm package naming a
+  local folder; every refusal in the table, an unreachable registry (its
+  port kept bound) and one whose certificate the system does not trust;
+  nothing left downloaded after a preview, an install or a component
+  failing its check, and a start keeping a download in progress; install
+  scripts never run; kept data reclaimed by the name; no Reload or
   Develop rows.
+- [`crates/pane-core/tests/update.rs`](../crates/pane-core/tests/update.rs),
+  with the settings sample packed as an npm package and served from a
+  local registry, and the Git sample's repository from
+  [git](git.md#checks)'s own server (the [Git half](git.md#checks) of the
+  same suite): a newer version updating the package by itself, keeping
+  its settings and ending the old code's generation; a command that is
+  running finishing first, the update waiting until the screen the answer
+  is on closes; a pinned, disabled and opted-out package not replaced, and
+  the controls (both rows) checked through Manage extensions; an
+  incompatible version, a dependency that cannot be installed and an
+  unreachable registry refused with their explanations, the installed
+  copy untouched; an installed local folder's copy never asked about or
+  touched; an action or an opening asked in the moment the replacement is
+  being applied refused with the update's explanation rather than stopped
+  by it; a new version that fails to start not rolled back, its settings
+  kept and its failure explained when its command is opened; the check
+  repeating on its cadence (the clock moved a day on) and at Pane's start
+  after a restart.
 - [`crates/pane/tests/npm.rs`](../crates/pane/tests/npm.rs): the form,
   preview, Install and Update in the native window at Pane's size, the
   Update row in view below the longer details, and the command running.
-- The native smokes' own phase (frames 260 to 266;
+- The native smokes' own phase (frames 260 to 268;
   [Linux](platforms/linux.md#npm-packages-45)).
 
 ## Limits
@@ -234,13 +339,26 @@ is a local package requiring it.
 - Only the public registry, without credentials: no private or scoped
   registries, `.npmrc`, or enterprise mirrors; no registry setting for
   users.
-- No automatic updates of unpinned packages yet, and no check for a newer
-  version other than choosing the package again.
+- The automatic update's choices are provisional: the cadence (a second
+  after Pane starts, then every 24 hours), the retry every second while a
+  package is in use, and that a disabled or paused package is not updated
+  (see [updating by itself](#updating-by-itself)). The spec leaves the
+  delivery and activation timing open.
+- An automatic update does not wait for calls *other* packages make into
+  the one it replaces: they are stopped, answer that the package was
+  updated and may be made again, as any replacement stops them. Long-lived
+  views and services restart with the new generation.
+- More than one Pane on the same data folder would each check and each
+  update, as each would run scheduled work.
 - The HTTPS path to the real registry is not exercised by the checks, which
   never reach the network; it was not run against registry.npmjs.org
-  ([by hand](#trying-the-real-registry-by-hand)).
+  ([by hand](#trying-the-real-registry-by-hand)). An automatic update over
+  it is likewise untried.
 - Downloads are not resumed or kept across starts; an interrupted one
-  starts again, and the install downloads again what its preview showed.
+  starts again, and the install downloads again what its preview showed. A
+  staged update keeps its download while it waits for the package to be
+  quiet; a Pane that stops drops it (a start removes downloads begun more
+  than a day ago), and the next check stages the version again.
 - The integrity is the registry's own; npm signatures and provenance are
   not checked.
 - Unpacking reads the whole tarball into memory (at most 64 MiB).

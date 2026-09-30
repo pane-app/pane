@@ -711,6 +711,20 @@ pub(crate) fn fetch(spec: &GitSpec, downloads: &Path) -> Result<Fetched, String>
     fetch_within(spec, downloads, Limits::default())
 }
 
+/// The revision `reference` (none: the repository's default branch) points
+/// to now, resolved without fetching anything of it: the updater's check
+/// of a tracked branch, which fetches only when the branch has moved. The
+/// same explanation [`fetch`](fetch) gives when the reference cannot be
+/// resolved.
+pub(crate) fn resolve_reference(
+    repository: &Repository,
+    reference: Option<&str>,
+) -> Result<GitRevision, String> {
+    let remote = Remote::connect(repository)?;
+    let (revision, _) = remote.resolve(reference)?;
+    Ok(revision)
+}
+
 pub(crate) fn fetch_within(
     spec: &GitSpec,
     downloads: &Path,

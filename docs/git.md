@@ -130,11 +130,55 @@ tag the repository's owners published when choosing what to pin.
 
 Naming another reference changes the recorded one. A name that is both a
 branch and a tag is refused until written `refs/heads/…` or `refs/tags/…`;
-an abbreviated commit id is not accepted. Nothing updates by itself yet
-([#50](https://github.com/hoangvu12/pane/issues/50) adds updates of tracked
-branches); an update keeps the identity, its data, whether it is disabled,
-its hotkeys and aliases, as a folder's does. A Git package has no **Reload**
-or **Develop** row: it has no source folder on this computer.
+an abbreviated commit id is not accepted. An update keeps the identity,
+its data, whether it is disabled, its hotkeys and aliases, as a folder's
+does; a tracked branch also updates [by itself](#updating-by-itself).
+A Git package has no **Reload** or **Develop** row: it has no source
+folder on this computer.
+
+## Updating by itself
+
+An eligible Git package updates by itself, as [an npm package
+does](npm.md#updating-by-itself) (#50): the same updater thread, on the
+same cadence (a second after Pane starts, then every 24 hours, by the
+launcher's clock) and under the same controls (the global row in the
+extension list and a per-package one, in `updates.json`), applying at the
+same safe activation boundary — never during a command of the package
+the user asked for that has not answered, nor while one of its screens is
+on display, retrying every second until the package is quiet — and
+applying as the preview's Update row does: the identity, saved data,
+disabled state, hotkeys and aliases are kept, the old generation ends,
+managed background work restarts with the new code, and the outcome says
+so in the status line of root search or the extension list ("Updated
+Greeter from Git to 0.2.0").
+
+What differs is what a check reads and what it fetches. A check of a
+tracked package asks the repository for its reference listing alone —
+the same `ls-refs` a preview's fetch begins with, without fetching a
+commit — and nothing is fetched while the tracked branch points at the
+commit installed. When it has moved, the new commit is fetched (with
+`deepen 1`, as an install fetches it) and checked exactly as an install
+checks a package; a check or an update that fails — the repository gone,
+the branch deleted, the moved-to revision source-only, its manifest or
+API or components or helpers no longer passing — explains in the status
+line ("Greeter from Git was not updated: Branch release (commit …) of the
+Git repository … holds only the source of …; It keeps running its
+installed code") and leaves the installed copy as it is.
+
+**Which packages update** (as [npm's](npm.md#which-packages-update)):
+an installed Git package that is tracked — installed from the default
+branch or a named branch — enabled, not paused after a failure, and not
+turned off; a tag or commit named to install it pins it, and an update
+installs that revision again, so it is never updated by itself. The same
+safe boundary defers an update while a command runs, and an update the
+user chose (choosing the repository again, Update on its preview, `pane
+--install git:<address>`) replaces the copy without waiting, as a reload
+does.
+
+**Provisional, pending the user's decision:** the shared cadence and
+retry timing (see [npm](npm.md#updating-by-itself)), and that a
+tracked branch is followed even when its new commit holds an older
+version, as `latest` is.
 
 ## Dependencies from Git
 
@@ -265,7 +309,14 @@ yet.
 - [`crates/pane/tests/repositories.rs`](../crates/pane/tests/repositories.rs):
   the form, the source-only explanation, preview, Install in view below whole Git lines and the
   command running in the native window at Pane's size.
-- The native smokes' own phase (frames 300 to 304;
+- [`crates/pane-core/tests/update.rs`](../crates/pane-core/tests/update.rs)
+  for the [automatic updates](#updating-by-itself) of Git packages, from
+  the same server: a tracked branch that has moved updating by itself
+  (identity, tracked reference and pin kept, the new copy running), a
+  pinned tag never asked about, the per-package control row, and a
+  branch that has moved to a source-only revision refused with the
+  installed copy untouched.
+- The native smokes' own phase (frames 300 to 307;
   [Linux](platforms/linux.md#git-packages-46)).
 
 ## Limits
@@ -274,9 +325,9 @@ yet.
   private hosts' sign-in; SHA-256 repositories are refused.
 - The package must be at the repository's root; submodules and Git LFS are
   not fetched.
-- No automatic updates of tracked branches yet (#50), no check for a newer
-  commit other than choosing the repository again, no history browser and
-  no publishing to a host.
+- No check for a newer commit other than the updater's [tracked-branch
+  check](#updating-by-itself) and choosing the repository again, no
+  history browser and no publishing to a host.
 - Signed tags and commits are not checked; the commit id, checked object by
   object, is the pin, and it proves contents, not provenance: a fork's
   commit served at the repository's address is only cautioned about, on

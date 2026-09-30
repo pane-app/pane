@@ -725,8 +725,10 @@ fn a_service_that_stalls_is_given_up_on_within_the_limits() {
             failed("the answer is larger than the 4194304 bytes Pane accepts")
         );
 
-        // Pane hung up on each, and the extension carries on.
-        let deadline = Instant::now() + Duration::from_secs(5);
+        // Pane hung up on each, and the extension carries on: the give-ups
+        // are waited for with a deadline a loaded runner can afford, since
+        // only that they happen is checked, not how fast.
+        let deadline = Instant::now() + Duration::from_secs(30);
         while service.abandoned().len() < 5 {
             assert!(Instant::now() < deadline, "{:?}", service.abandoned());
             std::thread::sleep(Duration::from_millis(10));

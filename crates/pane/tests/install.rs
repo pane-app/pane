@@ -139,7 +139,8 @@ fn an_unsupported_folder_is_explained_and_escape_returns_to_root(cx: &mut TestAp
         "{:?}",
         view.screen
     );
-    assert!(view.rows.is_empty());
+    // A preview that cannot be installed offers no rows.
+    assert_eq!(titles(&view), Vec::<String>::new());
     assert!(
         cx.debug_bounds("status-error").is_some(),
         "the reason is rendered"
@@ -180,7 +181,8 @@ fn an_installed_package_is_disabled_and_enabled_from_the_extension_list(cx: &mut
             "Uninstall Hello",
             "Hotkey for Say hello",
             "Alias for Say hello",
-            "Develop Hello"
+            "Develop Hello",
+            "Update extensions automatically"
         ]
     );
     assert!(
@@ -314,7 +316,8 @@ fn a_reload_that_fails_to_start_offers_retry(cx: &mut TestAppContext) {
             "Uninstall Hello",
             "Hotkey for Say hello",
             "Alias for Say hello",
-            "Develop Hello"
+            "Develop Hello",
+            "Update extensions automatically"
         ]
     );
 
@@ -342,7 +345,8 @@ fn a_reload_that_fails_to_start_offers_retry(cx: &mut TestAppContext) {
             "Uninstall Hello",
             "Hotkey for Say hello",
             "Alias for Say hello",
-            "Develop Hello"
+            "Develop Hello",
+            "Update extensions automatically"
         ]
     );
 }
@@ -365,7 +369,8 @@ fn an_installed_package_cache_is_cleared_after_confirming(cx: &mut TestAppContex
             "Uninstall Hello",
             "Hotkey for Say hello",
             "Alias for Say hello",
-            "Develop Hello"
+            "Develop Hello",
+            "Update extensions automatically"
         ]
     );
 
@@ -530,7 +535,8 @@ fn an_installed_package_is_uninstalled_after_choosing_what_to_keep(cx: &mut Test
         view.status,
         Status::Result("Uninstalled Hello and deleted its saved data".into())
     );
-    assert!(view.rows.is_empty());
+    // Only the global automatic-update row, which ends the list, is left.
+    assert_eq!(titles(&view), ["Update extensions automatically"]);
     assert!(cx.debug_bounds("status-result").is_some());
 
     // Root search no longer offers its command, nor the extension list.
@@ -567,7 +573,13 @@ fn retained_data_is_deleted_from_the_extension_list_after_confirming(cx: &mut Te
     press_enter_on(&window, cx, MANAGE_ROW);
     press_enter_on(&window, cx, "Uninstall Hello");
     let view = press_enter_on(&window, cx, "Uninstall and keep saved data");
-    assert_eq!(titles(&view), ["Delete retained data of Hello"]);
+    assert_eq!(
+        titles(&view),
+        [
+            "Delete retained data of Hello",
+            "Update extensions automatically"
+        ]
+    );
     assert!(
         cx.debug_bounds("row-Delete retained data of Hello")
             .is_some()
@@ -601,7 +613,8 @@ fn retained_data_is_deleted_from_the_extension_list_after_confirming(cx: &mut Te
         view.status,
         Status::Result("Deleted the retained data of Hello".into())
     );
-    assert!(view.rows.is_empty());
+    // Only the global automatic-update row, which ends the list, is left.
+    assert_eq!(titles(&view), ["Update extensions automatically"]);
     assert!(cx.debug_bounds("status-result").is_some());
     assert!(!keeps_settings(&settings, &key));
 

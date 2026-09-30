@@ -1,6 +1,7 @@
 //! Pane's core: the launcher model, extension packages and the extension
 //! runtime the launcher drives.
 
+mod application_update;
 pub mod applications;
 mod atomic;
 pub mod changes;
@@ -27,6 +28,7 @@ mod platform;
 mod runtime;
 mod search;
 mod threads;
+mod zip;
 
 pub use defaults::{ArtifactSource, DefaultExtension};
 pub use helpers::runner::{HELPER_TIME_LIMIT, MAX_HELPER_INPUT, MAX_HELPER_OUTPUT};

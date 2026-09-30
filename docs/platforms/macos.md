@@ -291,16 +291,23 @@ macOS; **not run on macOS yet**.
 
 ## npm packages (#45)
 
-A phase of the smoke (screenshots 260 to 266, [npm packages](../npm.md)),
+A phase of the smoke (screenshots 260 to 268, [npm packages](../npm.md)),
 with a data folder of its own, starts `scripts/npm_registry.py` on
 127.0.0.1 serving the npm sample `cargo xtask guests` packed, and points the
 development build at it with `PANE_NPM_REGISTRY`: it installs the local
 Dependencies from npm sample, which downloads and installs the npm package
 it requires, calls its `greet` operation, then names the npm package in
 "Install extension from npm…" (two rows up from the last row), updates it and runs
-its command, which answers "Hello from the npm package"; `installed.json`
+its command, which answers "Hello from the npm package". #49 extends the
+phase: a 0.2.0 of the sample is published into the registry's folder
+(`scripts/npm_publish.py`; the registry reads its folder on request), Pane
+is stopped and started again, and the check a second after its start
+replaces the installed unpinned copy by itself — nothing of it running —
+saying "Updated Greeter from npm to 0.2.0" (267), the new copy's command
+answering as before (268); `installed.json`
 must then record `"npm": "@pane-samples/greeter"` at `"npmVersion":
-"0.1.0"` with both packages. The real registry would be reached through the
+"0.2.0"` with both packages. The automatic-update frames have not been
+captured; the phase is **not run on macOS yet**. The real registry would be reached through the
 HTTP client guests' requests use, trusting the certificates rustls-native-certs
 reads from the system keychains, which no check exercises (the smoke never
 reaches the network; [by hand](../npm.md#trying-the-real-registry-by-hand),
@@ -346,6 +353,19 @@ The phase types the address with System Events. Its repository server
 skips the reverse DNS lookup the npm phase's first run stopped on (above)
 and is waited for as long; checked by reading only. **Not run on macOS
 yet.**
+
+#50 extends the phase with a second repository of the same sample
+(`make-sample` again, `greeter-tracked` beside `greeter`, served by the
+same server), installed in a data folder of its own from its tracked
+`release` branch (`--install git:<address>@release`: the preview says
+"Revision: branch release, tracked: an update fetches that branch again",
+305; installed, 306); `repository_server.py move-sample` then commits a
+0.2.0 on the branch while Pane is stopped, and the check a second after
+the restart replaces the installed copy by itself, saying "Updated
+Greeter from Git to 0.2.0" (307), the new copy's command answering as
+before (308); `installed.json` must record the branch's new commit,
+tracked and unpinned. Written and checked by reading only; **not run on
+macOS yet**.
 
 ## Files (#29)
 
@@ -510,6 +530,76 @@ runner provides.
 | "6*7" answers 42 | pending CI (frame 501) |
 | Enter copies the answer | pending CI (frame 502) |
 | The helper sample's prebuilt helper answers | pending CI (frame 503) |
+
+## Installing a Pane application update by the user's choice (#55)
+
+A final phase, after the installer one, proves the whole outcome of
+[#55](https://github.com/hoangvu12/pane/issues/55)
+([installer](../installer.md)), the macOS half of what
+[#54](windows.md#installing-a-pane-application-update-by-the-users-choice-54)
+proved on Windows. The same `cargo xtask package-macos --dev` builds a
+**second** package with `--package-version 99.0.0`: a program that
+reports 99.0.0, a package named by it, and an index whose `application`
+entry names that package for `macos-aarch64` — the two runnable builds
+an update goes between. The 0.1.0 package the installer phase built is
+installed on another clean home (its install script, its empty PATH, its
+own data under `~/Library/Application Support/Pane`), and the smoke
+serves the 99.0.0 artifacts from 127.0.0.1 with
+`scripts/artifact_server.py` (nothing reaches the network or Pane's
+published downloads). The installed 0.1.0 Pane, started with
+`PANE_ARTIFACTS`, acquires its default extensions and, in the same
+background, checks the index for a newer version of itself: the offer
+appears as **Update Pane to 99.0.0** in root search (frame 601; the
+status line tells what was found, frame 600). The artifact server's log
+must hold **no request for the package** until the row is chosen —
+nothing is downloaded, installed or restarted automatically. The Helper
+sample is disabled first, so an extension the user disabled before the
+update must stay disabled after it. Choosing the row with a **damaged
+package** is explained (its bytes do not match the sha512 its entry
+gives, frame 602) with the program, the data and the bundle untouched
+and the row ready to try again; then the real choice downloads the
+package, checks it, unpacks it and swaps the running binary **inside the
+bundle** — the old `Contents/MacOS/pane` renamed `pane.old` beside it,
+the new one in its place, the staging folder gone (frame 603, and byte
+comparisons of both binaries against the two packages' own files). The
+next start runs the new version: it reports `Pane 99.0.0`, removes
+`pane.old` at start, the calculator still answers "6*7" with 42 from
+the old version's acquired payload (frames 604 and 605, and the
+pasteboard holds 42), and the disabled Helper sample stays disabled —
+Pane's data was never touched. The bundle itself is never replaced: the
+same `Pane.app` keeps its identity, and what the swap does not update
+(the `Info.plist` version keys) is a provisional limit recorded in the
+[installer](../installer.md#updating-pane-itself). Pane itself was never
+restarted by the update: the smoke stops the old process and starts the
+new program itself, exactly as the user would.
+
+**Recorded 2026-09-30, this branch's machine (headless aarch64 Linux —
+no Apple toolchain, so the macOS `pane` program and its package cannot
+be built here):** what ran locally is everything that machine can run:
+the platform-independent half (`crates/pane-core/tests/application_update.rs`,
+all passing, including the swap, the failures and the data kept),
+`cargo check` and the unit tests of `pane-core` and `xtask`, and `cargo
+xtask package-macos --dev --package-version 99.0.0` far enough to
+assemble the whole artifact tree before it refuses with the message
+that only a macOS checkout builds the program — the same refusal the
+installer phase records. The macOS wiring itself is one `cfg` widened in
+`pane`'s `main.rs` around the identical call the Windows build makes,
+so it was compile-checked by reading (the Linux checkout compiles the
+file without the macOS half, exactly as without the Windows one). The
+bash smoke phase is syntax-checked (`bash -n`) and reviewed only; the
+99.0.0 package, the bundle-binary swap and the smoke phase are **pending
+CI**: they need the macOS build and interactive desktop only the
+`macos-15` runner provides. The running-binary rename the swap depends
+on (renaming a running program's file is allowed; overwriting one is
+not, and the running process keeps its open file) is a POSIX behavior
+read-reviewed, only provable end to end on the runner.
+
+| Step | Evidence |
+| --- | --- |
+| The check at start tells the user; nothing is downloaded until they choose | pending CI (frames 600, 601) |
+| A damaged package is explained, everything untouched, the row retried | pending CI (frame 602) |
+| The user's choice swaps the running binary in the bundle; the new one is used the next start | pending CI (frame 603) |
+| The new version reports itself; the old version's data and enablement are kept | pending CI (frames 604, 605) |
 
 ## Text input and accessibility findings
 

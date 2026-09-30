@@ -4393,6 +4393,7 @@ name = "pane-core"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "crc32fast",
  "flate2",
  "futures",
  "global-hotkey",

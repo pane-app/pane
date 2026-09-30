@@ -1340,7 +1340,32 @@ try {
     Send "{ENTER}"; Start-Sleep -Seconds 2   # "Say hello"
     Capture "266-npm-command-ran.png"
     Check "266-npm-command-ran.png" "9fd8a8"   # "Hello from the npm package"
-    $shots = "260-npm-dependency-preview", "261-npm-dependency-installed", "262-npm-dependency-called", "263-npm-form", "264-npm-preview", "265-npm-updated", "266-npm-command-ran" | ForEach-Object { Join-Path $OutDir "$_.png" }
+
+    # #49: the update Pane applies by itself. A 0.2.0 of the sample is
+    # published into the registry this phase serves (it reads its folder on
+    # request, so publishing is dropping the tarball in), and Pane is
+    # stopped and started again: the first check, a second after the start,
+    # finds the newer version and replaces the installed copy - unpinned,
+    # and nothing of it running, so the safe boundary is at once - saying
+    # so in the status line. The new copy's command runs as the old one did.
+    python "$PSScriptRoot/npm_publish.py" "target/guests/npm/pane-samples-greeter-0.1.0.tgz" "0.2.0"
+    Stop-Pane $process
+    $process = Start-Pane "stderr-npm.log"
+    # The check a second after the start, then the download and the apply:
+    # poll until the status line says the update landed, whenever that is,
+    # so a slow runner is waited for rather than slept past.
+    for ($i = 0; $i -lt 120; $i++) {
+        Capture "267-npm-updated-automatically.png"
+        python "$PSScriptRoot/check_screenshot.py" (Join-Path $OutDir "267-npm-updated-automatically.png") "9fd8a8"
+        if ($LASTEXITCODE -eq 0) { break }
+        Start-Sleep -Milliseconds 500
+    }
+    Check "267-npm-updated-automatically.png" "9fd8a8"   # "Updated Greeter from npm to 0.2.0"
+    Send "{ENTER}"; Start-Sleep -Seconds 3   # open Greeter from npm, the new copy
+    Send "{ENTER}"; Start-Sleep -Seconds 2   # "Say hello"
+    Capture "268-npm-new-copy-ran.png"
+    Check "268-npm-new-copy-ran.png" "9fd8a8"   # "Hello from the npm package"
+    $shots = "260-npm-dependency-preview", "261-npm-dependency-installed", "262-npm-dependency-called", "263-npm-form", "264-npm-preview", "265-npm-updated", "266-npm-command-ran", "267-npm-updated-automatically", "268-npm-new-copy-ran" | ForEach-Object { Join-Path $OutDir "$_.png" }
     python "$PSScriptRoot/check_screenshot.py" --distinct @shots
     if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: installing from npm changed nothing" }
     Stop-Pane $process
@@ -1350,7 +1375,7 @@ try {
 }
 $record = Join-Path $data "extensions/installed.json"
 if (-not (Select-String -Quiet -SimpleMatch '"npm": "@pane-samples/greeter"' $record)) { throw "npm package not recorded" }
-if (-not (Select-String -Quiet -SimpleMatch '"npmVersion": "0.1.0"' $record)) { throw "npm version not recorded" }
+if (-not (Select-String -Quiet -SimpleMatch '"npmVersion": "0.2.0"' $record)) { throw "the automatic update was not recorded" }
 if ((Select-String -SimpleMatch '"dir"' $record).Count -ne 2) { throw "not both installed" }
 
 # Git packages (#46), from a repository the smoke makes with git from the
@@ -1441,6 +1466,68 @@ if ($fromGit[0].gitRef -ne "refs/tags/v0.1.0") { throw "Git reference not record
 if ($fromGit[0].gitCommit -ne $release.Trim()) { throw "Git commit not recorded: $($fromGit[0].gitCommit)" }
 if ($fromGit[0].pinned -ne $true) { throw "Git tag not recorded as pinned" }
 $downloads = Join-Path $data "extensions/downloads"
+if ((Test-Path $downloads) -and (Get-ChildItem $downloads)) { throw "a Git download was left" }
+
+# Git packages update themselves (#50): a second repository of the same
+# sample, served by a server of its own, installed in a data folder of its
+# own from its tracked release branch -- `--install` naming the branch, so
+# the copy is tracked, not pinned -- with its command run; the branch then
+# moves to a 0.2.0 (repository_server.py move-sample) while Pane is
+# stopped, and the check a second after the restart replaces the installed
+# copy by itself, the new code running. Nothing reaches the network.
+$updateData = Join-Path $OutDir "git-update-data"
+if (Test-Path $updateData) { Remove-Item -Recurse -Force $updateData }
+$env:PANE_DATA_DIR = $updateData
+python "$PSScriptRoot/repository_server.py" make-sample target/guests/git/greeter (Join-Path $repositories "greeter-tracked")
+if ($LASTEXITCODE -ne 0) { throw "the second Git sample's repository was not made" }
+$updatePortFile = Join-Path $OutDir "repository-update-server.port"
+if (Test-Path $updatePortFile) { Remove-Item -Force $updatePortFile }
+$server2 = Start-Process python -PassThru -NoNewWindow `
+    -ArgumentList @("`"$PSScriptRoot/repository_server.py`"", "serve", "`"$repositories`"", "`"$updatePortFile`"") `
+    -RedirectStandardError (Join-Path $OutDir "repository-update-server.log")
+$process = $null
+try {
+    for ($i = 0; $i -lt 600 -and -not (Test-Path $updatePortFile) -and -not $server2.HasExited; $i++) { Start-Sleep -Milliseconds 100 }
+    if (-not (Test-Path $updatePortFile)) { throw "the second local repository server did not start" }
+    $tracked = "http://127.0.0.1:$((Get-Content $updatePortFile).Trim())/greeter-tracked.git"
+    $process = Start-Pane "stderr-git-update.log" @("--install", "git:$tracked@release")
+    # The fetch runs after the window shows: capture until its preview does.
+    Capture-Until "305-git-tracked-preview.png" "aab4c0" 60   # "Revision: branch release, tracked: an update fetches that branch again"
+    Send "{ENTER}"; Start-Sleep -Seconds 3   # Install; Greeter from Git is selected
+    Capture "306-git-tracked-installed.png"
+    Check "306-git-tracked-installed.png" "9fd8a8"   # "Installed Greeter from Git"
+    python "$PSScriptRoot/repository_server.py" move-sample (Join-Path $repositories "greeter-tracked") 0.2.0
+    if ($LASTEXITCODE -ne 0) { throw "the tracked branch did not move" }
+    Stop-Pane $process
+    $process = Start-Pane "stderr-git-update.log"
+    # The check a second after the start, then the fetch and the apply:
+    # capture until the status line says the update landed.
+    Capture-Until "307-git-updated-automatically.png" "9fd8a8" 60   # "Updated Greeter from Git to 0.2.0"
+    Send "{ENTER}"; Start-Sleep -Seconds 3   # open Greeter from Git, the new copy
+    Send "{ENTER}"; Start-Sleep -Seconds 2   # "Say hello"
+    Capture "308-git-new-copy-ran.png"
+    Check "308-git-new-copy-ran.png" "9fd8a8"   # "Hello from the Git repository"
+    $shots = "305-git-tracked-preview", "306-git-tracked-installed", "307-git-updated-automatically", "308-git-new-copy-ran" | ForEach-Object { Join-Path $OutDir "$_.png" }
+    python "$PSScriptRoot/check_screenshot.py" --distinct @shots
+    if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: updating from Git changed nothing" }
+    Stop-Pane $process
+} finally {
+    # A failure above leaves Pane running: stop it too, before the server.
+    if ($process -and -not $process.HasExited) {
+        Stop-Process -Id $process.Id -ErrorAction SilentlyContinue
+        $process.WaitForExit()
+    }
+    Stop-Process -Id $server2.Id -ErrorAction SilentlyContinue
+}
+$moved = (python "$PSScriptRoot/repository_server.py" commit (Join-Path $repositories "greeter-tracked") release)
+if ($LASTEXITCODE -ne 0) { throw "the moved branch's commit was not found" }
+$record = Join-Path $updateData "extensions/installed.json"
+$fromGit = @((Get-Content -Raw $record | ConvertFrom-Json).packages | Where-Object { $_.git })
+if ($fromGit.Count -ne 1) { throw "not one package from Git recorded: $($fromGit.Count)" }
+if ($fromGit[0].gitRef -ne "refs/heads/release") { throw "Git reference not recorded: $($fromGit[0].gitRef)" }
+if ($fromGit[0].gitCommit -ne $moved.Trim()) { throw "Git commit not recorded: $($fromGit[0].gitCommit)" }
+if ($fromGit[0].pinned) { throw "the tracked branch recorded as pinned" }
+$downloads = Join-Path $updateData "extensions/downloads"
 if ((Test-Path $downloads) -and (Get-ChildItem $downloads)) { throw "a Git download was left" }
 
 # File search (#29): Files, a default extension (its data folder is this
@@ -1932,6 +2019,179 @@ try {
     # installed.json record and the logs.
     Remove-Item -Force $installed
     Remove-Item -Force (Join-Path $unpack "pane\pane.exe")
+} finally {
+    Stop-Process -Id $server.Id -ErrorAction SilentlyContinue
+    Remove-Item Env:PANE_ARTIFACTS -ErrorAction SilentlyContinue
+    $env:PATH = $realPath
+    $env:APPDATA = $realAppData
+    $env:LOCALAPPDATA = $realLocal
+}
+
+# Installing a Pane application update by the user's choice (#54): a
+# second package is built with --package-version 99.0.0, whose program
+# reports 99.0.0 and whose index entry names it (the two runnable builds
+# the update goes between); the 0.1.0 package the #51 phase built is
+# installed on another clean profile, and its Pane, running from
+# %LOCALAPPDATA%\Pane\pane.exe, is told by the check it makes at start
+# that 99.0.0 exists: a row in root search with the version, and a word on
+# the status line. Nothing is downloaded until that row is chosen; the
+# choice is proven by the artifact server's log, which must hold no
+# request for the package until then. A corrupted package is explained
+# first (its bytes do not match the sha512 its index gives), everything
+# untouched and the row ready to try again; then the real install
+# downloads the package, checks it, and swaps the running pane.exe — the
+# old one renamed pane.exe.old, removed on a later start — so the new
+# version is used the next time Pane starts (Pane never restarts itself).
+# The new Pane, started again, reports 99.0.0, with the old version's
+# data (the calculator acquired at first setup) and the extension the
+# user disabled kept, and with nothing of the update left in the install
+# folder.
+cargo xtask package-windows --dev --package-version 99.0.0
+if ($LASTEXITCODE -ne 0) { throw "the update package was not built" }
+$older = Get-ChildItem "target/dist/pane-0.1.0-windows-*-dev.zip" | Select-Object -First 1
+$newer = Get-ChildItem "target/dist/pane-99.0.0-windows-*-dev.zip" | Select-Object -First 1
+if (-not $older -or -not $newer) { throw "the two packages were not built" }
+$cleanProfile = Join-Path $OutDir "update-profile"
+$unpackOld = Join-Path $OutDir "update-unpacked-old"
+$unpackNew = Join-Path $OutDir "update-unpacked-new"
+foreach ($folder in $cleanProfile, $unpackOld, $unpackNew) {
+    if (Test-Path $folder) { Remove-Item -Recurse -Force $folder }
+}
+New-Item -ItemType Directory -Force -Path $cleanProfile, $unpackOld, $unpackNew | Out-Null
+Expand-Archive -Path $older.FullName -DestinationPath $unpackOld
+Expand-Archive -Path $newer.FullName -DestinationPath $unpackNew
+$portFile = Join-Path $OutDir "update-artifact-server.port"
+if (Test-Path $portFile) { Remove-Item -Force $portFile }
+$serverLog = Join-Path $OutDir "update-artifact-server.log"
+$server = Start-Process python -PassThru -NoNewWindow `
+    -ArgumentList @("`"$PSScriptRoot/artifact_server.py`"", "target/dist/artifacts", "`"$portFile`"") `
+    -RedirectStandardError $serverLog
+$realAppData = $env:APPDATA; $realLocal = $env:LOCALAPPDATA; $realPath = $env:PATH
+try {
+    for ($i = 0; $i -lt 600 -and -not (Test-Path $portFile) -and -not $server.HasExited; $i++) { Start-Sleep -Milliseconds 100 }
+    if (-not (Test-Path $portFile)) { throw "the update artifact source did not start (see update-artifact-server.log)" }
+    # The 0.1.0 package installed on another clean profile, as the #51
+    # phase installed it (nothing is signed, so the policy is bypassed for
+    # the one script).
+    $env:LOCALAPPDATA = Join-Path $cleanProfile "Local"
+    $env:APPDATA = Join-Path $cleanProfile "Roaming"
+    New-Item -ItemType Directory -Force -Path $env:LOCALAPPDATA, $env:APPDATA | Out-Null
+    $shell = if (Get-Command pwsh -ErrorAction SilentlyContinue) { "pwsh" } else { "powershell" }
+    & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $unpackOld "pane\install.ps1") *>> (Join-Path $OutDir "update-install.log")
+    if ($LASTEXITCODE -ne 0) { throw "the install script failed (see update-install.log)" }
+    $install = Join-Path $env:LOCALAPPDATA "Pane"
+    $installed = Join-Path $install "pane.exe"
+    $extensions = Join-Path $install "data\extensions"
+    $registry = Join-Path $extensions "installed.json"
+    # A PATH that holds nothing, and the controlled artifact source.
+    $cleanBin = Join-Path $OutDir "update-clean-bin"
+    if (Test-Path $cleanBin) { Remove-Item -Recurse -Force $cleanBin }
+    New-Item -ItemType Directory -Force -Path $cleanBin | Out-Null
+    $env:PATH = $cleanBin
+    $env:PANE_ARTIFACTS = "http://127.0.0.1:$((Get-Content $portFile).Trim())/"
+    $process = Start-Pane "update-stderr-0.1.0.log" @() $installed
+    $env:PATH = $realPath
+    # First setup: the default extensions are acquired (2 index reads),
+    # and Pane's own check reads the index once more.
+    if ($process.HasExited) { throw "the installed Pane exited during setup" }
+    Wait-For $registry '"default": "calculator"' $true 1200
+    Wait-For $registry '"default": "helper-sample"' $true 1200
+    # The check has read the index (its request is the third): the offer
+    # is in root search. The status line tells what it found; nothing has
+    # been downloaded.
+    for ($i = 0; $i -lt 100; $i++) {
+        if ((Select-String -SimpleMatch "pane-defaults.json" $serverLog).Count -ge 3) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    if ((Select-String -SimpleMatch "pane-defaults.json" $serverLog).Count -lt 3) { throw "Pane never checked for its own update" }
+    Start-Sleep -Seconds 2
+    Capture "600-notification.png"
+    Check "600-notification.png" "9fd8a8"   # "Pane 99.0.0 is available" (or the setup's own outcome)
+    Send "^a"; Send "update"; Start-Sleep -Seconds 1
+    Capture "601-offered.png"
+    Check "601-offered.png" "aab4c0"   # the offer row: "Your extensions and settings are kept; ..."
+    Check "601-offered.png" "364355" 3000   # the row, selected
+    # Taking no action downloads nothing: no package was asked for.
+    if (Select-String -SimpleMatch ".zip" $serverLog) { throw "a package was downloaded without the user choosing it" }
+
+    # Disable the Helper sample first: an extension the user disabled
+    # before the update must stay disabled after it.
+    Send "^a"; Send "manage"; Start-Sleep -Seconds 1
+    Send "{ENTER}"; Start-Sleep -Seconds 1   # Manage extensions…
+    Send "{DOWN}{ENTER}"; Start-Sleep -Seconds 2   # Helper sample: disabled
+    Wait-For $registry '"disabled": true' $true
+    Send "{ESC}"; Start-Sleep -Seconds 1
+
+    # A package that does not match the integrity its index gives is
+    # explained and not installed: the bytes of the served package are
+    # damaged, and the program keeps running the one it was.
+    $served = Join-Path "target/dist/artifacts" $newer.Name
+    $bytes = [IO.File]::ReadAllBytes($served)
+    $at = [int]($bytes.Length / 2)
+    $bytes[$at] = $bytes[$at] -bxor 1
+    [IO.File]::WriteAllBytes($served, $bytes)
+    Send "^a"; Send "update"; Start-Sleep -Seconds 1
+    Send "{ENTER}"; Start-Sleep -Seconds 10
+    Capture "602-corrupt-package.png"
+    Check "602-corrupt-package.png" "f08c8c"   # "Could not update Pane to 99.0.0: ... does not match the sha512 integrity"
+    if (Test-Path (Join-Path $install "pane.exe.old")) { throw "a failed install replaced the program" }
+    if ((Get-FileHash $installed).Hash -ne (Get-FileHash (Join-Path $unpackOld "pane\pane.exe")).Hash) {
+        throw "a failed install changed the program"
+    }
+    if (Test-Path (Join-Path $install "update")) { throw "a failed install left its staging behind" }
+
+    # The source works again; the row that stays tries again, and the
+    # update is installed: the new program takes the old one's name and
+    # place, the old one is renamed out of its way.
+    Copy-Item $newer.FullName $served -Force
+    Send "^a"; Send "update"; Start-Sleep -Seconds 1
+    Send "{ENTER}"
+    for ($i = 0; $i -lt 1200 -and -not (Test-Path (Join-Path $install "pane.exe.old")); $i++) {
+        if ($process.HasExited) { throw "Pane exited while updating itself" }
+        Start-Sleep -Milliseconds 200
+    }
+    if (-not (Test-Path (Join-Path $install "pane.exe.old"))) { throw "the update was not installed" }
+    Start-Sleep -Seconds 2
+    Capture "603-installed.png"
+    Check "603-installed.png" "9fd8a8"   # "Installed Pane 99.0.0; the new version is used the next time Pane starts"
+    if ((Get-FileHash $installed).Hash -ne (Get-FileHash (Join-Path $unpackNew "pane\pane.exe")).Hash) {
+        throw "the new program was not installed"
+    }
+    if ((Get-FileHash (Join-Path $install "pane.exe.old")).Hash -ne (Get-FileHash (Join-Path $unpackOld "pane\pane.exe")).Hash) {
+        throw "the old program was not kept out of the new one's way"
+    }
+    if (Test-Path (Join-Path $install "update")) { throw "the install left its staging behind" }
+    # The package was downloaded once for each attempt: the damaged one
+    # and the one that installed.
+    if ((Select-String -SimpleMatch ".zip" $serverLog).Count -ne 2) { throw "the package was not downloaded exactly twice" }
+    Stop-Pane $process
+
+    # The next start runs the new version: it reports 99.0.0, removes what
+    # the update left, and the old version's data is kept — the
+    # calculator answers and the Helper sample stays disabled.
+    $version = Join-Path $OutDir "update-version.txt"
+    $check = Start-Process -FilePath $installed -ArgumentList "--version" -Wait -PassThru -RedirectStandardOutput $version
+    if ($check.ExitCode -ne 0) { throw "the new pane.exe --version failed" }
+    if (((Get-Content $version) -join "") -ne "Pane 99.0.0") { throw "the new program reports the wrong version" }
+    $env:PATH = $cleanBin
+    $process = Start-Pane "update-stderr-99.0.0.log" @() $installed
+    $env:PATH = $realPath
+    Wait-For (Join-Path $install "pane.exe.old") "x" $false 100
+    if (Test-Path (Join-Path $install "pane.exe.old")) { throw "the old program's file was not removed on the new start" }
+    Send "^a"; Send "6*7"; Start-Sleep -Seconds 2
+    Capture "604-answer-after-update.png"
+    Check "604-answer-after-update.png" "364355" 3000   # "42", the calculator's answer
+    Send "{ENTER}"; Start-Sleep -Seconds 1
+    Capture "605-copied-after-update.png"
+    Check "605-copied-after-update.png" "9fd8a8"   # "Copied 42 to the clipboard"
+    Wait-For $registry '"disabled": true' $true
+    $shots = "600-notification", "601-offered", "602-corrupt-package", "603-installed", "604-answer-after-update" |
+        ForEach-Object { Join-Path $OutDir "$_.png" }
+    python "$PSScriptRoot/check_screenshot.py" --distinct @shots
+    if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the update changed nothing" }
+    Stop-Pane $process
+    # The program files go again, as the #51 phase's do.
+    Remove-Item -Force $installed
 } finally {
     Stop-Process -Id $server.Id -ErrorAction SilentlyContinue
     Remove-Item Env:PANE_ARTIFACTS -ErrorAction SilentlyContinue

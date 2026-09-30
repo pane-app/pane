@@ -25,6 +25,15 @@
 //! published downloads, which no controlled source may replace). Without
 //! it, the release profile is built.
 //!
+//! The index the artifacts hold also names the application package a Pane
+//! application update downloads (#54): its `application` entry, with the
+//! package's version, file name, sha512 integrity, size and target.
+//! `--package-version <version>` builds the program reporting that
+//! version and names the package and its entry by it — for the smokes,
+//! which need a newer version to offer than the one installed (a real
+//! release builds the workspace's own version, and no override is
+//! given).
+//!
 //! Each task builds the package for the system it runs on, so a release
 //! for several systems builds one package per system (this machine builds
 //! the Linux one, CI's `windows-2025`, `macos-15` and `ubuntu-24.04`
@@ -113,25 +122,36 @@ impl System {
     }
 }
 
-/// Builds the Linux package and the default extensions' artifacts.
-pub fn linux(dev: bool) -> Result<(), String> {
+/// Builds the Linux package and the artifacts an artifact source serves:
+/// the default extensions' payloads, and the index naming them and the
+/// application package this task also built.
+pub fn linux(dev: bool, version: Option<String>) -> Result<(), String> {
     let root = root();
     let out = root.join("target/dist");
     fs::create_dir_all(&out).map_err(|error| error.to_string())?;
-    build_program(&root, dev)?;
-    let artifacts = assemble_artifacts(&root, &out)?;
-    let package = assemble_package(&root, &out, dev, System::Linux)?;
+    let (artifacts, entries) = assemble_payloads(&root, &out)?;
+    build_program(&root, dev, version.as_deref())?;
+    let (package, packed) = assemble_package(&root, &out, dev, System::Linux, version.as_deref())?;
+    let target = target_id()?;
+    let application = application_entry(
+        version.as_deref().unwrap_or(VERSION),
+        &package,
+        &packed,
+        &target,
+    );
+    write_index(&artifacts, &entries, Some(&application))?;
+    serve_package(&artifacts, &package)?;
     println!("package built into {}", package.display());
     println!("artifacts built into {}", artifacts.display());
     Ok(())
 }
 
-/// Builds the Windows package and the default extensions' artifacts.
-pub fn windows(dev: bool) -> Result<(), String> {
+/// Builds the Windows package and the same artifacts.
+pub fn windows(dev: bool, version: Option<String>) -> Result<(), String> {
     let root = root();
     let out = root.join("target/dist");
     fs::create_dir_all(&out).map_err(|error| error.to_string())?;
-    let artifacts = assemble_artifacts(&root, &out)?;
+    let (artifacts, entries) = assemble_payloads(&root, &out)?;
     // The program comes last, so everything else the task builds is built
     // wherever it runs; but pane.exe can only be built by a Windows
     // checkout (no cross toolchain is set up: a Windows program needs a
@@ -139,6 +159,9 @@ pub fn windows(dev: bool) -> Result<(), String> {
     // Windows package's name would be worse than explaining so. CI's
     // `windows-2025` runner builds the package itself.
     if !cfg!(target_os = "windows") {
+        // No package was built, so the index names no application package:
+        // a source that serves none still serves the default extensions.
+        write_index(&artifacts, &entries, None)?;
         return Err(format!(
             "package-windows builds the pane program for Windows, which only a Windows checkout \
              can build; this one runs on {}. The artifacts under {} are assembled for this \
@@ -147,19 +170,29 @@ pub fn windows(dev: bool) -> Result<(), String> {
             artifacts.display()
         ));
     }
-    build_program(&root, dev)?;
-    let package = assemble_package(&root, &out, dev, System::Windows)?;
+    build_program(&root, dev, version.as_deref())?;
+    let (package, packed) =
+        assemble_package(&root, &out, dev, System::Windows, version.as_deref())?;
+    let target = target_id()?;
+    let application = application_entry(
+        version.as_deref().unwrap_or(VERSION),
+        &package,
+        &packed,
+        &target,
+    );
+    write_index(&artifacts, &entries, Some(&application))?;
+    serve_package(&artifacts, &package)?;
     println!("package built into {}", package.display());
     println!("artifacts built into {}", artifacts.display());
     Ok(())
 }
 
 /// Builds the macOS package and the default extensions' artifacts.
-pub fn macos(dev: bool) -> Result<(), String> {
+pub fn macos(dev: bool, version: Option<String>) -> Result<(), String> {
     let root = root();
     let out = root.join("target/dist");
     fs::create_dir_all(&out).map_err(|error| error.to_string())?;
-    let artifacts = assemble_artifacts(&root, &out)?;
+    let (artifacts, entries) = assemble_payloads(&root, &out)?;
     // As on Windows, the program comes last, so everything else the task
     // builds is built wherever it runs; but the `pane` program for macOS
     // can only be built by a macOS checkout (no cross toolchain is set up:
@@ -167,6 +200,9 @@ pub fn macos(dev: bool) -> Result<(), String> {
     // program under a macOS package's name would be worse than explaining
     // so. CI's `macos-15` runner builds the package itself.
     if !cfg!(target_os = "macos") {
+        // No package was built, so the index names no application package:
+        // a source that serves none still serves the default extensions.
+        write_index(&artifacts, &entries, None)?;
         return Err(format!(
             "package-macos builds the pane program for macOS, which only a macOS checkout can \
              build; this one runs on {}. The artifacts under {} are assembled for this system, \
@@ -175,10 +211,29 @@ pub fn macos(dev: bool) -> Result<(), String> {
             artifacts.display()
         ));
     }
-    build_program(&root, dev)?;
-    let package = assemble_package(&root, &out, dev, System::Macos)?;
+    build_program(&root, dev, version.as_deref())?;
+    let (package, packed) = assemble_package(&root, &out, dev, System::Macos, version.as_deref())?;
+    let target = target_id()?;
+    let application = application_entry(
+        version.as_deref().unwrap_or(VERSION),
+        &package,
+        &packed,
+        &target,
+    );
+    write_index(&artifacts, &entries, Some(&application))?;
+    serve_package(&artifacts, &package)?;
     println!("package built into {}", package.display());
     println!("artifacts built into {}", artifacts.display());
+    Ok(())
+}
+
+/// Keeps the package in the artifacts an artifact source serves, under the
+/// file name its index entry names: a Pane application update downloads it
+/// from the same source the default extensions' payloads come from.
+fn serve_package(artifacts: &Path, package: &Path) -> Result<(), String> {
+    let served = artifacts.join(package.file_name().expect("the package is named"));
+    fs::copy(package, &served)
+        .map_err(|error| format!("copy {} failed: {error}", served.display()))?;
     Ok(())
 }
 
@@ -204,14 +259,19 @@ fn run(command: &mut Command) -> Result<(), String> {
     }
 }
 
-/// Builds the `pane` program for the system this runs on.
-fn build_program(root: &Path, dev: bool) -> Result<(), String> {
+/// Builds the `pane` program for the system this runs on. With `version`,
+/// the program reports that version (`pane --version`, and the version an
+/// application update compares itself with) instead of the workspace's.
+fn build_program(root: &Path, dev: bool, version: Option<&str>) -> Result<(), String> {
     let mut build = cargo();
     build
         .current_dir(root)
         .args(["build", "--locked", "-p", "pane"]);
     if !dev {
         build.arg("--release");
+    }
+    if let Some(version) = version {
+        build.env("PANE_PACKAGE_VERSION", version);
     }
     run(&mut build)
 }
@@ -233,15 +293,16 @@ fn target_id() -> Result<String, String> {
         .ok_or_else(|| "Pane names no target for this system".to_owned())
 }
 
-/// Assembles the artifacts an artifact source serves into
-/// `target/dist/artifacts`: the index `pane-defaults.json` and one tarball
-/// per default extension's payload, packed from the package `cargo xtask
-/// guests` assembled. The payload's manifest names the helper targets
-/// whose files it carries: the build serves the helper built for the
-/// system it ran on, so the manifest is rewritten to name that target
-/// alone (a real deployment builds every supported target and serves one
-/// payload whose manifest names them all).
-fn assemble_artifacts(root: &Path, out: &Path) -> Result<PathBuf, String> {
+/// Assembles the payloads an artifact source serves into
+/// `target/dist/artifacts`: one tarball per default extension's payload,
+/// packed from the package `cargo xtask guests` assembled, and the line
+/// each takes in the index (written by [`write_index`], once the
+/// application package is also known). The payload's manifest names the
+/// helper targets whose files it carries: the build serves the helper
+/// built for the system it ran on, so the manifest is rewritten to name
+/// that target alone (a real deployment builds every supported target and
+/// serves one payload whose manifest names them all).
+fn assemble_payloads(root: &Path, out: &Path) -> Result<(PathBuf, Vec<String>), String> {
     let artifacts = out.join("artifacts");
     let _ = fs::remove_dir_all(&artifacts);
     fs::create_dir_all(&artifacts).map_err(|error| error.to_string())?;
@@ -267,14 +328,48 @@ fn assemble_artifacts(root: &Path, out: &Path) -> Result<PathBuf, String> {
             tarball.len()
         ));
     }
-    let index = format!(
-        "{{\n  \"formatVersion\": 1,\n  \"defaults\": [\n{}\n  ]\n}}\n",
+    Ok((artifacts, entries))
+}
+
+/// Writes the index `pane-defaults.json` into `artifacts`: the default
+/// extensions' entries, and the `application` entry naming the package an
+/// application update downloads (its version, file name, sha512
+/// integrity, size and target) when the task built one. A source that
+/// serves no application package still serves the default extensions.
+fn write_index(
+    artifacts: &Path,
+    entries: &[String],
+    application: Option<&str>,
+) -> Result<(), String> {
+    let mut index = format!(
+        "{{\n  \"formatVersion\": 1,\n  \"defaults\": [\n{}\n  ]",
         entries.join(",\n")
     );
+    if let Some(application) = application {
+        index.push_str(",\n");
+        index.push_str(application);
+    }
+    index.push_str("\n}\n");
     let index_file = artifacts.join("pane-defaults.json");
     fs::write(&index_file, index)
         .map_err(|error| format!("write {} failed: {error}", index_file.display()))?;
-    Ok(artifacts)
+    Ok(())
+}
+
+/// The `application` line of the index: what a Pane application update
+/// reads of the package `packed` built as `file`, of `version`, for
+/// `target`.
+fn application_entry(version: &str, package: &Path, packed: &[u8], target: &str) -> String {
+    let file = package
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("the package is named");
+    let integrity = format!("sha512-{}", base64(&Sha512::digest(packed)));
+    format!(
+        "  \"application\": {{ \"version\": \"{version}\", \"file\": \"{file}\", \
+         \"integrity\": \"{integrity}\", \"size\": {}, \"target\": \"{target}\" }}",
+        packed.len()
+    )
 }
 
 /// The files of the payload packed from `source`: the manifest, and the
@@ -438,13 +533,20 @@ fn pack_tgz(
 /// file beside it. The package is the same bytes wherever it is built: the
 /// tarball with fixed time, owner and mode, the zip the same way
 /// ([`zip::pack`]).
-fn assemble_package(root: &Path, out: &Path, dev: bool, system: System) -> Result<PathBuf, String> {
+fn assemble_package(
+    root: &Path,
+    out: &Path,
+    dev: bool,
+    system: System,
+    version: Option<&str>,
+) -> Result<(PathBuf, Vec<u8>), String> {
     let stage = out.join("stage/pane");
     let _ = fs::remove_dir_all(stage.parent().expect("the stage folder"));
     fs::create_dir_all(&stage).map_err(|error| error.to_string())?;
     let suffix = if dev { "-dev" } else { "" };
     let name = format!(
-        "pane-{VERSION}-{}-{}{suffix}.{}",
+        "pane-{}-{}-{}{suffix}.{}",
+        version.unwrap_or(VERSION),
         system.id(),
         arch().ok_or("the package names no architecture for this system")?,
         system.archive(),
@@ -457,7 +559,8 @@ fn assemble_package(root: &Path, out: &Path, dev: bool, system: System) -> Resul
     for (from, to) in copies {
         fs::copy(&from, &to).map_err(|error| format!("copy {} failed: {error}", from.display()))?;
     }
-    fs::write(stage.join("README.txt"), readme(system, dev)).map_err(|error| error.to_string())?;
+    fs::write(stage.join("README.txt"), readme(system, dev, version))
+        .map_err(|error| error.to_string())?;
     if let Some((file, contents)) = system.extra_file() {
         fs::write(stage.join(file), contents).map_err(|error| error.to_string())?;
     }
@@ -479,7 +582,7 @@ fn assemble_package(root: &Path, out: &Path, dev: bool, system: System) -> Resul
     let sha256 = out.join(format!("{name}.sha256"));
     fs::write(&sha256, format!("{digest}  {name}\n"))
         .map_err(|error| format!("write {} failed: {error}", sha256.display()))?;
-    Ok(package)
+    Ok((package, packed))
 }
 
 /// The architecture of the system this ran on, as the package name says
@@ -492,19 +595,21 @@ fn arch() -> Option<&'static str> {
     }
 }
 
-/// The README in the package.
-fn readme(system: System, dev: bool) -> String {
+/// The README in the package, naming the `version` the packaged program
+/// reports.
+fn readme(system: System, dev: bool, version: Option<&str>) -> String {
+    let version = version.unwrap_or(VERSION);
     match system {
-        System::Linux => readme_linux(dev),
-        System::Windows => readme_windows(dev),
-        System::Macos => readme_macos(dev),
+        System::Linux => readme_linux(dev, version),
+        System::Windows => readme_windows(dev, version),
+        System::Macos => readme_macos(dev, version),
     }
 }
 
-fn readme_linux(dev: bool) -> String {
+fn readme_linux(dev: bool, version: &str) -> String {
     let profile = if dev { "development" } else { "release" };
     format!(
-        "Pane {VERSION} for Linux (this package is the {profile} profile)
+        "Pane {version} for Linux (this package is the {profile} profile)
 
 WHAT THIS IS
 
@@ -555,10 +660,10 @@ FIRST RUN
     )
 }
 
-fn readme_windows(dev: bool) -> String {
+fn readme_windows(dev: bool, version: &str) -> String {
     let profile = if dev { "development" } else { "release" };
     format!(
-        r#"Pane {VERSION} for Windows (this package is the {profile} profile)
+        r#"Pane {version} for Windows (this package is the {profile} profile)
 
 WHAT THIS IS
 
@@ -618,10 +723,10 @@ FIRST RUN
     )
 }
 
-fn readme_macos(dev: bool) -> String {
+fn readme_macos(dev: bool, version: &str) -> String {
     let profile = if dev { "development" } else { "release" };
     format!(
-        r#"Pane {VERSION} for macOS (this package is the {profile} profile)
+        r#"Pane {version} for macOS (this package is the {profile} profile)
 
 WHAT THIS IS
 

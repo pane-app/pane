@@ -24,8 +24,10 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task;
 
 use tokio::sync::{mpsc, oneshot};
 
@@ -735,6 +737,27 @@ enum Request {
     },
 }
 
+impl Request {
+    /// The component this request's call runs in, when it is a call the
+    /// user asked the package for — opening a command, running an item, a
+    /// query sent from root, a command's search, a form submission or
+    /// opening a custom view. Not the background and ambient ones (a
+    /// scheduled run, a service cycle, a root search's ask), which a
+    /// replacement of the package's code ends and its new code restarts or
+    /// re-asks, nor a view event, whose screen is what the launcher checks.
+    fn user_component(&self) -> Option<&Path> {
+        match self {
+            Request::GetView { component, .. }
+            | Request::RunAction { component, .. }
+            | Request::RunQuery { component, .. }
+            | Request::Search { component, .. }
+            | Request::SubmitForm { component, .. }
+            | Request::OpenView { component, .. } => Some(component),
+            _ => None,
+        }
+    }
+}
+
 /// How a call into an installed package's code failed, for deciding
 /// whether to pause the package (see the launcher's `pausing`). Only the
 /// package's own failures are reported: an error the guest answers with is
@@ -1281,6 +1304,23 @@ impl Runtime {
         self.try_running().await.unwrap_or_default()
     }
 
+    /// The components with calls the user asked for that have not answered
+    /// yet, counting the calls asked for before this one: sent, queued
+    /// behind another call or running in the guest. The replacement of a
+    /// package's code (an update) waits for these, so that no command the
+    /// user is waiting on is interrupted mid-run. Background and ambient
+    /// calls (a scheduled run, a service cycle, a root search's ask) are
+    /// not counted: a replacement ends them and the new code restarts or
+    /// re-asks them. Nor is a custom view event, whose open screen is what
+    /// the launcher waits for instead. In no particular order.
+    pub fn busy(&self) -> Vec<PathBuf> {
+        lock(&self.shared.busy)
+            .iter()
+            .filter(|(_, busy)| busy.calls > 0)
+            .map(|(component, _)| component.clone())
+            .collect()
+    }
+
     /// Like [`Runtime::running`], saying why there is no answer: the
     /// runtime is stopped, or its thread failed (a crash, or Pane gave up
     /// on it) before answering. Answered once every request sent before it
@@ -1318,9 +1358,22 @@ impl Runtime {
     /// already in progress finishes first, unless its generation ends (as
     /// the launcher does before forgetting a disabled or replaced package),
     /// which stops it. Nothing coordinates this with a command the user has
-    /// open: its instance's state is lost.
+    /// open: its instance's state is lost. Their calls the user asked for
+    /// are being stopped, so they no longer count as busy
+    /// ([`Runtime::busy`]): the count's generation moves on, so a call of
+    /// the ended generation dropped later cannot touch a newer one's.
     pub fn forget(&self, components: impl IntoIterator<Item = PathBuf>) {
-        let components = components.into_iter().collect();
+        let components: Vec<PathBuf> = components.into_iter().collect();
+        {
+            let mut busy = lock(&self.shared.busy);
+            for component in &components {
+                // Ends the generation the counts so far are of, zeroing
+                // them: a newer generation starts its count afresh.
+                let busy = busy.entry(component.clone()).or_default();
+                busy.calls = 0;
+                busy.generation += 1;
+            }
+        }
         // A stopped runtime holds nothing to forget.
         let _ = self.send(Request::Forget { components });
     }
@@ -1361,15 +1414,22 @@ impl Runtime {
     /// `response`. An answer lost because the runtime thread crashed or
     /// stopped responding is known once Pane has restarted it or chosen
     /// not to, and says which; the request is never sent again.
+    ///
+    /// A call the user asked a package for (see
+    /// [`Request::user_component`]) is counted as busy in its component
+    /// until its answer is waited for or nobody waits for it any more, so
+    /// that replacing the package's code can wait for every such call to
+    /// finish ([`Runtime::busy`]).
     fn call<T: Send + 'static>(
         &self,
         request: Request,
         response: oneshot::Receiver<Result<T, CallError>>,
     ) -> impl Future<Output = Result<T, CallError>> + Send + 'static + use<T> {
+        let component = request.user_component().map(Path::to_path_buf);
         let handled = self.shared.handled();
         let sent = self.shared.send(request);
         let shared = Arc::downgrade(&self.shared);
-        async move {
+        let answer = async move {
             let thread = match sent {
                 Err(NotSent::Stopped) => return Err(supervisor::stopped()),
                 Err(NotSent::Lost(thread)) => thread,
@@ -1395,6 +1455,67 @@ impl Runtime {
                 }
             };
             Err(supervisor::lost(shared, handled, thread).await)
+        };
+        match component {
+            None => CountedCall {
+                answer,
+                counting: None,
+            },
+            Some(component) => {
+                // The generation the count is of, captured here and checked
+                // again when it ends: `forget` moves the generation on, so
+                // this call cannot take a call of a newer generation's
+                // count with it.
+                let generation = {
+                    let mut busy = lock(&self.shared.busy);
+                    let busy = busy.entry(component.clone()).or_default();
+                    busy.calls += 1;
+                    busy.generation
+                };
+                CountedCall {
+                    answer,
+                    counting: Some((self.shared.clone(), component, generation)),
+                }
+            }
+        }
+    }
+}
+
+/// The answer of one call, counted as busy in its component for as long
+/// as it is waited for when the user asked the package for it (see
+/// [`Runtime::call`]).
+struct CountedCall<F> {
+    answer: F,
+    /// What to tell when this stops counting, with the component to tell
+    /// it for and the generation the count was of; `None` for a call that
+    /// is not counted.
+    counting: Option<(Arc<Shared>, PathBuf, u64)>,
+}
+
+impl<F: Future> Future for CountedCall<F> {
+    type Output = F::Output;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<F::Output> {
+        // SAFETY: `answer` is never moved out of this, and is pinned here
+        // for as long as `self` is, as structural pinning requires.
+        let answer = unsafe {
+            self.as_mut()
+                .map_unchecked_mut(|counted| &mut counted.answer)
+        };
+        answer.poll(cx)
+    }
+}
+
+impl<F> Drop for CountedCall<F> {
+    fn drop(&mut self) {
+        if let Some((shared, component, generation)) = self.counting.take() {
+            let mut busy = lock(&shared.busy);
+            if let Some(count) = busy.get_mut(&component)
+                && count.generation == generation
+                && count.calls > 0
+            {
+                count.calls -= 1;
+            }
         }
     }
 }

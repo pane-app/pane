@@ -53,6 +53,17 @@ pub fn bind_keys(cx: &mut App) {
     custom_view::bind_keys(cx);
 }
 
+/// The version of Pane this build is: the workspace's version, or the one
+/// `cargo xtask package-windows --package-version` gave the program when
+/// it packed it (a build whose version the packaging overrode, so an
+/// update's version transition can be checked). This is the version
+/// `pane --version` prints and the one an application update compares
+/// itself with.
+pub const APP_VERSION: &str = match option_env!("PANE_PACKAGE_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 /// The sample commands: (id, title, subtitle, component file name). Each
 /// implements the same command in a different extension language.
 #[cfg(debug_assertions)]

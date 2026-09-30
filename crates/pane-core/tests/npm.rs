@@ -1234,7 +1234,10 @@ fn an_npm_package_has_no_reload_or_develop_rows() {
             .any(|t| t.starts_with("Reload ") || t.starts_with("Develop ")),
         "{titles:?}"
     );
-    let row = &launcher.view().rows[0];
+    let row = &launcher.view().rows[titles
+        .iter()
+        .position(|t| t == "Greeter from npm")
+        .expect("the package's row")];
     assert_eq!(
         row.subtitle.as_deref(),
         Some("Enabled · npm package @pane-samples/greeter")

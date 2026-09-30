@@ -310,6 +310,7 @@ fn uninstalling_and_keeping_saved_data_restores_it_on_reinstall(fixture: &Fixtur
             "Hotkey for Greeting",
             "Alias for Greeting",
             "Develop Settings sample",
+            "Update extensions automatically",
         ]
     );
     ask_to_uninstall(&launcher, "Settings sample", 0);
@@ -345,7 +346,10 @@ fn uninstalling_and_keeping_saved_data_restores_it_on_reinstall(fixture: &Fixtur
     // It is listed only as retained data now.
     assert_eq!(
         titles(&launcher),
-        ["Delete retained data of Settings sample"]
+        [
+            "Delete retained data of Settings sample",
+            "Update extensions automatically"
+        ]
     );
 
     // Gone from root search, with its managed copy, cache and credential.
@@ -704,7 +708,9 @@ fn retained_data_is_listed_and_deleted_without_the_extension(fixture: &Fixture) 
     let restarted = Launcher::with_packages(unavailable, vec![], dirs.packages_dir());
     manage(&restarted);
     let view = restarted.view();
-    assert_eq!(view.rows.len(), 1, "{:?}", view.rows);
+    // The retained data's row, then the global automatic-update row that
+    // ends the list.
+    assert_eq!(view.rows.len(), 2, "{:?}", view.rows);
     assert_eq!(
         view.rows[0].title,
         "Delete retained data of Settings sample"
@@ -744,7 +750,8 @@ fn retained_data_is_listed_and_deleted_without_the_extension(fixture: &Fixture) 
         view.status,
         Status::Result("Deleted the retained data of Settings sample".into())
     );
-    assert!(view.rows.is_empty(), "{:?}", view.rows);
+    // Only the global automatic-update row, which ends the list, is left.
+    assert_eq!(titles(&restarted), ["Update extensions automatically"]);
     assert!(restarted.retained_data().is_empty());
     assert!(dirs.kinds_kept(&folder).is_empty());
     assert_eq!(files(dirs.sources.path()), sources);
