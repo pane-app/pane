@@ -719,6 +719,9 @@ visible.
 ## Remaining limits
 
 - Only a CI runner was used; no one has run it on a contributor's own Mac.
+- The #4 resource and latency workload exists for Linux only; this
+  platform's measurements and targets are not started
+  ([the measurement record](../research/resource-measurements.md)).
 - Intel Macs, other macOS versions and the JS/TS toolchain build on macOS are
   untested. The wasi-sdk checksum for macOS in `tools/componentize-js/pins.json`
   has not been checked against a real download.

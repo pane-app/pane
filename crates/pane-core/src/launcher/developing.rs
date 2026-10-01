@@ -143,12 +143,25 @@ pub(super) struct DevelopStart {
 /// The launcher's development: which packages are developed, and how they
 /// are built.
 pub(super) struct Developing {
-    builder: Option<Arc<dyn Builder>>,
-    changes: Option<ChangeSender>,
+    /// What `with_development` configures, behind a lock so that configuring
+    /// a launcher after it was built never replaces this Arc: the
+    /// background threads the launcher starts hold it weakly, and a
+    /// replacement would tell them the launcher was dropped (as
+    /// `WeakLauncher::upgrade` upgrades every weakly-held part or none).
+    config: Mutex<DevelopmentConfig>,
     sessions: Mutex<HashMap<PackageIdentity, Session>>,
     /// The id of the next session, so that a session's thread can tell
     /// whether its package is still developed by it.
     next: AtomicU64,
+}
+
+/// The builder local packages are built with on save, and the sender that
+/// tells the window what development changed; either absent until
+/// `with_development` runs, so a launcher without it explains that this
+/// Pane does not build extensions.
+struct DevelopmentConfig {
+    builder: Option<Arc<dyn Builder>>,
+    changes: Option<ChangeSender>,
 }
 
 /// One developed package.
@@ -176,12 +189,23 @@ enum Signal {
 
 impl Developing {
     pub(super) fn new(builder: Option<Arc<dyn Builder>>, changes: Option<ChangeSender>) -> Self {
+        // The configuration is held behind a lock so that
+        // `with_development`, which runs after the launcher was built,
+        // reconfigures this same Arc rather than replacing it: the
+        // background threads hold it weakly, and a replacement would tell
+        // them the launcher was dropped.
         Developing {
-            builder,
-            changes,
+            config: Mutex::new(DevelopmentConfig { builder, changes }),
             sessions: Mutex::new(HashMap::new()),
             next: AtomicU64::new(1),
         }
+    }
+
+    /// The configuration `with_development` last set, locked: the builder
+    /// local packages are built with on save, and the sender that tells
+    /// the window what development changed.
+    fn config(&self) -> MutexGuard<'_, DevelopmentConfig> {
+        self.config.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     fn sessions(&self) -> MutexGuard<'_, HashMap<PackageIdentity, Session>> {
@@ -235,10 +259,22 @@ impl Developing {
         !ended.is_empty()
     }
 
-    fn changed(&self) {
-        if let Some(changes) = &self.changes {
+    /// Tells the window that the launcher changed in the background, as
+    /// `Launcher::changed` does, through the shared configuration so that a
+    /// channel wired after the launcher was built reaches the threads that
+    /// were started before it (the updater's checks; #59's family).
+    pub(super) fn changed(&self) {
+        if let Some(changes) = &self.config().changes {
             changes.changed();
         }
+    }
+
+    /// The sender that tells the window the launcher changed in the
+    /// background, for the progress a download reports as it goes.
+    /// Read through the shared configuration, so a channel wired after the
+    /// launcher was built is seen here too.
+    pub(super) fn changes(&self) -> Option<ChangeSender> {
+        self.config().changes.clone()
     }
 }
 
@@ -255,15 +291,24 @@ impl Launcher {
     /// developing a package explains that this Pane cannot.
     pub fn with_development(self, builder: Arc<dyn Builder>, changes: ChangeSender) -> Self {
         self.developing.end(None);
-        let launcher = Launcher {
-            developing: Arc::new(Developing::new(Some(builder), Some(changes.clone()))),
+        // The same Arc is reconfigured, not replaced: the launcher's
+        // background threads hold it weakly, and a replacement would make
+        // them take the launcher for dropped (the updater's checks would
+        // never run again; #59).
+        //
+        // The changes sender is written into the shared configuration, not
+        // into this launcher's fields: the threads the constructor started
+        // hold launchers whose own field snapshots were taken before this
+        // ran, and a field would leave them telling no window anything
+        // while development's changes (read through the configuration)
+        // still arrived — the smoke's #49 phase saw exactly that: the
+        // update applied, and the status line never showed it.
+        *self.developing.config() = DevelopmentConfig {
+            builder: Some(builder),
             changes: Some(changes),
-            ..self
         };
-        // The runtime reports failures to this launcher, not the one it
-        // replaces, whose development is gone.
-        launcher.report_failures();
-        launcher
+        self.report_failures();
+        self
     }
 
     /// Develops the installed package with `identity`: from now on, each
@@ -331,7 +376,7 @@ impl Launcher {
                 return None;
             }
         }
-        let Some(builder) = self.developing.builder.clone() else {
+        let Some(builder) = self.developing.config().builder.clone() else {
             state.view.status = Status::Error(format!(
                 "Cannot develop {title}: this Pane does not build extensions"
             ));

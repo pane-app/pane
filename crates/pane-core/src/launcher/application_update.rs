@@ -237,7 +237,7 @@ impl Launcher {
         self.changed();
         // The download runs off the thread; the status line follows it,
         // as acquiring a default extension's payload does.
-        let (state, changes) = (self.state.clone(), self.changes.clone());
+        let (state, changes) = (self.state.clone(), self.developing.changes());
         let telling = version.clone();
         let telling = move |bytes: u64, total: u64| {
             let text = format!(

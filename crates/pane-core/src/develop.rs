@@ -1360,10 +1360,19 @@ mod tests {
         let pid_file = dir.path().join("pid");
         // setsid moves the sleeper to a session of its own, as a daemon
         // does: killing the group misses it, and it keeps the pipes open.
-        // Perl's, since macOS has no setsid command.
+        // Perl's, since macOS has no setsid command. The shell waits for the
+        // daemon's pid file instead of a fixed time: the group is killed the
+        // moment the shell exits, and a slow start (a loaded runner) would
+        // otherwise leave the daemon still inside the group when that
+        // happens, so its pid never appears and the test times out (run
+        // 36791672656's Linux leg). Waiting keeps the daemon's escape before
+        // the exit, bounded so a daemon that never starts still fails fast.
         let script = format!(
             "perl -MPOSIX -e 'POSIX::setsid(); open(my $f, \">\", $ARGV[0]) or die; \
-             print $f $$; close $f; exec(\"sleep\", \"30\")' '{}' & sleep 0.2; echo done",
+             print $f $$; close $f; exec(\"sleep\", \"30\")' '{}' & \
+             i=0; while [ ! -s '{}' ] && [ \"$i\" -lt 200 ]; do sleep 0.01; i=$((i+1)); done; \
+             echo done",
+            pid_file.display(),
             pid_file.display()
         );
         let (job, _) = job(dir.path());

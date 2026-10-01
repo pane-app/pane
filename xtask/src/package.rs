@@ -56,12 +56,18 @@ use sha2::{Digest, Sha256, Sha512};
 use crate::zip;
 
 /// The default extensions whose payloads the artifacts describe, and the
-/// assembled package each is packed from: the calculator (the default
-/// feature the installer proves) and the helper sample (the prebuilt
-/// helper fixture with it). The ids are the ones Pane's application build
-/// acquires (`pane::default_extensions`).
-const DEFAULTS: [(&str, &str); 2] = [
+/// assembled package each is packed from: the release's default set
+/// (#60, the user's recorded choice — the calculator, applications,
+/// quicklinks, files and clipboard history) plus the helper sample, the
+/// prebuilt-helper fixture development builds acquire with them. The ids
+/// are the ones Pane's application build acquires
+/// (`pane::default_extensions`).
+const DEFAULTS: [(&str, &str); 6] = [
     ("calculator", "calculator"),
+    ("applications", "applications"),
+    ("quicklinks", "quicklinks"),
+    ("files", "files"),
+    ("clipboard-history", "clipboard-history"),
     ("helper-sample", "sample-helper"),
 ];
 

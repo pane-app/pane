@@ -21,9 +21,11 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
+use pane_core::clipboard::{Clock as _, ManualClock, SystemClock};
 use pane_core::{Launcher, Runtime, SavedData, Screen, Status};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -66,6 +68,15 @@ struct Dirs {
     repos: TempDir,
     runtime: Runtime,
     server: Server,
+    /// Frozen, so the launcher's background updater never checks on its
+    /// own. A launcher of these tests is on the system clock otherwise,
+    /// and its first check — a second after the launcher was built, while
+    /// the test is fetching from and moving the same test repositories —
+    /// can race the test's own update and preview (run 36829978244's
+    /// Windows leg: the user-chosen Update was refused with "Greeter
+    /// from Git is updating", and a preview fetch failed on the server
+    /// at the same time).
+    clock: Arc<ManualClock>,
 }
 
 impl Dirs {
@@ -76,6 +87,7 @@ impl Dirs {
             repos: tempfile::tempdir().unwrap(),
             runtime: Runtime::start().unwrap(),
             server: Server::start(),
+            clock: ManualClock::at(SystemClock.now()),
         }
     }
 
@@ -84,8 +96,11 @@ impl Dirs {
     }
 
     /// A launcher on this data folder; a new one is a restart of Pane.
+    /// It runs on the frozen clock, so nothing happens in the background
+    /// that the test did not ask for.
     fn launcher(&self) -> Launcher {
         Launcher::with_packages(Ok(self.runtime.clone()), vec![], self.packages_dir())
+            .with_clock(self.clock.clone())
     }
 
     /// A new repository served as `name`.

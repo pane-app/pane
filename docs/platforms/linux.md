@@ -1014,6 +1014,26 @@ Windows; overwriting one is not) are proven only there.
 | The user's choice swaps the running program; the new one is used the next start | pending the Linux smoke run (frame 603) |
 | The new version reports itself; the old version's data and enablement are kept | pending the Linux smoke run (frames 604, 605) |
 
+### Resource and latency measurements (#4)
+
+The [documented workload](../research/resource-measurements.md)
+(`scripts/measure-linux.sh`, the smoke's runner, guests and binary) runs
+Pane through cold and warm start, an idle core, seven installed-but-unused
+extensions, repeated calculator use, the Watching service and the Counting
+schedule, and repeated reload and disable, sampling Pane's whole process
+tree from `/proc` at 1 s into a machine-readable record. It is wired into
+CI's Linux leg, its record uploaded as the `resource-measurements`
+artifact, and its summary checked against the proposed targets
+(`scripts/resource-targets.json`), which are **all pending numbers**: this
+combination has not run it yet (this machine cannot; see the record), no
+target is inferred from the older CLI peaks, and Q3's budgets stay open
+until the first record is collected and the user confirms ceilings.
+
+| | |
+| --- | --- |
+| The workload, sampler, targets file and CI wiring | [the measurement record](../research/resource-measurements.md) |
+| This combination's numbers | pending the next CI Linux run (`measure/summary.json` in the artifact) |
+
 ## Text input and accessibility findings
 
 - **Text input / IME (#20):** extension forms have a text field (GPUI CE's

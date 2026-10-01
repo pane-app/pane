@@ -495,18 +495,6 @@ fn local_package(sources: &Path) -> PathBuf {
     folder
 }
 
-/// The names of the managed folders under `extensions/packages`, each of
-/// which is one installed copy: a new one appears while a replacement is
-/// being written into it.
-fn managed_folders(dirs: &Dirs) -> Vec<String> {
-    let mut names: Vec<String> = fs::read_dir(dirs.packages_dir().join("packages"))
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .collect();
-    names.sort();
-    names
-}
-
 #[test]
 fn a_newer_version_updates_the_package_by_itself_keeping_its_data() {
     let dirs = Dirs::new();
@@ -904,11 +892,22 @@ fn an_action_asked_while_the_update_applies_is_refused_not_stopped() {
     let launcher = dirs.launcher();
     dirs.install(&launcher, "0.1.0");
 
-    // A new version whose component is padded out, so writing its managed
-    // copy takes a while: the window between the updater claiming the
-    // package and the replacement landing stays open long enough to ask
-    // something of the package inside it.
-    dirs.publish_component("0.2.0", padded_component(48 * 1024 * 1024));
+    // A new version whose component is padded out, so applying it — the
+    // unpack, the checks and the copy of the managed folder — takes a
+    // while: the claim the apply holds stays open long enough to ask
+    // something of the package inside it. The pad is 192 MiB: the claim
+    // is read directly (below), from before the copy is written until
+    // after it lands, and that much padding keeps the claim open for
+    // hundreds of milliseconds on even the fastest disk, well past the
+    // test's 20 ms polling, while the stage before it stays quick (the
+    // padded tarball compresses to almost nothing, so the download and
+    // unpack are fast however large the pad is). The wait's failure
+    // explains the state it found, because the three ways it can fail
+    // look alike from the outside: the window missed because the copy
+    // was written between two polls (the record then holds 0.2.0), a
+    // check or stage failure (the status line then explains it), or the
+    // apply deferred or never begun (both then idle at 0.1.0).
+    dirs.publish_component("0.2.0", padded_component(192 * 1024 * 1024));
 
     // An action of the package's command, asked for but not sent yet: as
     // the deferral test holds a command running by not resolving it, this
@@ -919,16 +918,56 @@ fn an_action_asked_while_the_update_applies_is_refused_not_stopped() {
     select_title(&launcher, "Use a casual greeting");
     let action = launcher.activate_selected();
     to_root(&launcher);
-    let before = managed_folders(&dirs);
 
-    // The check: the update is staged, and applying it writes a new
-    // managed folder, which is the replacement being written.
+    // The check: the update is staged, and applying it claims the package
+    // while the replacement is written. The claim is polled directly, from
+    // the moment it is taken — but not at the sleeping cadence: an
+    // M-series writes the whole 192 MiB copy from the page cache in
+    // barely more than one 20 ms sleep, and run 36836762847's macOS leg
+    // missed the window entirely that way (the record already held 0.2.0
+    // when the wait gave up). The claim is due moments after the clock
+    // moves — the stage before it takes a second or so — so the wait
+    // spins with a yield while it is due, polling far faster than any
+    // copy, and falls back to sleeping once ten seconds pass without it:
+    // a claim that late is a slow leg's, and a slow copy is a long window
+    // that sleeping polls cannot miss. The wait explains itself on
+    // timeout: which of the three states above the leg is in.
     dirs.clock.advance(Duration::from_secs(2));
-    wait_until(
-        "the update began replacing the copy",
-        Duration::from_secs(30),
-        || managed_folders(&dirs) != before,
-    );
+    let component = component_of(&launcher);
+    eprintln!("polling for the claim of {}", component.display());
+    {
+        let start = Instant::now();
+        let deadline = start + Duration::from_secs(120);
+        // A trace a second, so a failure's captured output shows the
+        // timeline: when the record flipped (mid-claim) against the polls.
+        // Both the looked-up claim and the raw claim map are polled, so a
+        // disagreement between them shows in the trace too.
+        let mut told = 0u64;
+        while !launcher.package_being_updated(&component) {
+            let elapsed = start.elapsed().as_secs();
+            if elapsed >= told {
+                told = elapsed + 1;
+                let (claims, packages) = launcher.claims_now();
+                eprintln!(
+                    "{elapsed:>3} s: the claim is not held ({claims:?}; the packages are \
+                     {packages:?}); the status is {:?}; the record has {}",
+                    launcher.view().status,
+                    dirs.installed_version()
+                );
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the update never claimed the package: the status is {:?}, the record has {}",
+                launcher.view().status,
+                dirs.installed_version()
+            );
+            if start.elapsed() < Duration::from_secs(10) {
+                std::thread::yield_now();
+            } else {
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+    }
 
     // The action asked of the updating package now, while the replacement
     // is being applied, is refused with the update's explanation rather
@@ -943,7 +982,7 @@ fn an_action_asked_while_the_update_applies_is_refused_not_stopped() {
     );
 
     // The update lands, and the refused action never ran.
-    wait_until("the update applied", Duration::from_secs(30), || {
+    wait_until("the update applied", Duration::from_secs(120), || {
         dirs.installed_version() == "0.2.0"
     });
     assert!(!dirs.settings().contains("casual"));

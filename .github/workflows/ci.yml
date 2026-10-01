@@ -64,9 +64,14 @@ jobs:
       # The many test binaries each link Pane's whole dependency tree, so
       # the Linux legs link them with mold (Windows and macOS link with
       # their own linkers; the empty value keeps the cache key uniform
-      # per operating system). The matrix is what a job-level env may read:
-      # the runner context exists only inside a step.
-      RUSTFLAGS: ${{ matrix.os == 'ubuntu-24.04' && '-C link-arg=-fuse-ld=mold' || '' }}
+      # per operating system). The flag is scoped to the host triple, never
+      # RUSTFLAGS: a job-wide RUSTFLAGS would also reach the wasm32-wasip2
+      # guest builds, whose wasm-component-ld rejects native linker flags
+      # (run 36789533844 failed on "unexpected argument '-f' found"). The
+      # matrix is what a job-level env may read: the runner context exists
+      # only inside a step; and on the other legs the triple never builds,
+      # so the variable is inert there whatever it holds.
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ${{ matrix.os == 'ubuntu-24.04' && '-C link-arg=-fuse-ld=mold' || '' }}
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux build dependencies
@@ -115,8 +120,10 @@ jobs:
         os: [windows-2025, macos-15, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     env:
-      # As in the check job: the matrix is what a job-level env may read.
-      RUSTFLAGS: ${{ matrix.os == 'ubuntu-24.04' && '-C link-arg=-fuse-ld=mold' || '' }}
+      # As in the check job: host-triple-scoped so the wasm guest builds
+      # keep their own linker (and the matrix is what a job-level env may
+      # read).
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ${{ matrix.os == 'ubuntu-24.04' && '-C link-arg=-fuse-ld=mold' || '' }}
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux build dependencies
@@ -150,6 +157,13 @@ jobs:
       - name: Native GUI smoke (Linux, Xvfb)
         if: runner.os == 'Linux'
         run: bash scripts/smoke-linux.sh smoke
+      # The #4 resource and latency workload: the same runner, the same
+      # guests and binary, its record checked against the proposed targets
+      # (scripts/resource-targets.json; every ceiling is pending a number,
+      # so the check passes until one is confirmed and then breached).
+      - name: Resource and latency workload (Linux, Xvfb)
+        if: runner.os == 'Linux'
+        run: bash scripts/measure-linux.sh measure
       - name: Native GUI smoke (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -194,6 +208,13 @@ jobs:
           name: gui-smoke-${{ runner.os }}
           path: smoke
           if-no-files-found: ignore
+      - name: Upload resource and latency measurements
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: resource-measurements
+          path: measure
+          if-no-files-found: ignore
 
   # Rebuilds the JS/TS sample components from source with the pinned toolchain
   # and runs the same contract tests on them. The rebuilt files are not
@@ -206,7 +227,9 @@ jobs:
     if: needs.changes.outputs.js-guests == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     env:
-      RUSTFLAGS: -C link-arg=-fuse-ld=mold
+      # Host-triple-scoped as in the check job (this job also builds the
+      # wasm guests): a job-wide RUSTFLAGS would break their links.
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux build dependencies

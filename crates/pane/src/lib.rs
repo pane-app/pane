@@ -124,30 +124,42 @@ pub fn sample_commands() -> Vec<CommandRegistration> {
 /// The default extensions this build of Pane acquires at first setup, from
 /// Pane's own downloads (see
 /// [`pane_core::defaults`]): the installer carries none of their payloads.
-/// The calculator is the one whose acquisition the installer slices prove
-/// ([#53](https://github.com/hoangvu12/pane/issues/53)); in development
-/// builds the prebuilt-helper sample is acquired with it, so a payload
-/// carrying a native helper is acquired and its helper runs without any
-/// developer tool. A release build acquires the calculator alone.
+/// The release's default extensions are the calculator, applications,
+/// quicklinks, files and clipboard history ([#60](https://github.com/hoangvu12/pane/issues/60),
+/// the user's recorded choice): all five enabled by default and each
+/// individually disableable, with clipboard history's capture still off
+/// until the user turns it on. In development builds the prebuilt-helper
+/// sample is acquired with them, so a payload carrying a native helper is
+/// acquired and its helper runs without any developer tool.
 pub fn default_extensions() -> Vec<pane_core::DefaultExtension> {
-    let calculator = pane_core::DefaultExtension {
-        id: "calculator".into(),
-        title: "Calculator".into(),
-    };
+    let mut extensions = vec![
+        pane_core::DefaultExtension {
+            id: "calculator".into(),
+            title: "Calculator".into(),
+        },
+        pane_core::DefaultExtension {
+            id: "applications".into(),
+            title: "Applications".into(),
+        },
+        pane_core::DefaultExtension {
+            id: "quicklinks".into(),
+            title: "Quicklinks".into(),
+        },
+        pane_core::DefaultExtension {
+            id: "files".into(),
+            title: "Files".into(),
+        },
+        pane_core::DefaultExtension {
+            id: "clipboard-history".into(),
+            title: "Clipboard History".into(),
+        },
+    ];
     #[cfg(debug_assertions)]
-    {
-        vec![
-            calculator,
-            pane_core::DefaultExtension {
-                id: "helper-sample".into(),
-                title: "Helper sample".into(),
-            },
-        ]
-    }
-    #[cfg(not(debug_assertions))]
-    {
-        vec![calculator]
-    }
+    extensions.push(pane_core::DefaultExtension {
+        id: "helper-sample".into(),
+        title: "Helper sample".into(),
+    });
+    extensions
 }
 
 /// Where Pane keeps disposable cached data, such as compiled extension code:

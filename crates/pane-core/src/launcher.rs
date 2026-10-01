@@ -44,7 +44,6 @@ mod hotkeys;
 mod indexed;
 mod network;
 
-use crate::changes::ChangeSender;
 use crate::clipboard::{Capture, ClipboardSystem};
 use crate::dependencies;
 use crate::extension_data::{ExtensionData, PackageData};
@@ -486,12 +485,11 @@ pub struct Launcher {
     updates: Option<Arc<updates::Updates>>,
     /// Reads packages from folders and downloads them from npm.
     sources: install::Sources,
-    /// The packages being developed: built and reloaded on save.
+    /// The packages being developed: built and reloaded on save. The
+    /// sender that tells the window the launcher changed in the background
+    /// lives in its configuration ([`Launcher::with_development`]), shared
+    /// so that the threads the constructor started see it once it is wired.
     developing: Arc<Developing>,
-    /// Tells the window that the launcher changed in the background, such
-    /// as after a runtime crash; given with development
-    /// ([`Launcher::with_development`]).
-    changes: Option<ChangeSender>,
     state: Arc<Mutex<State>>,
 }
 
@@ -520,7 +518,6 @@ struct WeakLauncher {
     updates: Option<std::sync::Weak<updates::Updates>>,
     sources: install::Sources,
     developing: std::sync::Weak<Developing>,
-    changes: Option<ChangeSender>,
     state: std::sync::Weak<Mutex<State>>,
 }
 
@@ -549,7 +546,6 @@ impl WeakLauncher {
             updates: self.updates.as_ref().and_then(std::sync::Weak::upgrade),
             sources: self.sources.clone(),
             developing: self.developing.upgrade()?,
-            changes: self.changes.clone(),
             state: self.state.upgrade()?,
         })
     }
@@ -1150,7 +1146,6 @@ impl Launcher {
             updates: None,
             sources,
             developing: Arc::new(Developing::new(None, None)),
-            changes: None,
             state: Arc::new(Mutex::new(state)),
         };
         if let (Ok(runtime), Some(installation)) = (&launcher.runtime, &launcher.installation) {
@@ -1365,7 +1360,6 @@ impl Launcher {
             updates: self.updates.as_ref().map(Arc::downgrade),
             sources: self.sources.clone(),
             developing: Arc::downgrade(&self.developing),
-            changes: self.changes.clone(),
             state: Arc::downgrade(&self.state),
         }
     }
@@ -1377,6 +1371,54 @@ impl Launcher {
     /// The installed packages, as read from their managed copies.
     pub fn packages(&self) -> Vec<InstalledPackage> {
         self.lock().packages.clone()
+    }
+
+    /// Test support: whether an update Pane applies by itself is
+    /// replacing the installed package whose command's component is
+    /// `component` right now — the claim held while the replacement is
+    /// written, which makes calls into the package refused. `component` is
+    /// a command's component, as [`InstalledPackage::commands`] gives; the
+    /// claim is readable from the moment it is taken until the replacement
+    /// lands, however fast the copy is written.
+    #[doc(hidden)]
+    pub fn package_being_updated(&self, component: &std::path::Path) -> bool {
+        self.updating(component).is_some()
+    }
+
+    /// Test support: the identities holding a change claim right now,
+    /// with what each is doing, and the identities and locations of the
+    /// installed packages — the raw claim map and the paths the owner
+    /// lookup uses, so a test can observe a claim without the lookup.
+    #[doc(hidden)]
+    #[allow(clippy::type_complexity)]
+    pub fn claims_now(
+        &self,
+    ) -> (
+        Vec<(String, &'static str)>,
+        Vec<(String, std::path::PathBuf)>,
+    ) {
+        let state = self.lock();
+        let claims = state
+            .changing
+            .iter()
+            .map(|(identity, changing)| {
+                let doing = match changing {
+                    Changing::Recording => "recording",
+                    Changing::Reloading => "reloading",
+                    Changing::Updating | Changing::BackgroundUpdating => "updating",
+                    Changing::Uninstalling => "uninstalling",
+                    Changing::DeletingRetained => "deleting-retained",
+                    Changing::Installing => "installing",
+                };
+                (identity.key(), doing)
+            })
+            .collect();
+        let packages = state
+            .packages
+            .iter()
+            .map(|package| (package.identity.key(), package.location.clone()))
+            .collect();
+        (claims, packages)
     }
 
     /// Shows `message` as the outcome of the most recent action; for
@@ -3809,10 +3851,12 @@ impl Launcher {
     }
 
     /// Tells the window that the launcher changed in the background.
+    /// Through the shared development configuration, so the threads started
+    /// before `with_development` wired the channel — the updater, the
+    /// scheduler, the services — reach the window as well (#49's smoke: the
+    /// update applied and the status line never showed it).
     fn changed(&self) {
-        if let Some(changes) = &self.changes {
-            changes.changed();
-        }
+        self.developing.changed();
     }
 }
 

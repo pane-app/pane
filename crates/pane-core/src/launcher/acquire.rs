@@ -295,7 +295,7 @@ impl Launcher {
         let source = defaults.source.clone();
         let downloads = installation.dir.join(DOWNLOADS_DIR);
         let acquired = installation.dir.join(ACQUIRED_DIR);
-        let (state, changes) = (self.state.clone(), self.changes.clone());
+        let (state, changes) = (self.state.clone(), self.developing.changes());
         let telling = title.clone();
         let telling = move |bytes: u64, total: u64| {
             let text = format!("Acquiring the {telling}: {}", progress(bytes, total));

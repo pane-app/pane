@@ -1,0 +1,35 @@
+{
+  "format": 1,
+  "status": "proposed-pending-measurement",
+  "note": "The resource and latency targets of #4 (G7). Every ceiling here is deliberately null: no number is inferred from the earlier CLI peaks. The workload (scripts/measure-linux.sh) fills summary.json on the next CI Linux leg; proposed ceilings are then recorded here — as numbers, only once the user confirms them — and a non-null ceiling makes proc_tree.py check fail the run when the summary is above it. Pending numbers keep the check reporting 'pending' and passing.",
+  "targets": {
+    "cold-start": {
+      "window_ms": { "median": null }
+    },
+    "warm-start": {
+      "window_ms": { "median": null }
+    },
+    "idle-core": {
+      "rss_kb": { "max": null },
+      "cpu_share": null
+    },
+    "installed-unused": {
+      "rss_kb": { "max": null },
+      "per_extension_kb": null
+    },
+    "calculator": {
+      "rss_kb": { "max": null },
+      "growth_kb": null
+    },
+    "continuing-work": {
+      "rss_kb": { "max": null },
+      "growth_kb": null
+    },
+    "reload": {
+      "growth_kb": null
+    },
+    "disable": {
+      "growth_kb": null
+    }
+  }
+}

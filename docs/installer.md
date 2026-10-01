@@ -5,8 +5,9 @@ US16, US18, US42; T23; contributions to G6, not a claim that it passes),
 [#51](https://github.com/hoangvu12/pane/issues/51) (Windows) and
 [#52](https://github.com/hoangvu12/pane/issues/52) (macOS): a clean
 machine installs Pane from one package, and Pane acquires its default
-extensions itself over the network — the calculator, the feature this
-proves — with progress, retries and a cache, while the core (the window,
+extensions itself over the network — [#60](https://github.com/hoangvu12/pane/issues/60)'s
+five, with the calculator the feature the installer slices proved —
+with progress, retries and a cache, while the core (the window,
 root search, the install rows, Manage extensions) stays usable. This is
 the internet-first setup the specification chose
 ([decision 20](../launcher-design-interview.md)); the installer carries no
@@ -190,11 +191,14 @@ A default extension ([glossary](../CONTEXT.md)) is identified by its id —
 `calculator` — which is also its package identity
 (`default:calculator`, recorded as `"default": "calculator"` in
 `installed.json`, with `"defaultVersion"`), whatever version is
-installed. A development build of Pane acquires the calculator and, with
-it, the helper sample (`helper-sample`), so a payload carrying a native
-helper is acquired and its prebuilt helper runs with no developer tool; a
-release build acquires the calculator alone — which default extensions a
-release ships is a product choice as each lands its slice.
+installed. The release's default extensions are the calculator,
+applications, quicklinks, files and clipboard history
+([#60](https://github.com/hoangvu12/pane/issues/60), the user's recorded
+choice): all five enabled by default and each individually disableable,
+with clipboard history's capture still off until the user turns it on.
+A development build acquires the prebuilt-helper sample with them, so a
+payload carrying a native helper is acquired and its prebuilt helper
+runs with no developer tool.
 
 At first setup, and whenever a default extension is missing, Pane
 acquires each in turn in the background:

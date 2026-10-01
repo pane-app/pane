@@ -26,6 +26,9 @@ def main() -> None:
     if len(from_git) != 1:
         sys.exit(f"{args.record}: {len(from_git)} packages from Git, not one: {from_git}")
     package = from_git[0]
+    # `pinned` is written only when it is true (serde skips false), so a
+    # missing key means false, as the record's reader takes it.
+    package.setdefault("pinned", False)
     expected = {"gitRef": args.ref, "gitCommit": args.commit, "pinned": not args.unpinned}
     wrong = {key: package.get(key) for key, value in expected.items() if package.get(key) != value}
     if wrong:

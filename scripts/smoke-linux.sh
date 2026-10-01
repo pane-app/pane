@@ -98,6 +98,23 @@ start_pane() {
   done
   [ -n "$window" ] || { echo "Pane window did not appear"; exit 1; }
   sleep 2
+  # A --install preview arrives once its check finishes; until then the
+  # screen is root search, whose query field's border is #8ab4f8. Wait for
+  # the field to leave, so the phase's first Enter lands on the preview:
+  # run 36796103906's frame 31 lost that race (the check outlasted the
+  # wait and the Enter opened root search's own first row instead).
+  if [ "${1:-}" = "--install" ]; then
+    for _ in $(seq 60); do
+      capture preview-wait.png
+      if python3 "$(dirname "$0")/check_screenshot.py" --absent "$out/preview-wait.png" 8ab4f8; then
+        break
+      fi
+      sleep 0.5
+    done
+    capture preview-wait.png
+    python3 "$(dirname "$0")/check_screenshot.py" --absent "$out/preview-wait.png" 8ab4f8 \
+      || { echo "the --install preview did not appear (still root search)"; exit 1; }
+  fi
 }
 
 stop_pane() {
@@ -670,8 +687,9 @@ if grep -q '"paused"' "$PANE_DATA_DIR/extensions/installed.json"; then echo "pau
 
 # Delete retained data: with a data folder of its own, the settings sample
 # saves a note and is uninstalled keeping it (its Uninstall row follows its
-# state, Reload and Clear cache rows); its retained data, the extension list's
-# last row, is deleted after confirming (Cancel is selected first, so Down
+# state, Reload and Clear cache rows); its retained data, the extension
+# list's first row with nothing else installed, already selected when the
+# list opens, is deleted after confirming (Cancel is selected first, so Down
 # then Return), without the extension. Installing the same folder again finds
 # nothing. Steps that change Pane's files wait for the change instead of a
 # fixed time.
@@ -703,10 +721,15 @@ for ((i = 0; i < 14; i++)); do "$xdotool" key Down; done   # Manage extensions�
 "$xdotool" key Down Down Down Return; sleep 1   # "Uninstall Settings sample"
 "$xdotool" key Return   # "Uninstall and keep saved data"
 wait_for "$registry" '"retained"' present; sleep 1
-for ((i = 0; i < 40; i++)); do "$xdotool" key Down; done
-"$xdotool" key Return; sleep 1   # "Delete retained data of Settings sample"
+"$xdotool" key Return; sleep 1   # "Delete retained data of Settings sample" (the list's first row, already selected)
 capture 63-confirm-delete-retained.png
 check 63-confirm-delete-retained.png aab4c0   # what is kept and what is not touched
+# The confirmation's status line is the idle hint, not a result: the
+# extension list also shows aab4c0 subtitles, so that color alone let the
+# wrong screen pass (#58: Down to the list's end had landed on the
+# automatic-update row, whose Enter toggles it and leaves its result on
+# screen). No result color on screen says the right screen is up.
+python3 "$(dirname "$0")/check_screenshot.py" --absent "$out/63-confirm-delete-retained.png" 9fd8a8
 "$xdotool" key Down Return   # "Delete retained data"
 wait_for "$registry" '"retained"' absent; sleep 1
 capture 64-retained-deleted.png
@@ -833,9 +856,10 @@ start_pane --install target/guests/packages/sample-helper
 "$xdotool" windowfocus --sync "$window"
 "$xdotool" key Return; sleep 2   # Install; Helper sample is selected
 "$xdotool" key Return; sleep 2   # open Helper sample
-"$xdotool" key Return; sleep 2   # Echo through the helper
-capture 90-helper-echoed.png
-check 90-helper-echoed.png 9fd8a8   # 'Echoed "hello from Pane" on Linux x86-64'
+"$xdotool" key Return   # Echo through the helper
+# The helper is a process Pane starts and waits for; a cold spawn on a
+# loaded runner can outlast a fixed sleep, so the answer is waited for.
+capture_until 90-helper-echoed.png 9fd8a8 15   # 'Echoed "hello from Pane" on Linux x86-64'
 "$xdotool" key Down Down Return; sleep 3   # Echo within a second
 capture 91-helper-cancelled.png
 check 91-helper-cancelled.png 9fd8a8   # "Stopped the helper after one second"
@@ -883,7 +907,9 @@ beats=$(stat -c %s "$alive"); sleep 0.5
 
 # Development mode (#12, #13): a copy of each development sample
 # (guests/hello-rust, hello-ts, hello-js) is built once, installed and
-# developed from Manage extensions ("Develop <title>", its last row). Saving
+# developed from Manage extensions ("Develop <title>", the row above the
+# list's last: #49's global automatic-update choice is last of all now, and
+# the develop row no longer is). Saving
 # an edit of its greeting builds it with the documented command and reloads
 # it while Pane keeps running; a save that does not build keeps the working
 # code and shows the error; two saves in a row (the second while the first
@@ -951,8 +977,12 @@ PY
   "$xdotool" key Return; sleep 2   # Install
   for ((i = 0; i < 14; i++)); do "$xdotool" key Down; done   # Manage extensions…
   "$xdotool" key Return; sleep 1
-  for ((i = 0; i < 14; i++)); do "$xdotool" key Down; done   # Develop <title>
-  "$xdotool" key Return; sleep 2
+  # "Develop <title>": the row above the list's last, which is the global
+  # automatic-update choice since #49 (the develop row was the last row
+  # before it, and Down to the end now lands on that instead).
+  for ((i = 0; i < 14; i++)); do "$xdotool" key Down; done
+  "$xdotool" key Up; sleep 0.12
+  "$xdotool" key Return; sleep 2   # Develop <title>
   capture "$n-$sample-develop-started.png"
   check "$n-$sample-develop-started.png" 9fd8a8   # "Developing <title>: each save in ..."
   "$xdotool" key Escape; sleep 1
@@ -1003,8 +1033,10 @@ PY
   # Stopped: a save builds nothing.
   for ((i = 0; i < 14; i++)); do "$xdotool" key Down; done   # Manage extensions…
   "$xdotool" key Return; sleep 1
-  for ((i = 0; i < 14; i++)); do "$xdotool" key Down; done   # Stop developing <title>
-  "$xdotool" key Return; sleep 2
+  # As above: the row above the list's last.
+  for ((i = 0; i < 14; i++)); do "$xdotool" key Down; done
+  "$xdotool" key Up; sleep 0.12
+  "$xdotool" key Return; sleep 2   # Stop developing <title>
   capture "$((n + 8))-$sample-stopped.png"
   check "$((n + 8))-$sample-stopped.png" 9fd8a8   # "Stopped developing <title>"
   cp "$built" "$before"
@@ -1902,11 +1934,14 @@ wait_recorded() {
   exit 1
 }
 kill -0 "$pane_pid" 2>/dev/null || { echo "the installed Pane exited during setup"; exit 1; }
-wait_recorded '"default": "calculator"'
-wait_recorded '"default": "helper-sample"'
+# The release's default set (#60): all five, plus the helper sample a
+# development build acquires with them.
+for default_ in calculator applications quicklinks files clipboard-history helper-sample; do
+  wait_recorded "\"default\": \"$default_\""
+done
 sleep 1
 capture 500-installed-root.png
-check 500-installed-root.png aab4c0   # root search: the calculator and Helper sample commands are listed
+check 500-installed-root.png aab4c0   # root search: the default extensions' commands are listed
 "$xdotool" type --delay 50 '6*7'; sleep 2
 capture 501-calculator-answer.png
 check 501-calculator-answer.png 364355 3000   # "42", the calculator's selected answer row
@@ -1921,7 +1956,11 @@ check 503-helper-echoed.png 9fd8a8   # "Echoed \"hello from Pane\" on Linux x86-
 [ -n "$(ls "$installed"/packages/*/helpers/*/pane-echo)" ] \
   || { echo "the acquired payload's helper was not installed"; exit 1; }
 [ -z "$(pgrep -f pane-echo)" ] || { echo "a helper is still running"; exit 1; }
-[ "$(ls "$installed/acquired/calculator" | wc -l)" = 1 ] || { echo "the calculator's payload is not cached"; exit 1; }
+# The payload the calculator acquired is kept, exactly its one current
+# entry. GNU wc prints a bare count, but the padding is trimmed anyway,
+# as the macOS smoke's does: one wording, and no platform's wc formatting
+# can fail it.
+[ "$(ls "$installed/acquired/calculator" | wc -l | tr -d ' ')" = 1 ] || { echo "the calculator's payload is not cached"; exit 1; }
 [ -z "$(ls -A "$installed/downloads" 2>/dev/null)" ] || { echo "downloads were left behind"; exit 1; }
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{500-installed-root,501-calculator-answer,503-helper-echoed}.png
 stop_pane
@@ -2018,7 +2057,9 @@ check 601-offered.png 364355 3000   # the row, selected
 # the update must stay disabled after it.
 "$xdotool" key ctrl+a; "$xdotool" type --delay 50 manage; sleep 1
 "$xdotool" key Return; sleep 1   # Manage extensions…
-"$xdotool" key Down Return; sleep 2   # Helper sample: disabled
+# The Helper sample is the sixth extension now (#60's set is listed
+# first), so five Downs reach it.
+"$xdotool" key Down Down Down Down Down Return; sleep 2   # Helper sample: disabled
 wait_for "$update_registry" '"disabled": true' present 600
 "$xdotool" key Escape; sleep 1
 
