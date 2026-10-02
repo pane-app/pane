@@ -1,0 +1,172 @@
+diff --git a/.scratch/native-review/capture-pane.ps1 b/.scratch/native-review/capture-pane.ps1
+index 3b49abe..d375a6f 100644
+--- a/.scratch/native-review/capture-pane.ps1
++++ b/.scratch/native-review/capture-pane.ps1
+@@ -441,6 +441,8 @@ try {
+         $backdropForm.Size = New-Object System.Drawing.Size (($geometry.Crop.Width + 2 * $margin), ($geometry.Crop.Height + 2 * $margin))
+         [void]$backdropForm.Handle                       # create the window
+         [void][PaneWin]::ShowWindow($backdropForm.Handle, 4)   # SW_SHOWNOACTIVATE
++        # Keep our own diagnostic window out of the guarded focus point.
++        [void][PaneWin]::SetWindowPos($backdropForm.Handle, $hwnd, 0, 0, 0, 0, 0x13)
+         [System.Windows.Forms.Application]::DoEvents()   # let it paint
+     }
+ 
+diff --git a/Cargo.lock b/Cargo.lock
+index a64852e..61cce76 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2625,7 +2625,6 @@ dependencies = [
+ [[package]]
+ name = "gpui_ce_windows"
+ version = "0.1.0"
+-source = "git+https://github.com/gpui-ce/gpui-ce?rev=17d9c8e8fdb30a329d817ca06bff424e8e848f1a#17d9c8e8fdb30a329d817ca06bff424e8e848f1a"
+ dependencies = [
+  "accesskit",
+  "accesskit_windows",
+diff --git a/Cargo.toml b/Cargo.toml
+index 1e03b7b..f27cb1c 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -4,6 +4,10 @@ members = ["crates/pane", "crates/pane-core", "crates/pane-target", "xtask"]
+ # Guests target WebAssembly and form their own workspace.
+ exclude = ["guests"]
+ 
++# Windows source-over alpha fix carried from Roboco's renderer; see vendor provenance.
++[patch."https://github.com/gpui-ce/gpui-ce"]
++gpui_ce_windows = { path = "vendor/gpui_windows" }
++
+ [workspace.package]
+ edition = "2024"
+ publish = false
+diff --git a/crates/pane/src/ui/material.rs b/crates/pane/src/ui/material.rs
+index 62bca8e..a6789ae 100644
+--- a/crates/pane/src/ui/material.rs
++++ b/crates/pane/src/ui/material.rs
+@@ -110,10 +110,10 @@ impl Material {
+     /// The panel clips its content (the reference rounds and clips the
+     /// glass section), so `content` should size itself to fill —
+     /// `.size_full().flex().flex_col()` is the expected shape. The
+-    /// panel fills the window, so the two drop shadows are clipped by the
+-    /// window's own bounds and only the inner edge and the crisp outer
+-    /// hairline are actually visible; the shadows are kept from the
+-    /// reference recipe and this is their actual, current effect.
++    /// panel fills the window. GPUI drop shadows also paint under its
++    /// interior, so stacking the reference's outer shadows here would
++    /// obscure the desktop through the translucent fill. Keep the inset
++    /// highlight and border; the native window owns the outside shadow.
+     pub(crate) fn panel(&self, theme: &Theme, content: impl IntoElement) -> Div {
+         let background = match self.mode {
+             MaterialMode::Glass => solid_background(theme.panel_tint),
+@@ -133,18 +133,7 @@ impl Material {
+             .border_1()
+             .border_color(theme.hairline)
+             .shadow(vec![
+-                // inset 0 1px 0 rgba(255,255,255,.1) — the top edge light.
+                 BoxShadow::new(px(0.), px(1.), theme.panel_top_highlight).inset(),
+-                // 0 0 0 .5px rgba(0,0,0,.75) — the crisp outer hairline.
+-                BoxShadow::new(px(0.), px(0.), theme.panel_edge).spread_radius(px(0.5)),
+-                // 0 50px 120px -30px rgba(0,0,0,.72).
+-                BoxShadow::new(px(0.), px(50.), theme.panel_shadow_far)
+-                    .blur_radius(px(120.))
+-                    .spread_radius(px(-30.)),
+-                // 0 16px 40px -16px rgba(0,0,0,.5).
+-                BoxShadow::new(px(0.), px(16.), theme.panel_shadow_near)
+-                    .blur_radius(px(40.))
+-                    .spread_radius(px(-16.)),
+             ])
+             // The sheen paints beneath the content: earlier child, and a
+             // plain div, so it never intercepts input.
+diff --git a/crates/pane/src/ui/theme.rs b/crates/pane/src/ui/theme.rs
+index dd296f2..231c866 100644
+--- a/crates/pane/src/ui/theme.rs
++++ b/crates/pane/src/ui/theme.rs
+@@ -69,12 +69,6 @@ pub(crate) struct Theme {
+     pub(crate) panel_sheen: Hsla,
+     /// The 1px inset line along the panel's top edge.
+     pub(crate) panel_top_highlight: Hsla,
+-    /// The crisp hairline the panel paints just outside its bounds.
+-    pub(crate) panel_edge: Hsla,
+-    /// The panel's far, soft drop shadow.
+-    pub(crate) panel_shadow_far: Hsla,
+-    /// The panel's near, tighter drop shadow.
+-    pub(crate) panel_shadow_near: Hsla,
+     /// The footer strip's translucent wash (reference: rgba(0,0,0,.14)).
+     pub(crate) footer_tint: Hsla,
+ 
+@@ -207,9 +201,6 @@ impl Theme {
+             panel_solid: color(0x16171AFF),
+             panel_sheen: color(0xFFFFFF0D),
+             panel_top_highlight: color(0xFFFFFF1A),
+-            panel_edge: color(0x000000BF),
+-            panel_shadow_far: color(0x000000B8),
+-            panel_shadow_near: color(0x00000080),
+             footer_tint: color(0x00000024),
+ 
+             hairline: color(0xFFFFFF13),
+@@ -254,13 +245,10 @@ impl Theme {
+             text_query: color(0x1D1E23FF),
+             text_placeholder: color(0x575A63FF),
+ 
+-            panel_tint: color(0xF6F6F8EB),
++            panel_tint: color(0xF6F6F8CC),
+             panel_solid: color(0xF6F6F8FF),
+             panel_sheen: color(0xFFFFFF4D),
+             panel_top_highlight: color(0xFFFFFF66),
+-            panel_edge: color(0x00000059),
+-            panel_shadow_far: color(0x00000042),
+-            panel_shadow_near: color(0x00000033),
+             footer_tint: color(0x0000000D),
+ 
+             hairline: color(0x00000017),
+diff --git a/docs/ui-prototype-review.md b/docs/ui-prototype-review.md
+index a2ceed0..2d4f770 100644
+--- a/docs/ui-prototype-review.md
++++ b/docs/ui-prototype-review.md
+@@ -11,11 +11,20 @@ visual integration work: all 51 window/search tests pass, including the
+ new long-message regression test, and Windows captures show readable dark
+ and light launchers and forms. The prototype is ready for user design review.
+ 
+-Desktop frost remains **unverified**. Windows' `EnableTransparency` setting
+-was 0 on this host. Requesting GPUI's blurred window background produced no
+-visible backdrop difference between external light and dark test patterns.
+-The system setting was left unchanged. Explicit opaque mode was also
+-captured. This is not evidence that the renderer's blur path is broken.
++Desktop frost is now **visually verified on this Windows host** after the
++user enabled transparency. Initial captures with transparency enabled still
++showed a solid panel. Comparing Roboco identified an additive-alpha bug in
++the pinned Windows renderer; its source-over correction is carried in the
++prototype's local Windows package patch. Removing Pane's outer panel shadows
++was also necessary: GPUI paints them under the translucent panel, obscuring
++the desktop. The inner highlight and border remain. Light tint is now 80%.
++
++The final dark panel responds to external light/dark test patterns with a
++mean RGB difference of 18.086 (previously 0), and visual inspection shows
++softened edges of those sharp patterns. The numeric test proves transparency;
++the softened edges supply the blur evidence. No global Windows setting was
++changed by the agent. See [dark glass](ui-prototype/dark-glass.png) and
++[light glass](ui-prototype/light-glass.png).
+ 
+ ## Implemented structure
+ 
+@@ -36,8 +45,9 @@ crates/pane/src/
+ 
+ `ui/` imports no `pane-core` types. The app maps existing stable IDs to
+ presentation values. Only used components are retained; there are no
+-placeholder directories for later features. No core, manifest or lockfile
+-changes were needed.
++placeholder directories for later features. Core is unchanged. The glass
++follow-up adds a manifest/lockfile patch for `gpui_ce_windows`; see
++[patch provenance](../vendor/gpui_windows/PROVENANCE.md).
+ 
+ The existing GPUI CE editable input remains responsible for editing, IME
+ and focus. Pane owns visual tokens, surfaces and row chrome. The separate
+@@ -113,7 +123,8 @@ into whichever unrelated application happens to be foreground.
+ 
+ - Windows at 96 DPI was exercised; macOS, Linux and other DPI scales were not.
+ - Linux selects an opaque window and solid panel in source; not runtime-tested here.
+-- Reference shadows extending beyond the window are clipped by native bounds.
++- Outer panel shadows are delegated to the native window; the original
++  in-scene shadows obscured its glass and were removed.
+ - Glass tint is not a universal text-contrast guarantee over arbitrary desktops.
+ - Existing color-dependent native smoke scripts still need updating before reuse.
+ - Broader specs/tickets and production integration follow user review of this proof.

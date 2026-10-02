@@ -10,7 +10,7 @@
 //! and Escape clears the query.
 //!
 //! The field's editing keys are the ones the form's text fields use, bound
-//! once by [`crate::form::bind_text_editing`] without Tab, Enter and
+//! once by [`crate::ui::input::bind_text_editing`] without Tab, Enter and
 //! Escape: those bubble from the field to the launcher's Confirm and Back
 //! actions. [`bind_keys`] takes that binding's result, so root search cannot
 //! be registered without it.
@@ -22,13 +22,16 @@
 
 use gpui::{
     AnyElement, App, Context, Div, Entity, Focusable, KeyBinding, Role, Stateful, Subscription,
-    Window, div, prelude::*, px, rgb,
+    Window, WindowControlArea, div, prelude::*, px,
 };
 use gpui_elements::editable_text::actions::DEFAULT_INPUT_CONTEXT;
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
 
-use crate::form::TextEditingKeys;
-use crate::{LauncherWindow, SelectNext, SelectPrevious};
+use crate::app::LauncherWindow;
+use crate::ui::icon::{Glyph, glyph};
+use crate::ui::input::TextEditingKeys;
+use crate::ui::{self};
+use crate::{SelectNext, SelectPrevious};
 
 const CONTEXT: &str = "RootSearch";
 /// The query field's placeholder on root search.
@@ -127,6 +130,12 @@ impl LauncherWindow {
 
     /// Root search, or an opened command's search: the query field, showing
     /// `placeholder` while empty, above `list`, the results.
+    ///
+    /// The field's chrome is the reference's search header: a 64px row with
+    /// the magnifier, 20px padding, a 14px gap and a hairline below — no
+    /// boxed input. The editable text element, its IME plumbing, focus
+    /// tracking and accessibility node are exactly the ones the launcher
+    /// always used; only the paint around them is new.
     pub(crate) fn render_search(
         &self,
         query: String,
@@ -135,6 +144,9 @@ impl LauncherWindow {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let input = &self.query.input;
+        let theme = &ui::visuals().theme;
+        let geometry = &theme.geometry;
+        let typography = &theme.typography;
         div()
             .id("search")
             .debug_selector(|| "search".into())
@@ -151,20 +163,49 @@ impl LauncherWindow {
             .min_h(px(0.))
             .flex()
             .flex_col()
-            .gap_2()
             .child(
                 div()
-                    .px_2()
-                    .py_1()
-                    .rounded_md()
-                    .border_2()
-                    .border_color(rgb(0x8ab4f8))
-                    .bg(rgb(0x1a1e24))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(geometry.search_gap)
+                    .h(geometry.search_height)
+                    .px(geometry.search_padding_x)
+                    .border_b_1()
+                    .border_color(theme.hairline_soft)
+                    // The magnifier's wrapper is the search header's drag
+                    // region: with the native title bar hidden, the window
+                    // can be moved by grabbing the icon — the editable
+                    // field itself never drags. The hit target is a
+                    // 44×44 square, while −12px horizontal margins keep
+                    // its layout box at the glyph's 20px: the header's
+                    // alignment is unchanged, and the input keeps its
+                    // 14px gap minus the 12px bleed — 2px of clear space
+                    // before the editable field begins.
+                    .child(
+                        div()
+                            .window_control_area(WindowControlArea::Drag)
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .size(px(44.))
+                            .mx(px(-12.))
+                            .child(glyph(Glyph::Search, px(20.), theme.text_muted)),
+                    )
                     .child(
                         text_input("query")
                             .state(input.downgrade())
                             .placeholder(placeholder)
+                            .placeholder_color(theme.text_placeholder)
+                            .caret_color(theme.accent_text)
+                            .selection_color(theme.row_selected)
+                            .marked_color(theme.accent_text)
+                            .text_size(typography.search_size)
+                            .text_color(theme.text_query)
+                            .font_family(typography.family.clone())
                             .w_full()
+                            .min_w(px(0.))
                             .whitespace_nowrap()
                             .overflow_x_scroll(),
                     ),

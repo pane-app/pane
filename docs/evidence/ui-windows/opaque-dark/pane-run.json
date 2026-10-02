@@ -1,0 +1,115 @@
+{
+    "script":  "capture-pane-windows.ps1",
+    "applicationRevision":  "70fd205",
+    "installFolder":  "",
+    "binarySha256":  "B4EEABBA65B91E29CB7F9D86783306787977280E9D4C0E2448EF51405639E053",
+    "osVersion":  "Microsoft Windows NT 10.0.26200.0",
+    "windowsBuild":  {
+                         "DisplayVersion":  "25H2",
+                         "CurrentBuild":  "26200",
+                         "UBR":  8737
+                     },
+    "transparencySetting":  1,
+    "startedUtc":  "2026-10-02T01:16:08.4780213Z",
+    "binary":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane-ui-64\\.scratch\\pane-ui64.exe",
+    "runDir":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\ui-native\\opaque-dark\\run-20261002-081608-a27c1513",
+    "paneDataDir":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\ui-native\\opaque-dark\\run-20261002-081608-a27c1513\\pane-data",
+    "localAppData":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\ui-native\\opaque-dark\\run-20261002-081608-a27c1513\\localappdata",
+    "cacheLocation":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\ui-native\\opaque-dark\\run-20261002-081608-a27c1513\\localappdata\\Pane\\cache",
+    "cacheDirExisted":  true,
+    "extensionsDir":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\scripts\\..\\target\\guests",
+    "theme":  "dark",
+    "material":  "opaque",
+    "keysRequested":  [
+                          "rust",
+                          "{ENTER}",
+                          "{ENTER}",
+                          "{ESC}"
+                      ],
+    "keysAbortedAt":  null,
+    "captureMode":  "window",
+    "backdrop":  "light: base #ECECEC with black blocks/bands (distinct blurred luminance)",
+    "zOrderVerified":  true,
+    "pid":  43272,
+    "windowTitle":  "Pane",
+    "windowRect":  "32,32,808,500",
+    "frameBounds":  "39,32,801,493",
+    "requestedWindowSize":  null,
+    "positionedTopLeft":  true,
+    "dpi":  96,
+    "focusAchieved":  true,
+    "activationMethod":  "guarded-click",
+    "foregroundHwnd":  "hwnd 0xc102e8 pid 43272",
+    "foregroundPid":  43272,
+    "foregroundIsPane":  true,
+    "foregroundBeforeFallback":  "hwnd 0xa109a0 pid 64848",
+    "clickToFocusPoint":  "420,64",
+    "clickToFocusGuards":  "guard1: hit 0xc102e8 root 0xc102e8 pid 43272 | guard2: hit 0xc102e8 root 0xc102e8 pid 43272",
+    "cursorSaved":  "2313,252",
+    "cursorRestored":  true,
+    "screenshots":  [
+                        {
+                            "file":  "00-initial-window.png",
+                            "label":  "initial",
+                            "utc":  "2026-10-02T01:16:14.9264318Z"
+                        },
+                        {
+                            "file":  "01-after-rust-window.png",
+                            "label":  "after \u0027rust\u0027",
+                            "utc":  "2026-10-02T01:16:15.7875186Z"
+                        },
+                        {
+                            "file":  "02-after-ENTER-window.png",
+                            "label":  "after \u0027{ENTER}\u0027",
+                            "utc":  "2026-10-02T01:16:16.5360829Z"
+                        },
+                        {
+                            "file":  "03-after-ENTER-window.png",
+                            "label":  "after \u0027{ENTER}\u0027",
+                            "utc":  "2026-10-02T01:16:17.2876380Z"
+                        },
+                        {
+                            "file":  "04-after-ESC-window.png",
+                            "label":  "after \u0027{ESC}\u0027",
+                            "utc":  "2026-10-02T01:16:18.0299014Z"
+                        }
+                    ],
+    "windowChecks":  [
+                         {
+                             "file":  "window-moved.png",
+                             "windowRect":  "64,56,840,524",
+                             "foregroundIsPane":  true,
+                             "dpi":  96
+                         },
+                         {
+                             "file":  "window-narrow.png",
+                             "windowRect":  "64,56,444,476",
+                             "foregroundIsPane":  true,
+                             "dpi":  96
+                         },
+                         {
+                             "file":  "window-restored.png",
+                             "windowRect":  "32,32,808,500",
+                             "foregroundIsPane":  true,
+                             "dpi":  96
+                         },
+                         {
+                             "file":  "window-inactive.png",
+                             "windowRect":  "32,32,808,500",
+                             "foregroundIsPane":  false,
+                             "dpi":  96
+                         },
+                         {
+                             "file":  "window-active.png",
+                             "windowRect":  "32,32,808,500",
+                             "foregroundIsPane":  true,
+                             "dpi":  96
+                         }
+                     ],
+    "backdropClosed":  true,
+    "processClosed":  true,
+    "processExited":  true,
+    "exitCode":  null,
+    "errorMessage":  null,
+    "finishedUtc":  "2026-10-02T01:16:21.6204438Z"
+}

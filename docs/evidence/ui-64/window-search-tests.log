@@ -1,0 +1,66 @@
+   Compiling pane-target v0.1.0 (C:\Users\ADMIN\Desktop\nguyenvu\pane-ui-64\crates\pane-target)
+   Compiling pane-core v0.1.0 (C:\Users\ADMIN\Desktop\nguyenvu\pane-ui-64\crates\pane-core)
+   Compiling pane v0.1.0 (C:\Users\ADMIN\Desktop\nguyenvu\pane-ui-64\crates\pane)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 33s
+     Running tests\command_search.rs (C:\Users\ADMIN\Desktop\nguyenvu\pane\target\debug\deps\command_search-a0b23d1b3820ab45.exe)
+
+running 1 test
+test the_commands_own_search_field_lists_the_service_results ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.78s
+
+     Running tests\window.rs (C:\Users\ADMIN\Desktop\nguyenvu\pane\target\debug\deps\window-6657bc7807be0818.exe)
+
+running 50 tests
+test a_long_error_wraps_grows_and_scrolls_inside_the_footer ... ok
+test a_query_that_matches_nothing_says_so_and_escape_clears_it ... ok
+test assistive_technology_sees_the_search_field_and_the_selected_result ... ok
+test input_method_composition_searches_root ... ok
+test arrow_keys_move_the_selection ... ok
+test coming_back_to_root_search_starts_an_empty_search_with_focus ... ok
+test a_rejected_extension_shows_an_error_and_navigation_keeps_working ... ok
+test assistive_technology_sees_the_forms_labelled_controls_and_values ... ok
+test input_method_composition_commits_into_the_text_field ... ok
+test editing_keys_change_the_text_field ... ok
+test a_press_on_the_views_border_is_not_sent_to_the_view ... ok
+test clicking_a_choice_and_the_submit_button_submits_the_form ... ok
+test a_release_outside_the_window_ends_the_drag ... ok
+test assistive_technology_sees_the_list_the_selection_and_the_result ... ok
+test javascript::a_validation_error_is_rendered ... ok
+test arrow_keys_move_through_the_matches_while_the_query_keeps_focus ... ok
+test javascript::a_rejected_field_shows_its_error_and_takes_focus ... ok
+test javascript::an_unavailable_action_is_listed_with_its_reason_and_others_still_run ... ok
+test rust::a_validation_error_is_rendered ... ok
+test rust::the_keyboard_opens_the_sample_and_runs_an_action ... ok
+test leaving_the_window_during_a_drag_ends_it ... ok
+test rust::clicking_a_row_runs_its_action ... ok
+test rust::a_rejected_field_shows_its_error_and_takes_focus ... ok
+test rust::the_pointer_chooses_and_drags_across_swatches ... ok
+test javascript::the_keyboard_opens_the_sample_and_runs_an_action ... ok
+test rust::the_keyboard_fills_in_and_submits_the_form ... ok
+test tab_and_shift_tab_visit_each_control_once_in_order ... ok
+test javascript::the_keyboard_fills_in_and_submits_the_form ... ok
+test javascript::clicking_a_row_runs_its_action ... ok
+test rust::an_unavailable_action_is_listed_with_its_reason_and_others_still_run ... ok
+test rust::keys_change_the_color_the_view_shows ... ok
+test the_focused_submit_button_submits_with_space ... ok
+test javascript::keys_change_the_color_the_view_shows ... ok
+test the_selected_row_stays_visible_when_the_window_shrinks ... ok
+test javascript::the_pointer_chooses_and_drags_across_swatches ... ok
+test the_list_scrolls_to_keep_the_selected_row_visible ... ok
+test a_quicklink_created_in_its_form_is_found_and_opened_from_root_search ... ok
+test typing_in_root_search_narrows_the_results_and_enter_opens_the_best_match ... ok
+test typescript::the_keyboard_opens_the_sample_and_runs_an_action ... ok
+test typescript::a_validation_error_is_rendered ... ok
+test typing_an_applications_name_shows_it_and_enter_opens_it ... ok
+test typing_an_expression_shows_its_answer_and_enter_copies_it ... ok
+test typescript::the_keyboard_fills_in_and_submits_the_form ... ok
+test typescript::the_pointer_chooses_and_drags_across_swatches ... ok
+test typescript::a_rejected_field_shows_its_error_and_takes_focus ... ok
+test the_mouse_wheel_scrolls_away_until_the_rows_reload ... ok
+test typescript::clicking_a_row_runs_its_action ... ok
+test typescript::keys_change_the_color_the_view_shows ... ok
+test typescript::an_unavailable_action_is_listed_with_its_reason_and_others_still_run ... ok
+test the_launcher_offers_the_rust_javascript_and_typescript_samples ... ok
+
+test result: ok. 50 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.29s

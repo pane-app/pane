@@ -1,0 +1,72 @@
+{
+  "script": "capture-pane-windows.ps1",
+  "applicationRevision": "fece16533d87ce77d84eca038bacf2309a018956",
+  "installFolder": "",
+  "binarySha256": "BEC481F869FAC4322A588ADD046CB721F0BD7156C02BF6E8627A60E0618BEC20",
+  "osVersion": "Microsoft Windows NT 10.0.26200.0",
+  "windowsBuild": {
+    "DisplayVersion": "25H2",
+    "CurrentBuild": "26200",
+    "UBR": 8737
+  },
+  "transparencySetting": 1,
+  "startedUtc": "2026-10-02T01:17:27.1937422Z",
+  "binary": "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane-ui-63\\target\\debug\\pane.exe",
+  "runDir": "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane-ui-63\\target\\native-ui63\\run-20261002-081726-8714c6ed",
+  "paneDataDir": "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane-ui-63\\target\\native-ui63\\run-20261002-081726-8714c6ed\\pane-data",
+  "localAppData": "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane-ui-63\\target\\native-ui63\\run-20261002-081726-8714c6ed\\localappdata",
+  "cacheLocation": "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane-ui-63\\target\\native-ui63\\run-20261002-081726-8714c6ed\\localappdata\\Pane\\cache",
+  "cacheDirExisted": true,
+  "extensionsDir": "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane-ui-63\\target\\guests",
+  "theme": "",
+  "material": "",
+  "keysRequested": [
+    "rust",
+    "{ESC}"
+  ],
+  "keysAbortedAt": null,
+  "captureMode": "window",
+  "backdrop": null,
+  "zOrderVerified": null,
+  "pid": 66844,
+  "windowTitle": "Pane",
+  "windowRect": "32,32,688,491",
+  "frameBounds": "39,32,681,484",
+  "requestedWindowSize": null,
+  "positionedTopLeft": true,
+  "dpi": 96,
+  "focusAchieved": true,
+  "activationMethod": "guarded-click",
+  "foregroundHwnd": "hwnd 0x29a021a pid 66844",
+  "foregroundPid": 66844,
+  "foregroundIsPane": true,
+  "foregroundBeforeFallback": "hwnd 0xa109a0 pid 64848",
+  "clickToFocusPoint": "360,64",
+  "clickToFocusGuards": "guard1: hit 0x29a021a root 0x29a021a pid 66844 | guard2: hit 0x29a021a root 0x29a021a pid 66844",
+  "cursorSaved": "2313,252",
+  "cursorRestored": true,
+  "screenshots": [
+    {
+      "file": "00-initial-window.png",
+      "label": "initial",
+      "utc": "2026-10-02T01:17:34.2420960Z"
+    },
+    {
+      "file": "01-after-rust-window.png",
+      "label": "after 'rust'",
+      "utc": "2026-10-02T01:17:35.0922368Z"
+    },
+    {
+      "file": "02-after-ESC-window.png",
+      "label": "after '{ESC}'",
+      "utc": "2026-10-02T01:17:35.8512991Z"
+    }
+  ],
+  "windowChecks": [],
+  "backdropClosed": null,
+  "processClosed": true,
+  "processExited": true,
+  "exitCode": null,
+  "errorMessage": null,
+  "finishedUtc": "2026-10-02T01:17:36.0192495Z"
+}

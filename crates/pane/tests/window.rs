@@ -1303,3 +1303,129 @@ fn a_quicklink_created_in_its_form_is_found_and_opened_from_root_search(cx: &mut
         ["https://github.com/hoangvu12/pane/issues"]
     );
 }
+
+#[gpui::test]
+fn a_long_error_wraps_grows_and_scrolls_inside_the_footer(cx: &mut TestAppContext) {
+    // The kind of message a picker or download failure reports: long
+    // enough to wrap past the footer's 50px floor and past its cap.
+    let detail = "the operation could not be completed because the target \
+                  system refused the connection and every retry failed, so \
+                  nothing was installed and the previous state was kept";
+    let message =
+        format!("Could not open a folder picker: {detail}. {detail}. {detail}. {detail}.");
+    let launcher = Launcher::new(Runtime::start(), Vec::new());
+    launcher.show_error(message.clone());
+    let (window, cx) = open_launcher(cx, launcher);
+
+    // A narrow window: the message wraps within the footer's width — not
+    // one line clipped at the window's right edge — the footer grows past
+    // its 50px floor, and the message is taller than the capped strip, so
+    // the overflow must scroll rather than disappear.
+    cx.simulate_resize(gpui::size(px(380.), px(420.)));
+    let view = settle(&window, cx);
+    assert_eq!(view.status, Status::Error(message.clone()));
+    let footer = cx
+        .debug_bounds("status-error")
+        .expect("the footer is rendered");
+    let text = cx
+        .debug_bounds("status-message")
+        .expect("the message is rendered");
+    assert!(
+        text.right() <= footer.right(),
+        "the message wraps within the footer, not past its right edge"
+    );
+    assert!(
+        text.size.height > px(60.),
+        "the message wrapped to several lines: {:?}",
+        text.size.height
+    );
+    assert!(
+        footer.size.height > px(50.),
+        "the footer grew past its 50px floor: {:?}",
+        footer.size.height
+    );
+    assert!(
+        footer.size.height <= px(147.5),
+        "the footer is capped at 35% of the panel: {:?}",
+        footer.size.height
+    );
+    assert!(
+        text.size.height > footer.size.height,
+        "the overflow is scrollable, not cut"
+    );
+
+    // A short window: the cap follows the panel down (35% of 200px), so
+    // the list keeps most of the window, and the overflow still scrolls.
+    cx.simulate_resize(gpui::size(px(640.), px(200.)));
+    settle(&window, cx);
+    let footer = cx
+        .debug_bounds("status-error")
+        .expect("the footer is rendered");
+    let text = cx
+        .debug_bounds("status-message")
+        .expect("the message is rendered");
+    assert!(
+        footer.size.height <= px(70.5),
+        "the cap follows the panel height: {:?}",
+        footer.size.height
+    );
+    assert!(text.size.height > footer.size.height);
+
+    // The wheel over the footer scrolls the message itself, the same
+    // event the list's wheel test dispatches (negative scrolls down): the
+    // message's painted position moves up.
+    let before = text.top();
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: footer.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-80.))),
+        modifiers: Modifiers::none(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    cx.run_until_parked();
+    redraw(&window, cx);
+    let text = cx
+        .debug_bounds("status-message")
+        .expect("the message is rendered");
+    assert!(
+        text.top() < before,
+        "the message scrolled up within the footer"
+    );
+
+    // Scrolled far down, the wheel reaches the end: the last line lands
+    // inside the strip.
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: footer.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-4000.))),
+        modifiers: Modifiers::none(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    cx.run_until_parked();
+    redraw(&window, cx);
+    let footer = cx
+        .debug_bounds("status-error")
+        .expect("the footer is rendered");
+    let text = cx
+        .debug_bounds("status-message")
+        .expect("the message is rendered");
+    assert!(
+        text.bottom() <= footer.bottom() + px(1.),
+        "the last line can be scrolled into view"
+    );
+
+    // And back up: the first line is reachable again.
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: footer.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(4000.))),
+        modifiers: Modifiers::none(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    cx.run_until_parked();
+    redraw(&window, cx);
+    let text = cx
+        .debug_bounds("status-message")
+        .expect("the message is rendered");
+    assert!(
+        text.top() >= before - px(1.),
+        "the first line scrolls back into view"
+    );
+}

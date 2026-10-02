@@ -8,6 +8,8 @@
 # installed packages in <output-dir>/data, not the user's data folder.
 # Usage: scripts/smoke-linux.sh <output-dir> [pane-binary]
 set -euo pipefail
+# Behavior captures use a fixed palette without desktop-dependent glass.
+export PANE_THEME=dark PANE_MATERIAL=opaque
 out=${1:-smoke}
 pane=${2:-target/debug/pane}
 xvfb=${PANE_XVFB:-Xvfb}
@@ -16,6 +18,8 @@ mkdir -p "$out"
 rm -rf "$out/data"
 export PANE_DATA_DIR=$out/data
 { grep PRETTY_NAME /etc/os-release; uname -srm; } >"$out/system.txt"   # the tested OS and architecture
+
+printf "%s\n" "theme=dark material=opaque (behavior smoke; not blur evidence)" >>"$out/system.txt"
 
 # Starts Xvfb on a display no other server uses, and uses it only once it
 # is up: its socket appeared after it started and it is still running. A
@@ -99,20 +103,20 @@ start_pane() {
   [ -n "$window" ] || { echo "Pane window did not appear"; exit 1; }
   sleep 2
   # A --install preview arrives once its check finishes; until then the
-  # screen is root search, whose query field's border is #8ab4f8. Wait for
-  # the field to leave, so the phase's first Enter lands on the preview:
+  # screen is root search. Wait for preview metadata below its heading, then
+  # send the phase's first Enter to the preview:
   # run 36796103906's frame 31 lost that race (the check outlasted the
   # wait and the Enter opened root search's own first row instead).
   if [ "${1:-}" = "--install" ]; then
     for _ in $(seq 60); do
       capture preview-wait.png
-      if python3 "$(dirname "$0")/check_screenshot.py" --absent "$out/preview-wait.png" 8ab4f8; then
+      if python3 "$(dirname "$0")/check_screenshot.py" --preview "$out/preview-wait.png"; then
         break
       fi
       sleep 0.5
     done
     capture preview-wait.png
-    python3 "$(dirname "$0")/check_screenshot.py" --absent "$out/preview-wait.png" 8ab4f8 \
+    python3 "$(dirname "$0")/check_screenshot.py" --preview "$out/preview-wait.png" \
       || { echo "the --install preview did not appear (still root search)"; exit 1; }
   fi
 }
@@ -126,7 +130,7 @@ stop_pane() {
 
 start_pane
 capture 1-root.png
-check 1-root.png 8a96a3   # the hint line: text renders
+check 1-root.png hint   # the hint line: text renders
 "$xdotool" windowfocus --sync "$window"
 
 # Open each sample command (Rust, JavaScript, TypeScript) and run an item.
@@ -136,7 +140,7 @@ for index in 0 1 2; do
   capture "$((index + 2))-command-$index.png"
   "$xdotool" key Down key Return; sleep 2
   capture "$((index + 2))-result-$index.png"
-  check "$((index + 2))-result-$index.png" 9fd8a8   # the guest's answer
+  check "$((index + 2))-result-$index.png" success   # the guest's answer
   "$xdotool" key Escape; sleep 1
 done
 capture 5-back-to-root.png
@@ -152,11 +156,11 @@ for _ in 1 2 3 4; do "$xdotool" key Down; done
 capture 6-form.png
 "$xdotool" key Return; sleep 2
 capture 7-form-error.png
-check 7-form-error.png f08c8c   # the rejected field's message
+check 7-form-error.png error   # the rejected field's message
 "$xdotool" type --delay 50 Ada
 "$xdotool" key Tab key Down key Return; sleep 2
 capture 8-form-result.png
-check 8-form-result.png 9fd8a8   # the guest's answer
+check 8-form-result.png success   # the guest's answer
 "$xdotool" key Escape key Escape; sleep 1
 stop_pane
 
@@ -166,20 +170,20 @@ stop_pane
 start_pane --install target/guests/packages/sample-rust
 "$xdotool" windowfocus --sync "$window"
 capture 9-package.png
-check 9-package.png aab4c0   # the package's identity and compatibility lines
+check 9-package.png details   # the package's identity and compatibility lines
 "$xdotool" key Return; sleep 2
 capture 10-installed.png
-check 10-installed.png 9fd8a8   # "Installed Rust sample"
+check 10-installed.png success   # "Installed Rust sample"
 "$xdotool" key Return; sleep 3
 "$xdotool" key Return; sleep 2
 capture 11-installed-result.png
-check 11-installed-result.png 9fd8a8   # the installed guest's answer
+check 11-installed-result.png success   # the installed guest's answer
 stop_pane
 
 # The installed command is still listed after a restart.
 start_pane
 capture 12-restarted.png
-check 12-restarted.png 8a96a3
+check 12-restarted.png hint
 [ -f "$out/data/extensions/installed.json" ] || { echo "no install record"; exit 1; }
 "$xdotool" windowfocus --sync "$window"
 
@@ -190,11 +194,11 @@ check 12-restarted.png 8a96a3
 for _ in 1 2 3 4 5 6; do "$xdotool" key Down; done
 "$xdotool" key Return; sleep 2
 capture 13-windows-only.png
-check 13-windows-only.png d6a36a   # the row's reason
-check 13-windows-only.png f08c8c   # Linux: the reason as the error
+check 13-windows-only.png warning   # the row's reason
+check 13-windows-only.png error   # Linux: the reason as the error
 "$xdotool" key Down key Return; sleep 2
 capture 14-not-windows.png
-check 14-not-windows.png 9fd8a8    # Linux: the guest's answer
+check 14-not-windows.png success    # Linux: the guest's answer
 "$xdotool" key Escape; sleep 1
 stop_pane
 
@@ -213,7 +217,7 @@ cat >"$out/elsewhere/pane.json" <<'JSON'
 JSON
 start_pane --install "$out/elsewhere"
 capture 15-no-compatible-package.png
-check 15-no-compatible-package.png f08c8c   # "Not available on Linux: ..."
+check 15-no-compatible-package.png error   # "Not available on Linux: ..."
 stop_pane
 
 # Install the settings sample, save a choice with it, then disable it in
@@ -226,13 +230,13 @@ start_pane --install target/guests/packages/sample-settings
 "$xdotool" key Return; sleep 3   # open Greeting
 "$xdotool" key Return; sleep 2   # "Use a formal greeting"
 capture 16-setting-saved.png
-check 16-setting-saved.png 9fd8a8   # "Saved the formal greeting"
+check 16-setting-saved.png success   # "Saved the formal greeting"
 "$xdotool" key Escape; sleep 1
 for ((i = 0; i < 14; i++)); do "$xdotool" key Down; done   # the last row
 "$xdotool" key Return; sleep 1
 "$xdotool" key Down key Return; sleep 2
 capture 17-disabled.png
-check 17-disabled.png 9fd8a8   # "Disabled Settings sample"
+check 17-disabled.png success   # "Disabled Settings sample"
 stop_pane
 grep -q '"disabled": true' "$out/data/extensions/installed.json" || { echo "disabled state not recorded"; exit 1; }
 grep -q '"greeting-style": "formal"' "$out/data/extensions/settings.json" || { echo "setting not saved"; exit 1; }
@@ -244,19 +248,19 @@ grep -q '"greeting-style": "formal"' "$out/data/extensions/settings.json" || { e
 start_pane
 "$xdotool" windowfocus --sync "$window"
 capture 18-restarted-disabled.png
-check 18-restarted-disabled.png 8a96a3
+check 18-restarted-disabled.png hint
 python3 "$(dirname "$0")/check_screenshot.py" --same "$out/12-restarted.png" "$out/18-restarted-disabled.png"
 for ((i = 0; i < 14; i++)); do "$xdotool" key Down; done
 "$xdotool" key Return; sleep 1
 "$xdotool" key Down key Return; sleep 2
 capture 19-enabled.png
-check 19-enabled.png 9fd8a8   # "Enabled Settings sample"
+check 19-enabled.png success   # "Enabled Settings sample"
 "$xdotool" key Escape; sleep 1
 for ((i = 0; i < 4; i++)); do "$xdotool" key Down; done   # Greeting
 "$xdotool" key Return; sleep 3
 "$xdotool" key Down key Down key Return; sleep 2   # "Greet me"
 capture 20-greeted.png
-check 20-greeted.png 9fd8a8   # "Good day to you"
+check 20-greeted.png success   # "Good day to you"
 stop_pane
 
 # Restarted, root lists Greeting again, after Rust sample.
@@ -293,7 +297,7 @@ capture 24-search.png
 "$xdotool" key Return; sleep 3
 "$xdotool" key Down key Return; sleep 2
 capture 25-search-result.png
-check 25-search-result.png 9fd8a8   # the TypeScript guest's answer
+check 25-search-result.png success   # the TypeScript guest's answer
 python3 "$(dirname "$0")/check_screenshot.py" --same "$out/4-result-2.png" "$out/25-search-result.png"
 "$xdotool" key Escape; sleep 1
 "$xdotool" type --delay 50 zzz; sleep 1
@@ -311,7 +315,7 @@ start_pane --install target/guests/packages/calculator
 "$xdotool" key Return; sleep 2   # Install
 "$xdotool" type --delay 50 '6*7'; sleep 2
 capture 27-answer.png
-check 27-answer.png 364355 3000   # the selected answer row
+check 27-answer.png selected 3000   # the selected answer row
 "$xdotool" key Return; sleep 1
 capture 28-copied.png   # "Copied 42 to the clipboard"
 "$xdotool" key ctrl+a; "$xdotool" type --delay 50 '42+1'; sleep 2
@@ -331,7 +335,7 @@ start_pane --install target/guests/packages/sample-operations-js
 "$xdotool" windowfocus --sync "$window"
 "$xdotool" key Return; sleep 2   # Install
 capture 31-operations-target.png
-check 31-operations-target.png 9fd8a8   # "Installed JavaScript operations sample"
+check 31-operations-target.png success   # "Installed JavaScript operations sample"
 stop_pane
 start_pane --install target/guests/packages/sample-operations
 "$xdotool" windowfocus --sync "$window"
@@ -342,7 +346,7 @@ start_pane --install target/guests/packages/sample-operations
 "$xdotool" key Tab; "$xdotool" type --delay 50 Rust
 "$xdotool" key Return; sleep 5   # Greet
 capture 32-operation-answer.png
-check 32-operation-answer.png 9fd8a8   # the JavaScript guest's answer
+check 32-operation-answer.png success   # the JavaScript guest's answer
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{31-operations-target,32-operation-answer}.png
 stop_pane
 
@@ -368,7 +372,7 @@ start_pane --install "$out/dev"
 "$xdotool" key Return; sleep 3
 "$xdotool" key Return; sleep 2   # "Say hello"
 capture 33-dev-before.png
-check 33-dev-before.png 9fd8a8   # "Hello from the Rust guest"
+check 33-dev-before.png success   # "Hello from the Rust guest"
 "$xdotool" key Escape; sleep 1
 cp target/guests/sample_js.wasm "$out/dev/command.wasm"
 for ((i = 0; i < 12; i++)); do "$xdotool" key Down; done   # the last row
@@ -376,13 +380,13 @@ for ((i = 0; i < 12; i++)); do "$xdotool" key Down; done   # the last row
 for ((i = 0; i < 11; i++)); do "$xdotool" key Down; done   # Reload Dev
 "$xdotool" key Return; sleep 3
 capture 34-reloaded.png
-check 34-reloaded.png 9fd8a8   # "Reloaded Dev"
+check 34-reloaded.png success   # "Reloaded Dev"
 "$xdotool" key Escape; sleep 1
 for ((i = 0; i < 8; i++)); do "$xdotool" key Down; done   # Dev sample
 "$xdotool" key Return; sleep 3
 "$xdotool" key Return; sleep 2   # "Say hello"
 capture 35-dev-after.png
-check 35-dev-after.png 9fd8a8   # "Hello from the JavaScript guest"
+check 35-dev-after.png success   # "Hello from the JavaScript guest"
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out/33-dev-before.png" "$out/35-dev-after.png"
 "$xdotool" key Escape; sleep 1
 
@@ -394,7 +398,7 @@ for ((i = 0; i < 12; i++)); do "$xdotool" key Down; done
 for ((i = 0; i < 11; i++)); do "$xdotool" key Down; done
 "$xdotool" key Return; sleep 2
 capture 36-not-reloaded.png
-check 36-not-reloaded.png f08c8c   # "Dev was not reloaded: ..."
+check 36-not-reloaded.png error   # "Dev was not reloaded: ..."
 "$xdotool" key Escape; sleep 1
 for ((i = 0; i < 8; i++)); do "$xdotool" key Down; done
 "$xdotool" key Return; sleep 3
@@ -411,10 +415,10 @@ for ((i = 0; i < 12; i++)); do "$xdotool" key Down; done
 for ((i = 0; i < 11; i++)); do "$xdotool" key Down; done
 "$xdotool" key Return; sleep 3
 capture 38-start-failed.png
-check 38-start-failed.png f08c8c   # "Reloaded Dev, but it failed to start; ..."
+check 38-start-failed.png error   # "Reloaded Dev, but it failed to start; ..."
 "$xdotool" key Down key Return; sleep 3   # Retry starting Dev
 capture 39-retried.png
-check 39-retried.png 9fd8a8   # "Started Dev"
+check 39-retried.png success   # "Started Dev"
 stop_pane
 grep -q '"start-attempted": "yes"' "$out/data/extensions/settings.json" || { echo "the failed start's setting was not kept"; exit 1; }
 
@@ -431,7 +435,7 @@ for ((i = 0; i < 3; i++)); do "$xdotool" key Down; done
 "$xdotool" key Down key Return; sleep 2   # "Sign in"
 "$xdotool" key Down key Return; sleep 2   # "Show what Pane keeps"
 capture 40-kept.png
-check 40-kept.png 9fd8a8   # every value, the cached greeting included
+check 40-kept.png success   # every value, the cached greeting included
 "$xdotool" key Escape; sleep 1
 stop_pane
 grep -q '"note": "Water the plants"' "$out/data/extensions/content.json" || { echo "note not saved"; exit 1; }
@@ -448,17 +452,17 @@ for ((i = 0; i < 12; i++)); do "$xdotool" key Down; done   # the last row
 for ((i = 0; i < 13; i++)); do "$xdotool" key Down; done
 "$xdotool" key Return; sleep 1   # "Clear cache of Settings sample"
 capture 41-confirm-clear-cache.png
-check 41-confirm-clear-cache.png aab4c0   # what is deleted and what is kept
+check 41-confirm-clear-cache.png details   # what is deleted and what is kept
 "$xdotool" key Return; sleep 2   # "Clear cache"
 capture 42-cache-cleared.png
-check 42-cache-cleared.png 9fd8a8   # "Cleared the cache of Settings sample"
+check 42-cache-cleared.png success   # "Cleared the cache of Settings sample"
 "$xdotool" key Escape; sleep 1
 for ((i = 0; i < 4; i++)); do "$xdotool" key Down; done   # Greeting
 "$xdotool" key Return; sleep 3
 for ((i = 0; i < 5; i++)); do "$xdotool" key Down; done
 "$xdotool" key Return; sleep 2   # "Show what Pane keeps"
 capture 43-kept-after-clear.png
-check 43-kept-after-clear.png 9fd8a8   # "... Cached greeting: none"
+check 43-kept-after-clear.png success   # "... Cached greeting: none"
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out/40-kept.png" "$out/43-kept-after-clear.png"
 "$xdotool" key Escape; sleep 1
 stop_pane
@@ -486,10 +490,10 @@ XDG_DATA_HOME=$apps/data start_pane --install target/guests/packages/application
 "$xdotool" key Return; sleep 2   # Install
 "$xdotool" type --delay 50 'pane smoke'; sleep 3
 capture 44-application.png
-check 44-application.png 364355 3000   # the selected application row
+check 44-application.png selected 3000   # the selected application row
 "$xdotool" key Return; sleep 3
 capture 45-opened.png
-check 45-opened.png 9fd8a8   # "Opened Pane Smoke App"
+check 45-opened.png success   # "Opened Pane Smoke App"
 for _ in $(seq 50); do [ -f "$apps/launched" ] && break; sleep 0.2; done
 [ -f "$apps/launched" ] || { echo "the application did not run"; exit 1; }
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{44-application,45-opened}.png
@@ -511,7 +515,7 @@ start_pane --install target/guests/packages/quicklinks
 "$xdotool" type --delay 50 'https://example.com/pane-issues'
 "$xdotool" key Return; sleep 2
 capture 46-quicklink-saved.png
-check 46-quicklink-saved.png 9fd8a8   # "Saved quicklink “Pane issues”"
+check 46-quicklink-saved.png success   # "Saved quicklink “Pane issues”"
 "$xdotool" key Escape key Escape; sleep 1
 stop_pane
 printf '#!/bin/sh\necho "$1" >"%s/opened-link.txt"\n' "$out" >"$out/browser.sh"
@@ -550,10 +554,10 @@ start_pane
 "$xdotool" windowfocus --sync "$window"
 "$xdotool" type --delay 50 'pane iss'; sleep 2
 capture 47-quicklink-found.png
-check 47-quicklink-found.png 364355 3000   # the selected quicklink row
+check 47-quicklink-found.png selected 3000   # the selected quicklink row
 "$xdotool" key Return; sleep 3
 capture 48-quicklink-opened.png
-check 48-quicklink-opened.png 9fd8a8   # "Opened https://example.com/pane-issues"
+check 48-quicklink-opened.png success   # "Opened https://example.com/pane-issues"
 [ "$(cat "$out/opened-link.txt")" = https://example.com/pane-issues ] || { echo "the link handler was not asked to open the quicklink"; exit 1; }
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{46-quicklink-saved,47-quicklink-found,48-quicklink-opened}.png
 stop_pane
@@ -569,10 +573,10 @@ for ((i = 0; i < 20; i++)); do "$xdotool" key Down; done   # the last row
 for ((i = 0; i < 25; i++)); do "$xdotool" key Down; done
 "$xdotool" key Return; sleep 1   # "Uninstall Settings sample"
 capture 49-confirm-uninstall.png
-check 49-confirm-uninstall.png aab4c0   # what is removed and the saved data
+check 49-confirm-uninstall.png details   # what is removed and the saved data
 "$xdotool" key Return; sleep 2   # "Uninstall and keep saved data"
 capture 50-uninstalled.png
-check 50-uninstalled.png 9fd8a8   # "Uninstalled Settings sample; its settings and content are kept"
+check 50-uninstalled.png success   # "Uninstalled Settings sample; its settings and content are kept"
 stop_pane
 grep -q '"retained"' "$out/data/extensions/installed.json" || { echo "kept data not recorded"; exit 1; }
 if grep -q 'sample-token' "$out/data/extensions/credentials.json"; then echo "credential not removed"; exit 1; fi
@@ -585,7 +589,7 @@ start_pane --install target/guests/packages/sample-settings
 for ((i = 0; i < 5; i++)); do "$xdotool" key Down; done
 "$xdotool" key Return; sleep 2   # "Show what Pane keeps"
 capture 51-reinstalled.png
-check 51-reinstalled.png 9fd8a8   # "Style: formal · Note: Water the plants · Signed in: no ..."
+check 51-reinstalled.png success   # "Style: formal · Note: Water the plants · Signed in: no ..."
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out/43-kept-after-clear.png" "$out/51-reinstalled.png"
 "$xdotool" key Escape; sleep 1
 stop_pane
@@ -613,16 +617,16 @@ for ((i = 0; i < 14; i++)); do "$xdotool" key Down; done   # Manage extensions�
 "$xdotool" key Return; sleep 1
 "$xdotool" key Down Down Down Down Return; sleep 1   # "Hotkey for Greeting"
 capture 52-hotkey-screen.png
-check 52-hotkey-screen.png aab4c0   # "Press the keys that should open Greeting ..."
+check 52-hotkey-screen.png details   # "Press the keys that should open Greeting ..."
 "$xdotool" key ctrl+alt+g; sleep 2
 capture 53-hotkey-assigned.png
-check 53-hotkey-assigned.png 9fd8a8   # "Ctrl+Alt+G now opens Greeting"
+check 53-hotkey-assigned.png success   # "Ctrl+Alt+G now opens Greeting"
 "$xdotool" key Escape; sleep 1   # root search
 unfocus_pane
 capture 54-unfocused.png
 press_hotkey
 capture 55-hotkey-opened.png
-check 55-hotkey-opened.png 364355 3000   # Greeting's first item, selected
+check 55-hotkey-opened.png selected 3000   # Greeting's first item, selected
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{53-hotkey-assigned,55-hotkey-opened}.png
 stop_pane
 grep -q '"ctrl+alt+g"' "$PANE_DATA_DIR/extensions/hotkeys.json" || { echo "hotkey not recorded"; exit 1; }
@@ -630,7 +634,7 @@ start_pane
 unfocus_pane
 press_hotkey
 capture 56-hotkey-after-restart.png
-check 56-hotkey-after-restart.png 364355 3000   # Greeting's first item, selected
+check 56-hotkey-after-restart.png selected 3000   # Greeting's first item, selected
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{54-unfocused,56-hotkey-after-restart}.png
 "$xdotool" windowfocus --sync "$window"   # no window manager: Pane is focused here
 "$xdotool" key Escape; sleep 1
@@ -663,24 +667,24 @@ for ((i = 0; i < 7; i++)); do "$xdotool" key Down; done   # Crash
 for ((i = 0; i < 3; i++)); do "$xdotool" key Return; sleep 2; done
 "$xdotool" type --delay 50 greet; sleep 1   # Greeting and its reason at the top on any window height
 capture 59-paused.png
-check 59-paused.png f08c8c   # "Settings sample crashed 3 times within 5 minutes and is paused ..."
-check 59-paused.png d6a36a   # Greeting: "Settings sample is paused after an error; ..."
+check 59-paused.png error   # "Settings sample crashed 3 times within 5 minutes and is paused ..."
+check 59-paused.png warning   # Greeting: "Settings sample is paused after an error; ..."
 stop_pane
 grep -q '"paused"' "$PANE_DATA_DIR/extensions/installed.json" || { echo "pause not recorded"; exit 1; }
 start_pane
 "$xdotool" windowfocus --sync "$window"
 "$xdotool" type --delay 50 greet; sleep 1
 capture 60-paused-after-restart.png
-check 60-paused-after-restart.png d6a36a   # Greeting is still paused
+check 60-paused-after-restart.png warning   # Greeting is still paused
 "$xdotool" key Escape; sleep 1   # clears the query
 for ((i = 0; i < 14; i++)); do "$xdotool" key Down; done   # Manage extensions…
 "$xdotool" key Return; sleep 1
 "$xdotool" key Down Down Down Return; sleep 1   # "Why Settings sample is paused"
 capture 61-pause-details.png
-check 61-pause-details.png aab4c0   # the details
+check 61-pause-details.png details   # the details
 "$xdotool" key Return; sleep 2   # Retry Settings sample
 capture 62-pause-retried.png
-check 62-pause-retried.png 9fd8a8   # "Started Settings sample"
+check 62-pause-retried.png success   # "Started Settings sample"
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{61-pause-details,62-pause-retried}.png
 stop_pane
 if grep -q '"paused"' "$PANE_DATA_DIR/extensions/installed.json"; then echo "pause not cleared"; exit 1; fi
@@ -723,17 +727,17 @@ for ((i = 0; i < 14; i++)); do "$xdotool" key Down; done   # Manage extensions�
 wait_for "$registry" '"retained"' present; sleep 1
 "$xdotool" key Return; sleep 1   # "Delete retained data of Settings sample" (the list's first row, already selected)
 capture 63-confirm-delete-retained.png
-check 63-confirm-delete-retained.png aab4c0   # what is kept and what is not touched
+check 63-confirm-delete-retained.png details   # what is kept and what is not touched
 # The confirmation's status line is the idle hint, not a result: the
-# extension list also shows aab4c0 subtitles, so that color alone let the
+# extension list also shows hint subtitles, so that color alone let the
 # wrong screen pass (#58: Down to the list's end had landed on the
 # automatic-update row, whose Enter toggles it and leaves its result on
 # screen). No result color on screen says the right screen is up.
-python3 "$(dirname "$0")/check_screenshot.py" --absent "$out/63-confirm-delete-retained.png" 9fd8a8
+python3 "$(dirname "$0")/check_screenshot.py" --absent "$out/63-confirm-delete-retained.png" success
 "$xdotool" key Down Return   # "Delete retained data"
 wait_for "$registry" '"retained"' absent; sleep 1
 capture 64-retained-deleted.png
-check 64-retained-deleted.png 9fd8a8   # "Deleted the retained data of Settings sample"
+check 64-retained-deleted.png success   # "Deleted the retained data of Settings sample"
 stop_pane
 if grep -q 'Water the plants' "$PANE_DATA_DIR/extensions/content.json"; then echo "note not deleted"; exit 1; fi
 start_pane --install target/guests/packages/sample-settings
@@ -744,7 +748,7 @@ wait_for "$registry" sample-settings present; sleep 1
 for ((i = 0; i < 5; i++)); do "$xdotool" key Down; done
 "$xdotool" key Return; sleep 2   # "Show what Pane keeps"
 capture 65-reinstalled-empty.png
-check 65-reinstalled-empty.png 9fd8a8   # "Style: none · Note: none · Signed in: no ..."
+check 65-reinstalled-empty.png success   # "Style: none · Note: none · Signed in: no ..."
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out/51-reinstalled.png" "$out/65-reinstalled-empty.png"
 "$xdotool" key Escape; sleep 1
 stop_pane
@@ -770,28 +774,28 @@ for ((i = 0; i < 5; i++)); do "$xdotool" key Down; done   # "Alias for Echo"
 "$xdotool" type --delay 50 'ec'
 "$xdotool" key Return; sleep 2
 capture 66-alias-saved.png
-check 66-alias-saved.png 9fd8a8   # "Typing “ec” now finds Echo"
+check 66-alias-saved.png success   # "Typing “ec” now finds Echo"
 "$xdotool" key Down Return; sleep 2   # "Fallback: Echo"
 capture 67-fallback-on.png
-check 67-fallback-on.png 9fd8a8   # "Echo is now offered for any text typed in root search"
+check 67-fallback-on.png success   # "Echo is now offered for any text typed in root search"
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{66-alias-saved,67-fallback-on}.png
 "$xdotool" key Escape; sleep 1   # root search
 "$xdotool" type --delay 50 'ec hello'; sleep 1
 capture 68-alias-row.png
-check 68-alias-row.png 364355 3000   # Echo, sending “hello”, selected
+check 68-alias-row.png selected 3000   # Echo, sending “hello”, selected
 "$xdotool" key Return; sleep 3
 capture 69-alias-answer.png
-check 69-alias-answer.png 9fd8a8   # "Echo heard “hello”"
+check 69-alias-answer.png success   # "Echo heard “hello”"
 "$xdotool" key Escape; sleep 1   # clears the query
 "$xdotool" type --delay 50 'zqx'; sleep 1
 capture 70-fallback-listed.png   # "No results for “zqx”", then Echo, not selected
 "$xdotool" key Down; sleep 1
 capture 71-fallback-chosen.png
-check 71-fallback-chosen.png 364355 3000   # Echo, now selected
+check 71-fallback-chosen.png selected 3000   # Echo, now selected
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{70-fallback-listed,71-fallback-chosen}.png
 "$xdotool" key Return; sleep 3
 capture 72-fallback-answer.png
-check 72-fallback-answer.png 9fd8a8   # "Echo heard “zqx”"
+check 72-fallback-answer.png success   # "Echo heard “zqx”"
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{69-alias-answer,72-fallback-answer}.png
 stop_pane
 grep -q '"ec"' "$PANE_DATA_DIR/extensions/aliases.json" || { echo "alias not recorded"; exit 1; }
@@ -827,14 +831,14 @@ rm -rf "$PANE_DATA_DIR"
 start_pane --install target/guests/packages/sample-dependencies
 "$xdotool" windowfocus --sync "$window"
 capture 75-dependencies-preview.png
-check 75-dependencies-preview.png aab4c0   # "Requires: JavaScript operations sample, installed with it ..."
+check 75-dependencies-preview.png details   # "Requires: JavaScript operations sample, installed with it ..."
 "$xdotool" key Return; sleep 3   # Install; Greet through dependencies is selected
 capture 76-dependencies-installed.png
-check 76-dependencies-installed.png 9fd8a8   # "Installed Dependencies sample with JavaScript operations sample, which it requires"
+check 76-dependencies-installed.png success   # "Installed Dependencies sample with JavaScript operations sample, which it requires"
 "$xdotool" key Return; sleep 3   # open Greet through dependencies
 "$xdotool" key Return; sleep 5   # Greet through the required greeter
 capture 77-dependency-answer.png
-check 77-dependency-answer.png 9fd8a8   # the JavaScript guest's answer
+check 77-dependency-answer.png success   # the JavaScript guest's answer
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{75-dependencies-preview,76-dependencies-installed,77-dependency-answer}.png
 stop_pane
 grep -q '"id": "greeter"' "$PANE_DATA_DIR/extensions/installed.json" || { echo "dependency not recorded"; exit 1; }
@@ -859,10 +863,10 @@ start_pane --install target/guests/packages/sample-helper
 "$xdotool" key Return   # Echo through the helper
 # The helper is a process Pane starts and waits for; a cold spawn on a
 # loaded runner can outlast a fixed sleep, so the answer is waited for.
-capture_until 90-helper-echoed.png 9fd8a8 15   # 'Echoed "hello from Pane" on Linux x86-64'
+capture_until 90-helper-echoed.png success 15   # 'Echoed "hello from Pane" on Linux x86-64'
 "$xdotool" key Down Down Return; sleep 3   # Echo within a second
 capture 91-helper-cancelled.png
-check 91-helper-cancelled.png 9fd8a8   # "Stopped the helper after one second"
+check 91-helper-cancelled.png success   # "Stopped the helper after one second"
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{90-helper-echoed,91-helper-cancelled}.png
 if helpers_running; then echo "a cancelled helper is still running"; exit 1; fi
 "$xdotool" key Up Return; sleep 2   # Echo after waiting
@@ -873,7 +877,7 @@ for ((i = 0; i < 14; i++)); do "$xdotool" key Down; done   # Manage extensions�
 "$xdotool" key Return; sleep 1
 "$xdotool" key Return; sleep 2   # disable Helper sample
 capture 93-helper-disabled.png
-check 93-helper-disabled.png 9fd8a8   # "Disabled Helper sample"
+check 93-helper-disabled.png success   # "Disabled Helper sample"
 if helpers_running; then echo "the helper outlived its disabled package"; exit 1; fi
 grep -q '"helper-wait": "started"' "$PANE_DATA_DIR/extensions/settings.json" || { echo "saved note lost"; exit 1; }
 if grep -q '"helper-wait": "finished"' "$PANE_DATA_DIR/extensions/settings.json"; then echo "the stopped call finished"; exit 1; fi
@@ -893,7 +897,7 @@ start_pane --install target/guests/packages/sample-helper
 "$xdotool" key Down Return; sleep 2   # Echo after waiting
 helpers_running || { echo "the waiting helper is not running"; exit 1; }
 capture 94-helper-before-quit.png
-check 94-helper-before-quit.png d6c27a   # "Running…"
+check 94-helper-before-quit.png progress   # "Running…"
 alive=$(find "$PANE_DATA_DIR/extensions/packages" -name pane-echo.alive | head -1)
 [ -n "$alive" ] || { echo "the waiting helper does not beat"; exit 1; }
 python3 "$(dirname "$0")/close_window.py" "$window"
@@ -984,11 +988,11 @@ PY
   "$xdotool" key Up; sleep 0.12
   "$xdotool" key Return; sleep 2   # Develop <title>
   capture "$n-$sample-develop-started.png"
-  check "$n-$sample-develop-started.png" 9fd8a8   # "Developing <title>: each save in ..."
+  check "$n-$sample-develop-started.png" success   # "Developing <title>: each save in ..."
   "$xdotool" key Escape; sleep 1
   say_hello
   capture "$((n + 1))-$sample-greeting-before.png"
-  check "$((n + 1))-$sample-greeting-before.png" 9fd8a8   # "Hello from ..."
+  check "$((n + 1))-$sample-greeting-before.png" success   # "Hello from ..."
   "$xdotool" key Escape; sleep 1
 
   # An edit, saved: built and reloaded.
@@ -996,10 +1000,10 @@ PY
   set_greeting "$copy/$source" "$(printf "$greeting" "Hello again")"
   wait_reloaded "$built" "$before"
   capture "$((n + 2))-$sample-rebuilt.png"
-  check "$((n + 2))-$sample-rebuilt.png" 9fd8a8   # "Reloaded <title>"
+  check "$((n + 2))-$sample-rebuilt.png" success   # "Reloaded <title>"
   say_hello
   capture "$((n + 3))-$sample-greeting-after.png"
-  check "$((n + 3))-$sample-greeting-after.png" 9fd8a8   # "Hello again"
+  check "$((n + 3))-$sample-greeting-after.png" success   # "Hello again"
   python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out/$((n + 1))-$sample-greeting-before.png" "$out/$((n + 3))-$sample-greeting-after.png"
   "$xdotool" key Escape; sleep 1
 
@@ -1009,10 +1013,10 @@ PY
   set_greeting "$copy/$source" "$broken"
   wait_failed "$failures"
   capture "$((n + 4))-$sample-build-failed.png"
-  check "$((n + 4))-$sample-build-failed.png" f08c8c   # "<title> did not build: ..."
+  check "$((n + 4))-$sample-build-failed.png" error   # "<title> did not build: ..."
   say_hello
   capture "$((n + 5))-$sample-kept.png"
-  check "$((n + 5))-$sample-kept.png" 9fd8a8   # still "Hello again"
+  check "$((n + 5))-$sample-kept.png" success   # still "Hello again"
   python3 "$(dirname "$0")/check_screenshot.py" --same "$out/$((n + 3))-$sample-greeting-after.png" "$out/$((n + 5))-$sample-kept.png"
   "$xdotool" key Escape; sleep 1
 
@@ -1023,10 +1027,10 @@ PY
   set_greeting "$copy/$source" "$(printf "$greeting" "Hello at last")"
   wait_reloaded "$built" "$before"
   capture "$((n + 6))-$sample-rebuilt-again.png"
-  check "$((n + 6))-$sample-rebuilt-again.png" 9fd8a8   # "Reloaded <title>"
+  check "$((n + 6))-$sample-rebuilt-again.png" success   # "Reloaded <title>"
   say_hello
   capture "$((n + 7))-$sample-greeting-fixed.png"
-  check "$((n + 7))-$sample-greeting-fixed.png" 9fd8a8   # "Hello at last"
+  check "$((n + 7))-$sample-greeting-fixed.png" success   # "Hello at last"
   python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out/$((n + 3))-$sample-greeting-after.png" "$out/$((n + 7))-$sample-greeting-fixed.png"
   "$xdotool" key Escape; sleep 1
 
@@ -1038,7 +1042,7 @@ PY
   "$xdotool" key Up; sleep 0.12
   "$xdotool" key Return; sleep 2   # Stop developing <title>
   capture "$((n + 8))-$sample-stopped.png"
-  check "$((n + 8))-$sample-stopped.png" 9fd8a8   # "Stopped developing <title>"
+  check "$((n + 8))-$sample-stopped.png" success   # "Stopped developing <title>"
   cp "$built" "$before"
   set_greeting "$copy/$source" "$(printf "$greeting" "Hello unseen")"
   sleep 8
@@ -1073,16 +1077,16 @@ for ((i = 0; i < 14; i++)); do "$xdotool" key Down; done   # Manage extensions�
 "$xdotool" key Return; sleep 1
 "$xdotool" key Return; sleep 1   # disable JavaScript operations sample: asks first
 capture 140-disable-dependents-asked.png
-check 140-disable-dependents-asked.png aab4c0   # "Dependencies sample, which requires JavaScript operations sample · …"
+check 140-disable-dependents-asked.png details   # "Dependencies sample, which requires JavaScript operations sample · …"
 "$xdotool" key Down Return; sleep 1   # Cancel
 capture 141-disable-dependents-cancelled.png   # both still enabled
 "$xdotool" key Return; sleep 1   # asks again
 "$xdotool" key Return; sleep 2   # Disable all 2
 capture 142-disable-dependents-disabled.png
-check 142-disable-dependents-disabled.png 9fd8a8   # "Disabled JavaScript operations sample and Dependencies sample, which requires it"
+check 142-disable-dependents-disabled.png success   # "Disabled JavaScript operations sample and Dependencies sample, which requires it"
 "$xdotool" key Return; sleep 2   # enable JavaScript operations sample
 capture 143-disable-dependents-enabled-alone.png
-check 143-disable-dependents-enabled-alone.png 9fd8a8   # "Enabled JavaScript operations sample"; Dependencies sample stays disabled
+check 143-disable-dependents-enabled-alone.png success   # "Enabled JavaScript operations sample"; Dependencies sample stays disabled
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{140-disable-dependents-asked,141-disable-dependents-cancelled,142-disable-dependents-disabled,143-disable-dependents-enabled-alone}.png
 stop_pane
 [ "$(grep -c '"disabled": true' "$PANE_DATA_DIR/extensions/installed.json")" = 1 ] || { echo "not exactly the dependent left disabled"; exit 1; }
@@ -1130,7 +1134,7 @@ start_pane --install target/guests/packages/sample-settings
 for ((i = 0; i < 8; i++)); do "$xdotool" key Down; done   # Count
 "$xdotool" key Return; sleep 2
 capture 200-runtime-counted.png
-check 200-runtime-counted.png 9fd8a8   # "Counted 1"
+check 200-runtime-counted.png success   # "Counted 1"
 [ "$(count)" = 1 ] || { echo "Count did not count once"; exit 1; }
 "$xdotool" key Escape; sleep 1
 "$xdotool" type --delay 50 helper; sleep 1
@@ -1138,12 +1142,12 @@ check 200-runtime-counted.png 9fd8a8   # "Counted 1"
 "$xdotool" key Down Return; sleep 2   # Echo after waiting
 helpers_running || { echo "the waiting helper is not running"; exit 1; }
 capture 201-runtime-helper-waiting.png
-check 201-runtime-helper-waiting.png d6c27a   # "Running…"
+check 201-runtime-helper-waiting.png progress   # "Running…"
 alive=$(find "$PANE_DATA_DIR/extensions/packages" -name pane-echo.alive | head -1)
 [ -n "$alive" ] || { echo "the waiting helper does not beat"; exit 1; }
 inject crash
 capture 202-runtime-crashed.png
-check 202-runtime-crashed.png f08c8c   # "Pane's extension runtime stopped unexpectedly and was started again; ..."
+check 202-runtime-crashed.png error   # "Pane's extension runtime stopped unexpectedly and was started again; ..."
 if helpers_running; then echo "the helper outlived the crashed runtime"; exit 1; fi
 beats=$(stat -c %s "$alive"); sleep 0.5
 [ "$(stat -c %s "$alive")" = "$beats" ] || { echo "the helper still beats after the crash"; exit 1; }
@@ -1156,27 +1160,27 @@ for ((i = 0; i < 8; i++)); do "$xdotool" key Down; done   # Count
 inject crash-before-answer:count
 "$xdotool" key Return; sleep 3   # counts, then the runtime crashes before answering
 capture 203-runtime-stopped.png
-check 203-runtime-stopped.png f08c8c   # the runtime stopped; its answer is lost
+check 203-runtime-stopped.png error   # the runtime stopped; its answer is lost
 [ "$(count)" = 2 ] || { echo "Count did not run once before the crash"; exit 1; }
 "$xdotool" key Escape; sleep 1
 "$xdotool" type --delay 50 greet; sleep 1
 "$xdotool" key Return; sleep 2   # Greeting: nothing runs
 capture 204-runtime-refused.png
-check 204-runtime-refused.png f08c8c   # "Extension runtime unavailable: it stopped after crashing ..."
+check 204-runtime-refused.png error   # "Extension runtime unavailable: it stopped after crashing ..."
 "$xdotool" key Escape; sleep 1   # clears the query
 for ((i = 0; i < 14; i++)); do "$xdotool" key Down; done   # Manage extensions…
 "$xdotool" key Return; sleep 1
 capture 205-runtime-manage.png   # Restart the extension runtime, Why the extension runtime stopped
 "$xdotool" key Down Return; sleep 1   # Why the extension runtime stopped
 capture 206-runtime-details.png
-check 206-runtime-details.png aab4c0   # the details
+check 206-runtime-details.png details   # the details
 "$xdotool" key Escape; sleep 1   # back at its row
 "$xdotool" key Down Return; sleep 2   # disable Helper sample, the first package
 capture 207-runtime-disabled.png
-check 207-runtime-disabled.png 9fd8a8   # "Disabled Helper sample"
+check 207-runtime-disabled.png success   # "Disabled Helper sample"
 "$xdotool" key Up Up Return; sleep 2   # Restart the extension runtime
 capture 208-runtime-restarted.png
-check 208-runtime-restarted.png 9fd8a8   # "Restarted the extension runtime"
+check 208-runtime-restarted.png success   # "Restarted the extension runtime"
 [ "$(count)" = 2 ] || { echo "Count was run again without asking"; exit 1; }
 "$xdotool" key Escape; sleep 1
 "$xdotool" type --delay 50 greet; sleep 1
@@ -1184,7 +1188,7 @@ check 208-runtime-restarted.png 9fd8a8   # "Restarted the extension runtime"
 for ((i = 0; i < 8; i++)); do "$xdotool" key Down; done   # Count
 "$xdotool" key Return; sleep 2
 capture 209-runtime-counted-again.png
-check 209-runtime-counted-again.png 9fd8a8   # "Counted 3"
+check 209-runtime-counted-again.png success   # "Counted 3"
 [ "$(count)" = 3 ] || { echo "Count did not count once more"; exit 1; }
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{200-runtime-counted,202-runtime-crashed,203-runtime-stopped,204-runtime-refused,205-runtime-manage,206-runtime-details,207-runtime-disabled,208-runtime-restarted,209-runtime-counted-again}.png
 stop_pane
@@ -1237,7 +1241,7 @@ for ((i = 0; i < 9; i++)); do "$xdotool" key Down; done   # Stop responding
 for ((i = 0; i < 10; i++)); do "$xdotool" key Down; done   # Manage extensions…
 "$xdotool" key Return; sleep 1
 capture 240-unresponsive-window-answers.png   # the extension list, while the guest computes
-check 240-unresponsive-window-answers.png aab4c0   # its rows' subtitles
+check 240-unresponsive-window-answers.png subtitle   # its rows' subtitles
 [ "$(stopped_calls)" = 0 ] || { echo "Stop responding was stopped before frame 240"; exit 1; }
 inject limits:2,4,15   # it has computed longer: Pane stops it at its next tick
 for _ in $(seq 300); do [ "$(stopped_calls)" -ge 1 ] && break; sleep 0.1; done
@@ -1248,44 +1252,44 @@ for _ in $(seq 300); do [ "$(stopped_calls)" -ge 1 ] && break; sleep 0.1; done
 for ((i = 0; i < 9; i++)); do "$xdotool" key Down; done   # Stop responding
 "$xdotool" key Return; sleep 8
 capture 241-unresponsive-stopped.png
-check 241-unresponsive-stopped.png f08c8c   # "The extension stopped responding: it computed for 2 seconds ..."
+check 241-unresponsive-stopped.png error   # "The extension stopped responding: it computed for 2 seconds ..."
 "$xdotool" key Return; sleep 8   # the third time
 "$xdotool" type --delay 50 greet; sleep 1   # Greeting and its reason at the top
 capture 242-unresponsive-paused.png
-check 242-unresponsive-paused.png f08c8c   # "Settings sample stopped responding 3 times within 5 minutes and is paused ..."
-check 242-unresponsive-paused.png d6a36a   # Greeting: "Settings sample is paused after an error; ..."
+check 242-unresponsive-paused.png error   # "Settings sample stopped responding 3 times within 5 minutes and is paused ..."
+check 242-unresponsive-paused.png warning   # Greeting: "Settings sample is paused after an error; ..."
 [ "$(saved busy)" = started ] || { echo "Stop responding finished or was lost"; exit 1; }
 "$xdotool" key Escape; sleep 1   # clears the query
 for ((i = 0; i < 10; i++)); do "$xdotool" key Down; done   # Manage extensions…
 "$xdotool" key Return; sleep 1
 "$xdotool" key Down Down Down Return; sleep 1   # "Why Settings sample is paused"
 capture 243-unresponsive-pause-details.png
-check 243-unresponsive-pause-details.png aab4c0   # the details
+check 243-unresponsive-pause-details.png details   # the details
 "$xdotool" key Return; sleep 2   # Retry Settings sample
 capture 244-unresponsive-retried.png
-check 244-unresponsive-retried.png 9fd8a8   # "Started Settings sample"
+check 244-unresponsive-retried.png success   # "Started Settings sample"
 "$xdotool" key Escape; sleep 1
 inject hang
 "$xdotool" type --delay 50 greet; sleep 1
 "$xdotool" key Return; sleep 4   # open Greeting: the stuck runtime is not responding yet
 capture 245-unresponsive-not-yet.png
-check 245-unresponsive-not-yet.png d6c27a   # "Pane's extension runtime is not responding yet. ..."
+check 245-unresponsive-not-yet.png progress   # "Pane's extension runtime is not responding yet. ..."
 sleep 14   # Pane gives up on it
 capture 246-unresponsive-runtime.png
-check 246-unresponsive-runtime.png f08c8c   # the runtime stopped responding and was started again
+check 246-unresponsive-runtime.png error   # the runtime stopped responding and was started again
 "$xdotool" key Escape; sleep 1   # clears the query
 for ((i = 0; i < 10; i++)); do "$xdotool" key Down; done   # Manage extensions…
 "$xdotool" key Return; sleep 1
 "$xdotool" key Return; sleep 1   # Why the extension runtime stopped, its first row
 capture 247-unresponsive-runtime-details.png
-check 247-unresponsive-runtime-details.png aab4c0   # the details
+check 247-unresponsive-runtime-details.png details   # the details
 inject release
 "$xdotool" key Escape Escape; sleep 1
 "$xdotool" type --delay 50 greet; sleep 1
 "$xdotool" key Return; sleep 2   # open Greeting on a fresh runtime thread
 "$xdotool" key Return; sleep 2   # Use a formal greeting
 capture 248-unresponsive-runs-again.png
-check 248-unresponsive-runs-again.png 9fd8a8   # "Saved the formal greeting"
+check 248-unresponsive-runs-again.png success   # "Saved the formal greeting"
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{240-unresponsive-window-answers,241-unresponsive-stopped,242-unresponsive-paused,243-unresponsive-pause-details,244-unresponsive-retried,245-unresponsive-not-yet,246-unresponsive-runtime,247-unresponsive-runtime-details,248-unresponsive-runs-again}.png
 stop_pane
 unset PANE_TEST_RUNTIME_FAULTS
@@ -1318,13 +1322,13 @@ for ((i = 0; i < 14; i++)); do "$xdotool" key Down; done   # Manage extensions�
 for ((i = 0; i < 6; i++)); do "$xdotool" key Down; done   # Uninstall JavaScript operations sample
 "$xdotool" key Return; sleep 1   # asks first
 capture 180-uninstall-dependents-asked.png
-check 180-uninstall-dependents-asked.png aab4c0   # "Dependencies sample, which requires JavaScript operations sample · …"
+check 180-uninstall-dependents-asked.png details   # "Dependencies sample, which requires JavaScript operations sample · …"
 "$xdotool" key Down Down Return; sleep 1   # Cancel
 capture 181-uninstall-dependents-cancelled.png   # both still installed
 "$xdotool" key Return; sleep 1   # asks again
 "$xdotool" key Return; sleep 3   # Uninstall all 2 and keep saved data
 capture 182-uninstall-dependents-uninstalled.png
-check 182-uninstall-dependents-uninstalled.png 9fd8a8   # "Uninstalled JavaScript operations sample and Dependencies sample, which requires it; …"
+check 182-uninstall-dependents-uninstalled.png success   # "Uninstalled JavaScript operations sample and Dependencies sample, which requires it; …"
 stop_pane
 [ "$(grep -c '"dir"' "$PANE_DATA_DIR/extensions/installed.json")" = 0 ] || { echo "not both uninstalled"; exit 1; }
 start_pane --install target/guests/packages/sample-operations-js
@@ -1333,7 +1337,7 @@ start_pane --install target/guests/packages/sample-operations-js
 for ((i = 0; i < 14; i++)); do "$xdotool" key Down; done   # Manage extensions…
 "$xdotool" key Return; sleep 1
 capture 183-uninstall-dependents-reinstalled-alone.png   # only the JavaScript operations sample is listed
-check 183-uninstall-dependents-reinstalled-alone.png aab4c0
+check 183-uninstall-dependents-reinstalled-alone.png subtitle
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{180-uninstall-dependents-asked,181-uninstall-dependents-cancelled,182-uninstall-dependents-uninstalled,183-uninstall-dependents-reinstalled-alone}.png
 stop_pane
 [ "$(grep -c '"dir"' "$PANE_DATA_DIR/extensions/installed.json")" = 1 ] || { echo "not the dependency alone reinstalled"; exit 1; }
@@ -1358,30 +1362,30 @@ export PANE_NPM_REGISTRY=http://127.0.0.1:$(cat "$out/npm-registry.port")/
 start_pane --install target/guests/packages/sample-dependencies-npm
 "$xdotool" windowfocus --sync "$window"
 capture 260-npm-dependency-preview.png
-check 260-npm-dependency-preview.png aab4c0   # "Requires: Greeter from npm, installed with it from npm:@pane-samples/greeter"
+check 260-npm-dependency-preview.png details   # "Requires: Greeter from npm, installed with it from npm:@pane-samples/greeter"
 "$xdotool" key Return; sleep 3   # Install; Greet through an npm dependency is selected
 capture 261-npm-dependency-installed.png
-check 261-npm-dependency-installed.png 9fd8a8   # "Installed Dependencies from npm sample with Greeter from npm, which it requires"
+check 261-npm-dependency-installed.png success   # "Installed Dependencies from npm sample with Greeter from npm, which it requires"
 "$xdotool" key Return; sleep 3   # open it
 "$xdotool" key Return; sleep 3   # "Greet through the required greeter"
 capture 262-npm-dependency-called.png
-check 262-npm-dependency-called.png 9fd8a8   # "Hello, Pane, from the npm package"
+check 262-npm-dependency-called.png success   # "Hello, Pane, from the npm package"
 "$xdotool" key Escape; sleep 1
 for ((i = 0; i < 14; i++)); do "$xdotool" key Down; done   # Manage extensions…, the last row
 "$xdotool" key Up Up Return; sleep 1   # Install extension from npm…
 capture 263-npm-form.png
-check 263-npm-form.png 8a96a3   # the form's hint line
+check 263-npm-form.png hint   # the form's hint line
 "$xdotool" type --delay 50 @pane-samples/greeter
 "$xdotool" key Return; sleep 3
 capture 264-npm-preview.png
-check 264-npm-preview.png aab4c0   # "Source: npm package @pane-samples/greeter", "npm version: 0.1.0, the latest", …
+check 264-npm-preview.png details   # "Source: npm package @pane-samples/greeter", "npm version: 0.1.0, the latest", …
 "$xdotool" key Return; sleep 3   # Update; Greeter from npm is selected
 capture 265-npm-updated.png
-check 265-npm-updated.png 9fd8a8   # "Updated Greeter from npm to 0.1.0"
+check 265-npm-updated.png success   # "Updated Greeter from npm to 0.1.0"
 "$xdotool" key Return; sleep 3   # open Greeter from npm
 "$xdotool" key Return; sleep 2   # "Say hello"
 capture 266-npm-command-ran.png
-check 266-npm-command-ran.png 9fd8a8   # "Hello from the npm package"
+check 266-npm-command-ran.png success   # "Hello from the npm package"
 
 # #49: the update Pane applies by itself. A 0.2.0 of the sample is
 # published into the registry this phase serves (it reads its folder on
@@ -1397,11 +1401,11 @@ start_pane
 # The check a second after the start, then the download and the apply:
 # capture until the status line says the update landed, whenever that is,
 # so a slow runner is waited for rather than slept past.
-capture_until 267-npm-updated-automatically.png 9fd8a8 60   # "Updated Greeter from npm to 0.2.0"
+capture_until 267-npm-updated-automatically.png success 60   # "Updated Greeter from npm to 0.2.0"
 "$xdotool" key Return; sleep 3   # open Greeter from npm, the new copy
 "$xdotool" key Return; sleep 2   # "Say hello"
 capture 268-npm-new-copy-ran.png
-check 268-npm-new-copy-ran.png 9fd8a8   # "Hello from the npm package"
+check 268-npm-new-copy-ran.png success   # "Hello from the npm package"
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{260-npm-dependency-preview,261-npm-dependency-installed,262-npm-dependency-called,263-npm-form,264-npm-preview,265-npm-updated,266-npm-command-ran,267-npm-updated-automatically,268-npm-new-copy-ran}.png
 stop_pane
 kill "$npm_registry_pid"; wait "$npm_registry_pid" 2>/dev/null || true; npm_registry_pid=
@@ -1433,23 +1437,23 @@ repository=http://127.0.0.1:$(cat "$out/repository-server.port")/greeter.git
 start_pane --install "git:$repository"
 "$xdotool" windowfocus --sync "$window"
 # The fetch runs after the window shows: capture until its explanation does.
-capture_until 300-git-source-only.png f08c8c 60   # "The default branch, main (commit …) of the Git repository … holds only the source of …"
+capture_until 300-git-source-only.png error 60   # "The default branch, main (commit …) of the Git repository … holds only the source of …"
 "$xdotool" key Escape; sleep 1
 for ((i = 0; i < 14; i++)); do "$xdotool" key Down; done   # the last row
 "$xdotool" key Return; sleep 1   # Install extension from Git…
 capture 301-git-form.png
-check 301-git-form.png 8a96a3   # the form's hint line
+check 301-git-form.png hint   # the form's hint line
 "$xdotool" type --delay 50 "$repository@v0.1.0"
 "$xdotool" key Return; sleep 3
 capture 302-git-preview.png
-check 302-git-preview.png aab4c0   # "Source: Git repository 127.0.0.1:<port>/greeter", "Revision: tag v0.1.0, which you named: …"
+check 302-git-preview.png details   # "Source: Git repository 127.0.0.1:<port>/greeter", "Revision: tag v0.1.0, which you named: …"
 "$xdotool" key Return; sleep 3   # Install; Greeter from Git is selected
 capture 303-git-installed.png
-check 303-git-installed.png 9fd8a8   # "Installed Greeter from Git"
+check 303-git-installed.png success   # "Installed Greeter from Git"
 "$xdotool" key Return; sleep 3   # open Greeter from Git
 "$xdotool" key Return; sleep 2   # "Say hello"
 capture 304-git-command-ran.png
-check 304-git-command-ran.png 9fd8a8   # "Hello from the Git repository"
+check 304-git-command-ran.png success   # "Hello from the Git repository"
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{300-git-source-only,301-git-form,302-git-preview,303-git-installed,304-git-command-ran}.png
 stop_pane
 release=$(python3 "$(dirname "$0")/repository_server.py" commit "$out/git-repositories/greeter" v0.1.0)
@@ -1470,21 +1474,21 @@ python3 "$(dirname "$0")/repository_server.py" make-sample target/guests/git/gre
 tracked=http://127.0.0.1:$(cat "$out/repository-server.port")/greeter-tracked.git
 start_pane --install "git:$tracked@release"
 "$xdotool" windowfocus --sync "$window"
-capture_until 305-git-tracked-preview.png aab4c0 60   # "Revision: branch release, tracked: an update fetches that branch again"
+capture_until 305-git-tracked-preview.png details 60   # "Revision: branch release, tracked: an update fetches that branch again"
 "$xdotool" key Return; sleep 3   # Install; Greeter from Git is selected
 capture 306-git-tracked-installed.png
-check 306-git-tracked-installed.png 9fd8a8   # "Installed Greeter from Git"
+check 306-git-tracked-installed.png success   # "Installed Greeter from Git"
 python3 "$(dirname "$0")/repository_server.py" move-sample "$out/git-repositories/greeter-tracked" 0.2.0
 stop_pane
 start_pane
 "$xdotool" windowfocus --sync "$window"
 # The check a second after the start, then the fetch and the apply: capture
 # until the status line says the update landed, whenever that is.
-capture_until 307-git-updated-automatically.png 9fd8a8 60   # "Updated Greeter from Git to 0.2.0"
+capture_until 307-git-updated-automatically.png success 60   # "Updated Greeter from Git to 0.2.0"
 "$xdotool" key Return; sleep 3   # open Greeter from Git, the new copy
 "$xdotool" key Return; sleep 2   # "Say hello"
 capture 308-git-new-copy-ran.png
-check 308-git-new-copy-ran.png 9fd8a8   # "Hello from the Git repository"
+check 308-git-new-copy-ran.png success   # "Hello from the Git repository"
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{305-git-tracked-preview,306-git-tracked-installed,307-git-updated-automatically,308-git-new-copy-ran}.png
 stop_pane
 kill "$repository_server_pid"; wait "$repository_server_pid" 2>/dev/null || true; repository_server_pid=
@@ -1542,14 +1546,14 @@ start_pane --install target/guests/packages/files
 "$xdotool" key Return; sleep 3   # open Files; "Choose folder…" is selected
 "$xdotool" key Return; sleep 2   # the folder PANE_TEST_CHOOSE_FOLDER names
 capture 220-files-folder-granted.png
-check 220-files-folder-granted.png 9fd8a8   # "Files may now list “Pane smoke files”"
+check 220-files-folder-granted.png success   # "Files may now list “Pane smoke files”"
 "$xdotool" key Escape; sleep 1
 "$xdotool" type --delay 50 'plan'; sleep 3
 capture 221-files-found.png
-check 221-files-found.png 364355 3000   # the selected file row, "Résumé plan ü.txt"
+check 221-files-found.png selected 3000   # the selected file row, "Résumé plan ü.txt"
 "$xdotool" key Return; sleep 4
 capture 222-files-opened.png
-check 222-files-opened.png 9fd8a8   # "Opened Résumé plan ü.txt"
+check 222-files-opened.png success   # "Opened Résumé plan ü.txt"
 [ -f "$out/opened-file.txt" ] || { echo "the handler for files was not asked to open anything"; exit 1; }
 # Both sides resolved, as the same file.
 [ "$(realpath "$(cat "$out/opened-file.txt")")" = "$(realpath "$files_folder/Résumé plan ü.txt")" ] || { echo "the handler for files was not asked to open the found file"; exit 1; }
@@ -1558,7 +1562,7 @@ rm -f "$out/opened-file.txt"
 "$xdotool" type --delay 50 'runner'; sleep 3
 "$xdotool" key Return; sleep 2
 capture 223-files-program-refused.png
-check 223-files-program-refused.png f08c8c   # "Could not open runner.sh: it is a program or script, ..."
+check 223-files-program-refused.png error   # "Could not open runner.sh: it is a program or script, ..."
 [ ! -e "$out/opened-file.txt" ] || { echo "the script was handed to the handler"; exit 1; }
 [ ! -e "$files_fixture/runner-ran" ] || { echo "the script ran"; exit 1; }
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{220-files-folder-granted,221-files-found,222-files-opened,223-files-program-refused}.png
@@ -1606,7 +1610,7 @@ start_pane --install target/guests/packages/sample-search
 "$xdotool" windowfocus --sync "$window"
 "$xdotool" key Return; sleep 2   # Install; Package search is selected
 capture 160-search-installed.png
-check 160-search-installed.png 9fd8a8   # "Installed Search sample"
+check 160-search-installed.png success   # "Installed Search sample"
 "$xdotool" type --delay 50 aurora; sleep 2
 capture 161-root-typed.png   # root search: "No results for “aurora”"
 if grep -q '^GET' "$service_log"; then echo "root search reached the service"; exit 1; fi
@@ -1614,36 +1618,36 @@ if grep -q '^GET' "$service_log"; then echo "root search reached the service"; e
 "$xdotool" type --delay 50 'package search'; sleep 1
 "$xdotool" key Return; sleep 3   # open Package search
 capture 162-command-opened.png   # its own list, its search field empty
-check 162-command-opened.png 364355 3000   # its first row, selected
+check 162-command-opened.png selected 3000   # its first row, selected
 "$xdotool" key Down Return; sleep 2   # Service address: its form
 "$xdotool" type --delay 20 "http://127.0.0.1:$service_port"
 "$xdotool" key Return; sleep 2   # Save
 capture 163-service-set.png   # "Searching http://127.0.0.1:<port> from now on"
-check 163-service-set.png 9fd8a8
+check 163-service-set.png success
 "$xdotool" key Escape; sleep 1   # back to the command, its search field empty
 "$xdotool" type --delay 50 aurora; sleep 3
 capture 164-search-results.png   # aurora-charts, selected, and aurora-cli
-check 164-search-results.png 364355 3000
+check 164-search-results.png selected 3000
 grep -q '^GET /search?q=aurora$' "$service_log" || { echo "the command's search did not reach the service"; exit 1; }
 "$xdotool" key Down Return; sleep 3   # aurora-cli's details
 capture 165-details.png
-check 165-details.png 9fd8a8   # "aurora-cli 0.9.3 (Apache-2.0): Command-line parsing with subcommands"
+check 165-details.png success   # "aurora-cli 0.9.3 (Apache-2.0): Command-line parsing with subcommands"
 "$xdotool" key ctrl+a; "$xdotool" type --delay 50 slow; sleep 2   # held by the service
 "$xdotool" key ctrl+a; "$xdotool" type --delay 50 ember; sleep 3
 capture 166-newer-search.png   # ember-tz, not what "slow" would list
-check 166-newer-search.png 364355 3000
+check 166-newer-search.png selected 3000
 grep -q '^ABANDONED /search?q=slow$' "$service_log" || { echo "the replaced search was not stopped"; exit 1; }
 "$xdotool" key ctrl+a; "$xdotool" type --delay 50 down; sleep 3
 capture 167-service-error.png
-check 167-service-error.png f08c8c   # "... The service answered 503: the registry is down for maintenance"
+check 167-service-error.png error   # "... The service answered 503: the registry is down for maintenance"
 stop_service
 "$xdotool" key ctrl+a; "$xdotool" type --delay 50 basalt; sleep 3
 capture 168-offline.png
-check 168-offline.png f08c8c   # "... Could not reach the service at http://127.0.0.1:<port>: connection refused"
+check 168-offline.png error   # "... Could not reach the service at http://127.0.0.1:<port>: connection refused"
 start_service 2
 "$xdotool" key ctrl+a; "$xdotool" type --delay 50 cobalt; sleep 3
 capture 169-back-online.png   # cobalt-http, selected: not paused
-check 169-back-online.png 364355 3000
+check 169-back-online.png selected 3000
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{161-root-typed,162-command-opened,163-service-set,164-search-results,165-details,166-newer-search,167-service-error,168-offline,169-back-online}.png
 stop_pane
 stop_service
@@ -1695,19 +1699,19 @@ wait_for "$extensions/installed.json" clipboard-history present; sleep 1
 copy pane-smoke-before   # while history is off
 open_history
 capture 280-clipboard-off.png
-check 280-clipboard-off.png aab4c0   # "Off · Pane keeps nothing you copy until you turn it on ..."
+check 280-clipboard-off.png subtitle   # "Off · Pane keeps nothing you copy until you turn it on ..."
 [ ! -e "$history" ] || { echo "clipboard history was kept before it was turned on"; exit 1; }
 "$xdotool" key Return   # Turn on clipboard history
 wait_for "$history" '"capture": "on"' present; sleep 1
 capture 281-clipboard-on.png
-check 281-clipboard-on.png 9fd8a8   # "Clipboard history is on"
+check 281-clipboard-on.png success   # "Clipboard history is on"
 copy pane-smoke-kept
 copy pane-smoke-second
 wait_for "$history" pane-smoke-second present
 [ "$(kept_texts)" = pane-smoke-second,pane-smoke-kept ] || { echo "kept: $(kept_texts)"; exit 1; }
 open_history
 capture 282-clipboard-kept.png
-check 282-clipboard-kept.png aab4c0   # the two kept items, newest first
+check 282-clipboard-kept.png subtitle   # the two kept items, newest first
 "$xdotool" key Return   # Pause clipboard history
 wait_for "$history" '"capture": "paused"' present
 copy pane-smoke-paused
@@ -1721,7 +1725,7 @@ open_history
 "$xdotool" key Down Down Down Down Down Down Down Down Return; sleep 1   # the second kept item, pane-smoke-second, after Pause, Turn off, Keep items for, Exclude, Clear, Turn off and delete, Delete recent and the first
 "$xdotool" key Return; sleep 2   # Copy it again, the first of its choices (#36)
 capture 283-clipboard-copied.png
-check 283-clipboard-copied.png 9fd8a8   # "Copied to the clipboard"
+check 283-clipboard-copied.png success   # "Copied to the clipboard"
 [ "$(first_kept)" = pane-smoke-second ] || { echo "the copied item did not move to the front: $(kept_texts)"; exit 1; }
 # The clipboard really holds the item again: pasting it over root search
 # shows exactly what typing it shows.
@@ -1738,7 +1742,7 @@ python3 "$(dirname "$0")/check_screenshot.py" --same "$out"/{284-clipboard-paste
 "$xdotool" key Return; sleep 2   # disable Clipboard History, the first row
 wait_for "$extensions/installed.json" '"disabled": true' present; sleep 1
 capture 286-clipboard-disabled.png
-check 286-clipboard-disabled.png 9fd8a8   # "Disabled Clipboard History"
+check 286-clipboard-disabled.png success   # "Disabled Clipboard History"
 copy pane-smoke-disabled
 not_kept pane-smoke-disabled
 stop_pane
@@ -1759,7 +1763,7 @@ copy pane-smoke-after-restart
 wait_for "$history" pane-smoke-after-restart present
 open_history
 capture 287-clipboard-after-restart.png
-check 287-clipboard-after-restart.png aab4c0   # kept again after the restart
+check 287-clipboard-after-restart.png subtitle   # kept again after the restart
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{280-clipboard-off,281-clipboard-on,282-clipboard-kept,283-clipboard-copied,284-clipboard-pasted,286-clipboard-disabled,287-clipboard-after-restart}.png
 stop_pane
 [ "$(kept_texts)" = pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-second,pane-smoke-resumed,pane-smoke-kept ] || { echo "kept: $(kept_texts)"; exit 1; }
@@ -1793,12 +1797,12 @@ sleep 1
 [ "$(kept_texts)" = pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-second,pane-smoke-resumed ] || { echo "kept after starting: $(kept_texts)"; exit 1; }
 open_history
 capture 400-clipboard-expired.png
-check 400-clipboard-expired.png aab4c0   # pane-smoke-kept is no longer listed
+check 400-clipboard-expired.png subtitle   # pane-smoke-kept is no longer listed
 "$xdotool" key Down Down Down Down Down Down Down Down Down Return; sleep 1   # pane-smoke-second: Copy it again or Delete it
 "$xdotool" key Down Return; sleep 1   # Delete it
 wait_for "$history" pane-smoke-second absent; sleep 1
 capture 401-clipboard-item-deleted.png
-check 401-clipboard-item-deleted.png 9fd8a8   # "Deleted the kept item"
+check 401-clipboard-item-deleted.png success   # "Deleted the kept item"
 [ "$(kept_texts)" = pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-resumed ] || { echo "kept: $(kept_texts)"; exit 1; }
 "$xdotool" key Escape; sleep 1   # from the item's form to the command's list
 open_history
@@ -1806,7 +1810,7 @@ open_history
 "$xdotool" key Down Return; sleep 1   # the last hour
 wait_for "$history" pane-smoke-resumed absent; sleep 1
 capture 402-clipboard-recent-deleted.png
-check 402-clipboard-recent-deleted.png 9fd8a8   # "Deleted 2 kept items"
+check 402-clipboard-recent-deleted.png success   # "Deleted 2 kept items"
 [ "$(kept_texts)" = pane-smoke-enabled ] || { echo "kept: $(kept_texts)"; exit 1; }
 "$xdotool" key Escape; sleep 1
 open_history
@@ -1814,7 +1818,7 @@ open_history
 "$xdotool" key Down Return; sleep 1   # 1 hour, the second choice
 wait_for "$history" '"retentionSeconds": 3600' present; sleep 1
 capture 403-clipboard-retention-changed.png
-check 403-clipboard-retention-changed.png 9fd8a8   # "Items are kept for 1 hour; deleted 1 older item"
+check 403-clipboard-retention-changed.png success   # "Items are kept for 1 hour; deleted 1 older item"
 [ -z "$(kept_texts)" ] || { echo "kept: $(kept_texts)"; exit 1; }
 # The retention form stays open after its choice, so one Escape returns
 # to the command's list before `copy` leaves it for root search (without
@@ -1827,7 +1831,7 @@ open_history
 "$xdotool" key Down Down Down Down Down Return; sleep 1   # Turn off and delete clipboard history
 wait_for "$history" pane-smoke-final absent; sleep 1
 capture 404-clipboard-turned-off-and-deleted.png
-check 404-clipboard-turned-off-and-deleted.png 9fd8a8   # "Clipboard history is off; deleted 1 kept item"
+check 404-clipboard-turned-off-and-deleted.png success   # "Clipboard history is off; deleted 1 kept item"
 [ -z "$(field capture)" ] || { echo "history is still $(field capture)"; exit 1; }
 # Deleting history never changes the system's clipboard: pasting what was
 # copied last into root search still shows pane-smoke-final.
@@ -1890,6 +1894,7 @@ env -i HOME="$home" PATH="/usr/bin:/bin" bash "$unpack/pane/install.sh" >>"$out/
 [ -x "$home/.local/bin/pane" ] || { echo "the install script installed no pane"; exit 1; }
 start_installed() {
   env -i HOME="$home" PATH="$clean_bin" DISPLAY="$display" \
+    PANE_THEME=dark PANE_MATERIAL=opaque \
     PANE_ARTIFACTS="http://127.0.0.1:$(cat "$out/artifact-server.port")/" \
     "$home/.local/bin/pane" "$@" 2>>"$out/installed-stderr.log" &
   pane_pid=$!
@@ -1941,18 +1946,18 @@ for default_ in calculator applications quicklinks files clipboard-history helpe
 done
 sleep 1
 capture 500-installed-root.png
-check 500-installed-root.png aab4c0   # root search: the default extensions' commands are listed
+check 500-installed-root.png subtitle   # root search: the default extensions' commands are listed
 "$xdotool" type --delay 50 '6*7'; sleep 2
 capture 501-calculator-answer.png
-check 501-calculator-answer.png 364355 3000   # "42", the calculator's selected answer row
+check 501-calculator-answer.png selected 3000   # "42", the calculator's selected answer row
 "$xdotool" key Return; sleep 1
 capture 502-calculator-copied.png
-check 502-calculator-copied.png 9fd8a8   # "Copied 42 to the clipboard"
+check 502-calculator-copied.png success   # "Copied 42 to the clipboard"
 "$xdotool" key ctrl+a; "$xdotool" type --delay 50 helper; sleep 1
 "$xdotool" key Return; sleep 2   # Helper sample
 "$xdotool" key Return; sleep 3   # "Echo through the helper"
 capture 503-helper-echoed.png
-check 503-helper-echoed.png 9fd8a8   # "Echoed \"hello from Pane\" on Linux x86-64"
+check 503-helper-echoed.png success   # "Echoed \"hello from Pane\" on Linux x86-64"
 [ -n "$(ls "$installed"/packages/*/helpers/*/pane-echo)" ] \
   || { echo "the acquired payload's helper was not installed"; exit 1; }
 [ -z "$(pgrep -f pane-echo)" ] || { echo "a helper is still running"; exit 1; }
@@ -2021,6 +2026,7 @@ update_log=$out/update-artifact-server.log
 # start_installed does for its own home.
 start_update_pane() {
   env -i HOME="$update_home" PATH="$clean_bin" DISPLAY="$display" \
+    PANE_THEME=dark PANE_MATERIAL=opaque \
     PANE_ARTIFACTS="http://127.0.0.1:$(cat "$out/update-artifact-server.port")/" \
     "$update_program" "$@" 2>>"$out/update-stderr.log" &
   pane_pid=$!
@@ -2046,10 +2052,10 @@ done
 wait_for "$update_registry" '"default": "calculator"' present 6000
 wait_for "$update_registry" '"default": "helper-sample"' present 6000
 # The check has told the user what it found; nothing has been downloaded.
-capture_until 600-notification.png 9fd8a8 30   # "Pane 99.0.0 is available" (or the setup's own outcome)
+capture_until 600-notification.png success 30   # "Pane 99.0.0 is available" (or the setup's own outcome)
 "$xdotool" key ctrl+a; "$xdotool" type --delay 50 update; sleep 1
-capture_until 601-offered.png aab4c0 30   # the offer row: "Your extensions and settings are kept; ..."
-check 601-offered.png 364355 3000   # the row, selected
+capture_until 601-offered.png subtitle 30   # the offer row: "Your extensions and settings are kept; ..."
+check 601-offered.png selected 3000   # the row, selected
 # Taking no action downloads nothing: no package was asked for.
 [ -z "$(grep "\.tar\.gz" "$update_log")" ] || { echo "a package was downloaded without the user choosing it"; exit 1; }
 
@@ -2077,7 +2083,7 @@ with open(sys.argv[1], "wb") as file:
 EOF
 "$xdotool" key ctrl+a; "$xdotool" type --delay 50 update; sleep 1
 "$xdotool" key Return
-capture_until 602-corrupt-package.png f08c8c 60   # "Could not update Pane to 99.0.0: ... does not match the sha512 integrity"
+capture_until 602-corrupt-package.png error 60   # "Could not update Pane to 99.0.0: ... does not match the sha512 integrity"
 [ ! -e "$update_home/.local/bin/pane.old" ] || { echo "a failed install replaced the program"; exit 1; }
 cmp -s "$update_program" "$unpack_old/pane/pane" || { echo "a failed install changed the program"; exit 1; }
 [ ! -e "$update_home/.local/bin/update" ] || { echo "a failed install left its staging behind"; exit 1; }
@@ -2094,7 +2100,7 @@ for _ in $(seq 1200); do
   sleep 0.2
 done
 [ -e "$update_home/.local/bin/pane.old" ] || { echo "the update was not installed"; exit 1; }
-capture_until 603-installed.png 9fd8a8 30   # "Installed Pane 99.0.0; the new version is used the next time Pane starts"
+capture_until 603-installed.png success 30   # "Installed Pane 99.0.0; the new version is used the next time Pane starts"
 cmp -s "$update_program" "$unpack_new/pane/pane" || { echo "the new program was not installed"; exit 1; }
 cmp -s "$update_home/.local/bin/pane.old" "$unpack_old/pane/pane" \
   || { echo "the old program was not kept out of the new one's way"; exit 1; }
@@ -2114,9 +2120,9 @@ start_update_pane
 for _ in $(seq 500); do [ ! -e "$update_home/.local/bin/pane.old" ] && break; sleep 0.2; done
 [ ! -e "$update_home/.local/bin/pane.old" ] || { echo "the old program's file was not removed on the new start"; exit 1; }
 "$xdotool" key ctrl+a; "$xdotool" type --delay 50 '6*7'
-capture_until 604-answer-after-update.png 364355 30   # "42", the calculator's selected answer row
+capture_until 604-answer-after-update.png selected 30   # "42", the calculator's selected answer row
 "$xdotool" key Return
-capture_until 605-copied-after-update.png 9fd8a8 10   # "Copied 42 to the clipboard"
+capture_until 605-copied-after-update.png success 10   # "Copied 42 to the clipboard"
 wait_for "$update_registry" '"disabled": true' present
 python3 "$(dirname "$0")/check_screenshot.py" --distinct \
   "$out"/{600-notification,601-offered,602-corrupt-package,603-installed,604-answer-after-update}.png

@@ -1,0 +1,4 @@
+# Preserve the authored reference byte-for-byte on Windows checkouts.
+reference/launcher.html -text
+# Keep the saved source diff directly applicable to LF source checkouts.
+glass-follow-up.patch text eol=lf

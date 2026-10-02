@@ -19,7 +19,8 @@ use gpui::{
 };
 use pane_core::{CustomViewRole, CustomViewSnapshot, Key, Point, Shape, ViewEvent, ViewId};
 
-use crate::LauncherWindow;
+use crate::app::LauncherWindow;
+use crate::ui;
 
 actions!(custom_view, [Left, Right, Up, Down, Home, End]);
 
@@ -219,9 +220,9 @@ impl LauncherWindow {
             })
             .p_1()
             .rounded_md()
-            .border_2()
-            .border_color(rgb(0x20252d))
-            .focus(|node| node.border_color(rgb(0x8ab4f8)))
+            .border_1()
+            .border_color(ui::visuals().theme.hairline)
+            .focus(|node| node.border_color(ui::visuals().theme.focus_ring))
             .child(drawing);
         // Fills the body, like the list and the form, so the status line
         // stays at the bottom.

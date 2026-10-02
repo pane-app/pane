@@ -13,6 +13,86 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Renderer tests live in the maintained fork, outside Pane's workspace.
+  # Keep this revision aligned with Pane's GPUI dependency pin. The harness
+  # uses a hidden DirectX target; it does not focus or capture the desktop.
+  windows-renderer:
+    name: Windows renderer output
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: hoangvu12/gpui-ce
+          ref: bcf3a0acd047c1873293069d0ed42085a38f699b
+          path: renderer
+          persist-credentials: false
+      - name: Install renderer test toolchain
+        run: rustup toolchain install 1.98.1 --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: renderer
+          key: windows-renderer-1.98.1
+      - name: Check source-over quad and path output
+        working-directory: renderer
+        run: cargo +1.98.1 test --locked -j1 -p gpui_ce_windows --features test-support --lib
+        env:
+          GPUI_ALPHA_OUTPUT_DIR: ${{ github.workspace }}/renderer-output
+      - name: Upload renderer output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-renderer-output
+          path: renderer-output
+          if-no-files-found: warn
+
+  macos-renderer:
+    name: macOS renderer CGColor regression
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Derive the immutable revision from Pane so this job cannot silently
+      # exercise a different renderer than the default-startup smoke.
+      - name: Read Pane's renderer pin
+        id: renderer-pin
+        shell: python
+        run: |
+          import os, pathlib, re, tomllib
+          manifest = tomllib.loads(pathlib.Path("crates/pane/Cargo.toml").read_text())
+          dependency = manifest["dependencies"]["gpui"]
+          assert dependency["git"] == "https://github.com/hoangvu12/gpui-ce"
+          revision = dependency["rev"]
+          assert re.fullmatch(r"[0-9a-f]{40}", revision), "renderer requires an exact commit"
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"revision={revision}\n")
+      - uses: actions/checkout@v4
+        with:
+          repository: hoangvu12/gpui-ce
+          ref: ${{ steps.renderer-pin.outputs.revision }}
+          path: renderer
+          persist-credentials: false
+      - name: Install renderer test toolchain
+        run: rustup toolchain install 1.98.1 --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: renderer
+          key: macos-renderer-1.98.1
+      - name: Check recursive native layer background clearing
+        working-directory: renderer
+        shell: bash
+        run: |
+          cargo +1.98.1 test --locked -j1 -p gpui_ce_macos --features font-kit --lib remove_layer_background_clears_cgcolor_recursively 2>&1 | tee renderer-test.log
+          grep -q '1 passed; 0 failed' renderer-test.log
+      - name: Upload macOS renderer result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-renderer-result
+          path: renderer/renderer-test.log
+          if-no-files-found: warn
+
   licenses:
     name: Licenses and sources
     runs-on: ubuntu-24.04
@@ -152,6 +232,8 @@ jobs:
           python-version: "3.12"
       - name: Install Pillow for screenshot checks
         run: python -m pip install pillow
+      - name: Check screenshot assertions without a desktop
+        run: python -m unittest discover -s scripts -p test_check_screenshot.py
       # The JavaScript and TypeScript development phases of each smoke
       # skip themselves here as before: this job holds no JS toolchain.
       - name: Native GUI smoke (Linux, Xvfb)
@@ -168,6 +250,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/smoke-windows.ps1 -OutDir smoke
+      - name: Native default startup regression (macOS)
+        if: runner.os == 'macOS'
+        run: bash scripts/smoke-macos-default-startup.sh smoke/default-startup
       - name: Native GUI smoke (macOS)
         if: runner.os == 'macOS'
         run: bash scripts/smoke-macos.sh smoke

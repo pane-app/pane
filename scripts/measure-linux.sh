@@ -213,7 +213,7 @@ install_package() {
 set_phase cold-start
 start_pane
 capture 1-cold-root.png
-check 1-cold-root.png 8a96a3   # the hint line: text renders
+check 1-cold-root.png hint   # the hint line: text renders
 stop_pane
 
 # 2. Warm restarts: the same data folder, still nothing installed.
@@ -251,7 +251,7 @@ set_phase calculator
 "$xdotool" windowfocus --sync "$window"
 "$xdotool" type --delay 50 '6*7'; sleep 2
 capture 4-calculator-answer.png
-check 4-calculator-answer.png 364355 3000   # the selected answer row
+check 4-calculator-answer.png selected 3000   # the selected answer row
 "$xdotool" key Return; sleep 1
 "$xdotool" key Escape; sleep 1
 for run in $(seq $((calculator_runs - 1))); do

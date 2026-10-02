@@ -50,6 +50,13 @@ fn main() {
     let preview = package_to_preview();
     gpui_platform::application().run(move |cx: &mut App| {
         pane::bind_keys(cx);
+        // The visual configuration — theme (PANE_THEME), material
+        // (PANE_MATERIAL) and the embedded Geist fonts — is chosen once,
+        // before the first window. A font failure only falls back to the
+        // system's default font.
+        if let Err(error) = pane::configure_visuals(cx) {
+            eprintln!("Pane's fonts could not be loaded: {error:#}");
+        }
         cx.on_window_closed(|cx, _| cx.quit()).detach();
         let runtime = match pane::cache_dir() {
             Some(dir) => Runtime::start_with_cache(dir),
@@ -156,17 +163,28 @@ fn main() {
         // once the window exists.
         let acquiring = launcher.clone();
         let checking = launcher.clone();
-        let bounds = Bounds::centered(None, size(px(640.), px(420.)), cx);
+        // The window is the reference's launcher panel: 760px wide,
+        // tall enough for the search header, the results and the status
+        // bar, with no native title bar drawn — the panel's own glass
+        // chrome is the whole window — and the frost material's window
+        // background (acrylic behind the glass panel, opaque otherwise).
+        let bounds = Bounds::centered(None, size(px(760.), px(460.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
+            window_background: pane::window_background(),
             titlebar: Some(TitlebarOptions {
                 title: Some("Pane".into()),
+                appears_transparent: true,
                 ..Default::default()
             }),
             ..Default::default()
         };
         let window = cx
             .open_window(options, |window, cx| {
+                // The window's own corners are rounded by the Desktop Window
+                // Manager, so nothing shows behind the panel that fills it.
+                #[cfg(target_os = "windows")]
+                pane::prefer_rounded_window_corners(window);
                 cx.new(|cx| {
                     let mut launcher = LauncherWindow::new(launcher, window, cx);
                     launcher.follow_changes(changes, window, cx);

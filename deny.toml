@@ -45,4 +45,4 @@ license-files = [{ path = "../../LICENSE", hash = 0x0 }]
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-allow-git = ["https://github.com/gpui-ce/gpui-ce", "https://github.com/schell/wgsl-rs"]
+allow-git = ["https://github.com/hoangvu12/gpui-ce", "https://github.com/schell/wgsl-rs"]

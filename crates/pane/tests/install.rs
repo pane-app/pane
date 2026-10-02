@@ -417,6 +417,12 @@ fn row_is_visible(cx: &mut VisualTestContext, element: &'static str) -> bool {
 fn a_short_confirmation_after_a_scrolled_extension_list_shows_its_first_choice(
     cx: &mut TestAppContext,
 ) {
+    for height in [420., 220.] {
+        assert_confirmation_scroll_reset(cx, height);
+    }
+}
+
+fn assert_confirmation_scroll_reset(cx: &mut TestAppContext, height: f32) {
     let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     cx.executor().allow_parking();
     cx.update(pane::bind_keys);
@@ -434,9 +440,9 @@ fn a_short_confirmation_after_a_scrolled_extension_list_shows_its_first_choice(
     }
     let (window, cx) =
         cx.add_window_view(|window, cx| LauncherWindow::new(launcher.clone(), window, cx));
-    // The size of Pane's window: the extension list of six packages
-    // overflows it.
-    cx.simulate_resize(gpui::size(gpui::px(640.), gpui::px(420.)));
+    // Both the regular and short window overflow the extension list. In
+    // the short window even the confirmation has less room than one row.
+    cx.simulate_resize(gpui::size(gpui::px(640.), gpui::px(height)));
     launcher.back();
     let manage = titles(&launcher.view())
         .iter()
@@ -477,16 +483,45 @@ fn a_short_confirmation_after_a_scrolled_extension_list_shows_its_first_choice(
     let asked = cx.update(|window, cx| window.simulate_next_frame(cx));
     assert!(asked > 0, "the window asks for a frame to scroll again");
     cx.run_until_parked();
-    // The list shows the first choice from its top (the long source paths
-    // leave the list less room than one row).
+    // Compare with this same confirmation opened in a fresh window, which
+    // has no inherited scroll offset. A row can start below the viewport's
+    // edge because of list padding; it must retain that natural position,
+    // not an offset left over from the extension list.
     let list = cx.debug_bounds("rows").expect("the list is rendered");
     let first = cx
         .debug_bounds("row-Uninstall and keep saved data")
         .expect("it is rendered");
+    if height == 220. {
+        assert!(
+            list.size.height < first.size.height,
+            "the short confirmation viewport is smaller than its first row"
+        );
+    }
+    let size = cx.update(|window, _| window.viewport_size());
+    let (fresh_window, fresh_cx) =
+        cx.add_window_view(|window, cx| LauncherWindow::new(launcher.clone(), window, cx));
+    fresh_cx.simulate_resize(size);
+    settle(&fresh_window, fresh_cx);
+    fresh_cx.update(|window, cx| window.simulate_next_frame(cx));
+    fresh_cx.run_until_parked();
+    let fresh_list = fresh_cx
+        .debug_bounds("rows")
+        .expect("the fresh list is rendered");
+    let fresh_first = fresh_cx
+        .debug_bounds("row-Uninstall and keep saved data")
+        .expect("the fresh first choice is rendered");
     assert_eq!(
-        first.top(),
-        list.top(),
-        "the selected first choice is shown from its top"
+        list.size, fresh_list.size,
+        "the confirmation viewports match"
+    );
+    assert!(
+        first.top() >= list.top(),
+        "the first choice's top is not clipped"
+    );
+    assert_eq!(
+        first.top() - list.top(),
+        fresh_first.top() - fresh_list.top(),
+        "the selected first choice has its unscrolled position"
     );
 }
 
