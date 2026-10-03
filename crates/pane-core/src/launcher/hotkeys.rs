@@ -13,6 +13,15 @@
 //! ([`Launcher::forget_hotkeys_of`]). The record is kept as the other
 //! per-command choices are (see `choices`).
 //!
+//! Beside them stands the Open Pane hotkey
+//! ([`OpenPane`](struct@OpenPane)): the application-owned binding that
+//! summons the launcher from any application. It is not a command's
+//! hotkey — it belongs to no package, stays registered while every
+//! extension is disabled and while the runtime has failed, and is
+//! recorded in the host settings (`crate::host_settings`), which the
+//! window applies through this same registration path at startup and
+//! after every change.
+//!
 //! Registering can fail when another application uses the shortcut; that is
 //! explained on the hotkey's row ("Not active: ...") and tried again with
 //! each change to the installed packages and at the next start.
@@ -111,6 +120,49 @@ impl Bindings {
             .find(|(command, chosen)| *chosen == shortcut && command.as_str() != except)
             .map(|(command, _)| command.as_str())
     }
+
+    /// The hotkey recorded for `command`, for the Shortcuts catalog.
+    pub(super) fn hotkey_of(&self, command: &str) -> Option<Shortcut> {
+        self.chosen().get(command).cloned()
+    }
+
+    /// Why the hotkey recorded for `command` could not be registered with
+    /// the system, if it could not; for the Shortcuts catalog.
+    pub(super) fn problem_of(&self, command: &str) -> Option<String> {
+        self.problems.get(command).cloned()
+    }
+
+    /// Every command id with a hotkey recorded; for the Shortcuts
+    /// catalog's rows of choices whose commands are gone.
+    pub(super) fn recorded(&self) -> Vec<&str> {
+        self.chosen().keys().map(String::as_str).collect()
+    }
+}
+
+/// The Open Pane hotkey: the application-owned binding that summons the
+/// launcher from any application, independent of every extension. The
+/// host settings hold the choice (see `crate::host_settings`); the window
+/// hands each recorded choice to the launcher, which applies it through
+/// the same registration path the command hotkeys take.
+#[derive(Default)]
+pub(super) struct OpenPane {
+    /// What is registered with the system, if anything.
+    registered: Option<Shortcut>,
+    /// Why the recorded choice is not the one registered, if it is not —
+    /// a registration the system refused, a choice it would refuse, or a
+    /// collision with a command's hotkey.
+    problem: Option<String>,
+}
+
+impl OpenPane {
+    /// Whether the command hotkey `shortcut` takes these keys from the
+    /// working Open Pane binding: a registration must not, and a command
+    /// whose recorded hotkey names them is explained instead.
+    fn taken_by(&self, shortcut: &Shortcut) -> bool {
+        self.registered
+            .as_ref()
+            .is_some_and(|open| open == shortcut)
+    }
 }
 
 /// The commands offered by enabled packages, each with why it is
@@ -141,6 +193,7 @@ impl Launcher {
                 .collect()
         };
         let bindings = &mut state.bindings;
+        let open_pane = state.open_pane.registered.clone();
         let stale: Vec<String> = bindings
             .registered
             .iter()
@@ -168,6 +221,15 @@ impl Launcher {
                 bindings
                     .problems
                     .insert(command, "another command has the same hotkey".into());
+                continue;
+            }
+            if open_pane.as_ref().is_some_and(|open| *open == shortcut) {
+                // The application's own binding keeps working: a command
+                // whose recorded hotkey names the same keys is explained,
+                // never registered over it.
+                bindings
+                    .problems
+                    .insert(command, "the Open Pane hotkey uses it".into());
                 continue;
             }
             match self.hotkeys.register(&shortcut) {
@@ -358,6 +420,13 @@ impl Launcher {
             ));
             return None;
         }
+        if state.open_pane.taken_by(&shortcut) {
+            state.view.status = Status::Error(format!(
+                "{shortcut} opens Pane itself: choose another shortcut for {title}, or change \
+                 Pane's hotkey in Settings."
+            ));
+            return None;
+        }
         let previous = state.bindings.chosen().get(&command);
         if previous == Some(&shortcut) && state.bindings.registered.contains_key(&command) {
             self.show_extensions_at_hotkey(state, &command);
@@ -445,6 +514,84 @@ impl Launcher {
         if row.is_some() {
             state.view.selected = row;
         }
+    }
+
+    /// Why the chosen Open Pane hotkey is not the one registered with the
+    /// system, if it is not — a registration the system refused, a choice
+    /// it would refuse, or a collision with a command's recorded hotkey.
+    /// The General page shows it.
+    pub fn open_pane_problem(&self) -> Option<String> {
+        self.lock().open_pane.problem.clone()
+    }
+
+    /// Whether `shortcut` is the registered Open Pane binding, as the
+    /// system reported it pressed: the window then summons, focuses or
+    /// hides the launcher instead of opening a command.
+    pub fn opens_pane(&self, shortcut: &Shortcut) -> bool {
+        self.lock().open_pane.registered.as_ref() == Some(shortcut)
+    }
+
+    /// Makes `shortcut` the Open Pane hotkey, as the user recorded it on
+    /// the General page: it is checked against the combinations the
+    /// system keeps for itself and against the command hotkeys, then
+    /// registered before the binding it replaces is released, so a
+    /// refusal leaves the previous binding working. `Err` names the
+    /// reason and changes nothing — the previous binding keeps working
+    /// and no choice is kept; the page reports the reason.
+    pub fn set_open_pane(&self, shortcut: Shortcut) -> Result<(), String> {
+        let mut state = self.lock();
+        self.assign_open_pane(&mut state, shortcut)
+    }
+
+    /// Makes the registered Open Pane binding match `chosen`, the host
+    /// settings' recorded choice: the application at startup and the
+    /// rollback after a choice that could not be saved. Unlike a change,
+    /// a choice that cannot be applied is *kept* (the record names it)
+    /// with the reason recorded as its problem, for the General page —
+    /// the last working binding still works.
+    pub fn sync_open_pane(&self, chosen: Shortcut) -> Result<(), String> {
+        let mut state = self.lock();
+        let applied = self.assign_open_pane(&mut state, chosen);
+        if let Err(reason) = &applied {
+            state.open_pane.problem = Some(reason.clone());
+        }
+        applied
+    }
+
+    /// Applies `shortcut` to the Open Pane binding's state and the system:
+    /// validate, register the new one, then release the one it replaces.
+    /// `Err` leaves the state exactly as it was.
+    fn assign_open_pane(&self, state: &mut State, shortcut: Shortcut) -> Result<(), String> {
+        if state.open_pane.registered.as_ref() == Some(&shortcut) {
+            // Already the working binding: nothing to register or release.
+            state.open_pane.problem = None;
+            return Ok(());
+        }
+        if let Some(reason) = self.hotkeys.unavailable() {
+            // Global hotkeys cannot be used here at all (Wayland, or a
+            // launcher with no adapter): the reason carries the guidance.
+            return Err(reason);
+        }
+        if let Some(refusal) = shortcut.refusal() {
+            return Err(refusal);
+        }
+        if let Some(other) = state.bindings.opened_by(&shortcut, "") {
+            let other = self.command_title(state, other);
+            return Err(format!(
+                "{shortcut} already opens {other}: remove it there first, or press another \
+                 shortcut."
+            ));
+        }
+        // The new one first, so a refusal leaves the old one working.
+        if let Err(error) = self.hotkeys.register(&shortcut) {
+            return Err(format!("{shortcut} cannot be used: {error}."));
+        }
+        let open_pane = &mut state.open_pane;
+        if let Some(old) = open_pane.registered.replace(shortcut) {
+            self.hotkeys.unregister(&old);
+        }
+        open_pane.problem = None;
+        Ok(())
     }
 }
 

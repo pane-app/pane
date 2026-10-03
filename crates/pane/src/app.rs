@@ -11,11 +11,12 @@
 use std::future::Future;
 use std::mem::{Discriminant, discriminant};
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use gpui::{
-    BoxShadow, ClipboardItem, Context, Div, FocusHandle, Hsla, KeyDownEvent, PathPromptOptions,
-    Pixels, Role, ScrollHandle, SharedString, Size, Stateful, Window, WindowControlArea, div,
-    prelude::*, px, relative,
+    App, BoxShadow, ClipboardItem, Context, Div, FocusHandle, Hsla, KeyDownEvent,
+    PathPromptOptions, Pixels, Role, ScrollHandle, SharedString, Size, Stateful, Window,
+    WindowControlArea, div, prelude::*, px, relative,
 };
 use pane_core::changes::Changes;
 use pane_core::hotkeys::Shortcut;
@@ -27,12 +28,20 @@ use crate::features::root_search;
 use crate::features::settings;
 use crate::ui::icon::{Glyph, IconTone};
 use crate::ui::keycap::{self, Key as ActionKey};
+use crate::ui::material::Material;
 use crate::ui::motion::{self, Direction};
 use crate::ui::result_row::{RowContent, result_row};
-use crate::ui::{self, material::Material};
 use crate::{Back, Confirm, FocusNext, FocusPrevious, OpenSettings, SelectNext, SelectPrevious};
 
 pub(crate) const KEY_CONTEXT: &str = "Launcher";
+
+/// How long after an accepted Open Pane press another press of the same
+/// binding is treated as the repeat of a key still held, not a new press.
+/// The Windows and X11 adapters stop the system's key repeat at its source
+/// (`MOD_NOREPEAT`, detectable auto-repeat); macOS's Carbon hot keys
+/// report a held key again, so the window keeps the guard itself. A
+/// genuine second press after this long toggles again.
+const OPEN_PANE_REPEAT: Duration = Duration::from_millis(600);
 
 /// The launcher window's root view.
 pub struct LauncherWindow {
@@ -80,6 +89,16 @@ pub struct LauncherWindow {
     /// [`LauncherWindow::drawn_view`]). Test and debug builds only.
     #[cfg(any(test, debug_assertions))]
     drawn: Option<LauncherView>,
+    /// When the Open Pane hotkey was last accepted, so the repeats of a
+    /// held key do not toggle again and again (see [`OPEN_PANE_REPEAT`]).
+    open_pane_press: Option<Instant>,
+    /// Whether the launcher window is hidden by the Open Pane hotkey —
+    /// hidden, not closed: Pane keeps running, and the next press shows
+    /// the same window and the same launcher again. Drives the toggle's
+    /// decision together with the window's focus, so what the hotkey does
+    /// is the same whatever the platform reports about a hidden window.
+    /// The test-observable copy is [`LauncherWindow::hidden`].
+    hidden: bool,
 }
 
 /// What the list was last scrolled for. When any of it changes, the list
@@ -106,6 +125,17 @@ impl LauncherWindow {
         query.focus(window, cx);
         // The footer menu's button, first of the strip's controls.
         let menu_button = cx.focus_handle().tab_stop(true);
+        // The host settings this window renders through: what the
+        // Appearance page chooses repaints this window (and the Settings
+        // window) without a restart, its background follows the material
+        // in effect, and the platform's appearance notification feeds the
+        // system's appearance back into them (see `crate::settings`).
+        crate::settings::follow(&crate::settings::ensure(cx), window, cx);
+        // The launcher this window runs owns the global-shortcut
+        // registration: the recorded Open Pane hotkey is applied to the
+        // system here, at startup, and the settings keep this launcher for
+        // every later change (see `crate::settings::attach_launcher`).
+        crate::settings::attach_launcher(&launcher, cx);
         // Quitting ends development: its watchers go and a running build
         // is stopped with the processes it started.
         cx.on_app_quit(|this: &mut Self, _| {
@@ -129,6 +159,8 @@ impl LauncherWindow {
             arriving: None,
             menu_button,
             menu: None,
+            open_pane_press: None,
+            hidden: false,
             #[cfg(any(test, debug_assertions))]
             drawn: None,
         }
@@ -158,6 +190,16 @@ impl LauncherWindow {
     #[doc(hidden)]
     pub fn view_transition(&self) -> Option<(f32, f32)> {
         self.arriving
+    }
+
+    /// Test support: whether the Open Pane hotkey has hidden the window —
+    /// the platform's own visibility is not observable from outside GPUI,
+    /// so the window reports the state it drove. Test and debug builds
+    /// only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn hidden(&self) -> bool {
+        self.hidden
     }
 
     /// Redraws whenever the launcher changes in the background, as
@@ -320,20 +362,74 @@ impl LauncherWindow {
     /// Opens the command whose global hotkey `shortcut` is, as the system
     /// reported it pressed while any application had focus: the window
     /// comes to the front and shows the command. A press that opens nothing
-    /// (a hotkey released meanwhile) leaves the window where it is.
+    /// (a hotkey released meanwhile) leaves the window where it is. The
+    /// Open Pane hotkey is not a command's: its press summons, focuses or
+    /// hides the launcher itself ([`LauncherWindow::open_pane_pressed`]).
     pub fn hotkey_pressed(
         &mut self,
         shortcut: &Shortcut,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.launcher.opens_pane(shortcut) {
+            self.open_pane_pressed(window, cx);
+            return;
+        }
         let Some(pending) = self.launcher.press_hotkey(shortcut) else {
             return;
         };
+        self.unhide(window);
         window.activate_window();
         cx.activate(true);
         self.navigation = Direction::Forward;
         self.show_until_done(pending, window, cx);
+    }
+
+    /// Shows the window if the Open Pane hotkey hid it: every activation
+    /// of the launcher — the hotkey's show path, a command's hotkey, an
+    /// entry point that reaches the launcher from Settings — must find a
+    /// visible window.
+    fn unhide(&mut self, window: &mut Window) {
+        if self.hidden {
+            window.set_visible(true);
+            self.hidden = false;
+        }
+    }
+
+    /// The Open Pane hotkey's press: hidden, the launcher is shown and its
+    /// search focused; visible but without focus (another application's,
+    /// or the Settings window's — its focus does not count), it is brought
+    /// forward; already focused, it is hidden — hidden, not closed, so
+    /// Pane keeps running in the background, the Settings window stays
+    /// open and the next press reuses the same live launcher.
+    fn open_pane_pressed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let now = cx.background_executor().now();
+        if self
+            .open_pane_press
+            .is_some_and(|last| now.duration_since(last) < OPEN_PANE_REPEAT)
+        {
+            // The repeat of a key still held, not a new press.
+            return;
+        }
+        self.open_pane_press = Some(now);
+        if !self.hidden && window.is_window_active() {
+            window.set_visible(false);
+            self.hidden = true;
+            return;
+        }
+        self.unhide(window);
+        window.activate_window();
+        cx.activate(true);
+        // The summoned launcher's search has focus: the query of the search
+        // on screen, or root search's when the launcher was left on a
+        // screen with no search of its own.
+        if self.launcher.view().search_field().is_some() {
+            self.query.focus(window, cx);
+        } else {
+            self.launcher.show_root_search();
+            self.sync_screen(window, cx);
+        }
+        cx.notify();
     }
 
     /// On the hotkey screen, a key pressed with its modifiers is the new
@@ -405,6 +501,50 @@ impl LauncherWindow {
         self.show_until_done(pending, window, cx);
     }
 
+    /// Activates the root result with `id` in this window, as clicking it
+    /// in root search does: the launcher returns to root search first,
+    /// wherever it is, this window is summoned and focused, and the result
+    /// is selected and activated through the same Enter path
+    /// ([`LauncherWindow::activate_selected`]). The Settings window's
+    /// Extensions page reaches the launcher's own install rows and a
+    /// package's commands through this, so those flows keep running where
+    /// their forms, folder pickers and key capture already live — here,
+    /// with the window they belong to in front.
+    pub(crate) fn activate_root_result(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.navigation = Direction::Forward;
+        // Root search is reached as Escape reaches it, one screen back at a
+        // time, wherever the launcher is (a form, a command, the extension
+        // list Settings entered); every `back` moves toward root search,
+        // and at root search this stops.
+        while !matches!(self.launcher.view().screen, Screen::Root { .. }) {
+            self.launcher.back();
+        }
+        self.unhide(window);
+        window.activate_window();
+        cx.activate(true);
+        let Some(index) = self
+            .launcher
+            .view()
+            .rows
+            .iter()
+            .position(|row| row.id == id)
+        else {
+            // No such root result (the row was disabled or removed since
+            // the page drew it): root search is shown, focused, which is as
+            // far as this reaches.
+            self.sync_screen(window, cx);
+            cx.notify();
+            return;
+        };
+        self.launcher.select(index);
+        self.activate_selected(window, cx);
+    }
+
     /// Shows the launcher's state now and again when `pending`, a launcher
     /// action's reply, has been applied, without blocking the window
     /// meanwhile. Each time the form's and custom view's controls follow the
@@ -468,12 +608,23 @@ impl LauncherWindow {
 
     /// Makes the form's and custom view's controls, root search's query
     /// field, and focus, follow the launcher's screen.
+    ///
+    /// This also asks every window to redraw, not only this one: the
+    /// Settings window's Extensions page reads the launcher's state — the
+    /// same records this window shows — so wherever the launcher changed
+    /// here (an operation's reply, a background change the changes channel
+    /// reported, a key this window handled), each window showing it
+    /// re-reads what it holds. A window refresh rather than a notify on
+    /// one window's view, so no window is left out; it is an effect, so it
+    /// is safe wherever the launcher changed, including from another
+    /// window's own flow.
     fn sync_screen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sync_form(window, cx);
         self.sync_custom_view(window, cx);
         // Last: coming back to root search, even as a view closes, focuses
         // the query rather than the list.
         self.sync_root_search(window, cx);
+        cx.refresh_windows();
     }
 
     fn render_row(
@@ -483,7 +634,8 @@ impl LauncherWindow {
         selected: bool,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        let theme = &ui::visuals().theme;
+        let visuals = crate::settings::visuals(cx);
+        let theme = &visuals.theme;
         let reason = row.unavailable.as_ref().map(|u| u.reason().to_owned());
         // The row's accessible description: its subtitle and, when it
         // cannot run, the reason, together.
@@ -562,7 +714,7 @@ impl LauncherWindow {
         action: &SelectedAction,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        let theme = ui::visuals().theme.clone();
+        let theme = crate::settings::visuals(cx).theme;
         let geometry = &theme.geometry;
         div()
             .id("primary-action")
@@ -662,8 +814,9 @@ impl Render for LauncherWindow {
         {
             self.arriving = arriving;
         }
-        let theme = ui::visuals().theme.clone();
-        let material = ui::visuals().material;
+        let visuals = crate::settings::visuals(cx);
+        let theme = visuals.theme;
+        let material = visuals.material;
         let empty = match &view.screen {
             Screen::Root { .. } => "No commands are installed.",
             Screen::Command | Screen::CommandSearch { .. } => "This command has no items.",
@@ -963,11 +1116,32 @@ impl Render for LauncherWindow {
     }
 }
 
+/// Tells the launcher window that the launcher changed outside its own
+/// flow — the Settings window's Extensions page drove an operation through
+/// the launcher — so it redraws with what the launcher holds: its screen
+/// may have moved under it (an open form closes when its package is
+/// disabled from Settings), and the screen sync the update runs asks
+/// every window to redraw, Settings included. Focus is not taken: the
+/// flow runs in Settings.
+pub(crate) fn launcher_changed_outside(cx: &mut App) {
+    for window in cx.windows() {
+        let Some(launcher) = window.downcast::<LauncherWindow>() else {
+            continue;
+        };
+        launcher
+            .update(cx, |this, window, cx| {
+                this.sync_screen(window, cx);
+                cx.notify();
+            })
+            .ok();
+    }
+}
+
 /// The icon presentation for a row, chosen by the row's stable id: the
 /// built-in rows and this build's sample commands are known identities,
 /// each with a reference tone and glyph; everything else is a plain
 /// command. No presentation is inferred from a title's text.
-fn row_icon(id: &str) -> Option<(IconTone, Glyph)> {
+pub(crate) fn row_icon(id: &str) -> Option<(IconTone, Glyph)> {
     match id {
         "rust-sample" => Some((IconTone::Term, Glyph::Prompt)),
         "javascript-sample" | "typescript-sample" => Some((IconTone::Code, Glyph::Code)),

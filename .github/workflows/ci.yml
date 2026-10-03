@@ -2,21 +2,19 @@ name: CI
 
 on:
   # The release matrix runs where a release is at stake: on pushes to
-  # main, when a pull request leaves draft (ready_for_review), and on
-  # demand via workflow_dispatch. Branches iterating toward a pull
-  # request take their per-push feedback from the branch tier in
-  # ci-branch.yml instead: this matrix's smoke, renderer, packaging and
-  # guests-from-source legs hold their runners for an hour or more, and
-  # paying that on every working-branch push made the milestone loop
-  # wait on release validation that only needs to happen once.
+  # main, and on demand via workflow_dispatch. Branches iterating
+  # toward a pull request take their per-push feedback from the branch
+  # tier in ci-branch.yml instead: this matrix's smoke, renderer,
+  # packaging and guests-from-source legs hold their runners for an
+  # hour or more, and paying that on every working-branch push made the
+  # milestone loop wait on release validation that only needs to
+  # happen once. A milestone's release-validation ticket (for #70, #84)
+  # is fed by the run on main when its pull request merges.
   # pi-subagent/** worktrees keep their own two-tier workflow in
   # ci-fast.yml.
   push:
     branches:
       - main
-  pull_request:
-    types:
-      - ready_for_review
   workflow_dispatch:
 
 # One run per branch: a superseded run is cancelled instead of finishing
@@ -183,6 +181,12 @@ jobs:
             .
             guests
             guests/fixtures/mixed-p2
+      # cargo-nextest, which `cargo xtask ci` runs the tests with (a
+      # flaky failure is retried, not fatal to the run); pinned to an
+      # exact version, as the licenses job pins cargo-deny.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.146
       - name: Build guests, check formatting and lints, run tests
         run: cargo xtask ci
         env:
@@ -362,8 +366,12 @@ jobs:
         run: cargo xtask js-guests
       # Also development mode's JavaScript and TypeScript builds on save
       # (crates/pane-core/tests/develop_builds.rs), which need the toolchain.
+      # cargo-nextest, as in the check job, so a flaky failure is retried.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.146
       - name: Run the tests against the rebuilt components
-        run: cargo test --locked --workspace
+        run: cargo nextest run --locked --workspace --retries 2
         env:
           PANE_TEST_JS_BUILDS: "1"
       - name: Upload the rebuilt components

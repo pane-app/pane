@@ -173,3 +173,122 @@ pub(crate) fn ranked_matches<'a>(
     matches.sort_by_key(|&(rank, _)| rank);
     matches.into_iter().map(|(_, index)| index).collect()
 }
+
+/// One entry of Pane's Settings search, as the Settings window registers
+/// it: a setting or section's title, the group the control sits in (the
+/// page's own words, such as "Theme"), and the title of the Settings page
+/// it belongs to. Matching is the same code that matches root search's
+/// results: every word of the query must appear in the title, the group
+/// or the page's title, ranked by how well the title matches and then
+/// how far out the words had to be found (see the module docs).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SettingsEntry {
+    /// The setting or section's name, as the Settings page shows it.
+    pub title: String,
+    /// The group the control sits in on its page, if it names one.
+    pub group: Option<String>,
+    /// The title of the Settings page the control sits on.
+    pub page: String,
+}
+
+/// The indices of the Settings entries that match `query`, best match
+/// first; equally good matches keep their registration order. An empty
+/// query matches every entry, in order — the Settings window decides
+/// itself what an empty query shows (its sections list), and only asks
+/// for matches to non-empty text. The window owns registration; this
+/// only matches and ranks, so a page can register controls as they
+/// appear and drop them as they go, without this code knowing pages.
+pub fn settings_matches(query: &str, entries: &[SettingsEntry]) -> Vec<usize> {
+    let keys = entries
+        .iter()
+        .map(|entry| {
+            Keys::new(
+                &entry.title,
+                entry.group.as_deref(),
+                Some(entry.page.as_str()),
+            )
+        })
+        .collect::<Vec<_>>();
+    let query = Query::new(query);
+    ranked_matches(&query, keys.iter())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SettingsEntry, settings_matches};
+
+    /// A small catalog, as the Settings window registers one.
+    fn catalog() -> Vec<SettingsEntry> {
+        [
+            (
+                "Appearance",
+                Some("Theme and material choices"),
+                "Appearance",
+            ),
+            ("System", Some("Theme"), "Appearance"),
+            ("Dark", Some("Theme"), "Appearance"),
+            ("Glass", Some("Material"), "Appearance"),
+            ("Shortcuts", Some("Aliases and hotkeys"), "Shortcuts"),
+        ]
+        .into_iter()
+        .map(|(title, group, page)| SettingsEntry {
+            title: title.into(),
+            group: group.map(str::to_owned),
+            page: page.into(),
+        })
+        .collect()
+    }
+
+    /// The titles of the catalog's entries, in registration order, for
+    /// reading the matches back.
+    const TITLES: [&str; 5] = ["Appearance", "System", "Dark", "Glass", "Shortcuts"];
+
+    /// The entries `query` matches, as their titles, in ranked order.
+    fn titles(query: &str) -> Vec<&'static str> {
+        settings_matches(query, &catalog())
+            .into_iter()
+            .map(|index| TITLES[index])
+            .collect()
+    }
+
+    #[test]
+    fn an_empty_query_matches_every_entry_in_order() {
+        assert_eq!(
+            settings_matches("", &catalog()),
+            vec![0, 1, 2, 3, 4],
+            "the window decides what an empty query shows; the core just ranks"
+        );
+        assert_eq!(
+            settings_matches("   ", &catalog()),
+            vec![0, 1, 2, 3, 4],
+            "whitespace is no query"
+        );
+    }
+
+    #[test]
+    fn the_title_ranks_before_the_group_and_the_page() {
+        // "dark" is in the Dark choice's title, so it ranks by title; the
+        // page's own entry, whose description names no darkness, does not
+        // match at all.
+        assert_eq!(titles("dark"), vec!["Dark"]);
+        // A word of the group matches beneath the title; of the page,
+        // beneath that — the same order root search's results keep.
+        assert_eq!(
+            titles("material"),
+            vec!["Appearance", "Glass"],
+            "the description of the Appearance page names the material, and so does the group"
+        );
+        assert_eq!(titles("shortcuts"), vec!["Shortcuts"]);
+        // Every word must appear somewhere: one that does not matches
+        // nothing.
+        assert!(titles("dark material").is_empty());
+    }
+
+    #[test]
+    fn every_word_may_be_found_in_a_different_place() {
+        // "dark" in the title, "theme" in the group: one result.
+        assert_eq!(titles("dark theme"), vec!["Dark"]);
+        // The page's title counts too, as a package's does in root search.
+        assert_eq!(titles("glass appearance"), vec!["Glass"]);
+    }
+}

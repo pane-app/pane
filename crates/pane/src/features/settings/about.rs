@@ -1,5 +1,5 @@
-//! The About page: the one Settings page this milestone ships, holding
-//! the real version of the running Pane and the documentation entry.
+//! The About page: the version of the running Pane and the documentation
+//! entry.
 //!
 //! Both are honest by construction: the version is
 //! [`crate::APP_VERSION`], the same value `pane --version` prints and an
@@ -9,10 +9,9 @@
 //! instance. Opening runs off the window's thread, as every link
 //! opening does, and what it reported is shown as the page's status.
 
-use gpui::{AnyElement, Context, Hsla, Role, SharedString, Window, div, prelude::*, px};
+use gpui::{AnyElement, App, Context, Hsla, Role, SharedString, Window, div, prelude::*, px};
 
-use super::{Page, SettingsWindow};
-use crate::ui;
+use super::{Page, SettingsWindow, search};
 use crate::ui::icon::{Glyph, IconTone};
 use crate::ui::result_row::{RowContent, result_row};
 
@@ -20,13 +19,40 @@ use crate::ui::result_row::{RowContent, result_row};
 /// the documentation of this build.
 const DOCUMENTATION: &str = "https://github.com/hoangvu12/pane";
 
-/// The About page, registered first in the window's page list.
+/// The target id of the documentation entry, the control the sidebar's
+/// search jumps to (see [`entries`]).
+const DOCUMENTATION_ROW: &str = "documentation";
+
+/// The About page, registered last in the window's page list: the spec's
+/// section order names it the last of the seven.
 pub(crate) fn page() -> Page {
     Page {
         title: "About",
+        about: "Pane's version, documentation and diagnostics",
         icon: (IconTone::Command, Glyph::Gear),
         render,
+        search: entries,
+        focus,
     }
+}
+
+/// The control the page offers the sidebar's search: its documentation
+/// entry. The version is information, not a control, so it is not
+/// offered as one.
+fn entries(_launcher: &pane_core::Launcher, _cx: &App) -> Vec<search::Entry> {
+    vec![search::Entry {
+        control: Some(DOCUMENTATION_ROW.into()),
+        title: "Documentation".into(),
+        group: None,
+        unavailable: None,
+    }]
+}
+
+/// The page's entry takes no keyboard focus (it is a link row, chosen
+/// with the pointer), so a jump reveals it and the sidebar keeps the
+/// focus: `false`.
+fn focus(_: &mut SettingsWindow, _: &str, _: &mut Window, _: &mut Context<SettingsWindow>) -> bool {
+    false
 }
 
 /// The About page's state, held by the window: what opening the
@@ -50,7 +76,7 @@ fn render(
     _window: &mut Window,
     cx: &mut Context<SettingsWindow>,
 ) -> AnyElement {
-    let theme = ui::visuals().theme.clone();
+    let theme = crate::settings::visuals(cx).theme;
     let typography = &theme.typography;
     let opened = this.about.opened.clone();
     div()
@@ -113,6 +139,7 @@ fn render(
             )
             .id("about-documentation")
             .debug_selector(|| "about-documentation".into())
+            .anchor_scroll(Some(this.search_anchor(DOCUMENTATION_ROW)))
             .role(Role::Link)
             .aria_label("Documentation")
             .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {

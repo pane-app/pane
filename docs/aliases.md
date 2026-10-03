@@ -3,7 +3,8 @@
 Added for [#31](https://github.com/hoangvu12/pane/issues/31): US10, US11;
 T03; contributions to G2, not claims that it passes. The user gives an
 installed command an **alias** or makes it a **fallback** in Manage
-extensions, and reaches it from [root search](root-search.md) in fewer
+extensions or in Settings' Shortcuts page — one record either way, the
+same rules — and reaches it from [root search](root-search.md) in fewer
 steps. Text typed in root search reaches a command that **takes a query**
 only when the user invokes it that way: root search never sends it while
 the user types, so no command (an online service, say) sees text meant for
@@ -26,6 +27,12 @@ alias now"). Refused, with the reason next to the field and the form kept:
 | With a space | "An alias is one word, without spaces" |
 | Over 32 characters | "An alias has at most 32 characters" |
 | Another command's, compared caselessly: NFC, then full Unicode case folding ("STRASSE" is "straße"; not locale-aware, so Turkish dotted and dotless I stay apart) | "“STRASSE” is already the alias of Greeting: change it there first, or choose another" |
+
+Settings' **Shortcuts** page gives every command the same editing in place
+of its alias: clicking the row's alias (or reaching it with Tab and Enter)
+opens a field filled with the current alias; Enter applies and records it,
+Escape cancels, and the same refusals show beside the field with it kept
+open. The page edits the same records, so nothing differs between the two.
 
 In root search, a query that is the alias, compared the same caseless way,
 lists the command first, above every other result, computed results

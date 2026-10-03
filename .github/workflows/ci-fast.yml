@@ -65,6 +65,14 @@ jobs:
         run: |
           cargo fmt --all --check
           cargo check --locked --workspace --all-targets
+      # cargo-nextest, which the [verify] tier's `cargo xtask ci` runs
+      # the tests with (a flaky failure is retried, not fatal to the
+      # run); installed only when that tier runs, as the quick tier runs
+      # no tests. Pinned to an exact version as ci.yml pins cargo-deny.
+      - uses: taiki-e/install-action@v2
+        if: ${{ contains(github.event.head_commit.message || '', '[verify]') }}
+        with:
+          tool: cargo-nextest@0.9.146
       # The verification tier: the agent asks for it by putting
       # "[verify]" in the pushed commit's message — the full check leg
       # of ci.yml (guests, clippy -D warnings, the workspace tests).

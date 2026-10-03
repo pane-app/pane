@@ -10,7 +10,12 @@
 //! - `js-guests`: rebuild the prebuilt JS/TS sample components with the pinned
 //!   toolchain in `tools/componentize-js` (prerequisites: guests/README.md),
 //!   then run `guests`.
-//! - `ci`: build guests, then check formatting, lints and tests.
+//! - `ci`: the lints of `ci-lints`, then the tests of `ci-tests`.
+//! - `ci-lints`: check formatting, the prebuilt JS/TS samples and
+//!   clippy: the half of `ci` that builds no guests and runs no tests.
+//! - `ci-tests`: build the guests, then run the workspace's tests with
+//!   cargo-nextest, which retries a failing test twice before the run
+//!   fails for it, so one flaky failure costs time, not the run.
 //! - `package-linux`: build Pane's Linux package and the artifacts its
 //!   default extensions are acquired from, under `target/dist/` (with
 //!   `--dev`, the package's program is the development profile; see
@@ -92,15 +97,16 @@ fn main() -> ExitCode {
         (Some("guests"), _) => guests(),
         (Some("js-guests"), _) => js_guests(),
         (Some("ci"), _) => ci(),
+        (Some("ci-lints"), _) => ci_lints(),
+        (Some("ci-tests"), _) => ci_tests(),
         (Some("package-linux"), Ok(version)) => package::linux(dev, version),
         (Some("package-windows"), Ok(version)) => package::windows(dev, version),
         (Some("package-macos"), Ok(version)) => package::macos(dev, version),
         (_, Err(why)) => Err(why),
-        _ => Err(
-            "usage: cargo xtask <guests|js-guests|ci|package-linux|package-windows|package-macos> \
+        _ => Err("usage: cargo xtask \
+             <guests|js-guests|ci|ci-lints|ci-tests|package-linux|package-windows|package-macos> \
              [--dev] [--package-version <version>]"
-                .into(),
-        ),
+            .into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -388,7 +394,11 @@ fn pane_js(subcommand: &str) -> Command {
     command
 }
 
-fn ci() -> Result<(), String> {
+/// The lints half of `ci`: the formatting checks, the prebuilt-samples
+/// check and clippy — everything that builds no guests and runs no
+/// tests. `ci-branch.yml` runs this as a job beside `ci-tests`, so the
+/// lints and the tests of a push finish in the time of the slower one.
+fn ci_lints() -> Result<(), String> {
     // Formatting first: it is free, so a formatting error is seen at once
     // instead of after the guests and the checks have been built.
     let root = root();
@@ -405,7 +415,6 @@ fn ci() -> Result<(), String> {
     }
     // The prebuilt JS/TS samples must match their sources and pins.
     run(&mut pane_js("check"))?;
-    guests()?;
     let clippy = [
         "clippy",
         "--locked",
@@ -419,8 +428,28 @@ fn ci() -> Result<(), String> {
     // The helper sample's native helper, an ordinary program of its own.
     run(cargo()
         .current_dir(root.join("guests/helpers/echo"))
-        .args(clippy))?;
-    run(cargo()
-        .current_dir(&root)
-        .args(["test", "--locked", "--workspace"]))
+        .args(clippy))
+}
+
+/// The tests half of `ci`: build the guests the tests use, then run the
+/// workspace's tests with cargo-nextest, which retries a failing test
+/// twice before the run fails for it, so one flaky failure costs time
+/// rather than the run. cargo-nextest runs no doc tests; this workspace
+/// has none (its documentation's code fences are `text` and `json`, not
+/// Rust), so nothing that `cargo test` ran is lost.
+fn ci_tests() -> Result<(), String> {
+    guests()?;
+    run(cargo().current_dir(root()).args([
+        "nextest",
+        "run",
+        "--locked",
+        "--workspace",
+        "--retries",
+        "2",
+    ]))
+}
+
+fn ci() -> Result<(), String> {
+    ci_lints()?;
+    ci_tests()
 }

@@ -9,11 +9,13 @@
 //! GPUI renders an SVG as an alpha mask and tints it with the element's
 //! text color, so the glyph's color always comes from the caller's token.
 //!
-//! The reference's set has no settings, menu or window-control glyph, so
-//! those are Pane's own authoring in the same stroke style: the ellipsis
-//! and gear (the Settings rows), the globe (the documentation entry) and
-//! the Windows titlebar's close, minimize and maximize marks (see the
-//! Settings window's custom titlebar).
+//! The reference's set has no settings, menu, window-control,
+//! appearance or general glyph, so those are Pane's own authoring in the
+//! same stroke style: the ellipsis and gear (the Settings rows), the
+//! globe (the documentation entry), the Windows titlebar's close,
+//! minimize and maximize marks (see the Settings window's custom
+//! titlebar), the half-and-half circle (the Appearance page) and the
+//! three sliders (the General page).
 //!
 //! Tones are the reference's `appTone` map, exactly: nine vertical
 //! gradients with their glyph colors, plus the neutral command tile.
@@ -45,6 +47,18 @@ pub(crate) enum Glyph {
     Gear,
     /// A globe: Settings' documentation entry.
     Globe,
+    /// A keyboard: the Settings window's Shortcuts section.
+    Keyboard,
+    /// A chevron pointing down: a group of rows expanded.
+    ChevronDown,
+    /// A chevron pointing right: a group of rows collapsed.
+    ChevronRight,
+    /// A circle split down the middle: the Appearance page's sidebar entry
+    /// (the two palettes its theme choice stands between).
+    Theme,
+    /// Three sliders: the General page's sidebar entry (the choices that
+    /// govern Pane as a whole).
+    Sliders,
     /// The Windows titlebar's close mark.
     #[cfg(target_os = "windows")]
     WindowClose,
@@ -69,6 +83,11 @@ impl Glyph {
             Glyph::Ellipsis => include_bytes!("../../assets/icons/ellipsis.svg"),
             Glyph::Gear => include_bytes!("../../assets/icons/gear.svg"),
             Glyph::Globe => include_bytes!("../../assets/icons/globe.svg"),
+            Glyph::Keyboard => include_bytes!("../../assets/icons/keyboard.svg"),
+            Glyph::ChevronDown => include_bytes!("../../assets/icons/chevron-down.svg"),
+            Glyph::ChevronRight => include_bytes!("../../assets/icons/chevron-right.svg"),
+            Glyph::Theme => include_bytes!("../../assets/icons/theme.svg"),
+            Glyph::Sliders => include_bytes!("../../assets/icons/sliders.svg"),
             #[cfg(target_os = "windows")]
             Glyph::WindowClose => include_bytes!("../../assets/icons/window-close.svg"),
             #[cfg(target_os = "windows")]

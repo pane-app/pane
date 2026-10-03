@@ -84,6 +84,20 @@ impl Shortcut {
         })
     }
 
+    /// The provisional Open Pane default: Ctrl+Alt+Space on Windows and
+    /// Linux, Option+Space on macOS. The parent specification records it
+    /// as a synthesis default, not a separately confirmed product
+    /// decision: it stays clear of the combinations each system keeps for
+    /// itself (the Windows key, Spotlight, the window menu) and of plain
+    /// typing, and the General page can change it.
+    pub fn open_pane_default() -> Shortcut {
+        if cfg!(target_os = "macos") {
+            Shortcut::parse("alt+space").expect("a valid default")
+        } else {
+            Shortcut::parse("ctrl+alt+space").expect("a valid default")
+        }
+    }
+
     /// Reads a shortcut as [`Shortcut::id`] writes it, such as
     /// `ctrl+alt+p`.
     pub fn parse(text: &str) -> Result<Shortcut, String> {

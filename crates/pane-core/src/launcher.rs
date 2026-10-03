@@ -75,19 +75,22 @@ mod reload;
 mod retained;
 mod schedules;
 mod services;
+mod shortcuts;
 mod uninstall;
 mod updates;
 
 use acquire::{Acquisitions, Defaults};
 use aliases::AliasChoices;
+pub use aliases::AliasOutcome;
 use application_update::{Application, Updates};
 use choices::Record;
 use developing::Developing;
 pub use developing::{BuildFailure, Development};
-use hotkeys::Bindings;
+use hotkeys::{Bindings, OpenPane};
 use pausing::{Pauses, Recorder};
 use schedules::Schedules;
 use services::Services;
+pub use shortcuts::{ShortcutCatalog, ShortcutCommand, ShortcutGroup};
 
 /// The id of the root row that installs a package from a local folder.
 const INSTALL_FROM_FOLDER: &str = "pane.install-from-folder";
@@ -648,6 +651,10 @@ struct State {
     paused: Pauses,
     /// The global hotkeys the user assigned to commands.
     bindings: Bindings,
+    /// The Open Pane hotkey: the application-owned binding the host
+    /// settings record and the window applies through the same
+    /// registration path (see [`crate::hotkeys`]).
+    open_pane: OpenPane,
     /// The aliases and fallbacks the user gave commands.
     aliases: Record<AliasChoices>,
     /// Acquiring Pane's default extensions: what the status line says of
@@ -1136,6 +1143,7 @@ impl Launcher {
             store_problem,
             paused: Pauses::default(),
             bindings,
+            open_pane: OpenPane::default(),
             aliases,
             acquisitions: Acquisitions::default(),
             updates: Updates::default(),
@@ -1416,6 +1424,29 @@ impl Launcher {
     /// The installed packages, as read from their managed copies.
     pub fn packages(&self) -> Vec<InstalledPackage> {
         self.lock().packages.clone()
+    }
+
+    /// The extension list, as "Manage extensions…" shows it: its rows and
+    /// its lines of information, read without leaving the screen the
+    /// launcher is on. The rows are the ones [`Launcher::manage_extensions`]
+    /// shows once the list is entered; a second window over the launcher
+    /// (Pane's Settings) lists the installed extensions through this before
+    /// the user opens the flow itself, so it stays a reading of the
+    /// launcher's own records rather than a copy of them.
+    pub fn extension_list(&self) -> LauncherView {
+        let state = self.lock();
+        let (rows, _) = self.extension_rows(&state);
+        let details = extension_details(&state);
+        LauncherView::new(Screen::Extensions { details }, "Extensions").with_rows(rows)
+    }
+
+    /// Whether this launcher installs packages — whether it was made with
+    /// a packages folder ([`Launcher::with_packages`]). Only such a launcher
+    /// offers the install rows in root search and the extension list's
+    /// global update choice, so a window reaching those rows through the
+    /// launcher offers them only then, as root search does.
+    pub fn installs_packages(&self) -> bool {
+        self.installation.is_some()
     }
 
     /// Test support: whether an update Pane applies by itself is
@@ -1909,6 +1940,20 @@ impl Launcher {
                 }
             }
         }
+    }
+
+    /// Shows the extension list, as activating the "Manage extensions…"
+    /// root result does, wherever the launcher now is: the same screen,
+    /// rows and operations the launcher window shows. Pane's Settings
+    /// window enters the flow through this, so both windows reach the same
+    /// operations and records — the confirmations among them — rather than
+    /// Settings growing a management flow of its own. Selecting a row and
+    /// activating it ([`Launcher::select`],
+    /// [`Launcher::activate_selected`]) drives it from there, as the
+    /// launcher window's Enter does.
+    pub fn manage_extensions(&self) {
+        let mut state = self.lock();
+        self.show_extensions(&mut state);
     }
 
     /// The selected action: what Enter, or the window's footer button, does
@@ -2818,6 +2863,15 @@ impl Launcher {
         self.show_kept_development_status(state);
     }
 
+    /// Shows root search with an empty query, leaving whatever screen is
+    /// open — the state a summoned launcher starts from, with its search
+    /// to focus. The Open Pane hotkey's show path uses this when the
+    /// launcher was left on a screen with no search of its own.
+    pub fn show_root_search(&self) {
+        let mut state = self.lock();
+        self.show_root(&mut state, None);
+    }
+
     /// Updates root search or the extension list on screen after a package
     /// changed; other screens show no package state.
     fn refresh(&self, state: &mut State) {
@@ -3229,29 +3283,7 @@ impl Launcher {
         let (rows, entries) = self.extension_rows(state);
         self.leave_command(state);
         state.entries = entries;
-        let mut details = vec![
-            "A disabled extension adds no commands and runs nothing; it keeps its settings.".into(),
-            "Reloading replaces an extension's code with its source folder's current build; it \
-             keeps its settings."
-                .into(),
-            "Clearing an extension's cache keeps its settings, content and credentials.".into(),
-            "Uninstalling an extension asks whether to keep its settings and content.".into(),
-            "An automatic update replaces an extension's copy with a compatible newer version \
-             of it, from npm, once no command of it is running; a pinned version never moves."
-                .into(),
-            format!(
-                "An extension that cannot start, or crashes or stops responding {}, is paused \
-                 until you retry it; it keeps its settings.",
-                pausing::within()
-            ),
-        ];
-        if !state.retained.is_empty() {
-            details.push(
-                "Data kept for an uninstalled extension is listed until you delete it or install \
-                 it again from the same source."
-                    .into(),
-            );
-        }
+        let details = extension_details(state);
         state.view =
             LauncherView::new(Screen::Extensions { details }, "Extensions").with_rows(rows);
         self.show_kept_development_status(state);
@@ -3981,6 +4013,38 @@ fn disabled(state: &State, component: &Path) -> String {
         Some(package) => format!("{} is disabled", package.title()),
         None => CallError::Disabled.to_string(),
     }
+}
+
+/// The extension list's lines of information: what each kind of action
+/// there does to an extension's data, and what a pause or retained data
+/// is. Read for the list itself and for
+/// [`Launcher::extension_list`], which shows the same lines without
+/// entering the list.
+fn extension_details(state: &State) -> Vec<String> {
+    let mut details = vec![
+        "A disabled extension adds no commands and runs nothing; it keeps its settings.".into(),
+        "Reloading replaces an extension's code with its source folder's current build; it \
+         keeps its settings."
+            .into(),
+        "Clearing an extension's cache keeps its settings, content and credentials.".into(),
+        "Uninstalling an extension asks whether to keep its settings and content.".into(),
+        "An automatic update replaces an extension's copy with a compatible newer version \
+         of it, from npm, once no command of it is running; a pinned version never moves."
+            .into(),
+        format!(
+            "An extension that cannot start, or crashes or stops responding {}, is paused \
+             until you retry it; it keeps its settings.",
+            pausing::within()
+        ),
+    ];
+    if !state.retained.is_empty() {
+        details.push(
+            "Data kept for an uninstalled extension is listed until you delete it or install \
+             it again from the same source."
+                .into(),
+        );
+    }
+    details
 }
 
 /// One row per installed package, saying whether it is enabled or paused

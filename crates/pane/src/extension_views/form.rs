@@ -21,7 +21,6 @@ use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged
 use pane_core::{FieldKind, FormField, FormView, Screen, Status};
 
 use crate::app::LauncherWindow;
-use crate::ui;
 use crate::ui::input::TextEditingKeys;
 
 actions!(form, [NextChoice, PreviousChoice, Press]);
@@ -187,7 +186,8 @@ impl LauncherWindow {
         };
         // The form keeps its own behavior; only its paint comes from the
         // shared theme, so it stays legible in either appearance.
-        let theme = &ui::visuals().theme;
+        let visuals = crate::settings::visuals(cx);
+        let theme = &visuals.theme;
         let fields: Vec<AnyElement> = form
             .fields
             .into_iter()
@@ -246,7 +246,8 @@ impl LauncherWindow {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let error = field.error.clone();
-        let theme = &ui::visuals().theme;
+        let visuals = crate::settings::visuals(cx);
+        let theme = &visuals.theme;
         let control = match (control, &field.kind) {
             (Control::Text(input), FieldKind::Text { placeholder }) => {
                 let placeholder = placeholder.clone().unwrap_or_default();

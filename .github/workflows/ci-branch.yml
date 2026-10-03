@@ -1,17 +1,23 @@
 name: CI (branch)
 
 # The branch tier of CI: every push to a working branch that is not
-# main and not a pi-subagent worktree runs the check leg of the release
-# matrix — build the guests, check formatting and lints, run the tests
-# — on all three operating systems. This is what an iterating branch
-# (a milestone's PR branch between merges, or any feature branch)
-# needs per push: proof that this combination compiles and passes its
-# tests, in the half hour the check legs take, instead of the hour-plus
-# that the release legs (smokes, renderers, packaging,
-# guests-from-source) need per run. Those legs live in ci.yml and run
-# where a release is at stake: on main, when a pull request is marked
-# ready for review, and on demand. pi-subagent/** worktrees keep their
-# own two-tier workflow in ci-fast.yml.
+# main and not a pi-subagent worktree is verified here. Linux runs the
+# full check leg of the release matrix as two jobs beside each other:
+# `lints` checks formatting, the prebuilt JS/TS samples and clippy
+# (`cargo xtask ci-lints`), and `tests` builds the guests and runs the
+# tests (`cargo xtask ci-tests`, under cargo-nextest, which retries a
+# flaky failure instead of failing the run for it) — so a push's wall
+# time on Linux is the slower of the two, not their sum. The other
+# operating systems run the quick compile check (formatting plus
+# `cargo check --all-targets`): one full test run per push is the
+# verification an iterating branch needs (the single-platform pattern
+# the Cargo book recommends), and the quick legs keep the
+# platform-specific compile errors caught everywhere at a fraction of
+# the cost. The full suite on every operating system still runs: at
+# the [verify] tier of ci-fast.yml on the ticket branches, and in
+# ci.yml's release matrix where a release is at stake (main, a pull
+# request marked ready for review, on demand). pi-subagent/** worktrees
+# keep their own two-tier workflow in ci-fast.yml.
 on:
   push:
     branches-ignore:
@@ -24,32 +30,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The same check job as ci.yml's, kept in step-for-step sync with it
-  # (same steps, same environment, same caches) so that a green run
-  # here means exactly what a green check leg means there.
-  check:
-    name: Check (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-2025, macos-15, ubuntu-24.04]
-    runs-on: ${{ matrix.os }}
+  # The Linux jobs match ci.yml's check job step for step (same
+  # commands, same environment, same caches) so a green Linux leg means
+  # exactly what a green check leg means there: this workflow runs the
+  # one job's `cargo xtask ci` — the lints, then the tests — as a
+  # `lints` job and a `tests` job beside each other instead, so the
+  # wall time is the slower of the two. Keep both in sync with those
+  # workflows; the other legs match ci-fast's quick tier.
+  lints:
+    name: Lints (Linux)
+    runs-on: ubuntu-24.04
     env:
-      # The many test binaries each link Pane's whole dependency tree, so
-      # the Linux legs link them with mold (Windows and macOS link with
-      # their own linkers; the empty value keeps the cache key uniform
-      # per operating system). The flag is scoped to the host triple, never
-      # RUSTFLAGS: a job-wide RUSTFLAGS would also reach the wasm32-wasip2
-      # guest builds, whose wasm-component-ld rejects native linker flags
-      # (run 36789533844 failed on "unexpected argument '-f' found"). The
-      # matrix is what a job-level env may read: the runner context exists
-      # only inside a step; and on the other legs the triple never builds,
-      # so the variable is inert there whatever it holds.
-      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ${{ matrix.os == 'ubuntu-24.04' && '-C link-arg=-fuse-ld=mold' || '' }}
+      # As in ci.yml's check job: host-triple-scoped, never RUSTFLAGS
+      # (a job-wide RUSTFLAGS would also reach the wasm32-wasip2 guest
+      # builds, whose wasm-component-ld rejects native linker flags;
+      # run 36789533844 failed on "unexpected argument '-f' found").
+      # Kept on this job so both Linux jobs carry the check leg's
+      # environment, though fmt and clippy link nothing.
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux build dependencies
-        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
@@ -63,21 +64,86 @@ jobs:
             .
             guests
             guests/fixtures/mixed-p2
-      - name: Build guests, check formatting and lints, run tests
-        run: cargo xtask ci
-        env:
-          # The Windows and macOS clipboard adapters' tests replace what is
-          # on the clipboard, so they run only where this is set: on CI's
-          # runners (the macOS one has the runner's logged-in WindowServer
-          # session, so the pasteboard is live), never by default on a
-          # developer's computer.
-          PANE_TEST_REAL_CLIPBOARD: ${{ runner.os != 'Linux' && '1' || '' }}
-      # The Linux (X11) clipboard adapter's test also replaces what is on
-      # the clipboard, and needs a display to watch: the same opt-in, run
-      # under Xvfb (the step above runs without a display, so the test
-      # skips itself there).
+      - name: Check formatting, prebuilt samples and lints
+        run: cargo xtask ci-lints
+  tests:
+    name: Tests (Linux)
+    runs-on: ubuntu-24.04
+    env:
+      # As in ci.yml's check job: the many test binaries each link
+      # Pane's whole dependency tree, so they link with mold. The flag
+      # is scoped to the host triple, never RUSTFLAGS: a job-wide
+      # RUSTFLAGS would also reach the wasm32-wasip2 guest builds this
+      # job makes, whose wasm-component-ld rejects native linker flags
+      # (run 36789533844 failed on "unexpected argument '-f' found").
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libxcb1-dev libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers \
+            xvfb xdotool imagemagick mold
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            guests
+            guests/fixtures/mixed-p2
+      # cargo-nextest, which `cargo xtask ci-tests` runs the tests with
+      # (a flaky failure is retried, not fatal to the run); pinned to
+      # an exact version as ci.yml pins cargo-deny.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.146
+      # The Linux tests run without the real-clipboard opt-in (as they
+      # always did on this leg); the one Linux adapter test that needs
+      # it runs under Xvfb below.
+      - name: Build guests and run tests
+        run: cargo xtask ci-tests
       - name: Run the Linux clipboard adapter test (Xvfb)
-        if: runner.os == 'Linux'
         run: xvfb-run -a cargo test --locked -p pane-core --test clipboard_adapter_linux
         env:
           PANE_TEST_REAL_CLIPBOARD: "1"
+  # The quick compile check on the other operating systems, the same
+  # commands as ci-fast's quick tier: `cargo check --all-targets`
+  # type-checks the workspace's libraries, binaries, tests and
+  # examples without codegen or linking, so the platform-specific
+  # compile errors (the cfg-gating class) are caught on every
+  # operating system in minutes.
+  check:
+    name: Check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    env:
+      # The many test binaries each link Pane's whole dependency tree, so
+      # the Linux legs link them with mold (Windows and macOS link with
+      # their own linkers; the empty value keeps the cache key uniform
+      # per operating system). The flag is scoped to the host triple, never
+      # RUSTFLAGS: a job-wide RUSTFLAGS would also reach the wasm32-wasip2
+      # guest builds, whose wasm-component-ld rejects native linker flags
+      # (run 36789533844 failed on "unexpected argument '-f' found"). The
+      # matrix is what a job-level env may read: the runner context exists
+      # only inside a step; and on these legs the triple never builds, so
+      # the variable is inert there whatever it holds.
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ${{ matrix.os == 'ubuntu-24.04' && '-C link-arg=-fuse-ld=mold' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            guests
+            guests/fixtures/mixed-p2
+      - name: Quick compile check
+        run: |
+          cargo fmt --all --check
+          cargo check --locked --workspace --all-targets

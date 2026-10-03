@@ -4,6 +4,7 @@
 mod application_update;
 pub mod applications;
 mod atomic;
+pub mod autostart;
 pub mod changes;
 pub mod clipboard;
 pub mod defaults;
@@ -15,6 +16,7 @@ pub mod files;
 mod generation;
 pub mod git;
 mod helpers;
+mod host_settings;
 pub mod hotkeys;
 mod http;
 mod launcher;
@@ -32,11 +34,13 @@ mod zip;
 
 pub use defaults::{ArtifactSource, DefaultExtension};
 pub use helpers::runner::{HELPER_TIME_LIMIT, MAX_HELPER_INPUT, MAX_HELPER_OUTPUT};
+pub use host_settings::{HostSettings, MaterialPreference, ThemePreference};
 #[doc(hidden)]
 pub use http::HttpLimits;
 pub use launcher::{
-    BuildFailure, CommandRegistration, CustomViewSnapshot, Development, FormField, FormView,
-    Launcher, LauncherView, Question, Row, Screen, SelectedAction, Status, Unavailable,
+    AliasOutcome, BuildFailure, CommandRegistration, CustomViewSnapshot, Development, FormField,
+    FormView, Launcher, LauncherView, Question, Row, Screen, SelectedAction, ShortcutCatalog,
+    ShortcutCommand, ShortcutGroup, Status, Unavailable,
 };
 pub use links::LinkOpener;
 pub use operations::{MAX_CALL_DEPTH, MAX_OPERATION_JSON};
@@ -58,3 +62,4 @@ pub use runtime::{
     Rgb, Runtime, RuntimeFailure, RuntimeStatus, Shape, UNRESPONSIVE_LIMIT, View, ViewEvent,
     ViewId, WARN_AFTER,
 };
+pub use search::{SettingsEntry, settings_matches};

@@ -5,21 +5,32 @@
 //!
 //! The window shares the launcher's own handle — the same
 //! [`pane_core::Launcher`] the launcher window holds — so Settings runs
-//! no second extension runtime and duplicates no launcher state. Its
-//! shell is the reference's Settings composition: the frost panel with
-//! the custom titlebar where the platform hides its own (macOS's traffic
-//! lights, Windows's caption buttons; Linux keeps the window manager's
-//! frame), a sidebar of sections, and the selected page's content.
+//! no second extension runtime and duplicates no launcher state. The two
+//! windows also share the host settings (`crate::settings`): what the
+//! Appearance page chooses repaints both, without a restart, and what the
+//! General page chooses — today, the Open Pane hotkey and whether Pane
+//! starts at login — reaches the platform through the same entity. Its shell is
+//! the reference's Settings composition: the frost panel with the custom
+//! titlebar where the platform hides its own (macOS's traffic lights,
+//! Windows's caption buttons; Linux keeps the window manager's frame), a
+//! sidebar of sections with the search field above them ([`search`]),
+//! and the selected page's content.
 //!
 //! ## Page registration
 //!
-//! A page is one [`Page`]: its sidebar entry (id, title, icon) and a
-//! function that draws its content, registered by pushing it in
+//! A page is one [`Page`]: its sidebar entry (title, description, icon),
+//! a function that draws its content, the settings it offers the
+//! sidebar's search (see [`search`]), and the focus it gives a control
+//! the search jumps to — registered by pushing it in
 //! [`SettingsWindow::new`]. Later pages add their module under
 //! `settings/` and one line there — no empty feature folder, no new
 //! framework — and the sidebar lists only registered pages, so no
-//! section ships as a placeholder. A page's state lives in its module,
-//! held by the window as a field.
+//! section ships as a placeholder. The Appearance and General pages'
+//! choices live in
+//! the shared host settings rather than the window, since the launcher
+//! window renders by them too (and the platform's login registration
+//! outlives any window); a page whose state is the window's own
+//! lives in its module, held by the window as a field.
 
 use gpui::{
     AnyElement, App, Bounds, Context, Div, FocusHandle, KeyBinding, Role, Stateful,
@@ -40,8 +51,14 @@ use crate::ui::icon::{Glyph, IconTone};
 #[cfg(target_os = "windows")]
 use crate::ui::icon::glyph;
 use crate::ui::result_row::{RowContent, result_row};
+use crate::{FocusNext, FocusPrevious};
 
 mod about;
+mod appearance;
+mod extensions;
+mod general;
+mod search;
+mod shortcuts;
 
 actions!(settings, [NextSection, PreviousSection]);
 
@@ -50,15 +67,24 @@ actions!(settings, [NextSection, PreviousSection]);
 const CONTEXT: &str = "Settings";
 
 /// Registers the Settings window's key bindings: the sidebar's navigation
-/// keys, which apply only while the Settings window is focused. Enter is
-/// left unbound: the sidebar's selection already shows the page Enter
-/// would choose, so the key does nothing, and later pages' controls bind
-/// it for their own submitting.
+/// keys and the window's focus traversal, which apply only while the
+/// Settings window is focused. Enter is left unbound: the sidebar's
+/// selection already shows the page Enter would choose, so the key does
+/// nothing, and later pages' controls bind it for their own submitting.
 pub(crate) fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("down", NextSection, Some(CONTEXT)),
         KeyBinding::new("up", PreviousSection, Some(CONTEXT)),
+        // Tab and Shift-Tab move through the pages' controls, as the
+        // launcher window's do through its: the pages' fields and buttons
+        // are tab stops (the Shortcuts page's filter, group headers and
+        // alias cells among them).
+        KeyBinding::new("tab", FocusNext, Some(CONTEXT)),
+        KeyBinding::new("shift-tab", FocusPrevious, Some(CONTEXT)),
     ]);
+    general::bind_keys(cx);
+    search::bind_keys(cx);
+    shortcuts::bind_keys(cx);
 }
 
 /// The Settings window's root view. One instance exists at most — see
@@ -76,6 +102,12 @@ pub struct SettingsWindow {
     focus: FocusHandle,
     /// The About page's state, owned by its module.
     about: about::State,
+    /// The General page's state, owned by its module.
+    general: general::State,
+    /// The Shortcuts page's state, owned by its module.
+    shortcuts: shortcuts::State,
+    /// The sidebar's search, owned by its module.
+    search: search::State,
 }
 
 impl SettingsWindow {
@@ -84,18 +116,66 @@ impl SettingsWindow {
     fn new(launcher: &Launcher, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle().tab_stop(true);
         window.focus(&focus, cx);
+        // The host settings this window renders through — the Appearance
+        // page is one of its windows' shared consumers: what it chooses
+        // repaints this window and the launcher without a restart, and
+        // the platform's appearance notification feeds the system's
+        // appearance back into them (see `crate::settings`).
+        crate::settings::follow(&crate::settings::ensure(cx), window, cx);
+        // The Shortcuts page lists the launcher's commands, and the
+        // launcher's packages can change while this window sits idle:
+        // installed, disabled, enabled, updated or removed in the
+        // launcher window, or in the background. Nothing tells this
+        // window, so while it is open a small watcher wakes at
+        // `shortcuts::WATCH`, compares the catalog the page last drew with
+        // a fresh one and asks for a redraw when they differ — the next
+        // frame draws the launcher as it is now. It ends with the window.
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(shortcuts::WATCH).await;
+                if this
+                    .update(cx, |window, cx| {
+                        window.shortcuts_watched(cx);
+                        window.search_watched(cx);
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
         SettingsWindow {
             launcher: launcher.clone(),
-            pages: vec![about::page()],
+            // The sidebar's order: the sections the reference lists
+            // (General, Launcher, Appearance, Shortcuts, Keyboard,
+            // Extensions), About last. Of those, this milestone ships
+            // General, Appearance, Shortcuts and Extensions; General —
+            // the Open Pane hotkey and the launch-at-login choice — is
+            // the page the window first shows, and the later tickets'
+            // pages take their places in this order as they land.
+            pages: vec![
+                general::page(),
+                appearance::page(),
+                shortcuts::page(),
+                extensions::page(),
+                about::page(),
+            ],
             selected: 0,
             focus,
             about: about::State::default(),
+            general: general::State::new(cx),
+            shortcuts: shortcuts::State::new(launcher, cx),
+            search: search::State::new(cx),
         }
     }
 
     fn next_section(&mut self, _: &NextSection, _: &mut Window, cx: &mut Context<Self>) {
         if self.selected + 1 < self.pages.len() {
             self.selected += 1;
+            // Page navigation leaves the search: a query showing clears,
+            // so the sidebar returns to the sections as the page changes.
+            self.clear_search(cx);
             cx.notify();
         }
     }
@@ -103,17 +183,71 @@ impl SettingsWindow {
     fn previous_section(&mut self, _: &PreviousSection, _: &mut Window, cx: &mut Context<Self>) {
         if self.selected > 0 {
             self.selected -= 1;
+            // As the sections' Down key does.
+            self.clear_search(cx);
             cx.notify();
         }
     }
 
-    /// The sidebar: the sections list, one row per registered page. It is
-    /// the window's keyboard focus, so its keys (see [`bind_keys`]) drive
-    /// the window.
-    fn render_sidebar(&self, theme: &ui::theme::Theme, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn focus_next(&mut self, _: &FocusNext, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus_next(cx);
+    }
+
+    fn focus_previous(&mut self, _: &FocusPrevious, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus_prev(cx);
+    }
+
+    /// The sidebar: the search field, then the sections list — or, while
+    /// a query shows, the search's results (see the search module's
+    /// docs). The list is the window's keyboard focus, so its keys (see
+    /// [`bind_keys`]) drive the window.
+    fn render_sidebar(&self, theme: &ui::theme::Theme, cx: &mut Context<Self>) -> Div {
+        // While a query shows, the list is the search's results; the
+        // search module builds those rows (or its no-results line).
+        let searching = self.search.searching(cx);
+        let rows: Vec<AnyElement> = if searching {
+            search::result_rows(self, theme, cx)
+        } else {
+            self.pages
+                .iter()
+                .enumerate()
+                .map(|(index, page)| {
+                    let selected = index == self.selected;
+                    // Presentation only: the shared row paints the chrome, and
+                    // the identity, accessibility and click behavior are
+                    // attached here.
+                    result_row(
+                        RowContent {
+                            title: page.title.into(),
+                            subtitle: None,
+                            unavailable_reason: None,
+                            unavailable_id: ("section-unavailable", index).into(),
+                            selected,
+                            icon: Some(page.icon),
+                        },
+                        theme,
+                    )
+                    .id(("section", index))
+                    .debug_selector(move || format!("section-{}", page.title))
+                    .role(Role::ListBoxOption)
+                    .aria_label(page.title)
+                    .aria_selected(selected)
+                    .when(selected, |row| row.aria_active_descendant())
+                    .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                        if this.selected != index {
+                            this.selected = index;
+                            // Choosing a section is page navigation: any
+                            // query showing clears, as the sections' keys
+                            // also do.
+                            this.clear_search(cx);
+                            cx.notify();
+                        }
+                    }))
+                    .into_any_element()
+                })
+                .collect()
+        };
         div()
-            .id("sections")
-            .debug_selector(|| "sections".into())
             .flex_none()
             .w(px(200.))
             .h_full()
@@ -123,49 +257,43 @@ impl SettingsWindow {
             .gap(px(2.))
             .border_r_1()
             .border_color(theme.hairline_soft)
-            .track_focus(&self.focus)
-            .role(Role::ListBox)
-            .aria_label("Settings sections")
-            .on_action(cx.listener(Self::next_section))
-            .on_action(cx.listener(Self::previous_section))
-            .children(self.pages.iter().enumerate().map(|(index, page)| {
-                let selected = index == self.selected;
-                // Presentation only: the shared row paints the chrome, and
-                // the identity, accessibility and click behavior are
-                // attached here.
-                result_row(
-                    RowContent {
-                        title: page.title.into(),
-                        subtitle: None,
-                        unavailable_reason: None,
-                        unavailable_id: ("section-unavailable", index).into(),
-                        selected,
-                        icon: Some(page.icon),
-                    },
-                    theme,
-                )
-                .id(("section", index))
-                .debug_selector(move || format!("section-{}", page.title))
-                .role(Role::ListBoxOption)
-                .aria_label(page.title)
-                .aria_selected(selected)
-                .when(selected, |row| row.aria_active_descendant())
-                .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                    if this.selected != index {
-                        this.selected = index;
-                        cx.notify();
-                    }
-                }))
-            }))
+            .child(search::field(self, theme, cx))
+            .child(
+                div()
+                    .id("sections")
+                    .debug_selector(|| "sections".into())
+                    .flex_1()
+                    .min_h(px(0.))
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .track_focus(&self.focus)
+                    .role(Role::ListBox)
+                    .aria_label(if searching {
+                        "Settings search results"
+                    } else {
+                        "Settings sections"
+                    })
+                    .on_action(cx.listener(Self::next_section))
+                    .on_action(cx.listener(Self::previous_section))
+                    .children(rows),
+            )
     }
 
     /// The selected page's content, scrolling when the window is short.
+    /// The scroll container is tracked by the search's handle, and the
+    /// controls' scroll anchors are the ones the page about to draw
+    /// registers — cleared here, filled by the page's render — so a
+    /// search reveal only ever scrolls a control on the page now
+    /// showing.
     fn render_page(
         &mut self,
         theme: &ui::theme::Theme,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
+        self.search.clear_anchors();
         let render = self.pages[self.selected].render;
         let content = render(self, window, cx);
         div()
@@ -175,6 +303,7 @@ impl SettingsWindow {
             .min_w(px(0.))
             .h_full()
             .overflow_y_scroll()
+            .track_scroll(self.search.scroll())
             .px(px(28.))
             .py(px(20.))
             .text_size(theme.typography.row_subtitle_size)
@@ -185,13 +314,23 @@ impl SettingsWindow {
 
 impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = ui::visuals().theme.clone();
-        let material = ui::visuals().material;
+        // The search's results follow the query and the registered
+        // settings as they stand: recomputed here, every frame, so what
+        // the sidebar lists and what its keys act on are the same — and
+        // a change anywhere (typing, a package the launcher window
+        // installed, the host settings) is what the next frame shows.
+        self.search.refresh(&self.launcher, &self.pages, cx);
+        let visuals = crate::settings::visuals(cx);
+        let theme = visuals.theme;
+        let material = visuals.material;
         // The content: the shared Geist family and base text color on
         // everything, the custom titlebar where the platform's is hidden,
         // then the sidebar and the selected page.
         let content = div()
             .key_context(CONTEXT)
+            .on_action(cx.listener(Self::focus_next))
+            .on_action(cx.listener(Self::focus_previous))
+            .on_action(cx.listener(Self::search_focus))
             .size_full()
             .flex()
             .flex_col()
@@ -363,7 +502,7 @@ pub(crate) fn open(launcher: &Launcher, cx: &mut App) -> WindowHandle<SettingsWi
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         window_min_size: Some(size(px(560.), px(400.))),
-        window_background: crate::window_background(),
+        window_background: crate::settings::window_background(cx),
         titlebar: Some(TitlebarOptions {
             title: Some("Settings".into()),
             appears_transparent: true,
@@ -397,10 +536,23 @@ pub(crate) struct Page {
     /// The sidebar entry's title, the page's identity in the sidebar and
     /// the tests' selectors.
     pub(crate) title: &'static str,
+    /// What the page is, in one line: the description its entry in the
+    /// sidebar's search carries, matched beside the page's title.
+    pub(crate) about: &'static str,
     /// The icon the sidebar entry shows.
     pub(crate) icon: (IconTone, Glyph),
     /// Draws the page's content into the page area; the window hands
     /// itself over, since a page's state lives in its module, held by the
     /// window as a field.
     render: fn(&mut SettingsWindow, &mut Window, &mut Context<SettingsWindow>) -> AnyElement,
+    /// The settings and controls the page offers the sidebar's search,
+    /// read live: a control that appears or goes on the page is in or out
+    /// of the search with it. See [`search::Entry`].
+    search: fn(&Launcher, &App) -> Vec<search::Entry>,
+    /// Focuses the control `target` when the search jumps to it: a
+    /// control that takes keyboard focus focuses it and returns true;
+    /// one that takes none — or no longer exists — returns false, and the
+    /// reveal scrolls it into view where it drew while the sidebar keeps
+    /// the window's keyboard focus.
+    focus: fn(&mut SettingsWindow, &str, &mut Window, &mut Context<SettingsWindow>) -> bool,
 }

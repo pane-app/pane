@@ -6,33 +6,59 @@ to the working launcher. The [presentation ownership](launcher-presentation.md)
 from #62 is kept: the app supplies identities and behavior; shared UI owns
 colors, type, geometry, row chrome, glyphs and surfaces.
 
-## Select appearance at startup
+## Choosing the appearance
 
-From PowerShell, start a fresh process for each selection:
+Pane's appearance is the user's choice, made on the Settings window's
+Appearance page ([#73](https://github.com/hoangvu12/pane/issues/73)):
+the theme (system, light or dark) and the material (glass or solid), each
+shown with a live preview and each taking effect in the launcher and the
+Settings window the moment it is chosen — no restart. The choice is kept
+in `settings.json` in Pane's data folder (versioned, validated, written
+atomically, beside — never inside — the extensions' own records), a fresh
+start reloads the last choice a save actually wrote, and a save that
+fails is reported while the page falls back to what was saved. A record
+that cannot be read is never replaced: its data stays for diagnosis.
+
+The *system* theme follows the operating system's appearance, and the
+windows re-render when the OS switches between light and dark — GPUI
+delivers the platform's notification on Windows (the `ImmersiveColorSet`
+change), macOS, X11 and Wayland. On macOS the platform's own titlebar and
+window edges follow the theme as well: forced light or dark where the
+preference forces one, the system's own where the preference follows it.
+
+Development overrides remain, for driving a specific appearance through
+a test or a smoke run:
 
 ```powershell
-$env:PANE_THEME = 'dark'       # dark or light
-$env:PANE_MATERIAL = 'opaque' # deterministic solid surface
+$env:PANE_THEME = 'dark'       # system, dark or light
+$env:PANE_MATERIAL = 'opaque'  # glass or opaque
 cargo run -p pane --locked
 ```
 
-Use `PANE_THEME=light` for the derived light palette. This slice defaults to
-dark/glass; absent or unknown values use those defaults. Configuration is
-read once before window creation, with no persistent preference or settings
-screen. The retained `PANE_MATERIAL=glass` path requests desktop composition
-on Windows/macOS and normalizes to opaque on Linux. On Windows, startup reads
-the OS build, [transparency setting](https://learn.microsoft.com/en-us/uwp/api/windows.ui.viewmanagement.uisettings.advancedeffectsenabled)
-and [high-contrast setting](https://learn.microsoft.com/en-us/uwp/api/windows.ui.viewmanagement.accessibilitysettings.highcontrast).
-Builds below 17763, disabled transparency, enabled high contrast, or a failed
-settings/version query select an opaque window and solid panel. Nothing changes
-system settings. Restart Pane after changing a setting; appearance is fixed for
-the process. Opaque validation does not require transparency to be enabled.
+An explicit `PANE_THEME`/`PANE_MATERIAL` wins for that process: the
+Settings window's Appearance page says it is in force, offers no choices
+while it is (nothing chosen there applies), and never writes it back as
+the saved preference. Unknown or missing values override nothing. The
+product default — no record, no override — is the reference's
+dark/glass.
 
-These checks reveal suppression preferences, not successful compositor output.
-GPUI exposes no reliable visible-blur query. A driver/compositor failure after
-the startup checks may leave the tint without blur; choose `opaque` for a
-deterministic solid surface. Native glass evidence and remaining Windows
-conditions are recorded in [the validation report](launcher-ui-validation.md).
+The retained `PANE_MATERIAL=glass` path requests desktop composition on
+Windows/macOS and normalizes to opaque on Linux; the Appearance page says
+so under the material choice where it happens. On Windows, the material's
+construction reads the OS build, [transparency setting](https://learn.microsoft.com/en-us/uwp/api/windows.ui.viewmanagement.uisettings.advancedeffectsenabled)
+and [high-contrast setting](https://learn.microsoft.com/en-us/uwp/api/windows.ui.viewmanagement.accessibilitysettings.highcontrast).
+Builds below 17763, disabled transparency, enabled high contrast, or a
+failed settings/version query select an opaque window and solid panel.
+Nothing changes system settings. Opaque validation does not require
+transparency to be enabled.
+
+These checks reveal suppression preferences, not successful compositor
+output. GPUI exposes no reliable visible-blur query. A driver/compositor
+failure after the checks may leave the tint without blur; the page says a
+glass request is not proof of blur, and choosing the solid surface gives
+a deterministic panel everywhere. Native glass evidence and remaining
+Windows conditions are recorded in [the validation report](launcher-ui-validation.md)
+and [the Settings appearance validation plan](evidence/settings-73/native-validation.md).
 
 ## Visual behavior
 

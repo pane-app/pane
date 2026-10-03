@@ -260,8 +260,9 @@ impl LauncherWindow {
         menu: &FooterMenu,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let theme = ui::visuals().theme.clone();
-        let material = ui::visuals().material;
+        let visuals = crate::settings::visuals(cx);
+        let theme = visuals.theme;
+        let material = visuals.material;
         let geometry = &theme.geometry;
         let selected = menu.selected;
         let list = div()

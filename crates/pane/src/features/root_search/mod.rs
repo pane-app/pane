@@ -30,7 +30,6 @@ use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged
 use crate::app::LauncherWindow;
 use crate::ui::icon::{Glyph, glyph};
 use crate::ui::input::TextEditingKeys;
-use crate::ui::{self};
 use crate::{SelectNext, SelectPrevious};
 
 const CONTEXT: &str = "RootSearch";
@@ -147,7 +146,8 @@ impl LauncherWindow {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let input = &self.query.input;
-        let theme = &ui::visuals().theme;
+        let visuals = crate::settings::visuals(cx);
+        let theme = &visuals.theme;
         let geometry = &theme.geometry;
         let typography = &theme.typography;
         div()

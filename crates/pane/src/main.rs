@@ -50,10 +50,11 @@ fn main() {
     let preview = package_to_preview();
     gpui_platform::application().run(move |cx: &mut App| {
         pane::bind_keys(cx);
-        // The visual configuration — theme (PANE_THEME), material
-        // (PANE_MATERIAL) and the embedded Geist fonts — is chosen once,
-        // before the first window. A font failure only falls back to the
-        // system's default font.
+        // Pane's own settings — the appearance preferences recorded in
+        // settings.json, with the PANE_THEME/PANE_MATERIAL development
+        // overrides winning for this process — and the embedded Geist
+        // fonts. A font failure only falls back to the system's default
+        // font.
         if let Err(error) = pane::configure_visuals(cx) {
             eprintln!("Pane's fonts could not be loaded: {error:#}");
         }
@@ -176,7 +177,7 @@ fn main() {
         let bounds = Bounds::centered(None, size(px(760.), px(460.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
-            window_background: pane::window_background(),
+            window_background: pane::window_background(cx),
             titlebar: Some(TitlebarOptions {
                 title: Some("Pane".into()),
                 appears_transparent: true,

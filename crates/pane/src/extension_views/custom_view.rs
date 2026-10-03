@@ -20,7 +20,6 @@ use gpui::{
 use pane_core::{CustomViewRole, CustomViewSnapshot, Key, Point, Shape, ViewEvent, ViewId};
 
 use crate::app::LauncherWindow;
-use crate::ui;
 
 actions!(custom_view, [Left, Right, Up, Down, Home, End]);
 
@@ -146,6 +145,7 @@ impl LauncherWindow {
         let focus = controls.focus.clone();
         let entity = cx.entity().downgrade();
         let (moved, released) = (entity.clone(), entity);
+        let visuals = crate::settings::visuals(cx);
         let drawing = div()
             .debug_selector(|| "custom-view".into())
             .relative()
@@ -221,8 +221,8 @@ impl LauncherWindow {
             .p_1()
             .rounded_md()
             .border_1()
-            .border_color(ui::visuals().theme.hairline)
-            .focus(|node| node.border_color(ui::visuals().theme.focus_ring))
+            .border_color(visuals.theme.hairline)
+            .focus(|node| node.border_color(visuals.theme.focus_ring))
             .child(drawing);
         // Fills the body, like the list and the form, so the status line
         // stays at the bottom.

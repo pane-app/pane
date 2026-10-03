@@ -126,9 +126,13 @@ fn pressing_keys_on_the_hotkey_screen_assigns_them_and_the_hotkey_opens_the_comm
         Status::Result(format!("{shortcut} now opens Say hello"))
     );
     assert!(matches!(view.screen, Screen::Extensions { .. }));
+    // The Open Pane hotkey's default binding is registered with the
+    // system beside the command's (#74): the window attached the launcher
+    // to the host settings, which applied the record's choice — the
+    // provisional default — at startup.
     assert_eq!(
         *system.registered.lock().unwrap(),
-        std::slice::from_ref(&shortcut)
+        vec![Shortcut::open_pane_default(), shortcut.clone()]
     );
 
     // Pressed while Pane shows root search with a query typed.
@@ -153,5 +157,65 @@ fn pressing_keys_on_the_hotkey_screen_assigns_them_and_the_hotkey_opens_the_comm
         Screen::Root {
             query: String::new()
         }
+    );
+}
+
+#[gpui::test]
+fn a_command_hotkey_cannot_take_the_open_pane_keys(cx: &mut TestAppContext) {
+    let (sources, data): (TempDir, TempDir) =
+        (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = package(&sources.path().join("hello"));
+    let system = Arc::new(FakeSystem::default());
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"))
+            .with_hotkeys(system.clone());
+    let (window, cx) = cx.add_window_view(|window, cx| {
+        let mut launcher = LauncherWindow::new(launcher, window, cx);
+        launcher.preview_package(&folder, window, cx);
+        launcher
+    });
+    settle(&window, cx);
+    cx.simulate_keystrokes("enter");
+    settle(&window, cx);
+    cx.simulate_keystrokes("down down down down enter");
+    settle(&window, cx);
+    cx.simulate_keystrokes("down down down down enter");
+    let view = settle(&window, cx);
+    assert!(
+        matches!(view.screen, Screen::Hotkey { .. }),
+        "{:?}",
+        view.screen
+    );
+
+    // The keys the application's own binding holds — the Open Pane
+    // default, which the window registered at startup — are refused:
+    // the screen explains them and stays for another try, and nothing
+    // is registered or recorded over the working binding.
+    cx.simulate_keystrokes("ctrl-alt-space");
+    let open_pane = Shortcut::open_pane_default();
+    let view = settle(&window, cx);
+    assert_eq!(
+        view.status,
+        Status::Error(format!(
+            "{open_pane} opens Pane itself: choose another shortcut for Say hello, or change \
+             Pane's hotkey in Settings."
+        )),
+        "the refusal is explained"
+    );
+    assert!(
+        matches!(view.screen, Screen::Hotkey { .. }),
+        "the screen stays for another try, {:?}",
+        view.screen
+    );
+    assert_eq!(
+        *system.registered.lock().unwrap(),
+        vec![open_pane],
+        "only the Open Pane default is registered"
+    );
+    assert!(
+        !data.path().join("extensions").join("hotkeys.json").exists(),
+        "nothing was recorded"
     );
 }

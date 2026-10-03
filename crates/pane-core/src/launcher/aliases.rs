@@ -23,6 +23,7 @@
 //! with why.
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::path::PathBuf;
 
 use serde_json::{Map, Value};
@@ -120,6 +121,22 @@ impl Choices for AliasChoices {
 }
 
 impl AliasChoices {
+    /// The alias recorded for `command`, as the user typed it; for the
+    /// Shortcuts catalog.
+    pub(super) fn alias_of(&self, command: &str) -> Option<String> {
+        self.aliases.get(command).cloned()
+    }
+
+    /// Every command id with an alias or a fallback recorded; for the
+    /// Shortcuts catalog's rows of choices whose commands are gone.
+    pub(super) fn recorded(&self) -> Vec<&str> {
+        self.aliases
+            .keys()
+            .map(String::as_str)
+            .chain(self.fallbacks.iter().map(String::as_str))
+            .collect()
+    }
+
     /// Whether `command` is offered as a fallback. `pub(super)` for the
     /// launcher's selected-action label, which turns with the choice.
     pub(super) fn is_fallback(&self, command: &str) -> bool {
@@ -132,7 +149,7 @@ impl AliasChoices {
 
     /// Another command whose alias is `alias`, compared caselessly (full
     /// Unicode case folding after NFC, so "STRASSE" is "straße").
-    fn shared_with(&self, command: &str, alias: &str) -> Option<&str> {
+    pub(super) fn shared_with(&self, command: &str, alias: &str) -> Option<&str> {
         self.aliases
             .iter()
             .find(|(other, chosen)| other.as_str() != command && same_text(chosen, alias))
@@ -462,24 +479,9 @@ impl Launcher {
             return None;
         };
         let alias = form.fields.first()?.value.trim().to_owned();
-        let refusal = if alias.chars().any(char::is_whitespace) {
-            Some("An alias is one word, without spaces".to_string())
-        } else if alias.chars().count() > MAX_ALIAS_CHARS {
-            Some(format!("An alias has at most {MAX_ALIAS_CHARS} characters"))
-        } else {
-            state
-                .aliases
-                .chosen
-                .shared_with(command, &alias)
-                .map(|other| {
-                    let other = self.command_title(state, other);
-                    format!(
-                        "“{alias}” is already the alias of {other}: change it there first, or \
-                         choose another"
-                    )
-                })
-        };
-        if let Some(refusal) = refusal.filter(|_| !alias.is_empty()) {
+        if let Some(refusal) =
+            alias_refusal(self, state, command, &alias).filter(|_| !alias.is_empty())
+        {
             let Screen::Form(form) = &mut state.view.screen else {
                 unreachable!("the alias form is open");
             };
@@ -487,19 +489,55 @@ impl Launcher {
             state.view.status = Status::Error(format!("Alias: {refusal}"));
             return None;
         }
-        let title = self.command_title(state, command);
-        let aliases = &mut state.aliases.chosen.aliases;
-        let done = if alias.is_empty() {
-            aliases.remove(command);
-            format!("{title} has no alias now")
-        } else {
-            let done = format!("Typing “{alias}” now finds {title}");
-            aliases.insert(command.to_owned(), alias);
-            done
-        };
+        let done = apply_alias(self, state, command, &alias);
         state.form = None;
         let at = |entry: &Entry| matches!(entry, Entry::AskAlias(id) if id == command);
         Some(self.choices_changed(state, at, command, done))
+    }
+
+    /// Sets `alias` as the alias of the command `command` without opening
+    /// the launcher's alias form: the Settings window's Shortcuts page
+    /// edits it inline. The alias form's rules apply: `Err` carries the
+    /// reason when the alias is not one word, is over the limit, or is
+    /// another command's; an empty or blank alias clears it.
+    ///
+    /// The alias takes effect at once — the rows on screen are refreshed,
+    /// so the next query root search runs finds it — and the returned
+    /// future records it; a record that cannot be written goes back to
+    /// what was last recorded (see [`Launcher::save`]), and its outcome
+    /// says which it was. The launcher's screens are left where they are,
+    /// unlike the form's submission: the page that asked shows the
+    /// outcome itself.
+    pub fn set_alias(
+        &self,
+        command: &str,
+        alias: &str,
+    ) -> Result<impl Future<Output = AliasOutcome> + Send + 'static, String> {
+        let alias = alias.trim();
+        let mut state = self.lock();
+        if let Some(refusal) =
+            alias_refusal(self, &state, command, alias).filter(|_| !alias.is_empty())
+        {
+            return Err(refusal);
+        }
+        let done = apply_alias(self, &mut state, command, alias);
+        self.refresh(&mut state);
+        let command = command.to_owned();
+        let saving = self.clone();
+        let after = self.clone();
+        Ok(async move {
+            let saved = off_thread(move || saving.save::<AliasChoices>(Some(&command))).await;
+            match saved {
+                Ok(()) => AliasOutcome::Saved(done),
+                Err(problem) => {
+                    // What was last recorded is back in Pane (see
+                    // `Launcher::save`); the rows on screen follow it again.
+                    let mut state = after.lock();
+                    after.refresh(&mut state);
+                    AliasOutcome::NotKept(problem)
+                }
+            }
+        })
     }
 
     /// Makes the command `command` a fallback if it is not one, else no
@@ -592,4 +630,62 @@ pub(super) struct ChoiceChange {
     /// The outcome once recorded.
     done: String,
     epoch: u64,
+}
+
+/// What an alias set directly, through [`Launcher::set_alias`], came to.
+/// The alias has taken effect in Pane either way; this says whether the
+/// record on disk kept it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AliasOutcome {
+    /// The alias was recorded. The message says what typing it now finds
+    /// (“Typing “ec” now finds Echo”), or that the command has no
+    /// alias now.
+    Saved(String),
+    /// The alias took effect but could not be recorded: what was last
+    /// recorded is back, and root search follows it again. The message
+    /// says why it could not be kept.
+    NotKept(String),
+}
+
+/// Why `alias` cannot be the alias of the command `command`, or `None` if
+/// it can: a space in it, over the limit, or another command's (compared
+/// caselessly). An empty alias is never refused — it clears the command's
+/// alias — so the callers decide what an empty one means. This is the one
+/// rule the alias form and the Settings window's inline field both apply.
+fn alias_refusal(launcher: &Launcher, state: &State, command: &str, alias: &str) -> Option<String> {
+    if alias.chars().any(char::is_whitespace) {
+        Some("An alias is one word, without spaces".to_string())
+    } else if alias.chars().count() > MAX_ALIAS_CHARS {
+        Some(format!("An alias has at most {MAX_ALIAS_CHARS} characters"))
+    } else {
+        state
+            .aliases
+            .chosen
+            .shared_with(command, alias)
+            .map(|other| {
+                let other = launcher.command_title(state, other);
+                format!(
+                    "“{alias}” is already the alias of {other}: change it there first, or \
+                     choose another"
+                )
+            })
+    }
+}
+
+/// Applies `alias` to the command `command` in Pane's records — an empty
+/// one clears it — returning the message that says what changed. The
+/// caller records the change: the alias form shows the extension list,
+/// [`Launcher::set_alias`] leaves the screens where they are, and both
+/// await the record's write.
+fn apply_alias(launcher: &Launcher, state: &mut State, command: &str, alias: &str) -> String {
+    let title = launcher.command_title(state, command);
+    let aliases = &mut state.aliases.chosen.aliases;
+    if alias.is_empty() {
+        aliases.remove(command);
+        format!("{title} has no alias now")
+    } else {
+        let done = format!("Typing “{alias}” now finds {title}");
+        aliases.insert(command.to_owned(), alias.to_owned());
+        done
+    }
 }

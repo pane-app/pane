@@ -11,8 +11,9 @@
 //! the neutrals for light-glass counterparts; it is a starting point for
 //! review, not a claim of reference fidelity.
 //!
-//! No globals: the integration reads `PANE_THEME` once, builds a [`Theme`],
-//! and passes it down.
+//! No globals: the host settings resolve the user's preference (and the
+//! system's appearance, where the preference follows it) to one palette
+//! and pass the built [`Theme`] down.
 //!
 //! Contrast honesty — no blanket accessibility claim. The dark glass is
 //! the reference's dark panel composited over whatever is behind the
@@ -26,8 +27,9 @@
 
 use gpui::{FontWeight, Hsla, Pixels, SharedString, px, rgb_to_hsla, rgba};
 
-/// Which palette a [`Theme`] carries. The integration picks once, from
-/// `PANE_THEME`; nothing here observes the system appearance.
+/// Which palette a [`Theme`] carries. The host settings pick one — the
+/// user's preference, or the system's appearance where the preference
+/// follows it — and nothing here observes the system itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Appearance {
     Dark,
