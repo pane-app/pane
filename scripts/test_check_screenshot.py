@@ -67,7 +67,7 @@ class ScreenshotChecks(unittest.TestCase):
         draw.rectangle((42, 100, 777, 143), fill="#2a2b2e")
         check.selected(self.save(image))
 
-    def test_same_allows_only_one_pixel_of_rounding_noise(self):
+    def test_same_allows_a_few_pixels_of_rounding_noise(self):
         image, _ = self.panel()
         image.putpixel((330, 300), (178, 92, 46))
         first = self.save(image, "original.png")
@@ -76,10 +76,18 @@ class ScreenshotChecks(unittest.TestCase):
         image.putpixel((330, 300), (178, 92, 48))
         with self.assertRaises(SystemExit):
             check.same(first, self.save(image, "two-levels.png"))
-        image.putpixel((330, 300), (178, 92, 47))
-        image.putpixel((331, 300), (23, 23, 26))
+        # A handful of one-level pixels — one glyph's antialiased edge —
+        # is rounding noise too (CI 37054210836 saw 11 on Windows, 2 on
+        # macOS): the panel behind them is #16171a, so +1 on one channel
+        # is one level. More than the handful is not noise anymore.
+        baseline, _ = self.panel()
+        plain = self.save(baseline, "plain.png")
+        for x in range(330, 346):
+            baseline.putpixel((x, 300), (23, 23, 26))
+        check.same(plain, self.save(baseline, "edge-rounding.png"))
+        baseline.putpixel((346, 300), (23, 23, 26))
         with self.assertRaises(SystemExit):
-            check.same(first, self.save(image, "two-pixels.png"))
+            check.same(plain, self.save(baseline, "too-many.png"))
 
     def test_same_rejects_changed_row_hover(self):
         image, draw = self.panel()

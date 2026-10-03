@@ -2,6 +2,7 @@
 //! and mouse events dispatch to the window, which runs real guest components.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, prelude::*, px};
 use pane::LauncherWindow;
@@ -335,26 +336,45 @@ fn tab_and_shift_tab_visit_each_control_once_in_order(cx: &mut TestAppContext) {
     // Two full rounds each way: a control with two tab stops (such as the
     // text field and a wrapper tracking its focus) would appear twice in a
     // row. The greeting group reports its chosen option as focused, like a
-    // list reports its selected row.
+    // list reports its selected row. The footer's menu button joins the
+    // order after the form's controls.
     let mut forward = Vec::new();
-    for _ in 0..6 {
+    for _ in 0..8 {
         cx.simulate_keystrokes("tab");
         forward.push(focused_label(cx));
     }
     let mut backward = Vec::new();
-    for _ in 0..6 {
+    for _ in 0..8 {
         cx.simulate_keystrokes("shift-tab");
         backward.push(focused_label(cx));
     }
 
-    let labels = |order: [&str; 6]| order.map(|label| Some(label.to_owned()));
+    let labels = |order: [&str; 8]| order.map(|label| Some(label.to_owned()));
     assert_eq!(
         forward,
-        labels(["Hello", "Greet", "Name", "Hello", "Greet", "Name"])
+        labels([
+            "Hello",
+            "Greet",
+            "More actions",
+            "Name",
+            "Hello",
+            "Greet",
+            "More actions",
+            "Name"
+        ])
     );
     assert_eq!(
         backward,
-        labels(["Greet", "Hello", "Name", "Greet", "Hello", "Name"])
+        labels([
+            "More actions",
+            "Greet",
+            "Hello",
+            "Name",
+            "More actions",
+            "Greet",
+            "Hello",
+            "Name"
+        ])
     );
 }
 
@@ -499,12 +519,12 @@ fn the_launcher_offers_the_rust_javascript_and_typescript_samples(cx: &mut TestA
     let (window, cx) = open_with(cx, pane::sample_commands());
     let root = settle(&window, cx);
     let titles: Vec<&str> = root.rows.iter().map(|row| row.title.as_str()).collect();
-    assert_eq!(
-        titles,
-        ["Rust sample", "JavaScript sample", "TypeScript sample"]
-    );
+    // Pane's own Settings row is listed last, whatever is installed (its
+    // window is the Settings milestone's work, covered in tests/settings).
+    let samples = ["Rust sample", "JavaScript sample", "TypeScript sample"];
+    assert_eq!(titles, [samples.as_slice(), &["Settings…"]].concat());
 
-    for (index, title) in titles.iter().enumerate() {
+    for (index, title) in samples.iter().enumerate() {
         cx.simulate_keystrokes("enter");
         let view = settle(&window, cx);
         assert_eq!(
@@ -821,8 +841,8 @@ fn keys_change_the_color_the_view_shows(cx: &mut TestAppContext, sample: &Sample
     );
     assert_eq!(
         roles.len(),
-        3,
-        "the view, the status line and the window: {roles:?}"
+        4,
+        "the view, the footer's menu button, the status line and the window: {roles:?}"
     );
     assert!(
         cx.debug_bounds("custom-view").is_some(),
@@ -837,9 +857,10 @@ fn keys_change_the_color_the_view_shows(cx: &mut TestAppContext, sample: &Sample
     wait_for_color(&window, cx, "Dark red, #B71C1C");
     assert_eq!(color_node(cx)["value"], "Dark red, #B71C1C");
 
-    // The view is the screen's only tab stop, and Escape closes it.
+    // The view and the footer's menu button are the screen's tab stops,
+    // and Tab visits the button and comes back; Escape closes the view.
     cx.simulate_keystrokes("tab");
-    assert_eq!(focused_label(cx).as_deref(), Some("Color"));
+    assert_eq!(focused_label(cx).as_deref(), Some("More actions"));
     cx.simulate_keystrokes("shift-tab");
     assert_eq!(focused_label(cx).as_deref(), Some("Color"));
     cx.simulate_keystrokes("escape");
@@ -1025,7 +1046,7 @@ fn a_query_that_matches_nothing_says_so_and_escape_clears_it(cx: &mut TestAppCon
     cx.simulate_keystrokes("escape");
     let view = settle(&window, cx);
     assert_eq!(view.query(), Some(""));
-    assert_eq!(row_titles(&window, cx).len(), 3);
+    assert_eq!(row_titles(&window, cx).len(), 4, "the samples and Settings");
     let text = cx.read_entity(&window, |window, cx| {
         window.query_field().read(cx).as_str().to_owned()
     });
@@ -1428,4 +1449,762 @@ fn a_long_error_wraps_grows_and_scrolls_inside_the_footer(cx: &mut TestAppContex
         text.top() >= before - px(1.),
         "the first line scrolls back into view"
     );
+}
+
+/// The idle footer's selected action: its button, right-aligned in the
+/// strip, with the Enter keycap beside the label; the button and Enter run
+/// the same action; and a status — running, a result, an error — owns the
+/// strip while it shows, in place of the action.
+#[gpui::test]
+fn the_footer_button_runs_the_selected_action_like_enter(cx: &mut TestAppContext) {
+    let (window, cx) = open(cx, &RUST);
+    // A narrow window: the strip, the button and its label all have to fit.
+    cx.simulate_resize(gpui::size(px(380.), px(420.)));
+    settle(&window, cx);
+
+    // The button sits in the strip's right half — the far left stays free
+    // for the app menu a later slice delivers there — and the keycap sits
+    // inside the button, at its right end.
+    let footer = cx
+        .debug_bounds("status-idle")
+        .expect("the idle strip is rendered");
+    let button = cx
+        .debug_bounds("primary-action")
+        .expect("the action button is rendered");
+    assert!(
+        button.left() > footer.left() + footer.size.width / 2.,
+        "the button is right-aligned: {button:?} in {footer:?}"
+    );
+    assert!(button.right() <= footer.right(), "inside the strip");
+    assert!(
+        button.top() >= footer.top() && button.bottom() <= footer.bottom(),
+        "the button is centered in the strip: {button:?} in {footer:?}"
+    );
+    let (above, below) = (
+        button.top() - footer.top(),
+        footer.bottom() - button.bottom(),
+    );
+    assert!(
+        (above - below).abs() <= px(1.),
+        "the button is centered in the strip: {above:?} above, {below:?} below"
+    );
+    let keycap = cx.debug_bounds("keycap").expect("the keycap is rendered");
+    assert!(
+        keycap.left() > button.left() && keycap.right() <= button.right(),
+        "the keycap sits inside the button: {keycap:?} in {button:?}"
+    );
+
+    // The definition supplies the label from the action's identity — a
+    // selected extension command in root search opens it — and the keycap
+    // names its key, on the button and to assistive technology.
+    let nodes = accessible_nodes(cx);
+    let action = node(&nodes, "Button", "Open command");
+    assert_eq!(action["keyboard_shortcut"].as_str(), Some("Enter"));
+    node(&nodes, "Image", "Enter");
+
+    // Clicking the button opens the selected command, as Enter does.
+    cx.simulate_click(button.center(), Modifiers::none());
+    let view = settle(&window, cx);
+    assert_eq!(
+        (view.screen, view.title.as_str()),
+        (Screen::Command, "Rust sample")
+    );
+
+    // The command's own screen names what activating its selected item
+    // does, and clicking the button there runs it, as Enter does.
+    let nodes = accessible_nodes(cx);
+    node(&nodes, "Button", "Run item");
+    let button = cx
+        .debug_bounds("primary-action")
+        .expect("the action button is rendered");
+    cx.simulate_click(button.center(), Modifiers::none());
+    let view = settle(&window, cx);
+    assert_eq!(
+        view.status,
+        Status::Result("Hello from the Rust guest".into())
+    );
+    assert!(
+        cx.debug_bounds("status-result").is_some(),
+        "the answer is rendered"
+    );
+    assert!(
+        cx.debug_bounds("primary-action").is_none(),
+        "a status owns the strip while it shows, not the idle action"
+    );
+
+    // Back at root search the launcher is idle again, and the strip is the
+    // action again.
+    cx.simulate_keystrokes("escape");
+    settle(&window, cx);
+    let nodes = accessible_nodes(cx);
+    node(&nodes, "Button", "Open command");
+}
+
+/// The footer's Submit button submits the form, as Enter does, beside the
+/// form's own submit control.
+#[gpui::test]
+fn the_footer_button_submits_the_form_like_enter(cx: &mut TestAppContext) {
+    let (window, cx) = open(cx, &RUST);
+    open_form(&window, cx);
+    cx.simulate_input("Ada");
+
+    let nodes = accessible_nodes(cx);
+    node(&nodes, "Button", "Submit");
+    node(&nodes, "Button", "Greet");
+    let button = cx
+        .debug_bounds("primary-action")
+        .expect("the action button is rendered");
+    cx.simulate_click(button.center(), Modifiers::none());
+
+    assert_eq!(
+        settle(&window, cx).status,
+        Status::Result("Hello, Ada, from the Rust guest".into())
+    );
+}
+
+/// With nothing selected, the button stays — named for the action there
+/// would be — but a click dispatches nothing.
+#[gpui::test]
+fn the_footer_button_cannot_run_an_action_with_nothing_selected(cx: &mut TestAppContext) {
+    let (window, cx) = open_with(cx, pane::sample_commands());
+    cx.simulate_input("zzz");
+    let view = settle(&window, cx);
+    assert_eq!(view.selected, None);
+
+    let nodes = accessible_nodes(cx);
+    node(&nodes, "Button", "Open command");
+    let button = cx
+        .debug_bounds("primary-action")
+        .expect("the action button is rendered");
+    cx.simulate_click(button.center(), Modifiers::none());
+
+    let view = settle(&window, cx);
+    assert_eq!(view.status, Status::Idle, "nothing was dispatched");
+    assert_eq!(view.query(), Some("zzz"));
+    assert!(
+        cx.debug_bounds("status-idle").is_some(),
+        "the idle strip is unchanged"
+    );
+}
+
+/// An unavailable result keeps its button — disabled, named for what it
+/// cannot do — and its explanation where it always was, on its row: a
+/// click dispatches nothing, while Enter still explains, as it always has.
+#[gpui::test]
+fn the_footer_button_does_not_dispatch_an_unavailable_action(cx: &mut TestAppContext) {
+    let ((_, available), (_, unavailable), reason) = platforms::sample_items();
+    let (window, cx) = open(cx, &RUST);
+    cx.simulate_resize(gpui::size(gpui::px(640.), gpui::px(420.)));
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    let index = |title: &str| view.rows.iter().position(|row| row.title == title).unwrap();
+    for _ in 0..index(unavailable) {
+        cx.simulate_keystrokes("down");
+    }
+    cx.run_until_parked();
+
+    let nodes = accessible_nodes(cx);
+    node(&nodes, "Button", "Unavailable");
+    let button = cx
+        .debug_bounds("primary-action")
+        .expect("the action button is rendered");
+    cx.simulate_click(button.center(), Modifiers::none());
+
+    let view = settle(&window, cx);
+    assert_eq!(view.status, Status::Idle, "the button dispatched nothing");
+    assert!(
+        row_is_visible(cx, &format!("unavailable-reason-{unavailable}")),
+        "the row's explanation stays visible"
+    );
+
+    // Enter keeps its behavior: it shows the reason.
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert_eq!(view.status, Status::Error(reason));
+
+    // What selected the unavailable row is undone, and the others still
+    // run — the row, not the button, was the dispatch.
+    let delta = index(available) as isize - index(unavailable) as isize;
+    let key = if delta > 0 { "down" } else { "up" };
+    for _ in 0..delta.abs() {
+        cx.simulate_keystrokes(key);
+    }
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        settle(&window, cx).status,
+        Status::Result(format!("Ran the {available} in the Rust guest"))
+    );
+}
+
+/// A double click on the button dispatches the action exactly once: the
+/// second press lands on the stale frame that still shows the button while
+/// the first press's action is already running, and the definition — which
+/// the click checks again at click time — refuses it. The host records the
+/// opens, so a second dispatch would be visible.
+#[gpui::test]
+fn a_running_action_cannot_be_dispatched_again_through_the_footer_button(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let system = std::sync::Arc::new(TwoApplications::default());
+    let runtime = Runtime::start().unwrap();
+    runtime.set_applications(system.clone());
+    let folder =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/applications");
+    let launcher = Launcher::with_packages(Ok(runtime), vec![], data.path().join("extensions"));
+    cx.executor().allow_parking();
+    cx.foreground_executor()
+        .block_on(launcher.install_package(&folder));
+    launcher.back();
+    let (window, cx) = open_launcher(cx, launcher);
+
+    // The install's result owns the strip; open the command and come back
+    // so the launcher is idle again and the strip is the action.
+    cx.simulate_keystrokes("enter");
+    settle(&window, cx);
+    cx.simulate_keystrokes("escape");
+    settle(&window, cx);
+
+    cx.simulate_input("fire");
+    wait_for_rows(&window, cx, &["Firefox"]);
+    let nodes = accessible_nodes(cx);
+    node(&nodes, "Button", "Open application");
+    let button = cx
+        .debug_bounds("primary-action")
+        .expect("the action button is rendered");
+    cx.simulate_click(button.center(), Modifiers::none());
+    cx.simulate_click(button.center(), Modifiers::none());
+
+    let view = settle(&window, cx);
+    assert_eq!(view.status, Status::Result("Opened Firefox".into()));
+    assert_eq!(
+        *system.opened.lock().unwrap(),
+        ["/apps/Firefox.desktop"],
+        "the action dispatched exactly once"
+    );
+}
+
+/// A launcher with the Hello package from `cargo xtask guests` installed in
+/// `data` and `source`, as the wheel test installs it.
+fn installed_hello(
+    cx: &mut TestAppContext,
+    data: &std::path::Path,
+    source: &std::path::Path,
+) -> Launcher {
+    let folder = source.join("hello");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("pane.json"),
+        r#"{ "manifestVersion": 1, "title": "Hello", "apiVersion": "0.1",
+  "commands": [{ "id": "hello", "title": "Say hello", "component": "hello.wasm" }] }"#,
+    )
+    .unwrap();
+    std::fs::copy(
+        command("hello", "sample_rust").component,
+        folder.join("hello.wasm"),
+    )
+    .unwrap();
+    let launcher =
+        Launcher::with_packages(Runtime::start(), twelve_rows(), data.join("extensions"));
+    // The install's guest check answers from the runtime thread.
+    cx.executor().allow_parking();
+    cx.foreground_executor()
+        .block_on(launcher.install_package(&folder));
+    launcher.back();
+    launcher
+}
+
+/// The button's label comes from the action's identity — what activating
+/// the selected row does — never from the row's title: the extension
+/// list's first row is the package itself, titled "Hello", and the button
+/// says what activating it does there, following the package's state as it
+/// changes.
+#[gpui::test]
+fn the_footer_button_labels_the_action_from_identity_not_the_row_title(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let launcher = installed_hello(cx, data.path(), source.path());
+    let (window, cx) = open_launcher(cx, launcher);
+
+    let manage = cx
+        .debug_bounds("row-Manage extensions…")
+        .expect("the row is rendered");
+    cx.simulate_click(manage.center(), Modifiers::none());
+    settle(&window, cx);
+
+    let nodes = accessible_nodes(cx);
+    node(&nodes, "ListBoxOption", "Hello");
+    node(&nodes, "Button", "Disable");
+    let button = cx
+        .debug_bounds("primary-action")
+        .expect("the action button is rendered");
+    cx.simulate_click(button.center(), Modifiers::none());
+    assert_eq!(
+        settle(&window, cx).status,
+        Status::Result("Disabled Hello".into())
+    );
+
+    // The row is still titled "Hello"; the action's identity turned with
+    // the package's state, so re-entering the list (the change's result
+    // owned the strip until then) offers to enable it now.
+    cx.simulate_keystrokes("escape");
+    settle(&window, cx);
+    let manage = cx
+        .debug_bounds("row-Manage extensions…")
+        .expect("the row is rendered");
+    cx.simulate_click(manage.center(), Modifiers::none());
+    settle(&window, cx);
+
+    let nodes = accessible_nodes(cx);
+    node(&nodes, "ListBoxOption", "Hello");
+    node(&nodes, "Button", "Enable");
+}
+
+/// A long status owns the strip in place of the idle action, and stays
+/// readable: it wraps within the strip's width and the strip grows with
+/// it, as it did before the idle hint became the action.
+#[gpui::test]
+fn a_long_status_replaces_the_idle_strip_and_stays_readable(cx: &mut TestAppContext) {
+    let detail = "the operation could not be completed because the target \
+                  system refused the connection and every retry failed, so \
+                  nothing was installed and the previous state was kept";
+    let message =
+        format!("Could not open a folder picker: {detail}. {detail}. {detail}. {detail}.");
+    let launcher = Launcher::new(Runtime::start(), Vec::new());
+    launcher.show_error(message.clone());
+    let (window, cx) = open_launcher(cx, launcher);
+    cx.simulate_resize(gpui::size(px(380.), px(420.)));
+    let view = settle(&window, cx);
+    assert_eq!(view.status, Status::Error(message));
+
+    assert!(
+        cx.debug_bounds("primary-action").is_none(),
+        "no idle action button while a status shows"
+    );
+    let footer = cx
+        .debug_bounds("status-error")
+        .expect("the footer is rendered");
+    let text = cx
+        .debug_bounds("status-message")
+        .expect("the message is rendered");
+    assert!(
+        text.right() <= footer.right(),
+        "the message wraps within the footer, not past its right edge"
+    );
+    assert!(
+        text.size.height > px(50.),
+        "the message wrapped to several lines: {:?}",
+        text.size.height
+    );
+    assert!(
+        footer.size.height > px(50.),
+        "the footer grew past its 50px floor: {:?}",
+        footer.size.height
+    );
+}
+
+/// The last drawn frame's view transition, as the arriving content's
+/// (offset from rest in px — below rest for a view that opens, above for
+/// backing out — and its opacity); `None` when the frame drew the content
+/// settled, which is also all reduced motion ever reports. See
+/// [`LauncherWindow::view_transition`].
+fn arriving(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> Option<(f32, f32)> {
+    cx.read_entity(window, |window, _| window.view_transition())
+}
+
+/// Delivers the animation frame the window has asked for, as the native
+/// frame loop would, with `elapsed` passing first on the test platform's
+/// controlled clock. The test platform delivers no frames on its own, so
+/// this is the only thing that advances a running transition; one call
+/// draws at most one frame. Returns how many next-frame callbacks ran —
+/// `0` means the window had asked for no frame, so nothing drew.
+fn frame(cx: &mut VisualTestContext, elapsed: Duration) -> usize {
+    cx.executor().advance_clock(elapsed);
+    let ran = cx.update(|window, cx| window.simulate_next_frame(cx));
+    cx.run_until_parked();
+    ran
+}
+
+/// Delivers frames until the window asks for none, so a transition in
+/// flight completes and the functional scroll relayout after a screen
+/// change finishes, and returns the frames it delivered. `0` means the
+/// window was already idle: no cosmetic and no functional frame was
+/// pending. Bounded, so a window that never stopped asking for frames
+/// fails the test instead of hanging it.
+fn settle_frames(cx: &mut VisualTestContext) -> usize {
+    let mut delivered = 0;
+    for _ in 0..20 {
+        let ran = frame(cx, Duration::from_millis(25));
+        if ran == 0 {
+            return delivered;
+        }
+        delivered += ran;
+    }
+    panic!("the window never stopped asking for animation frames");
+}
+
+/// Opening a command is a view transition: the content that changes —
+/// the results list — arrives over a brief fade and a tiny shift from
+/// below, while the shell chrome (the footer with #71's action strip)
+/// stays exactly where it was. The arrival is driven on the controlled
+/// clock: it progresses as frames are delivered, completes within its
+/// bounded span, and leaves the window asking for no frame at all.
+#[gpui::test]
+fn opening_a_command_transitions_the_content_and_keeps_the_chrome_still(cx: &mut TestAppContext) {
+    let (window, cx) = open(cx, &RUST);
+    let view = settle(&window, cx);
+    assert!(matches!(view.screen, Screen::Root { .. }));
+    // The first frame drew no transition, and none is pending: a settled
+    // window is idle.
+    assert_eq!(frame(cx, Duration::ZERO), 0);
+    assert!(arriving(&window, cx).is_none());
+
+    // The footer — the idle strip with the action button — is chrome.
+    let footer = cx
+        .debug_bounds("status-idle")
+        .expect("the idle strip is rendered");
+
+    // Enter opens the selected command: the frame that draws the new
+    // screen starts the arrival, the full shift below rest.
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert_eq!(
+        (view.screen, view.title.as_str()),
+        (Screen::Command, "Rust sample")
+    );
+    let (offset, opacity) = arriving(&window, cx).expect("the command's content is arriving");
+    assert!(
+        offset > 2.5 && offset < 3.5,
+        "the arrival starts the full shift below rest: {offset}"
+    );
+    assert!(opacity < 0.45, "the arrival starts faint: {opacity}");
+    // The chrome did not move with it.
+    let footer_now = cx
+        .debug_bounds("status-idle")
+        .expect("the idle strip is rendered");
+    assert_eq!(
+        footer_now, footer,
+        "the footer (the action strip) stayed still"
+    );
+    // The content did: the list is drawn displaced from its rest by the
+    // arrival's shift (where it lies once settled, below).
+    let rows = cx.debug_bounds("rows").expect("the list is rendered");
+
+    // Frames pass, and the arrival progresses without restarting.
+    assert!(frame(cx, Duration::from_millis(40)) >= 1);
+    let (progressed, _) = arriving(&window, cx).expect("the content is still arriving");
+    assert!(
+        progressed > 0.05 && progressed < offset,
+        "the arrival progressed toward rest: {progressed} from {offset}"
+    );
+    // Past the entrance's span, the next delivered frame lands the
+    // content at rest and asks for no further frame: the window is idle.
+    assert!(frame(cx, Duration::from_millis(130)) >= 1);
+    assert!(arriving(&window, cx).is_none());
+    let settled = cx.debug_bounds("rows").expect("the list is rendered");
+    assert_eq!(
+        rows.origin.y - settled.origin.y,
+        px(offset),
+        "the list was shifted exactly the arrival's offset below its rest"
+    );
+    assert_eq!(settle_frames(cx), 0, "a settled window asks for no frame");
+}
+
+/// Backing out is the paired transition: the root content arrives from
+/// above rest instead of below, over the quicker return, and settles
+/// leaving the window idle.
+#[gpui::test]
+fn backing_out_transitions_the_root_content_from_above(cx: &mut TestAppContext) {
+    let (window, cx) = open(cx, &RUST);
+    cx.simulate_keystrokes("enter");
+    settle(&window, cx);
+    // The entrance completed; nothing is pending.
+    settle_frames(cx);
+    assert!(arriving(&window, cx).is_none());
+
+    // Escape backs out to root search.
+    cx.simulate_keystrokes("escape");
+    let view = settle(&window, cx);
+    assert!(matches!(view.screen, Screen::Root { .. }));
+    let (offset, _) = arriving(&window, cx).expect("the root content is arriving");
+    assert!(
+        offset < -2.5 && offset > -3.5,
+        "the return starts the full shift above rest: {offset}"
+    );
+
+    // The return is the quicker of the two spans: 130ms — past its 120ms
+    // — settles it.
+    assert!(frame(cx, Duration::from_millis(130)) >= 1);
+    assert!(arriving(&window, cx).is_none());
+    assert_eq!(settle_frames(cx), 0, "a settled window asks for no frame");
+}
+
+/// A rapid open/back/open retargets each arrival from the presentation on
+/// screen — the interrupted offset carries over, so nothing restarts, no
+/// departed screen flashes back and the navigation itself is unaffected.
+#[gpui::test]
+fn rapid_open_back_open_retargets_the_arrival_from_where_it_is(cx: &mut TestAppContext) {
+    let (window, cx) = open(cx, &RUST);
+    settle(&window, cx);
+
+    // Open, back and open again, with no test-clock time passing between
+    // them: each navigation's frame has already drawn.
+    cx.simulate_keystrokes("enter");
+    settle(&window, cx);
+    let (offset, _) = arriving(&window, cx).expect("the command's content is arriving");
+
+    cx.simulate_keystrokes("escape");
+    let view = settle(&window, cx);
+    assert!(matches!(view.screen, Screen::Root { .. }));
+    let (back, _) = arriving(&window, cx).expect("the root content is arriving");
+    // The back transition continued from the interrupted presentation —
+    // the same offset, not a fresh start from above.
+    assert!(
+        (back - offset).abs() < 0.05,
+        "the back continued the presentation: {back} from {offset}"
+    );
+
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert_eq!(
+        (view.screen, view.title.as_str()),
+        (Screen::Command, "Rust sample")
+    );
+    let (retargeted, _) = arriving(&window, cx).expect("the command's content is arriving again");
+    assert!(
+        (retargeted - offset).abs() < 0.05,
+        "the reopening continued the presentation"
+    );
+
+    // The retargeted arrival then progresses and completes like any other.
+    assert!(frame(cx, Duration::from_millis(40)) >= 1);
+    let (progressed, _) = arriving(&window, cx).expect("the content is still arriving");
+    assert!(
+        progressed < retargeted,
+        "the arrival progressed toward rest"
+    );
+    settle_frames(cx);
+    assert!(arriving(&window, cx).is_none());
+    // And the screen the user navigated to is what is drawn — the rapid
+    // reversal left no stale view behind (settle drew and checked it).
+    let view = settle(&window, cx);
+    assert_eq!(view.screen, Screen::Command);
+}
+
+/// Navigation, focus and typing take effect immediately: while an arrival
+/// is still in flight, the query field has focus, typing lands on the very
+/// frames that carry the transition, and Enter dispatches without waiting
+/// for it.
+#[gpui::test]
+fn typing_and_dispatch_take_effect_while_an_arrival_is_in_flight(cx: &mut TestAppContext) {
+    let (window, cx) = open(cx, &RUST);
+    settle(&window, cx);
+    cx.simulate_keystrokes("enter");
+    settle(&window, cx);
+
+    // Back out: the root content's arrival is in flight.
+    cx.simulate_keystrokes("escape");
+    let view = settle(&window, cx);
+    assert!(matches!(view.screen, Screen::Root { .. }));
+    assert!(
+        arriving(&window, cx).is_some(),
+        "the return is still arriving"
+    );
+    assert!(
+        query_has_focus(&window, cx),
+        "focus moved to the query at once"
+    );
+
+    // Typing lands while the arrival is in flight: the frame that draws
+    // the narrowed results is the same frame that draws the transition.
+    cx.simulate_input("Rust");
+    let view = settle(&window, cx);
+    assert_eq!(view.search_field(), Some("Rust"));
+    assert!(
+        arriving(&window, cx).is_some(),
+        "typing did not wait for the arrival to finish"
+    );
+
+    // So does dispatch: Enter opens the best match while the arrival is
+    // still in flight.
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert_eq!(
+        (view.screen, view.title.as_str()),
+        (Screen::Command, "Rust sample")
+    );
+    settle_frames(cx);
+}
+
+/// Escaping mid-arrival cancels the opening: the departing command's
+/// content is unmounted at once — the drawn screen is root's, its rows
+/// are root's — and the in-flight arrival belongs to the root content,
+/// with no overlay of the command fading out. The command's answer,
+/// arriving after the user left, updates the status without navigating
+/// back to the departed screen.
+#[gpui::test]
+fn escaping_mid_arrival_cancels_it_without_a_trace_of_the_departed_screen(cx: &mut TestAppContext) {
+    let (window, cx) = open(cx, &RUST);
+    settle(&window, cx);
+    cx.simulate_keystrokes("enter");
+    settle(&window, cx);
+
+    // The command's selected item starts running (its answer is still to
+    // come) and, with the arrival from opening still in flight, the user
+    // backs out of it.
+    cx.simulate_keystrokes("enter");
+    cx.simulate_keystrokes("escape");
+    let view = settle(&window, cx);
+    assert!(matches!(view.screen, Screen::Root { .. }));
+    // Root's own rows are what is drawn, not a fading-out command.
+    assert!(
+        row_titles(&window, cx)
+            .iter()
+            .any(|title| title == "Rust sample"),
+        "the root results are drawn, not the command's"
+    );
+    // The arrival in flight is the root content's, continued from the
+    // interrupted forward arrival.
+    let (offset, _) = arriving(&window, cx).expect("the root content is arriving");
+    assert!(
+        (offset - 3.).abs() < 0.5,
+        "the arrival continued from below rest: {offset}"
+    );
+
+    // The item's answer, landing after the user left, changes nothing
+    // about where the user is: the core drops a departed command's pending
+    // reply, so the screen stays root and the status stays idle — no
+    // stale completion navigates back. (Give the guest's late reply time
+    // to land before asserting that it changed nothing.)
+    std::thread::sleep(Duration::from_millis(150));
+    let view = settle(&window, cx);
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "the late answer did not navigate back to the departed screen"
+    );
+    assert_eq!(view.status, Status::Idle);
+    // And the cancellation left the window working: opening the command
+    // again arrives again.
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert_eq!(
+        (view.screen, view.title.as_str()),
+        (Screen::Command, "Rust sample")
+    );
+    assert!(arriving(&window, cx).is_some(), "the command arrives again");
+    settle_frames(cx);
+}
+
+/// Query and result updates never animate: typing, a changed row set and
+/// a moved selection on the same screen kind draw no transition and ask
+/// for no cosmetic frame — only the functional scroll relayout's one.
+#[gpui::test]
+fn typing_selection_and_row_changes_never_transition(cx: &mut TestAppContext) {
+    let (window, cx) = open(cx, &RUST);
+    settle(&window, cx);
+    assert!(arriving(&window, cx).is_none());
+
+    // Typing narrows the results to one: a query update, not a view
+    // transition.
+    cx.simulate_input("Rus");
+    let view = settle(&window, cx);
+    assert_eq!(view.search_field(), Some("Rus"));
+    assert_eq!(view.selected, Some(0));
+    assert!(
+        arriving(&window, cx).is_none(),
+        "a query update does not animate"
+    );
+    // So does moving the selection on the narrowed results.
+    cx.simulate_keystrokes("down");
+    let view = settle(&window, cx);
+    assert_eq!(view.selected, Some(0));
+    assert!(
+        arriving(&window, cx).is_none(),
+        "a selection update does not animate"
+    );
+    // The functional scroll relayout after the rows changed is the only
+    // frame the window asked for; once it is delivered, the window is
+    // idle.
+    settle_frames(cx);
+    assert!(arriving(&window, cx).is_none());
+}
+
+/// Reduced motion settles every view transition at once: a navigation
+/// under it starts no arrival, and reducing motion mid-arrival ends it on
+/// the next drawn frame. Either way the window schedules no frame for
+/// presentation.
+#[gpui::test]
+fn reduced_motion_settles_transitions_at_once_without_frames(cx: &mut TestAppContext) {
+    let (window, cx) = open(cx, &RUST);
+    settle(&window, cx);
+
+    // A navigation under reduced motion starts no transition: the frame
+    // that draws the new screen is already settled.
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert_eq!(
+        (view.screen, view.title.as_str()),
+        (Screen::Command, "Rust sample")
+    );
+    assert!(
+        arriving(&window, cx).is_none(),
+        "reduced motion drew the command's content settled"
+    );
+
+    // Reduced motion engaged mid-arrival ends it on the next frame. Begin
+    // a return under full motion, then flip the preference.
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    cx.simulate_keystrokes("escape");
+    settle(&window, cx);
+    assert!(
+        arriving(&window, cx).is_some(),
+        "the return began under full motion"
+    );
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    // The frame the arrival had asked for draws settled, and asks for
+    // nothing further.
+    assert!(frame(cx, Duration::ZERO) >= 1);
+    assert!(
+        arriving(&window, cx).is_none(),
+        "the arrival settled the moment reduced motion engaged"
+    );
+    assert_eq!(
+        settle_frames(cx),
+        0,
+        "the window asked for no further frame"
+    );
+}
+
+/// A window that stops drawing mid-arrival — hidden, on the native
+/// platform — settles on the first frame it draws later: progress is
+/// measured on a clock, not counted in frames, so the time that passed
+/// while nothing drew completes the transition and that frame requests
+/// nothing. (The test platform has no window visibility; the same state
+/// is produced by letting the clock run without delivering a frame.)
+#[gpui::test]
+fn a_window_that_stops_drawing_settles_its_arrival_on_the_next_frame_it_draws(
+    cx: &mut TestAppContext,
+) {
+    let (window, cx) = open(cx, &RUST);
+    settle(&window, cx);
+    cx.simulate_keystrokes("enter");
+    settle(&window, cx);
+    assert!(arriving(&window, cx).is_some());
+
+    // Time passes with no frame delivered and no redraw provoked — a
+    // hidden window draws nothing, and the platform delivers none of the
+    // frames it asked for.
+    cx.executor().advance_clock(Duration::from_secs(5));
+
+    // The window is shown again: the frame it had asked for is delivered,
+    // and it is already settled — the time that passed completed the
+    // transition — so that frame asks for no animation frame of its own.
+    assert!(
+        frame(cx, Duration::ZERO) >= 1,
+        "the pending frame was delivered on show"
+    );
+    assert!(
+        arriving(&window, cx).is_none(),
+        "the arrival settled while the window did not draw"
+    );
+    assert_eq!(settle_frames(cx), 0, "the shown frame asked for nothing");
 }

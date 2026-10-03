@@ -64,6 +64,20 @@ key() {  # macOS virtual key codes: 36 Return, 125 Down, 126 Up, 124 Right, 53 E
 type_text() { osascript -e "tell application \"System Events\" to keystroke \"$1\""; }
 command_key() { osascript -e "tell application \"System Events\" to keystroke \"$1\" using command down"; }
 
+# Opens Manage extensions from root search. A blind run of Downs to root's
+# end was the way in until #72's Settings… root result made itself last of
+# all (it is listed whatever is installed, so every phase's root ends with
+# it): the run now opens the Settings window instead. Searching for the row
+# by its title is order-proof: "manage" matches only the Manage extensions…
+# row, which is selected when the list narrows to it, and Return opens it.
+# Cmd+A first, so a query an earlier step left in the field is replaced,
+# not extended.
+manage_extensions() {
+  command_key a
+  type_text manage; sleep 1
+  key 36; sleep 1
+}
+
 # Brings the running Pane to the front, so that key events reach it.
 focus_pane() {
   osascript -e "tell application \"System Events\" to set frontmost of (first process whose unix id is $pid) to true"
@@ -194,8 +208,8 @@ stop_pane
 
 # Install the settings sample, save a choice with it, then disable it in
 # Manage extensions. Root lists the three samples, Rust sample, Greeting, the
-# install row, then Manage extensions… last; the extension list holds Rust
-# sample, then Settings sample.
+# install rows, then Manage extensions… and Settings… last; the extension
+# list holds Rust sample, then Settings sample.
 start_pane --install target/guests/packages/sample-settings
 key 36; sleep 2   # Install; Greeting is selected
 key 36; sleep 3   # open Greeting
@@ -203,8 +217,7 @@ key 36; sleep 2   # "Use a formal greeting"
 capture 16-setting-saved.png
 check 16-setting-saved.png success   # "Saved the formal greeting"
 key 53; sleep 1
-for ((i = 0; i < 14; i++)); do key 125; done   # the last row
-key 36; sleep 1
+manage_extensions
 key 125; key 36; sleep 2
 capture 17-disabled.png
 check 17-disabled.png success   # "Disabled Settings sample"
@@ -220,8 +233,7 @@ start_pane
 capture 18-restarted-disabled.png
 check 18-restarted-disabled.png hint
 python3 "$(dirname "$0")/check_screenshot.py" --same "$out/12-restarted.png" "$out/18-restarted-disabled.png"
-for ((i = 0; i < 14; i++)); do key 125; done
-key 36; sleep 1
+manage_extensions
 key 125; key 36; sleep 2
 capture 19-enabled.png
 check 19-enabled.png success   # "Enabled Settings sample"
@@ -340,8 +352,7 @@ capture 33-dev-before.png
 check 33-dev-before.png success   # "Hello from the Rust guest"
 key 53; sleep 1
 cp target/guests/sample_js.wasm "$out/dev/command.wasm"
-for ((i = 0; i < 12; i++)); do key 125; done   # the last row
-key 36; sleep 1
+manage_extensions
 for ((i = 0; i < 11; i++)); do key 125; done   # Reload Dev
 key 36; sleep 3
 capture 34-reloaded.png
@@ -358,8 +369,7 @@ key 53; sleep 1
 # A build that fails the install checks (here its component is missing) is
 # not reloaded: the working code keeps running, exactly as before.
 rm "$out/dev/command.wasm"
-for ((i = 0; i < 12; i++)); do key 125; done
-key 36; sleep 1
+manage_extensions
 for ((i = 0; i < 11; i++)); do key 125; done
 key 36; sleep 2
 capture 36-not-reloaded.png
@@ -375,8 +385,7 @@ key 53; sleep 1
 # A build whose start fails is reported with Retry, after Reload Dev; this
 # one saves a setting and fails its first start only, so Retry starts it.
 cp target/guests/failing_start.wasm "$out/dev/command.wasm"
-for ((i = 0; i < 12; i++)); do key 125; done
-key 36; sleep 1
+manage_extensions
 for ((i = 0; i < 11; i++)); do key 125; done
 key 36; sleep 3
 capture 38-start-failed.png
@@ -410,8 +419,7 @@ grep -q '"last-greeting": "Good day to you"' "$out/data/extensions/cache.json" |
 # six package rows, their six Reload rows and "Clear cache of Rust sample". Pane asks first, then deletes only the cached
 # greeting, without running the extension.
 start_pane
-for ((i = 0; i < 12; i++)); do key 125; done   # the last row
-key 36; sleep 1
+manage_extensions
 for ((i = 0; i < 13; i++)); do key 125; done
 key 36; sleep 1   # "Clear cache of Settings sample"
 capture 41-confirm-clear-cache.png
@@ -501,8 +509,7 @@ stop_pane
 # choice keeps its settings and content while its copy and credential go.
 # Installing the same folder again finds its formal style and note, signed out.
 start_pane
-for ((i = 0; i < 20; i++)); do key 125; done   # the last row
-key 36; sleep 1
+manage_extensions
 for ((i = 0; i < 25; i++)); do key 125; done
 key 36; sleep 1   # "Uninstall Settings sample"
 capture 49-confirm-uninstall.png
@@ -551,8 +558,7 @@ export PANE_DATA_DIR=$out/hotkeys-data
 rm -rf "$PANE_DATA_DIR"
 start_pane --install target/guests/packages/sample-settings
 key 36; sleep 2   # Install; Greeting is selected
-for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…
-key 36; sleep 1
+manage_extensions
 key 125; key 125; key 125; key 125; key 36; sleep 1   # "Hotkey for Greeting"
 capture 52-hotkey-screen.png
 check 52-hotkey-screen.png details   # "Press the keys that should open Greeting ..."
@@ -577,8 +583,7 @@ capture 56-hotkey-after-restart.png
 check 56-hotkey-after-restart.png selected 3000   # Greeting's first item, selected
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{53-hotkey-assigned,56-hotkey-after-restart}.png
 key 53; sleep 1
-for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…
-key 36; sleep 1
+manage_extensions
 key 36; sleep 2   # disable Settings sample
 key 53; sleep 1
 capture 57-disabled.png   # root search
@@ -615,8 +620,7 @@ type_text greet; sleep 1
 capture 60-paused-after-restart.png
 check 60-paused-after-restart.png warning   # Greeting is still paused
 key 53; sleep 1   # Escape clears the query
-for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…
-key 36; sleep 1
+manage_extensions
 key 125; key 125; key 125; key 36; sleep 1   # "Why Settings sample is paused"
 capture 61-pause-details.png
 check 61-pause-details.png details   # the details
@@ -654,8 +658,7 @@ for ((i = 0; i < 3; i++)); do key 125; done
 key 36   # "Save a note"
 wait_for "$PANE_DATA_DIR/extensions/content.json" '"note": "Water the plants"' present
 key 53; sleep 1   # root search
-for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…
-key 36; sleep 1
+manage_extensions
 for ((i = 0; i < 3; i++)); do key 125; done
 key 36; sleep 1   # "Uninstall Settings sample"
 key 36   # "Uninstall and keep saved data"
@@ -700,8 +703,7 @@ export PANE_DATA_DIR=$out/aliases-data
 rm -rf "$PANE_DATA_DIR"
 start_pane --install target/guests/packages/sample-query
 key 36; sleep 2   # Install; Echo is selected
-for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…
-key 36; sleep 1
+manage_extensions
 for ((i = 0; i < 5; i++)); do key 125; done   # "Alias for Echo"
 key 36; sleep 1
 type_text ec
@@ -734,8 +736,7 @@ stop_pane
 grep -q '"ec"' "$PANE_DATA_DIR/extensions/aliases.json" || { echo "alias not recorded"; exit 1; }
 grep -q '#echo"' "$PANE_DATA_DIR/extensions/aliases.json" || { echo "fallback not recorded"; exit 1; }
 start_pane
-for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…
-key 36; sleep 1
+manage_extensions
 key 36; sleep 2   # disable Query sample
 key 53; sleep 1
 type_text 'ec hello'; sleep 1
@@ -804,8 +805,7 @@ key 126; key 36; sleep 2   # Up: Echo after waiting
 helpers_running || { echo "the waiting helper is not running"; exit 1; }
 capture 92-helper-waiting.png
 key 53; sleep 1   # root search; the helper keeps running
-for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…
-key 36; sleep 1
+manage_extensions
 key 36; sleep 2   # disable Helper sample
 capture 93-helper-disabled.png
 check 93-helper-disabled.png success   # "Disabled Helper sample"
@@ -928,8 +928,7 @@ PY
   local built=$copy/$component before=$out/develop-$sample-before.wasm
   start_pane --install "$copy"
   key 36; sleep 2   # Install
-  for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…
-  key 36; sleep 1
+  manage_extensions
   # "Develop <title>": the row above the list's last, which is the global
   # automatic-update choice since #49 (the develop row was the last row
   # before it, and Down to the end now lands on that instead).
@@ -984,8 +983,7 @@ PY
   key 53; sleep 1
 
   # Stopped: a save builds nothing.
-  for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…
-  key 36; sleep 1
+  manage_extensions
   # As above: the row above the list's last.
   for ((i = 0; i < 14; i++)); do key 125; done
   key 126; sleep 0.12   # Up
@@ -1021,8 +1019,7 @@ export PANE_DATA_DIR=$out/disable-dependents-data
 rm -rf "$PANE_DATA_DIR"
 start_pane --install target/guests/packages/sample-dependencies
 key 36; sleep 3   # Install
-for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…
-key 36; sleep 1
+manage_extensions
 key 36; sleep 1   # disable JavaScript operations sample: asks first
 capture 140-disable-dependents-asked.png
 check 140-disable-dependents-asked.png details   # "Dependencies sample, which requires JavaScript operations sample · …"
@@ -1114,8 +1111,7 @@ key 36; sleep 2   # Greeting: nothing runs
 capture 204-runtime-refused.png
 check 204-runtime-refused.png error   # "Extension runtime unavailable: it stopped after crashing ..."
 key 53; sleep 1   # clears the query
-for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…
-key 36; sleep 1
+manage_extensions
 capture 205-runtime-manage.png   # Restart the extension runtime, Why the extension runtime stopped
 key 125; key 36; sleep 1   # Why the extension runtime stopped
 capture 206-runtime-details.png
@@ -1183,8 +1179,7 @@ for ((i = 0; i < 9; i++)); do key 125; done   # Stop responding
 key 36; sleep 1   # it computes
 [ "$(saved busy)" = started ] || { echo "Stop responding did not start"; exit 1; }
 key 53; sleep 1   # root search answers meanwhile
-for ((i = 0; i < 10; i++)); do key 125; done   # Manage extensions…
-key 36; sleep 1
+manage_extensions
 capture 240-unresponsive-window-answers.png   # the extension list, while the guest computes
 check 240-unresponsive-window-answers.png subtitle   # its rows' subtitles
 [ "$(stopped_calls)" = 0 ] || { echo "Stop responding was stopped before frame 240"; exit 1; }
@@ -1205,8 +1200,7 @@ check 242-unresponsive-paused.png error   # "Settings sample stopped responding 
 check 242-unresponsive-paused.png warning   # Greeting: "Settings sample is paused after an error; ..."
 [ "$(saved busy)" = started ] || { echo "Stop responding finished or was lost"; exit 1; }
 key 53; sleep 1   # clears the query
-for ((i = 0; i < 10; i++)); do key 125; done   # Manage extensions…
-key 36; sleep 1
+manage_extensions
 key 125; key 125; key 125; key 36; sleep 1   # "Why Settings sample is paused"
 capture 243-unresponsive-pause-details.png
 check 243-unresponsive-pause-details.png details   # the details
@@ -1223,8 +1217,7 @@ sleep 14   # Pane gives up on it
 capture 246-unresponsive-runtime.png
 check 246-unresponsive-runtime.png error   # the runtime stopped responding and was started again
 key 53; sleep 1   # clears the query
-for ((i = 0; i < 10; i++)); do key 125; done   # Manage extensions…
-key 36; sleep 1
+manage_extensions
 key 36; sleep 1   # Why the extension runtime stopped, its first row
 capture 247-unresponsive-runtime-details.png
 check 247-unresponsive-runtime-details.png details   # the details
@@ -1261,8 +1254,7 @@ export PANE_DATA_DIR=$out/uninstall-dependents-data
 rm -rf "$PANE_DATA_DIR"
 start_pane --install target/guests/packages/sample-dependencies
 key 36; sleep 3   # Install
-for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…
-key 36; sleep 1
+manage_extensions
 for ((i = 0; i < 6; i++)); do key 125; done   # Uninstall JavaScript operations sample
 key 36; sleep 1   # asks first
 capture 180-uninstall-dependents-asked.png
@@ -1277,8 +1269,7 @@ stop_pane
 [ "$(grep -c '"dir"' "$PANE_DATA_DIR/extensions/installed.json")" = 0 ] || { echo "not both uninstalled"; exit 1; }
 start_pane --install target/guests/packages/sample-operations-js
 key 36; sleep 3   # Install the dependency alone
-for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…
-key 36; sleep 1
+manage_extensions
 capture 183-uninstall-dependents-reinstalled-alone.png   # only the JavaScript operations sample is listed
 check 183-uninstall-dependents-reinstalled-alone.png subtitle
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{180-uninstall-dependents-asked,181-uninstall-dependents-cancelled,182-uninstall-dependents-uninstalled,183-uninstall-dependents-reinstalled-alone}.png
@@ -1290,9 +1281,10 @@ stop_pane
 # the network), with a data folder of its own. Installing the local
 # Dependencies from npm sample shows the npm package it requires and
 # installs both; its command calls the npm package's greet operation. Then
-# "Install extension from npm…" (root's third-to-last row) asks for the
-# npm package in a form; naming the installed one offers Update, and its
-# command runs: "Hello from the npm package".
+# "Install extension from npm…" (searched for by title, as manage_extensions
+# does: a blind run of Downs to root's end would open #72's Settings… row,
+# last of all now) asks for the npm package in a form; naming the installed
+# one offers Update, and its command runs: "Hello from the npm package".
 export PANE_DATA_DIR=$out/npm-data
 rm -rf "$PANE_DATA_DIR"
 rm -f "$out/npm-registry.port"
@@ -1313,8 +1305,8 @@ key 36; sleep 3   # "Greet through the required greeter"
 capture 262-npm-dependency-called.png
 check 262-npm-dependency-called.png success   # "Hello, Pane, from the npm package"
 key 53; sleep 1
-for ((i = 0; i < 14; i++)); do key 125; done   # Manage extensions…, the last row
-key 126; key 126; key 36; sleep 1   # Install extension from npm…
+command_key a; type_text 'install npm'; sleep 1
+key 36; sleep 1   # Install extension from npm…
 capture 263-npm-form.png
 check 263-npm-form.png hint   # the form's hint line
 type_text @pane-samples/greeter
@@ -1362,8 +1354,10 @@ grep -q '"npmVersion": "0.2.0"' "$PANE_DATA_DIR/extensions/installed.json" || { 
 # (scripts/repository_server.py; nothing reaches the network), with a data
 # folder of its own. `--install git:<address>` names the default branch,
 # which holds the source only: explained, nothing offered. Then "Install
-# extension from Git…" (root's last row: with nothing installed in this data
-# folder, there is no Manage extensions… yet) asks for the repository
+# extension from Git…" (searched for by title rather than counted to, as
+# manage_extensions does: root's last row is #72's Settings… now, and with
+# nothing installed in this data folder there is no Manage extensions… row
+# to find either) asks for the repository
 # in a form; naming the tag previews the release revision, pinned, and
 # installs it, and its command runs: "Hello from the Git repository".
 export PANE_DATA_DIR=$out/git-data
@@ -1379,7 +1373,7 @@ start_pane --install "git:$repository"
 # The fetch runs after the window shows: capture until its explanation does.
 capture_until 300-git-source-only.png error 60   # "The default branch, main (commit …) of the Git repository … holds only the source of …"
 key 53; sleep 1
-for ((i = 0; i < 14; i++)); do key 125; done   # the last row
+command_key a; type_text 'install git'; sleep 1
 key 36; sleep 1   # Install extension from Git…
 capture 301-git-form.png
 check 301-git-form.png hint   # the form's hint line

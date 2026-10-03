@@ -101,7 +101,9 @@ fn back_returns_from_a_command_to_root_search() {
         view.screen
     );
     assert_eq!(view.status, Status::Idle);
-    assert_eq!(titles(&launcher), ["sample command"]);
+    // Pane's own Settings row is listed whatever is installed, so it is
+    // the command's row and it after going back.
+    assert_eq!(titles(&launcher), ["sample command", "Settings…"]);
 }
 
 #[test]
@@ -157,16 +159,19 @@ fn an_unavailable_runtime_leaves_root_navigable() {
 }
 
 #[test]
-fn with_no_commands_root_is_empty_and_activation_does_nothing() {
+fn with_no_commands_root_lists_only_settings_and_activation_does_nothing() {
     let launcher = launcher(vec![]);
 
     block_on(launcher.activate_selected());
 
+    // No command is installed, but Pane's own Settings row is still
+    // listed — it needs no extension — and activating it does nothing in
+    // the launcher: the window opens the Settings window.
     let view = launcher.view();
-    assert_eq!(
-        (view.rows.len(), view.selected, view.status),
-        (0, None, Status::Idle)
-    );
+    assert_eq!(titles(&launcher), ["Settings…".to_string()]);
+    assert_eq!(view.selected, Some(0));
+    assert_eq!(view.status, Status::Idle);
+    assert!(launcher.selected_opens_settings());
 }
 
 #[test]

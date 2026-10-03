@@ -21,8 +21,8 @@
 //! is reported as focused, and with no result the combo box itself is.
 
 use gpui::{
-    AnyElement, App, Context, Div, Entity, Focusable, KeyBinding, Role, Stateful, Subscription,
-    Window, WindowControlArea, div, prelude::*, px,
+    AnyElement, App, Context, Entity, Focusable, KeyBinding, Role, Subscription, Window,
+    WindowControlArea, div, prelude::*, px,
 };
 use gpui_elements::editable_text::actions::DEFAULT_INPUT_CONTEXT;
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
@@ -129,7 +129,10 @@ impl LauncherWindow {
     }
 
     /// Root search, or an opened command's search: the query field, showing
-    /// `placeholder` while empty, above `list`, the results.
+    /// `placeholder` while empty, above `list`, the results — the content
+    /// that arrives with a view transition, wrapped by the caller (see
+    /// [`crate::app::LauncherWindow::render`]); the field above it is the
+    /// shell's search header and never moves.
     ///
     /// The field's chrome is the reference's search header: a 64px row with
     /// the magnifier, 20px padding, a 14px gap and a hairline below — no
@@ -140,7 +143,7 @@ impl LauncherWindow {
         &self,
         query: String,
         placeholder: &'static str,
-        list: Stateful<Div>,
+        list: impl gpui::IntoElement,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let input = &self.query.input;

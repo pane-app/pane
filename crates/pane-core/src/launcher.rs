@@ -120,6 +120,9 @@ const GIT_REPOSITORY_FIELD: &str = "repository";
 /// disable them.
 const MANAGE_EXTENSIONS: &str = "pane.manage-extensions";
 
+/// The id of the root row that opens Pane's Settings window.
+const SETTINGS: &str = "pane.settings";
+
 /// A command offered in root search, backed by one extension component.
 #[derive(Clone, Debug)]
 pub struct CommandRegistration {
@@ -327,6 +330,35 @@ pub enum Status {
     /// Why the most recent action failed. For a rejected form field this is
     /// "<field label>: <message>".
     Error(String),
+}
+
+/// What the launcher's primary action — Enter, or the window's footer
+/// button — does with the selected row right now: one definition for the
+/// label, the availability and the binding the window shows, so behavior
+/// and presentation cannot diverge.
+///
+/// The action's identity is the screen plus the selected row's entry,
+/// never a display title: the label says what activating that row does
+/// there — "Open command" for a selected extension command in root search,
+/// "Submit" on a form. The labels are the specification's provisional
+/// synthesis ([#70](https://github.com/hoangvu12/pane/issues/70)), named
+/// here so behavior and wording move together. Dispatch itself stays where
+/// it is: both Enter and the button route through
+/// [`Launcher::activate_selected`], or [`Launcher::submit_form`] on a form.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SelectedAction {
+    /// The action's label, from its identity. Empty where there is no
+    /// primary action to show at all: a custom view takes the keys itself,
+    /// the network details screen has only Back, and the hotkey screen
+    /// with no row to remove has only the keys it records — the window
+    /// shows no button there.
+    pub label: String,
+    /// Whether the action can run now: `false` with no row selected, for a
+    /// row whose action is unavailable on this system or paused (its reason
+    /// stays visible where the row shows it), and while an action is
+    /// already running. Enter keeps the behavior it has today either way;
+    /// this keeps the button from dispatching what cannot run.
+    pub available: bool,
 }
 
 /// An open form, as the user is filling it in.
@@ -914,6 +946,10 @@ enum Entry {
     Install(install::Request, Mode, dependencies::Assumptions),
     /// Show the installed packages (root).
     Manage,
+    /// Nothing in the launcher: the window opens or focuses its Settings
+    /// window (root). Which pages Settings offers is the app's, not the
+    /// launcher's.
+    Settings,
     /// Enable this installed package if it is disabled, else disable it, or
     /// first ask about the enabled packages that require it.
     Toggle(PackageIdentity),
@@ -1191,6 +1227,15 @@ impl Launcher {
         let launcher = Launcher { links, ..self };
         launcher.report_failures();
         launcher
+    }
+
+    /// The link opener this launcher was given (see
+    /// [`Launcher::with_link_opener`]), for the app to open Pane's own
+    /// links with the same handler — the documentation entry of Settings'
+    /// About page — rather than construct a second opener instance. A
+    /// launcher given none returns the opener that says so.
+    pub fn link_opener(&self) -> Arc<dyn LinkOpener> {
+        self.links.clone()
     }
 
     /// This launcher downloading npm packages from `registry` rather than
@@ -1792,6 +1837,19 @@ impl Launcher {
         matches!(entry, Some(Entry::InstallFromFolder))
     }
 
+    /// Whether the selected row opens Pane's Settings window. Activating
+    /// it does nothing in the launcher: the window opens or focuses its
+    /// one Settings window, whatever opened it (the row, the ellipsis menu
+    /// or the shortcut).
+    pub fn selected_opens_settings(&self) -> bool {
+        let state = self.lock();
+        let entry = state
+            .view
+            .selected
+            .and_then(|index| state.entries.get(index));
+        matches!(entry, Some(Entry::Settings))
+    }
+
     /// Leaves an open form or custom view for its command's list, or an open
     /// command, package preview or the extension list for root search. A
     /// custom view is closed. On root search it clears the query.
@@ -1851,6 +1909,16 @@ impl Launcher {
                 }
             }
         }
+    }
+
+    /// The selected action: what Enter, or the window's footer button, does
+    /// with the selected row now (see [`SelectedAction`]). One definition
+    /// for the label, the availability and the binding the window shows;
+    /// dispatch is the one both inputs already take —
+    /// [`Launcher::activate_selected`], or [`Launcher::submit_form`] on a
+    /// form — so a click and a key press cannot diverge.
+    pub fn selected_action(&self) -> SelectedAction {
+        selected_action(&self.lock())
     }
 
     /// Opens the selected command (root), opens the selected item's form or
@@ -2069,7 +2137,9 @@ impl Launcher {
                 self.show_git_form(&mut state);
                 None
             }
-            Some(Entry::InstallFromFolder | Entry::ChooseFolder(_)) | None => None,
+            Some(Entry::InstallFromFolder | Entry::ChooseFolder(_) | Entry::Settings) | None => {
+                None
+            }
             Some(entry) => {
                 state.view.status = Status::Running;
                 Some(entry)
@@ -2192,6 +2262,7 @@ impl Launcher {
                     | Entry::AskDeleteRetained(_)
                     | Entry::DeleteRetained(_)
                     | Entry::Cancel
+                    | Entry::Settings
                     | Entry::Form(..),
                 )
                 | None => {}
@@ -2955,6 +3026,19 @@ impl Launcher {
                 unavailable: None,
             };
             add(row, Entry::Manage, None, None);
+        }
+        // Pane's Settings window is the app's to open; the row is listed
+        // whatever is installed, since Settings is reachable without any
+        // extension (the ellipsis menu and the local shortcut open it
+        // too).
+        {
+            let row = Row {
+                id: SETTINGS.into(),
+                title: "Settings…".into(),
+                subtitle: Some("Open Pane's settings window".into()),
+                unavailable: None,
+            };
+            add(row, Entry::Settings, None, None);
         }
         results
     }
@@ -4318,6 +4402,140 @@ fn open_form(state: &mut State, item_id: String, form: Form) {
         submitting: false,
     });
     state.next_screen();
+}
+
+/// The selected action (see [`Launcher::selected_action`]) for the
+/// launcher's current state. The label comes from the selected entry's
+/// identity — what activating that row does on that screen — never from a
+/// display title; the availability comes from what can run now. Nothing is
+/// selected, or the row's action cannot run, and the action is the
+/// screen's own, unavailable: the window shows it disabled, and Enter
+/// keeps the behavior it has today (nothing, or an explanation) instead of
+/// an extension call.
+fn selected_action(state: &State) -> SelectedAction {
+    // An action is already running: the status line reports it, and the
+    // definition keeps the button from dispatching another one meanwhile.
+    let busy = matches!(state.view.status, Status::Running);
+    let acting = |label: &str| SelectedAction {
+        label: label.into(),
+        available: !busy,
+    };
+    let unusable = |label: &str| SelectedAction {
+        label: label.into(),
+        available: false,
+    };
+    let entry = state
+        .view
+        .selected
+        .and_then(|index| state.entries.get(index));
+    match (&state.view.screen, entry) {
+        // A form submits: the form's own control keeps the label the
+        // extension gave it, but Enter — and the footer's button with it —
+        // submits the form.
+        (Screen::Form(_), _) => acting("Submit"),
+        // A custom view takes the keys itself, and the network details
+        // screen has only Back: Enter does nothing, so there is no primary
+        // action to show.
+        (Screen::CustomView(_) | Screen::NetworkDetails { .. }, _) => unusable(""),
+        // A row is selected: what activating it does is the action.
+        (_, Some(Entry::Open(_))) => acting("Open command"),
+        (_, Some(Entry::Send(sending))) => match &sending.unavailable {
+            Some(_) => unusable("Unavailable"),
+            None => acting("Send query"),
+        },
+        (_, Some(Entry::Copy(_))) => acting("Copy answer"),
+        (_, Some(Entry::OpenUrl(_))) => acting("Open link"),
+        (_, Some(Entry::OpenFile { .. })) => acting("Open file"),
+        (_, Some(Entry::OpenApplication { .. })) => acting("Open application"),
+        (_, Some(Entry::Broken(_) | Entry::Unavailable(_))) => unusable("Unavailable"),
+        (_, Some(Entry::InstallFromFolder)) => acting("Install from folder"),
+        (_, Some(Entry::AskNpm)) => acting("Install from npm"),
+        (_, Some(Entry::AskGit)) => acting("Install from Git"),
+        (_, Some(Entry::Acquire(_))) => acting("Set up extension"),
+        (_, Some(Entry::InstallUpdate)) => acting("Install update"),
+        (_, Some(Entry::CheckUpdate)) => acting("Check for update"),
+        (_, Some(Entry::Manage)) => acting("Manage extensions"),
+        // Pane's Settings row opens the Settings window, exactly as its
+        // ellipsis menu entry and the local shortcut do (the window, not
+        // the launcher, acts; see [`Launcher::selected_opens_settings`]).
+        (_, Some(Entry::Settings)) => acting("Open settings"),
+        (_, Some(Entry::Run(_))) => acting("Run item"),
+        (_, Some(Entry::Form(..))) => acting("Open form"),
+        (_, Some(Entry::CustomView(..))) => acting("Open view"),
+        (_, Some(Entry::ChooseFolder(_))) => acting("Choose folder"),
+        (_, Some(Entry::StopSharingFolder(_))) => acting("Stop sharing"),
+        (_, Some(Entry::Install(_, Mode::Install, _))) => acting("Install"),
+        (_, Some(Entry::Install(_, Mode::Update(_), _))) => acting("Update"),
+        // A confirmation's rows are its answers; the direction a toggle
+        // turns in comes from the state it acts on, not from a title.
+        (_, Some(Entry::Toggle(identity))) => {
+            let enable = state
+                .package(identity)
+                .is_some_and(|package| !package.enabled);
+            acting(if enable { "Enable" } else { "Disable" })
+        }
+        (_, Some(Entry::ToggleUpdates(None))) => acting(if state.update_controls.automatic {
+            "Turn updates off"
+        } else {
+            "Turn updates on"
+        }),
+        (_, Some(Entry::ToggleUpdates(Some(identity)))) => {
+            let off = state.update_controls.off.contains(&identity.key());
+            acting(if off {
+                "Turn updates on"
+            } else {
+                "Turn updates off"
+            })
+        }
+        (_, Some(Entry::Reload(_))) => acting("Reload"),
+        (_, Some(Entry::Retry(_))) => acting("Retry"),
+        (_, Some(Entry::PauseDetails(_))) => acting("Show details"),
+        (_, Some(Entry::NetworkDetails(_))) => acting("Show network use"),
+        (_, Some(Entry::RuntimeDetails)) => acting("Show details"),
+        (_, Some(Entry::RestartRuntime)) => acting("Restart runtime"),
+        (_, Some(Entry::Develop(_))) => acting("Start developing"),
+        (_, Some(Entry::StopDeveloping(_))) => acting("Stop developing"),
+        (_, Some(Entry::BuildDetails(_))) => acting("Show details"),
+        (_, Some(Entry::BuildAgain(_))) => acting("Build again"),
+        (_, Some(Entry::AskClearCache(_))) => acting("Clear cache"),
+        (_, Some(Entry::AskHotkey(_))) => acting("Set hotkey"),
+        (_, Some(Entry::RemoveHotkey(_))) => acting("Remove hotkey"),
+        (_, Some(Entry::AskAlias(_))) => acting("Set alias"),
+        (_, Some(Entry::ToggleFallback(command))) => {
+            let fallback = state.aliases.chosen.is_fallback(command);
+            acting(if fallback {
+                "Stop offering as fallback"
+            } else {
+                "Offer as fallback"
+            })
+        }
+        (_, Some(Entry::ForgetChoices(_))) => acting("Forget choices"),
+        (_, Some(Entry::AskUninstall(_))) => acting("Uninstall"),
+        (_, Some(Entry::AskDeleteRetained(_))) => acting("Delete retained data"),
+        (_, Some(Entry::Uninstall(_, SavedData::Keep))) => acting("Uninstall"),
+        (_, Some(Entry::Uninstall(_, SavedData::Delete))) => acting("Uninstall and delete data"),
+        (_, Some(Entry::UninstallAll(_, _, SavedData::Keep))) => acting("Uninstall all"),
+        (_, Some(Entry::UninstallAll(_, _, SavedData::Delete))) => {
+            acting("Uninstall all and delete data")
+        }
+        (_, Some(Entry::DeleteRetained(_))) => acting("Delete retained data"),
+        (_, Some(Entry::ClearCache(_))) => acting("Clear cache"),
+        (_, Some(Entry::DisableAll(..))) => acting("Disable all"),
+        (_, Some(Entry::Cancel)) => acting("Cancel"),
+        // Nothing is selected: the screen's own action, which cannot run
+        // without a row to run it on.
+        (Screen::Root { .. }, None) => unusable("Open command"),
+        (Screen::Command | Screen::CommandSearch { .. }, None) => unusable("Run item"),
+        (Screen::Package { .. }, None) => unusable("Install"),
+        (Screen::Extensions { .. }, None) => unusable("Choose"),
+        (Screen::Confirm { .. }, None) => unusable("Choose"),
+        // The hotkey screen without a row to remove has no primary action:
+        // Enter does nothing there; the keys it records are the point.
+        (Screen::Hotkey { .. }, None) => unusable(""),
+        (Screen::PauseDetails { .. }, None) => unusable("Retry"),
+        (Screen::RuntimeDetails { .. }, None) => unusable("Restart"),
+        (Screen::BuildDetails { .. }, None) => unusable("Build again"),
+    }
 }
 
 /// The rows of root search for `query`, and what activating each does: the

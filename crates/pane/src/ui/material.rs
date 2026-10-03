@@ -9,9 +9,11 @@
 //!   and blurs whatever is *behind the window*. This is the launcher's
 //!   glass. It is never simulated: no wallpaper is drawn inside the app.
 //! - **In-scene frost** — GPUI's `Styled::backdrop_blur(radius)` blurs
-//!   content *inside* the window, behind an element (a future popover over
-//!   the list). This slice uses none of it; the seam is noted so later
-//!   overlays know the difference.
+//!   content *inside* the window, behind an element. The L2 popover
+//!   ([`Material::popover`]) uses it in glass mode, blurring the list
+//!   behind the launcher footer's menu the way the reference's `.pop`
+//!   blurs the page behind it; the window's own glass is never simulated
+//!   with it.
 //!
 //! Failure honesty: whether the compositor actually applied the blur is not
 //! observable from the application — GPUI exposes no query for it. On
@@ -191,5 +193,55 @@ impl Material {
             .bg(theme.footer_tint)
             .border_t_1()
             .border_color(theme.hairline_soft)
+    }
+
+    /// The L2 popover: the reference's `.pop` surface, for a small floating
+    /// layer over the panel (the launcher footer's menu). Draw order,
+    /// inside out: the tint (or the solid fallback), the sheen fading out
+    /// over the top 40%, then `content`. Like the panel, the surface owns
+    /// the tint-or-solid choice, clips its content, and keeps the sheen a
+    /// plain non-interactive layer.
+    ///
+    /// Two differences from the panel, both stated by the reference and
+    /// GPUI's painting order:
+    ///
+    /// - In glass mode the popover blurs what is behind it *inside the
+    ///   window* (the reference's `backdrop-filter: blur(30px)`), which
+    ///   works on every platform — unlike the window's own frost. GPUI has
+    ///   no saturation filter, so the reference's `saturate(160%)` is
+    ///   dropped rather than approximated.
+    /// - The reference's outer shadows are not painted here: GPUI paints a
+    ///   non-inset shadow under the element's own translucent fill, where
+    ///   it would show through the tint. A caller that wants the reference's
+    ///   elevation wraps this surface in a plain `relative` div carrying
+    ///   the shadow, so it paints behind the surface (see the footer menu).
+    pub(crate) fn popover(&self, theme: &Theme, content: impl IntoElement) -> Div {
+        let geometry = &theme.geometry;
+        let (background, blur) = match self.mode {
+            MaterialMode::Glass => (solid_background(theme.popover_tint), px(30.)),
+            MaterialMode::Opaque => (solid_background(theme.popover_solid), px(0.)),
+        };
+        div()
+            .relative()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .rounded(geometry.popover_radius)
+            .when(blur > px(0.), |surface| surface.backdrop_blur(blur))
+            .bg(background)
+            // The reference's inset edge (`inset 0 0 0 1px`) and top inset
+            // (`inset 0 1px 0`), as the panel renders its own.
+            .border_1()
+            .border_color(theme.popover_edge)
+            .shadow(vec![
+                BoxShadow::new(px(0.), px(1.), theme.popover_top_highlight).inset(),
+            ])
+            // The sheen paints beneath the content, as on the panel.
+            .child(div().absolute().size_full().bg(linear_gradient(
+                180.,
+                linear_color_stop(theme.popover_sheen, 0.),
+                linear_color_stop(transparent_black(), 0.4),
+            )))
+            .child(content)
     }
 }

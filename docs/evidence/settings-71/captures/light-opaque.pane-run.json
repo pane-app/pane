@@ -1,0 +1,49 @@
+{
+    "script":  "capture-pane.ps1",
+    "startedUtc":  "2026-10-02T16:09:14.0313238Z",
+    "binary":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\target\\debug\\pane.exe",
+    "runDir":  "C:\\Users\\ADMIN\\AppData\\Local\\Temp\\pi-subagent-worktrees\\job-6129fa3dac82\\docs\\evidence\\settings-71\\captures\\run-20261002-230913-cc06cd59",
+    "paneDataDir":  "C:\\Users\\ADMIN\\AppData\\Local\\Temp\\pi-subagent-worktrees\\job-6129fa3dac82\\docs\\evidence\\settings-71\\captures\\run-20261002-230913-cc06cd59\\pane-data",
+    "localAppData":  "C:\\Users\\ADMIN\\AppData\\Local\\Temp\\pi-subagent-worktrees\\job-6129fa3dac82\\docs\\evidence\\settings-71\\captures\\run-20261002-230913-cc06cd59\\localappdata",
+    "cacheLocation":  "C:\\Users\\ADMIN\\AppData\\Local\\Temp\\pi-subagent-worktrees\\job-6129fa3dac82\\docs\\evidence\\settings-71\\captures\\run-20261002-230913-cc06cd59\\localappdata\\Pane\\cache",
+    "cacheDirExisted":  true,
+    "extensionsDir":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\target\\guests",
+    "theme":  "light",
+    "material":  "opaque",
+    "keysRequested":  [
+
+                      ],
+    "keysAbortedAt":  null,
+    "captureMode":  "window",
+    "backdrop":  null,
+    "zOrderVerified":  null,
+    "pid":  71784,
+    "windowTitle":  "Pane",
+    "windowRect":  "572,306,1348,774",
+    "frameBounds":  "579,306,1341,767",
+    "requestedWindowSize":  null,
+    "dpi":  96,
+    "focusAchieved":  false,
+    "activationMethod":  null,
+    "foregroundHwnd":  "hwnd 0x28098e pid 63796",
+    "foregroundPid":  63796,
+    "foregroundIsPane":  false,
+    "foregroundBeforeFallback":  "hwnd 0x28098e pid 63796",
+    "clickToFocusPoint":  null,
+    "clickToFocusGuards":  null,
+    "cursorSaved":  null,
+    "cursorRestored":  null,
+    "screenshots":  [
+                        {
+                            "file":  "00-initial-window.png",
+                            "label":  "initial",
+                            "utc":  "2026-10-02T16:09:19.6759983Z"
+                        }
+                    ],
+    "backdropClosed":  null,
+    "processClosed":  true,
+    "processExited":  true,
+    "exitCode":  null,
+    "errorMessage":  "Pane window could not be focused; keys were NOT sent (SendKeys would reach another window). See foregroundHwnd/foregroundPid/foregroundIsPane in pane-run.json.",
+    "finishedUtc":  "2026-10-02T16:09:19.7680850Z"
+}

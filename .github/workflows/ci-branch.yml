@@ -1,0 +1,83 @@
+name: CI (branch)
+
+# The branch tier of CI: every push to a working branch that is not
+# main and not a pi-subagent worktree runs the check leg of the release
+# matrix — build the guests, check formatting and lints, run the tests
+# — on all three operating systems. This is what an iterating branch
+# (a milestone's PR branch between merges, or any feature branch)
+# needs per push: proof that this combination compiles and passes its
+# tests, in the half hour the check legs take, instead of the hour-plus
+# that the release legs (smokes, renderers, packaging,
+# guests-from-source) need per run. Those legs live in ci.yml and run
+# where a release is at stake: on main, when a pull request is marked
+# ready for review, and on demand. pi-subagent/** worktrees keep their
+# own two-tier workflow in ci-fast.yml.
+on:
+  push:
+    branches-ignore:
+      - main
+      - "pi-subagent/**"
+
+# As in ci.yml: one run per branch, a superseded run cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The same check job as ci.yml's, kept in step-for-step sync with it
+  # (same steps, same environment, same caches) so that a green run
+  # here means exactly what a green check leg means there.
+  check:
+    name: Check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, macos-15, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    env:
+      # The many test binaries each link Pane's whole dependency tree, so
+      # the Linux legs link them with mold (Windows and macOS link with
+      # their own linkers; the empty value keeps the cache key uniform
+      # per operating system). The flag is scoped to the host triple, never
+      # RUSTFLAGS: a job-wide RUSTFLAGS would also reach the wasm32-wasip2
+      # guest builds, whose wasm-component-ld rejects native linker flags
+      # (run 36789533844 failed on "unexpected argument '-f' found"). The
+      # matrix is what a job-level env may read: the runner context exists
+      # only inside a step; and on the other legs the triple never builds,
+      # so the variable is inert there whatever it holds.
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ${{ matrix.os == 'ubuntu-24.04' && '-C link-arg=-fuse-ld=mold' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libxcb1-dev libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers \
+            xvfb xdotool imagemagick mold
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            guests
+            guests/fixtures/mixed-p2
+      - name: Build guests, check formatting and lints, run tests
+        run: cargo xtask ci
+        env:
+          # The Windows and macOS clipboard adapters' tests replace what is
+          # on the clipboard, so they run only where this is set: on CI's
+          # runners (the macOS one has the runner's logged-in WindowServer
+          # session, so the pasteboard is live), never by default on a
+          # developer's computer.
+          PANE_TEST_REAL_CLIPBOARD: ${{ runner.os != 'Linux' && '1' || '' }}
+      # The Linux (X11) clipboard adapter's test also replaces what is on
+      # the clipboard, and needs a display to watch: the same opt-in, run
+      # under Xvfb (the step above runs without a display, so the test
+      # skips itself there).
+      - name: Run the Linux clipboard adapter test (Xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a cargo test --locked -p pane-core --test clipboard_adapter_linux
+        env:
+          PANE_TEST_REAL_CLIPBOARD: "1"

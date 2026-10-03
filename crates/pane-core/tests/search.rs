@@ -89,7 +89,9 @@ fn root_search_opens_with_an_empty_query_listing_every_command_in_order() {
             "Recent downloads",
             "Downloader",
             "Download",
-            "Settings"
+            "Settings",
+            // Pane's own row, listed after every command.
+            "Settings…"
         ]
     );
     assert_eq!(view.selected, Some(0));
@@ -122,7 +124,7 @@ fn matching_ignores_letter_case_and_surrounding_spaces() {
     block_on(launcher.set_query("  DOWNLOADER "));
     assert_eq!(titles(&launcher), ["Downloader"]);
     block_on(launcher.set_query("   "));
-    assert_eq!(titles(&launcher).len(), 6, "a blank query lists everything");
+    assert_eq!(titles(&launcher).len(), 7, "a blank query lists everything");
 }
 
 #[test]
@@ -267,7 +269,7 @@ fn back_clears_the_query_before_anything_else() {
     launcher.back();
     let view = launcher.view();
     assert_eq!(view.query(), Some(""));
-    assert_eq!(titles(&launcher).len(), 6);
+    assert_eq!(titles(&launcher).len(), 7);
 }
 
 #[test]
@@ -289,7 +291,7 @@ fn returning_to_root_search_starts_a_new_search() {
     launcher.back();
     let view = launcher.view();
     assert_eq!(view.query(), Some(""));
-    assert_eq!(titles(&launcher), ["Rust sample", "Other"]);
+    assert_eq!(titles(&launcher), ["Rust sample", "Other", "Settings…"]);
 }
 
 /// Test-local directories: package sources and Pane's data location.
@@ -364,7 +366,7 @@ fn many_installed_commands_are_searched_without_running_them_and_only_the_chosen
     // A restart: listing and searching read only the managed manifests.
     let runtime = dirs.runtime();
     let launcher = Launcher::with_packages(Ok(runtime.clone()), vec![], dirs.packages_dir());
-    assert_eq!(launcher.view().rows.len(), 16);
+    assert_eq!(launcher.view().rows.len(), 17);
     block_on(launcher.set_query("tool 1"));
     assert_eq!(
         titles(&launcher),

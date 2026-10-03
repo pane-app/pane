@@ -802,7 +802,9 @@ fn a_package_that_only_publishes_operations_adds_no_command() {
             "Install extension from folder…",
             "Install extension from npm…",
             "Install extension from Git…",
-            "Manage extensions…"
+            "Manage extensions…",
+            // Pane's own row, listed after every command.
+            "Settings…"
         ]
     );
 }

@@ -9,6 +9,12 @@
 //! GPUI renders an SVG as an alpha mask and tints it with the element's
 //! text color, so the glyph's color always comes from the caller's token.
 //!
+//! The reference's set has no settings, menu or window-control glyph, so
+//! those are Pane's own authoring in the same stroke style: the ellipsis
+//! and gear (the Settings rows), the globe (the documentation entry) and
+//! the Windows titlebar's close, minimize and maximize marks (see the
+//! Settings window's custom titlebar).
+//!
 //! Tones are the reference's `appTone` map, exactly: nine vertical
 //! gradients with their glyph colors, plus the neutral command tile.
 //! Tones carry *presentation* only — mapping a real row's identity to a
@@ -33,6 +39,21 @@ pub(crate) enum Glyph {
     Code,
     Folder,
     Blocks,
+    /// Three dots: the launcher footer's menu button.
+    Ellipsis,
+    /// A cog: the Settings root row and the Settings window's sidebar.
+    Gear,
+    /// A globe: Settings' documentation entry.
+    Globe,
+    /// The Windows titlebar's close mark.
+    #[cfg(target_os = "windows")]
+    WindowClose,
+    /// The Windows titlebar's minimize mark.
+    #[cfg(target_os = "windows")]
+    WindowMinimize,
+    /// The Windows titlebar's maximize mark.
+    #[cfg(target_os = "windows")]
+    WindowMaximize,
 }
 
 impl Glyph {
@@ -45,6 +66,15 @@ impl Glyph {
             Glyph::Code => include_bytes!("../../assets/icons/code.svg"),
             Glyph::Folder => include_bytes!("../../assets/icons/folder.svg"),
             Glyph::Blocks => include_bytes!("../../assets/icons/blocks.svg"),
+            Glyph::Ellipsis => include_bytes!("../../assets/icons/ellipsis.svg"),
+            Glyph::Gear => include_bytes!("../../assets/icons/gear.svg"),
+            Glyph::Globe => include_bytes!("../../assets/icons/globe.svg"),
+            #[cfg(target_os = "windows")]
+            Glyph::WindowClose => include_bytes!("../../assets/icons/window-close.svg"),
+            #[cfg(target_os = "windows")]
+            Glyph::WindowMinimize => include_bytes!("../../assets/icons/window-minimize.svg"),
+            #[cfg(target_os = "windows")]
+            Glyph::WindowMaximize => include_bytes!("../../assets/icons/window-maximize.svg"),
         }
     }
 }

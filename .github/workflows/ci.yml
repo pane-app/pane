@@ -1,8 +1,22 @@
 name: CI
 
 on:
+  # The release matrix runs where a release is at stake: on pushes to
+  # main, when a pull request leaves draft (ready_for_review), and on
+  # demand via workflow_dispatch. Branches iterating toward a pull
+  # request take their per-push feedback from the branch tier in
+  # ci-branch.yml instead: this matrix's smoke, renderer, packaging and
+  # guests-from-source legs hold their runners for an hour or more, and
+  # paying that on every working-branch push made the milestone loop
+  # wait on release validation that only needs to happen once.
+  # pi-subagent/** worktrees keep their own two-tier workflow in
+  # ci-fast.yml.
   push:
+    branches:
+      - main
   pull_request:
+    types:
+      - ready_for_review
   workflow_dispatch:
 
 # One run per branch: a superseded run is cancelled instead of finishing

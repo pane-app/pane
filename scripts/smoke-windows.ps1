@@ -67,6 +67,18 @@ function Click-At($x, $y) {
     [Win]::mouse_event(0x4, 0, 0, 0, [UIntPtr]::Zero)   # left button up
 }
 function Send($keys) { [System.Windows.Forms.SendKeys]::SendWait($keys) }
+# Opens Manage extensions from root search. A blind run of Downs to root's
+# end was the way in until #72's Settings… root result made itself last of
+# all (it is listed whatever is installed, so every phase's root ends with
+# it): the run now opens the Settings window instead. Searching for the row
+# by its title is order-proof: "manage" matches only the Manage extensions…
+# row, which is selected when the list narrows to it, and Enter opens it.
+# ^A first, so a query an earlier step left in the field is replaced, not
+# extended.
+function Manage-Extensions {
+    Send "^a"; Send "manage"; Start-Sleep -Seconds 1
+    Send "{ENTER}"; Start-Sleep -Seconds 1
+}
 # Brings Pane's window to the front, so that key events reach it.
 function Focus-Pane($process) {
     [Win]::SetForegroundWindow($process.MainWindowHandle) | Out-Null
@@ -206,8 +218,8 @@ Stop-Pane $process
 
 # Install the settings sample, save a choice with it, then disable it in
 # Manage extensions. Root lists the three samples, Rust sample, Greeting, the
-# install row, then Manage extensions... last; the extension list holds Rust
-# sample, then Settings sample.
+# install rows, then Manage extensions… and Settings… last; the extension
+# list holds Rust sample, then Settings sample.
 $process = Start-Pane "stderr-settings.log" @("--install", "target/guests/packages/sample-settings")
 Send "{ENTER}"; Start-Sleep -Seconds 2   # Install; Greeting is selected
 Send "{ENTER}"; Start-Sleep -Seconds 3   # open Greeting
@@ -215,8 +227,7 @@ Send "{ENTER}"; Start-Sleep -Seconds 2   # "Use a formal greeting"
 Capture "16-setting-saved.png"
 Check "16-setting-saved.png" "success"   # "Saved the formal greeting"
 Send "{ESC}"; Start-Sleep -Seconds 1
-Send "{DOWN 14}"   # the last row
-Send "{ENTER}"; Start-Sleep -Seconds 1
+Manage-Extensions
 Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 2
 Capture "17-disabled.png"
 Check "17-disabled.png" "success"   # "Disabled Settings sample"
@@ -233,8 +244,7 @@ Capture "18-restarted-disabled.png"
 Check "18-restarted-disabled.png" "hint"
 python "$PSScriptRoot/check_screenshot.py" --same (Join-Path $OutDir "12-restarted.png") (Join-Path $OutDir "18-restarted-disabled.png")
 if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: root after the restart lists the disabled package" }
-Send "{DOWN 14}"
-Send "{ENTER}"; Start-Sleep -Seconds 1
+Manage-Extensions
 Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 2
 Capture "19-enabled.png"
 Check "19-enabled.png" "success"   # "Enabled Settings sample"
@@ -361,8 +371,7 @@ Capture "33-dev-before.png"
 Check "33-dev-before.png" "success"   # "Hello from the Rust guest"
 Send "{ESC}"; Start-Sleep -Seconds 1
 Copy-Item -Force "target/guests/sample_js.wasm" (Join-Path $dev "command.wasm")
-Send "{DOWN 12}"   # the last row
-Send "{ENTER}"; Start-Sleep -Seconds 1
+Manage-Extensions
 Send "{DOWN 11}"   # Reload Dev
 Send "{ENTER}"; Start-Sleep -Seconds 3
 Capture "34-reloaded.png"
@@ -380,8 +389,7 @@ Send "{ESC}"; Start-Sleep -Seconds 1
 # A build that fails the install checks (here its component is missing) is
 # not reloaded: the working code keeps running, exactly as before.
 Remove-Item (Join-Path $dev "command.wasm")
-Send "{DOWN 12}"
-Send "{ENTER}"; Start-Sleep -Seconds 1
+Manage-Extensions
 Send "{DOWN 11}"
 Send "{ENTER}"; Start-Sleep -Seconds 2
 Capture "36-not-reloaded.png"
@@ -398,8 +406,7 @@ Send "{ESC}"; Start-Sleep -Seconds 1
 # A build whose start fails is reported with Retry, after Reload Dev; this
 # one saves a setting and fails its first start only, so Retry starts it.
 Copy-Item "target/guests/failing_start.wasm" (Join-Path $dev "command.wasm")
-Send "{DOWN 12}"
-Send "{ENTER}"; Start-Sleep -Seconds 1
+Manage-Extensions
 Send "{DOWN 11}"
 Send "{ENTER}"; Start-Sleep -Seconds 3
 Capture "38-start-failed.png"
@@ -433,8 +440,7 @@ if (-not (Select-String -Quiet -SimpleMatch '"last-greeting": "Good day to you"'
 # six package rows, their six Reload rows and "Clear cache of Rust sample". Pane asks first, then deletes only the cached
 # greeting, without running the extension.
 $process = Start-Pane "stderr-clear-cache.log"
-Send "{DOWN 12}"   # the last row
-Send "{ENTER}"; Start-Sleep -Seconds 1
+Manage-Extensions
 Send "{DOWN 13}"
 Send "{ENTER}"; Start-Sleep -Seconds 1   # "Clear cache of Settings sample"
 Capture "41-confirm-clear-cache.png"
@@ -523,8 +529,7 @@ Stop-Pane $process
 # choice keeps its settings and content while its copy and credential go.
 # Installing the same folder again finds its formal style and note, signed out.
 $process = Start-Pane "stderr-uninstall.log"
-Send "{DOWN 20}"   # the last row
-Send "{ENTER}"; Start-Sleep -Seconds 1
+Manage-Extensions
 Send "{DOWN 25}"
 Send "{ENTER}"; Start-Sleep -Seconds 1   # "Uninstall Settings sample"
 Capture "49-confirm-uninstall.png"
@@ -576,8 +581,7 @@ if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 $env:PANE_DATA_DIR = $data
 $process = Start-Pane "stderr-hotkeys.log" @("--install", "target/guests/packages/sample-settings")
 Send "{ENTER}"; Start-Sleep -Seconds 2   # Install; Greeting is selected
-Send "{DOWN 14}"   # Manage extensions…
-Send "{ENTER}"; Start-Sleep -Seconds 1
+Manage-Extensions
 Send "{DOWN 4}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 1   # "Hotkey for Greeting"
 Capture "52-hotkey-screen.png"
 Check "52-hotkey-screen.png" "details"   # "Press the keys that should open Greeting ..."
@@ -606,8 +610,7 @@ $shots = "53-hotkey-assigned", "56-hotkey-after-restart" | ForEach-Object { Join
 python "$PSScriptRoot/check_screenshot.py" --distinct @shots
 if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the hotkey did not open Greeting after a restart" }
 Send "{ESC}"; Start-Sleep -Seconds 1
-Send "{DOWN 14}"   # Manage extensions…
-Send "{ENTER}"; Start-Sleep -Seconds 1
+Manage-Extensions
 Send "{ENTER}"; Start-Sleep -Seconds 2   # disable Settings sample
 Send "{ESC}"; Start-Sleep -Seconds 1
 Capture "57-disabled.png"   # root search
@@ -648,8 +651,7 @@ Send "greet"; Start-Sleep -Seconds 1
 Capture "60-paused-after-restart.png"
 Check "60-paused-after-restart.png" "warning"   # Greeting is still paused
 Send "{ESC}"; Start-Sleep -Seconds 1   # clears the query
-Send "{DOWN 14}"   # Manage extensions…
-Send "{ENTER}"; Start-Sleep -Seconds 1
+Manage-Extensions
 Send "{DOWN 3}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 1   # "Why Settings sample is paused"
 Capture "61-pause-details.png"
 Check "61-pause-details.png" "details"   # the details
@@ -696,8 +698,7 @@ Send "{DOWN 3}"
 Send "{ENTER}"   # "Save a note"
 Wait-For (Join-Path $data "extensions/content.json") '"note": "Water the plants"' $true
 Send "{ESC}"; Start-Sleep -Seconds 1   # root search
-Send "{DOWN 14}"   # Manage extensions…
-Send "{ENTER}"; Start-Sleep -Seconds 1
+Manage-Extensions
 Send "{DOWN 3}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 1   # "Uninstall Settings sample"
 Send "{ENTER}"   # "Uninstall and keep saved data"
 Wait-For $registry '"retained"' $true; Start-Sleep -Seconds 1
@@ -706,8 +707,7 @@ Wait-For $registry '"retained"' $true; Start-Sleep -Seconds 1
 Stop-Pane $process
 $process = Start-Pane "stderr-retained.log"
 Start-Sleep -Seconds 2
-Send "{DOWN 14}"   # Manage extensions… (root's last row)
-Send "{ENTER}"; Start-Sleep -Seconds 1
+Manage-Extensions
 Send "{ENTER}"; Start-Sleep -Seconds 1   # "Delete retained data of Settings sample" (the list's first row)
 Capture "63-confirm-delete-retained.png"
 Check "63-confirm-delete-retained.png" "details"   # what is kept and what is not touched
@@ -752,8 +752,7 @@ if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 $env:PANE_DATA_DIR = $data
 $process = Start-Pane "stderr-aliases.log" @("--install", "target/guests/packages/sample-query")
 Send "{ENTER}"; Start-Sleep -Seconds 2   # Install; Echo is selected
-Send "{DOWN 14}"   # Manage extensions…
-Send "{ENTER}"; Start-Sleep -Seconds 1
+Manage-Extensions
 Send "{DOWN 5}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 1   # "Alias for Echo"
 Send "ec"
 Send "{ENTER}"; Start-Sleep -Seconds 2
@@ -792,8 +791,7 @@ $aliases = Join-Path $data "extensions/aliases.json"
 if (-not (Select-String -Quiet -SimpleMatch '"ec"' $aliases)) { throw "alias not recorded" }
 if (-not (Select-String -Quiet -SimpleMatch '#echo"' $aliases)) { throw "fallback not recorded" }
 $process = Start-Pane "stderr-aliases-restart.log"
-Send "{DOWN 14}"   # Manage extensions…
-Send "{ENTER}"; Start-Sleep -Seconds 1
+Manage-Extensions
 Send "{ENTER}"; Start-Sleep -Seconds 2   # disable Query sample
 Send "{ESC}"; Start-Sleep -Seconds 1
 Send "ec hello"; Start-Sleep -Seconds 1
@@ -880,8 +878,7 @@ Send "{UP}{ENTER}"; Start-Sleep -Seconds 2   # Echo after waiting
 if (-not (Helpers-Running)) { throw "the waiting helper is not running" }
 Capture "92-helper-waiting.png"
 Send "{ESC}"; Start-Sleep -Seconds 1   # root search; the helper keeps running
-Send "{DOWN 14}"   # Manage extensions…
-Send "{ENTER}"; Start-Sleep -Seconds 1
+Manage-Extensions
 Send "{ENTER}"; Start-Sleep -Seconds 2   # disable Helper sample
 Capture "93-helper-disabled.png"
 Check "93-helper-disabled.png" "success"   # "Disabled Helper sample"
@@ -997,7 +994,7 @@ function Develop-Sample($sample, $title, $component, $source, $n, $greeting, $br
     $log = "stderr-develop-$sample.log"
     $process = Start-Pane $log @("--install", $copy)
     Send "{ENTER}"; Start-Sleep -Seconds 2   # Install
-    Send "{DOWN 14}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 1   # Manage extensions
+    Manage-Extensions
     # "Develop <title>": the row above the list's last, which is the
     # global automatic-update choice since #49 (the develop row was the
     # last row before it, and Down to the end now lands on that instead).
@@ -1051,7 +1048,7 @@ function Develop-Sample($sample, $title, $component, $source, $n, $greeting, $br
     Send "{ESC}"; Start-Sleep -Seconds 1
 
     # Stopped: a save builds nothing.
-    Send "{DOWN 14}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 1   # Manage extensions
+    Manage-Extensions
     # "Stop developing <title>": as above, the row above the list's last.
     Send "{DOWN 14}"; Start-Sleep -Milliseconds 120; Send "{UP}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 2
     Capture "$($n + 8)-$sample-stopped.png"
@@ -1086,8 +1083,7 @@ if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 $env:PANE_DATA_DIR = $data
 $process = Start-Pane "stderr-disable-dependents.log" @("--install", "target/guests/packages/sample-dependencies")
 Send "{ENTER}"; Start-Sleep -Seconds 3   # Install
-for ($i = 0; $i -lt 14; $i++) { Send "{DOWN}" }   # Manage extensions...
-Send "{ENTER}"; Start-Sleep -Seconds 1
+Manage-Extensions
 Send "{ENTER}"; Start-Sleep -Seconds 1   # disable JavaScript operations sample: asks first
 Capture "140-disable-dependents-asked.png"
 Check "140-disable-dependents-asked.png" "details"   # "Dependencies sample, which requires JavaScript operations sample ..."
@@ -1188,8 +1184,7 @@ Send "{ENTER}"; Start-Sleep -Seconds 2   # Greeting: nothing runs
 Capture "204-runtime-refused.png"
 Check "204-runtime-refused.png" "error"   # "Extension runtime unavailable: it stopped after crashing ..."
 Send "{ESC}"; Start-Sleep -Seconds 1   # clears the query
-Send "{DOWN 14}"   # Manage extensions…
-Send "{ENTER}"; Start-Sleep -Seconds 1
+Manage-Extensions
 Capture "205-runtime-manage.png"   # Restart the extension runtime, Why the extension runtime stopped
 Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 1   # Why the extension runtime stopped
 Capture "206-runtime-details.png"
@@ -1261,8 +1256,7 @@ Send "{DOWN 9}"   # Stop responding
 Send "{ENTER}"; Start-Sleep -Seconds 1   # it computes
 if ((Saved-Setting "busy") -ne "started") { throw "Stop responding did not start" }
 Send "{ESC}"; Start-Sleep -Seconds 1   # root search answers meanwhile
-Send "{DOWN 10}"   # Manage extensions…
-Send "{ENTER}"; Start-Sleep -Seconds 1
+Manage-Extensions
 Capture "240-unresponsive-window-answers.png"   # the extension list, while the guest computes
 Check "240-unresponsive-window-answers.png" "subtitle"   # its rows' subtitles
 if ((Stopped-Calls) -ne 0) { throw "Stop responding was stopped before frame 240" }
@@ -1283,8 +1277,7 @@ Check "242-unresponsive-paused.png" "error"   # "Settings sample stopped respond
 Check "242-unresponsive-paused.png" "warning"   # Greeting: "Settings sample is paused after an error; ..."
 if ((Saved-Setting "busy") -ne "started") { throw "Stop responding finished or was lost" }
 Send "{ESC}"; Start-Sleep -Seconds 1   # clears the query
-Send "{DOWN 10}"   # Manage extensions…
-Send "{ENTER}"; Start-Sleep -Seconds 1
+Manage-Extensions
 Send "{DOWN 3}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 1   # "Why Settings sample is paused"
 Capture "243-unresponsive-pause-details.png"
 Check "243-unresponsive-pause-details.png" "details"   # the details
@@ -1301,8 +1294,7 @@ Start-Sleep -Seconds 14   # Pane gives up on it
 Capture "246-unresponsive-runtime.png"
 Check "246-unresponsive-runtime.png" "error"   # the runtime stopped responding and was started again
 Send "{ESC}"; Start-Sleep -Seconds 1   # clears the query
-Send "{DOWN 10}"   # Manage extensions…
-Send "{ENTER}"; Start-Sleep -Seconds 1
+Manage-Extensions
 Send "{ENTER}"; Start-Sleep -Seconds 1   # Why the extension runtime stopped, its first row
 Capture "247-unresponsive-runtime-details.png"
 Check "247-unresponsive-runtime-details.png" "details"   # the details
@@ -1338,8 +1330,7 @@ if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 $env:PANE_DATA_DIR = $data
 $process = Start-Pane "stderr-uninstall-dependents.log" @("--install", "target/guests/packages/sample-dependencies")
 Send "{ENTER}"; Start-Sleep -Seconds 3   # Install
-for ($i = 0; $i -lt 14; $i++) { Send "{DOWN}" }   # Manage extensions...
-Send "{ENTER}"; Start-Sleep -Seconds 1
+Manage-Extensions
 for ($i = 0; $i -lt 6; $i++) { Send "{DOWN}" }   # Uninstall JavaScript operations sample
 Send "{ENTER}"; Start-Sleep -Seconds 1   # asks first
 Capture "180-uninstall-dependents-asked.png"
@@ -1355,8 +1346,7 @@ $record = Join-Path $data "extensions/installed.json"
 if ((Select-String -SimpleMatch '"dir"' $record).Count -ne 0) { throw "not both uninstalled" }
 $process = Start-Pane "stderr-uninstall-dependents-again.log" @("--install", "target/guests/packages/sample-operations-js")
 Send "{ENTER}"; Start-Sleep -Seconds 3   # Install the dependency alone
-for ($i = 0; $i -lt 14; $i++) { Send "{DOWN}" }   # Manage extensions...
-Send "{ENTER}"; Start-Sleep -Seconds 1
+Manage-Extensions
 Capture "183-uninstall-dependents-reinstalled-alone.png"   # only the JavaScript operations sample is listed
 Check "183-uninstall-dependents-reinstalled-alone.png" "subtitle"
 $shots = "180-uninstall-dependents-asked", "181-uninstall-dependents-cancelled", "182-uninstall-dependents-uninstalled", "183-uninstall-dependents-reinstalled-alone" | ForEach-Object { Join-Path $OutDir "$_.png" }
@@ -1370,7 +1360,9 @@ if ((Select-String -SimpleMatch '"dir"' $record).Count -ne 1) { throw "not the d
 # the network), with a data folder of its own. Installing the local
 # Dependencies from npm sample shows the npm package it requires and
 # installs both; its command calls the npm package's greet operation. Then
-# "Install extension from npm..." (root's third-to-last row) asks for the
+# "Install extension from npm..." (searched for by title, as Manage-Extensions
+# does: a blind run of Downs to root's end would open #72's Settings… row,
+# last of all now) asks for the
 # npm package in a form; naming the installed one offers Update, and its
 # command runs: "Hello from the npm package".
 $data = Join-Path $OutDir "npm-data"
@@ -1397,8 +1389,8 @@ try {
     Capture "262-npm-dependency-called.png"
     Check "262-npm-dependency-called.png" "success"   # "Hello, Pane, from the npm package"
     Send "{ESC}"; Start-Sleep -Seconds 1
-    for ($i = 0; $i -lt 14; $i++) { Send "{DOWN}" }   # Manage extensions..., the last row
-    Send "{UP 2}{ENTER}"; Start-Sleep -Seconds 1   # Install extension from npm...
+    Send "^a"; Send "install npm"; Start-Sleep -Seconds 1
+    Send "{ENTER}"; Start-Sleep -Seconds 1   # Install extension from npm...
     Capture "263-npm-form.png"
     Check "263-npm-form.png" "hint"   # the form's hint line
     Send "@pane-samples/greeter"
@@ -1457,8 +1449,10 @@ if ((Select-String -SimpleMatch '"dir"' $record).Count -ne 2) { throw "not both 
 # (scripts/repository_server.py; nothing reaches the network), with a data
 # folder of its own. `--install git:<address>` names the default branch,
 # which holds the source only: explained, nothing offered. Then "Install
-# extension from Git..." (root's last row: with nothing installed in this data
-# folder, there is no Manage extensions... yet) asks for the repository
+# extension from Git..." (searched for by title rather than counted to, as
+# Manage-Extensions does: root's last row is #72's Settings… now, and with
+# nothing installed in this data folder there is no Manage extensions... row
+# to find either) asks for the repository
 # in a form; naming the tag previews the release revision, pinned, and
 # installs it, and its command runs: "Hello from the Git repository".
 $data = Join-Path $OutDir "git-data"
@@ -1502,7 +1496,7 @@ try {
     # The fetch runs after the window shows: capture until its explanation does.
     Capture-Until "300-git-source-only.png" "error" 60   # "The default branch, main (commit ...) of the Git repository ... holds only the source of ..."
     Send "{ESC}"; Start-Sleep -Seconds 1
-    for ($i = 0; $i -lt 14; $i++) { Send "{DOWN}" }   # the last row
+    Send "^a"; Send "install git"; Start-Sleep -Seconds 1
     Send "{ENTER}"; Start-Sleep -Seconds 1   # Install extension from Git...
     Capture "301-git-form.png"
     Check "301-git-form.png" "hint"   # the form's hint line

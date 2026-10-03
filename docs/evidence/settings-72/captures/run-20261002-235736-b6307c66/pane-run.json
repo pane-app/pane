@@ -1,0 +1,93 @@
+{
+    "script":  "capture-settings.ps1",
+    "startedUtc":  "2026-10-02T16:57:36.9553246Z",
+    "binary":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\target\\debug\\pane.exe",
+    "runDir":  "C:\\Users\\ADMIN\\AppData\\Local\\Temp\\pi-subagent-worktrees\\job-c11938cfe1b3\\docs\\evidence\\settings-72\\captures\\run-20261002-235736-b6307c66",
+    "steps":  [
+                  {
+                      "name":  "launcher",
+                      "detail":  "window 0x2070a9a, DPI 96",
+                      "utc":  "2026-10-02T16:57:37.6631912Z"
+                  },
+                  {
+                      "name":  "activation",
+                      "detail":  "guarded click at the search header activated the launcher",
+                      "utc":  "2026-10-02T16:57:41.8099685Z"
+                  },
+                  {
+                      "name":  "capture",
+                      "detail":  "00-launcher.png",
+                      "utc":  "2026-10-02T16:57:43.8713021Z"
+                  },
+                  {
+                      "name":  "menu",
+                      "detail":  "click opened the ellipsis menu; Escape closed it",
+                      "utc":  "2026-10-02T16:57:45.6602242Z"
+                  },
+                  {
+                      "name":  "settings",
+                      "detail":  "Ctrl+, opened a second window (0x950c68)",
+                      "utc":  "2026-10-02T16:57:46.6197449Z"
+                  },
+                  {
+                      "name":  "layout",
+                      "detail":  "resized to 560x400 logical and captured",
+                      "utc":  "2026-10-02T16:57:47.2033187Z"
+                  },
+                  {
+                      "name":  "close",
+                      "detail":  "close button: settings closed True, process alive True, launcher alive True",
+                      "utc":  "2026-10-02T16:57:48.4934568Z"
+                  },
+                  {
+                      "name":  "reopen",
+                      "detail":  "Ctrl+, opened Settings again (1 Settings window(s), not a duplicate)",
+                      "utc":  "2026-10-02T16:57:49.4411519Z"
+                  },
+                  {
+                      "name":  "minimize",
+                      "detail":  "minimize button clicked; IsIconic = True",
+                      "utc":  "2026-10-02T16:57:50.7431467Z"
+                  },
+                  {
+                      "name":  "maximize",
+                      "detail":  "maximize button clicked; IsZoomed = True",
+                      "utc":  "2026-10-02T16:57:52.3287899Z"
+                  },
+                  {
+                      "name":  "drag",
+                      "detail":  "titlebar drag moved the window from 589,271 to 679,331",
+                      "utc":  "2026-10-02T16:57:54.3239463Z"
+                  },
+                  {
+                      "name":  "quit",
+                      "detail":  "closing the launcher window: process exited = True",
+                      "utc":  "2026-10-02T16:57:54.6311560Z"
+                  }
+              ],
+    "launcherWindow":  "0x2070a9a",
+    "settingsWindow":  "0x950c68",
+    "dpi":  96,
+    "checkOpen":  true,
+    "checkMenu":  "opened by click, closed by Escape",
+    "checkClose":  {
+                       "processAlive":  true,
+                       "settingsClosed":  true,
+                       "launcherAlive":  true
+                   },
+    "checkMin":  true,
+    "checkMax":  true,
+    "checkDrag":  {
+                      "before":  "589,271",
+                      "moved":  true,
+                      "after":  "679,331"
+                  },
+    "checkQuit":  true,
+    "processClosed":  true,
+    "errorMessage":  null,
+    "pid":  63236,
+    "checkReopen":  {
+                        "settingsWindows":  1
+                    },
+    "finishedUtc":  "2026-10-02T16:57:54.6342039Z"
+}

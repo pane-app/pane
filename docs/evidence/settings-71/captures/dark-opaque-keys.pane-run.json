@@ -1,0 +1,84 @@
+{
+    "script":  "capture-pane.ps1",
+    "startedUtc":  "2026-10-02T16:07:50.0626331Z",
+    "binary":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\target\\debug\\pane.exe",
+    "runDir":  "C:\\Users\\ADMIN\\AppData\\Local\\Temp\\pi-subagent-worktrees\\job-6129fa3dac82\\docs\\evidence\\settings-71\\captures\\run-20261002-230749-b27a0c17",
+    "paneDataDir":  "C:\\Users\\ADMIN\\AppData\\Local\\Temp\\pi-subagent-worktrees\\job-6129fa3dac82\\docs\\evidence\\settings-71\\captures\\run-20261002-230749-b27a0c17\\pane-data",
+    "localAppData":  "C:\\Users\\ADMIN\\AppData\\Local\\Temp\\pi-subagent-worktrees\\job-6129fa3dac82\\docs\\evidence\\settings-71\\captures\\run-20261002-230749-b27a0c17\\localappdata",
+    "cacheLocation":  "C:\\Users\\ADMIN\\AppData\\Local\\Temp\\pi-subagent-worktrees\\job-6129fa3dac82\\docs\\evidence\\settings-71\\captures\\run-20261002-230749-b27a0c17\\localappdata\\Pane\\cache",
+    "cacheDirExisted":  true,
+    "extensionsDir":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\target\\guests",
+    "theme":  "dark",
+    "material":  "opaque",
+    "keysRequested":  [
+                          "{ENTER}",
+                          "{DOWN}",
+                          "{DOWN}",
+                          "{DOWN}",
+                          "{DOWN}",
+                          "{ENTER}"
+                      ],
+    "keysAbortedAt":  null,
+    "captureMode":  "window",
+    "backdrop":  null,
+    "zOrderVerified":  null,
+    "pid":  53412,
+    "windowTitle":  "Pane",
+    "windowRect":  "572,306,1348,774",
+    "frameBounds":  "579,306,1341,767",
+    "requestedWindowSize":  null,
+    "dpi":  96,
+    "focusAchieved":  true,
+    "activationMethod":  "guarded-click",
+    "foregroundHwnd":  "hwnd 0x37c0d6c pid 53412",
+    "foregroundPid":  53412,
+    "foregroundIsPane":  true,
+    "foregroundBeforeFallback":  "hwnd 0x28098e pid 63796",
+    "clickToFocusPoint":  "960,338",
+    "clickToFocusGuards":  "guard1: hit 0x37c0d6c root 0x37c0d6c pid 53412 | guard2: hit 0x37c0d6c root 0x37c0d6c pid 53412",
+    "cursorSaved":  "2661,758",
+    "cursorRestored":  true,
+    "screenshots":  [
+                        {
+                            "file":  "00-initial-window.png",
+                            "label":  "initial",
+                            "utc":  "2026-10-02T16:07:56.4672865Z"
+                        },
+                        {
+                            "file":  "01-after-ENTER-window.png",
+                            "label":  "after \u0027{ENTER}\u0027",
+                            "utc":  "2026-10-02T16:07:57.2587398Z"
+                        },
+                        {
+                            "file":  "02-after-DOWN-window.png",
+                            "label":  "after \u0027{DOWN}\u0027",
+                            "utc":  "2026-10-02T16:07:58.0128235Z"
+                        },
+                        {
+                            "file":  "03-after-DOWN-window.png",
+                            "label":  "after \u0027{DOWN}\u0027",
+                            "utc":  "2026-10-02T16:07:58.7689219Z"
+                        },
+                        {
+                            "file":  "04-after-DOWN-window.png",
+                            "label":  "after \u0027{DOWN}\u0027",
+                            "utc":  "2026-10-02T16:07:59.5227389Z"
+                        },
+                        {
+                            "file":  "05-after-DOWN-window.png",
+                            "label":  "after \u0027{DOWN}\u0027",
+                            "utc":  "2026-10-02T16:08:00.2837724Z"
+                        },
+                        {
+                            "file":  "06-after-ENTER-window.png",
+                            "label":  "after \u0027{ENTER}\u0027",
+                            "utc":  "2026-10-02T16:08:01.0366923Z"
+                        }
+                    ],
+    "backdropClosed":  null,
+    "processClosed":  true,
+    "processExited":  true,
+    "exitCode":  null,
+    "errorMessage":  null,
+    "finishedUtc":  "2026-10-02T16:08:01.1774150Z"
+}

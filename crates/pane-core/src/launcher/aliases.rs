@@ -120,7 +120,9 @@ impl Choices for AliasChoices {
 }
 
 impl AliasChoices {
-    fn is_fallback(&self, command: &str) -> bool {
+    /// Whether `command` is offered as a fallback. `pub(super)` for the
+    /// launcher's selected-action label, which turns with the choice.
+    pub(super) fn is_fallback(&self, command: &str) -> bool {
         self.fallbacks.iter().any(|id| id == command)
     }
 

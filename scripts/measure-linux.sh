@@ -143,6 +143,19 @@ capture() {
 }
 check() { python3 "$here/check_screenshot.py" "$out/$1" "$2" ${3:+"$3"}; }
 
+# Opens Manage extensions from root search. A blind run of Downs to root's
+# end was the way in until #72's Settings… root result made itself last of
+# all (it is listed whatever is installed, so this root ends with it too):
+# the run now opens the Settings window instead, and the lifecycle's
+# reloads and disables would never happen. Searching for the row by its
+# title is order-proof: "manage" matches only the Manage extensions… row,
+# which is selected when the list narrows to it, and Return opens it.
+manage_extensions() {
+  "$xdotool" key ctrl+a
+  "$xdotool" type --delay 50 manage; sleep 1
+  "$xdotool" key Return; sleep 1
+}
+
 # The sampler watches the whole tree of the pid the control file names, in
 # the phase the control file names, until it reads "stop".
 control=$out/control
@@ -333,8 +346,7 @@ wait_reloaded() {
 for run in $(seq "$reloads"); do
   if [ $((run % 2)) = 0 ]; then cp target/guests/sample_rust.wasm "$package/command.wasm";
   else cp target/guests/sample_js.wasm "$package/command.wasm"; fi
-  for _ in $(seq 14); do "$xdotool" key Down; done   # Manage extensions…
-  "$xdotool" key Return; sleep 1
+  manage_extensions
   "$xdotool" key Down; sleep 0.5   # Reload Measure
   "$xdotool" key Return; sleep 2
   wait_reloaded
@@ -342,8 +354,7 @@ for run in $(seq "$reloads"); do
 done
 set_phase disable
 for run in $(seq "$disables"); do
-  for _ in $(seq 14); do "$xdotool" key Down; done   # Manage extensions…
-  "$xdotool" key Return; sleep 1
+  manage_extensions
   "$xdotool" key Return; sleep 1   # the package's row: disable
   wait_for "$PANE_DATA_DIR/extensions/installed.json" '"disabled": true' present
   "$xdotool" key Return; sleep 1   # the same row: enable again

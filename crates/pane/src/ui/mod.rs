@@ -1,5 +1,7 @@
 //! Pane's shared visual layer: semantic tokens, frost materials, the
-//! reference's icon treatment, and the shared control chrome.
+//! reference's icon treatment, and the shared control chrome — result
+//! rows and keycaps — plus the motion policy (see [`motion`]) that the
+//! launcher's subtle transitions share.
 //!
 //! This layer owns presentation only. It imports no `pane-core` types, so
 //! the visual system is usable and reviewable without launcher state, and
@@ -30,7 +32,9 @@ use gpui::App;
 
 pub(crate) mod icon;
 pub(crate) mod input;
+pub(crate) mod keycap;
 pub(crate) mod material;
+pub(crate) mod motion;
 pub(crate) mod result_row;
 pub(crate) mod theme;
 
