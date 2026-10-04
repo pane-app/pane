@@ -19,18 +19,39 @@ gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/hoangv
 # with `Invoke-Item -LiteralPath` (anything else with `Start-Process`); review
 # the Windows path before widening this.
 open = "~5.4.4"
+# The launcher window's own platform handle, for the placement's move and
+# the DWM call; GPUI exports no raw-window-handle types of its own.
+raw-window-handle = "0.6"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-# Read system transparency/high-contrast preferences once at startup, and
-# round the window's own corners through the Desktop Window Manager.
-windows = { version = "0.62", features = ["UI_ViewManagement", "Wdk_System_SystemServices", "Win32_System_SystemInformation", "Win32_Graphics_Dwm"] }
+# Read system transparency/high-contrast preferences once at startup, round
+# the window's own corners through the Desktop Window Manager, and place the
+# launcher window on the display the Launcher page's choice resolves to
+# (the monitors the GDI API lists, the pointer, the foreground window's
+# monitor, and the move itself); already in the tree through pane-core's
+# Windows adapters.
+windows = { version = "0.62", features = ["UI_ViewManagement", "Wdk_System_SystemServices", "Win32_System_SystemInformation", "Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }
 # The channel the reduced-motion watch reports Windows' preference changes
 # over, from the WinRT event's thread to the app's thread — the same hop
 # pane-core's global-hotkey presses take, so no second mechanism is added.
 tokio = { version = "1", features = ["sync"] }
-# The launcher window's own handle, for the DWM call above; GPUI exports
-# no raw-window-handle types of its own.
-raw-window-handle = "0.6"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The displays the launcher's placement reads on X11 (the RandR monitors,
+# the pointer, the window manager's active window) and the move it applies
+# (a configure request on the window's own X window); already in the tree
+# through pane-core's X11 adapters.
+x11rb = { version = "0.13", features = ["randr"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The displays the launcher's placement reads on macOS (the CoreGraphics
+# display list, the main display, the pointer's position from a fresh
+# event) — already in the tree through GPUI CE's macOS platform.
+core-graphics = "0.24"
+# The move the placement applies: `setFrameTopLeftPoint` on the AppKit
+# window behind the view; already in the tree through pane-core's macOS
+# adapters.
+objc2 = "0.6"
 
 [dev-dependencies]
 futures = { version = "0.3", default-features = false, features = ["executor"] }
@@ -40,4 +61,8 @@ tempfile = "3"
 sha2 = "0.10"
 tar = { version = "0.4.44", default-features = false }
 flate2 = "1"
+# The zip packer of that same test support, which the Settings tests now
+# reuse for the local artifact source's application packages; already in the
+# tree through `pane-core`'s zip reader.
+crc32fast = "1"
 gpui ={ package = "gpui-ce", git = "https://github.com/hoangvu12/gpui-ce", rev = "bcf3a0acd047c1873293069d0ed42085a38f699b", default-features = false, features = ["test-support"] }

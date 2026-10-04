@@ -19,6 +19,7 @@ mod helpers;
 mod host_settings;
 pub mod hotkeys;
 mod http;
+mod keyboard;
 mod launcher;
 mod links;
 pub mod npm;
@@ -26,21 +27,26 @@ mod operations;
 mod packages;
 #[cfg(test)]
 mod peak_memory;
+pub mod placement;
 mod platform;
 mod runtime;
 mod search;
 mod threads;
+pub mod tray;
 mod zip;
 
 pub use defaults::{ArtifactSource, DefaultExtension};
 pub use helpers::runner::{HELPER_TIME_LIMIT, MAX_HELPER_INPUT, MAX_HELPER_OUTPUT};
-pub use host_settings::{HostSettings, MaterialPreference, ThemePreference};
+pub use host_settings::{
+    HostSettings, MaterialPreference, OpeningMonitor, Reopening, ThemePreference,
+};
 #[doc(hidden)]
 pub use http::HttpLimits;
+pub use keyboard::{Binding, Keyboard, KeyboardAction};
 pub use launcher::{
-    AliasOutcome, BuildFailure, CommandRegistration, CustomViewSnapshot, Development, FormField,
-    FormView, Launcher, LauncherView, Question, Row, Screen, SelectedAction, ShortcutCatalog,
-    ShortcutCommand, ShortcutGroup, Status, Unavailable,
+    AliasOutcome, ApplicationUpdate, BuildFailure, CommandRegistration, CustomViewSnapshot,
+    Development, FormField, FormView, HotkeyOutcome, Launcher, LauncherView, Question, Row, Screen,
+    SelectedAction, ShortcutCatalog, ShortcutCommand, ShortcutGroup, Status, Unavailable,
 };
 pub use links::LinkOpener;
 pub use operations::{MAX_CALL_DEPTH, MAX_OPERATION_JSON};

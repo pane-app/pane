@@ -68,7 +68,8 @@ libc = "0.2"
 x11rb = { version = "0.13", features = ["xkb", "xfixes"] }
 
 # Global hotkeys on macOS through Carbon's RegisterEventHotKey, which needs no
-# Accessibility permission.
+# Accessibility permission. The menu-bar entry of the tray (#79): NSStatusItem
+# and its NSMenu (AppKit, as the pasteboard is), with the button it needs.
 [target.'cfg(target_os = "macos")'.dependencies]
 global-hotkey = "0.8"
 # The pasteboard of clipboard history on macOS (NSPasteboard's change count,
@@ -76,7 +77,7 @@ global-hotkey = "0.8"
 # bindings with no build script, already in the dependency tree through GPUI
 # CE's and global-hotkey's AppKit code.
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["NSPasteboard"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSControl", "NSMenu", "NSMenuItem", "NSPasteboard", "NSResponder", "NSStatusBar", "NSStatusBarButton", "NSStatusItem", "NSView", "NSButton", "objc2-core-foundation"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSData", "NSError", "NSString", "std"] }
 
 [dev-dependencies]

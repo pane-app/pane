@@ -328,6 +328,19 @@ with why, which tries again.
    which the install folder does not even hold), and the swap changes
    only the program, so extensions, their settings, pins and enablement
    are exactly what they were.
+4. **Where the user reaches it.** Root search's rows are one entry point
+   and the Settings window's About page ([#82](https://github.com/hoangvu12/pane/issues/82))
+   is the other: the page reads the same state the rows come from —
+   `Launcher::application_update` — so the two cannot disagree, and its
+   "Check for updates" and "Update Pane to <version>" rows run the same
+   check and the same install the root rows run. The page also says the
+   states the rows stay quiet about: that Pane is up to date (after a
+   check the user asked for), that no artifact source is configured at
+   all (a development build without `PANE_ARTIFACTS`, whose page explains
+   the state rather than promising a release), and why installing the
+   offer last failed, since the offer stays, ready to be chosen again.
+   A check the user asks for from either entry point answers even when
+   there is nothing to offer.
 
 The Windows install of an update is this whole path with the program at
 `%LOCALAPPDATA%\Pane\pane.exe` (the install script's target, and the

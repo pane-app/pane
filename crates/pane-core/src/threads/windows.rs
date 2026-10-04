@@ -14,7 +14,7 @@ use ::windows::Win32::System::Threading::GetCurrentThreadId;
 use ::windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, DispatchMessageW, GetMessageW, HWND_MESSAGE, MSG, PM_NOREMOVE,
     PeekMessageW, PostQuitMessage, PostThreadMessageW, RegisterClassW, SendNotifyMessageW,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_USER, WNDCLASSW,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_USER, WNDCLASSW, WS_POPUP,
 };
 use ::windows::core::PCWSTR;
 
@@ -96,6 +96,40 @@ impl WindowClass {
                 0,
                 0,
                 Some(HWND_MESSAGE),
+                None,
+                Some(instance.into()),
+                None,
+            )
+        }
+        .map_err(|error| error.message())?;
+        Ok(Window(window))
+    }
+
+    /// A hidden top-level window of this class, owned by the calling
+    /// thread: no parent, never shown. For adapters whose window the
+    /// system itself addresses (the tray icon's, whose menu the shell
+    /// opens through it), where a message-only window would not do —
+    /// such a window is not enumerated and cannot take the foreground a
+    /// menu needs.
+    pub(crate) fn hidden_window(&'static self) -> Result<Window, String> {
+        let class = self.register()?;
+        // SAFETY: no arguments; the module is this process's executable.
+        let instance =
+            unsafe { GetModuleHandleW(PCWSTR::null()) }.map_err(|error| error.message())?;
+        // SAFETY: the class is registered and its name kept; the window is
+        // created hidden — `WS_POPUP` alone, with no `WS_VISIBLE` — and
+        // has no title, menu or creation data.
+        let window = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                class,
+                PCWSTR::null(),
+                WS_POPUP,
+                0,
+                0,
+                0,
+                0,
+                None,
                 None,
                 Some(instance.into()),
                 None,

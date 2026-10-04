@@ -12,6 +12,10 @@
 //!
 //! - `.id(("row", index))` — the stable id (making the row stateful for
 //!   scrolling and hit-testing) and `.debug_selector(...)` for the smokes,
+//! - the pressed feedback — the wash strengthening to the selected one
+//!   while the row is held, fading on the shared pointer span beside the
+//!   hover wash this component carries — attached after the id, because a
+//!   press state needs the named (stateful) row,
 //! - the accessibility contract — `.role(Role::ListBoxOption)`,
 //!   `.aria_selected`, `.aria_active_descendant` when selected,
 //!   `.aria_disabled` with a description when the reason is present,

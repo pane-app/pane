@@ -14,28 +14,54 @@
 //! [`Launcher::set_alias`], so the alias form's rules and records are the
 //! ones in force: a refusal shows next to the field and keeps the editor
 //! open, and the change reaches root search at once and is recorded by
-//! the same write the form's submission makes. The Hotkey column is
-//! display-only — recording is #76's slice — and shows each command's
-//! hotkey as recorded, with why it is not active when it is not.
+//! the same write the form's submission makes. The Hotkey column records
+//! through [`Launcher::set_hotkey`] — the same checks and the same
+//! `hotkeys.json` the hotkey screen in Manage extensions writes: the
+//! cell's click, Enter or Space starts the recorder, which takes the keys
+//! pressed next as the binding being recorded (captured: they do not
+//! navigate or act; Escape cancels, changing nothing), and a Clear button
+//! beside the cell forgets a recorded hotkey. A refusal shows under the
+//! cell and keeps the recorder listening; a change that lands is
+//! registered with the system before the binding it replaces is released,
+//! and a record that cannot be written puts back what was last recorded,
+//! with its registration, as the status line says.
 //!
 //! Keyboard: the filter field, each group's header (Enter or Space
-//! expands or collapses it) and each editable alias cell are tab stops.
-//! The editor's Enter and Escape are bound in its own key context, so
-//! they reach the editor and nothing else.
+//! expands or collapses it), each editable alias cell, each recordable
+//! hotkey cell and its Clear button are tab stops. The editor's Enter and
+//! Escape are bound in its own key context, and the recorder's keys in
+//! its own, so they reach those controls and nothing else.
+//!
+//! Groups disclose on the shared motion policy (see `crate::ui::motion`):
+//! one tween per group drives both the header chevron's rotation and the
+//! commands' arrival, so the two coordinate on one timeline and retarget
+//! together when the user reverses mid-flight. Expanding mounts the rows
+//! at once — the real layout, hit targets and all — and fades the whole
+//! block in; collapsing unmounts them at once, never drawing the
+//! departing rows fading out, while the chevron turns back. Focus inside
+//! a collapsing group moves to its controlling header, an open editor in
+//! it closes without committing, and a hotkey recorder for one of its
+//! commands ends, as Escape ends it. Typing in the filter is a
+//! content update: rows appear and vanish with no transition at all.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use gpui::{
     AnyElement, App, BoxShadow, Context, Div, Entity, FocusHandle, Focusable, Hsla, KeyBinding,
-    Pixels, Role, Stateful, StyleRefinement, Subscription, Window, actions, div, prelude::*, px,
+    KeyDownEvent, MouseDownEvent, Pixels, Role, Stateful, StyleRefinement, Subscription, Window,
+    actions, div, prelude::*, px,
 };
 use gpui_elements::editable_text::actions::DEFAULT_INPUT_CONTEXT;
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
-use pane_core::{AliasOutcome, Launcher, ShortcutCatalog, ShortcutCommand, ShortcutGroup};
+use pane_core::hotkeys::Shortcut;
+use pane_core::{
+    AliasOutcome, HotkeyOutcome, Launcher, ShortcutCatalog, ShortcutCommand, ShortcutGroup,
+};
 
 use super::{Page, SettingsWindow, search};
-use crate::ui::icon::{Glyph, IconTone, glyph};
+use crate::ui::icon::{Glyph, IconTone, glyph, glyph_rotated};
+use crate::ui::motion;
 use crate::ui::theme::Theme;
 
 /// The page's sidebar title, its identity in the sidebar and the tests'
@@ -55,6 +81,15 @@ const CELL: &str = "ShortcutAliasCell";
 /// The inline alias editor's key context, in which Enter commits and
 /// Escape cancels.
 const EDITOR: &str = "ShortcutAliasEditor";
+/// A hotkey cell's key context, in which Enter and Space start the
+/// recorder.
+const HOTKEY_CELL: &str = "ShortcutHotkeyCell";
+/// A hotkey cell's key context while its recorder listens, in which the
+/// keys pressed are the binding being recorded and Escape cancels.
+const HOTKEY_RECORDER: &str = "ShortcutHotkeyRecorder";
+/// A hotkey cell's Clear button's key context, in which Enter and Space
+/// clear the hotkey.
+const HOTKEY_CLEAR: &str = "ShortcutHotkeyClear";
 
 /// The filter's placeholder.
 const PLACEHOLDER: &str = "Filter commands and extensions";
@@ -70,14 +105,23 @@ const HOTKEY_WIDTH: Pixels = px(190.);
 
 actions!(
     shortcuts,
-    [EditAlias, CommitAlias, CancelAlias, ToggleGroup]
+    [
+        EditAlias,
+        CommitAlias,
+        CancelAlias,
+        ToggleGroup,
+        RecordHotkey,
+        CancelHotkeyRecording,
+        ClearHotkey
+    ]
 );
 
 /// Registers the page's key bindings: the group headers' and alias cells'
-/// activation keys in their own contexts, and the inline editor's commit
-/// and cancel keys in the editor's context above the editable text
-/// element, so they are deeper in the focus stack than anything broader
-/// and never fall through to the sidebar's keys.
+/// activation keys in their own contexts, the inline editor's commit and
+/// cancel keys in the editor's context above the editable text element,
+/// and the hotkey cells' keys in theirs — all deeper in the focus stack
+/// than anything broader, so they never fall through to the sidebar's
+/// keys.
 pub(crate) fn bind_keys(cx: &mut App) {
     let editor = format!("{EDITOR} > {DEFAULT_INPUT_CONTEXT}");
     cx.bind_keys([
@@ -87,6 +131,27 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("space", ToggleGroup, Some(GROUP)),
         KeyBinding::new("enter", CommitAlias, Some(&editor)),
         KeyBinding::new("escape", CancelAlias, Some(&editor)),
+        // The hotkey cell is a button: Enter and Space start its recorder.
+        // While the recorder listens, the cell's context is the recorder's
+        // instead (see [`hotkey_cell`]), where those keys stay with the
+        // recorder's activation — a no-op while it listens, since neither
+        // can be part of a binding — Escape cancels, and the keys the
+        // window would otherwise act on (the sidebar's navigation, Tab's
+        // traversal) are bound to [`gpui::NoAction`] so they do nothing
+        // instead; everything else reaches the cell's own key handler as
+        // the combination being recorded.
+        KeyBinding::new("enter", RecordHotkey, Some(HOTKEY_CELL)),
+        KeyBinding::new("space", RecordHotkey, Some(HOTKEY_CELL)),
+        KeyBinding::new("enter", RecordHotkey, Some(HOTKEY_RECORDER)),
+        KeyBinding::new("space", RecordHotkey, Some(HOTKEY_RECORDER)),
+        KeyBinding::new("escape", CancelHotkeyRecording, Some(HOTKEY_RECORDER)),
+        KeyBinding::new("down", gpui::NoAction, Some(HOTKEY_RECORDER)),
+        KeyBinding::new("up", gpui::NoAction, Some(HOTKEY_RECORDER)),
+        KeyBinding::new("tab", gpui::NoAction, Some(HOTKEY_RECORDER)),
+        KeyBinding::new("shift-tab", gpui::NoAction, Some(HOTKEY_RECORDER)),
+        // The Clear button beside a recorded hotkey.
+        KeyBinding::new("enter", ClearHotkey, Some(HOTKEY_CLEAR)),
+        KeyBinding::new("space", ClearHotkey, Some(HOTKEY_CLEAR)),
     ]);
 }
 
@@ -95,7 +160,10 @@ pub(crate) fn page() -> Page {
     Page {
         title: TITLE,
         about: "Aliases and global hotkeys for installed commands",
-        icon: (IconTone::Command, Glyph::Keyboard),
+        // The magnifier: the page is the searchable catalog of the
+        // commands' aliases and hotkeys. (The Keyboard page takes the
+        // keyboard glyph — the sidebar keeps its entries distinct.)
+        icon: (IconTone::Command, Glyph::Search),
         render,
         search: entries,
         focus,
@@ -143,21 +211,61 @@ pub(crate) struct State {
     /// The groups the user has collapsed, by the group's stable key (see
     /// [`group_key`]). Groups start expanded.
     collapsed: HashSet<String>,
+    /// Each group's disclosure tween, by the group's stable key: the
+    /// group's look (0 collapsed, 1 expanded) while a toggle's
+    /// transition is in flight, `None` when settled. The chevron's
+    /// rotation and the commands' arrival both follow it, so the group
+    /// coordinates on one timeline (see `crate::ui::motion`).
+    disclosures: HashMap<String, Option<motion::Tween>>,
+    /// Each group's disclosure as the last frame drew it, collapsed or
+    /// expanded, by key — only a flip here with the filter unchanged is
+    /// a real toggle, which transitions; a filter change or a group's
+    /// first draw is a content update, which never animates.
+    drawn_collapsed: HashMap<String, bool>,
+    /// Whether the page is drawing with no filter, as the last frame drew
+    /// it: the same comparison's other half.
+    drawn_blank: bool,
+    /// Whether any group's disclosure was still in flight as the frame
+    /// being drawn found it, so the page asks for the one animation
+    /// frame that continues them; the frame that settles them all asks
+    /// for none, so a settled page is idle.
+    disclosing: bool,
     /// The command whose alias is being edited inline, if any.
     editing: Option<Editing>,
+    /// The command whose hotkey is being recorded, if any: the keys
+    /// pressed next are its new binding, captured — they do not act.
+    recording: Option<Recording>,
     /// Each editable command's alias cell focus, created when the command
     /// first draws and kept so the focus survives redraws — and returns
     /// there when the editor it opened closes. The handles of commands a
     /// package change removed are kept too: they cost nothing, and the
     /// window holds them for as long as it is open.
     alias_cells: HashMap<String, FocusHandle>,
+    /// Each recordable command's hotkey cell focus, kept as the alias
+    /// cells' are: the recorder takes it while it listens, and the focus
+    /// returns there when it closes or the change it recorded lands.
+    hotkey_cells: HashMap<String, FocusHandle>,
+    /// Each recorded hotkey's Clear button focus, kept as the hotkey
+    /// cells' are.
+    hotkey_clears: HashMap<String, FocusHandle>,
     /// Each group header's focus, kept as the alias cells' are.
     group_cells: HashMap<String, FocusHandle>,
     /// The last catalog this page drew, which the window's watcher
     /// compares a fresh one against.
     drawn: Option<ShortcutCatalog>,
-    /// What the last alias change came to, as the page's status line.
+    /// What the last alias or hotkey change came to, as the page's status
+    /// line.
     status: Option<StatusLine>,
+    /// Each group's disclosure state as the last frame drew it, for
+    /// tests (see [`SettingsWindow::group_disclosure`]). Test and debug
+    /// builds only.
+    #[cfg(any(test, debug_assertions))]
+    drawn_looks: HashMap<String, Option<f32>>,
+    /// Each group's arriving commands as the last frame drew them — the
+    /// block's (offset from rest in px, opacity) — for tests (see
+    /// [`SettingsWindow::group_arrival`]). Test and debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    drawn_arrivals: HashMap<String, Option<(f32, f32)>>,
 }
 
 /// The inline alias editor for one command, in the place of its cell.
@@ -172,13 +280,25 @@ struct Editing {
     _changes: Subscription,
 }
 
-/// The page's status line: what the last alias change came to.
+/// The hotkey recorder for one command, in its cell: while it listens,
+/// the keys pressed next are the binding being recorded.
+struct Recording {
+    /// The command whose hotkey is being recorded.
+    command: String,
+    /// Why the last capture was refused, shown under the cell; the
+    /// recorder keeps listening for another try, as the General page's
+    /// recorder does.
+    rejection: Option<String>,
+}
+
+/// The page's status line: what the last change the page started came to.
 enum StatusLine {
-    /// The alias took effect and is being recorded.
-    Saving,
-    /// The alias was recorded, saying what typing it now finds.
+    /// The change took effect and is being recorded.
+    Saving(String),
+    /// The change was recorded, saying what typing an alias now finds or
+    /// what a hotkey now opens.
     Saved(String),
-    /// The alias could not be recorded; what was last recorded is back,
+    /// The change could not be recorded; what was last recorded is back,
     /// saying why.
     NotKept(String),
 }
@@ -196,11 +316,22 @@ impl State {
             query,
             _query_changes,
             collapsed: HashSet::new(),
+            disclosures: HashMap::new(),
+            drawn_collapsed: HashMap::new(),
+            drawn_blank: true,
+            disclosing: false,
             editing: None,
+            recording: None,
             alias_cells: HashMap::new(),
+            hotkey_cells: HashMap::new(),
+            hotkey_clears: HashMap::new(),
             group_cells: HashMap::new(),
             drawn: Some(launcher.shortcut_catalog()),
             status: None,
+            #[cfg(any(test, debug_assertions))]
+            drawn_looks: HashMap::new(),
+            #[cfg(any(test, debug_assertions))]
+            drawn_arrivals: HashMap::new(),
         }
     }
 }
@@ -220,11 +351,96 @@ impl SettingsWindow {
             .map(|editing| editing.input.clone())
     }
 
+    /// Test support: the disclosure state of the group with `key` as the
+    /// last frame drew it: its look — 0 collapsed, 1 expanded — while the
+    /// disclosure is in flight, which the chevron's angle and the
+    /// commands' arrival both follow; `None` when the frame drew it
+    /// settled. Test and debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn group_disclosure(&self, key: &str) -> Option<f32> {
+        self.shortcuts.drawn_looks.get(key).copied().flatten()
+    }
+
+    /// Test support: the group with `key`'s arriving commands as the
+    /// last frame drew them — the whole block's (offset from rest in px,
+    /// opacity) while the disclosure is in flight; `None` when the frame
+    /// drew them settled, which is also all reduced motion ever draws.
+    /// Test and debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn group_arrival(&self, key: &str) -> Option<(f32, f32)> {
+        self.shortcuts.drawn_arrivals.get(key).copied().flatten()
+    }
+
     /// Expands or collapses the group with `key`, from its header's keys
-    /// or click.
-    fn shortcuts_toggle_group(&mut self, key: &str, cx: &mut Context<Self>) {
-        if !self.shortcuts.collapsed.remove(key) {
+    /// or click — `commands` are the ids of the commands the group holds,
+    /// as the last frame drew them.
+    ///
+    /// Collapsing unmounts the group's rows at once — the departing
+    /// content is never drawn fading out, so it can expose no hit targets
+    /// or active accessibility nodes — which means anything inside them
+    /// that holds the focus must give it up first: an open inline editor
+    /// for one of the group's commands closes without committing, as
+    /// Escape closes it, and the focus — the editor's field or a row's
+    /// alias cell — moves to the header that controls the group, which
+    /// stays. Expanding needs nothing: the rows mount and arrive on the
+    /// disclosure's timeline (see [`group_element`]).
+    fn shortcuts_toggle_group(
+        &mut self,
+        key: &str,
+        commands: &[String],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let collapsing = if !self.shortcuts.collapsed.remove(key) {
             self.shortcuts.collapsed.insert(key.to_owned());
+            true
+        } else {
+            false
+        };
+        if collapsing {
+            // The inline editor for a command in the group, if one is
+            // open, closes without committing (as Escape closes it), and
+            // a hotkey recorder for one of its commands ends (as Escape
+            // ends it): their controls unmount with the rows and cannot
+            // keep the focus or take further input — the recorder's keys
+            // would fall through to the page with no cell listening.
+            let editor = self
+                .shortcuts
+                .editing
+                .take_if(|editing| commands.contains(&editing.command));
+            let recording = self
+                .shortcuts
+                .recording
+                .take_if(|recording| commands.contains(&recording.command));
+            // Focus inside the collapsing group — the open editor's
+            // field, a row's alias cell, the hotkey cell listening as its
+            // recorder or its Clear button — moves to the header that
+            // controls the group. Focus elsewhere stays where it is.
+            let inside = editor
+                .as_ref()
+                .is_some_and(|editing| editing.input.focus_handle(cx).is_focused(window))
+                || recording.is_some()
+                || commands.iter().any(|id| {
+                    self.shortcuts
+                        .alias_cells
+                        .get(id)
+                        .is_some_and(|cell| cell.is_focused(window))
+                        || self
+                            .shortcuts
+                            .hotkey_cells
+                            .get(id)
+                            .is_some_and(|cell| cell.is_focused(window))
+                        || self
+                            .shortcuts
+                            .hotkey_clears
+                            .get(id)
+                            .is_some_and(|button| button.is_focused(window))
+                });
+            if inside && let Some(header) = self.shortcuts.group_cells.get(key) {
+                window.focus(header, cx);
+            }
         }
         cx.notify();
     }
@@ -306,7 +522,7 @@ impl SettingsWindow {
                 window.focus(&field, cx);
             }
             Ok(pending) => {
-                self.shortcuts.status = Some(StatusLine::Saving);
+                self.shortcuts.status = Some(StatusLine::Saving("Saving the alias…".into()));
                 if let Some(cell) = self.shortcuts.alias_cells.get(&command) {
                     window.focus(cell, cx);
                 }
@@ -350,6 +566,151 @@ impl SettingsWindow {
         }
     }
 
+    /// Starts recording the hotkey of `command`: its cell takes focus and
+    /// listens, and the keys pressed next are the binding being recorded,
+    /// captured — they do not navigate or act. Called by the cell's keys
+    /// and click; the cell only exists for a command a hotkey can be
+    /// recorded for.
+    fn shortcuts_record_hotkey(
+        &mut self,
+        command: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.stop_propagation();
+        if self
+            .shortcuts
+            .recording
+            .as_ref()
+            .is_some_and(|recording| recording.command == command)
+        {
+            // The keys pressed while it listens are the binding, and
+            // Enter and Space cannot be part of one: the recorder keeps
+            // listening.
+            return;
+        }
+        self.shortcuts.recording = Some(Recording {
+            command: command.to_owned(),
+            rejection: None,
+        });
+        if let Some(cell) = self.shortcuts.hotkey_cells.get(command) {
+            window.focus(cell, cx);
+        }
+        cx.notify();
+    }
+
+    /// Escape on a hotkey cell while its recorder listens: cancels it,
+    /// changing nothing, and focus stays on the cell, a tab stop again.
+    fn shortcuts_cancel_hotkey(
+        &mut self,
+        _: &CancelHotkeyRecording,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.stop_propagation();
+        self.shortcuts_cancel_recording(cx);
+    }
+
+    /// Cancels the hotkey recorder, if one is listening, changing nothing:
+    /// Escape on its cell, or a mouse-down outside it while it listens
+    /// (see the cell's `on_mouse_down_out`).
+    fn shortcuts_cancel_recording(&mut self, cx: &mut Context<Self>) {
+        if self.shortcuts.recording.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// A key pressed while a hotkey recorder listens: the combination it
+    /// names is the binding to record, as the General page's recorder
+    /// takes the Open Pane keys. Keys the window binds (Enter, Space,
+    /// Escape, the navigation and traversal keys) never reach here — they
+    /// are bound in the recorder's context and handled above.
+    fn shortcuts_hotkey_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(recording) = self.shortcuts.recording.as_ref() else {
+            return;
+        };
+        let command = recording.command.clone();
+        let keystroke = &event.keystroke;
+        let modifiers = keystroke.modifiers;
+        cx.stop_propagation();
+        match Shortcut::new(
+            modifiers.control,
+            modifiers.alt,
+            modifiers.shift,
+            modifiers.platform,
+            &keystroke.key,
+        ) {
+            Ok(shortcut) => self.shortcuts_apply_hotkey(&command, Some(shortcut), window, cx),
+            Err(problem) => {
+                if let Some(recording) = self.shortcuts.recording.as_mut() {
+                    recording.rejection = Some(format!("{problem}."));
+                }
+                cx.notify();
+            }
+        }
+    }
+
+    /// Applies `shortcut` — or `None`, clearing — as the hotkey of
+    /// `command`, as the recorder or the Clear button asked: through the
+    /// launcher, which registers the new binding with the system before
+    /// the one it replaces is released and only then keeps and records the
+    /// choice, so a refusal, a cancellation or a save that fails never
+    /// discards the previous working binding. A refusal is shown under
+    /// the cell and keeps the recorder listening for another try; a
+    /// change that lands is recorded by the returned future, its outcome
+    /// the page's status line, and focus returns to the row's hotkey cell.
+    fn shortcuts_apply_hotkey(
+        &mut self,
+        command: &str,
+        shortcut: Option<Shortcut>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match self.launcher.set_hotkey(command, shortcut) {
+            Err(reason) => {
+                // Refused: the cell keeps listening and shows the reason
+                // under itself, for another try.
+                if let Some(recording) = self.shortcuts.recording.as_mut() {
+                    recording.rejection = Some(reason);
+                }
+                cx.notify();
+            }
+            Ok(pending) => {
+                self.shortcuts.recording = None;
+                self.shortcuts.status = Some(StatusLine::Saving("Saving the hotkey…".into()));
+                if let Some(cell) = self.shortcuts.hotkey_cells.get(command) {
+                    window.focus(cell, cx);
+                }
+                cx.spawn(async move |this, cx| {
+                    let outcome = pending.await;
+                    this.update(cx, |window, cx| {
+                        window.shortcuts_hotkey_recorded(outcome, cx);
+                    })
+                    .ok();
+                })
+                .detach();
+                cx.notify();
+            }
+        }
+    }
+
+    /// Records what the hotkey change the page started came to, as its
+    /// status line; a change that could not be kept also put back what was
+    /// last recorded — and the registration that follows it — which the
+    /// next frame's catalog shows.
+    fn shortcuts_hotkey_recorded(&mut self, outcome: HotkeyOutcome, cx: &mut Context<Self>) {
+        self.shortcuts.status = Some(match outcome {
+            HotkeyOutcome::Saved(done) => StatusLine::Saved(done),
+            HotkeyOutcome::NotKept(problem) => StatusLine::NotKept(problem),
+        });
+        cx.notify();
+    }
+
     /// What the window's watcher does on each of its ticks: nothing unless
     /// this page is showing, in which case a catalog that differs from the
     /// last one drawn asks for a redraw — the next frame reads the catalog
@@ -368,7 +729,7 @@ impl SettingsWindow {
 /// and their commands, and the status line.
 fn render(
     this: &mut SettingsWindow,
-    _window: &mut Window,
+    window: &mut Window,
     cx: &mut Context<SettingsWindow>,
 ) -> AnyElement {
     // The theme the host settings resolve to now: the page redraws with
@@ -378,7 +739,33 @@ fn render(
     // they are now, whatever made the window redraw.
     let catalog = this.launcher.shortcut_catalog();
     this.shortcuts.drawn = Some(catalog.clone());
+    // A recorder whose command the packages no longer offer ends: its
+    // cell is drawn as the plain label of a command that cannot record,
+    // so the keys would fall through to the page. The catalog changed
+    // under the page between the watcher's ticks.
+    if let Some(recording) = &this.shortcuts.recording {
+        let offered = catalog.groups.iter().any(|group| {
+            group
+                .commands
+                .iter()
+                .any(|command| command.id == recording.command && command.hotkey_editable)
+        });
+        if !offered {
+            this.shortcuts.recording = None;
+        }
+    }
     let query = this.shortcuts.query.read(cx).as_str().to_owned();
+    // A filter change is a content update — rows appear and vanish as
+    // the filter narrows or clears, and no disclosure transitions for
+    // it — so the page notes the blank state this frame draws, for the
+    // groups to compare against.
+    let blank = query.trim().is_empty();
+    let filtering = this.shortcuts.drawn_blank != blank;
+    this.shortcuts.drawn_blank = blank;
+    // Whether any group's disclosure is in flight starts false each
+    // frame; the groups that draw in flight set it, and the page asks
+    // for the one frame that continues them below.
+    this.shortcuts.disclosing = false;
     let editing = this
         .shortcuts
         .editing
@@ -387,8 +774,14 @@ fn render(
     let groups: Vec<AnyElement> = catalog
         .groups
         .iter()
-        .filter_map(|group| group_element(this, group, &query, &editing, &theme, cx))
+        .filter_map(|group| group_element(this, group, &query, &editing, filtering, &theme, cx))
         .collect();
+    // While any group's disclosure is still in flight, keep frames
+    // coming; the frame that completes them requests none, so a settled
+    // page is idle.
+    if this.shortcuts.disclosing {
+        window.request_animation_frame();
+    }
     div()
         .id("shortcuts")
         .debug_selector(|| "shortcuts".into())
@@ -531,11 +924,16 @@ fn columns_header(hotkeys_unavailable: Option<&str>, theme: &Theme) -> Stateful<
 /// One group: the header that expands and collapses it, then its commands
 /// as the filter and the expanded state leave them. `None` when a filter
 /// is on and nothing in the group matches it.
+///
+/// `filtering` says the filter changed since the last drawn frame, which
+/// makes whatever rows appear or vanish here a content update — those
+/// never animate.
 fn group_element(
     this: &mut SettingsWindow,
     group: &ShortcutGroup,
     query: &str,
     editing: &Option<String>,
+    filtering: bool,
     theme: &Theme,
     cx: &mut Context<SettingsWindow>,
 ) -> Option<AnyElement> {
@@ -557,14 +955,57 @@ fn group_element(
     if !blank && shown.is_empty() {
         return None;
     }
+    // The group's disclosure: its look — 0 collapsed, 1 expanded — while
+    // a toggle's transition is in flight. Only a real toggle of this
+    // group starts or retargets it (the drawn state flipped with the
+    // filter unchanged); a filter change and the group's first draw are
+    // content updates, which never animate. The look is the one number
+    // the chevron's rotation and the commands' arrival below derive
+    // from, so the group coordinates on one timeline and retargets
+    // together; reduced motion settles it at once. See
+    // `crate::ui::motion` for the whole policy.
+    let drawn = this
+        .shortcuts
+        .drawn_collapsed
+        .insert(key.clone(), collapsed);
+    let toggled = !filtering && drawn == Some(!collapsed);
+    let look = motion::advance_disclosure(
+        this.shortcuts.disclosures.entry(key.clone()).or_default(),
+        !collapsed,
+        toggled,
+        cx.reduce_motion(),
+        cx.background_executor().now(),
+    );
+    let in_flight = look.is_some();
+    if in_flight {
+        this.shortcuts.disclosing = true;
+    }
+    #[cfg(any(test, debug_assertions))]
+    {
+        this.shortcuts.drawn_looks.insert(key.clone(), look);
+    }
     let handle = this
         .shortcuts
         .group_cells
         .entry(key.clone())
         .or_insert_with(|| cx.focus_handle().tab_stop(true))
         .clone();
-    let for_keys = key.clone();
-    let for_click = key.clone();
+    // The group's commands, for the header's toggle to act on — the ids
+    // as this frame draws them.
+    let commands: Vec<String> = group
+        .commands
+        .iter()
+        .map(|command| command.id.clone())
+        .collect();
+    let for_keys = (key.clone(), commands.clone());
+    let for_click = (key.clone(), commands);
+    // The chevron: one glyph, rotated from pointing right (collapsed, at
+    // 0) to pointing down (expanded, at a quarter turn) by the look's
+    // angle — so its turn runs on the disclosure's own timeline and
+    // retargets with it, never snapping ahead or behind the content.
+    // Paint only: the element's layout and hit target are the unrotated
+    // box's.
+    let angle = std::f32::consts::FRAC_PI_2 * look.unwrap_or(if collapsed { 0. } else { 1. });
     let header = div()
         .id(key.clone())
         .debug_selector(|| format!("shortcut-group-{key}"))
@@ -573,11 +1014,11 @@ fn group_element(
         .role(Role::Button)
         .aria_label(group_label(group))
         .aria_expanded(!collapsed)
-        .on_action(cx.listener(move |this, _: &ToggleGroup, _, cx| {
-            this.shortcuts_toggle_group(&for_keys, cx);
+        .on_action(cx.listener(move |this, _: &ToggleGroup, window, cx| {
+            this.shortcuts_toggle_group(&for_keys.0, &for_keys.1, window, cx);
         }))
-        .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-            this.shortcuts_toggle_group(&for_click, cx);
+        .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
+            this.shortcuts_toggle_group(&for_click.0, &for_click.1, window, cx);
         }))
         .flex()
         .items_center()
@@ -587,15 +1028,15 @@ fn group_element(
         .rounded(theme.geometry.row_radius)
         .cursor_pointer()
         .hover(|header| header.bg(theme.row_hover))
+        // Pressed: the selected wash, one rung above the hover one.
+        .active(|header| header.bg(theme.row_selected))
+        .transitions(|fades| fades.bg(crate::ui::motion::pointer_fade()))
         .focus(|header| focus_ring(header, theme.focus_ring))
-        .child(glyph(
-            if collapsed {
-                Glyph::ChevronRight
-            } else {
-                Glyph::ChevronDown
-            },
+        .child(glyph_rotated(
+            Glyph::ChevronRight,
             px(14.),
             theme.text_muted,
+            gpui::radians(angle),
         ))
         .child(
             div()
@@ -633,6 +1074,10 @@ fn group_element(
                 }),
         );
     let rows: Vec<AnyElement> = if blank && collapsed {
+        // Collapsed: the rows are unmounted — the departing content is
+        // never drawn fading out, so it can expose no hit targets or
+        // active accessibility nodes. The chevron's turn above is the
+        // collapse's transition.
         Vec::new()
     } else {
         shown
@@ -640,13 +1085,44 @@ fn group_element(
             .map(|command| row_element(this, command, editing, theme, cx))
             .collect()
     };
-    // The commands the group shows, in one container of their own: the
-    // seam #87's group transitions animate later — nothing here animates.
+    // The commands the group shows, in one container of their own, which
+    // arrives with the disclosure while it is in flight: the whole block
+    // of rows fades in over the tiny shift from below — one arrival for
+    // the group, never a stagger of rows — mounted and interactive from
+    // the first frame, because the state has already flipped. The offset
+    // is a relative `top` inset, applied after layout, so the real
+    // layout (the page's actual height, the scroll range, the rows'
+    // hit targets) is the expanded one from the first frame too, and
+    // nothing resizes the window. Collapsing, or settled, draws plain.
+    let (offset, opacity) = look
+        .filter(|_| !collapsed)
+        .map(|look| {
+            (
+                motion::VIEW_SHIFT * (1. - look),
+                motion::VIEW_OPACITY_FLOOR + (1. - motion::VIEW_OPACITY_FLOOR) * look,
+            )
+        })
+        .unwrap_or((0., 1.));
+    // The commands' arrival this frame draws, for the tests (see
+    // [`SettingsWindow::group_arrival`]): the block's (offset, opacity)
+    // while the disclosure is in flight, `None` when settled. Test and
+    // debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    {
+        this.shortcuts.drawn_arrivals.insert(
+            key.clone(),
+            look.filter(|_| !collapsed).map(|_| (offset, opacity)),
+        );
+    }
     let commands = div()
         .id(format!("commands-{key}"))
+        .debug_selector(|| format!("commands-{key}"))
         .flex()
         .flex_col()
         .gap(px(2.))
+        .relative()
+        .top(px(offset))
+        .when(opacity < 1., |commands| commands.opacity(opacity))
         .children(rows);
     Some(
         div()
@@ -716,7 +1192,7 @@ fn row_element(
     } else {
         alias_cell(this, command, theme, cx)
     };
-    let hotkey = hotkey_cell(command, theme);
+    let hotkey = hotkey_cell(this, command, theme, cx);
     div()
         .id(format!("row-{id}"))
         .debug_selector(|| format!("shortcut-row-{id}"))
@@ -787,6 +1263,9 @@ fn alias_cell(
             .bg(theme.tile_background)
             .cursor_pointer()
             .hover(|cell| cell.bg(theme.row_hover))
+            // Pressed: the selected wash, one rung above the hover one.
+            .active(|cell| cell.bg(theme.row_selected))
+            .transitions(|fades| fades.bg(crate::ui::motion::pointer_fade()))
             .focus(|cell| cell.border_color(theme.focus_ring))
             .text_size(theme.typography.row_subtitle_size)
             .text_color(if current.is_some() {
@@ -939,13 +1418,38 @@ fn editor_element(
         })
 }
 
-/// The Hotkey column's cell: the command's hotkey as text in the keycap
-/// chrome (display-only until #76 lands recording), or none, with why the
-/// hotkey is not active below it.
-fn hotkey_cell(command: &ShortcutCommand, theme: &Theme) -> Div {
+/// The Hotkey column's cell: the command's hotkey in the keycap chrome —
+/// or "None" — as a button that starts the recorder, with a Clear button
+/// beside it while a hotkey is recorded. While the recorder listens, the
+/// button shows it — the keys pressed next are the binding being recorded,
+/// captured, Escape cancels — with why the last capture was refused below,
+/// and the hint of what is being recorded; the Clear button hides, since
+/// a click while it listens only cancels. A command a hotkey cannot be
+/// recorded for (its package is disabled, or it is unavailable on this
+/// system) shows its recorded hotkey as a plain label instead. Whatever
+/// the cell shows, why the hotkey is not active is below it.
+fn hotkey_cell(
+    this: &mut SettingsWindow,
+    command: &ShortcutCommand,
+    theme: &Theme,
+    cx: &mut Context<SettingsWindow>,
+) -> Div {
+    let id = command.id.clone();
     let shown = command.hotkey.as_ref().map(|shortcut| shortcut.to_string());
+    let listening = this
+        .shortcuts
+        .recording
+        .as_ref()
+        .is_some_and(|recording| recording.command == id);
+    let rejection = this
+        .shortcuts
+        .recording
+        .as_ref()
+        .filter(|recording| recording.command == id)
+        .and_then(|recording| recording.rejection.clone());
     let label = format!(
-        "Hotkey for {}: {}",
+        "{}Hotkey for {}: {}",
+        if listening { "Recording; " } else { "" },
         command.title,
         shown.as_deref().unwrap_or("none")
     );
@@ -953,6 +1457,160 @@ fn hotkey_cell(command: &ShortcutCommand, theme: &Theme) -> Div {
         .hotkey_inactive
         .as_ref()
         .map(|why| format!("Not active: {why}"));
+    // What assistive technology is told after the cell's name: while the
+    // recorder listens, why the last capture was refused — as the alias
+    // editor's field announces its error — with the reason the hotkey is
+    // not active as the fallback while it listens and alone otherwise.
+    let description = if listening {
+        rejection.clone().or_else(|| inactive.clone())
+    } else {
+        inactive.clone()
+    };
+
+    // The recorder button, or the plain label of a command that cannot
+    // record here.
+    let value = if listening {
+        // The listening mark, as the General page's recorder shows it.
+        hotkey_chip("…", theme.warning, theme).into_any_element()
+    } else {
+        match shown.as_deref() {
+            Some(shortcut) => {
+                hotkey_chip(shortcut, theme.tile_foreground, theme).into_any_element()
+            }
+            None => div()
+                .text_size(theme.typography.row_subtitle_size)
+                .text_color(theme.text_muted)
+                .child("None")
+                .into_any_element(),
+        }
+    };
+    let cell = if command.hotkey_editable {
+        let handle = this
+            .shortcuts
+            .hotkey_cells
+            .entry(id.clone())
+            .or_insert_with(|| cx.focus_handle().tab_stop(true))
+            .clone();
+        let for_keys = id.clone();
+        let for_click = id.clone();
+        let for_out = id.clone();
+        // While the recorder listens, the cell's context is the recorder's
+        // (see [`bind_keys`]): its keys are the binding being recorded.
+        div()
+            .id(format!("hotkey-{id}"))
+            .debug_selector(|| format!("shortcut-hotkey-{id}"))
+            .key_context(if listening {
+                HOTKEY_RECORDER
+            } else {
+                HOTKEY_CELL
+            })
+            .track_focus(&handle)
+            .role(Role::Button)
+            .aria_label(label)
+            .when_some(description.clone(), |cell, why| cell.aria_description(why))
+            .on_action(cx.listener(move |this, _: &RecordHotkey, window, cx| {
+                this.shortcuts_record_hotkey(&for_keys, window, cx);
+            }))
+            .on_action(cx.listener(SettingsWindow::shortcuts_cancel_hotkey))
+            .on_key_down(cx.listener(SettingsWindow::shortcuts_hotkey_key_down))
+            // A mouse-down anywhere outside the cell while it listens
+            // cancels the recording and is consumed, as the General page's
+            // recorder and the footer menu's popup do: the click
+            // underneath does not act, and the recorder gives up the keys.
+            .on_mouse_down_out(cx.listener(move |this, _: &MouseDownEvent, _window, cx| {
+                if this
+                    .shortcuts
+                    .recording
+                    .as_ref()
+                    .is_some_and(|recording| recording.command == for_out)
+                {
+                    this.shortcuts_cancel_recording(cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
+                this.shortcuts_record_hotkey(&for_click, window, cx);
+            }))
+            .flex()
+            .items_center()
+            .min_h(px(30.))
+            .px(px(4.))
+            .rounded_md()
+            .cursor_pointer()
+            .hover(|cell| cell.bg(theme.row_hover))
+            // Pressed: the selected wash, one rung above the hover one.
+            .active(|cell| cell.bg(theme.row_selected))
+            .transitions(|fades| fades.bg(crate::ui::motion::pointer_fade()))
+            .focus(|cell| focus_ring(cell, theme.focus_ring))
+            .child(value)
+            .into_any_element()
+    } else {
+        div()
+            .id(format!("hotkey-{id}"))
+            .debug_selector(|| format!("shortcut-hotkey-{id}"))
+            .role(Role::Label)
+            .aria_label(label)
+            .when_some(description, |cell, why| cell.aria_description(why))
+            .flex()
+            .items_center()
+            .min_h(px(30.))
+            .px(px(4.))
+            .opacity(0.6)
+            .child(value)
+            .into_any_element()
+    };
+
+    // The Clear button, beside a recorded hotkey of a command that can
+    // record: it forgets the hotkey through the same checks and record
+    // the recorder writes. It hides while the recorder listens, since a
+    // click there only cancels it.
+    let clear = (!listening && command.hotkey.is_some() && command.hotkey_editable).then(|| {
+        let handle = this
+            .shortcuts
+            .hotkey_clears
+            .entry(id.clone())
+            .or_insert_with(|| cx.focus_handle().tab_stop(true))
+            .clone();
+        let for_keys = id.clone();
+        let for_click = id.clone();
+        div()
+            .id(format!("hotkey-clear-{id}"))
+            .debug_selector(|| format!("shortcut-hotkey-clear-{id}"))
+            .key_context(HOTKEY_CLEAR)
+            .track_focus(&handle)
+            .role(Role::Button)
+            .aria_label(format!("Clear the hotkey for {}", command.title))
+            .on_action(cx.listener(move |this, _: &ClearHotkey, window, cx| {
+                this.shortcuts_apply_hotkey(&for_keys, None, window, cx);
+            }))
+            .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
+                this.shortcuts_apply_hotkey(&for_click, None, window, cx);
+            }))
+            .flex()
+            .items_center()
+            .min_h(px(30.))
+            .px(px(6.))
+            .rounded_md()
+            .cursor_pointer()
+            .hover(|button| button.bg(theme.row_hover))
+            // Pressed: the selected wash, one rung above the hover one.
+            .active(|button| button.bg(theme.row_selected))
+            .transitions(|fades| fades.bg(crate::ui::motion::pointer_fade()))
+            .focus(|button| focus_ring(button, theme.focus_ring))
+            .text_size(theme.typography.row_kind_size)
+            .text_color(theme.text_muted)
+            .child("Clear")
+    });
+
+    // The hint of what is being recorded, and why the last capture was
+    // refused — both only while the recorder listens.
+    let hint = listening.then(|| {
+        format!(
+            "Press the keys that should open {}; they are captured here and do not act. Esc \
+             cancels",
+            command.title
+        )
+    });
     div()
         .w(HOTKEY_WIDTH)
         .flex_none()
@@ -962,23 +1620,33 @@ fn hotkey_cell(command: &ShortcutCommand, theme: &Theme) -> Div {
         .py(px(6.))
         .child(
             div()
-                .id(format!("hotkey-{}", command.id))
-                .debug_selector(|| format!("shortcut-hotkey-{}", command.id))
-                .role(Role::Label)
-                .aria_label(label)
-                .when_some(inactive, |cell, why| cell.aria_description(why))
                 .flex()
+                .flex_row()
                 .items_center()
-                .min_h(px(30.))
-                .child(match shown {
-                    Some(shortcut) => hotkey_chip(&shortcut, theme).into_any_element(),
-                    None => div()
-                        .text_size(theme.typography.row_subtitle_size)
-                        .text_color(theme.text_muted)
-                        .child("None")
-                        .into_any_element(),
-                }),
+                .gap(px(6.))
+                .child(cell)
+                .when_some(clear, |row, clear| row.child(clear)),
         )
+        .when_some(hint, |column, hint| {
+            column.child(
+                div()
+                    .id("shortcut-hotkey-hint")
+                    .debug_selector(|| "shortcut-hotkey-hint".into())
+                    .text_size(theme.typography.row_kind_size)
+                    .text_color(theme.text_muted)
+                    .child(hint),
+            )
+        })
+        .when_some(rejection, |column, why| {
+            column.child(
+                div()
+                    .id("shortcut-hotkey-error")
+                    .debug_selector(|| "shortcut-hotkey-error".into())
+                    .text_size(theme.typography.row_kind_size)
+                    .text_color(theme.danger)
+                    .child(why),
+            )
+        })
         .when_some(command.hotkey_inactive.as_ref(), |cell, why| {
             cell.child(
                 div()
@@ -993,8 +1661,8 @@ fn hotkey_cell(command: &ShortcutCommand, theme: &Theme) -> Div {
 
 /// The hotkey as text in the neutral control chrome — the keycap's tile
 /// colors at text scale, since a hotkey is more than one key and the
-/// keycap shows one glyph.
-fn hotkey_chip(text: &str, theme: &Theme) -> Div {
+/// keycap shows one glyph. The listening mark passes the warning tone.
+fn hotkey_chip(text: &str, color: Hsla, theme: &Theme) -> Div {
     div()
         .flex_none()
         .flex()
@@ -1010,15 +1678,15 @@ fn hotkey_chip(text: &str, theme: &Theme) -> Div {
             BoxShadow::new(px(0.), px(1.), theme.tile_highlight).inset(),
         ])
         .text_size(theme.typography.footer_size)
-        .text_color(theme.tile_foreground)
+        .text_color(color)
         .child(text.to_owned())
 }
 
-/// The page's status line: what the last alias change came to, a live
-/// region so assistive technology announces it.
+/// The page's status line: what the last change the page started came
+/// to, a live region so assistive technology announces it.
 fn status_line(status: &StatusLine, theme: &Theme) -> Stateful<Div> {
     let (text, color): (String, Hsla) = match status {
-        StatusLine::Saving => ("Saving the alias…".into(), theme.warning),
+        StatusLine::Saving(saving) => (saving.clone(), theme.warning),
         StatusLine::Saved(done) => (done.clone(), theme.success),
         StatusLine::NotKept(problem) => (
             format!("Could not keep the change: {problem}"),

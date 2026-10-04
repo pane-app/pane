@@ -83,8 +83,45 @@ jobs:
           # As in ci.yml: the real-clipboard adapter tests opt in where a
           # logged-in session exists; on Linux they run under Xvfb below.
           PANE_TEST_REAL_CLIPBOARD: ${{ runner.os != 'Linux' && '1' || '' }}
+      # The Linux (X11) clipboard adapter's test also replaces what is on
+      # the clipboard, and needs a display to watch: the same opt-in, run
+      # under Xvfb (the step above runs without a display, so the test
+      # skips itself there).
       - name: Run the Linux clipboard adapter test (Xvfb)
         if: ${{ runner.os == 'Linux' && contains(github.event.head_commit.message || '', '[verify]') }}
         run: xvfb-run -a cargo test --locked -p pane-core --test clipboard_adapter_linux
+        env:
+          PANE_TEST_REAL_CLIPBOARD: "1"
+
+  # The quick tier compiles Linux and Windows; the macOS-gated code
+  # (the autostart, tray, placement and hotkey adapters) is compiled
+  # only by the branch tier and the release matrix. A [verify] push is
+  # the ticket's completion signal, so it also pays a compile check on
+  # macOS: an uncompiled macOS adapter (wave 4's tray and placement
+  # adapters each shipped a real error) is then caught at the ticket,
+  # not at the wave gate. Plain iterations never pay for it.
+  macos-check:
+    name: Check (macos-15, verify only)
+    if: contains(github.event.head_commit.message || '', '[verify]')
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            guests
+            guests/fixtures/mixed-p2
+      - name: Quick compile check
+        run: |
+          cargo fmt --all --check
+          cargo check --locked --workspace --all-targets
+      # The macOS clipboard adapter's test replaces what is on the
+      # clipboard; the runner's logged-in session keeps the pasteboard
+      # live, as ci.yml's check job does on its macOS leg.
+      - name: Run the macOS clipboard adapter test
+        run: cargo test --locked -p pane-core --test clipboard_adapter_macos
         env:
           PANE_TEST_REAL_CLIPBOARD: "1"

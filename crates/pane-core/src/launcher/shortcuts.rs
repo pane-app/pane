@@ -90,15 +90,24 @@ pub struct ShortcutCommand {
     /// Why the hotkey is not active, if it is not: the command is not
     /// offered (its package is disabled, or the command is unavailable on
     /// this system), the system refused to register it, or this system has
-    /// no global hotkeys at all.
+    /// no global hotkeys at all. A command that cannot have a hotkey
+    /// recorded here says so whether or not one is recorded, as its other
+    /// configuration does.
     pub hotkey_inactive: Option<String>,
+    /// Whether a hotkey can be recorded for the command here: a command
+    /// whose package is disabled or that is unavailable on this system
+    /// keeps the hotkey recorded, but none can be given to it until it is
+    /// offered and available again; one that is gone from its package
+    /// keeps the choice, which only uninstalling forgets.
+    pub hotkey_editable: bool,
 }
 
 impl Launcher {
     /// The installed commands with their aliases and hotkeys, grouped by
     /// their packages, for the Settings window's Shortcuts page. See the
     /// module docs for what the catalog holds; alias editing goes through
-    /// [`Launcher::set_alias`].
+    /// [`Launcher::set_alias`] and hotkey recording through
+    /// [`Launcher::set_hotkey`].
     pub fn shortcut_catalog(&self) -> ShortcutCatalog {
         let state = self.lock();
         catalog(self, &state)
@@ -175,6 +184,7 @@ fn catalog(launcher: &Launcher, state: &State) -> ShortcutCatalog {
             editable: false,
             hotkey,
             hotkey_inactive,
+            hotkey_editable: false,
         });
     }
     if !unlisted.is_empty() {
@@ -218,15 +228,16 @@ fn command(
             shared.then(|| "another command has the same alias".to_owned())
         });
     let hotkey = state.bindings.hotkey_of(&id);
-    // The hotkey row's wording: registered while the command is offered,
-    // so an unavailable command's or a disabled package's hotkey is not
-    // active, and one the system refused says why.
-    let hotkey_inactive = hotkey.as_ref().and_then(|_| {
-        unavailable
-            .map(str::to_owned)
-            .or_else(|| state.bindings.problem_of(&id))
-            .or_else(|| hotkey_package_inactive.map(str::to_owned))
-    });
+    // The hotkey cell's wording: a command that cannot have a hotkey
+    // recorded here — its package is disabled, or it is unavailable on
+    // this system — says so whether or not one is recorded, as the alias
+    // cell does; a command that can says why its recorded hotkey is not
+    // active, when it is not (a registration the system refused, or one
+    // another command has).
+    let hotkey_inactive = unavailable
+        .map(str::to_owned)
+        .or_else(|| hotkey_package_inactive.map(str::to_owned))
+        .or_else(|| hotkey.as_ref().and_then(|_| state.bindings.problem_of(&id)));
     ShortcutCommand {
         id,
         title,
@@ -237,6 +248,10 @@ fn command(
         editable: true,
         hotkey,
         hotkey_inactive,
+        // A command whose package is disabled, or that is unavailable on
+        // this system, is not offered: its hotkey is kept, not changed
+        // here. A paused package's commands are offered still.
+        hotkey_editable: unavailable.is_none() && hotkey_package_inactive.is_none(),
     }
 }
 
@@ -276,6 +291,7 @@ fn missing(
             editable: false,
             hotkey,
             hotkey_inactive,
+            hotkey_editable: false,
         });
         listed.insert(id);
     }

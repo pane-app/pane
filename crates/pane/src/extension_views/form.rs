@@ -61,6 +61,21 @@ impl Control {
     }
 }
 
+impl FormControls {
+    /// The form's text fields' editing states, which a platform input
+    /// method talks to while composing text — for the launcher's back
+    /// key, which cancels an active composition before it acts.
+    pub(crate) fn text_fields(&self) -> Vec<Entity<EditableTextState>> {
+        self.fields
+            .iter()
+            .filter_map(|control| match control {
+                Control::Text(input) => Some(input.clone()),
+                Control::Choice(_) => None,
+            })
+            .collect()
+    }
+}
+
 impl LauncherWindow {
     /// Test support: the editing state of the open form's text field
     /// `field_id`, which a platform input method talks to while composing

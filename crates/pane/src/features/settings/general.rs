@@ -1,5 +1,6 @@
 //! The General page: the choices that govern Pane as a whole — today,
-//! the Open Pane hotkey and whether Pane starts at login.
+//! the Open Pane hotkey, whether Pane starts at login, and whether Pane
+//! shows its tray or menu-bar entry.
 //!
 //! The Open Pane hotkey is the application-owned global binding that
 //! summons the launcher from any application, recorded here and applied
@@ -41,6 +42,19 @@
 //! ([`crate::settings`]), so the record's own rules (atomic writes, an
 //! unreadable record never replaced) are the ones this choice lives by.
 //!
+//! The tray or menu-bar visibility is the third of the same discipline:
+//! the native entry is shown or hidden through the platform's adapter
+//! before the choice is kept, so only a change that took is saved, a
+//! system that refused explains itself, and a platform with no entry at
+//! all (Linux today) explains that instead of offering a switch that
+//! would pretend. The entry is the one place outside Pane's own windows
+//! whose menu opens the launcher, Settings and Quit — so hiding it
+//! leaves the launcher's footer menu, its Settings root result and the
+//! local Settings shortcut as the entry points they always were, and
+//! hiding it never hides a window: a launcher whose Open Pane binding
+//! failed keeps its window, because the entry is the only thing the
+//! preference ever hides.
+//!
 //! What the page explains: the binding's state — why a chosen one is not
 //! registered, including the Wayland limitation and the desktop-shortcut
 //! guidance the adapter itself carries — the reason a recording was
@@ -59,6 +73,36 @@ use pane_core::hotkeys::Shortcut;
 use super::{Page, SettingsWindow, search};
 use crate::ui::icon::{Glyph, IconTone};
 use crate::ui::theme::Theme;
+
+/// The tray row's title, in the platform's own terms for the entry: the
+/// menu bar's status item on macOS, the notification area's tray icon
+/// elsewhere.
+fn tray_row_title() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Show in Menu Bar"
+    } else {
+        "Show in tray"
+    }
+}
+
+/// The tray group's label, in the same terms.
+fn tray_group_title() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Menu Bar"
+    } else {
+        "System tray"
+    }
+}
+
+/// The tray row's subtitle, in the same terms: what the entry is and
+/// what its menu holds.
+fn tray_row_subtitle() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Pane's menu-bar item, with Open Pane, Settings and Quit Pane"
+    } else {
+        "Pane's item in the notification area, with Open Pane, Settings and Exit"
+    }
+}
 
 /// The recorder row's key context: while the recorder holds focus, its
 /// keys are the binding being recorded, not the window's navigation.
@@ -103,7 +147,8 @@ pub(crate) fn page() -> Page {
     }
 }
 
-/// The General page's state, held by the window as a field: the recorder.
+/// The General page's state, held by the window as a field: the recorder
+/// and the tray toggle's last refusal.
 pub(crate) struct State {
     /// Whether the recorder is listening for a new binding.
     recording: bool,
@@ -111,6 +156,11 @@ pub(crate) struct State {
     /// collision or the system's refusal. Shown as the page's status; the
     /// recorder keeps listening for another try.
     rejection: Option<String>,
+    /// Why the last tray or menu-bar toggle was refused, if it was: the
+    /// system's refusal, or the platform's lack of an entry. Shown as the
+    /// page's status; the entry's own state is explained beside the
+    /// toggle.
+    tray_refusal: Option<String>,
     /// The recorder row's focus, held while it listens (and a tab stop
     /// otherwise, so the keyboard reaches the row).
     focus: FocusHandle,
@@ -122,21 +172,27 @@ impl State {
         State {
             recording: false,
             rejection: None,
+            tray_refusal: None,
             focus: cx.focus_handle().tab_stop(true),
         }
     }
 }
 
 /// The settings the page offers the sidebar's search: the Open Pane
-/// hotkey — its recorder and its reset — and the launch-at-login switch,
-/// named as the page names them, in the groups they sit in. The hotkey
-/// carries the binding's own problem as its reason when one stands (the
-/// system refused the binding, or it cannot be used at all here); the
-/// login choice carries the integration's reason where it cannot manage
-/// a registration. Read live, so a binding that changes or an
-/// integration that answers differently is in the next catalog.
+/// hotkey — its recorder and its reset — the launch-at-login switch and
+/// the tray or menu-bar visibility, named as the page names them, in the
+/// groups they sit in. The hotkey carries the binding's own problem as
+/// its reason when one stands (the system refused the binding, or it
+/// cannot be used at all here); the login choice carries the
+/// integration's reason where it cannot manage a registration, and the
+/// tray choice the platform's reason where it has no entry at all. Read
+/// live, so a binding that changes or an integration that answers
+/// differently is in the next catalog.
 fn entries(launcher: &Launcher, cx: &App) -> Vec<search::Entry> {
-    let login_unavailable = crate::settings::shared(cx).read(cx).login_unavailable();
+    let (login_unavailable, tray_unavailable) = {
+        let state = crate::settings::shared(cx).read(cx);
+        (state.login_unavailable(), state.tray_unavailable())
+    };
     vec![
         search::Entry {
             control: Some("open-pane-recorder".into()),
@@ -156,14 +212,20 @@ fn entries(launcher: &Launcher, cx: &App) -> Vec<search::Entry> {
             group: Some("Startup".into()),
             unavailable: login_unavailable,
         },
+        search::Entry {
+            control: Some("tray-visibility".into()),
+            title: tray_row_title().into(),
+            group: Some(tray_group_title().into()),
+            unavailable: tray_unavailable,
+        },
     ]
 }
 
 /// The recorder row takes keyboard focus — it is a tab stop, and Enter
 /// or a click on it starts recording — so a jump to it focuses the row,
-/// ready to record. The reset row and the login switch take none (they
-/// are chosen with the pointer, as the Appearance choices are), so a
-/// jump reveals them and the sidebar keeps the focus: `false`.
+/// ready to record. The reset row and the switches take none (they are
+/// chosen with the pointer, as the Appearance choices are), so a jump
+/// reveals them and the sidebar keeps the focus: `false`.
 fn focus(
     this: &mut SettingsWindow,
     target: &str,
@@ -178,8 +240,8 @@ fn focus(
 }
 
 /// Draws the General page: the Open Pane hotkey — its recorder and reset —
-/// the launch-at-login switch, what each of them explains, and what the
-/// last attempt or save reported.
+/// the launch-at-login and tray switches, what each of them explains, and
+/// what the last attempt or save reported.
 fn render(
     this: &mut SettingsWindow,
     _window: &mut Window,
@@ -187,14 +249,22 @@ fn render(
 ) -> AnyElement {
     let theme = crate::settings::visuals(cx).theme;
     let typography = &theme.typography;
-    // Everything the page shows about the binding comes from the host
-    // settings (the choice, the save's word) and the launcher (what is
-    // registered, and why not), and everything about the login choice
-    // comes from the host settings (the preference, the registration and
-    // the platform's ability): what the record holds and what actually
-    // works stay distinguishable.
+    // Everything the page shows comes from the host settings (the
+    // choices, the save's word, the registration and ability each
+    // integration reports, the entry's state) and the launcher (what is
+    // registered, and why not): what the record holds and what actually
+    // works stay distinguishable, choice by choice.
     let settings = crate::settings::shared(cx);
-    let (choice, status, preference, unavailable, registration) = {
+    let (
+        choice,
+        status,
+        preference,
+        unavailable,
+        registration,
+        tray_visible,
+        tray_unavailable,
+        tray_status,
+    ) = {
         let state = settings.read(cx);
         (
             state.open_pane(),
@@ -202,10 +272,14 @@ fn render(
             state.launch_at_login(),
             state.login_unavailable(),
             state.login_registration().clone(),
+            state.tray_visible(),
+            state.tray_unavailable(),
+            state.tray_status(),
         )
     };
     let problem = this.launcher.open_pane_problem();
     let rejection = this.general.rejection.clone();
+    let tray_refusal = this.general.tray_refusal.clone();
     let resettable = choice != Shortcut::open_pane_default();
     // The rows' scroll anchors, which the search's reveal scrolls to
     // (see the window's render): the reset row and the login switch take
@@ -213,6 +287,7 @@ fn render(
     let recorder_anchor = this.search_anchor("open-pane-recorder");
     let reset_anchor = this.search_anchor("open-pane-reset");
     let login_anchor = this.search_anchor("launch-at-login");
+    let tray_anchor = this.search_anchor("tray-visibility");
 
     let page = div()
         .id("general")
@@ -254,6 +329,10 @@ fn render(
         .child(group(
             "Startup",
             vec![switch(
+                "launch-at-login",
+                "general-launch-at-login",
+                "Launch Pane at login",
+                "Pane is ready when you log in",
                 preference,
                 unavailable.is_none(),
                 login_anchor,
@@ -273,7 +352,44 @@ fn render(
             login_note(preference, unavailable, registration, &theme),
             |page, note| page.child(note),
         )
-        // What the last attempt was refused with, if anything.
+        .child(group(
+            tray_group_title(),
+            vec![switch(
+                "tray-visibility",
+                "tray-visibility",
+                tray_row_title(),
+                tray_row_subtitle(),
+                tray_visible,
+                tray_unavailable.is_none(),
+                tray_anchor,
+                &theme,
+                // The click reports the choice to the host settings: the
+                // native entry is shown or hidden, the record written,
+                // and the switch redrawn with what was actually kept —
+                // the preference read as it is now, not as the frame that
+                // drew the row holds it.
+                cx.listener(|this, _, _, cx| {
+                    let visible = crate::settings::shared(cx).read(cx).tray_visible();
+                    this.apply_tray_visible(!visible, cx);
+                }),
+            )],
+            &theme,
+        ))
+        // The entry's state: why the native entry is not what the
+        // preference names — a system with no tray or menu-bar entry at
+        // all (Linux today, with the adapter's own guidance), or a show
+        // or hide the system refused. An unavailable entry is explained
+        // rather than represented as a successful toggle, and its switch
+        // is not offered where the platform has none.
+        .when_some(tray_status, |page, status| {
+            page.child(note("tray-note", &status, theme.warning, &theme))
+        })
+        // What the last tray toggle was refused with, if anything.
+        .when_some(tray_refusal, |page, refusal| {
+            page.child(note("tray-refusal", &refusal, theme.danger, &theme))
+        })
+        // What the last attempt to record a binding was refused with, if
+        // anything.
         .when_some(rejection, |page, rejection| {
             page.child(note("general-refusal", &rejection, theme.danger, &theme))
         })
@@ -340,6 +456,9 @@ fn recorder_row(
         .rounded(geometry.row_radius)
         .cursor_pointer()
         .hover(|row| row.bg(theme.row_hover))
+        // Pressed: the selected wash, one rung above the hover one.
+        .active(|row| row.bg(theme.row_selected))
+        .transitions(|fades| fades.bg(crate::ui::motion::pointer_fade()))
         .child(
             div()
                 .flex_1()
@@ -444,9 +563,7 @@ fn reset_row(
         .min_h(geometry.row_min_height)
         .px(geometry.row_padding_x)
         .rounded(geometry.row_radius)
-        .when(resettable, |row| {
-            row.cursor_pointer().hover(|row| row.bg(theme.row_hover))
-        })
+        .when(resettable, |row| row.cursor_pointer())
         .when(!resettable, |row| row.opacity(0.5).cursor_default())
         .child(
             div()
@@ -470,6 +587,14 @@ fn reset_row(
                 ),
         );
     row.id("open-pane-reset")
+        // The pointer feedback, on the named row: the hover wash fades
+        // over the shared pointer span, and the press takes the selected
+        // wash, one rung above the hover one.
+        .when(resettable, |row| {
+            row.hover(|row| row.bg(theme.row_hover))
+                .active(|row| row.bg(theme.row_selected))
+                .transitions(|fades| fades.bg(crate::ui::motion::pointer_fade()))
+        })
         .debug_selector(|| "open-pane-reset".into())
         .anchor_scroll(Some(anchor))
         .role(Role::Button)
@@ -482,12 +607,21 @@ fn reset_row(
         })
 }
 
-/// The launch-at-login switch row: the reference's row chrome carrying a
-/// switch's marks and semantics, the switch itself at the right. The
-/// switch carries the *saved preference*; `offered` is whether choosing
-/// it does anything (nothing is offered where the platform cannot manage
-/// the registration, and the row says so by its state).
+/// One switch row, as the General page's boolean choices are drawn: the
+/// reference's row chrome carrying a switch's marks and semantics, the
+/// switch itself at the right, `title` and `subtitle` naming the choice.
+/// The switch carries the *saved preference*; `offered` is whether
+/// choosing it does anything (nothing is offered where the platform
+/// cannot manage what the choice asks, and the row says so by its
+/// state). One presentation for every boolean the page offers, so what
+/// a switch says, whether it can be taken and what taking it does cannot
+/// diverge between the choices.
+#[allow(clippy::too_many_arguments)]
 fn switch(
+    id: &'static str,
+    selector: &'static str,
+    title: &'static str,
+    subtitle: &'static str,
     preference: bool,
     offered: bool,
     anchor: ScrollAnchor,
@@ -503,9 +637,7 @@ fn switch(
         .min_h(geometry.row_min_height)
         .px(geometry.row_padding_x)
         .rounded(geometry.row_radius)
-        .when(offered, |row| {
-            row.cursor_pointer().hover(|row| row.bg(theme.row_hover))
-        })
+        .when(offered, |row| row.cursor_pointer())
         .when(!offered, |row| row.opacity(0.5).cursor_default())
         .child(
             div()
@@ -519,21 +651,29 @@ fn switch(
                         .text_size(typography.row_title_size)
                         .font_weight(typography.medium)
                         .text_color(theme.text_title)
-                        .child("Launch Pane at login"),
+                        .child(title),
                 )
                 .child(
                     div()
                         .text_size(typography.row_subtitle_size)
                         .text_color(theme.text_muted)
-                        .child("Pane is ready when you log in"),
+                        .child(subtitle),
                 ),
         )
         .child(track(preference, theme))
-        .id("launch-at-login")
-        .debug_selector(|| "general-launch-at-login".into())
+        .id(id)
+        // The pointer feedback, on the named row: the hover wash fades
+        // over the shared pointer span, and the press takes the selected
+        // wash, one rung above the hover one.
+        .when(offered, |row| {
+            row.hover(|row| row.bg(theme.row_hover))
+                .active(|row| row.bg(theme.row_selected))
+                .transitions(|fades| fades.bg(crate::ui::motion::pointer_fade()))
+        })
+        .debug_selector(move || selector.into())
         .anchor_scroll(Some(anchor))
         .role(Role::Switch)
-        .aria_label("Launch Pane at login")
+        .aria_label(title)
         .aria_toggled(if preference {
             Toggled::True
         } else {
@@ -743,5 +883,21 @@ impl SettingsWindow {
                 cx.notify();
             }
         }
+    }
+
+    /// Applies `visible` as the tray or menu-bar visibility, as the
+    /// toggle's click does: through the host settings, which apply it to
+    /// the native entry first and only then keep and save the choice. A
+    /// refusal leaves the entry and the record as they were; the reason
+    /// is the page's status, and the entry's own state is explained
+    /// beside the toggle whether or not a change was attempted.
+    fn apply_tray_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
+        let applied = crate::settings::shared(cx)
+            .update(cx, |settings, cx| settings.set_tray_visible(visible, cx));
+        match applied {
+            Ok(()) => self.general.tray_refusal = None,
+            Err(reason) => self.general.tray_refusal = Some(reason),
+        }
+        cx.notify();
     }
 }

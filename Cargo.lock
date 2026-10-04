@@ -4376,11 +4376,14 @@ checksum = "6e6eb142958d64335fb0e345c5b9ead2ecd6fc438c307e9d7d3c4fd428dbaf12"
 name = "pane"
 version = "0.1.0"
 dependencies = [
+ "core-graphics",
+ "crc32fast",
  "flate2",
  "futures",
  "gpui-ce",
  "gpui_ce_elements",
  "gpui_ce_platform",
+ "objc2 0.6.4",
  "open",
  "pane-core",
  "raw-window-handle",
@@ -4390,6 +4393,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "windows 0.62.2",
+ "x11rb",
 ]
 
 [[package]]

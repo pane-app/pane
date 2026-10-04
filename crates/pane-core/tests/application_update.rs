@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
 use pane_core::defaults::ArtifactSource;
-use pane_core::{DefaultExtension, Launcher, Runtime, Status, Target};
+use pane_core::{ApplicationUpdate, DefaultExtension, Launcher, Runtime, Status, Target};
 use tempfile::TempDir;
 
 #[path = "support/artifacts.rs"]
@@ -213,6 +213,14 @@ fn choosing_to_install_downloads_and_swaps_the_program() {
             "Installed Pane 99.0.0; the new version is used the next time Pane starts".into()
         )
     );
+    // What the About page reads once the install is done: the installed
+    // version, used the next time Pane starts.
+    assert_eq!(
+        launcher.application_update(),
+        ApplicationUpdate::Installed {
+            version: "99.0.0".into(),
+        }
+    );
     assert_eq!(fs::read(dirs.program()).unwrap(), b"the 99.0.0 program");
     assert_eq!(
         fs::read(dirs.install.path().join("pane.old")).unwrap(),
@@ -307,6 +315,15 @@ fn a_newer_version_is_notified_and_nothing_is_downloaded() {
         launcher.view().status,
         Status::Result("Pane 99.0.0 is available".into())
     );
+    // The same state, as the Settings About page reads it: the offer the
+    // row lists, with no install attempted against it.
+    assert_eq!(
+        launcher.application_update(),
+        ApplicationUpdate::Offered {
+            version: "99.0.0".into(),
+            failure: None,
+        }
+    );
     let rows = launcher.view().rows;
     let update = rows
         .iter()
@@ -353,6 +370,43 @@ fn a_newer_version_is_notified_and_nothing_is_downloaded() {
 /// How many bytes of the offered package arrive before the connection
 /// closes: partway, so the download is interrupted and tried again.
 const DROPPED_AFTER: usize = 16;
+
+#[test]
+fn the_state_the_about_page_reads_is_the_rows_own_state() {
+    let dirs = Dirs::new();
+    // No updater wired (no artifact source given): honestly nothing to
+    // check, which the Settings About page explains instead of promising
+    // a release or a feed.
+    let plain = Launcher::with_packages(Ok(dirs.runtime.clone()), vec![], dirs.packages_dir());
+    assert_eq!(plain.application_update(), ApplicationUpdate::Unconfigured);
+    // Wired, and no check has finished yet.
+    let launcher = dirs.launcher("0.1.0");
+    assert_eq!(launcher.application_update(), ApplicationUpdate::Unchecked);
+    // A check the user asked for answers even with nothing to offer, and
+    // the state says which of the two it is: new enough, not unchecked.
+    block_on(launcher.check_application_update_again());
+    assert_eq!(launcher.application_update(), ApplicationUpdate::Current);
+    assert_eq!(
+        launcher.view().status,
+        Status::Result("Pane is up to date".into())
+    );
+    // While a check runs the state says so; once it has answered, what it
+    // found. The index answers slowly, so the running check is seen.
+    dirs.artifacts
+        .stall("pane-defaults.json", 8, Duration::from_millis(400));
+    let checking = launcher.clone();
+    let running = thread::spawn(move || block_on(checking.check_application_update_again()));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while launcher.application_update() != ApplicationUpdate::Checking {
+        assert!(
+            Instant::now() < deadline,
+            "the check never showed as running"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    running.join().unwrap();
+    assert_eq!(launcher.application_update(), ApplicationUpdate::Current);
+}
 
 #[test]
 fn an_install_shows_progress_and_leaves_the_core_usable() {
@@ -432,6 +486,19 @@ fn a_failed_download_leaves_the_old_state_and_can_be_tried_again() {
         error.contains("does not match the sha512 integrity"),
         "{error}"
     );
+    // The About page reads the same failure with the offer it belongs
+    // to: the offer stays, ready to be chosen again.
+    assert!(
+        matches!(
+            launcher.application_update(),
+            ApplicationUpdate::Offered {
+                failure: Some(why),
+                ..
+            } if why.contains("does not match the sha512 integrity")
+        ),
+        "the offer keeps its failure: {:?}",
+        launcher.application_update()
+    );
     assert_eq!(fs::read(dirs.program()).unwrap(), b"the 0.1.0 program");
     assert_eq!(dirs.top_level(), ["pane"]);
     assert!(titles(&launcher).contains(&"Update Pane to 99.0.0".to_owned()));
@@ -504,6 +571,16 @@ fn an_unreachable_source_is_explained_and_the_row_tries_again() {
         error.contains("Pane's downloads at http://127.0.0.1:")
             && error.contains("Pane tried 3 times"),
         "{error}"
+    );
+    // The About page reads the same failure, with the check to try again
+    // offered there too.
+    assert!(
+        matches!(
+            launcher.application_update(),
+            ApplicationUpdate::Failed(why) if why.starts_with("Pane's downloads at")
+        ),
+        "the failure is the state: {:?}",
+        launcher.application_update()
     );
     assert_eq!(
         titles(&launcher),

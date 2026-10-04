@@ -13,6 +13,15 @@
 //! ([`Launcher::forget_hotkeys_of`]). The record is kept as the other
 //! per-command choices are (see `choices`).
 //!
+//! The records are assigned through two entry points that take the same
+//! checks and write the same record: the hotkey screen in Manage extensions
+//! ([`Launcher::record_hotkey`], which ends that screen's asking), and the
+//! Settings window's Shortcuts page ([`Launcher::set_hotkey`], which leaves
+//! the launcher's screens where they are). A change either entry point
+//! accepts takes effect with the system at once and is then recorded, and a
+//! write that fails puts back what was last recorded, with the registration
+//! following it, in both.
+//!
 //! Beside them stands the Open Pane hotkey
 //! ([`OpenPane`](struct@OpenPane)): the application-owned binding that
 //! summons the launcher from any application. It is not a command's
@@ -407,74 +416,200 @@ impl Launcher {
             return None;
         };
         let command = command.clone();
-        let title = self.command_title(state, &command);
-        if let Some(refusal) = shortcut.refusal() {
-            state.view.status = Status::Error(format!("{refusal}."));
-            return None;
+        let set = match self.set_hotkey_of(state, &command, Some(shortcut)) {
+            Err(reason) => {
+                state.view.status = Status::Error(reason);
+                return None;
+            }
+            Ok(set) => set,
+        };
+        self.show_extensions_at_hotkey(state, &command);
+        if set.write {
+            state.view.status = Status::Running;
+            Some(HotkeyChange {
+                command: set.command,
+                done: set.done,
+                epoch: state.screen_epoch,
+            })
+        } else {
+            // The keys are already the command's working binding: nothing
+            // to register, release or record.
+            state.view.status = Status::Result(set.done);
+            None
         }
-        if let Some(other) = state.bindings.opened_by(&shortcut, &command) {
+    }
+
+    /// Sets `shortcut` — or `None`, clearing — as the hotkey of the command
+    /// `command` without opening the launcher's hotkey screen: the Settings
+    /// window's Shortcuts page records it inline, as [`Launcher::set_alias`]
+    /// edits an alias. The hotkey screen's rules apply: `Err` carries the
+    /// reason when the command is not offered and available here, the
+    /// shortcut needs no modifier, is reserved, opens another command or
+    /// Pane itself, this system has no global hotkeys, or the system refuses
+    /// the registration — and nothing changes: the binding the command has
+    /// keeps working and nothing is kept.
+    ///
+    /// The change takes effect at once — the hotkey is registered with the
+    /// system before the one it replaces is released, and the launcher's
+    /// rows are refreshed, so Manage extensions and the next catalog agree
+    /// — and the returned future records it; a record that cannot be
+    /// written goes back to what was last recorded, with the registration
+    /// following it (see [`Launcher::save`]), and its outcome says which it
+    /// was. The launcher's screens are left where they are, unlike the hotkey
+    /// screen's flow: the page that asked shows the outcome itself.
+    pub fn set_hotkey(
+        &self,
+        command: &str,
+        shortcut: Option<Shortcut>,
+    ) -> Result<impl Future<Output = HotkeyOutcome> + Send + 'static, String> {
+        let mut state = self.lock();
+        let set = self.set_hotkey_of(&mut state, command, shortcut)?;
+        self.refresh(&mut state);
+        drop(state);
+        let launcher = self.clone();
+        Ok(async move { launcher.finish_set_hotkey(set).await })
+    }
+
+    /// Applies `shortcut` — `None` clearing the hotkey — as the command
+    /// `command`'s hotkey in Pane's records and with the system, taking the
+    /// checks every recording takes. The new hotkey is registered before the
+    /// one it replaces is released, so a refusal leaves the old one working;
+    /// the choice is kept in Pane for the future that records it. `Err`
+    /// names the reason, as the message to show, and changes nothing.
+    fn set_hotkey_of(
+        &self,
+        state: &mut State,
+        command: &str,
+        shortcut: Option<Shortcut>,
+    ) -> Result<HotkeySet, String> {
+        let title = self.command_title(state, command);
+        let Some(shortcut) = shortcut else {
+            // Clearing: the registration goes and the choice is forgotten;
+            // a command whose package is disabled keeps the release and the
+            // forgetting just the same.
+            if let Some(old) = state.bindings.registered.remove(command) {
+                self.hotkeys.unregister(&old);
+            }
+            state.bindings.problems.remove(command);
+            let recorded = state.bindings.record.chosen.remove(command).is_some();
+            return Ok(HotkeySet {
+                command: command.to_owned(),
+                done: format!("{title} has no hotkey now"),
+                write: recorded,
+            });
+        };
+        // Recording is offered for a command that is offered and available,
+        // as the hotkey screen's rows and the Shortcuts catalog's decide. A
+        // catalog the page has not redrawn can still ask after the packages
+        // changed, so the rule is here too.
+        match offered(&state.packages)
+            .into_iter()
+            .find(|(offered, _)| offered.id == command)
+        {
+            Some((_, None)) => {}
+            Some((_, Some(why))) => {
+                return Err(format!("A hotkey cannot be recorded for {title}: {why}"));
+            }
+            None => {
+                return Err(format!(
+                    "A hotkey cannot be recorded for {title}: its extension is not enabled here"
+                ));
+            }
+        }
+        if let Some(refusal) = shortcut.refusal() {
+            return Err(format!("{refusal}."));
+        }
+        if let Some(other) = state.bindings.opened_by(&shortcut, command) {
             let other = self.command_title(state, other);
-            state.view.status = Status::Error(format!(
+            return Err(format!(
                 "{shortcut} already opens {other}: remove it there first, or press another \
                  shortcut."
             ));
-            return None;
         }
         if state.open_pane.taken_by(&shortcut) {
-            state.view.status = Status::Error(format!(
+            return Err(format!(
                 "{shortcut} opens Pane itself: choose another shortcut for {title}, or change \
                  Pane's hotkey in Settings."
             ));
-            return None;
         }
-        let previous = state.bindings.chosen().get(&command);
-        if previous == Some(&shortcut) && state.bindings.registered.contains_key(&command) {
-            self.show_extensions_at_hotkey(state, &command);
-            state.view.status = Status::Result(format!("{shortcut} already opens {title}"));
-            return None;
+        let previous = state.bindings.chosen().get(command);
+        if previous == Some(&shortcut) && state.bindings.registered.contains_key(command) {
+            return Ok(HotkeySet {
+                command: command.to_owned(),
+                done: format!("{shortcut} already opens {title}"),
+                write: false,
+            });
         }
         if let Some(reason) = self.hotkeys.unavailable() {
-            state.view.status = Status::Error(reason);
-            return None;
+            return Err(reason);
         }
         // The new one first, so a refusal leaves the old one working.
         if let Err(error) = self.hotkeys.register(&shortcut) {
-            state.view.status = Status::Error(format!(
+            return Err(format!(
                 "{shortcut} cannot be used: {error}. Press another shortcut."
             ));
-            return None;
         }
         let bindings = &mut state.bindings;
         if let Some(old) = bindings
             .registered
-            .insert(command.clone(), shortcut.clone())
+            .insert(command.to_owned(), shortcut.clone())
         {
             self.hotkeys.unregister(&old);
         }
-        bindings.problems.remove(&command);
+        bindings.problems.remove(command);
         bindings
             .record
             .chosen
-            .insert(command.clone(), shortcut.clone());
-        self.show_extensions_at_hotkey(state, &command);
-        state.view.status = Status::Running;
-        Some(HotkeyChange {
-            command,
+            .insert(command.to_owned(), shortcut.clone());
+        Ok(HotkeySet {
+            command: command.to_owned(),
             done: format!("{shortcut} now opens {title}"),
-            epoch: state.screen_epoch,
+            write: true,
         })
+    }
+
+    /// Records a hotkey the Settings page set (see [`Launcher::set_hotkey`]),
+    /// restoring what was last recorded — and the registration that follows
+    /// it — if it cannot be, as [`Launcher::finish_hotkey_change`] does for
+    /// the hotkey screen's changes.
+    async fn finish_set_hotkey(&self, set: HotkeySet) -> HotkeyOutcome {
+        let HotkeySet {
+            command,
+            done,
+            write,
+        } = set;
+        if !write {
+            // The keys already being the working binding: nothing was
+            // changed, so nothing is written or rolled back.
+            return HotkeyOutcome::Saved(done);
+        }
+        let launcher = self.clone();
+        let saved = off_thread(move || launcher.save::<HotkeyChoices>(Some(&command))).await;
+        match saved {
+            Ok(()) => HotkeyOutcome::Saved(done),
+            Err(problem) => {
+                // What was last recorded is back in Pane (see
+                // `Launcher::save`); the registration follows it again, on
+                // the window's thread, as registering must (macOS).
+                let mut state = self.lock();
+                self.sync_hotkeys(&mut state);
+                self.refresh(&mut state);
+                HotkeyOutcome::NotKept(problem)
+            }
+        }
     }
 
     /// Removes the hotkey of `command`, releasing it; the future records it.
     pub(super) fn remove_hotkey(&self, state: &mut State, command: &str) -> Option<HotkeyChange> {
-        let title = self.command_title(state, command);
-        state.bindings.record.chosen.remove(command)?;
-        self.sync_hotkeys(state);
+        state.bindings.chosen().get(command)?;
+        let set = self
+            .set_hotkey_of(state, command, None)
+            .expect("clearing a hotkey takes no check");
         self.show_extensions_at_hotkey(state, command);
         state.view.status = Status::Running;
         Some(HotkeyChange {
-            command: command.to_owned(),
-            done: format!("{title} has no hotkey now"),
+            command: set.command,
+            done: set.done,
             epoch: state.screen_epoch,
         })
     }
@@ -558,6 +693,28 @@ impl Launcher {
         applied
     }
 
+    /// Releases every hotkey registered with the system — the commands'
+    /// and the Open Pane binding — leaving nothing of Pane's registered.
+    /// This is the quit path: the tray's Quit item calls it before it
+    /// ends Pane, and the window-close quit path reaches it through the
+    /// quit hooks, so the registrations are removed by Pane itself
+    /// rather than left for the system to reclaim with the process. The
+    /// adapters also release their registrations when they are dropped,
+    /// but a quit that ends the process may never run a destructor.
+    pub fn release_hotkeys(&self) {
+        let mut state = self.lock();
+        let registered: Vec<Shortcut> = state.bindings.registered.values().cloned().collect();
+        for shortcut in registered {
+            self.hotkeys.unregister(&shortcut);
+        }
+        state.bindings.registered.clear();
+        if let Some(open) = state.open_pane.registered.take() {
+            self.hotkeys.unregister(&open);
+        }
+        // Nothing is registered, so nothing is explained as not.
+        state.open_pane.problem = None;
+    }
+
     /// Applies `shortcut` to the Open Pane binding's state and the system:
     /// validate, register the new one, then release the one it replaces.
     /// `Err` leaves the state exactly as it was.
@@ -601,4 +758,30 @@ pub(super) struct HotkeyChange {
     /// The outcome once recorded.
     done: String,
     epoch: u64,
+}
+
+/// A hotkey change that took effect in Pane and with the system, for the
+/// caller to record and report.
+pub(super) struct HotkeySet {
+    command: String,
+    /// What the change came to, as the message to show once recorded.
+    done: String,
+    /// Whether the record is to be written: the keys already being the
+    /// command's working binding changed nothing.
+    write: bool,
+}
+
+/// What a hotkey set directly, through [`Launcher::set_hotkey`], came to.
+/// The hotkey has taken effect in Pane either way; this says whether the
+/// record on disk kept it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HotkeyOutcome {
+    /// The hotkey was recorded. The message says what its keys now open
+    /// ("Ctrl+Alt+G now opens Say hello"), or that the command has no
+    /// hotkey now.
+    Saved(String),
+    /// The hotkey took effect but could not be recorded: what was last
+    /// recorded is back in Pane, and the registration follows it. The
+    /// message says why it could not be kept.
+    NotKept(String),
 }

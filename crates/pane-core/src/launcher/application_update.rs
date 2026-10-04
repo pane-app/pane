@@ -12,6 +12,15 @@
 //! that fails is explained, everything left as it was, with the row ready
 //! to try again.
 //!
+//! The Settings window's About page (#82) is a second view of the same
+//! flow, not a second flow: `Launcher::application_update` reads the
+//! same state the rows come from, and its "Check for updates" and
+//! "Update Pane to <version>" rows run the same check
+//! (`Launcher::check_application_update_again`) and the same install
+//! (`Launcher::install_application_update`) the root rows run, so the
+//! two entry points cannot disagree — whichever one found the offer,
+//! both show it, and installing from either swaps the same program.
+//!
 //! Pane never restarts itself: an install replaces the program so the new
 //! version is used the next time Pane starts, as the row says.
 
@@ -47,17 +56,68 @@ pub(in crate::launcher) struct Updates {
     checking: bool,
     /// The offer is being installed now: its row is not listed meanwhile.
     installing: bool,
+    /// Why installing the offered update last failed, if it did: the
+    /// offer stays, ready to be chosen again, and the About page shows
+    /// the failure beside it, as the status line does. Cleared when a
+    /// new install of it begins, when one succeeds, and when a check
+    /// replaces what it found.
+    install_failed: Option<String>,
 }
 
 /// What the last check for a Pane update found.
 #[derive(Default)]
 enum Notice {
-    /// No check has finished, or it found nothing to tell the user.
+    /// No check has finished yet.
     #[default]
     None,
+    /// The last check found this Pane new enough: nothing to offer, but
+    /// not the same as no check having run — the About page says which
+    /// it is. No row and no word on the status line, as before.
+    Current,
     /// A newer version, found and offered.
     Offered(Offer),
+    /// The offered update was installed: its version, which the next
+    /// start of Pane runs. No row is listed for it, as nothing is left
+    /// to choose; the status line and the About page say what happened.
+    Installed(String),
     /// The check failed: why, with the row that tries it again.
+    Failed(String),
+}
+
+/// What Pane knows of its own update, for a second surface of it beside
+/// root search's rows (the Settings About page): one snapshot of the
+/// state [`Launcher::application_update`] reads, so a page and the
+/// launcher cannot disagree. Read only — nothing here checks, downloads
+/// or installs anything.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ApplicationUpdate {
+    /// No release source is configured: this Pane was given no artifact
+    /// source to check (or its own program could not be named), so there
+    /// is nothing to check, nothing to offer and no feed to claim. A
+    /// page showing this explains the state rather than promising a
+    /// check.
+    Unconfigured,
+    /// No check has finished yet — one may be about to run, or this
+    /// Pane has not started one.
+    Unchecked,
+    /// A check is running now.
+    Checking,
+    /// The last check found this Pane new enough: no offer, no failure.
+    Current,
+    /// A newer version is offered to the user's choice: its version,
+    /// with why installing it last failed, if it did — the offer stays,
+    /// ready to be chosen again.
+    Offered {
+        version: String,
+        failure: Option<String>,
+    },
+    /// The offered update is being installed now; the status line
+    /// follows its progress, as it does every other progress.
+    Installing { version: String },
+    /// The offered update was installed: its version, which the next
+    /// start of Pane runs. Pane never restarts itself.
+    Installed { version: String },
+    /// The check failed: why, with the check to try again.
     Failed(String),
 }
 
@@ -122,6 +182,47 @@ impl Updates {
 }
 
 impl Launcher {
+    /// What Pane knows of its own update, read without entering any flow
+    /// and without listing any row: the same state root search's update
+    /// rows and the status line come from, as a second surface of it (the
+    /// Settings About page) shows. Whether a release source is configured
+    /// at all, what the last check found — a newer version it offers, or
+    /// that this Pane is new enough, or why the check failed — and what
+    /// is running now; the progress of an install is the status line's
+    /// (see [`Launcher::view`]), which shows it as it shows every other
+    /// progress. Nothing here checks, downloads or installs anything.
+    pub fn application_update(&self) -> ApplicationUpdate {
+        if self.application.is_none() {
+            return ApplicationUpdate::Unconfigured;
+        }
+        let state = self.lock();
+        let updates = &state.updates;
+        // An install in flight comes first: the offer it is installing is
+        // still the found notice, but what the page shows is the install.
+        if updates.installing
+            && let Notice::Offered(offer) = &updates.found
+        {
+            return ApplicationUpdate::Installing {
+                version: offer.version.clone(),
+            };
+        }
+        if updates.checking {
+            return ApplicationUpdate::Checking;
+        }
+        match &updates.found {
+            Notice::None => ApplicationUpdate::Unchecked,
+            Notice::Current => ApplicationUpdate::Current,
+            Notice::Offered(offer) => ApplicationUpdate::Offered {
+                version: offer.version.clone(),
+                failure: updates.install_failed.clone(),
+            },
+            Notice::Installed(version) => ApplicationUpdate::Installed {
+                version: version.clone(),
+            },
+            Notice::Failed(why) => ApplicationUpdate::Failed(why.clone()),
+        }
+    }
+
     /// This launcher checking for Pane application updates: the version
     /// `version` of Pane it runs, updated from `source` — the same
     /// artifact source the default extensions are acquired from —
@@ -154,22 +255,33 @@ impl Launcher {
     /// status line for an update the user can choose to install, or an
     /// explanation of why the check could not be made, with the row that
     /// tries it again. Nothing is downloaded, installed or restarted: only
-    /// the index is read, and only this Pane's start runs it. Runs in the
-    /// background; await the returned future to apply the result, as the
-    /// window does at start. Calling it again while a check runs does
-    /// nothing.
+    /// the index is read. Runs in the background; await the returned future
+    /// to apply the result, as the window does at start. Calling it again
+    /// while a check runs does nothing. This is the check at Pane's start:
+    /// it stays quiet when there is nothing to tell, unlike the one the
+    /// user asks for ([`Launcher::check_application_update_again`]).
     pub fn check_application_update(&self) -> impl Future<Output = ()> + Send + 'static {
         let launcher = self.clone();
         async move { launcher.check(false).await }
     }
 
-    /// The check again, as the row that tries a failed one runs it: the
-    /// user asked, so it answers even when there is nothing to offer.
-    pub(in crate::launcher) async fn retry_checking_update(&self) {
-        self.check(true).await;
+    /// The check for a Pane update the user asked for: the root result
+    /// that tries a failed check again runs it, and the Settings About
+    /// page's "Check for updates" row does too. It is the same check as
+    /// the one at Pane's start ([`Launcher::check_application_update`])
+    /// over the same source, except that it answers even when there is
+    /// nothing to offer — the user asked, so up to date is an answer, not
+    /// a silence. Nothing is downloaded or installed either way. Runs in
+    /// the background; await the returned future to apply the result, as
+    /// the window that offered the row does. Calling it again while a
+    /// check runs does nothing.
+    pub fn check_application_update_again(&self) -> impl Future<Output = ()> + Send + 'static {
+        let launcher = self.clone();
+        async move { launcher.check(true).await }
     }
 
-    /// One check, at Pane's start or asked for by the row that retries.
+    /// One check, at Pane's start, asked for by the row that retries it
+    /// or by the Settings About page's "Check for updates" row.
     async fn check(&self, asked: bool) {
         let Some(application) = self.application.clone() else {
             return;
@@ -188,6 +300,9 @@ impl Launcher {
             off_thread(move || application_update::check(&source, &version, &target)).await;
         let mut state = self.lock();
         state.updates.end_check();
+        // Whatever the check found replaces what the last one did, and an
+        // install's failure with it: a new answer is the fresher word.
+        state.updates.install_failed = None;
         let status = match checked {
             Ok(Found::Offered(offer)) => {
                 let version = offer.version.clone();
@@ -195,7 +310,7 @@ impl Launcher {
                 Some(Status::Result(format!("Pane {version} is available")))
             }
             Ok(Found::UpToDate) => {
-                state.updates.found = Notice::None;
+                state.updates.found = Notice::Current;
                 // A check the user asked for answers, even with nothing to
                 // offer; the one at Pane's start stays quiet, as there is
                 // nothing to tell.
@@ -215,12 +330,24 @@ impl Launcher {
         }
     }
 
-    /// Installs the offered update, as the row the user chose does:
-    /// downloads the package with progress and retries, checks it, and
-    /// replaces the program, which the new version is used by the next
-    /// time Pane starts. On failure everything is as it was, explained,
-    /// and the row stays to try again.
-    pub(in crate::launcher) async fn install_application_update(&self) {
+    /// Installs the offered update, as the user chose it: the root
+    /// result "Update Pane to <version>" is one choice, and the Settings
+    /// About page's row is another. Downloads the package with progress
+    /// and retries, checks it, and replaces the program, which the new
+    /// version is used by the next time Pane starts. On failure
+    /// everything is as it was, explained, and the offer stays to try
+    /// again. Nothing is downloaded before the user's choice, and Pane
+    /// never restarts itself. Runs in the background; await the returned
+    /// future to apply the result, as the window that offered the row
+    /// does.
+    pub fn install_application_update(&self) -> impl Future<Output = ()> + Send + 'static {
+        let launcher = self.clone();
+        async move { launcher.install_chosen_update().await }
+    }
+
+    /// The install the user chose; see
+    /// [`Launcher::install_application_update`].
+    async fn install_chosen_update(&self) {
         let Some(application) = self.application.clone() else {
             return;
         };
@@ -231,6 +358,9 @@ impl Launcher {
         {
             let mut state = self.lock();
             state.updates.installing = true;
+            // A new attempt begins: whatever the last one failed with is
+            // no longer the word on it.
+            state.updates.install_failed = None;
             state.view.status = Status::Progress(format!("Downloading Pane {version}…"));
             self.refresh(&mut state);
         }
@@ -271,7 +401,7 @@ impl Launcher {
             Ok(()) => {
                 let mut state = self.lock();
                 state.updates.installing = false;
-                state.updates.found = Notice::None;
+                state.updates.found = Notice::Installed(version.clone());
                 self.refresh(&mut state);
                 drop(state);
                 self.show(Status::Result(format!(
@@ -284,11 +414,14 @@ impl Launcher {
     }
 
     /// Explains a failed install: the row stays, nothing was changed, and
-    /// the user can try again.
+    /// the user can try again. The reason is kept with the offer (see
+    /// [`Updates::install_failed`]), so the Settings About page shows it
+    /// beside the row that offers the install again.
     fn update_failed(&self, version: &str, why: String) {
         {
             let mut state = self.lock();
             state.updates.installing = false;
+            state.updates.install_failed = Some(why.clone());
             state.view.status = Status::Error(format!("Could not update Pane to {version}: {why}"));
             self.refresh(&mut state);
         }

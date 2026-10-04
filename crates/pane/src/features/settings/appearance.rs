@@ -339,10 +339,7 @@ fn choice(
         .min_h(geometry.row_min_height)
         .px(geometry.row_padding_x)
         .rounded(geometry.row_radius)
-        .when(offered, |row| {
-            row.cursor_pointer()
-                .when(!chosen, |row| row.hover(|row| row.bg(theme.row_hover)))
-        })
+        .when(offered, |row| row.cursor_pointer())
         .when(!offered, |row| row.opacity(0.5).cursor_default())
         .when(chosen, |row| {
             row.bg(theme.row_selected).shadow(vec![
@@ -382,6 +379,17 @@ fn choice(
                 ),
         );
     row.id(name)
+        // The pointer feedback, on the named row: the hover wash fades
+        // over the shared pointer span, and the press takes the selected
+        // wash — the wash the row keeps once it is chosen, so the press
+        // hands over to the choice without a jump. The fade attaches only
+        // while the row is unchosen, so the chosen wash both arrives and
+        // leaves at once, and only the pointer's own wash fades.
+        .when(offered && !chosen, |row| {
+            row.hover(|row| row.bg(theme.row_hover))
+                .active(|row| row.bg(theme.row_selected))
+                .transitions(|fades| fades.bg(crate::ui::motion::pointer_fade()))
+        })
         .debug_selector(move || selector.into())
         .anchor_scroll(Some(anchor))
         .role(Role::RadioButton)

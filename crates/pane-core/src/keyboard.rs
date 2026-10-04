@@ -1,0 +1,812 @@
+//! The bounded set of in-app navigation actions whose keys the Keyboard
+//! page lets the user rebind.
+//!
+//! These are the *host's* navigation keys — the ones Pane's own windows
+//! bind for moving through root search's results and leaving screens —
+//! not any extension's actions and not the standard text-editing keys a
+//! focused field owns. The set is closed and small by decision
+//! ([#70](https://github.com/hoangvu12/pane/issues/70),
+//! [#77](https://github.com/hoangvu12/pane/issues/77)): arbitrary
+//! rebinding of every key is explicitly not promised.
+//!
+//! Nothing here knows the renderer. A [`Binding`] is a keystroke as a
+//! plain value — the modifiers held and one key, written `ctrl-alt-b` —
+//! with its own grammar for the records that keep it, so the same rules
+//! apply wherever a binding is read: the host settings' record, the
+//! Keyboard page's recorder, and the checks that keep one binding from
+//! silently swallowing another. The window layer turns the [`Keyboard`]
+//! set into its own key bindings; this module decides only what a
+//! binding *is* and which sets of them are valid.
+//!
+//! The defaults are the specification's provisional synthesis, not
+//! separately confirmed product decisions: Up/Down for selection, Enter
+//! for invocation, Escape for back, Cmd+Esc on macOS / Shift+Esc
+//! elsewhere for return to root, Cmd+W / Ctrl+W for dismissing the
+//! launcher, and Cmd+, / Ctrl+, for Settings.
+
+use std::collections::BTreeMap;
+
+/// The platform modifier's name in a binding's id: `cmd` on every
+/// system, as the window layer's keystroke grammar writes it.
+const PLATFORM_MODIFIER: &str = "cmd";
+
+/// The modifiers a binding can hold, in the order their ids are written.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+struct Modifiers {
+    control: bool,
+    alt: bool,
+    shift: bool,
+    platform: bool,
+    function: bool,
+}
+
+impl Modifiers {
+    /// The modifiers of a binding id's prefix, as [`Binding::parse`]
+    /// reads them. Synonyms name the same modifier: `control` is Ctrl,
+    /// `option` is Alt, and `super`, `win` and `command` are the
+    /// platform modifier. An unrecognized part holds nothing.
+    fn of(parts: &[&str]) -> Modifiers {
+        let mut modifiers = Modifiers::default();
+        for part in parts {
+            match part.to_ascii_lowercase().as_str() {
+                "ctrl" | "control" => modifiers.control = true,
+                "alt" | "option" => modifiers.alt = true,
+                "shift" => modifiers.shift = true,
+                "super" | "win" | "cmd" | "command" => modifiers.platform = true,
+                "fn" => modifiers.function = true,
+                _ => {}
+            }
+        }
+        modifiers
+    }
+
+    /// Whether no modifier but Shift is held.
+    fn only_shift(&self) -> bool {
+        !self.control && !self.alt && !self.platform && !self.function
+    }
+
+    /// The modifiers in id order, joined by `-`, or empty.
+    fn id(&self) -> String {
+        let mut parts = Vec::new();
+        for (held, name) in [
+            (self.control, "ctrl"),
+            (self.alt, "alt"),
+            (self.shift, "shift"),
+            (self.platform, PLATFORM_MODIFIER),
+            (self.function, "fn"),
+        ] {
+            if held {
+                parts.push(name);
+            }
+        }
+        parts.join("-")
+    }
+
+    /// The modifiers as the user reads them on this system, joined by
+    /// `+`: Control, Option, Shift, Command and Fn on macOS; Ctrl, Alt,
+    /// Shift, Win and Fn elsewhere.
+    fn display(&self) -> String {
+        let names: [&str; 5] = if cfg!(target_os = "macos") {
+            ["Control", "Option", "Shift", "Command", "Fn"]
+        } else {
+            ["Ctrl", "Alt", "Shift", "Win", "Fn"]
+        };
+        [
+            self.control,
+            self.alt,
+            self.shift,
+            self.platform,
+            self.function,
+        ]
+        .into_iter()
+        .zip(names)
+        .filter_map(|(held, name)| held.then_some(name))
+        .collect::<Vec<_>>()
+        .join("+")
+    }
+}
+
+/// One in-app navigation action the Keyboard page rebinds, and the
+/// record's name for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum KeyboardAction {
+    /// Moves the selection to the previous result.
+    PreviousResult,
+    /// Moves the selection to the next result.
+    NextResult,
+    /// Opens the selected result — the footer's primary action.
+    InvokeSelectedAction,
+    /// Leaves the open screen, one level at a time, clearing a search's
+    /// text on the way.
+    Back,
+    /// Returns to root search from wherever the launcher is.
+    ReturnToRoot,
+    /// Hides the launcher, keeping Pane running in the background.
+    DismissLauncher,
+    /// Opens or focuses the Settings window.
+    OpenSettings,
+}
+
+impl KeyboardAction {
+    /// The bounded set, in the order the Keyboard page lists it.
+    pub const ALL: [KeyboardAction; 7] = [
+        KeyboardAction::PreviousResult,
+        KeyboardAction::NextResult,
+        KeyboardAction::InvokeSelectedAction,
+        KeyboardAction::Back,
+        KeyboardAction::ReturnToRoot,
+        KeyboardAction::DismissLauncher,
+        KeyboardAction::OpenSettings,
+    ];
+
+    /// The action's id in the record, such as `next-result`.
+    pub fn id(self) -> &'static str {
+        match self {
+            KeyboardAction::PreviousResult => "previous-result",
+            KeyboardAction::NextResult => "next-result",
+            KeyboardAction::InvokeSelectedAction => "invoke-selected-action",
+            KeyboardAction::Back => "back",
+            KeyboardAction::ReturnToRoot => "return-to-root",
+            KeyboardAction::DismissLauncher => "dismiss-launcher",
+            KeyboardAction::OpenSettings => "open-settings",
+        }
+    }
+
+    /// The action of a record's `id`, if it is one of the set.
+    pub fn of(id: &str) -> Option<KeyboardAction> {
+        KeyboardAction::ALL
+            .into_iter()
+            .find(|action| action.id() == id)
+    }
+
+    /// The action's name, as the Keyboard page's row and its messages
+    /// say it: "Next result", "Open Settings".
+    pub fn title(self) -> &'static str {
+        match self {
+            KeyboardAction::PreviousResult => "Previous result",
+            KeyboardAction::NextResult => "Next result",
+            KeyboardAction::InvokeSelectedAction => "Invoke selected action",
+            KeyboardAction::Back => "Back",
+            KeyboardAction::ReturnToRoot => "Return to root",
+            KeyboardAction::DismissLauncher => "Dismiss launcher",
+            KeyboardAction::OpenSettings => "Open Settings",
+        }
+    }
+
+    /// What the action does, as the page's rows describe it and a
+    /// collision's message names the other action: "moves to the next
+    /// result".
+    pub fn does(self) -> &'static str {
+        match self {
+            KeyboardAction::PreviousResult => "moves to the previous result",
+            KeyboardAction::NextResult => "moves to the next result",
+            KeyboardAction::InvokeSelectedAction => "invokes the selected action",
+            KeyboardAction::Back => "goes back",
+            KeyboardAction::ReturnToRoot => "returns to root",
+            KeyboardAction::DismissLauncher => "dismisses the launcher",
+            KeyboardAction::OpenSettings => "opens Settings",
+        }
+    }
+}
+
+/// The keys a binding's grammar knows as modifiers, for the message that
+/// refuses a modifier held alone.
+const MODIFIER_KEYS: [&str; 5] = ["ctrl", "alt", "shift", "cmd", "fn"];
+
+/// One keystroke: the modifiers held while one key is pressed. The id —
+/// [`Binding::id`], and the record's text — is the modifiers in a fixed
+/// order and the key joined by `-`, such as `ctrl-alt-b`, `shift-escape`
+/// or plain `up`.
+///
+/// The grammar is the window layer's keystroke grammar for a single
+/// keystroke, restricted to what a binding may use: modifiers from
+/// `ctrl`, `alt`, `shift`, `cmd` and `fn` (with their synonyms) and one
+/// key that is not itself a modifier and holds no separator. Whether a
+/// keystroke may *take over* an action is a separate rule —
+/// [`Binding::protected`] — so a plain navigation key like `up` is a
+/// valid binding while a plain typing key is refused for what it would
+/// swallow.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Binding {
+    modifiers: Modifiers,
+    key: String,
+}
+
+impl Binding {
+    /// The binding of the modifiers held and `key`, as the window
+    /// reports a key press: a letter, a digit, a named key such as
+    /// `escape`, `enter`, `up` or `f5`, or a single character, in any
+    /// case. A key that is itself a modifier is explained — a binding
+    /// ends with a key, not with a modifier held alone — and so is one
+    /// the grammar cannot write.
+    pub fn new(
+        control: bool,
+        alt: bool,
+        shift: bool,
+        platform: bool,
+        function: bool,
+        key: &str,
+    ) -> Result<Binding, String> {
+        let key = key.trim().to_ascii_lowercase();
+        let modifier = ["control", "option", "command", "super", "win"]
+            .into_iter()
+            .any(|name| key == name)
+            || MODIFIER_KEYS.contains(&key.as_str());
+        if modifier {
+            return Err(format!(
+                "Pane cannot use {key} in a shortcut: hold one more key with it"
+            ));
+        }
+        if key.is_empty() || key.contains('-') || key.chars().any(char::is_whitespace) {
+            return Err(format!("Pane cannot use “{key}” as a key in a shortcut"));
+        }
+        Ok(Binding {
+            modifiers: Modifiers {
+                control,
+                alt,
+                shift,
+                platform,
+                function,
+            },
+            key,
+        })
+    }
+
+    /// Reads a binding as [`Binding::id`] writes it, such as
+    /// `ctrl-alt-b`, `shift-escape` or `up`. The modifiers may name
+    /// their synonyms (`control`, `option`, `super`, `win`, `command`);
+    /// the key is whatever ends the id. A key that is itself a modifier —
+    /// a modifier held alone — or one the grammar cannot write is
+    /// explained.
+    pub fn parse(id: &str) -> Result<Binding, String> {
+        let trimmed = id.trim();
+        if trimmed.is_empty() {
+            return Err("a shortcut names no key".into());
+        }
+        let parts: Vec<&str> = trimmed.split('-').collect();
+        let key = parts.last().copied().unwrap_or_default();
+        let modifiers = Modifiers::of(&parts[..parts.len() - 1]);
+        Binding::new(
+            modifiers.control,
+            modifiers.alt,
+            modifiers.shift,
+            modifiers.platform,
+            modifiers.function,
+            key,
+        )
+    }
+
+    /// The binding's key, as the window layer's keystroke grammar writes
+    /// it: `escape`, `enter`, `b`, `,`.
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    /// The binding's modifiers, as booleans in the order
+    /// [`Binding::new`] takes them.
+    pub fn modifiers(&self) -> (bool, bool, bool, bool, bool) {
+        (
+            self.modifiers.control,
+            self.modifiers.alt,
+            self.modifiers.shift,
+            self.modifiers.platform,
+            self.modifiers.function,
+        )
+    }
+
+    /// The same text on every system, for records: the modifiers in a
+    /// fixed order, then the key, joined by `-`.
+    pub fn id(&self) -> String {
+        let prefix = self.modifiers.id();
+        if prefix.is_empty() {
+            self.key.clone()
+        } else {
+            format!("{prefix}-{}", self.key)
+        }
+    }
+
+    /// Whether this binding is exactly `key` with no modifier but Shift.
+    fn plain_or_shift(&self, key: &str) -> bool {
+        self.modifiers.only_shift() && self.key == key
+    }
+
+    /// Whether this binding is protected for a focused field — the
+    /// Keyboard page refuses it, so text editing, text composition and
+    /// focus traversal stay owned by the focused control and a navigation
+    /// binding cannot silently swallow them. Returns the field's name for
+    /// what the key does there, for the refusal's message.
+    ///
+    /// The keys that type are any single character and Space; the keys
+    /// that edit are Backspace and Delete; the keys that move within a
+    /// field are the arrows, Home and End; Tab, with no modifier but
+    /// Shift, traverses. With the platform's editing modifier held
+    /// (Command on macOS, Ctrl elsewhere) the field selects, copies,
+    /// pastes, cuts, undoes and moves by words —
+    /// [`text_editing_action`] below knows that platform's set.
+    pub fn protected(&self) -> Option<&'static str> {
+        if self.plain_or_shift("space") {
+            return Some("types a space");
+        }
+        if self.plain_or_shift("tab") {
+            return Some("moves the focus");
+        }
+        if self.plain_or_shift("backspace") {
+            return Some("deletes text");
+        }
+        if self.plain_or_shift("delete") {
+            return Some("deletes text");
+        }
+        for key in ["left", "right", "home", "end"] {
+            if self.plain_or_shift(key) {
+                return Some("moves within the text");
+            }
+        }
+        if self.key.chars().count() == 1 && self.modifiers.only_shift() {
+            return Some("types a character");
+        }
+        text_editing_action(self)
+    }
+}
+
+impl std::fmt::Display for Binding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let modifiers = self.modifiers.display();
+        if modifiers.is_empty() {
+            f.write_str(&key_name(&self.key))
+        } else {
+            write!(f, "{modifiers}+{}", key_name(&self.key))
+        }
+    }
+}
+
+/// The key as the user reads it: the named keys with their names, a
+/// single character as its uppercase, anything else capitalized.
+fn key_name(key: &str) -> String {
+    match key {
+        "escape" => "Escape".into(),
+        "enter" => "Enter".into(),
+        "up" => "Up".into(),
+        "down" => "Down".into(),
+        "left" => "Left".into(),
+        "right" => "Right".into(),
+        "home" => "Home".into(),
+        "end" => "End".into(),
+        "pageup" => "Page Up".into(),
+        "pagedown" => "Page Down".into(),
+        "space" => "Space".into(),
+        "tab" => "Tab".into(),
+        "backspace" => "Backspace".into(),
+        "delete" => "Delete".into(),
+        other => other.to_uppercase(),
+    }
+}
+
+/// The platform's editing combinations a binding could swallow in a
+/// focused field: Command on macOS, Ctrl elsewhere, and macOS's Option
+/// and Ctrl ones. Returns what the combination does there, for the
+/// refusal's message.
+fn text_editing_action(binding: &Binding) -> Option<&'static str> {
+    let (control, alt, _shift, platform, _function) = binding.modifiers();
+    let key = binding.key();
+    // The editing modifier on this system: Command on macOS, Ctrl
+    // elsewhere.
+    let editing = if cfg!(target_os = "macos") {
+        platform
+    } else {
+        control
+    };
+    if editing {
+        return match key {
+            "a" => Some("selects all text"),
+            "c" => Some("copies"),
+            "v" => Some("pastes"),
+            "x" => Some("cuts"),
+            "z" => Some("undoes"),
+            "space" => Some("shows the character palette"),
+            "backspace" | "delete" => Some("deletes a word"),
+            "left" | "right" => Some("moves by a word"),
+            "home" | "end" | "up" | "down" => Some("moves through the text"),
+            _ => None,
+        };
+    }
+    if cfg!(target_os = "macos") {
+        if alt {
+            return match key {
+                "backspace" => Some("deletes a word"),
+                "left" | "right" => Some("moves by a word"),
+                _ => None,
+            };
+        }
+        if control && key == "k" {
+            return Some("deletes to the end of the line");
+        }
+    }
+    None
+}
+
+/// The set of bindings for the bounded actions: one binding per action,
+/// valid together. Held in the host settings' record and applied by the
+/// window layer; [`Keyboard::default_for_this_system`] is what a record
+/// with no keyboard field means.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Keyboard {
+    bindings: BTreeMap<KeyboardAction, Binding>,
+}
+
+impl Default for Keyboard {
+    fn default() -> Keyboard {
+        Keyboard::default_for_this_system()
+    }
+}
+
+/// The macOS spelling of a default binding, or the one everywhere
+/// else: the platform's own modifier where macOS uses Command.
+fn platform(macos: &'static str, other: &'static str) -> &'static str {
+    if cfg!(target_os = "macos") {
+        macos
+    } else {
+        other
+    }
+}
+
+impl Keyboard {
+    /// The provisional defaults: Up/Down for selection, Enter for
+    /// invocation, Escape for back, Cmd+Esc on macOS / Shift+Esc
+    /// elsewhere for return to root, Cmd+W / Ctrl+W for dismissing the
+    /// launcher, and Cmd+, / Ctrl+, for Settings.
+    pub fn default_for_this_system() -> Keyboard {
+        let bindings = [
+            ("up", KeyboardAction::PreviousResult),
+            ("down", KeyboardAction::NextResult),
+            ("enter", KeyboardAction::InvokeSelectedAction),
+            ("escape", KeyboardAction::Back),
+            (
+                platform("cmd-escape", "shift-escape"),
+                KeyboardAction::ReturnToRoot,
+            ),
+            (platform("cmd-w", "ctrl-w"), KeyboardAction::DismissLauncher),
+            (platform("cmd-,", "ctrl-,"), KeyboardAction::OpenSettings),
+        ]
+        .into_iter()
+        .map(|(id, action)| {
+            (
+                action,
+                Binding::parse(id).expect("the default is a valid binding"),
+            )
+        })
+        .collect();
+        Keyboard { bindings }
+    }
+
+    /// The binding `action` has.
+    pub fn binding(&self, action: KeyboardAction) -> &Binding {
+        self.bindings
+            .get(&action)
+            .expect("every action of the set has a binding")
+    }
+
+    /// Whether `action` still has its default binding.
+    pub fn is_default(&self, action: KeyboardAction) -> bool {
+        *self.binding(action) == *Keyboard::default_for_this_system().binding(action)
+    }
+
+    /// Reads the keyboard the record holds: `fields` maps each action's
+    /// id to its binding's id, as [`Keyboard::recorded`] writes them.
+    /// Missing actions default; an unknown action id, a binding that is
+    /// not one, one that is protected for a focused field, or two
+    /// actions sharing one binding is `Err` with the problem, so the
+    /// record fails whole rather than half-loading.
+    pub fn parse(fields: &BTreeMap<String, String>) -> Result<Keyboard, String> {
+        let mut keyboard = Keyboard::default_for_this_system();
+        for (id, binding) in fields {
+            let action = KeyboardAction::of(id).ok_or_else(|| {
+                format!("its keyboard names “{id}”, which is not one of the actions")
+            })?;
+            let binding = Binding::parse(binding).map_err(|problem| {
+                format!("its binding for {} is not one: {problem}", action.title())
+            })?;
+            keyboard.check(action, &binding).map_err(|problem| {
+                format!(
+                    "its binding for {} cannot be used: {problem}",
+                    action.title()
+                )
+            })?;
+            keyboard.bindings.insert(action, binding);
+        }
+        Ok(keyboard)
+    }
+
+    /// The keyboard as the record holds it: every action's binding id.
+    pub fn recorded(&self) -> BTreeMap<String, String> {
+        self.bindings
+            .iter()
+            .map(|(action, binding)| (action.id().to_owned(), binding.id()))
+            .collect()
+    }
+
+    /// Sets `action` to `binding`, checked as the page records one: a
+    /// binding protected for a focused field is refused, and so is one
+    /// another action of the set already has — their contexts overlap in
+    /// the same window, so two actions on one keystroke cannot be told
+    /// apart. `Err` names the problem; nothing changes then.
+    pub fn checked_set(&mut self, action: KeyboardAction, binding: Binding) -> Result<(), String> {
+        self.check(action, &binding)?;
+        self.bindings.insert(action, binding);
+        Ok(())
+    }
+
+    /// The one reason `action` cannot take `binding`, if it cannot:
+    /// protected for a focused field, or already another action's. Every
+    /// collision of a set is caught here as the set is built (each field
+    /// is compared with all the map holds), so no two actions of a valid
+    /// set ever share a binding.
+    fn check(&self, action: KeyboardAction, binding: &Binding) -> Result<(), String> {
+        if let Some(protected) = binding.protected() {
+            return Err(format!(
+                "{binding} is protected: it {protected} in a field, so it cannot {}",
+                KeyboardAction::does(action)
+            ));
+        }
+        if let Some(other) = self
+            .bindings
+            .iter()
+            .find(|(other, held)| **other != action && *held == binding)
+        {
+            return Err(format!(
+                "{binding} already {}",
+                KeyboardAction::does(*other.0)
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Parses `id`, panicking on a problem, for the tests' fixtures.
+    fn binding(id: &str) -> Binding {
+        Binding::parse(id).unwrap()
+    }
+
+    #[test]
+    fn ids_round_trip_through_parse() {
+        for id in [
+            "up",
+            "down",
+            "enter",
+            "escape",
+            "shift-escape",
+            "cmd-escape",
+            "ctrl-w",
+            "cmd-w",
+            "ctrl-,",
+            "ctrl-alt-b",
+            "f5",
+            "pageup",
+        ] {
+            assert_eq!(binding(id).id(), id, "{id} round trips");
+        }
+        // Synonyms normalize to the one spelling; `option` is Alt, as
+        // the window layer's grammar reads it.
+        assert_eq!(binding("control-alt-command-b").id(), "ctrl-alt-cmd-b");
+        assert_eq!(binding("win-super-option-b").id(), "alt-cmd-b");
+        assert_eq!(binding("Control-B").id(), "ctrl-b");
+    }
+
+    #[test]
+    fn a_modifier_alone_or_a_bad_key_is_explained() {
+        for id in ["ctrl", "shift", "cmd", "fn", ""] {
+            assert!(Binding::parse(id).is_err(), "{id} is not a binding");
+        }
+        assert!(Binding::new(false, false, false, false, false, "cmd").is_err());
+        assert!(Binding::new(false, false, false, false, false, "").is_err());
+        // The minus key holds the separator, so the grammar cannot write
+        // it: the recorder explains rather than records it.
+        let problem = Binding::parse("ctrl--").unwrap_err();
+        assert!(problem.contains("as a key"), "{problem}");
+    }
+
+    #[test]
+    fn bindings_are_displayed_as_the_user_reads_them() {
+        assert_eq!(binding("up").to_string(), "Up");
+        assert_eq!(binding("escape").to_string(), "Escape");
+        assert_eq!(binding("enter").to_string(), "Enter");
+        assert_eq!(binding("shift-escape").to_string(), "Shift+Escape");
+        assert_eq!(binding("ctrl-alt-b").to_string(), "Ctrl+Alt+B");
+        assert_eq!(binding("ctrl-,").to_string(), "Ctrl+,");
+        // The platform modifier is named for this system, as Shortcut is.
+        assert_eq!(
+            binding("cmd-w").to_string(),
+            if cfg!(target_os = "macos") {
+                "Cmd+W"
+            } else {
+                "Win+W"
+            }
+        );
+        assert_eq!(binding("f5").to_string(), "F5");
+    }
+
+    #[test]
+    fn the_defaults_are_the_specifications_proposal() {
+        let defaults = Keyboard::default_for_this_system();
+        assert_eq!(defaults.binding(KeyboardAction::PreviousResult).id(), "up");
+        assert_eq!(defaults.binding(KeyboardAction::NextResult).id(), "down");
+        assert_eq!(
+            defaults.binding(KeyboardAction::InvokeSelectedAction).id(),
+            "enter"
+        );
+        assert_eq!(defaults.binding(KeyboardAction::Back).id(), "escape");
+        assert_eq!(
+            defaults.binding(KeyboardAction::ReturnToRoot).id(),
+            if cfg!(target_os = "macos") {
+                "cmd-escape"
+            } else {
+                "shift-escape"
+            }
+        );
+        assert_eq!(
+            defaults.binding(KeyboardAction::DismissLauncher).id(),
+            if cfg!(target_os = "macos") {
+                "cmd-w"
+            } else {
+                "ctrl-w"
+            }
+        );
+        assert_eq!(
+            defaults.binding(KeyboardAction::OpenSettings).id(),
+            if cfg!(target_os = "macos") {
+                "cmd-,"
+            } else {
+                "ctrl-,"
+            }
+        );
+        // Every default is a valid, distinct set, and it round trips.
+        let recorded = defaults.recorded();
+        assert_eq!(
+            Keyboard::parse(&recorded).unwrap(),
+            defaults,
+            "the defaults round trip"
+        );
+        let ids: Vec<String> = KeyboardAction::ALL
+            .into_iter()
+            .map(|action| defaults.binding(action).id())
+            .collect();
+        let distinct: std::collections::BTreeSet<&String> = ids.iter().collect();
+        assert_eq!(ids.len(), distinct.len(), "no two actions share a default");
+    }
+
+    #[test]
+    fn actions_read_from_their_ids() {
+        assert_eq!(
+            KeyboardAction::of("next-result"),
+            Some(KeyboardAction::NextResult)
+        );
+        assert_eq!(KeyboardAction::of("made-up"), None);
+    }
+
+    #[test]
+    fn protected_keys_are_refused_and_navigation_keys_are_not() {
+        for id in [
+            "b",
+            "B",
+            "shift-b",
+            "5",
+            ",",
+            "space",
+            "tab",
+            "shift-tab",
+            "backspace",
+            "left",
+        ] {
+            assert!(
+                binding(id).protected().is_some(),
+                "{id} is protected for a focused field"
+            );
+        }
+        for id in [
+            "up",
+            "down",
+            "pageup",
+            "enter",
+            "escape",
+            "shift-escape",
+            "ctrl-b",
+            "alt-5",
+            "cmd-tab",
+            "ctrl-j",
+        ] {
+            assert!(
+                binding(id).protected().is_none(),
+                "{id} is a navigation key"
+            );
+        }
+    }
+
+    #[test]
+    fn a_set_is_refused_when_two_actions_share_a_binding() {
+        let mut keyboard = Keyboard::default_for_this_system();
+        keyboard
+            .checked_set(KeyboardAction::Back, binding("ctrl-b"))
+            .unwrap();
+        // Now Ctrl+B is Back's; taking it for the next result is refused
+        // with the other action named.
+        let refused = keyboard
+            .checked_set(KeyboardAction::NextResult, binding("ctrl-b"))
+            .unwrap_err();
+        assert!(refused.contains("goes back"), "{refused}");
+        // The refusal left what was held in place.
+        assert_eq!(keyboard.binding(KeyboardAction::NextResult).id(), "down");
+
+        // A set is also invalid when read whole from a record: the
+        // field's check names the other action.
+        let mut fields = keyboard.recorded();
+        fields.insert("next-result".into(), "ctrl-b".into());
+        let problem = Keyboard::parse(&fields).unwrap_err();
+        assert!(
+            problem.contains("cannot be used: Ctrl+B already goes back"),
+            "{problem}"
+        );
+    }
+
+    #[test]
+    fn a_binding_protected_for_a_field_is_refused() {
+        let mut keyboard = Keyboard::default_for_this_system();
+        let refused = keyboard
+            .checked_set(KeyboardAction::NextResult, binding("j"))
+            .unwrap_err();
+        assert!(refused.contains("types a character"), "{refused}");
+        // A record holding such a binding is invalid whole.
+        let mut fields = keyboard.recorded();
+        fields.insert("next-result".into(), "j".into());
+        assert!(Keyboard::parse(&fields).is_err());
+    }
+
+    #[test]
+    fn platform_editing_combinations_are_named() {
+        let what = |id: &str| text_editing_action(&binding(id)).map(str::to_owned);
+        if cfg!(target_os = "macos") {
+            assert_eq!(what("cmd-a").as_deref(), Some("selects all text"));
+            assert_eq!(what("alt-left").as_deref(), Some("moves by a word"));
+            assert_eq!(
+                what("ctrl-k").as_deref(),
+                Some("deletes to the end of the line")
+            );
+            assert_eq!(what("ctrl-a"), None, "Ctrl+A is free on macOS");
+        } else {
+            assert_eq!(what("ctrl-a").as_deref(), Some("selects all text"));
+            assert_eq!(what("ctrl-backspace").as_deref(), Some("deletes a word"));
+            assert_eq!(what("ctrl-z").as_deref(), Some("undoes"));
+            assert_eq!(what("alt-a"), None, "Alt+A is free elsewhere");
+        }
+        // The defaults never collide with the editing combinations.
+        let defaults = Keyboard::default_for_this_system();
+        for action in KeyboardAction::ALL {
+            let binding = defaults.binding(action);
+            assert!(
+                binding.protected().is_none(),
+                "{binding} is protected for a field"
+            );
+        }
+    }
+
+    #[test]
+    fn a_record_with_missing_actions_defaults_and_unknown_ones_fail() {
+        // Missing: the default.
+        let mut fields = BTreeMap::new();
+        fields.insert("back".into(), "ctrl-b".into());
+        let keyboard = Keyboard::parse(&fields).unwrap();
+        assert_eq!(keyboard.binding(KeyboardAction::Back).id(), "ctrl-b");
+        assert_eq!(keyboard.binding(KeyboardAction::NextResult).id(), "down");
+
+        // Unknown action: the whole set fails.
+        fields.insert("launch".into(), "ctrl-l".into());
+        assert!(Keyboard::parse(&fields).is_err());
+
+        // A binding that is not one: the whole set fails.
+        let mut fields = BTreeMap::new();
+        fields.insert("back".into(), "not a binding".into());
+        assert!(Keyboard::parse(&fields).is_err());
+    }
+}

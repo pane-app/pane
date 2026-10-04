@@ -16,16 +16,24 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyWindowHandle, Modifiers, TestAppContext, VisualTestContext, WindowHandle, prelude::*, px,
+    AnyWindowHandle, Modifiers, MouseButton, TestAppContext, VisualTestContext, WindowHandle,
+    prelude::*, px,
 };
 use pane::{APP_VERSION, LauncherWindow, SettingsWindow};
 use pane_core::autostart::{Autostart, Registration};
-use pane_core::develop::{Build, BuildJob, BuildOutcome, Builder};
-use pane_core::{Launcher, PackageIdentity, Runtime, Screen, Status};
+use pane_core::changes;
+use pane_core::defaults::ArtifactSource;
+use pane_core::develop::{Build, BuildJob, BuildOutcome, Builder, Toolchains};
+use pane_core::{Launcher, PackageIdentity, Runtime, Screen, Status, Target};
 use tempfile::TempDir;
 
 #[path = "support/settle.rs"]
 mod settle;
+
+#[path = "../../pane-core/tests/support/artifacts.rs"]
+mod artifacts;
+
+use artifacts::Artifacts;
 
 use settle::settle;
 
@@ -278,11 +286,13 @@ fn open_extensions(
 }
 
 /// Clicks the row whose debug selector is `row` on the Extensions page,
-/// as its user would.
+/// as its user would — the pointer moving onto it first, for the reason
+/// [`click_section`] gives.
 fn click_row(settings_cx: &mut VisualTestContext, row: &'static str) {
     let bounds = settings_cx
         .debug_bounds(row)
         .unwrap_or_else(|| panic!("no {row} on the Extensions page"));
+    settings_cx.simulate_mouse_move(bounds.center(), None::<MouseButton>, Modifiers::none());
     settings_cx.simulate_click(bounds.center(), Modifiers::none());
     settings_cx.run_until_parked();
 }
@@ -364,6 +374,115 @@ fn until<T>(
         );
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+/// The last drawn frame's section arrival, as the arriving page content's
+/// (offset from rest in px — below rest when the sidebar moved down to
+/// the section, above when it moved up — and opacity); `None` when the
+/// frame drew the page settled, which is also all reduced motion ever
+/// reports. See [`SettingsWindow::section_arrival`].
+fn section_arrival(
+    settings: &WindowHandle<SettingsWindow>,
+    cx: &mut VisualTestContext,
+) -> Option<(f32, f32)> {
+    settings
+        .read_with(cx, |window, _| window.section_arrival())
+        .expect("the Settings window is open")
+}
+
+/// Delivers the animation frame the Settings window has asked for, as the
+/// native frame loop would, with `elapsed` passing first on the test
+/// platform's controlled clock. The test platform delivers no frames on
+/// its own, so this is the only thing that advances a running arrival;
+/// one call draws at most one frame. Returns how many next-frame
+/// callbacks ran — `0` means the window had asked for no frame, so
+/// nothing drew.
+fn frame(cx: &mut VisualTestContext, elapsed: Duration) -> usize {
+    cx.executor().advance_clock(elapsed);
+    let ran = cx.update(|window, cx| window.simulate_next_frame(cx));
+    cx.run_until_parked();
+    ran
+}
+
+/// Delivers frames until the window asks for none, so an arrival in
+/// flight completes, and returns the frames it delivered. `0` means the
+/// window was already idle: no frame was pending. Bounded, so a window
+/// that never stopped asking for frames fails the test instead of
+/// hanging it.
+fn settle_frames(cx: &mut VisualTestContext) -> usize {
+    let mut delivered = 0;
+    for _ in 0..20 {
+        let ran = frame(cx, Duration::from_millis(25));
+        if ran == 0 {
+            return delivered;
+        }
+        delivered += ran;
+    }
+    panic!("the window never stopped asking for animation frames");
+}
+
+/// Clicks the sidebar's section whose debug selector is `selector`
+/// ("section-<title>"), switching the window to it. The pointer moves
+/// onto the row first, as a user's does: a click's landing alone does
+/// not tell a row it is hovered, and the wash the row keeps would never
+/// settle with the layout saying the pointer is gone and the paint
+/// saying it is there.
+fn click_section(cx: &mut VisualTestContext, selector: &'static str) {
+    let section = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector} is drawn"));
+    cx.simulate_mouse_move(section.center(), None::<MouseButton>, Modifiers::none());
+    cx.simulate_click(section.center(), Modifiers::none());
+    cx.run_until_parked();
+}
+
+/// Clicks the element whose debug selector is `selector`, as its user
+/// would — the pointer moving onto it first, for the reason
+/// [`click_section`] gives.
+fn click(cx: &mut VisualTestContext, selector: &'static str) {
+    let bounds = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector} is drawn"));
+    cx.simulate_mouse_move(bounds.center(), None::<MouseButton>, Modifiers::none());
+    cx.simulate_click(bounds.center(), Modifiers::none());
+}
+
+/// Moves the pointer off the window, as a user's does when it leaves.
+/// The test platform parks the pointer wherever a move or click last
+/// put it, and content that reflows under a parked pointer — a popup
+/// unmounting over it, a list scrolling beneath it — would leave a wash
+/// running that only a real move settles: the tests that count the
+/// window's frames send the pointer away first.
+fn pointer_leaves(cx: &mut VisualTestContext) {
+    cx.simulate_mouse_move(
+        gpui::point(px(-100.), px(-100.)),
+        None::<MouseButton>,
+        Modifiers::none(),
+    );
+}
+
+/// Waits until the sidebar's selected section is exactly `title`, as
+/// assistive technology reads it — the visible selected-section state
+/// updates on the frame the switch draws, while the arrival is still in
+/// flight — and returns that frame's tree. (Polled, not read once: the
+/// captured tree can follow the drawn frame by one on the Windows test
+/// platform.)
+fn selected_section(cx: &mut VisualTestContext, title: &str) {
+    until(cx, |cx| {
+        let (_, json) = accessibility(cx);
+        let tree: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let selected: Vec<&str> = tree["nodes"]
+            .as_object()
+            .unwrap()
+            .values()
+            .filter(|node| {
+                node["aria"]["role"] == "ListBoxOption"
+                    && node["aria"]["selected"] == serde_json::json!(true)
+            })
+            .map(|node| node["aria"]["label"].as_str().unwrap_or_default())
+            .collect();
+        (selected == [title]).then_some(())
+    });
 }
 
 /// One of the theme's panel colors, as the window paints it on a quad:
@@ -706,7 +825,9 @@ fn the_footer_menu_opens_traverses_dismisses_and_restores_focus(cx: &mut TestApp
     assert_eq!(focused_label(cx).as_deref(), Some("Settings"));
 
     // The popup overlays the list: it sits above the footer strip, over
-    // the results.
+    // the results. Its entrance has settled (the frames it asked for
+    // delivered), so this reads it at rest.
+    settle_frames(cx);
     let menu = cx.debug_bounds("menu").expect("the menu");
     let footer = cx.debug_bounds("status-idle").expect("the footer");
     assert!(
@@ -719,12 +840,14 @@ fn the_footer_menu_opens_traverses_dismisses_and_restores_focus(cx: &mut TestApp
     // the footer.
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
-    assert!(cx.debug_bounds("menu").is_none(), "the menu is closed");
+    // The focus is restored at once, while the popup's exit still paints.
     assert_eq!(
         focused_label(cx).as_deref(),
         Some("More actions"),
         "focus is restored to what had it: the menu's button"
     );
+    settle_frames(cx);
+    assert!(cx.debug_bounds("menu").is_none(), "the menu is closed");
     let view = settle(&launcher, cx);
     assert!(matches!(view.screen, Screen::Root { .. }));
     assert_eq!(view.status, Status::Idle, "nothing was activated");
@@ -742,12 +865,13 @@ fn the_footer_menu_opens_traverses_dismisses_and_restores_focus(cx: &mut TestApp
     let settings = settings_windows(cx)
         .pop()
         .expect("the menu's item opened the Settings window");
-    assert!(cx.debug_bounds("menu").is_none(), "the menu closed with it");
     assert_eq!(
         focused_label(cx).as_deref(),
         Some("More actions"),
         "focus is restored to what had it: the menu's button"
     );
+    settle_frames(cx);
+    assert!(cx.debug_bounds("menu").is_none(), "the menu closed with it");
     let mut settings_cx = settings_context(&settings, cx);
     settings_cx.update(|window, _| window.remove_window());
     cx.run_until_parked();
@@ -759,9 +883,9 @@ fn the_footer_menu_opens_traverses_dismisses_and_restores_focus(cx: &mut TestApp
     cx.simulate_click(button.center(), Modifiers::none());
     cx.run_until_parked();
     assert!(cx.debug_bounds("menu").is_some());
-    let row = cx.debug_bounds("row-Rust sample").expect("a result row");
-    cx.simulate_click(row.center(), Modifiers::none());
+    click(cx, "row-Rust sample");
     cx.run_until_parked();
+    settle_frames(cx);
     assert!(cx.debug_bounds("menu").is_none(), "the menu closed");
     let view = settle(&launcher, cx);
     assert!(matches!(view.screen, Screen::Root { .. }), "no row opened");
@@ -776,20 +900,22 @@ fn the_menu_button_toggles_and_assistive_technology_sees_it_named(cx: &mut TestA
 
     // Clicking the button opens; clicking it again with the menu open
     // closes it — the popup's outside-click dismissal consumes the second
-    // click before the button can reopen it.
-    let button = cx.debug_bounds("footer-menu").expect("the menu button");
-    cx.simulate_click(button.center(), Modifiers::none());
+    // click before the button can reopen it. The pointer stays on the
+    // button throughout, as a user's does, so the wash it keeps there
+    // stays settled.
+    click(cx, "footer-menu");
     cx.run_until_parked();
     assert!(cx.debug_bounds("menu").is_some());
-    cx.simulate_click(button.center(), Modifiers::none());
+    click(cx, "footer-menu");
     cx.run_until_parked();
+    settle_frames(cx);
     assert!(
         cx.debug_bounds("menu").is_none(),
         "the button toggled closed"
     );
 
     // The button and its item are named controls, with the open state.
-    cx.simulate_click(button.center(), Modifiers::none());
+    click(cx, "footer-menu");
     cx.run_until_parked();
     let (_, json) = accessibility(cx);
     let tree: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -820,6 +946,245 @@ fn the_menu_button_toggles_and_assistive_technology_sees_it_named(cx: &mut TestA
     cx.run_until_parked();
     let view = settle(&launcher, cx);
     assert!(matches!(view.screen, Screen::Root { .. }));
+}
+
+/// The footer menu's popup enters from the strip and exits back into it:
+/// the entrance starts the full tiny shift toward the strip, already
+/// faintly visible, and settles at rest above the footer; the exit
+/// recedes over the shorter span, is inert while it paints — the focus
+/// is already restored, the item's click does nothing, and a click on
+/// the results under the overlay reaches nothing — and unmounts leaving
+/// the window idle, with the page under it answering again.
+#[gpui::test]
+fn the_menu_popup_enters_from_the_strip_and_exits_back_into_it(cx: &mut TestAppContext) {
+    let (launcher, _links, cx) = open_launcher(cx);
+    settle(&launcher, cx);
+    settle_frames(cx);
+
+    click(cx, "footer-menu");
+    cx.run_until_parked();
+    // The pointer leaves the strip's button it opened the menu with, and
+    // the wash it held settles with it, so the frames that follow are
+    // the popup's own — none of the pointer's.
+    pointer_leaves(cx);
+    // The entrance starts the full shift toward the strip (down, from
+    // the popup's rest above it) and the fade's floor.
+    let entering = menu_popup(&launcher, cx).expect("the popup is entering");
+    assert!(
+        entering.0 > 2.5 && entering.0 < 3.5,
+        "the entrance starts the full shift toward the strip: {}",
+        entering.0
+    );
+    assert!(
+        entering.1 < 0.45,
+        "the entrance starts faint: {}",
+        entering.1
+    );
+    let moving = cx.debug_bounds("menu").expect("the menu is drawn");
+    // Frames pass, and the entrance progresses toward rest.
+    assert!(frame(cx, Duration::from_millis(40)) >= 1);
+    let progressed = menu_popup(&launcher, cx).expect("the popup is still entering");
+    assert!(
+        progressed.0 < entering.0 && progressed.0 > 0.,
+        "the entrance progressed toward rest: {} from {}",
+        progressed.0,
+        entering.0
+    );
+    // Past the entrance's span the popup is at rest — above the footer,
+    // shifted exactly the entrance's offset up from where it started —
+    // and the window is idle.
+    assert!(frame(cx, Duration::from_millis(130)) >= 1);
+    assert!(menu_popup(&launcher, cx).is_none());
+    let rest = cx.debug_bounds("menu").expect("the menu is at rest");
+    let footer = cx.debug_bounds("status-idle").expect("the footer");
+    assert!(
+        rest.bottom() <= footer.top(),
+        "the popup settled above the footer"
+    );
+    assert_eq!(
+        moving.bottom() - rest.bottom(),
+        px(entering.0),
+        "the popup was shifted exactly the entrance's offset below its rest"
+    );
+    assert_eq!(settle_frames(cx), 0, "a settled menu schedules no frame");
+
+    // Escape closes it: the focus is restored the frame the menu closed,
+    // while the exit still paints; the exit recedes toward the strip.
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(
+        focused_label(cx).as_deref(),
+        Some("More actions"),
+        "the focus returned the frame the menu closed"
+    );
+    let leaving = menu_popup(&launcher, cx).expect("the exit is painting");
+    assert!(leaving.0 < 0.5, "the exit starts at rest: {}", leaving.0);
+    assert!(frame(cx, Duration::from_millis(30)) >= 1);
+    let receding = menu_popup(&launcher, cx).expect("the exit is still painting");
+    assert!(
+        receding.0 > 1.,
+        "the exit recedes toward the strip: {}",
+        receding.0
+    );
+    assert!(
+        receding.1 < 1.,
+        "the exit fades the popup out: {}",
+        receding.1
+    );
+
+    // The exit's visuals are inert: the item's click does nothing — the
+    // exit's list carries no handlers, and the overlay takes the clicks
+    // that land on it, so nothing under or on it is invoked.
+    click(cx, "menu-item-Settings");
+    cx.run_until_parked();
+    let view = settle(&launcher, cx);
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "the exiting menu's item invoked nothing"
+    );
+    assert_eq!(
+        settings_windows(cx).len(),
+        0,
+        "the exiting menu's item opened no Settings window"
+    );
+    // The pointer leaves the fading menu before it unmounts: the
+    // results it covers are revealed as it goes, and a row the pointer
+    // never moved onto takes no wash for its paint's say-so alone.
+    pointer_leaves(cx);
+
+    // Past the exit's span the popup unmounts — nothing of it is drawn,
+    // visible or not, so no invisible overlay survives to intercept a
+    // click — and the window is idle.
+    assert!(frame(cx, Duration::from_millis(90)) >= 1);
+    assert!(menu_popup(&launcher, cx).is_none());
+    assert!(
+        cx.debug_bounds("menu").is_none(),
+        "the exit unmounted the popup"
+    );
+    assert_eq!(settle_frames(cx), 0, "a closed menu schedules no frame");
+}
+
+/// A menu reopened during its exit reverses from the presentation on
+/// screen instead of restarting, and the item the exit was still
+/// painting is the item the reopened menu shows.
+#[gpui::test]
+fn a_menu_reopened_during_its_exit_retargets(cx: &mut TestAppContext) {
+    let (launcher, _links, cx) = open_launcher(cx);
+    settle(&launcher, cx);
+    settle_frames(cx);
+
+    // Open, and let the entrance settle.
+    click(cx, "footer-menu");
+    cx.run_until_parked();
+    settle_frames(cx);
+    assert!(menu_popup(&launcher, cx).is_none());
+
+    // Close, let part of the exit run, and reopen — with the exit still
+    // in flight.
+    click(cx, "footer-menu");
+    cx.run_until_parked();
+    assert!(menu_popup(&launcher, cx).is_some());
+    assert!(frame(cx, Duration::from_millis(25)) >= 1);
+    let mid_exit = menu_popup(&launcher, cx).expect("the exit is painting");
+
+    click(cx, "footer-menu");
+    cx.run_until_parked();
+    let reversing = menu_popup(&launcher, cx).expect("the popup is reopening");
+    assert!(
+        reversing.0 < mid_exit.0 + 0.5 && reversing.0 < 2.5,
+        "the reopen continued from the exit's presentation, not the full \
+         shift: {} from {}",
+        reversing.0,
+        mid_exit.0
+    );
+    assert!(
+        reversing.1 > 0.4,
+        "the reopen did not reset to the entrance's floor: {}",
+        reversing.1
+    );
+    // The reopened menu is the interactive one: its item activates.
+    assert!(
+        cx.debug_bounds("menu-item-Settings").is_some(),
+        "the reopened menu is drawn"
+    );
+    settle_frames(cx);
+    click(cx, "menu-item-Settings");
+    cx.run_until_parked();
+    assert_eq!(
+        settings_windows(cx).len(),
+        1,
+        "the reopened menu's item opened Settings"
+    );
+    // The pointer leaves the closing menu before it unmounts, so the
+    // results it covered take no wash for a pointer that never moved
+    // onto them.
+    pointer_leaves(cx);
+    settle_frames(cx);
+    assert!(cx.debug_bounds("menu").is_none(), "the menu closed with it");
+}
+
+/// Reduced motion lands the menu popup at its endpoint with no frame at
+/// all: opening draws it at rest above the footer, closing unmounts it
+/// at once, and a preference engaged mid-entrance settles it on the next
+/// frame.
+#[gpui::test]
+fn reduced_motion_lands_the_menu_popup_at_once(cx: &mut TestAppContext) {
+    let (launcher, _links, cx) = open_launcher(cx);
+    settle(&launcher, cx);
+    settle_frames(cx);
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+
+    // Opening under reduced motion: no entrance starts.
+    let button = cx.debug_bounds("footer-menu").expect("the menu button");
+    cx.simulate_click(button.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(menu_popup(&launcher, cx).is_none());
+    let menu = cx.debug_bounds("menu").expect("the menu is drawn at rest");
+    let footer = cx.debug_bounds("status-idle").expect("the footer");
+    assert!(
+        menu.bottom() <= footer.top(),
+        "the popup is at rest above the footer"
+    );
+    assert_eq!(settle_frames(cx), 0, "no frame was asked for");
+
+    // Closing under reduced motion: the popup unmounts at once.
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(menu_popup(&launcher, cx).is_none());
+    assert!(cx.debug_bounds("menu").is_none());
+    assert_eq!(settle_frames(cx), 0, "no frame was asked for");
+
+    // Reduced motion engaged mid-entrance ends it on the next frame.
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    cx.simulate_click(button.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        menu_popup(&launcher, cx).is_some(),
+        "the entrance began under full motion"
+    );
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    assert!(frame(cx, Duration::ZERO) >= 1);
+    assert!(
+        menu_popup(&launcher, cx).is_none(),
+        "the entrance settled the moment reduced motion engaged"
+    );
+    assert_eq!(
+        settle_frames(cx),
+        0,
+        "the window asked for no further frame"
+    );
+}
+
+/// The menu popup's presentation as the last frame drew it — the offset
+/// from rest toward the strip in px (positive: the popup sits above the
+/// strip, so toward it is down) and the opacity; `None` when the last
+/// frame drew the popup settled (at rest while open, absent while
+/// closed). See [`LauncherWindow::menu_popup_presentation`].
+fn menu_popup(
+    launcher: &gpui::Entity<LauncherWindow>,
+    cx: &mut VisualTestContext,
+) -> Option<(f32, f32)> {
+    cx.read_entity(launcher, |window, _| window.menu_popup_presentation())
 }
 
 #[gpui::test]
@@ -907,6 +1272,460 @@ fn a_refused_documentation_link_is_explained_on_the_page(cx: &mut TestAppContext
     );
     let view = cx.read_entity(&launcher, |window, _| window.launcher().view());
     assert_eq!(view.status, Status::Idle, "the launcher is untouched");
+}
+
+/// The world of one About-page update test: the folder Pane's program is
+/// installed in, the folder its data lives in, and a local artifact source
+/// on 127.0.0.1 (pane-core's test support; nothing reaches the network or
+/// Pane's published downloads) serving the index an update check reads —
+/// the same fixture `pane-core`'s application-update tests use, driven
+/// here through the highest boundary, the Settings window's own page.
+struct UpdateDirs {
+    install: TempDir,
+    data: TempDir,
+    artifacts: Artifacts,
+}
+
+impl UpdateDirs {
+    fn new() -> UpdateDirs {
+        UpdateDirs {
+            install: tempfile::tempdir().unwrap(),
+            data: tempfile::tempdir().unwrap(),
+            artifacts: Artifacts::start(),
+        }
+    }
+
+    /// The program Pane runs from, in the install folder.
+    fn program(&self) -> PathBuf {
+        self.install.path().join("pane")
+    }
+
+    /// Writes the program Pane runs from, with the given bytes.
+    fn running(&self, program: &[u8]) {
+        fs::write(self.program(), program).unwrap();
+    }
+
+    /// Publishes an application package `version` for this system, holding
+    /// `program` as the program an install replaces this Pane's with, as
+    /// `pane-core`'s own tests publish one.
+    fn publish_update(&self, version: &str, program: &[u8]) {
+        let zip = artifacts::pack_zip(&[("pane", program.to_vec())]);
+        let target = Target::current()
+            .expect("Pane names this system's target")
+            .id()
+            .to_owned();
+        self.artifacts.publish_application(version, &target, &zip);
+    }
+}
+
+/// Opens the launcher window over a launcher that checks the local
+/// artifact source for updates of the version `version` it runs from
+/// `dirs`' program file — the same wiring the binary's is, including the
+/// changes channel whose other end the window follows, so background
+/// changes (a check's answer, an install's progress) redraw the windows
+/// as they do in the app.
+fn open_updating_launcher<'a>(
+    cx: &'a mut TestAppContext,
+    dirs: &UpdateDirs,
+    version: &str,
+) -> (gpui::Entity<LauncherWindow>, &'a mut VisualTestContext) {
+    let (sender, changes) = changes::channel();
+    let launcher = Launcher::with_packages(
+        Runtime::start(),
+        vec![],
+        dirs.data.path().join("extensions"),
+    )
+    .with_application_update(
+        version,
+        ArtifactSource::local(dirs.artifacts.url()).unwrap(),
+        dirs.program(),
+    )
+    .with_development(Arc::new(Toolchains::from_env(None)), sender);
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let (window, cx) = cx.add_window_view(|window, cx| {
+        let mut launcher = LauncherWindow::new(launcher, window, cx);
+        launcher.follow_changes(changes, window, cx);
+        launcher
+    });
+    (window, cx)
+}
+
+/// Opens the Settings window with the local `Ctrl+,` shortcut and returns
+/// a context driving it, on its About page: the window opens on the
+/// General page, so this walks the sidebar to About first. The window
+/// is made tall enough that the page's rows are in reach of a click
+/// without scrolling it — the page itself scrolls when the window is
+/// smaller.
+fn open_about(cx: &mut VisualTestContext) -> (WindowHandle<SettingsWindow>, VisualTestContext) {
+    cx.simulate_keystrokes(settings_shortcut());
+    cx.run_until_parked();
+    let settings = settings_windows(cx).pop().expect("Settings opened");
+    let mut settings_cx = settings_context(&settings, cx);
+    settings_cx.simulate_resize(gpui::size(px(740.), px(1100.)));
+    settings_cx.run_until_parked();
+    let about = settings_cx
+        .debug_bounds("section-About")
+        .expect("the About section");
+    settings_cx.simulate_click(about.center(), Modifiers::none());
+    settings_cx.run_until_parked();
+    (settings, settings_cx)
+}
+
+#[gpui::test]
+fn the_about_page_explains_where_no_release_source_is_configured(cx: &mut TestAppContext) {
+    let (_launcher, _links, cx) = open_launcher(cx);
+    let (_settings, mut settings_cx) = open_about(cx);
+
+    // A launcher with no updater wired — no artifact source given, as a
+    // development checkout without PANE_ARTIFACTS runs — is explained as
+    // what it is: no release to check, no claim of a feed or an available
+    // release, and no row to click.
+    until_text(
+        &mut settings_cx,
+        "No artifact source is configured for this Pane",
+    );
+    assert!(
+        settings_cx.debug_bounds("about-check-update").is_none(),
+        "no check is offered against a source that is not there"
+    );
+    assert!(settings_cx.debug_bounds("about-update").is_none());
+}
+
+#[gpui::test]
+fn a_check_from_the_page_that_finds_nothing_newer_says_pane_is_up_to_date(cx: &mut TestAppContext) {
+    let dirs = UpdateDirs::new();
+    dirs.running(b"the 0.1.0 program");
+    let (launcher, cx) = open_updating_launcher(cx, &dirs, "0.1.0");
+    let (_settings, mut settings_cx) = open_about(cx);
+
+    // The check the user asked for, from the page: the page answers, and
+    // so does the status line — the same answer, as the user asked both.
+    click_row(&mut settings_cx, "about-check-update");
+    until_text(&mut settings_cx, "Pane is up to date");
+    // The row stays: the user can ask again.
+    assert!(
+        settings_cx.debug_bounds("about-check-update").is_some(),
+        "the check is offered again"
+    );
+    let view = cx.read_entity(&launcher, |window, _| window.launcher().view());
+    assert_eq!(view.status, Status::Result("Pane is up to date".into()));
+    // Root search lists no update row: there is nothing to choose.
+    let rows = titles(&launcher, cx);
+    assert!(
+        !rows.contains(&"Update Pane to 99.0.0".to_owned()),
+        "{rows:?}"
+    );
+    assert!(
+        !rows.contains(&"Check for a Pane update".to_owned()),
+        "{rows:?}"
+    );
+}
+
+#[gpui::test]
+fn an_unreachable_release_source_is_explained_on_the_page(cx: &mut TestAppContext) {
+    let dirs = UpdateDirs::new();
+    dirs.publish_update("99.0.0", b"the 99.0.0 program");
+    dirs.running(b"the 0.1.0 program");
+    let (launcher, cx) = open_updating_launcher(cx, &dirs, "0.1.0");
+    // Nothing answers where the artifact source is: the check cannot be
+    // made.
+    drop(dirs.artifacts);
+    let (_settings, mut settings_cx) = open_about(cx);
+
+    click_row(&mut settings_cx, "about-check-update");
+    until_text(&mut settings_cx, "Could not check for a Pane update");
+    // The failure explains the unreachable source, retried as an
+    // interrupted acquisition is, and the page offers the check again.
+    let (_, json) = accessibility(&mut settings_cx);
+    assert!(
+        json.contains("could not be reached") && json.contains("Pane tried 3 times"),
+        "the unreachable source is explained, {json}"
+    );
+    assert!(
+        settings_cx.debug_bounds("about-check-update").is_some(),
+        "the check is offered again"
+    );
+    // The root search holds the same failure with its own row: the two
+    // entry points share one state.
+    assert!(
+        titles(&launcher, cx).contains(&"Check for a Pane update".to_owned()),
+        "the root row is listed"
+    );
+    let view = cx.read_entity(&launcher, |window, _| window.launcher().view());
+    assert!(
+        matches!(&view.status, Status::Error(text) if text.starts_with(
+            "Could not check for a Pane update: Pane's downloads at"
+        )),
+        "the status line says it too: {:?}",
+        view.status
+    );
+}
+
+#[gpui::test]
+fn a_failed_check_is_tried_again_from_the_page_and_finds_the_update(cx: &mut TestAppContext) {
+    let dirs = UpdateDirs::new();
+    dirs.running(b"the 0.1.0 program");
+    // The source answers its index with an error, retried as an
+    // interrupted acquisition is, so the check fails.
+    dirs.artifacts
+        .fail_status("pane-defaults.json", 503, usize::MAX);
+    let (launcher, cx) = open_updating_launcher(cx, &dirs, "0.1.0");
+    let (_settings, mut settings_cx) = open_about(cx);
+
+    click_row(&mut settings_cx, "about-check-update");
+    until_text(&mut settings_cx, "Could not check for a Pane update");
+
+    // The source works again, with a newer version published: the retry
+    // from the page finds it, and both entry points show the offer.
+    dirs.artifacts.stop_failing("pane-defaults.json");
+    dirs.publish_update("99.0.0", b"the 99.0.0 program");
+    click_row(&mut settings_cx, "about-check-update");
+    until_text(&mut settings_cx, "Pane 99.0.0 is available");
+    assert!(settings_cx.debug_bounds("about-update").is_some());
+    assert!(titles(&launcher, cx).contains(&"Update Pane to 99.0.0".to_owned()));
+}
+
+#[gpui::test]
+fn the_page_offers_the_update_and_installs_it_by_the_users_choice(cx: &mut TestAppContext) {
+    let dirs = UpdateDirs::new();
+    dirs.publish_update("99.0.0", b"the 99.0.0 program");
+    dirs.running(b"the 0.1.0 program");
+    let (launcher, cx) = open_updating_launcher(cx, &dirs, "0.1.0");
+    let (_settings, mut settings_cx) = open_about(cx);
+
+    // The check from the page finds the newer version: the page offers
+    // what the root row offers — the version, and what installing does.
+    click_row(&mut settings_cx, "about-check-update");
+    until_text(&mut settings_cx, "Pane 99.0.0 is available");
+    let (_, json) = accessibility(&mut settings_cx);
+    assert!(json.contains("Update Pane to 99.0.0"), "{json}");
+    assert!(
+        json.contains(
+            "Your extensions and settings are kept; the new version is used the next time Pane \
+             starts"
+        ),
+        "the row says what installing does, {json}"
+    );
+    assert!(
+        titles(&launcher, cx).contains(&"Update Pane to 99.0.0".to_owned()),
+        "root search holds the same offer"
+    );
+
+    // The package arrives in two pieces, so the page is seen following the
+    // download as it goes.
+    let file = format!("pane-99.0.0-{}.zip", Target::current().unwrap().id());
+    dirs.artifacts.stall(&file, 8, Duration::from_millis(1200));
+
+    // Installing is the user's choice, the row clicked: the page follows
+    // the install's progress, and the answer when it lands.
+    click_row(&mut settings_cx, "about-update");
+    until_text(&mut settings_cx, "Downloading Pane 99.0.0: ");
+    // Mid-install there is no row to click: nothing else can be started
+    // against the same offer.
+    assert!(settings_cx.debug_bounds("about-update").is_none());
+    until_text(
+        &mut settings_cx,
+        "Installed Pane 99.0.0; the new version is used the next time Pane starts",
+    );
+
+    // The program was swapped: the new one in place, the old one renamed
+    // out of its way, nothing else in the install folder.
+    assert_eq!(fs::read(dirs.program()).unwrap(), b"the 99.0.0 program");
+    assert_eq!(
+        fs::read(dirs.install.path().join("pane.old")).unwrap(),
+        b"the 0.1.0 program"
+    );
+    // The launcher's status line said the same thing, and the offer is
+    // gone from both entry points.
+    let view = cx.read_entity(&launcher, |window, _| window.launcher().view());
+    assert_eq!(
+        view.status,
+        Status::Result(
+            "Installed Pane 99.0.0; the new version is used the next time Pane starts".into()
+        )
+    );
+    assert!(settings_cx.debug_bounds("about-update").is_none());
+    assert!(!titles(&launcher, cx).contains(&"Update Pane to 99.0.0".to_owned()));
+}
+
+#[gpui::test]
+fn a_failed_install_is_explained_and_the_offer_stays_to_try_again(cx: &mut TestAppContext) {
+    let dirs = UpdateDirs::new();
+    dirs.publish_update("99.0.0", b"the 99.0.0 program");
+    dirs.running(b"the 0.1.0 program");
+    let (launcher, cx) = open_updating_launcher(cx, &dirs, "0.1.0");
+    let (_settings, mut settings_cx) = open_about(cx);
+    click_row(&mut settings_cx, "about-check-update");
+    until_text(&mut settings_cx, "Pane 99.0.0 is available");
+    // The package the index names is not what arrives: its bytes were
+    // damaged, so they do not match the integrity the index gives.
+    dirs.artifacts.corrupt_application();
+
+    click_row(&mut settings_cx, "about-update");
+    until_text(&mut settings_cx, "Could not update Pane to 99.0.0");
+
+    // The failure is explained with the offer still offered, ready to be
+    // chosen again; nothing changed.
+    let (_, json) = accessibility(&mut settings_cx);
+    assert!(
+        json.contains("does not match the sha512 integrity"),
+        "{json}"
+    );
+    assert!(
+        settings_cx.debug_bounds("about-update").is_some(),
+        "the offer stays"
+    );
+    assert_eq!(fs::read(dirs.program()).unwrap(), b"the 0.1.0 program");
+    let view = cx.read_entity(&launcher, |window, _| window.launcher().view());
+    assert!(
+        matches!(&view.status, Status::Error(text) if text.starts_with(
+            "Could not update Pane to 99.0.0: "
+        )),
+        "the status line says it too: {:?}",
+        view.status
+    );
+
+    // The source works again; choosing the offer again installs it.
+    dirs.publish_update("99.0.0", b"the 99.0.0 program");
+    click_row(&mut settings_cx, "about-update");
+    until_text(
+        &mut settings_cx,
+        "Installed Pane 99.0.0; the new version is used the next time Pane starts",
+    );
+    assert_eq!(fs::read(dirs.program()).unwrap(), b"the 99.0.0 program");
+}
+
+#[gpui::test]
+fn an_interrupted_download_from_the_page_is_tried_again_and_lands(cx: &mut TestAppContext) {
+    let dirs = UpdateDirs::new();
+    dirs.publish_update("99.0.0", b"the 99.0.0 program");
+    dirs.running(b"the 0.1.0 program");
+    let (launcher, cx) = open_updating_launcher(cx, &dirs, "0.1.0");
+    let (_settings, mut settings_cx) = open_about(cx);
+    click_row(&mut settings_cx, "about-check-update");
+    until_text(&mut settings_cx, "Pane 99.0.0 is available");
+
+    // The first download of the package is interrupted partway: the
+    // connection closes after its first bytes, as an offline moment
+    // does. The install the page started rides the retry the download
+    // itself makes — the same retry the root row's install does — and
+    // lands.
+    let file = format!("pane-99.0.0-{}.zip", Target::current().unwrap().id());
+    dirs.artifacts.drop_after(&file, 16, 1);
+
+    click_row(&mut settings_cx, "about-update");
+    until_text(
+        &mut settings_cx,
+        "Installed Pane 99.0.0; the new version is used the next time Pane starts",
+    );
+    assert_eq!(fs::read(dirs.program()).unwrap(), b"the 99.0.0 program");
+    assert_eq!(
+        fs::read(dirs.install.path().join("pane.old")).unwrap(),
+        b"the 0.1.0 program"
+    );
+    // The package was downloaded twice: the interrupted one, and the
+    // retry that landed.
+    let downloads = dirs
+        .artifacts
+        .requests()
+        .iter()
+        .filter(|path| path.ends_with(".zip"))
+        .count();
+    assert_eq!(downloads, 2, "the interrupted download was retried");
+    // The status line answered the same landing, and neither entry
+    // point offers the update any more.
+    let view = cx.read_entity(&launcher, |window, _| window.launcher().view());
+    assert_eq!(
+        view.status,
+        Status::Result(
+            "Installed Pane 99.0.0; the new version is used the next time Pane starts".into()
+        )
+    );
+    assert!(settings_cx.debug_bounds("about-update").is_none());
+    assert!(!titles(&launcher, cx).contains(&"Update Pane to 99.0.0".to_owned()));
+}
+
+#[gpui::test]
+fn leaving_the_page_while_a_check_runs_cancels_nothing(cx: &mut TestAppContext) {
+    let dirs = UpdateDirs::new();
+    dirs.publish_update("99.0.0", b"the 99.0.0 program");
+    dirs.running(b"the 0.1.0 program");
+    // The index answers slowly, so the check is still running when the
+    // user leaves the page.
+    dirs.artifacts
+        .stall("pane-defaults.json", 8, Duration::from_millis(1200));
+    let (launcher, cx) = open_updating_launcher(cx, &dirs, "0.1.0");
+    let (_settings, mut settings_cx) = open_about(cx);
+
+    // The check starts from the page; the user walks away to another
+    // section while it runs.
+    click_row(&mut settings_cx, "about-check-update");
+    until_text(&mut settings_cx, "Checking for a Pane update");
+    let extensions = settings_cx
+        .debug_bounds("section-Extensions")
+        .expect("the Extensions section");
+    settings_cx.simulate_click(extensions.center(), Modifiers::none());
+    settings_cx.run_until_parked();
+
+    // Leaving cancelled nothing: the check ran to its end, and its answer
+    // is where both entry points read it — the launcher's state and
+    // status line, with the root row listed.
+    until(cx, |cx| {
+        cx.read_entity(&launcher, |window, _| window.launcher().view())
+            .status
+            .eq(&Status::Result("Pane 99.0.0 is available".into()))
+            .then_some(())
+    });
+    assert!(titles(&launcher, cx).contains(&"Update Pane to 99.0.0".to_owned()));
+
+    // Back on the About page, the same state: the offer, with the row that
+    // installs it.
+    let about = settings_cx
+        .debug_bounds("section-About")
+        .expect("the About section");
+    settings_cx.simulate_click(about.center(), Modifiers::none());
+    settings_cx.run_until_parked();
+    until_text(&mut settings_cx, "Pane 99.0.0 is available");
+    assert!(settings_cx.debug_bounds("about-update").is_some());
+}
+
+#[gpui::test]
+fn the_page_copies_the_diagnostics_to_the_clipboard_locally(cx: &mut TestAppContext) {
+    let dirs = UpdateDirs::new();
+    dirs.publish_update("99.0.0", b"the 99.0.0 program");
+    dirs.running(b"the 0.1.0 program");
+    let (_launcher, cx) = open_updating_launcher(cx, &dirs, "0.1.0");
+    let (_settings, mut settings_cx) = open_about(cx);
+    click_row(&mut settings_cx, "about-check-update");
+    until_text(&mut settings_cx, "Pane 99.0.0 is available");
+
+    // The copy is the user's explicit click, and its completion is the
+    // page's own status.
+    click_row(&mut settings_cx, "about-diagnostics");
+    until_text(&mut settings_cx, "Copied the diagnostics to the clipboard");
+    // What was copied is what Pane knows of this installation — the real
+    // version, the system, the data folder, the update state — as plain
+    // text on this computer's clipboard: nothing was sent anywhere, and
+    // nothing of any extension's settings or data is in it (none is
+    // read).
+    let report = settings_cx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .expect("the report was copied");
+    assert!(
+        report.starts_with(&format!("Pane {APP_VERSION}")),
+        "{report}"
+    );
+    assert!(
+        report.contains(&format!("Built for {}", Target::current().unwrap().id())),
+        "{report}"
+    );
+    assert!(report.contains("Data folder: "), "{report}");
+    assert!(
+        report.contains("Update check: Pane 99.0.0 is available"),
+        "{report}"
+    );
 }
 
 /// Runs the window until its accessibility tree contains `text`, so what
@@ -1380,7 +2199,21 @@ fn the_settings_window_keeps_its_layout_at_small_sizes(cx: &mut TestAppContext) 
     );
 
     // The About page keeps its own rows laid out at the same floor,
-    // reached through the sidebar.
+    // reached through the sidebar. The Keyboard page has joined the
+    // sections since this floor was written, so the sidebar's list
+    // scrolls at this size on the platforms whose titlebar is inside
+    // the window: turn its wheel to bring the About section's row
+    // into view before it is clicked.
+    let sections = settings_cx
+        .debug_bounds("sections")
+        .expect("the sections list");
+    settings_cx.simulate_event(gpui::ScrollWheelEvent {
+        position: sections.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-120.))),
+        modifiers: Modifiers::none(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    settings_cx.run_until_parked();
     let about = settings_cx
         .debug_bounds("section-About")
         .expect("the About section");
@@ -1402,6 +2235,276 @@ fn the_settings_window_keeps_its_layout_at_small_sizes(cx: &mut TestAppContext) 
     assert!(
         version.right() <= page.right(),
         "the version stays within the page"
+    );
+}
+
+/// A helper for the section-transition tests: the Settings window over
+/// the sample launcher, opened and settled, as (window, its context).
+fn opened_settings(
+    cx: &mut VisualTestContext,
+) -> (WindowHandle<SettingsWindow>, VisualTestContext) {
+    cx.simulate_keystrokes(settings_shortcut());
+    cx.run_until_parked();
+    let settings = settings_windows(cx).pop().expect("Settings opened");
+    let mut settings_cx = settings_context(&settings, cx);
+    settings_cx.run_until_parked();
+    // The window opens settled: the first frame has no section to come
+    // from, and none is pending — a settled window is idle.
+    assert_eq!(frame(&mut settings_cx, Duration::ZERO), 0);
+    assert!(section_arrival(&settings, &mut settings_cx).is_none());
+    (settings, settings_cx)
+}
+
+/// Switching sections transitions the content that changes — the page —
+/// with the shared policy's short fade and tiny shift from the side the
+/// sidebar moved, while the shell around it (a sidebar row, the page's
+/// scroll viewport) stays exactly where it was. The switch itself is
+/// immediate: the page's content is drawn on the frame the click draws,
+/// the sidebar's selected row is the new section's, and the arrival is
+/// driven on the controlled clock — it progresses as frames are
+/// delivered, completes within its bounded span, and leaves the window
+/// asking for no frame at all.
+#[gpui::test]
+fn switching_sections_transitions_the_content_and_keeps_the_shell_still(cx: &mut TestAppContext) {
+    let (_launcher, _links, cx) = open_launcher(cx);
+    let (settings, mut settings_cx) = opened_settings(cx);
+
+    // The shell: an unselected sidebar row, and the page's scroll
+    // viewport.
+    let about_row = settings_cx
+        .debug_bounds("section-About")
+        .expect("a sidebar row");
+    let viewport = settings_cx
+        .debug_bounds("settings-page")
+        .expect("the page viewport");
+
+    // Shortcuts is further down the sidebar than the General page the
+    // window opens on: the page's content arrives from below.
+    click_section(&mut settings_cx, "section-Shortcuts");
+    assert!(
+        settings_cx.debug_bounds("shortcuts-title").is_some(),
+        "the Shortcuts page is drawn at once, mid-arrival"
+    );
+    let (offset, opacity) =
+        section_arrival(&settings, &mut settings_cx).expect("the page is arriving");
+    assert!(
+        offset > 2.5 && offset < 3.5,
+        "the arrival starts the full shift below rest: {offset}"
+    );
+    assert!(opacity < 0.45, "the arrival starts faint: {opacity}");
+    // The shell did not move with it.
+    assert_eq!(
+        settings_cx.debug_bounds("section-About").expect("the row"),
+        about_row,
+        "the sidebar row stayed still"
+    );
+    assert_eq!(
+        settings_cx
+            .debug_bounds("settings-page")
+            .expect("the viewport"),
+        viewport,
+        "the page viewport stayed still"
+    );
+    // The visible selected-section state updated immediately, on this
+    // same frame — exactly one section selected, the new one.
+    selected_section(&mut settings_cx, "Shortcuts");
+
+    // The content is displaced from its rest by the arrival's shift.
+    let title = settings_cx
+        .debug_bounds("shortcuts-title")
+        .expect("the page's title");
+
+    // Frames pass, and the arrival progresses without restarting.
+    assert!(frame(&mut settings_cx, Duration::from_millis(40)) >= 1);
+    let (progressed, _) =
+        section_arrival(&settings, &mut settings_cx).expect("the page is still arriving");
+    assert!(
+        progressed > 0.05 && progressed < offset,
+        "the arrival progressed toward rest: {progressed} from {offset}"
+    );
+    // Past the section span, the next delivered frame lands the content
+    // at rest and asks for no further frame: the window is idle.
+    assert!(frame(&mut settings_cx, Duration::from_millis(130)) >= 1);
+    assert!(section_arrival(&settings, &mut settings_cx).is_none());
+    let settled = settings_cx
+        .debug_bounds("shortcuts-title")
+        .expect("the page's title");
+    assert_eq!(
+        title.origin.y - settled.origin.y,
+        px(offset),
+        "the page was shifted exactly the arrival's offset below its rest"
+    );
+    assert_eq!(
+        settle_frames(&mut settings_cx),
+        0,
+        "a settled window asks for no frame"
+    );
+}
+
+/// Moving back up the sidebar is the paired arrival: the page's content
+/// settles down into place from above rest, over the same section span,
+/// and settles leaving the window idle.
+#[gpui::test]
+fn moving_up_the_sidebar_arrives_from_above(cx: &mut TestAppContext) {
+    let (_launcher, _links, cx) = open_launcher(cx);
+    let (settings, mut settings_cx) = opened_settings(cx);
+
+    // Down to About — the last section — and settled.
+    click_section(&mut settings_cx, "section-About");
+    settle_frames(&mut settings_cx);
+    assert!(section_arrival(&settings, &mut settings_cx).is_none());
+
+    // Back up to Appearance, the first section: the content arrives from
+    // above.
+    click_section(&mut settings_cx, "section-Appearance");
+    assert!(
+        settings_cx.debug_bounds("appearance").is_some(),
+        "the Appearance page is drawn at once, mid-arrival"
+    );
+    let (offset, _) = section_arrival(&settings, &mut settings_cx).expect("the page is arriving");
+    assert!(
+        offset < -2.5 && offset > -3.5,
+        "the arrival starts the full shift above rest: {offset}"
+    );
+
+    // The section span settles it: 160ms — past its 150ms — leaves the
+    // window idle.
+    assert!(frame(&mut settings_cx, Duration::from_millis(160)) >= 1);
+    assert!(section_arrival(&settings, &mut settings_cx).is_none());
+    assert_eq!(
+        settle_frames(&mut settings_cx),
+        0,
+        "a settled window asks for no frame"
+    );
+}
+
+/// A rapid section switch retargets each arrival from the presentation
+/// on screen — the interrupted offset carries over, so nothing restarts
+/// and nothing flashes — and the outgoing page's content is unmounted at
+/// once: the page drawn is always the section the user is on.
+#[gpui::test]
+fn rapid_section_switches_retarget_the_arrival_from_where_it_is(cx: &mut TestAppContext) {
+    let (_launcher, _links, cx) = open_launcher(cx);
+    let (settings, mut settings_cx) = opened_settings(cx);
+
+    // Switch down to Shortcuts, and — with no clock time passing between
+    // them — down again to Extensions, whose page is different content.
+    click_section(&mut settings_cx, "section-Shortcuts");
+    let (offset, _) = section_arrival(&settings, &mut settings_cx).expect("Shortcuts is arriving");
+
+    click_section(&mut settings_cx, "section-Extensions");
+    let (continued, _) =
+        section_arrival(&settings, &mut settings_cx).expect("Extensions is arriving");
+    assert!(
+        (continued - offset).abs() < 0.05,
+        "the switch continued the presentation: {continued} from {offset}"
+    );
+    // The outgoing page's content is gone at once: the page drawn is
+    // Extensions', and none of Shortcuts' content lingers over it.
+    assert!(settings_cx.debug_bounds("extensions-title").is_some());
+    assert!(settings_cx.debug_bounds("shortcuts-title").is_none());
+
+    // And back up again, still from the presentation on screen.
+    click_section(&mut settings_cx, "section-Shortcuts");
+    let (back, _) =
+        section_arrival(&settings, &mut settings_cx).expect("Shortcuts is arriving again");
+    assert!(
+        (back - offset).abs() < 0.05,
+        "the return continued the presentation too: {back} from {offset}"
+    );
+    // What is drawn is Shortcuts' page, not a fading-out Extensions.
+    assert!(settings_cx.debug_bounds("shortcuts-title").is_some());
+    assert!(settings_cx.debug_bounds("extensions-title").is_none());
+
+    // The retargeted arrival then completes like any other.
+    settle_frames(&mut settings_cx);
+    assert!(section_arrival(&settings, &mut settings_cx).is_none());
+}
+
+/// Reduced motion settles every section switch at once: a switch under
+/// it starts no arrival, and reducing motion mid-arrival ends it on the
+/// next drawn frame. Either way the window schedules no frame for
+/// presentation — and at the window's floor the pages still switch and
+/// lay out.
+#[gpui::test]
+fn reduced_motion_settles_section_switches_at_once_at_the_window_boundary(cx: &mut TestAppContext) {
+    let (_launcher, _links, cx) = open_launcher(cx);
+    let (settings, mut settings_cx) = opened_settings(cx);
+    // The window's floor: the boundary the reduced presentation must
+    // still work at. The Keyboard page has joined the sections since
+    // this floor was written, so the sidebar's list now scrolls at this
+    // size: turn its wheel to bring the About section's row into view
+    // before it is clicked.
+    settings_cx.simulate_resize(gpui::size(px(560.), px(400.)));
+    settings_cx.run_until_parked();
+    let sections = settings_cx
+        .debug_bounds("sections")
+        .expect("the sections list");
+    settings_cx.simulate_event(gpui::ScrollWheelEvent {
+        position: sections.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-120.))),
+        modifiers: Modifiers::none(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    settings_cx.run_until_parked();
+    // The wheel leaves the pointer over the list it scrolled, with rows
+    // slid under it that no move ever named as hovered — the pointer
+    // leaves, and the reflowed rows' washes settle, before the
+    // preference is flipped and the frames are counted.
+    pointer_leaves(&mut settings_cx);
+    settle_frames(&mut settings_cx);
+
+    // A switch under reduced motion starts no arrival: the frame that
+    // draws the new page is already settled.
+    settings_cx.update(|_, cx| cx.set_reduce_motion(true));
+    click_section(&mut settings_cx, "section-About");
+    assert!(
+        settings_cx.debug_bounds("about").is_some(),
+        "the About page is drawn at the floor"
+    );
+    assert!(
+        section_arrival(&settings, &mut settings_cx).is_none(),
+        "reduced motion drew the page settled"
+    );
+    assert_eq!(
+        settle_frames(&mut settings_cx),
+        0,
+        "the window asked for no frame for the presentation"
+    );
+
+    // Reduced motion engaged mid-arrival ends it on the next frame. Begin
+    // a return under full motion, then flip the preference. The wheel
+    // goes back up first: the Appearance section's row was above the
+    // scrolled view.
+    settings_cx.update(|_, cx| cx.set_reduce_motion(false));
+    settings_cx.simulate_event(gpui::ScrollWheelEvent {
+        position: sections.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(120.))),
+        modifiers: Modifiers::none(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    settings_cx.run_until_parked();
+    // The wheel leaves the pointer over the list again; the pointer
+    // leaves before the section is clicked, for the reason it did
+    // above.
+    pointer_leaves(&mut settings_cx);
+    click_section(&mut settings_cx, "section-Appearance");
+    assert!(
+        section_arrival(&settings, &mut settings_cx).is_some(),
+        "the switch began under full motion"
+    );
+    settings_cx.update(|_, cx| cx.set_reduce_motion(true));
+    // The frame the arrival had asked for draws settled, and asks for
+    // nothing further.
+    assert!(frame(&mut settings_cx, Duration::ZERO) >= 1);
+    assert!(
+        section_arrival(&settings, &mut settings_cx).is_none(),
+        "the arrival settled the moment reduced motion engaged"
+    );
+    assert_eq!(
+        settle_frames(&mut settings_cx),
+        0,
+        "the window asked for no further frame"
     );
 }
 

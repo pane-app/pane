@@ -388,18 +388,11 @@ impl SettingsWindow {
             window.on_next_frame(move |window, _cx| {
                 window.on_next_frame(move |window, cx| {
                     // The page has painted; the anchors are the ones it
-                    // drew. Ask the control's anchor to scroll — it runs
-                    // one frame later, on the position that paint
-                    // recorded — and repaint then, so the scrolled place
-                    // shows.
-                    let anchor =
-                        this.update(cx, |this, _| this.search.anchors.get(&target).cloned());
-                    if let Some(anchor) = anchor {
-                        anchor.scroll_to(window, cx);
-                        window.on_next_frame(move |_, cx| {
-                            this.update(cx, |_, cx| cx.notify());
-                        });
-                    }
+                    // drew. Ask for the scroll — which waits, where the
+                    // page is still arriving from the section change,
+                    // for the rest the arrival settles to, so the
+                    // position it lands is the one the control keeps.
+                    SettingsWindow::reveal_when_settled(&this, &target, window, cx);
                 });
             });
         }
@@ -417,6 +410,35 @@ impl SettingsWindow {
         }
         if results(&self.launcher, &self.pages, &query, cx) != self.search.results {
             cx.notify();
+        }
+    }
+
+    /// The reveal's scroll, on the frame after the jump painted the
+    /// entry's page, so the anchors are the ones that paint drew. Where
+    /// the page is still arriving from the section change the jump made,
+    /// each frame re-checks until the arrival settles: the shift the
+    /// arrival draws is a layout offset, so an anchor recorded mid-flight
+    /// names a place the control does not keep, and the scroll lands the
+    /// rest — the position the control stays at. Then the control's
+    /// anchor scrolls — it runs one frame later, on the position that
+    /// paint recorded — and the window repaints, so the scrolled place
+    /// shows.
+    fn reveal_when_settled(this: &Entity<Self>, target: &str, window: &mut Window, cx: &mut App) {
+        if this.update(cx, |this, _| this.section_arrival.is_some()) {
+            let this = this.clone();
+            let target = target.to_owned();
+            window.on_next_frame(move |window, cx| {
+                SettingsWindow::reveal_when_settled(&this, &target, window, cx);
+            });
+            return;
+        }
+        let anchor = this.update(cx, |this, _| this.search.anchors.get(target).cloned());
+        if let Some(anchor) = anchor {
+            anchor.scroll_to(window, cx);
+            let this = this.clone();
+            window.on_next_frame(move |_, cx| {
+                this.update(cx, |_, cx| cx.notify());
+            });
         }
     }
 }
@@ -541,6 +563,14 @@ pub(super) fn result_rows(
                 theme,
             )
             .id(("settings-search-result", index))
+            // Pressed: the selected wash, one rung above the hover one,
+            // fading on the shared pointer span — and only while the
+            // result is unselected, so the search's selected wash lands
+            // at once.
+            .when(!selected, |row| {
+                row.active(|row| row.bg(theme.row_selected))
+                    .transitions(|fades| fades.bg(crate::ui::motion::pointer_fade()))
+            })
             .debug_selector(move || format!("settings-search-result-{title}"))
             .role(Role::ListBoxOption)
             .aria_label(hit.entry.title.clone())

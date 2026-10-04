@@ -16,6 +16,19 @@
 //! sidebar of sections with the search field above them ([`search`]),
 //! and the selected page's content.
 //!
+//! ## Section transitions
+//!
+//! Switching sections runs the shared motion policy's section arrival
+//! (see [`crate::ui::motion`]): the selected page's content fades in over
+//! a tiny shift from the side the sidebar moved, while the sidebar, the
+//! titlebar, the window bounds and the page's scroll viewport stay
+//! exactly where they were. The switch itself — the sidebar's selected
+//! row, the visible selection, the focus — is applied before the frame
+//! draws, and the page's own state (a filter, collapsed groups, an open
+//! edit) survives the round trip untouched; a rapid switch retargets
+//! from the presentation on screen. Nothing resizes the window, and
+//! reduced motion draws every switch settled.
+//!
 //! ## Page registration
 //!
 //! A page is one [`Page`]: its sidebar entry (title, description, icon),
@@ -50,6 +63,7 @@ use crate::ui::icon::{Glyph, IconTone};
 // draws; the import follows the same gate so it is not unused elsewhere.
 #[cfg(target_os = "windows")]
 use crate::ui::icon::glyph;
+use crate::ui::motion;
 use crate::ui::result_row::{RowContent, result_row};
 use crate::{FocusNext, FocusPrevious};
 
@@ -57,20 +71,23 @@ mod about;
 mod appearance;
 mod extensions;
 mod general;
+mod keyboard;
+mod launcher;
 mod search;
 mod shortcuts;
 
-actions!(settings, [NextSection, PreviousSection]);
+actions!(settings, [NextSection, PreviousSection, CloseSettings]);
 
 /// The id of the window's key context, which the sidebar's keys are bound
 /// to.
 const CONTEXT: &str = "Settings";
 
 /// Registers the Settings window's key bindings: the sidebar's navigation
-/// keys and the window's focus traversal, which apply only while the
-/// Settings window is focused. Enter is left unbound: the sidebar's
-/// selection already shows the page Enter would choose, so the key does
-/// nothing, and later pages' controls bind it for their own submitting.
+/// keys, the window's focus traversal and the platform's close-window
+/// shortcut, which apply only while the Settings window is focused. Enter
+/// is left unbound: the sidebar's selection already shows the page Enter
+/// would choose, so the key does nothing, and later pages' controls bind
+/// it for their own submitting.
 pub(crate) fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("down", NextSection, Some(CONTEXT)),
@@ -81,10 +98,24 @@ pub(crate) fn bind_keys(cx: &mut App) {
         // alias cells among them).
         KeyBinding::new("tab", FocusNext, Some(CONTEXT)),
         KeyBinding::new("shift-tab", FocusPrevious, Some(CONTEXT)),
+        // The platform's close-window shortcut, in this window's context:
+        // Cmd+W on macOS, Ctrl+W elsewhere. Window-local — it closes only
+        // Settings, and the launcher's own dismiss binding stays in the
+        // launcher's window, where the Keyboard page rebinds it.
+        KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "cmd-w"
+            } else {
+                "ctrl-w"
+            },
+            CloseSettings,
+            Some(CONTEXT),
+        ),
     ]);
     general::bind_keys(cx);
     search::bind_keys(cx);
     shortcuts::bind_keys(cx);
+    keyboard::bind_keys(cx);
 }
 
 /// The Settings window's root view. One instance exists at most — see
@@ -98,14 +129,31 @@ pub struct SettingsWindow {
     pages: Vec<Page>,
     /// The selected page, an index into `pages`.
     selected: usize,
+    /// The section arrival in flight, if any: the selected page's
+    /// content is fading in over a tiny directional shift. Presentation
+    /// only — see [`crate::ui::motion`].
+    section_arrival: Option<motion::Tween>,
+    /// The section the last frame drew, an index into `pages`, to tell a
+    /// real section change (which transitions) from a page's own content
+    /// update (which never animates).
+    drawn_section: Option<usize>,
+    /// The arriving content's presentation as the last frame drew it
+    /// (see [`SettingsWindow::section_arrival`]). Test and debug builds
+    /// only.
+    #[cfg(any(test, debug_assertions))]
+    arriving: Option<(f32, f32)>,
     /// The sidebar's focus, which is the window's keyboard focus.
     focus: FocusHandle,
     /// The About page's state, owned by its module.
     about: about::State,
     /// The General page's state, owned by its module.
     general: general::State,
+    /// The Launcher page's state, owned by its module.
+    launcher_page: launcher::State,
     /// The Shortcuts page's state, owned by its module.
     shortcuts: shortcuts::State,
+    /// The Keyboard page's state, owned by its module.
+    keyboard: keyboard::State,
     /// The sidebar's search, owned by its module.
     search: search::State,
 }
@@ -122,6 +170,9 @@ impl SettingsWindow {
         // the platform's appearance notification feeds the system's
         // appearance back into them (see `crate::settings`).
         crate::settings::follow(&crate::settings::ensure(cx), window, cx);
+        // The placement the Launcher page explains its choices through,
+        // ensuring it exists before the page's search reads it.
+        crate::placement::ensure(cx);
         // The Shortcuts page lists the launcher's commands, and the
         // launcher's packages can change while this window sits idle:
         // installed, disabled, enabled, updated or removed in the
@@ -150,22 +201,31 @@ impl SettingsWindow {
             // The sidebar's order: the sections the reference lists
             // (General, Launcher, Appearance, Shortcuts, Keyboard,
             // Extensions), About last. Of those, this milestone ships
-            // General, Appearance, Shortcuts and Extensions; General —
-            // the Open Pane hotkey and the launch-at-login choice — is
-            // the page the window first shows, and the later tickets'
-            // pages take their places in this order as they land.
+            // General, Launcher, Appearance, Shortcuts, Keyboard and
+            // Extensions; General — the Open Pane hotkey and the
+            // launch-at-login choice — is the page the window first
+            // shows, and the later tickets' pages take their places in
+            // this order as they land.
             pages: vec![
                 general::page(),
+                launcher::page(),
                 appearance::page(),
                 shortcuts::page(),
+                keyboard::page(),
                 extensions::page(),
                 about::page(),
             ],
             selected: 0,
+            section_arrival: None,
+            drawn_section: None,
+            #[cfg(any(test, debug_assertions))]
+            arriving: None,
             focus,
             about: about::State::default(),
             general: general::State::new(cx),
+            launcher_page: launcher::State::new(window, cx),
             shortcuts: shortcuts::State::new(launcher, cx),
+            keyboard: keyboard::State::new(cx),
             search: search::State::new(cx),
         }
     }
@@ -193,8 +253,27 @@ impl SettingsWindow {
         window.focus_next(cx);
     }
 
+    /// Test support: the section arrival the last frame drew, as the
+    /// arriving page content's (offset from rest in px — below rest when
+    /// the sidebar moved down to the section, above when it moved up —
+    /// and its opacity); `None` when the frame drew the page settled,
+    /// which is also all reduced motion ever reports. Test and debug
+    /// builds only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn section_arrival(&self) -> Option<(f32, f32)> {
+        self.arriving
+    }
+
     fn focus_previous(&mut self, _: &FocusPrevious, window: &mut Window, cx: &mut Context<Self>) {
         window.focus_prev(cx);
+    }
+
+    /// The platform's close-window shortcut: closes this window only —
+    /// the launcher keeps running, and with it the global hotkeys and
+    /// whatever the launcher was showing.
+    fn close_settings(&mut self, _: &CloseSettings, window: &mut Window, _: &mut Context<Self>) {
+        window.remove_window();
     }
 
     /// The sidebar: the search field, then the sections list — or, while
@@ -228,6 +307,14 @@ impl SettingsWindow {
                         theme,
                     )
                     .id(("section", index))
+                    // Pressed: the selected wash, one rung above the
+                    // hover one, fading on the shared pointer span — and
+                    // only while the section is unselected, so the
+                    // sidebar's selected wash lands at once.
+                    .when(!selected, |row| {
+                        row.active(|row| row.bg(theme.row_selected))
+                            .transitions(|fades| fades.bg(crate::ui::motion::pointer_fade()))
+                    })
                     .debug_selector(move || format!("section-{}", page.title))
                     .role(Role::ListBoxOption)
                     .aria_label(page.title)
@@ -287,6 +374,16 @@ impl SettingsWindow {
     /// registers — cleared here, filled by the page's render — so a
     /// search reveal only ever scrolls a control on the page now
     /// showing.
+    ///
+    /// The section arrival: the content that changes between sections —
+    /// the page — fades in over a tiny directional shift, from the side
+    /// the sidebar moved, while everything around it (the sidebar, the
+    /// titlebar, the scroll viewport itself) stays exactly where it was.
+    /// The section is already switched — the sidebar's selected row and
+    /// the window's focus were updated before this frame draws — and the
+    /// page's own state (a filter, collapsed groups, an open edit) is
+    /// the page's, untouched by the paint. Query and content updates
+    /// never animate. See `crate::ui::motion` for the whole policy.
     fn render_page(
         &mut self,
         theme: &ui::theme::Theme,
@@ -294,8 +391,39 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         self.search.clear_anchors();
+        let now = cx.background_executor().now();
+        // A section change transitions from the side the sidebar moved:
+        // down the list, the page arrives from below; up, from above. A
+        // rapid switch retargets from the interrupted presentation, and
+        // the first frame a window draws is settled.
+        let moving_down = self.drawn_section.is_some_and(|last| last < self.selected);
+        let from = if moving_down {
+            motion::VIEW_SHIFT
+        } else {
+            -motion::VIEW_SHIFT
+        };
+        let changed = self.drawn_section.is_some_and(|last| last != self.selected);
+        let arriving = motion::advance_arrival(
+            &mut self.section_arrival,
+            from,
+            changed,
+            cx.reduce_motion(),
+            now,
+        );
+        self.drawn_section = Some(self.selected);
+        #[cfg(any(test, debug_assertions))]
+        {
+            self.arriving = arriving;
+        }
         let render = self.pages[self.selected].render;
         let content = render(self, window, cx);
+        // While the arriving page is still in flight — or one of its
+        // groups is disclosing (the page's render asked for its own
+        // frames) — keep frames coming; the frame that completes them
+        // requests none, so a settled window is idle.
+        if arriving.is_some() {
+            window.request_animation_frame();
+        }
         div()
             .id("settings-page")
             .debug_selector(|| "settings-page".into())
@@ -308,7 +436,7 @@ impl SettingsWindow {
             .py(px(20.))
             .text_size(theme.typography.row_subtitle_size)
             .text_color(theme.text_body)
-            .child(content)
+            .child(motion::arriving_page(content, arriving))
     }
 }
 
@@ -331,6 +459,7 @@ impl Render for SettingsWindow {
             .on_action(cx.listener(Self::focus_next))
             .on_action(cx.listener(Self::focus_previous))
             .on_action(cx.listener(Self::search_focus))
+            .on_action(cx.listener(Self::close_settings))
             .size_full()
             .flex()
             .flex_col()
@@ -464,13 +593,21 @@ fn control_button(
         .on_click(move |_: &gpui::ClickEvent, window, _| activate(window))
         .hover(|button| {
             // The close button's hover is the danger tone, as Windows
-            // paints it; the others take the row hover wash.
+            // paints it; the others take the row hover wash. The wash
+            // fades in and out over the shared pointer span, and the
+            // press takes the selected wash below it — a window control
+            // closes or maximizes the frame the click lands, so the
+            // press is a flicker at most, but it is never a delay.
             if area == WindowControlArea::Close {
                 button.bg(theme.danger)
             } else {
                 button.bg(theme.row_hover)
             }
         })
+        .when(area != WindowControlArea::Close, |button| {
+            button.active(|button| button.bg(theme.row_selected))
+        })
+        .transitions(|fades| fades.bg(crate::ui::motion::pointer_fade()))
         .child(glyph(mark, px(16.), theme.text_title))
 }
 
@@ -530,8 +667,8 @@ pub(crate) fn open(launcher: &Launcher, cx: &mut App) -> WindowHandle<SettingsWi
     .expect("failed to open Pane's Settings window")
 }
 
-/// One page of Pane's Settings: the sidebar entry that lists it, and the
-/// content it draws. See the module docs for how a page registers.
+/// One page of Pane's Settings: the sidebar entry that lists it, and
+/// the content it draws. See the module docs for how a page registers.
 pub(crate) struct Page {
     /// The sidebar entry's title, the page's identity in the sidebar and
     /// the tests' selectors.

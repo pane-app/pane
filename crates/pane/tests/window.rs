@@ -2131,6 +2131,160 @@ fn typing_selection_and_row_changes_never_transition(cx: &mut TestAppContext) {
 /// under it starts no arrival, and reducing motion mid-arrival ends it on
 /// the next drawn frame. Either way the window schedules no frame for
 /// presentation.
+/// The launcher's result rows take the pointer feedback: the hover wash
+/// fades in over the shared pointer span, the press takes the stronger
+/// wash and hands it to the selection when the click lands, and a fast
+/// reversal settles with the window idle. The keyboard's selection still
+/// moves at once — nothing of the wash fades for it — and reduced motion
+/// snaps the wash with no frame at all.
+#[gpui::test]
+fn a_result_row_fades_its_pointer_washes(cx: &mut TestAppContext) {
+    let (window, cx) = open_with(
+        cx,
+        vec![
+            command("Rust sample", RUST.component),
+            command("JavaScript sample", JAVASCRIPT.component),
+        ],
+    );
+    let view = settle(&window, cx);
+    settle_frames(cx);
+    assert_eq!(view.selected, Some(0));
+
+    // The pointer arrives on an unselected row: the hover wash fades in,
+    // so the window asks for frames while it runs and none once it has.
+    let row = cx
+        .debug_bounds("row-JavaScript sample")
+        .expect("an unselected row");
+    cx.simulate_mouse_move(row.center(), None::<MouseButton>, Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        frame(cx, Duration::from_millis(40)) >= 1,
+        "the hover wash is fading"
+    );
+    assert!(
+        frame(cx, Duration::from_millis(160)) >= 1,
+        "the hover wash finished fading"
+    );
+    assert_eq!(settle_frames(cx), 0, "a settled wash requests no frame");
+
+    // Pressed: the wash strengthens, and the activation is immediate —
+    // the release's click selects and opens the row without waiting on
+    // any fade. The pointer leaves the row it opened, and the wash it
+    // held there settles with it, so the frames this test counts are
+    // the view's own — none of the pointer's.
+    cx.simulate_click(row.center(), Modifiers::none());
+    let view = settle(&window, cx);
+    assert_eq!(view.selected, Some(1), "the click selected the row");
+    assert!(
+        matches!(view.screen, Screen::Command),
+        "the click opened the row"
+    );
+    cx.simulate_mouse_move(
+        gpui::point(px(-100.), px(-100.)),
+        None::<MouseButton>,
+        Modifiers::none(),
+    );
+    settle_frames(cx);
+
+    // Back at root, a fast reversal: the pointer enters part-way
+    // through the fade-in and leaves again, and the wash settles back
+    // to rest with the window idle.
+    cx.simulate_keystrokes("escape");
+    let view = settle(&window, cx);
+    assert!(matches!(view.screen, Screen::Root { .. }));
+    let row = cx
+        .debug_bounds("row-JavaScript sample")
+        .expect("an unselected row");
+    cx.simulate_mouse_move(row.center(), None::<MouseButton>, Modifiers::none());
+    cx.run_until_parked();
+    assert!(frame(cx, Duration::from_millis(40)) >= 1);
+    cx.simulate_mouse_move(
+        gpui::point(px(-100.), px(-100.)),
+        None::<MouseButton>,
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+    assert!(frame(cx, Duration::from_millis(40)) >= 1);
+    assert!(frame(cx, Duration::from_millis(160)) >= 1);
+    assert_eq!(settle_frames(cx), 0, "the reversal settled the wash");
+
+    // The keyboard's selection still moves at once: nothing of the wash
+    // fades for it, and no frame is asked.
+    cx.simulate_keystrokes("down");
+    let view = settle(&window, cx);
+    assert_eq!(view.selected, Some(1));
+    assert_eq!(
+        settle_frames(cx),
+        0,
+        "the selection's move requested no frame"
+    );
+
+    // Reduced motion: the wash snaps, and no frame is asked for at all.
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    cx.simulate_mouse_move(row.center(), None::<MouseButton>, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(settle_frames(cx), 0, "the wash snapped in");
+}
+
+/// The footer's primary action takes the pointer feedback: the wash
+/// relaxes one rung while the button is held and fades back on release,
+/// and the activation is immediate — the click acts the moment it
+/// happens, never waiting on the fade.
+#[gpui::test]
+fn the_primary_action_fades_its_pressed_wash(cx: &mut TestAppContext) {
+    let (window, cx) = open(cx, &RUST);
+    settle(&window, cx);
+    settle_frames(cx);
+    let button = cx
+        .debug_bounds("primary-action")
+        .expect("the primary action");
+    let at_rest = button.origin;
+
+    // Press and hold: the wash relaxes one rung — the frames the fade
+    // asks for are delivered while the button is held, and the button
+    // stays exactly where it was (the press moves color, not geometry).
+    // The pointer moves onto the button before pressing it, as a user's
+    // does: a click's landing alone does not tell a control it is
+    // hovered, and the wash the button keeps would never settle with
+    // the layout saying the pointer is gone and the paint saying it is
+    // there.
+    cx.simulate_mouse_move(button.center(), None::<MouseButton>, Modifiers::none());
+    cx.simulate_mouse_down(button.center(), MouseButton::Left, Modifiers::none());
+    let held = cx
+        .debug_bounds("primary-action")
+        .expect("the button is held");
+    assert_eq!(
+        held.origin, at_rest,
+        "the press moved no geometry: {:?} vs {:?}",
+        held, at_rest
+    );
+    assert!(
+        frame(cx, Duration::from_millis(40)) >= 1,
+        "the pressed wash is fading"
+    );
+    // Release: the click activates at once — the row opens — and the
+    // wash fades back to the selected chrome, leaving the window idle.
+    cx.simulate_mouse_up(button.center(), MouseButton::Left, Modifiers::none());
+    let view = settle(&window, cx);
+    assert!(
+        matches!(view.screen, Screen::Command),
+        "the release activated the selected row at once"
+    );
+    assert!(frame(cx, Duration::from_millis(160)) >= 1);
+    assert_eq!(settle_frames(cx), 0, "the release settled the wash");
+
+    // Reduced motion: the press snaps, and no frame is asked for.
+    cx.simulate_keystrokes("escape");
+    settle(&window, cx);
+    settle_frames(cx);
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    let button = cx
+        .debug_bounds("primary-action")
+        .expect("the primary action");
+    cx.simulate_mouse_down(button.center(), MouseButton::Left, Modifiers::none());
+    assert_eq!(settle_frames(cx), 0, "the pressed wash snapped in");
+}
+
 #[gpui::test]
 fn reduced_motion_settles_transitions_at_once_without_frames(cx: &mut TestAppContext) {
     let (window, cx) = open(cx, &RUST);

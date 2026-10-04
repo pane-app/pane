@@ -9,7 +9,18 @@
 //! neither the row underneath nor the menu's own button (which would
 //! reopen the menu) sees the click. Escape dismisses it and restores
 //! focus; Tab and Shift-Tab dismiss it and continue focus traversal
-//! where it left off.
+//! where it left off. The popup occludes while it is on screen, so a
+//! click that lands on it — on an entry, on its padding, or on the
+//! fading surface of its exit — reaches nothing underneath.
+//!
+//! The popup's motion is the shared policy's popup family (see
+//! [`crate::ui::motion`]): it enters from the strip over a tiny shift
+//! and fade, and exits back toward it, faster. While the exit runs the
+//! popup is inert — its list carries no focus, no roles and no handlers,
+//! the whole subtree is hidden from accessibility, and the overlay
+//! keeps occluding — and the frame that completes the exit unmounts it,
+//! so nothing of a closed menu intercepts a click. Reopening during the
+//! exit retargets the same transition from the presentation on screen.
 //!
 //! While the menu is open its list holds focus (the selected item is its
 //! active descendant), so the launcher's keys — the query field's
@@ -19,11 +30,13 @@ use gpui::{
     AnyElement, App, BoxShadow, ClickEvent, Context, Div, FocusHandle, KeyBinding, MouseDownEvent,
     Role, Stateful, Subscription, Window, actions, div, prelude::*, px, relative, rgba,
 };
+use pane_core::KeyboardAction;
 
 use crate::app::LauncherWindow;
 use crate::features::settings;
 use crate::ui::icon::{Glyph, glyph};
-use crate::ui::{self};
+use crate::ui::keycap::binding_keycap;
+use crate::ui::{self, motion};
 
 actions!(
     footer_menu,
@@ -69,6 +82,10 @@ struct MenuItem {
     title: &'static str,
     /// What activating the entry does.
     activate: fn(&mut LauncherWindow, &mut Window, &mut Context<LauncherWindow>),
+    /// The in-app navigation action whose binding the entry shows as its
+    /// shortcut hint, if it has one: the hint follows the effective
+    /// binding, so it teaches the key that opens the entry now.
+    hint: Option<KeyboardAction>,
 }
 
 /// The menu's entries, in order. Settings is the only one this milestone;
@@ -77,6 +94,7 @@ struct MenuItem {
 const ITEMS: [MenuItem; 1] = [MenuItem {
     title: "Settings",
     activate: LauncherWindow::choose_menu_settings,
+    hint: Some(KeyboardAction::OpenSettings),
 }];
 
 /// The open footer menu: its own keyboard focus, its selected entry and
@@ -137,8 +155,12 @@ impl LauncherWindow {
     }
 
     /// Closes the open footer menu, if any, restoring the focus it took.
+    /// The popup's exit starts on the frame this draws — the item the
+    /// menu had selected is what the exit's inert visuals keep showing —
+    /// and the frame that completes it unmounts them.
     pub(crate) fn close_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(menu) = self.menu.take() {
+            self.menu_exit = Some(menu.selected);
             if let Some(restore) = menu.restore {
                 window.focus(&restore, cx);
             }
@@ -203,10 +225,10 @@ impl LauncherWindow {
         window.focus_prev(cx);
     }
 
-    /// The menu's button: the leftmost control of the footer strip. Its
-    /// click opens the menu — and while the menu is open, the popup's
-    /// outside-click dismissal consumes the click, so the button toggles
-    /// rather than reopening.
+    /// The open menu's button: the leftmost control of the footer
+    /// strip. Its click opens the menu — and while the menu is open, the
+    /// popup's outside-click dismissal consumes the click, so the button
+    /// toggles rather than reopening.
     pub(crate) fn render_menu_button(
         &self,
         theme: &ui::theme::Theme,
@@ -235,6 +257,9 @@ impl LauncherWindow {
             .aria_expanded(open)
             .on_action(cx.listener(Self::press_menu_button))
             .hover(|button| button.bg(theme.row_hover))
+            // Pressed: the selected wash, one rung above the hover one.
+            .active(|button| button.bg(theme.row_selected))
+            .transitions(|fades| fades.bg(motion::pointer_fade()))
             // Visible keyboard focus, the list's focus ring treatment.
             .focus(|button| {
                 button.shadow(vec![
@@ -249,37 +274,78 @@ impl LauncherWindow {
             .child(glyph(Glyph::Ellipsis, px(16.), icon_color))
     }
 
-    /// The open menu's popup: the L2 popover above the footer strip,
-    /// overlaying the results. It is the strip's first child, so its
-    /// capture-phase dismissal runs before the button's own click
-    /// tracking; the elevation shadow sits on the wrapper, which GPUI
-    /// paints behind the surface's translucent fill (see
-    /// [`Material::popover`]).
-    pub(crate) fn render_menu_popup(
+    /// The menu popup the footer strip carries: the open menu's popup,
+    /// or the exit it is still painting — `None` once the exit has
+    /// settled, when nothing of the menu is on screen at all. `in_flight`
+    /// is the popup's presentation while its entrance or exit runs (the
+    /// offset from rest toward the strip, and the opacity), `None` at
+    /// rest; see [`crate::ui::motion`] for the family's rules.
+    pub(crate) fn render_menu_popup_layer(
         &self,
-        menu: &FooterMenu,
+        in_flight: Option<(f32, f32)>,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> Option<AnyElement> {
         let visuals = crate::settings::visuals(cx);
-        let theme = visuals.theme;
-        let material = visuals.material;
-        let geometry = &theme.geometry;
-        let selected = menu.selected;
-        let list = div()
-            .id("menu")
-            .debug_selector(|| "menu".into())
+        match self.menu.as_ref() {
+            Some(menu) => Some(menu_popup(
+                menu_list(Some(&menu.focus), menu.selected, &visuals.theme, cx),
+                in_flight,
+                &visuals.theme,
+                visuals.material,
+            )),
+            // The exit paints only while its transition is in flight,
+            // from the item the menu had selected when it closed — the
+            // frame that settles it unmounts everything.
+            None => in_flight.map(|in_flight| {
+                menu_popup(
+                    menu_list(None, self.menu_exit.unwrap_or(0), &visuals.theme, cx),
+                    Some(in_flight),
+                    &visuals.theme,
+                    visuals.material,
+                )
+            }),
+        }
+    }
+}
+
+/// The menu's list of entries, interactive while the menu is open and
+/// inert while its exit paints. `focus` is the open menu's focus — the
+/// list's own, which holds the keyboard while the menu is open — and
+/// `selected` the entry the list shows as selected; an exit passes no
+/// focus, and the item the menu had selected when it closed. Without a
+/// focus the list is inert: no key context, no roles, no handlers and
+/// nothing in the accessibility tree, so the fading visuals expose
+/// nothing active (the frame that closed the menu has already restored
+/// the focus it took).
+fn menu_list(
+    focus: Option<&FocusHandle>,
+    selected: usize,
+    theme: &ui::theme::Theme,
+    cx: &mut Context<LauncherWindow>,
+) -> Stateful<Div> {
+    let geometry = &theme.geometry;
+    let list = div()
+        .id("menu")
+        .debug_selector(|| "menu".into())
+        .p(px(6.))
+        .min_w(px(200.));
+    let inert = focus.is_none();
+    // The interactive list: the open menu's focus, semantics and
+    // handlers — its key context over the window's, the selected entry
+    // as the list's active descendant, and the outside dismissal that
+    // consumes the click so nothing underneath is activated.
+    let list = match focus {
+        Some(focus) => list
             .key_context(CONTEXT)
-            .track_focus(&menu.focus)
+            .track_focus(focus)
             .role(Role::Menu)
             .aria_label("More actions")
-            .p(px(6.))
-            .min_w(px(200.))
-            .on_action(cx.listener(Self::menu_next_item))
-            .on_action(cx.listener(Self::menu_previous_item))
-            .on_action(cx.listener(Self::menu_choose_item))
-            .on_action(cx.listener(Self::menu_close))
-            .on_action(cx.listener(Self::menu_close_forward))
-            .on_action(cx.listener(Self::menu_close_backward))
+            .on_action(cx.listener(LauncherWindow::menu_next_item))
+            .on_action(cx.listener(LauncherWindow::menu_previous_item))
+            .on_action(cx.listener(LauncherWindow::menu_choose_item))
+            .on_action(cx.listener(LauncherWindow::menu_close))
+            .on_action(cx.listener(LauncherWindow::menu_close_forward))
+            .on_action(cx.listener(LauncherWindow::menu_close_backward))
             // A mouse-down anywhere outside the popup — on a result row,
             // the query field, the menu's own button — dismisses the menu
             // and is consumed: nothing underneath is activated, and the
@@ -287,27 +353,50 @@ impl LauncherWindow {
             .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, window, cx| {
                 this.close_menu(window, cx);
                 cx.stop_propagation();
-            }))
-            .children(ITEMS.iter().enumerate().map(|(index, item)| {
-                let item_selected = index == selected;
-                div()
-                    .id(("menu-item", index))
-                    .debug_selector(move || format!("menu-item-{}", item.title))
-                    .flex()
-                    .items_center()
-                    .min_h(geometry.row_min_height)
-                    .px(geometry.row_padding_x)
-                    .rounded(geometry.row_radius)
-                    .cursor_pointer()
-                    .text_size(theme.typography.row_title_size)
-                    .font_weight(theme.typography.medium)
-                    .text_color(theme.text_title)
-                    .when(!item_selected, |item| {
-                        item.hover(|item| item.bg(theme.row_hover))
-                    })
-                    .when(item_selected, |item| {
-                        item.bg(theme.row_selected).aria_active_descendant()
-                    })
+            })),
+        None => list.aria_hidden(),
+    };
+    list.children(ITEMS.iter().enumerate().map(|(index, item)| {
+        let item_selected = index == selected;
+        // The entry's shortcut hint, when it has one: the binding in
+        // force for the action that opens it, in the shared keycap
+        // chrome.
+        let hint = item.hint.map(|action| {
+            crate::settings::shared(cx)
+                .read(cx)
+                .keyboard()
+                .binding(action)
+                .clone()
+        });
+        div()
+            .id(("menu-item", index))
+            .debug_selector(move || format!("menu-item-{}", item.title))
+            .flex()
+            .items_center()
+            .min_h(geometry.row_min_height)
+            .px(geometry.row_padding_x)
+            .rounded(geometry.row_radius)
+            .text_size(theme.typography.row_title_size)
+            .font_weight(theme.typography.medium)
+            .text_color(theme.text_title)
+            .when(!inert, |item| item.cursor_pointer())
+            .when(!inert && !item_selected, |item| {
+                item.hover(|item| item.bg(theme.row_hover))
+                    // Pressed: the selected wash, one rung above the hover
+                    // one. The fade attaches only while the item is
+                    // unselected, so the selected wash both arrives and
+                    // leaves at once — the keyboard's active option is
+                    // immediately legible, as the policy requires — and
+                    // only the pointer's own wash fades.
+                    .active(|item| item.bg(theme.row_selected))
+                    .transitions(|fades| fades.bg(motion::pointer_fade()))
+            })
+            .when(item_selected, |item| {
+                item.bg(theme.row_selected)
+                    .when(!inert, |item| item.aria_active_descendant())
+            })
+            .when(!inert, |entry| {
+                entry
                     .role(Role::MenuItem)
                     .aria_label(item.title)
                     .aria_selected(item_selected)
@@ -317,22 +406,52 @@ impl LauncherWindow {
                             this.close_menu(window, cx);
                         }
                     }))
-                    .child(item.title)
-            }));
-        // The popover's bottom edge sits on the strip's top edge, however
-        // tall the status message has grown the strip.
-        div()
-            .absolute()
-            .left_0()
-            .bottom(relative(1.))
-            .flex_none()
-            .shadow(vec![
-                BoxShadow::new(px(0.), px(0.), rgba(0x000000CC)).spread_radius(px(0.5)),
-                BoxShadow::new(px(0.), px(28.), rgba(0x000000BF))
-                    .blur_radius(px(70.))
-                    .spread_radius(px(-14.)),
-            ])
-            .child(material.popover(&theme, list))
-            .into_any_element()
-    }
+            })
+            .child(item.title)
+            .when_some(hint, |item, hint| {
+                item.child(div().flex_1().min_w(px(0.)))
+                    .child(binding_keycap(&hint, theme))
+            })
+    }))
+}
+
+/// The menu popup's chrome: the L2 popover above the footer strip — its
+/// bottom edge sits on the strip's top edge, however tall the status
+/// message has grown the strip — with the motion wrapper inside. The
+/// wrapper is always in the tree while the popup paints, carrying the
+/// entrance/exit's shift toward the strip and its fade as no-op styles
+/// at rest, and the elevation shadow, so the shadow follows the surface
+/// it belongs to; the shift is the same relative-inset treatment the
+/// view transitions use, applied after layout. The popup occludes while
+/// it is on screen — open or exiting — so a click that lands on it
+/// reaches nothing underneath, and the frame that completes the exit
+/// unmounts it, so no invisible overlay survives to intercept one.
+fn menu_popup(
+    list: Stateful<Div>,
+    in_flight: Option<(f32, f32)>,
+    theme: &ui::theme::Theme,
+    material: ui::material::Material,
+) -> AnyElement {
+    let (offset, opacity) = in_flight.unwrap_or((0., 1.));
+    div()
+        .id("menu-popup")
+        .absolute()
+        .left_0()
+        .bottom(relative(1.))
+        .flex_none()
+        .occlude()
+        .child(
+            div()
+                .relative()
+                .top(px(offset))
+                .when(opacity < 1., |wrapper| wrapper.opacity(opacity))
+                .shadow(vec![
+                    BoxShadow::new(px(0.), px(0.), rgba(0x000000CC)).spread_radius(px(0.5)),
+                    BoxShadow::new(px(0.), px(28.), rgba(0x000000BF))
+                        .blur_radius(px(70.))
+                        .spread_radius(px(-14.)),
+                ])
+                .child(material.popover(theme, list)),
+        )
+        .into_any_element()
 }

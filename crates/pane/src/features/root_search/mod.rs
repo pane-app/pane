@@ -26,6 +26,7 @@ use gpui::{
 };
 use gpui_elements::editable_text::actions::DEFAULT_INPUT_CONTEXT;
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
+use pane_core::{Keyboard, KeyboardAction};
 
 use crate::app::LauncherWindow;
 use crate::ui::icon::{Glyph, glyph};
@@ -38,16 +39,33 @@ pub(crate) const ROOT_PLACEHOLDER: &str = "Search commands";
 /// The query field's placeholder in an opened command that searches.
 pub(crate) const COMMAND_PLACEHOLDER: &str = "Search";
 
-/// Registers Up and Down in the query field to move the selection. They are
-/// registered after, and so take precedence over, the text element's own
-/// Up and Down, which in a single-line field move the caret to its start or
-/// end. The field's other editing keys, and Enter and Escape bubbling to
-/// the launcher, come from the shared text editing keys.
-pub(crate) fn bind_keys(cx: &mut App, _: &TextEditingKeys) {
-    let context = format!("{CONTEXT} > {DEFAULT_INPUT_CONTEXT}");
+/// The context of the query field with focus, as a binding's context is
+/// written: the search field inside the window.
+pub(crate) fn field_context() -> String {
+    format!("{CONTEXT} > {DEFAULT_INPUT_CONTEXT}")
+}
+
+/// Registers the selection keys in the query field, under the bindings
+/// in force for previous and next result. They are registered after, and
+/// so take precedence over, the text element's own Up and Down, which in
+/// a single-line field move the caret to its start or end — the
+/// arrangement the fixed Up and Down had, kept for whatever keys the
+/// Keyboard page puts in their place. The field's other editing keys, and
+/// Enter and Escape bubbling to the launcher, come from the shared text
+/// editing keys.
+pub(crate) fn bind_keys(cx: &mut App, _: &TextEditingKeys, keyboard: &Keyboard) {
+    let context = field_context();
     cx.bind_keys([
-        KeyBinding::new("down", SelectNext, Some(&context)),
-        KeyBinding::new("up", SelectPrevious, Some(&context)),
+        KeyBinding::new(
+            &keyboard.binding(KeyboardAction::NextResult).id(),
+            SelectNext,
+            Some(&context),
+        ),
+        KeyBinding::new(
+            &keyboard.binding(KeyboardAction::PreviousResult).id(),
+            SelectPrevious,
+            Some(&context),
+        ),
     ]);
 }
 

@@ -82,10 +82,12 @@ mod updates;
 use acquire::{Acquisitions, Defaults};
 use aliases::AliasChoices;
 pub use aliases::AliasOutcome;
+pub use application_update::ApplicationUpdate;
 use application_update::{Application, Updates};
 use choices::Record;
 use developing::Developing;
 pub use developing::{BuildFailure, Development};
+pub use hotkeys::HotkeyOutcome;
 use hotkeys::{Bindings, OpenPane};
 use pausing::{Pauses, Recorder};
 use schedules::Schedules;
@@ -1883,8 +1885,12 @@ impl Launcher {
 
     /// Leaves an open form or custom view for its command's list, or an open
     /// command, package preview or the extension list for root search. A
-    /// custom view is closed. On root search it clears the query.
-    pub fn back(&self) {
+    /// custom view is closed. On root search it clears the query. The
+    /// answer is whether something was left: on root search with an empty
+    /// query there is nothing left to back out of — `false`, which the
+    /// window takes as the end of the Escape chain (the specification's
+    /// order ends there by hiding the launcher).
+    pub fn back(&self) -> bool {
         let mut state = self.lock();
         match &state.view.screen {
             Screen::Form(_) => {
@@ -1937,9 +1943,13 @@ impl Launcher {
             Screen::Root { query } => {
                 if !query.is_empty() {
                     self.search(&mut state, "");
+                } else {
+                    // Root search, an empty query: nothing to back out of.
+                    return false;
                 }
             }
         }
+        true
     }
 
     /// Shows the extension list, as activating the "Manage extensions…"
@@ -2240,7 +2250,7 @@ impl Launcher {
                 launcher.install_application_update().await;
             }
             if check_update {
-                launcher.retry_checking_update().await;
+                launcher.check_application_update_again().await;
             }
             if let Some(identity) = stop_sharing {
                 launcher.stop_sharing_folder(identity).await;
@@ -2866,10 +2876,43 @@ impl Launcher {
     /// Shows root search with an empty query, leaving whatever screen is
     /// open — the state a summoned launcher starts from, with its search
     /// to focus. The Open Pane hotkey's show path uses this when the
-    /// launcher was left on a screen with no search of its own.
+    /// launcher was left on a screen with no search of its own, and the
+    /// Launcher page's root-search choice uses it on every reopening.
     pub fn show_root_search(&self) {
         let mut state = self.lock();
         self.show_root(&mut state, None);
+    }
+
+    /// Whether the view on screen can be restored by a reopened launcher:
+    /// the parent specification's provisional default reopens what the
+    /// user left, when it is still a view there is something to return
+    /// to. Root search always is, and so are the screens of Pane's own
+    /// flows (the extension list, a package's preview, their details and
+    /// confirmations); a command's view — its list, its search, a form or
+    /// a custom view of it — is only while the command's package is still
+    /// installed and enabled, since a removed or disabled extension
+    /// leaves nothing to restore and a reopening launcher returns safely
+    /// to root search instead. A command not installed as a package — one
+    /// registered with Pane at start — has no package to lose and is
+    /// always restorable.
+    pub fn restorable_view(&self) -> bool {
+        let state = self.lock();
+        // Only a command's view has something to lose. A command not
+        // installed as a package — one registered with Pane at start —
+        // owns nothing that can be removed, so it is always restorable;
+        // an installed one is while its package stays installed and
+        // enabled, since a removed or disabled extension leaves nothing
+        // to return to and a reopening launcher goes safely to root
+        // search instead. Pane's own forms, opened with no command, are
+        // Pane's to keep.
+        match state.open.as_ref() {
+            None => true,
+            Some(component) => state
+                .packages
+                .iter()
+                .find(|package| component.starts_with(&package.location))
+                .is_none_or(|package| package.enabled),
+        }
     }
 
     /// Updates root search or the extension list on screen after a package

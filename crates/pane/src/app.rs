@@ -14,12 +14,13 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    App, BoxShadow, ClipboardItem, Context, Div, FocusHandle, Hsla, KeyDownEvent,
-    PathPromptOptions, Pixels, Role, ScrollHandle, SharedString, Size, Stateful, Window,
-    WindowControlArea, div, prelude::*, px, relative,
+    App, BoxShadow, ClipboardItem, Context, Div, EntityInputHandler, FocusHandle, Hsla,
+    KeyDownEvent, PathPromptOptions, Pixels, Role, ScrollHandle, SharedString, Size, Stateful,
+    Window, WindowControlArea, div, prelude::*, px, relative,
 };
 use pane_core::changes::Changes;
 use pane_core::hotkeys::Shortcut;
+use pane_core::tray::TrayAction;
 use pane_core::{Launcher, LauncherView, Row, Screen, SelectedAction, Status};
 
 use crate::extension_views::{custom_view, form};
@@ -27,11 +28,14 @@ use crate::features::footer_menu;
 use crate::features::root_search;
 use crate::features::settings;
 use crate::ui::icon::{Glyph, IconTone};
-use crate::ui::keycap::{self, Key as ActionKey};
+use crate::ui::keycap;
 use crate::ui::material::Material;
 use crate::ui::motion::{self, Direction};
 use crate::ui::result_row::{RowContent, result_row};
-use crate::{Back, Confirm, FocusNext, FocusPrevious, OpenSettings, SelectNext, SelectPrevious};
+use crate::{
+    Back, Confirm, DismissLauncher, FocusNext, FocusPrevious, OpenSettings, ReturnToRoot,
+    SelectNext, SelectPrevious,
+};
 
 pub(crate) const KEY_CONTEXT: &str = "Launcher";
 
@@ -60,6 +64,26 @@ pub struct LauncherWindow {
     pub(crate) menu_button: FocusHandle,
     /// The open footer menu, if any; see [`features::footer_menu`].
     pub(crate) menu: Option<footer_menu::FooterMenu>,
+    /// The footer menu popup's entrance or exit in flight, if any: the
+    /// popup's look (0 closed, 1 open), presentation only — see
+    /// [`crate::ui::motion`]. One tween serves both the open menu and
+    /// the exit after it, so a reopen during the exit reverses from the
+    /// presentation on screen.
+    menu_transition: Option<motion::Tween>,
+    /// The menu item the popup's exit still shows, captured when the
+    /// menu closed; the frame that completes the exit clears it, along
+    /// with the popup it was painting. Read by the popup layer the
+    /// footer menu module renders.
+    pub(crate) menu_exit: Option<usize>,
+    /// Whether the last drawn frame drew the menu popup open — the one
+    /// thing that starts or retargets the popup's transition.
+    drawn_menu: bool,
+    /// The footer menu popup's presentation (offset from rest toward the
+    /// strip in px, opacity) as the last frame drew it; `None` when the
+    /// last frame drew the popup settled — at rest while open, absent
+    /// while closed. Test and debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    drawn_menu_popup: Option<(f32, f32)>,
     /// The list's scroll position.
     scroll: ScrollHandle,
     /// What the list was last scrolled for.
@@ -70,7 +94,7 @@ pub struct LauncherWindow {
     /// The view transition in flight, if any: the arriving screen's
     /// content is fading in over a tiny directional shift. Presentation
     /// only — see [`crate::ui::motion`].
-    transition: Option<motion::Transition>,
+    transition: Option<motion::Tween>,
     /// Which way the last navigation went, for the next view transition's
     /// direction: `back()` leaves a view, everything else that changes the
     /// screen (opening a command, a form, a custom view, a preview, a
@@ -136,6 +160,9 @@ impl LauncherWindow {
         // system here, at startup, and the settings keep this launcher for
         // every later change (see `crate::settings::attach_launcher`).
         crate::settings::attach_launcher(&launcher, cx);
+        // The placement the launcher window opens through, ensuring it
+        // exists before the window below is placed by it.
+        crate::placement::ensure(cx);
         // Quitting ends development: its watchers go and a running build
         // is stopped with the processes it started.
         cx.on_app_quit(|this: &mut Self, _| {
@@ -143,7 +170,7 @@ impl LauncherWindow {
             async {}
         })
         .detach();
-        LauncherWindow {
+        let mut this = LauncherWindow {
             launcher,
             focus_handle,
             query,
@@ -159,11 +186,20 @@ impl LauncherWindow {
             arriving: None,
             menu_button,
             menu: None,
+            menu_transition: None,
+            menu_exit: None,
+            drawn_menu: false,
+            #[cfg(any(test, debug_assertions))]
+            drawn_menu_popup: None,
             open_pane_press: None,
             hidden: false,
             #[cfg(any(test, debug_assertions))]
             drawn: None,
-        }
+        };
+        // The launcher opens placed on the display the Launcher page's
+        // choice resolves to, before the first frame is drawn.
+        this.place(window, cx);
+        this
     }
 
     pub fn launcher(&self) -> &Launcher {
@@ -200,6 +236,17 @@ impl LauncherWindow {
     #[doc(hidden)]
     pub fn hidden(&self) -> bool {
         self.hidden
+    }
+
+    /// Test support: the footer menu popup's presentation as the last
+    /// frame drew it — the offset from rest toward the strip in px and
+    /// the opacity; `None` when the last frame drew the popup settled
+    /// (at rest while open, absent while closed), which is also all
+    /// reduced motion ever reports. Test and debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn menu_popup_presentation(&self) -> Option<(f32, f32)> {
+        self.drawn_menu_popup
     }
 
     /// Redraws whenever the launcher changes in the background, as
@@ -245,6 +292,23 @@ impl LauncherWindow {
     }
 
     fn back(&mut self, _: &Back, window: &mut Window, cx: &mut Context<Self>) {
+        // The back key's order, as the specification states it: an active
+        // IME composition in the focused field is cancelled first, then an
+        // open footer menu is dismissed, and only then does the key leave
+        // the screen — one level at a time, clearing a command search's
+        // text before leaving it and root search's before hiding the
+        // launcher when it is already empty. (The menu's own Escape is
+        // bound deeper still, in the menu's context, so it never reaches
+        // here; this arm is for whatever key back is rebound to.)
+        if self.cancel_composition(window, cx) || self.close_open_menu(window, cx) {
+            return;
+        }
+        if let Screen::Root { query } = &self.launcher.view().screen
+            && query.is_empty()
+        {
+            self.hide(window, cx);
+            return;
+        }
         self.launcher.back();
         // Backing out is the one navigation that leaves a view; the next
         // frame's view transition (if the screen kind changed) settles the
@@ -252,6 +316,62 @@ impl LauncherWindow {
         self.navigation = Direction::Back;
         self.sync_screen(window, cx);
         cx.notify();
+    }
+
+    /// Returns to root search from wherever the launcher is — the state a
+    /// summoned launcher starts from — leaving every open screen at once,
+    /// as the back key leaves them one at a time.
+    fn return_to_root(&mut self, _: &ReturnToRoot, window: &mut Window, cx: &mut Context<Self>) {
+        if self.close_open_menu(window, cx) {
+            return;
+        }
+        self.launcher.show_root_search();
+        // Leaving however many screens were open: the next frame's view
+        // transition settles the arriving content down into place.
+        self.navigation = Direction::Back;
+        self.sync_screen(window, cx);
+        cx.notify();
+    }
+
+    /// Hides the launcher — hidden, not closed: Pane keeps running in the
+    /// background, the Settings window stays open, the global hotkeys stay
+    /// registered, and the Open Pane hotkey shows the same window and the
+    /// same launcher again. In the Settings window the platform's close
+    /// shortcut closes only that window.
+    fn dismiss(&mut self, _: &DismissLauncher, window: &mut Window, cx: &mut Context<Self>) {
+        self.hide(window, cx);
+    }
+
+    /// Cancels the IME composition active in one of this window's fields
+    /// — the query field, or the open form's text fields — discarding its
+    /// marked text, if one is active: the next key is free to act, as it
+    /// is on a platform whose input method takes the key itself. Whether
+    /// one was cancelled.
+    fn cancel_composition(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let mut fields = vec![self.query_field()];
+        if let Some(form) = &self.form {
+            fields.extend(form.text_fields());
+        }
+        for input in fields {
+            let marked = input.update(cx, |input, cx| input.marked_text_range(window, cx));
+            if let Some(marked) = marked {
+                input.update(cx, |input, cx| {
+                    input.replace_text_in_range(Some(marked), "", window, cx)
+                });
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Closes the footer menu if it is open, restoring the focus it took.
+    /// Whether it was open.
+    fn close_open_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.menu.is_some() {
+            self.close_menu(window, cx);
+            return true;
+        }
+        false
     }
 
     /// Shows the package in `folder` with its identity and compatibility,
@@ -378,7 +498,7 @@ impl LauncherWindow {
         let Some(pending) = self.launcher.press_hotkey(shortcut) else {
             return;
         };
-        self.unhide(window);
+        self.unhide(window, cx);
         window.activate_window();
         cx.activate(true);
         self.navigation = Direction::Forward;
@@ -388,11 +508,61 @@ impl LauncherWindow {
     /// Shows the window if the Open Pane hotkey hid it: every activation
     /// of the launcher — the hotkey's show path, a command's hotkey, an
     /// entry point that reaches the launcher from Settings — must find a
-    /// visible window.
-    fn unhide(&mut self, window: &mut Window) {
+    /// visible window, opened on the display the placement resolves.
+    fn unhide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.hidden {
             window.set_visible(true);
             self.hidden = false;
+            // The launcher is opening: it is placed on the display the
+            // Launcher page's choice resolves to, wherever the window was
+            // left. Only this window is moved — the Settings window, which
+            // shares nothing of the launcher's lifecycle, stays where the
+            // user put it.
+            self.place(window, cx);
+        }
+    }
+
+    /// Hides the launcher window: the Open Pane hotkey's hide path,
+    /// Escape's end at root search, and the dismiss binding and back key
+    /// the Keyboard page can rebind all come here. Hidden, not closed —
+    /// Pane keeps running, the Settings window stays open, and the next
+    /// opening reuses the same live window and launcher.
+    fn hide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.set_visible(false);
+        self.hidden = true;
+        cx.notify();
+    }
+
+    /// Places the launcher window on the display the Launcher page's
+    /// opening-monitor choice resolves to, centered in that display's
+    /// usable area. A choice whose display is gone — disconnected, or one
+    /// this system does not tell Pane about — falls back to the primary
+    /// display, or the first one there is, so the launcher opens with its
+    /// controls reachable; a platform that cannot move a window at all
+    /// leaves it where it is, and the page explains that rather than
+    /// pretending the choice applied.
+    fn place(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let choice = crate::settings::shared(cx).read(cx).opening_monitor();
+        let placement = crate::placement::shared(cx);
+        let layout = placement.layout();
+        let Some(resolved) = pane_core::placement::resolve(&layout, choice) else {
+            return;
+        };
+        // The window's size in the layout's own units, so the placement is
+        // computed in the space its displays are measured in; a window
+        // keeps that size as it moves.
+        let size = window.bounds().size;
+        let units = crate::placement::units_per_pixel(window);
+        let bounds = resolved.display.window_bounds(pane_core::placement::Size {
+            width: size.width.as_f32() * units,
+            height: size.height.as_f32() * units,
+        });
+        // A move that failed is said, not hidden: the launcher's own status
+        // line carries it, so an opening that did not go where the choice
+        // says is never mistaken for one that did.
+        if let Err(why) = placement.place(window, bounds) {
+            self.launcher.show_error(why);
+            cx.notify();
         }
     }
 
@@ -413,23 +583,74 @@ impl LauncherWindow {
         }
         self.open_pane_press = Some(now);
         if !self.hidden && window.is_window_active() {
-            window.set_visible(false);
-            self.hidden = true;
+            self.hide(window, cx);
             return;
         }
-        self.unhide(window);
+        self.summon(window, cx);
+    }
+
+    /// Shows and focuses the launcher: the hotkey's show path, and the
+    /// one the tray's Open Pane takes — an entry point that reaches the
+    /// launcher from outside Pane's own windows must find a visible,
+    /// focused launcher. It never hides, whatever state the launcher
+    /// was in: only the hotkey toggles, because its press is the user's
+    /// other hand on the same control; the tray's item says Open Pane
+    /// and does only that.
+    fn summon(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.unhide(window, cx);
         window.activate_window();
         cx.activate(true);
-        // The summoned launcher's search has focus: the query of the search
-        // on screen, or root search's when the launcher was left on a
-        // screen with no search of its own.
-        if self.launcher.view().search_field().is_some() {
-            self.query.focus(window, cx);
-        } else {
+        // What the summoned launcher starts from is the Launcher page's
+        // reopening choice. Restoring the view keeps whatever the launcher
+        // was left showing — a search, a command's list, a form — when it
+        // is still a view there is something to return to, with the
+        // search focused where the view holds one and its own focus kept
+        // where it does not (the window never lost it); the root-search
+        // choice, or a view whose command is gone, starts from root
+        // search. Nothing of the window that had focus before reaches in
+        // here (the Settings window's focus is not the launcher's), and
+        // nothing is run.
+        let reopening = crate::settings::shared(cx).read(cx).reopening();
+        if reopening == pane_core::Reopening::RootSearch || !self.launcher.restorable_view() {
             self.launcher.show_root_search();
             self.sync_screen(window, cx);
+        } else if self.launcher.view().search_field().is_some() {
+            self.query.focus(window, cx);
         }
         cx.notify();
+    }
+
+    /// One selection of the native tray or menu-bar entry, as its adapter
+    /// reported the menu's choice ([`pane_core::tray`]): Open Pane summons
+    /// the launcher — shown and focused, never hidden, so the entry stays
+    /// usable while the launcher is hidden and never starts a second
+    /// window; Settings opens or focuses the one Settings window, which
+    /// shares this launcher, so no second window or extension runtime
+    /// comes of it; Quit ends Pane explicitly — Pane's own native
+    /// resources, the tray entry and the global hotkey registrations, go
+    /// first, and the quit hooks then stop the runtime's helpers and the
+    /// development watches, as closing the launcher's window does.
+    pub fn tray_selected(
+        &mut self,
+        action: TrayAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            TrayAction::OpenPane => self.summon(window, cx),
+            TrayAction::Settings => {
+                settings::open(&self.launcher, cx);
+            }
+            TrayAction::Quit => {
+                // Pane's own resources are removed deliberately — a quit
+                // that ended the process might never run a destructor —
+                // and then the same quit path closing the launcher's
+                // window is taken.
+                crate::settings::shared(cx).update(cx, |settings, _| settings.release_tray());
+                self.launcher.release_hotkeys();
+                cx.quit();
+            }
+        }
     }
 
     /// On the hotkey screen, a key pressed with its modifiers is the new
@@ -470,8 +691,10 @@ impl LauncherWindow {
         window.focus_prev(cx);
     }
 
-    /// The local `Cmd+,`/`Ctrl+,` shortcut: opens or focuses the Settings
-    /// window, the same one the footer menu and the root result open.
+    /// The open-Settings binding (Cmd+, on macOS / Ctrl+, elsewhere by
+    /// default, rebindable on the Keyboard page): opens or focuses the
+    /// Settings window, the same one the footer menu and the root result
+    /// open.
     fn open_settings(&mut self, _: &OpenSettings, _: &mut Window, cx: &mut Context<Self>) {
         settings::open(&self.launcher, cx);
     }
@@ -524,7 +747,7 @@ impl LauncherWindow {
         while !matches!(self.launcher.view().screen, Screen::Root { .. }) {
             self.launcher.back();
         }
-        self.unhide(window);
+        self.unhide(window, cx);
         window.activate_window();
         cx.activate(true);
         let Some(index) = self
@@ -657,6 +880,17 @@ impl LauncherWindow {
             theme,
         )
         .id(("row", index))
+        // Pressed: the selected wash — the wash the row keeps once the
+        // click selects it, so the press hands over to the selection
+        // without a jump — fading on the shared pointer span beside the
+        // row's own hover wash. The fade attaches only while the row is
+        // unselected, so the selected wash both arrives and leaves at
+        // once: the keyboard's selection is immediately legible, as the
+        // motion policy requires.
+        .when(!selected, |row| {
+            row.active(|row| row.bg(theme.row_selected))
+                .transitions(|fades| fades.bg(motion::pointer_fade()))
+        })
         .debug_selector(|| format!("row-{}", row.title))
         .role(Role::ListBoxOption)
         .aria_label(row.title.clone())
@@ -703,12 +937,15 @@ impl LauncherWindow {
             })
     }
 
-    /// The idle footer's button: the selected action's label with the
-    /// Enter keycap beside it. Its click takes the same Confirm path Enter
-    /// takes (see [`LauncherWindow::press_primary_action`]); its label and
-    /// availability come from the definition, so what the button says,
-    /// whether it can run and what it does cannot diverge. The selected
-    /// row's chrome marks it as the strip's primary control.
+    /// The idle footer's button: the selected action's label with the key
+    /// of its binding beside it — the Enter keycap for the Enter key, the
+    /// binding's name in the same chrome for any other key the Keyboard
+    /// page put there. Its click takes the same path the binding's key
+    /// takes (see [`LauncherWindow::press_primary_action`]); its label,
+    /// availability and key come from the definition and the effective
+    /// binding, so what the button says, whether it can run, what it does
+    /// and what its keycap teaches cannot diverge. The selected row's
+    /// chrome marks it as the strip's primary control.
     fn render_action_button(
         &self,
         action: &SelectedAction,
@@ -716,14 +953,19 @@ impl LauncherWindow {
     ) -> Stateful<Div> {
         let theme = crate::settings::visuals(cx).theme;
         let geometry = &theme.geometry;
+        let invoke = crate::settings::shared(cx)
+            .read(cx)
+            .keyboard()
+            .binding(pane_core::KeyboardAction::InvokeSelectedAction)
+            .clone();
         div()
             .id("primary-action")
             .debug_selector(|| "primary-action".into())
             .role(Role::Button)
             .aria_label(action.label.clone())
             // The key that presses this button from the keyboard: the
-            // keycap beside the label shows the same key.
-            .aria_keyshortcuts(ActionKey::Enter.name())
+            // keycap beside the label shows the same binding.
+            .aria_keyshortcuts(invoke.to_string())
             // A click never dispatches what the definition says cannot
             // run now; assistive technology is told the same thing.
             .when(!action.available, |button| button.aria_disabled(true))
@@ -748,7 +990,20 @@ impl LauncherWindow {
             .text_size(theme.typography.footer_size)
             .font_weight(theme.typography.medium)
             .text_color(theme.text_title)
-            .when(action.available, |button| button.cursor_pointer())
+            .when(action.available, |button| {
+                button.cursor_pointer().active(|button| {
+                    // Pressed: the wash relaxes one rung while the button
+                    // is held — the hover wash over the selected one,
+                    // which reads as pressed in without inventing a
+                    // color. The button's rest is the selected chrome and
+                    // keeps it while hovered, as a selected row keeps its
+                    // wash: the pointer's feedback here is the press.
+                    // Activation itself never waits on the fade — the
+                    // click acts when it happens.
+                    button.bg(theme.row_hover)
+                })
+            })
+            .transitions(|fades| fades.bg(motion::pointer_fade()))
             // Unavailable: dimmed, and the pointer says nothing to click.
             // What explains it stays where it was — the row's reason, the
             // empty state — not the button.
@@ -762,21 +1017,22 @@ impl LauncherWindow {
                     .truncate()
                     .child(action.label.clone()),
             )
-            .child(keycap::keycap(ActionKey::Enter, &theme))
+            .child(keycap::binding_keycap(&invoke, &theme))
             .on_click(cx.listener(|this, _, window, cx| {
                 this.press_primary_action(window, cx);
             }))
     }
 
     /// Dispatches the footer button's click: the same
-    /// [`LauncherWindow::confirm`] path Enter takes, but only when the
-    /// selected-action definition says the action can run now. The frame
-    /// that drew the button can be stale — an action may have started
-    /// since it was laid out — so the check is made again here, at click
-    /// time, against the launcher's current state. Enter is unchanged: it
-    /// keeps the behavior it has always had; this keeps the button from
-    /// dispatching what cannot run (no selection, an unavailable result, an
-    /// action already running).
+    /// [`LauncherWindow::confirm`] path the invoke binding's key takes,
+    /// but only when the selected-action definition says the action can
+    /// run now. The frame that drew the button can be stale — an action
+    /// may have started since it was laid out — so the check is made
+    /// again here, at click time, against the launcher's current state.
+    /// The binding's key is unchanged: it keeps the behavior it has
+    /// always had; this keeps the button from dispatching what cannot
+    /// run (no selection, an unavailable result, an action already
+    /// running).
     fn press_primary_action(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.launcher.selected_action().available {
             self.confirm(&Confirm, window, cx);
@@ -813,6 +1069,30 @@ impl Render for LauncherWindow {
         #[cfg(any(test, debug_assertions))]
         {
             self.arriving = arriving;
+        }
+        // The footer menu popup's entrance or exit, on the same tween
+        // machinery: only the menu's own open state flipping starts or
+        // retargets it, so a reopen during the exit reverses from the
+        // presentation on screen, and the closed menu's exit paints
+        // inert (see [`features::footer_menu`]). While the exit runs the
+        // popup snapshot below is what it paints; the frame that settles
+        // the exit clears it.
+        let menu_open = self.menu.is_some();
+        let menu_in_flight = motion::advance_popup(
+            &mut self.menu_transition,
+            menu_open,
+            motion::VIEW_SHIFT,
+            self.drawn_menu != menu_open,
+            cx.reduce_motion(),
+            now,
+        );
+        self.drawn_menu = menu_open;
+        #[cfg(any(test, debug_assertions))]
+        {
+            self.drawn_menu_popup = menu_in_flight;
+        }
+        if menu_open || menu_in_flight.is_none() {
+            self.menu_exit = None;
         }
         let visuals = crate::settings::visuals(cx);
         let theme = visuals.theme;
@@ -985,6 +1265,8 @@ impl Render for LauncherWindow {
             .on_action(cx.listener(Self::select_previous))
             .on_action(cx.listener(Self::confirm))
             .on_action(cx.listener(Self::back))
+            .on_action(cx.listener(Self::return_to_root))
+            .on_action(cx.listener(Self::dismiss))
             .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(Self::focus_next))
             .on_action(cx.listener(Self::focus_previous))
@@ -1043,9 +1325,7 @@ impl Render for LauncherWindow {
                     // scrolls.
                     .relative()
                     .when_some(
-                        self.menu
-                            .as_ref()
-                            .map(|menu| self.render_menu_popup(menu, cx)),
+                        self.render_menu_popup_layer(menu_in_flight, cx),
                         |strip, popup| strip.child(popup),
                     )
                     // The strip is the live region: it carries the
@@ -1106,8 +1386,9 @@ impl Render for LauncherWindow {
         // While the arriving content is still in flight, keep frames
         // coming; the frame that completes the transition requests none,
         // so a settled window is idle. The scroll relayout above keeps its
-        // own separate request, for the frame after the rows change.
-        if arriving.is_some() {
+        // own separate request, for the frame after the rows change, and
+        // so does the footer menu popup's entrance or exit.
+        if arriving.is_some() || menu_in_flight.is_some() {
             window.request_animation_frame();
         }
         // The panel surface: the frost material's L1 glass around the

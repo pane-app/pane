@@ -12,14 +12,16 @@ use gpui::{App, KeyBinding, WindowBackgroundAppearance, actions};
 // other platforms.
 #[cfg(target_os = "windows")]
 use gpui::Window;
-use pane_core::CommandRegistration;
+use pane_core::{CommandRegistration, Keyboard};
 
 mod app;
 mod extension_views;
 mod features;
+mod keyboard;
 mod links;
 mod ui;
 
+pub mod placement;
 pub mod settings;
 
 pub use app::LauncherWindow;
@@ -35,38 +37,39 @@ actions!(
         Back,
         FocusNext,
         FocusPrevious,
-        OpenSettings
+        OpenSettings,
+        ReturnToRoot,
+        DismissLauncher
     ]
 );
 
-/// Registers the launcher's key bindings.
+/// Registers the launcher's key bindings: the full registration over the
+/// bindings the host settings hold (see [`keyboard`]), so a record the
+/// Keyboard page saved is in force from the first window. The settings
+/// must have been initialized first, as the binary does before this
+/// runs.
 pub fn bind_keys(cx: &mut App) {
+    bind_keys_with(cx, &settings::keyboard_of(cx));
+}
+
+/// The full key registration over `keyboard`: [`bind_keys`] is this over
+/// the host settings' bindings, and the settings entity itself re-runs it
+/// over the keyboard it holds as a choice changes
+/// ([`keyboard::rebuild`]) — it cannot read itself back through
+/// [`settings::keyboard_of`] while its own update is in flight.
+pub(crate) fn bind_keys_with(cx: &mut App, keyboard: &Keyboard) {
     cx.bind_keys([
-        KeyBinding::new("down", SelectNext, Some(app::KEY_CONTEXT)),
-        KeyBinding::new("up", SelectPrevious, Some(app::KEY_CONTEXT)),
-        KeyBinding::new("enter", Confirm, Some(app::KEY_CONTEXT)),
-        KeyBinding::new("escape", Back, Some(app::KEY_CONTEXT)),
         KeyBinding::new("tab", FocusNext, Some(app::KEY_CONTEXT)),
         KeyBinding::new("shift-tab", FocusPrevious, Some(app::KEY_CONTEXT)),
-        // The local shortcut that opens Settings: Cmd+, on macOS, Ctrl+, on
-        // Windows and Linux, in the launcher's window only. Rebinding it is
-        // the Keyboard page's later work.
-        KeyBinding::new(
-            if cfg!(target_os = "macos") {
-                "cmd-,"
-            } else {
-                "ctrl-,"
-            },
-            OpenSettings,
-            Some(app::KEY_CONTEXT),
-        ),
     ]);
     let text_editing = ui::input::bind_text_editing(cx);
     extension_views::form::bind_keys(cx, &text_editing);
-    features::root_search::bind_keys(cx, &text_editing);
+    features::root_search::bind_keys(cx, &text_editing, keyboard);
     features::footer_menu::bind_keys(cx);
     features::settings::bind_keys(cx);
+    ui::select::bind_keys(cx);
     extension_views::custom_view::bind_keys(cx);
+    keyboard::bind_keys(cx, keyboard);
 }
 
 /// The version of Pane this build is: the workspace's version, or the one
