@@ -440,6 +440,7 @@ impl Launcher {
     /// its current alias filled in (Pane's own form; an extension's form
     /// starts empty).
     pub(super) fn show_alias_form(&self, state: &mut State, command: &str) {
+        state.actions_return = None;
         let title = self.command_title(state, command);
         let current = state
             .aliases
@@ -568,7 +569,8 @@ impl Launcher {
     }
 
     /// Shows the extension list at the first row `at` accepts after the
-    /// choices of `command` changed, with the change to record.
+    /// choices of `command` changed — or the search the Actions panel
+    /// opened the alias form from — with the change to record.
     fn choices_changed(
         &self,
         state: &mut State,
@@ -576,7 +578,9 @@ impl Launcher {
         command: &str,
         done: String,
     ) -> ChoiceChange {
-        self.show_extensions_at(state, at);
+        if !self.return_from_actions_flow(state) {
+            self.show_extensions_at(state, at);
+        }
         state.view.status = Status::Running;
         ChoiceChange {
             command: command.to_owned(),

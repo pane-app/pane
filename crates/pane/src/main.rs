@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use gpui::{App, Bounds, TitlebarOptions, WindowBounds, WindowOptions, prelude::*, px, size};
+use gpui::{App, Bounds, TitlebarOptions, WindowBounds, WindowOptions, prelude::*};
 use pane::LauncherWindow;
 use pane_core::develop::Toolchains;
 use pane_core::{Launcher, Runtime};
@@ -86,9 +86,12 @@ fn main() {
             })
             .detach();
         }
+        // The quick slots' record, beside the host settings in the same
+        // data folder (#101).
         let launcher = match pane::data_dir() {
             Some(dir) => {
                 Launcher::with_packages(runtime, pane::sample_commands(), dir.join("extensions"))
+                    .with_quick_slots(&dir)
             }
             None => Launcher::new(runtime, pane::sample_commands()),
         }
@@ -192,12 +195,12 @@ fn main() {
         // once the window exists.
         let acquiring = launcher.clone();
         let checking = launcher.clone();
-        // The window is the reference's launcher panel: 760px wide,
-        // tall enough for the search header, the results and the status
-        // bar, with no native title bar drawn — the panel's own glass
-        // chrome is the whole window — and the frost material's window
-        // background (acrylic behind the glass panel, opaque otherwise).
-        let bounds = Bounds::centered(None, size(px(760.), px(460.)), cx);
+        // The window is the reference's launcher panel, at its client size
+        // (see `pane::launcher_client_size`). No native title bar is drawn:
+        // the panel's own glass chrome is the whole window. Its background
+        // is the frost material's (acrylic behind the glass panel, opaque
+        // otherwise).
+        let bounds = Bounds::centered(None, pane::launcher_client_size(), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             window_background: pane::window_background(cx),

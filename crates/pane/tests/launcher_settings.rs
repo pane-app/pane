@@ -33,6 +33,9 @@ use tempfile::TempDir;
 #[path = "support/settle.rs"]
 mod settle;
 
+#[path = "support/paint.rs"]
+mod paint;
+
 use settle::settle;
 
 /// The fake system for global hotkeys, as the Open Pane tests' one: what
@@ -185,6 +188,10 @@ fn open_launcher_page(
         settings_cx.debug_bounds("launcher-title").is_some(),
         "the Launcher page is drawn"
     );
+    // The page arrives over the section transition's span, shifted from
+    // its rest until the frames carry it there; the tests measure the
+    // page's controls at rest, so those frames are delivered first.
+    settle_frames(&mut settings_cx);
     (settings, settings_cx)
 }
 
@@ -1171,10 +1178,12 @@ fn the_select_opens_below_the_trigger_and_commits_the_highlighted_choice(cx: &mu
     );
     // The popup is as wide as its contents ask (the field, the rows),
     // bounded by the trigger's width — content-width dropdowns, as
-    // Raycast's are, with the trigger's as the ceiling.
+    // Raycast's are, with the trigger's as the ceiling. On the canonical
+    // page the trigger spans the page's 824px column (#97), wider than
+    // the contents ask.
     assert!(
-        (popup.size.width - trigger.size.width).abs() <= px(8.),
-        "the popup is about the trigger's width: {popup:?} vs {trigger:?}"
+        popup.size.width <= trigger.size.width,
+        "the popup stays within the trigger's width: {popup:?} vs {trigger:?}"
     );
     assert_eq!(
         moving.origin.y - popup.origin.y,
@@ -1402,6 +1411,10 @@ fn the_trigger_toggles_and_an_outside_click_respects_its_target(cx: &mut TestApp
     let field = sc
         .debug_bounds("settings-search-field")
         .expect("the sidebar's search field");
+    // The pointer travels there first, as a real one does (see [`click`]):
+    // a click's landing alone leaves the trigger it left believing it is
+    // still hovered, and its pointer fade would never settle.
+    sc.simulate_mouse_move(field.center(), None::<MouseButton>, Modifiers::none());
     sc.simulate_click(field.center(), Modifiers::none());
     sc.run_until_parked();
     settle_frames(&mut sc);
@@ -1698,12 +1711,22 @@ fn a_popup_reopened_during_its_exit_retargets_and_blocks_nothing(cx: &mut TestAp
     assert!(frame(&mut sc, Duration::from_millis(25)) >= 1);
     let mid_exit = popup_presentation(&settings, &mut sc).expect("the exit is painting");
 
-    // The row the popup covers while it exits: a click on it now must
-    // not reach it — the overlay, open or exiting, takes the clicks that
-    // land on it.
-    let covered = sc
+    // The choice the popup covers while it exits: a click on the part of
+    // it under the popup must not reach it — the overlay, open or
+    // exiting, takes the clicks that land on it. (The popup is as wide as
+    // its contents, so it covers the reopening track's second segment
+    // only at that segment's start.)
+    let segment = sc
         .debug_bounds("launcher-reopening-RootSearch")
-        .expect("a row under the popup");
+        .expect("a segment under the popup");
+    let popup = sc
+        .debug_bounds("launcher-monitor-popup")
+        .expect("the exiting popup");
+    let covered = segment.intersect(&popup);
+    assert!(
+        covered.size.width > px(2.) && covered.size.height > px(2.),
+        "the popup covers part of the segment: {segment:?} under {popup:?}"
+    );
     sc.simulate_click(covered.center(), Modifiers::none());
     sc.run_until_parked();
     assert!(
@@ -1867,75 +1890,73 @@ fn filtering_never_animates_the_popup_contents(cx: &mut TestAppContext) {
     );
 }
 
-/// The select's trigger takes the pointer feedback the settings controls
-/// do: the hover wash fades in over the shared pointer span, and a fast
-/// reversal settles with the window idle — the wash is never still
-/// interpolating on a settled control.
+/// The select is a Settings field (#99): its label over the trigger, a
+/// 34px well (black 24% under its ring) showing the committed choice, its
+/// description under it. Nothing about it fades: the pointer over the
+/// trigger asks for no frame (the Settings board's controls change at
+/// once). Its list's rows are the Actions panel's entry family: at least
+/// 36 high, the highlighted one on the white 11% wash, never a root row's.
 #[gpui::test]
-fn the_selects_trigger_fades_its_pointer_washes(cx: &mut TestAppContext) {
+fn the_select_is_a_settings_field_whose_washes_change_at_once(cx: &mut TestAppContext) {
     let (_window, _settings, mut sc, _data) = open_select(cx);
+    pointer_leaves(&mut sc);
     settle_frames(&mut sc);
 
-    // The pointer arrives on the trigger: the hover wash fades in, so
-    // the frames it asked for are delivered and the window goes idle
-    // once the fade has run.
     let trigger = sc.debug_bounds("launcher-monitor").expect("the trigger");
-    sc.simulate_mouse_move(trigger.center(), None::<MouseButton>, Modifiers::none());
-    sc.run_until_parked();
-    assert!(
-        frame(&mut sc, Duration::from_millis(40)) >= 1,
-        "the hover wash is fading"
-    );
-    assert!(
-        frame(&mut sc, Duration::from_millis(160)) >= 1,
-        "the hover wash finished fading"
-    );
+    let label = sc
+        .debug_bounds("launcher-monitor-label")
+        .expect("the field's label");
+    assert_eq!(trigger.size.height, px(34.), "a field's well");
     assert_eq!(
-        settle_frames(&mut sc),
-        0,
-        "a settled wash requests no frame"
+        trigger.top(),
+        label.bottom() + px(8.),
+        "the label 8px over it"
     );
-
-    // The pointer leaves, and the wash that settled at hover fades back
-    // out to rest — leaving the reversal below to enter on a trigger at
-    // rest, so the fade-in it interrupts part-way through is a fresh
-    // one.
-    sc.simulate_mouse_move(
-        gpui::point(px(-100.), px(-100.)),
-        None::<MouseButton>,
-        Modifiers::none(),
-    );
-    sc.run_until_parked();
     assert!(
-        frame(&mut sc, Duration::from_millis(160)) >= 1,
-        "the wash faded back out"
+        paint::paints_fill_at(&mut sc, trigger, 0x0000003D),
+        "the well's black 24%"
     );
+    for root_wash in [0xFFFFFF09, 0xFFFFFF16] {
+        assert!(!paint::paints_fill_at(&mut sc, trigger, root_wash));
+    }
+    sc.simulate_mouse_move(trigger.center(), None::<MouseButton>, Modifiers::none());
+    sc.run_until_parked();
     assert_eq!(
-        settle_frames(&mut sc),
+        frame(&mut sc, Duration::ZERO),
         0,
-        "the window went idle with the pointer away"
+        "the pointer over the trigger asks for no frame"
     );
 
-    // A fast reversal: the pointer leaves part-way through the fade-in,
-    // and the wash fades back out to rest.
-    sc.simulate_mouse_move(trigger.center(), None::<MouseButton>, Modifiers::none());
+    // The list: the committed choice highlighted on white 11%.
+    click(&mut sc, "launcher-monitor");
     sc.run_until_parked();
-    assert!(frame(&mut sc, Duration::from_millis(40)) >= 1);
-    sc.simulate_mouse_move(
-        gpui::point(px(-100.), px(-100.)),
-        None::<MouseButton>,
-        Modifiers::none(),
+    settle_frames(&mut sc);
+    let row = sc
+        .debug_bounds("launcher-monitor-Primary")
+        .expect("the committed choice's row");
+    assert!(row.size.height >= px(36.), "an entry's floor: {row:?}");
+    assert!(
+        paint::paints_fill_at(&mut sc, row, 0xFFFFFF1C),
+        "the highlighted entry's white 11%"
     );
-    sc.run_until_parked();
-    assert!(frame(&mut sc, Duration::from_millis(40)) >= 1);
-    assert!(frame(&mut sc, Duration::from_millis(160)) >= 1);
-    assert_eq!(settle_frames(&mut sc), 0, "the reversal settled the wash");
+    assert!(!paint::paints_fill_at(&mut sc, row, 0xFFFFFF16));
 
-    // Reduced motion: the wash snaps, and no frame is asked for at all.
-    sc.update(|_, cx| cx.set_reduce_motion(true));
-    sc.simulate_mouse_move(trigger.center(), None::<MouseButton>, Modifiers::none());
+    // The reopening choice is a segmented choice: two 30px segments, the
+    // chosen one on white 12%.
+    sc.simulate_keystrokes("escape");
     sc.run_until_parked();
-    assert_eq!(settle_frames(&mut sc), 0, "the wash snapped in");
+    pointer_leaves(&mut sc);
+    settle_frames(&mut sc);
+    let restore = sc
+        .debug_bounds("launcher-reopening-RestoreView")
+        .expect("the default's segment");
+    let root = sc
+        .debug_bounds("launcher-reopening-RootSearch")
+        .expect("the other segment");
+    assert_eq!(restore.size.height, px(30.));
+    assert_eq!(restore.size.width, root.size.width, "equal shares");
+    assert!(paint::paints_fill_at(&mut sc, restore, 0xFFFFFF1F));
+    assert!(!paint::paints_fill_at(&mut sc, root, 0xFFFFFF1F));
 }
 
 #[gpui::test]

@@ -115,7 +115,7 @@ impl Launcher {
 }
 
 /// The catalog over the launcher's state as it is now.
-fn catalog(launcher: &Launcher, state: &State) -> ShortcutCatalog {
+pub(super) fn catalog(launcher: &Launcher, state: &State) -> ShortcutCatalog {
     let everywhere = launcher.hotkeys.unavailable();
     // The command ids the installed packages have listed rows for, so the
     // recorded choices left over are found however they were left.

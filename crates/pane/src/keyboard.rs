@@ -23,6 +23,11 @@
 //!   Up and Down always did. The other actions bubble to the window's
 //!   context from the field, as Enter and Escape always did.
 //!
+//! It is also where a binding meets its presentation: [`binding_keys`]
+//! turns an effective [`Binding`] into the [`KeySequence`] the shared
+//! keycaps draw — so the shared visual layer never sees a core binding,
+//! and a hint always shows the binding in force.
+//!
 //! Text editing and text composition stay owned by the focused field:
 //! [`pane_core::Binding::protected`] refuses the keys that would swallow
 //! them, and the recorder's own cancellation keys are bound deeper than
@@ -30,12 +35,15 @@
 //! rebound.
 
 use gpui::{App, KeyBinding, Keystroke};
+use pane_core::hotkeys::Shortcut;
 use pane_core::{Binding, Keyboard, KeyboardAction};
 
 use crate::app::KEY_CONTEXT;
 use crate::features::root_search;
+use crate::ui::keycap::{Key, KeySequence};
 use crate::{
-    Back, Confirm, DismissLauncher, OpenSettings, ReturnToRoot, SelectNext, SelectPrevious,
+    Back, Confirm, DismissLauncher, OpenActions, OpenSettings, ReturnToRoot, SelectNext,
+    SelectPrevious,
 };
 
 /// Registers the navigation actions under their effective bindings in
@@ -78,6 +86,7 @@ fn launcher_binding(id: &str, action: KeyboardAction) -> KeyBinding {
         KeyboardAction::ReturnToRoot => KeyBinding::new(id, ReturnToRoot, Some(KEY_CONTEXT)),
         KeyboardAction::DismissLauncher => KeyBinding::new(id, DismissLauncher, Some(KEY_CONTEXT)),
         KeyboardAction::OpenSettings => KeyBinding::new(id, OpenSettings, Some(KEY_CONTEXT)),
+        KeyboardAction::OpenActions => KeyBinding::new(id, OpenActions, Some(KEY_CONTEXT)),
     }
 }
 
@@ -117,4 +126,182 @@ pub(crate) fn binding_of(keystroke: &Keystroke) -> Result<Binding, String> {
         modifiers.function,
         &keystroke.key,
     )
+}
+
+/// The Escape key's cap: what closes the Actions panel and the footer
+/// menu, whatever back is bound to.
+pub(crate) fn escape_keys() -> KeySequence {
+    binding_keys(&Binding::parse("escape").expect("escape is a binding"))
+}
+
+/// The local chord that invokes quick slot `number` (1 to 5) while root
+/// search has focus: Ctrl and the digit, the approved Windows chord. A
+/// window-local binding of the root search field, never registered with
+/// the system, and fixed — not one of the actions the Keyboard page
+/// rebinds — so the hints the slots show are always the chords that work.
+pub(crate) fn quick_slot_binding(number: usize) -> Binding {
+    Binding::parse(&format!("ctrl-{number}")).expect("a digit chord is a binding")
+}
+
+/// The caps of quick slot `number`'s chord ([`quick_slot_binding`]).
+pub(crate) fn quick_slot_keys(number: usize) -> KeySequence {
+    binding_keys(&quick_slot_binding(number))
+}
+
+/// The caps the "Pinned" label shows for the chords of all `count` slots:
+/// the modifier's, then the digits' range, "1–5", named "1 to 5".
+pub(crate) fn quick_slots_keys(count: usize) -> KeySequence {
+    let mut keys = quick_slot_keys(1);
+    if let Some(digit) = keys.keys.last_mut() {
+        *digit = Key::new(format!("1–{count}"), format!("1 to {count}"));
+    }
+    keys
+}
+
+/// The keys `binding` is pressed with, as keycaps show them on this
+/// platform: every modifier its own cap, then the key. On Windows (and
+/// Linux) the Windows key leads, as Windows writes its own shortcuts
+/// ("Win+Alt+Left"), then Ctrl, Alt, Shift and Fn; macOS keeps its
+/// Control, Option, Shift, Command order. Enter shows the return symbol
+/// and the arrows their arrows, under their names; Escape shows "Esc".
+/// The sequence's name — what a hint announces — is the full binding,
+/// modifiers included: Shift+Enter is never shown or read as Enter.
+pub(crate) fn binding_keys(binding: &Binding) -> KeySequence {
+    let (control, alt, shift, platform, function) = binding.modifiers();
+    let modifiers: [(bool, &str); 5] = if cfg!(target_os = "macos") {
+        [
+            (control, "Control"),
+            (alt, "Option"),
+            (shift, "Shift"),
+            (platform, "Command"),
+            (function, "Fn"),
+        ]
+    } else {
+        [
+            (platform, "Win"),
+            (control, "Ctrl"),
+            (alt, "Alt"),
+            (shift, "Shift"),
+            (function, "Fn"),
+        ]
+    };
+    let mut keys: Vec<Key> = modifiers
+        .into_iter()
+        .filter_map(|(held, name)| held.then(|| Key::new(name, name)))
+        .collect();
+    let name = key_name(binding.key());
+    let cap = match binding.key() {
+        "enter" => "↵".to_owned(),
+        "left" => "←".to_owned(),
+        "right" => "→".to_owned(),
+        "up" => "↑".to_owned(),
+        "down" => "↓".to_owned(),
+        "escape" => "Esc".to_owned(),
+        _ => name.clone(),
+    };
+    keys.push(Key::new(cap, name));
+    KeySequence { keys }
+}
+
+/// The keys a command's global hotkey is pressed with, shown as
+/// [`binding_keys`] shows a binding: a hotkey's keys are a binding's.
+/// (Core's type for a global hotkey is `Shortcut`.)
+pub(crate) fn hotkey_keys(shortcut: &Shortcut) -> KeySequence {
+    match Binding::new(
+        shortcut.control(),
+        shortcut.alt(),
+        shortcut.shift(),
+        shortcut.super_key(),
+        false,
+        shortcut.key(),
+    ) {
+        Ok(binding) => binding_keys(&binding),
+        // Every hotkey key is a binding key; a future one that is not is
+        // still shown, by its own text.
+        Err(_) => KeySequence {
+            keys: vec![Key::new(shortcut.to_string(), shortcut.to_string())],
+        },
+    }
+}
+
+/// The key's own name, as the binding's text names it ("Enter", "Page
+/// Down", "V"): the binding of the key alone, written out.
+fn key_name(key: &str) -> String {
+    Binding::new(false, false, false, false, false, key)
+        .map(|alone| alone.to_string())
+        .unwrap_or_else(|_| key.to_uppercase())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sequence(binding: &str) -> (Vec<String>, String) {
+        let keys = binding_keys(&Binding::parse(binding).expect("the binding parses"));
+        let caps = keys.keys.iter().map(|key| key.cap.to_string()).collect();
+        (caps, keys.name())
+    }
+
+    #[test]
+    fn enter_alone_is_one_return_cap_named_enter() {
+        assert_eq!(sequence("enter"), (vec!["↵".into()], "Enter".into()));
+    }
+
+    #[test]
+    fn every_modifier_of_an_enter_chord_gets_its_own_cap_and_name() {
+        assert_eq!(
+            sequence("shift-enter"),
+            (vec!["Shift".into(), "↵".into()], "Shift+Enter".into())
+        );
+        assert_eq!(
+            sequence("ctrl-enter"),
+            (vec!["Ctrl".into(), "↵".into()], "Ctrl+Enter".into())
+        );
+        assert_eq!(
+            sequence("ctrl-shift-p"),
+            (
+                vec!["Ctrl".into(), "Shift".into(), "P".into()],
+                "Ctrl+Shift+P".into()
+            )
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn the_windows_key_leads_and_arrows_show_as_arrows() {
+        assert_eq!(
+            sequence("win-alt-left"),
+            (
+                vec!["Win".into(), "Alt".into(), "←".into()],
+                "Win+Alt+Left".into()
+            )
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn a_hotkey_shows_its_keys_as_a_binding_does() {
+        let keys = hotkey_keys(&Shortcut::parse("ctrl+shift+v").unwrap());
+        let caps: Vec<_> = keys.keys.iter().map(|key| key.cap.to_string()).collect();
+        assert_eq!(caps, ["Ctrl", "Shift", "V"]);
+        assert_eq!(keys.name(), "Ctrl+Shift+V");
+        let keys = hotkey_keys(&Shortcut::parse("super+alt+space").unwrap());
+        assert_eq!(keys.name(), "Win+Alt+Space");
+    }
+
+    #[test]
+    fn named_keys_keep_their_names_for_assistive_technology() {
+        assert_eq!(sequence("escape"), (vec!["Esc".into()], "Escape".into()));
+        assert_eq!(
+            sequence("ctrl-k"),
+            (vec!["Ctrl".into(), "K".into()], "Ctrl+K".into())
+        );
+        assert_eq!(
+            sequence("ctrl-pagedown"),
+            (
+                vec!["Ctrl".into(), "Page Down".into()],
+                "Ctrl+Page Down".into()
+            )
+        );
+    }
 }

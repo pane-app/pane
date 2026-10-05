@@ -125,14 +125,17 @@ pub enum KeyboardAction {
     DismissLauncher,
     /// Opens or focuses the Settings window.
     OpenSettings,
+    /// Opens or closes the selected result's Actions panel.
+    OpenActions,
 }
 
 impl KeyboardAction {
     /// The bounded set, in the order the Keyboard page lists it.
-    pub const ALL: [KeyboardAction; 7] = [
+    pub const ALL: [KeyboardAction; 8] = [
         KeyboardAction::PreviousResult,
         KeyboardAction::NextResult,
         KeyboardAction::InvokeSelectedAction,
+        KeyboardAction::OpenActions,
         KeyboardAction::Back,
         KeyboardAction::ReturnToRoot,
         KeyboardAction::DismissLauncher,
@@ -149,6 +152,7 @@ impl KeyboardAction {
             KeyboardAction::ReturnToRoot => "return-to-root",
             KeyboardAction::DismissLauncher => "dismiss-launcher",
             KeyboardAction::OpenSettings => "open-settings",
+            KeyboardAction::OpenActions => "open-actions",
         }
     }
 
@@ -170,6 +174,7 @@ impl KeyboardAction {
             KeyboardAction::ReturnToRoot => "Return to root",
             KeyboardAction::DismissLauncher => "Dismiss launcher",
             KeyboardAction::OpenSettings => "Open Settings",
+            KeyboardAction::OpenActions => "Open actions",
         }
     }
 
@@ -185,6 +190,30 @@ impl KeyboardAction {
             KeyboardAction::ReturnToRoot => "returns to root",
             KeyboardAction::DismissLauncher => "dismisses the launcher",
             KeyboardAction::OpenSettings => "opens Settings",
+            KeyboardAction::OpenActions => "opens the selected result's actions",
+        }
+    }
+
+    /// The action's defaults on this system, in order of preference: the
+    /// first is its default; a record that already gives that keystroke to
+    /// another action gives this action the next one free (an action added
+    /// after the record was written).
+    fn defaults(self) -> &'static [&'static str] {
+        let macos = cfg!(target_os = "macos");
+        match (self, macos) {
+            (KeyboardAction::PreviousResult, _) => &["up"],
+            (KeyboardAction::NextResult, _) => &["down"],
+            (KeyboardAction::InvokeSelectedAction, _) => &["enter"],
+            (KeyboardAction::Back, _) => &["escape"],
+            (KeyboardAction::ReturnToRoot, true) => &["cmd-escape"],
+            (KeyboardAction::ReturnToRoot, false) => &["shift-escape"],
+            (KeyboardAction::DismissLauncher, true) => &["cmd-w"],
+            (KeyboardAction::DismissLauncher, false) => &["ctrl-w"],
+            (KeyboardAction::OpenSettings, true) => &["cmd-,"],
+            (KeyboardAction::OpenSettings, false) => &["ctrl-,"],
+            // Ctrl+K deletes to the end of the line in a macOS field.
+            (KeyboardAction::OpenActions, true) => &["cmd-k", "cmd-shift-k"],
+            (KeyboardAction::OpenActions, false) => &["ctrl-k", "ctrl-shift-k"],
         }
     }
 }
@@ -424,6 +453,10 @@ fn text_editing_action(binding: &Binding) -> Option<&'static str> {
     None
 }
 
+fn default_binding(id: &str) -> Binding {
+    Binding::parse(id).expect("a default is a valid binding")
+}
+
 /// The set of bindings for the bounded actions: one binding per action,
 /// valid together. Held in the host settings' record and applied by the
 /// window layer; [`Keyboard::default_for_this_system`] is what a record
@@ -439,42 +472,17 @@ impl Default for Keyboard {
     }
 }
 
-/// The macOS spelling of a default binding, or the one everywhere
-/// else: the platform's own modifier where macOS uses Command.
-fn platform(macos: &'static str, other: &'static str) -> &'static str {
-    if cfg!(target_os = "macos") {
-        macos
-    } else {
-        other
-    }
-}
-
 impl Keyboard {
     /// The provisional defaults: Up/Down for selection, Enter for
-    /// invocation, Escape for back, Cmd+Esc on macOS / Shift+Esc
-    /// elsewhere for return to root, Cmd+W / Ctrl+W for dismissing the
-    /// launcher, and Cmd+, / Ctrl+, for Settings.
+    /// invocation, Cmd+K on macOS / Ctrl+K elsewhere for the Actions
+    /// panel, Escape for back, Cmd+Esc / Shift+Esc for return to root,
+    /// Cmd+W / Ctrl+W for dismissing the launcher, and Cmd+, / Ctrl+, for
+    /// Settings.
     pub fn default_for_this_system() -> Keyboard {
-        let bindings = [
-            ("up", KeyboardAction::PreviousResult),
-            ("down", KeyboardAction::NextResult),
-            ("enter", KeyboardAction::InvokeSelectedAction),
-            ("escape", KeyboardAction::Back),
-            (
-                platform("cmd-escape", "shift-escape"),
-                KeyboardAction::ReturnToRoot,
-            ),
-            (platform("cmd-w", "ctrl-w"), KeyboardAction::DismissLauncher),
-            (platform("cmd-,", "ctrl-,"), KeyboardAction::OpenSettings),
-        ]
-        .into_iter()
-        .map(|(id, action)| {
-            (
-                action,
-                Binding::parse(id).expect("the default is a valid binding"),
-            )
-        })
-        .collect();
+        let bindings = KeyboardAction::ALL
+            .into_iter()
+            .map(|action| (action, default_binding(action.defaults()[0])))
+            .collect();
         Keyboard { bindings }
     }
 
@@ -492,12 +500,20 @@ impl Keyboard {
 
     /// Reads the keyboard the record holds: `fields` maps each action's
     /// id to its binding's id, as [`Keyboard::recorded`] writes them.
-    /// Missing actions default; an unknown action id, a binding that is
-    /// not one, one that is protected for a focused field, or two
-    /// actions sharing one binding is `Err` with the problem, so the
-    /// record fails whole rather than half-loading.
+    /// An unknown action id, a binding that is not one, one that is
+    /// protected for a focused field, or two of the record's actions
+    /// sharing one binding is `Err` with the problem, so the record fails
+    /// whole rather than half-loading.
+    ///
+    /// The record's bindings are read first, against each other only, so
+    /// a binding moved from one action to another loads whatever order
+    /// the fields come in. Then each action the record doesn't name — one
+    /// added after it was written — takes its first default no recorded
+    /// action holds.
     pub fn parse(fields: &BTreeMap<String, String>) -> Result<Keyboard, String> {
-        let mut keyboard = Keyboard::default_for_this_system();
+        let mut keyboard = Keyboard {
+            bindings: BTreeMap::new(),
+        };
         for (id, binding) in fields {
             let action = KeyboardAction::of(id).ok_or_else(|| {
                 format!("its keyboard names “{id}”, which is not one of the actions")
@@ -512,6 +528,23 @@ impl Keyboard {
                 )
             })?;
             keyboard.bindings.insert(action, binding);
+        }
+        for action in KeyboardAction::ALL {
+            if keyboard.bindings.contains_key(&action) {
+                continue;
+            }
+            let free = action
+                .defaults()
+                .iter()
+                .map(|id| default_binding(id))
+                .find(|binding| keyboard.check(action, binding).is_ok())
+                .ok_or_else(|| {
+                    format!(
+                        "its keyboard leaves {} no free binding: its defaults are taken",
+                        action.title()
+                    )
+                })?;
+            keyboard.bindings.insert(action, free);
         }
         Ok(keyboard)
     }
@@ -662,6 +695,14 @@ mod tests {
                 "ctrl-,"
             }
         );
+        assert_eq!(
+            defaults.binding(KeyboardAction::OpenActions).id(),
+            if cfg!(target_os = "macos") {
+                "cmd-k"
+            } else {
+                "ctrl-k"
+            }
+        );
         // Every default is a valid, distinct set, and it round trips.
         let recorded = defaults.recorded();
         assert_eq!(
@@ -675,6 +716,63 @@ mod tests {
             .collect();
         let distinct: std::collections::BTreeSet<&String> = ids.iter().collect();
         assert_eq!(ids.len(), distinct.len(), "no two actions share a default");
+    }
+
+    fn record(fields: &[(&str, &str)]) -> BTreeMap<String, String> {
+        fields
+            .iter()
+            .map(|(action, binding)| ((*action).to_owned(), (*binding).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn a_record_from_before_an_action_existed_gives_it_its_default() {
+        // A record written before Open actions was an action of the set.
+        let mut older = Keyboard::default_for_this_system().recorded();
+        older.remove("open-actions");
+        let keyboard = Keyboard::parse(&older).unwrap();
+        assert_eq!(keyboard, Keyboard::default_for_this_system());
+    }
+
+    #[test]
+    fn a_record_holding_a_new_actions_default_keeps_it_and_the_action_takes_its_alternate() {
+        let (taken, alternate) = if cfg!(target_os = "macos") {
+            ("cmd-k", "cmd-shift-k")
+        } else {
+            ("ctrl-k", "ctrl-shift-k")
+        };
+        let keyboard = Keyboard::parse(&record(&[("back", taken)])).unwrap();
+        assert_eq!(keyboard.binding(KeyboardAction::Back).id(), taken);
+        assert_eq!(
+            keyboard.binding(KeyboardAction::OpenActions).id(),
+            alternate
+        );
+    }
+
+    #[test]
+    fn a_record_that_moved_a_binding_between_actions_loads() {
+        // Dismiss moved off its default, then Back took that default: a
+        // valid set, whatever order its fields are read in.
+        let (dismiss, moved) = if cfg!(target_os = "macos") {
+            ("cmd-w", "cmd-q")
+        } else {
+            ("ctrl-w", "ctrl-q")
+        };
+        let fields = record(&[("back", dismiss), ("dismiss-launcher", moved)]);
+        let keyboard = Keyboard::parse(&fields).unwrap();
+        assert_eq!(keyboard.binding(KeyboardAction::Back).id(), dismiss);
+        assert_eq!(
+            keyboard.binding(KeyboardAction::DismissLauncher).id(),
+            moved
+        );
+        // Escape, Back's default, is free again; nothing else took it.
+        assert_eq!(Keyboard::parse(&keyboard.recorded()).unwrap(), keyboard);
+    }
+
+    #[test]
+    fn a_record_whose_bindings_collide_still_fails_whole() {
+        let fields = record(&[("back", "ctrl-q"), ("dismiss-launcher", "ctrl-q")]);
+        assert!(Keyboard::parse(&fields).is_err());
     }
 
     #[test]

@@ -1,0 +1,59 @@
+﻿{
+    "command":  "try { $PSDefaultParameterValues[\u0027Out-File:Encoding\u0027] = \u0027utf8\u0027 } catch {}; if ($ExecutionContext.SessionState.LanguageMode -eq \u0027FullLanguage\u0027) { try { $OutputEncoding = [System.Text.UTF8Encoding]::new() } catch {}; if ($null -ne $PSStyle) { try { $PSStyle.OutputRendering = \u0027PlainText\u0027 } catch {} } }; \u0026 C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\scripts\\visual-workbench.ps1 -OutputDir C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\visual-workbench\\run-103-smoke -Scenario root-rest -SkipSensitivity -RealAppSmoke *\u003e\u00261 | Select-Object -Last 15; \"exit $LASTEXITCODE\"\n",
+    "revision":  "582b73af41dd158f497315074c6d70ac561cc17e",
+    "workingTreeDirty":  false,
+    "outputDir":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\visual-workbench\\run-103-smoke",
+    "theme":  "dark",
+    "material":  "opaque",
+    "steps":  {
+                  "reference-hash":  {
+                                         "ok":  true,
+                                         "seconds":  0
+                                     },
+                  "build-fixture":  {
+                                        "ok":  true,
+                                        "seconds":  1
+                                    },
+                  "fixture-freshness":  {
+                                            "ok":  true,
+                                            "seconds":  4
+                                        },
+                  "registry":  {
+                                   "ok":  true,
+                                   "seconds":  2
+                               },
+                  "reference-capture":  {
+                                            "ok":  true,
+                                            "seconds":  7
+                                        },
+                  "native-capture":  {
+                                         "ok":  true,
+                                         "seconds":  3
+                                     },
+                  "compare":  {
+                                  "ok":  true,
+                                  "seconds":  1
+                              },
+                  "real-app-smoke":  {
+                                         "ok":  true,
+                                         "seconds":  13
+                                     }
+              },
+    "reference":  {
+                      "path":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\docs\\evidence\\ui-prototype\\reference\\launcher.html",
+                      "sha256":  "F7E81E030E2216FE61509B9AFD98A68147D1998C73F0A168BAB02D0BF00F0BB4",
+                      "requestedCopySha256":  "F7E81E030E2216FE61509B9AFD98A68147D1998C73F0A168BAB02D0BF00F0BB4"
+                  },
+    "fixture":  {
+                    "path":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\target\\debug\\pane-visual-fixture.exe",
+                    "sha256":  "F8C509A7575956E7ECDA6E0DFCADC2C0864F93E7B16951639ECC103D3241994F",
+                    "freshness":  {
+                                      "fresh":  true,
+                                      "reason":  null,
+                                      "binary":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\target\\debug\\pane-visual-fixture.exe",
+                                      "binarySha256":  "F8C509A7575956E7ECDA6E0DFCADC2C0864F93E7B16951639ECC103D3241994F",
+                                      "inputsSha256":  "CD93FD3E44573B6C5D77D44A649523C60B68CDDF9D967FD03A11C734B52A88B8",
+                                      "recordedUtc":  "2026-10-05T09:08:12.090905+00:00"
+                                  }
+                }
+}

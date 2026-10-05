@@ -1,0 +1,6093 @@
+{
+  "kind": "pane-visual-reference-manifest",
+  "reference": "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\docs\\evidence\\ui-prototype\\reference\\launcher.html",
+  "sha256": "F7E81E030E2216FE61509B9AFD98A68147D1998C73F0A168BAB02D0BF00F0BB4",
+  "chrome": "Chrome/154.0.8037.93",
+  "chromeProfile": "C:\\Users\\ADMIN\\AppData\\Local\\Temp\\pane-visual-workbench-chrome-zB6tBn",
+  "deviceScaleFactor": 1,
+  "platform": "Windows",
+  "startedUtc": "2026-10-04T13:48:16.507Z",
+  "boards": [
+    {
+      "slug": "root",
+      "title": "Pane — launcher",
+      "frame": [
+        48,
+        78,
+        1440,
+        900
+      ],
+      "glass": [
+        340,
+        150,
+        760,
+        518
+      ],
+      "sourceOnly": false,
+      "file": "boards/root.png",
+      "image": [
+        760,
+        518
+      ]
+    },
+    {
+      "slug": "actions",
+      "title": "Pane — action panel",
+      "frame": [
+        48,
+        1056,
+        1440,
+        900
+      ],
+      "glass": [
+        340,
+        150,
+        760,
+        518
+      ],
+      "sourceOnly": false,
+      "file": "boards/actions.png",
+      "image": [
+        760,
+        518
+      ]
+    },
+    {
+      "slug": "calculator",
+      "title": "Pane — inline calculator",
+      "frame": [
+        48,
+        2034,
+        1440,
+        900
+      ],
+      "glass": [
+        340,
+        150,
+        760,
+        518
+      ],
+      "sourceOnly": false,
+      "file": "boards/calculator.png",
+      "image": [
+        760,
+        518
+      ]
+    },
+    {
+      "slug": "empty",
+      "title": "Pane — no results",
+      "frame": [
+        48,
+        3012,
+        1440,
+        900
+      ],
+      "glass": [
+        340,
+        150,
+        760,
+        518
+      ],
+      "sourceOnly": false,
+      "file": "boards/empty.png",
+      "image": [
+        760,
+        518
+      ]
+    },
+    {
+      "slug": "clipboard",
+      "title": "Pane — clipboard history",
+      "frame": [
+        48,
+        3990,
+        1440,
+        900
+      ],
+      "glass": [
+        250,
+        130,
+        940,
+        600
+      ],
+      "sourceOnly": false,
+      "file": "boards/clipboard.png",
+      "image": [
+        940,
+        600
+      ]
+    },
+    {
+      "slug": "window-manager",
+      "title": "Pane — window manager",
+      "frame": [
+        48,
+        4969,
+        1440,
+        900
+      ],
+      "glass": [
+        350,
+        460,
+        740,
+        396
+      ],
+      "sourceOnly": true,
+      "file": "boards/window-manager.png",
+      "image": [
+        740,
+        396
+      ]
+    },
+    {
+      "slug": "store",
+      "title": "Pane — plugin store",
+      "frame": [
+        48,
+        5947,
+        1440,
+        900
+      ],
+      "glass": [
+        140,
+        80,
+        1160,
+        740
+      ],
+      "sourceOnly": true,
+      "file": "boards/store.png",
+      "image": [
+        1160,
+        740
+      ]
+    },
+    {
+      "slug": "settings",
+      "title": "Pane — settings, appearance",
+      "frame": [
+        48,
+        6925,
+        1440,
+        900
+      ],
+      "glass": [
+        160,
+        90,
+        1120,
+        720
+      ],
+      "sourceOnly": false,
+      "file": "boards/settings.png",
+      "image": [
+        1120,
+        720
+      ]
+    },
+    {
+      "slug": "design-language",
+      "title": "Pane — design language",
+      "frame": [
+        48,
+        7903,
+        1440,
+        900
+      ],
+      "glass": null,
+      "sourceOnly": false,
+      "file": null
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "root-rest",
+      "captures": [
+        {
+          "name": "rest",
+          "after": [],
+          "file": "root-rest/rest.png",
+          "width": 760,
+          "height": 518,
+          "state": {
+            "glass": {
+              "x": 0,
+              "y": 0,
+              "width": 760,
+              "height": 518
+            },
+            "query": "",
+            "focused": true,
+            "searchHeader": {
+              "x": 0,
+              "y": 0,
+              "width": 760,
+              "height": 64
+            },
+            "list": {
+              "x": 0,
+              "y": 64,
+              "width": 760,
+              "height": 404
+            },
+            "listScrollTop": 0,
+            "footerPrimary": {
+              "label": "Open Application↵",
+              "rect": {
+                "x": 474.96875,
+                "y": 476.5,
+                "width": 142.390625,
+                "height": 34
+              }
+            },
+            "footer": {
+              "x": 0,
+              "y": 468,
+              "width": 760,
+              "height": 50
+            },
+            "rows": [
+              {
+                "title": "Figma",
+                "subtitle": null,
+                "selected": true,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 242,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 250,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 255,
+                  "width": 40.171875,
+                  "height": 18
+                },
+                "background": "rgba(255, 255, 255, 0.086)",
+                "keys": []
+              },
+              {
+                "title": "Clipboard History",
+                "subtitle": "Clipboard",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 288,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 296,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 301,
+                  "width": 113.953125,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 534.59375,
+                      "y": 300,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Shift",
+                    "rect": {
+                      "x": 574,
+                      "y": 300,
+                      "width": 43,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "V",
+                    "rect": {
+                      "x": 620,
+                      "y": 300,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              },
+              {
+                "title": "Left Half",
+                "subtitle": "Window Manager",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 334,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 342,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 347,
+                  "width": 56.90625,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Win",
+                    "rect": {
+                      "x": 554.375,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Alt",
+                    "rect": {
+                      "x": 587.1875,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "←",
+                    "rect": {
+                      "x": 620,
+                      "y": 346,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              },
+              {
+                "title": "Search Files",
+                "subtitle": "Files",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 380,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 388,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 393,
+                  "width": 80.484375,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Plugin Store",
+                "subtitle": "Pane",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 458,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 466,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 471,
+                  "width": 80.21875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Toggle Dark Mode",
+                "subtitle": "System",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 504,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 512,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 517,
+                  "width": 118.796875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Lock Screen",
+                "subtitle": "System",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 550,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 558,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 563,
+                  "width": 81.578125,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Settings",
+                "subtitle": "Pane",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 596,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 604,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 609,
+                  "width": 54.671875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 580.59375,
+                      "y": 608,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": ",",
+                    "rect": {
+                      "x": 620,
+                      "y": 608,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              }
+            ],
+            "keycaps": {
+              "footer-actions": {
+                "rect": {
+                  "x": 684.59375,
+                  "y": 483.5,
+                  "width": 59.40625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 684.59375,
+                      "y": 483.5,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "K",
+                    "rect": {
+                      "x": 724,
+                      "y": 483.5,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "left-half": {
+                "rect": {
+                  "x": 554.375,
+                  "y": 346,
+                  "width": 85.625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Win",
+                    "rect": {
+                      "x": 554.375,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Alt",
+                    "rect": {
+                      "x": 587.1875,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "←",
+                    "rect": {
+                      "x": 620,
+                      "y": 346,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "clipboard-history": {
+                "rect": {
+                  "x": 534.59375,
+                  "y": 300,
+                  "width": 105.40625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 534.59375,
+                      "y": 300,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Shift",
+                    "rect": {
+                      "x": 574,
+                      "y": 300,
+                      "width": 43,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "V",
+                    "rect": {
+                      "x": 620,
+                      "y": 300,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "footer-primary": {
+                "rect": {
+                  "x": 589.359375,
+                  "y": 483.5,
+                  "width": 20,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "↵",
+                    "rect": {
+                      "x": 589.359375,
+                      "y": 483.5,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgb(201, 238, 106)"
+              }
+            }
+          }
+        }
+      ],
+      "steps": [
+        {
+          "action": "capture",
+          "name": "rest"
+        }
+      ]
+    },
+    {
+      "name": "root-hover",
+      "captures": [
+        {
+          "name": "rest",
+          "after": [],
+          "file": "root-hover/rest.png",
+          "width": 760,
+          "height": 518,
+          "state": {
+            "glass": {
+              "x": 0,
+              "y": 0,
+              "width": 760,
+              "height": 518
+            },
+            "query": "",
+            "focused": true,
+            "searchHeader": {
+              "x": 0,
+              "y": 0,
+              "width": 760,
+              "height": 64
+            },
+            "list": {
+              "x": 0,
+              "y": 64,
+              "width": 760,
+              "height": 404
+            },
+            "listScrollTop": 0,
+            "footerPrimary": {
+              "label": "Open Application↵",
+              "rect": {
+                "x": 474.96875,
+                "y": 476.5,
+                "width": 142.390625,
+                "height": 34
+              }
+            },
+            "footer": {
+              "x": 0,
+              "y": 468,
+              "width": 760,
+              "height": 50
+            },
+            "rows": [
+              {
+                "title": "Figma",
+                "subtitle": null,
+                "selected": true,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 242,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 250,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 255,
+                  "width": 40.171875,
+                  "height": 18
+                },
+                "background": "rgba(255, 255, 255, 0.086)",
+                "keys": []
+              },
+              {
+                "title": "Clipboard History",
+                "subtitle": "Clipboard",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 288,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 296,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 301,
+                  "width": 113.953125,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 534.59375,
+                      "y": 300,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Shift",
+                    "rect": {
+                      "x": 574,
+                      "y": 300,
+                      "width": 43,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "V",
+                    "rect": {
+                      "x": 620,
+                      "y": 300,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              },
+              {
+                "title": "Left Half",
+                "subtitle": "Window Manager",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 334,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 342,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 347,
+                  "width": 56.90625,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Win",
+                    "rect": {
+                      "x": 554.375,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Alt",
+                    "rect": {
+                      "x": 587.1875,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "←",
+                    "rect": {
+                      "x": 620,
+                      "y": 346,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              },
+              {
+                "title": "Search Files",
+                "subtitle": "Files",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 380,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 388,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 393,
+                  "width": 80.484375,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Plugin Store",
+                "subtitle": "Pane",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 458,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 466,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 471,
+                  "width": 80.21875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Toggle Dark Mode",
+                "subtitle": "System",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 504,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 512,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 517,
+                  "width": 118.796875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Lock Screen",
+                "subtitle": "System",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 550,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 558,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 563,
+                  "width": 81.578125,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Settings",
+                "subtitle": "Pane",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 596,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 604,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 609,
+                  "width": 54.671875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 580.59375,
+                      "y": 608,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": ",",
+                    "rect": {
+                      "x": 620,
+                      "y": 608,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              }
+            ],
+            "keycaps": {
+              "footer-actions": {
+                "rect": {
+                  "x": 684.59375,
+                  "y": 483.5,
+                  "width": 59.40625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 684.59375,
+                      "y": 483.5,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "K",
+                    "rect": {
+                      "x": 724,
+                      "y": 483.5,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "left-half": {
+                "rect": {
+                  "x": 554.375,
+                  "y": 346,
+                  "width": 85.625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Win",
+                    "rect": {
+                      "x": 554.375,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Alt",
+                    "rect": {
+                      "x": 587.1875,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "←",
+                    "rect": {
+                      "x": 620,
+                      "y": 346,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "clipboard-history": {
+                "rect": {
+                  "x": 534.59375,
+                  "y": 300,
+                  "width": 105.40625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 534.59375,
+                      "y": 300,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Shift",
+                    "rect": {
+                      "x": 574,
+                      "y": 300,
+                      "width": 43,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "V",
+                    "rect": {
+                      "x": 620,
+                      "y": 300,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "footer-primary": {
+                "rect": {
+                  "x": 589.359375,
+                  "y": 483.5,
+                  "width": 20,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "↵",
+                    "rect": {
+                      "x": 589.359375,
+                      "y": 483.5,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgb(201, 238, 106)"
+              }
+            }
+          }
+        },
+        {
+          "name": "hover",
+          "after": [
+            {
+              "action": "pointer",
+              "row": 1
+            }
+          ],
+          "file": "root-hover/hover.png",
+          "width": 760,
+          "height": 518,
+          "state": {
+            "glass": {
+              "x": 0,
+              "y": 0,
+              "width": 760,
+              "height": 518
+            },
+            "query": "",
+            "focused": true,
+            "searchHeader": {
+              "x": 0,
+              "y": 0,
+              "width": 760,
+              "height": 64
+            },
+            "list": {
+              "x": 0,
+              "y": 64,
+              "width": 760,
+              "height": 404
+            },
+            "listScrollTop": 0,
+            "footerPrimary": {
+              "label": "Run Command↵",
+              "rect": {
+                "x": 489.578125,
+                "y": 476.5,
+                "width": 127.78125,
+                "height": 34
+              }
+            },
+            "footer": {
+              "x": 0,
+              "y": 468,
+              "width": 760,
+              "height": 50
+            },
+            "rows": [
+              {
+                "title": "Figma",
+                "subtitle": null,
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 242,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 250,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 255,
+                  "width": 40.171875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Clipboard History",
+                "subtitle": "Clipboard",
+                "selected": true,
+                "hovered": true,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 288,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 296,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 301,
+                  "width": 113.953125,
+                  "height": 18
+                },
+                "background": "rgba(255, 255, 255, 0.086)",
+                "keys": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 534.59375,
+                      "y": 300,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Shift",
+                    "rect": {
+                      "x": 574,
+                      "y": 300,
+                      "width": 43,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "V",
+                    "rect": {
+                      "x": 620,
+                      "y": 300,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              },
+              {
+                "title": "Left Half",
+                "subtitle": "Window Manager",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 334,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 342,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 347,
+                  "width": 56.90625,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Win",
+                    "rect": {
+                      "x": 554.375,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Alt",
+                    "rect": {
+                      "x": 587.1875,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "←",
+                    "rect": {
+                      "x": 620,
+                      "y": 346,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              },
+              {
+                "title": "Search Files",
+                "subtitle": "Files",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 380,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 388,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 393,
+                  "width": 80.484375,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Plugin Store",
+                "subtitle": "Pane",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 458,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 466,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 471,
+                  "width": 80.21875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Toggle Dark Mode",
+                "subtitle": "System",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 504,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 512,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 517,
+                  "width": 118.796875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Lock Screen",
+                "subtitle": "System",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 550,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 558,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 563,
+                  "width": 81.578125,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Settings",
+                "subtitle": "Pane",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 596,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 604,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 609,
+                  "width": 54.671875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 580.59375,
+                      "y": 608,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": ",",
+                    "rect": {
+                      "x": 620,
+                      "y": 608,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              }
+            ],
+            "keycaps": {
+              "footer-actions": {
+                "rect": {
+                  "x": 684.59375,
+                  "y": 483.5,
+                  "width": 59.40625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 684.59375,
+                      "y": 483.5,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "K",
+                    "rect": {
+                      "x": 724,
+                      "y": 483.5,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "left-half": {
+                "rect": {
+                  "x": 554.375,
+                  "y": 346,
+                  "width": 85.625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Win",
+                    "rect": {
+                      "x": 554.375,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Alt",
+                    "rect": {
+                      "x": 587.1875,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "←",
+                    "rect": {
+                      "x": 620,
+                      "y": 346,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "clipboard-history": {
+                "rect": {
+                  "x": 534.59375,
+                  "y": 300,
+                  "width": 105.40625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 534.59375,
+                      "y": 300,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Shift",
+                    "rect": {
+                      "x": 574,
+                      "y": 300,
+                      "width": 43,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "V",
+                    "rect": {
+                      "x": 620,
+                      "y": 300,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "footer-primary": {
+                "rect": {
+                  "x": 589.359375,
+                  "y": 483.5,
+                  "width": 20,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "↵",
+                    "rect": {
+                      "x": 589.359375,
+                      "y": 483.5,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgb(201, 238, 106)"
+              }
+            }
+          }
+        }
+      ],
+      "steps": [
+        {
+          "action": "capture",
+          "name": "rest"
+        },
+        {
+          "action": "pointer",
+          "row": 1
+        },
+        {
+          "action": "capture",
+          "name": "hover"
+        }
+      ]
+    },
+    {
+      "name": "root-selected",
+      "captures": [
+        {
+          "name": "rest",
+          "after": [],
+          "file": "root-selected/rest.png",
+          "width": 760,
+          "height": 518,
+          "state": {
+            "glass": {
+              "x": 0,
+              "y": 0,
+              "width": 760,
+              "height": 518
+            },
+            "query": "",
+            "focused": true,
+            "searchHeader": {
+              "x": 0,
+              "y": 0,
+              "width": 760,
+              "height": 64
+            },
+            "list": {
+              "x": 0,
+              "y": 64,
+              "width": 760,
+              "height": 404
+            },
+            "listScrollTop": 0,
+            "footerPrimary": {
+              "label": "Open Application↵",
+              "rect": {
+                "x": 474.96875,
+                "y": 476.5,
+                "width": 142.390625,
+                "height": 34
+              }
+            },
+            "footer": {
+              "x": 0,
+              "y": 468,
+              "width": 760,
+              "height": 50
+            },
+            "rows": [
+              {
+                "title": "Figma",
+                "subtitle": null,
+                "selected": true,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 242,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 250,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 255,
+                  "width": 40.171875,
+                  "height": 18
+                },
+                "background": "rgba(255, 255, 255, 0.086)",
+                "keys": []
+              },
+              {
+                "title": "Clipboard History",
+                "subtitle": "Clipboard",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 288,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 296,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 301,
+                  "width": 113.953125,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 534.59375,
+                      "y": 300,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Shift",
+                    "rect": {
+                      "x": 574,
+                      "y": 300,
+                      "width": 43,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "V",
+                    "rect": {
+                      "x": 620,
+                      "y": 300,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              },
+              {
+                "title": "Left Half",
+                "subtitle": "Window Manager",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 334,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 342,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 347,
+                  "width": 56.90625,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Win",
+                    "rect": {
+                      "x": 554.375,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Alt",
+                    "rect": {
+                      "x": 587.1875,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "←",
+                    "rect": {
+                      "x": 620,
+                      "y": 346,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              },
+              {
+                "title": "Search Files",
+                "subtitle": "Files",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 380,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 388,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 393,
+                  "width": 80.484375,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Plugin Store",
+                "subtitle": "Pane",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 458,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 466,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 471,
+                  "width": 80.21875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Toggle Dark Mode",
+                "subtitle": "System",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 504,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 512,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 517,
+                  "width": 118.796875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Lock Screen",
+                "subtitle": "System",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 550,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 558,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 563,
+                  "width": 81.578125,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Settings",
+                "subtitle": "Pane",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 596,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 604,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 609,
+                  "width": 54.671875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 580.59375,
+                      "y": 608,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": ",",
+                    "rect": {
+                      "x": 620,
+                      "y": 608,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              }
+            ],
+            "keycaps": {
+              "footer-actions": {
+                "rect": {
+                  "x": 684.59375,
+                  "y": 483.5,
+                  "width": 59.40625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 684.59375,
+                      "y": 483.5,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "K",
+                    "rect": {
+                      "x": 724,
+                      "y": 483.5,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "left-half": {
+                "rect": {
+                  "x": 554.375,
+                  "y": 346,
+                  "width": 85.625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Win",
+                    "rect": {
+                      "x": 554.375,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Alt",
+                    "rect": {
+                      "x": 587.1875,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "←",
+                    "rect": {
+                      "x": 620,
+                      "y": 346,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "clipboard-history": {
+                "rect": {
+                  "x": 534.59375,
+                  "y": 300,
+                  "width": 105.40625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 534.59375,
+                      "y": 300,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Shift",
+                    "rect": {
+                      "x": 574,
+                      "y": 300,
+                      "width": 43,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "V",
+                    "rect": {
+                      "x": 620,
+                      "y": 300,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "footer-primary": {
+                "rect": {
+                  "x": 589.359375,
+                  "y": 483.5,
+                  "width": 20,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "↵",
+                    "rect": {
+                      "x": 589.359375,
+                      "y": 483.5,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgb(201, 238, 106)"
+              }
+            }
+          }
+        },
+        {
+          "name": "down-1",
+          "after": [
+            {
+              "action": "key",
+              "key": "down"
+            }
+          ],
+          "file": "root-selected/down-1.png",
+          "width": 760,
+          "height": 518,
+          "state": {
+            "glass": {
+              "x": 0,
+              "y": 0,
+              "width": 760,
+              "height": 518
+            },
+            "query": "",
+            "focused": true,
+            "searchHeader": {
+              "x": 0,
+              "y": 0,
+              "width": 760,
+              "height": 64
+            },
+            "list": {
+              "x": 0,
+              "y": 64,
+              "width": 760,
+              "height": 404
+            },
+            "listScrollTop": 0,
+            "footerPrimary": {
+              "label": "Run Command↵",
+              "rect": {
+                "x": 489.578125,
+                "y": 476.5,
+                "width": 127.78125,
+                "height": 34
+              }
+            },
+            "footer": {
+              "x": 0,
+              "y": 468,
+              "width": 760,
+              "height": 50
+            },
+            "rows": [
+              {
+                "title": "Figma",
+                "subtitle": null,
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 242,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 250,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 255,
+                  "width": 40.171875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Clipboard History",
+                "subtitle": "Clipboard",
+                "selected": true,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 288,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 296,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 301,
+                  "width": 113.953125,
+                  "height": 18
+                },
+                "background": "rgba(255, 255, 255, 0.086)",
+                "keys": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 534.59375,
+                      "y": 300,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Shift",
+                    "rect": {
+                      "x": 574,
+                      "y": 300,
+                      "width": 43,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "V",
+                    "rect": {
+                      "x": 620,
+                      "y": 300,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              },
+              {
+                "title": "Left Half",
+                "subtitle": "Window Manager",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 334,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 342,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 347,
+                  "width": 56.90625,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Win",
+                    "rect": {
+                      "x": 554.375,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Alt",
+                    "rect": {
+                      "x": 587.1875,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "←",
+                    "rect": {
+                      "x": 620,
+                      "y": 346,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              },
+              {
+                "title": "Search Files",
+                "subtitle": "Files",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 380,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 388,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 393,
+                  "width": 80.484375,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Plugin Store",
+                "subtitle": "Pane",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 458,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 466,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 471,
+                  "width": 80.21875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Toggle Dark Mode",
+                "subtitle": "System",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 504,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 512,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 517,
+                  "width": 118.796875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Lock Screen",
+                "subtitle": "System",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 550,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 558,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 563,
+                  "width": 81.578125,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Settings",
+                "subtitle": "Pane",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 596,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 604,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 609,
+                  "width": 54.671875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 580.59375,
+                      "y": 608,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": ",",
+                    "rect": {
+                      "x": 620,
+                      "y": 608,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              }
+            ],
+            "keycaps": {
+              "footer-actions": {
+                "rect": {
+                  "x": 684.59375,
+                  "y": 483.5,
+                  "width": 59.40625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 684.59375,
+                      "y": 483.5,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "K",
+                    "rect": {
+                      "x": 724,
+                      "y": 483.5,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "left-half": {
+                "rect": {
+                  "x": 554.375,
+                  "y": 346,
+                  "width": 85.625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Win",
+                    "rect": {
+                      "x": 554.375,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Alt",
+                    "rect": {
+                      "x": 587.1875,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "←",
+                    "rect": {
+                      "x": 620,
+                      "y": 346,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "clipboard-history": {
+                "rect": {
+                  "x": 534.59375,
+                  "y": 300,
+                  "width": 105.40625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 534.59375,
+                      "y": 300,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Shift",
+                    "rect": {
+                      "x": 574,
+                      "y": 300,
+                      "width": 43,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "V",
+                    "rect": {
+                      "x": 620,
+                      "y": 300,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "footer-primary": {
+                "rect": {
+                  "x": 589.359375,
+                  "y": 483.5,
+                  "width": 20,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "↵",
+                    "rect": {
+                      "x": 589.359375,
+                      "y": 483.5,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgb(201, 238, 106)"
+              }
+            }
+          }
+        },
+        {
+          "name": "selected",
+          "after": [
+            {
+              "action": "key",
+              "key": "down"
+            },
+            {
+              "action": "key",
+              "key": "down"
+            }
+          ],
+          "file": "root-selected/selected.png",
+          "width": 760,
+          "height": 518,
+          "state": {
+            "glass": {
+              "x": 0,
+              "y": 0,
+              "width": 760,
+              "height": 518
+            },
+            "query": "",
+            "focused": true,
+            "searchHeader": {
+              "x": 0,
+              "y": 0,
+              "width": 760,
+              "height": 64
+            },
+            "list": {
+              "x": 0,
+              "y": 64,
+              "width": 760,
+              "height": 404
+            },
+            "listScrollTop": 0,
+            "footerPrimary": {
+              "label": "Run Command↵",
+              "rect": {
+                "x": 489.578125,
+                "y": 476.5,
+                "width": 127.78125,
+                "height": 34
+              }
+            },
+            "footer": {
+              "x": 0,
+              "y": 468,
+              "width": 760,
+              "height": 50
+            },
+            "rows": [
+              {
+                "title": "Figma",
+                "subtitle": null,
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 242,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 250,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 255,
+                  "width": 40.171875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Clipboard History",
+                "subtitle": "Clipboard",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 288,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 296,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 301,
+                  "width": 113.953125,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 534.59375,
+                      "y": 300,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Shift",
+                    "rect": {
+                      "x": 574,
+                      "y": 300,
+                      "width": 43,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "V",
+                    "rect": {
+                      "x": 620,
+                      "y": 300,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              },
+              {
+                "title": "Left Half",
+                "subtitle": "Window Manager",
+                "selected": true,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 334,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 342,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 347,
+                  "width": 56.90625,
+                  "height": 18
+                },
+                "background": "rgba(255, 255, 255, 0.086)",
+                "keys": [
+                  {
+                    "label": "Win",
+                    "rect": {
+                      "x": 554.375,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Alt",
+                    "rect": {
+                      "x": 587.1875,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "←",
+                    "rect": {
+                      "x": 620,
+                      "y": 346,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              },
+              {
+                "title": "Search Files",
+                "subtitle": "Files",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 380,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 388,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 393,
+                  "width": 80.484375,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Plugin Store",
+                "subtitle": "Pane",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 458,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 466,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 471,
+                  "width": 80.21875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Toggle Dark Mode",
+                "subtitle": "System",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 504,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 512,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 517,
+                  "width": 118.796875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Lock Screen",
+                "subtitle": "System",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 550,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 558,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 563,
+                  "width": 81.578125,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Settings",
+                "subtitle": "Pane",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 596,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 604,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 609,
+                  "width": 54.671875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 580.59375,
+                      "y": 608,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": ",",
+                    "rect": {
+                      "x": 620,
+                      "y": 608,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              }
+            ],
+            "keycaps": {
+              "footer-actions": {
+                "rect": {
+                  "x": 684.59375,
+                  "y": 483.5,
+                  "width": 59.40625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 684.59375,
+                      "y": 483.5,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "K",
+                    "rect": {
+                      "x": 724,
+                      "y": 483.5,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "left-half": {
+                "rect": {
+                  "x": 554.375,
+                  "y": 346,
+                  "width": 85.625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Win",
+                    "rect": {
+                      "x": 554.375,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Alt",
+                    "rect": {
+                      "x": 587.1875,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "←",
+                    "rect": {
+                      "x": 620,
+                      "y": 346,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "clipboard-history": {
+                "rect": {
+                  "x": 534.59375,
+                  "y": 300,
+                  "width": 105.40625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 534.59375,
+                      "y": 300,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Shift",
+                    "rect": {
+                      "x": 574,
+                      "y": 300,
+                      "width": 43,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "V",
+                    "rect": {
+                      "x": 620,
+                      "y": 300,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "footer-primary": {
+                "rect": {
+                  "x": 589.359375,
+                  "y": 483.5,
+                  "width": 20,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "↵",
+                    "rect": {
+                      "x": 589.359375,
+                      "y": 483.5,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgb(201, 238, 106)"
+              }
+            }
+          }
+        }
+      ],
+      "steps": [
+        {
+          "action": "capture",
+          "name": "rest"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "capture",
+          "name": "down-1"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "capture",
+          "name": "selected"
+        }
+      ]
+    },
+    {
+      "name": "root-selected-hover",
+      "captures": [
+        {
+          "name": "selected",
+          "after": [
+            {
+              "action": "key",
+              "key": "down"
+            },
+            {
+              "action": "key",
+              "key": "down"
+            }
+          ],
+          "file": "root-selected-hover/selected.png",
+          "width": 760,
+          "height": 518,
+          "state": {
+            "glass": {
+              "x": 0,
+              "y": 0,
+              "width": 760,
+              "height": 518
+            },
+            "query": "",
+            "focused": true,
+            "searchHeader": {
+              "x": 0,
+              "y": 0,
+              "width": 760,
+              "height": 64
+            },
+            "list": {
+              "x": 0,
+              "y": 64,
+              "width": 760,
+              "height": 404
+            },
+            "listScrollTop": 0,
+            "footerPrimary": {
+              "label": "Run Command↵",
+              "rect": {
+                "x": 489.578125,
+                "y": 476.5,
+                "width": 127.78125,
+                "height": 34
+              }
+            },
+            "footer": {
+              "x": 0,
+              "y": 468,
+              "width": 760,
+              "height": 50
+            },
+            "rows": [
+              {
+                "title": "Figma",
+                "subtitle": null,
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 242,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 250,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 255,
+                  "width": 40.171875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Clipboard History",
+                "subtitle": "Clipboard",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 288,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 296,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 301,
+                  "width": 113.953125,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 534.59375,
+                      "y": 300,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Shift",
+                    "rect": {
+                      "x": 574,
+                      "y": 300,
+                      "width": 43,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "V",
+                    "rect": {
+                      "x": 620,
+                      "y": 300,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              },
+              {
+                "title": "Left Half",
+                "subtitle": "Window Manager",
+                "selected": true,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 334,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 342,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 347,
+                  "width": 56.90625,
+                  "height": 18
+                },
+                "background": "rgba(255, 255, 255, 0.086)",
+                "keys": [
+                  {
+                    "label": "Win",
+                    "rect": {
+                      "x": 554.375,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Alt",
+                    "rect": {
+                      "x": 587.1875,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "←",
+                    "rect": {
+                      "x": 620,
+                      "y": 346,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              },
+              {
+                "title": "Search Files",
+                "subtitle": "Files",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 380,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 388,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 393,
+                  "width": 80.484375,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Plugin Store",
+                "subtitle": "Pane",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 458,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 466,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 471,
+                  "width": 80.21875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Toggle Dark Mode",
+                "subtitle": "System",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 504,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 512,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 517,
+                  "width": 118.796875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Lock Screen",
+                "subtitle": "System",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 550,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 558,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 563,
+                  "width": 81.578125,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Settings",
+                "subtitle": "Pane",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 596,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 604,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 609,
+                  "width": 54.671875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 580.59375,
+                      "y": 608,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": ",",
+                    "rect": {
+                      "x": 620,
+                      "y": 608,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              }
+            ],
+            "keycaps": {
+              "footer-actions": {
+                "rect": {
+                  "x": 684.59375,
+                  "y": 483.5,
+                  "width": 59.40625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 684.59375,
+                      "y": 483.5,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "K",
+                    "rect": {
+                      "x": 724,
+                      "y": 483.5,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "left-half": {
+                "rect": {
+                  "x": 554.375,
+                  "y": 346,
+                  "width": 85.625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Win",
+                    "rect": {
+                      "x": 554.375,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Alt",
+                    "rect": {
+                      "x": 587.1875,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "←",
+                    "rect": {
+                      "x": 620,
+                      "y": 346,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "clipboard-history": {
+                "rect": {
+                  "x": 534.59375,
+                  "y": 300,
+                  "width": 105.40625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 534.59375,
+                      "y": 300,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Shift",
+                    "rect": {
+                      "x": 574,
+                      "y": 300,
+                      "width": 43,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "V",
+                    "rect": {
+                      "x": 620,
+                      "y": 300,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "footer-primary": {
+                "rect": {
+                  "x": 589.359375,
+                  "y": 483.5,
+                  "width": 20,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "↵",
+                    "rect": {
+                      "x": 589.359375,
+                      "y": 483.5,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgb(201, 238, 106)"
+              }
+            }
+          }
+        },
+        {
+          "name": "selected-hover",
+          "after": [
+            {
+              "action": "key",
+              "key": "down"
+            },
+            {
+              "action": "key",
+              "key": "down"
+            },
+            {
+              "action": "pointer",
+              "row": 2
+            }
+          ],
+          "file": "root-selected-hover/selected-hover.png",
+          "width": 760,
+          "height": 518,
+          "state": {
+            "glass": {
+              "x": 0,
+              "y": 0,
+              "width": 760,
+              "height": 518
+            },
+            "query": "",
+            "focused": true,
+            "searchHeader": {
+              "x": 0,
+              "y": 0,
+              "width": 760,
+              "height": 64
+            },
+            "list": {
+              "x": 0,
+              "y": 64,
+              "width": 760,
+              "height": 404
+            },
+            "listScrollTop": 0,
+            "footerPrimary": {
+              "label": "Run Command↵",
+              "rect": {
+                "x": 489.578125,
+                "y": 476.5,
+                "width": 127.78125,
+                "height": 34
+              }
+            },
+            "footer": {
+              "x": 0,
+              "y": 468,
+              "width": 760,
+              "height": 50
+            },
+            "rows": [
+              {
+                "title": "Figma",
+                "subtitle": null,
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 242,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 250,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 255,
+                  "width": 40.171875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Clipboard History",
+                "subtitle": "Clipboard",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 288,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 296,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 301,
+                  "width": 113.953125,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 534.59375,
+                      "y": 300,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Shift",
+                    "rect": {
+                      "x": 574,
+                      "y": 300,
+                      "width": 43,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "V",
+                    "rect": {
+                      "x": 620,
+                      "y": 300,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              },
+              {
+                "title": "Left Half",
+                "subtitle": "Window Manager",
+                "selected": true,
+                "hovered": true,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 334,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 342,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 347,
+                  "width": 56.90625,
+                  "height": 18
+                },
+                "background": "rgba(255, 255, 255, 0.086)",
+                "keys": [
+                  {
+                    "label": "Win",
+                    "rect": {
+                      "x": 554.375,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Alt",
+                    "rect": {
+                      "x": 587.1875,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "←",
+                    "rect": {
+                      "x": 620,
+                      "y": 346,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              },
+              {
+                "title": "Search Files",
+                "subtitle": "Files",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 380,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 388,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 393,
+                  "width": 80.484375,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Plugin Store",
+                "subtitle": "Pane",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 458,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 466,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 471,
+                  "width": 80.21875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Toggle Dark Mode",
+                "subtitle": "System",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 504,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 512,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 517,
+                  "width": 118.796875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Lock Screen",
+                "subtitle": "System",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 550,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 558,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 563,
+                  "width": 81.578125,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Settings",
+                "subtitle": "Pane",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 596,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 604,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 609,
+                  "width": 54.671875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 580.59375,
+                      "y": 608,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": ",",
+                    "rect": {
+                      "x": 620,
+                      "y": 608,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              }
+            ],
+            "keycaps": {
+              "footer-actions": {
+                "rect": {
+                  "x": 684.59375,
+                  "y": 483.5,
+                  "width": 59.40625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 684.59375,
+                      "y": 483.5,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "K",
+                    "rect": {
+                      "x": 724,
+                      "y": 483.5,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "left-half": {
+                "rect": {
+                  "x": 554.375,
+                  "y": 346,
+                  "width": 85.625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Win",
+                    "rect": {
+                      "x": 554.375,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Alt",
+                    "rect": {
+                      "x": 587.1875,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "←",
+                    "rect": {
+                      "x": 620,
+                      "y": 346,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "clipboard-history": {
+                "rect": {
+                  "x": 534.59375,
+                  "y": 300,
+                  "width": 105.40625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 534.59375,
+                      "y": 300,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Shift",
+                    "rect": {
+                      "x": 574,
+                      "y": 300,
+                      "width": 43,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "V",
+                    "rect": {
+                      "x": 620,
+                      "y": 300,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "footer-primary": {
+                "rect": {
+                  "x": 589.359375,
+                  "y": 483.5,
+                  "width": 20,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "↵",
+                    "rect": {
+                      "x": 589.359375,
+                      "y": 483.5,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgb(201, 238, 106)"
+              }
+            }
+          }
+        }
+      ],
+      "steps": [
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "capture",
+          "name": "selected"
+        },
+        {
+          "action": "pointer",
+          "row": 2
+        },
+        {
+          "action": "capture",
+          "name": "selected-hover"
+        }
+      ]
+    },
+    {
+      "name": "root-focus",
+      "captures": [
+        {
+          "name": "rest",
+          "after": [],
+          "file": "root-focus/rest.png",
+          "width": 760,
+          "height": 518,
+          "state": {
+            "glass": {
+              "x": 0,
+              "y": 0,
+              "width": 760,
+              "height": 518
+            },
+            "query": "",
+            "focused": true,
+            "searchHeader": {
+              "x": 0,
+              "y": 0,
+              "width": 760,
+              "height": 64
+            },
+            "list": {
+              "x": 0,
+              "y": 64,
+              "width": 760,
+              "height": 404
+            },
+            "listScrollTop": 0,
+            "footerPrimary": {
+              "label": "Open Application↵",
+              "rect": {
+                "x": 474.96875,
+                "y": 476.5,
+                "width": 142.390625,
+                "height": 34
+              }
+            },
+            "footer": {
+              "x": 0,
+              "y": 468,
+              "width": 760,
+              "height": 50
+            },
+            "rows": [
+              {
+                "title": "Figma",
+                "subtitle": null,
+                "selected": true,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 242,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 250,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 255,
+                  "width": 40.171875,
+                  "height": 18
+                },
+                "background": "rgba(255, 255, 255, 0.086)",
+                "keys": []
+              },
+              {
+                "title": "Clipboard History",
+                "subtitle": "Clipboard",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 288,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 296,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 301,
+                  "width": 113.953125,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 534.59375,
+                      "y": 300,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Shift",
+                    "rect": {
+                      "x": 574,
+                      "y": 300,
+                      "width": 43,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "V",
+                    "rect": {
+                      "x": 620,
+                      "y": 300,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              },
+              {
+                "title": "Left Half",
+                "subtitle": "Window Manager",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 334,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 342,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 347,
+                  "width": 56.90625,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Win",
+                    "rect": {
+                      "x": 554.375,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Alt",
+                    "rect": {
+                      "x": 587.1875,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "←",
+                    "rect": {
+                      "x": 620,
+                      "y": 346,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              },
+              {
+                "title": "Search Files",
+                "subtitle": "Files",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 380,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 388,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 393,
+                  "width": 80.484375,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Plugin Store",
+                "subtitle": "Pane",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 458,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 466,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 471,
+                  "width": 80.21875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Toggle Dark Mode",
+                "subtitle": "System",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 504,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 512,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 517,
+                  "width": 118.796875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Lock Screen",
+                "subtitle": "System",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 550,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 558,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 563,
+                  "width": 81.578125,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Settings",
+                "subtitle": "Pane",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 596,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 604,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 609,
+                  "width": 54.671875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 580.59375,
+                      "y": 608,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": ",",
+                    "rect": {
+                      "x": 620,
+                      "y": 608,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              }
+            ],
+            "keycaps": {
+              "footer-actions": {
+                "rect": {
+                  "x": 684.59375,
+                  "y": 483.5,
+                  "width": 59.40625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 684.59375,
+                      "y": 483.5,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "K",
+                    "rect": {
+                      "x": 724,
+                      "y": 483.5,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "left-half": {
+                "rect": {
+                  "x": 554.375,
+                  "y": 346,
+                  "width": 85.625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Win",
+                    "rect": {
+                      "x": 554.375,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Alt",
+                    "rect": {
+                      "x": 587.1875,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "←",
+                    "rect": {
+                      "x": 620,
+                      "y": 346,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "clipboard-history": {
+                "rect": {
+                  "x": 534.59375,
+                  "y": 300,
+                  "width": 105.40625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 534.59375,
+                      "y": 300,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Shift",
+                    "rect": {
+                      "x": 574,
+                      "y": 300,
+                      "width": 43,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "V",
+                    "rect": {
+                      "x": 620,
+                      "y": 300,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "footer-primary": {
+                "rect": {
+                  "x": 589.359375,
+                  "y": 483.5,
+                  "width": 20,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "↵",
+                    "rect": {
+                      "x": 589.359375,
+                      "y": 483.5,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgb(201, 238, 106)"
+              }
+            }
+          }
+        },
+        {
+          "name": "focus-typed",
+          "after": [
+            {
+              "action": "type",
+              "text": "clip"
+            }
+          ],
+          "file": "root-focus/focus-typed.png",
+          "width": 760,
+          "height": 518,
+          "state": {
+            "glass": {
+              "x": 0,
+              "y": 0,
+              "width": 760,
+              "height": 518
+            },
+            "query": "clip",
+            "focused": true,
+            "searchHeader": {
+              "x": 0,
+              "y": 0,
+              "width": 760,
+              "height": 64
+            },
+            "list": {
+              "x": 0,
+              "y": 64,
+              "width": 760,
+              "height": 404
+            },
+            "listScrollTop": 0,
+            "footerPrimary": {
+              "label": "Run Command↵",
+              "rect": {
+                "x": 489.578125,
+                "y": 476.5,
+                "width": 127.78125,
+                "height": 34
+              }
+            },
+            "footer": {
+              "x": 0,
+              "y": 468,
+              "width": 760,
+              "height": 50
+            },
+            "rows": [
+              {
+                "title": "Clipboard History",
+                "subtitle": "Clipboard",
+                "selected": true,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 100,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 108,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 113,
+                  "width": 113.953125,
+                  "height": 18
+                },
+                "background": "rgba(255, 255, 255, 0.086)",
+                "keys": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 534.59375,
+                      "y": 112,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Shift",
+                    "rect": {
+                      "x": 574,
+                      "y": 112,
+                      "width": 43,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "V",
+                    "rect": {
+                      "x": 620,
+                      "y": 112,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              }
+            ],
+            "keycaps": {
+              "footer-actions": {
+                "rect": {
+                  "x": 684.59375,
+                  "y": 483.5,
+                  "width": 59.40625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 684.59375,
+                      "y": 483.5,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "K",
+                    "rect": {
+                      "x": 724,
+                      "y": 483.5,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "left-half": null,
+              "clipboard-history": {
+                "rect": {
+                  "x": 534.59375,
+                  "y": 112,
+                  "width": 105.40625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 534.59375,
+                      "y": 112,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Shift",
+                    "rect": {
+                      "x": 574,
+                      "y": 112,
+                      "width": 43,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "V",
+                    "rect": {
+                      "x": 620,
+                      "y": 112,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "footer-primary": {
+                "rect": {
+                  "x": 589.359375,
+                  "y": 483.5,
+                  "width": 20,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "↵",
+                    "rect": {
+                      "x": 589.359375,
+                      "y": 483.5,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgb(201, 238, 106)"
+              }
+            }
+          }
+        },
+        {
+          "name": "back-to-rest",
+          "after": [
+            {
+              "action": "type",
+              "text": "clip"
+            },
+            {
+              "action": "key",
+              "key": "escape"
+            }
+          ],
+          "file": "root-focus/back-to-rest.png",
+          "width": 760,
+          "height": 518,
+          "state": {
+            "glass": {
+              "x": 0,
+              "y": 0,
+              "width": 760,
+              "height": 518
+            },
+            "query": "",
+            "focused": true,
+            "searchHeader": {
+              "x": 0,
+              "y": 0,
+              "width": 760,
+              "height": 64
+            },
+            "list": {
+              "x": 0,
+              "y": 64,
+              "width": 760,
+              "height": 404
+            },
+            "listScrollTop": 0,
+            "footerPrimary": {
+              "label": "Open Application↵",
+              "rect": {
+                "x": 474.96875,
+                "y": 476.5,
+                "width": 142.390625,
+                "height": 34
+              }
+            },
+            "footer": {
+              "x": 0,
+              "y": 468,
+              "width": 760,
+              "height": 50
+            },
+            "rows": [
+              {
+                "title": "Figma",
+                "subtitle": null,
+                "selected": true,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 242,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 250,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 255,
+                  "width": 40.171875,
+                  "height": 18
+                },
+                "background": "rgba(255, 255, 255, 0.086)",
+                "keys": []
+              },
+              {
+                "title": "Clipboard History",
+                "subtitle": "Clipboard",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 288,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 296,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 301,
+                  "width": 113.953125,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 534.59375,
+                      "y": 300,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Shift",
+                    "rect": {
+                      "x": 574,
+                      "y": 300,
+                      "width": 43,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "V",
+                    "rect": {
+                      "x": 620,
+                      "y": 300,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              },
+              {
+                "title": "Left Half",
+                "subtitle": "Window Manager",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 334,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 342,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 347,
+                  "width": 56.90625,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Win",
+                    "rect": {
+                      "x": 554.375,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Alt",
+                    "rect": {
+                      "x": 587.1875,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "←",
+                    "rect": {
+                      "x": 620,
+                      "y": 346,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              },
+              {
+                "title": "Search Files",
+                "subtitle": "Files",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 380,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 388,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 393,
+                  "width": 80.484375,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Plugin Store",
+                "subtitle": "Pane",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 458,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 466,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 471,
+                  "width": 80.21875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Toggle Dark Mode",
+                "subtitle": "System",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 504,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 512,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 517,
+                  "width": 118.796875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Lock Screen",
+                "subtitle": "System",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 550,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 558,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 563,
+                  "width": 81.578125,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Settings",
+                "subtitle": "Pane",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 596,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 604,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 609,
+                  "width": 54.671875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 580.59375,
+                      "y": 608,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": ",",
+                    "rect": {
+                      "x": 620,
+                      "y": 608,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              }
+            ],
+            "keycaps": {
+              "footer-actions": {
+                "rect": {
+                  "x": 684.59375,
+                  "y": 483.5,
+                  "width": 59.40625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 684.59375,
+                      "y": 483.5,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "K",
+                    "rect": {
+                      "x": 724,
+                      "y": 483.5,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "left-half": {
+                "rect": {
+                  "x": 554.375,
+                  "y": 346,
+                  "width": 85.625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Win",
+                    "rect": {
+                      "x": 554.375,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Alt",
+                    "rect": {
+                      "x": 587.1875,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "←",
+                    "rect": {
+                      "x": 620,
+                      "y": 346,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "clipboard-history": {
+                "rect": {
+                  "x": 534.59375,
+                  "y": 300,
+                  "width": 105.40625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 534.59375,
+                      "y": 300,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Shift",
+                    "rect": {
+                      "x": 574,
+                      "y": 300,
+                      "width": 43,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "V",
+                    "rect": {
+                      "x": 620,
+                      "y": 300,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "footer-primary": {
+                "rect": {
+                  "x": 589.359375,
+                  "y": 483.5,
+                  "width": 20,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "↵",
+                    "rect": {
+                      "x": 589.359375,
+                      "y": 483.5,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgb(201, 238, 106)"
+              }
+            }
+          }
+        }
+      ],
+      "steps": [
+        {
+          "action": "capture",
+          "name": "rest"
+        },
+        {
+          "action": "type",
+          "text": "clip"
+        },
+        {
+          "action": "capture",
+          "name": "focus-typed"
+        },
+        {
+          "action": "key",
+          "key": "escape"
+        },
+        {
+          "action": "capture",
+          "name": "back-to-rest"
+        }
+      ]
+    },
+    {
+      "name": "keycap-windows",
+      "captures": [
+        {
+          "name": "keycaps",
+          "after": [],
+          "file": "keycap-windows/keycaps.png",
+          "width": 760,
+          "height": 518,
+          "state": {
+            "glass": {
+              "x": 0,
+              "y": 0,
+              "width": 760,
+              "height": 518
+            },
+            "query": "",
+            "focused": true,
+            "searchHeader": {
+              "x": 0,
+              "y": 0,
+              "width": 760,
+              "height": 64
+            },
+            "list": {
+              "x": 0,
+              "y": 64,
+              "width": 760,
+              "height": 404
+            },
+            "listScrollTop": 0,
+            "footerPrimary": {
+              "label": "Open Application↵",
+              "rect": {
+                "x": 474.96875,
+                "y": 476.5,
+                "width": 142.390625,
+                "height": 34
+              }
+            },
+            "footer": {
+              "x": 0,
+              "y": 468,
+              "width": 760,
+              "height": 50
+            },
+            "rows": [
+              {
+                "title": "Figma",
+                "subtitle": null,
+                "selected": true,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 242,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 250,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 255,
+                  "width": 40.171875,
+                  "height": 18
+                },
+                "background": "rgba(255, 255, 255, 0.086)",
+                "keys": []
+              },
+              {
+                "title": "Clipboard History",
+                "subtitle": "Clipboard",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 288,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 296,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 301,
+                  "width": 113.953125,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 534.59375,
+                      "y": 300,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Shift",
+                    "rect": {
+                      "x": 574,
+                      "y": 300,
+                      "width": 43,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "V",
+                    "rect": {
+                      "x": 620,
+                      "y": 300,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              },
+              {
+                "title": "Left Half",
+                "subtitle": "Window Manager",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 334,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 342,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 347,
+                  "width": 56.90625,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Win",
+                    "rect": {
+                      "x": 554.375,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Alt",
+                    "rect": {
+                      "x": 587.1875,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "←",
+                    "rect": {
+                      "x": 620,
+                      "y": 346,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              },
+              {
+                "title": "Search Files",
+                "subtitle": "Files",
+                "selected": false,
+                "hovered": false,
+                "visible": true,
+                "rect": {
+                  "x": 10,
+                  "y": 380,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 388,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 393,
+                  "width": 80.484375,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Plugin Store",
+                "subtitle": "Pane",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 458,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 466,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 471,
+                  "width": 80.21875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Toggle Dark Mode",
+                "subtitle": "System",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 504,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 512,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 517,
+                  "width": 118.796875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Lock Screen",
+                "subtitle": "System",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 550,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 558,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 563,
+                  "width": 81.578125,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": []
+              },
+              {
+                "title": "Settings",
+                "subtitle": "Pane",
+                "selected": false,
+                "hovered": false,
+                "visible": false,
+                "rect": {
+                  "x": 10,
+                  "y": 596,
+                  "width": 740,
+                  "height": 44
+                },
+                "tile": {
+                  "x": 20,
+                  "y": 604,
+                  "width": 28,
+                  "height": 28
+                },
+                "titleRect": {
+                  "x": 60,
+                  "y": 609,
+                  "width": 54.671875,
+                  "height": 18
+                },
+                "background": "rgba(0, 0, 0, 0)",
+                "keys": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 580.59375,
+                      "y": 608,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": ",",
+                    "rect": {
+                      "x": 620,
+                      "y": 608,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ]
+              }
+            ],
+            "keycaps": {
+              "footer-actions": {
+                "rect": {
+                  "x": 684.59375,
+                  "y": 483.5,
+                  "width": 59.40625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 684.59375,
+                      "y": 483.5,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "K",
+                    "rect": {
+                      "x": 724,
+                      "y": 483.5,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "left-half": {
+                "rect": {
+                  "x": 554.375,
+                  "y": 346,
+                  "width": 85.625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Win",
+                    "rect": {
+                      "x": 554.375,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Alt",
+                    "rect": {
+                      "x": 587.1875,
+                      "y": 346,
+                      "width": 29.8125,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "←",
+                    "rect": {
+                      "x": 620,
+                      "y": 346,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "clipboard-history": {
+                "rect": {
+                  "x": 534.59375,
+                  "y": 300,
+                  "width": 105.40625,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "Ctrl",
+                    "rect": {
+                      "x": 534.59375,
+                      "y": 300,
+                      "width": 36.40625,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "Shift",
+                    "rect": {
+                      "x": 574,
+                      "y": 300,
+                      "width": 43,
+                      "height": 20
+                    }
+                  },
+                  {
+                    "label": "V",
+                    "rect": {
+                      "x": 620,
+                      "y": 300,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgba(255, 255, 255, 0.07)"
+              },
+              "footer-primary": {
+                "rect": {
+                  "x": 589.359375,
+                  "y": 483.5,
+                  "width": 20,
+                  "height": 20
+                },
+                "caps": [
+                  {
+                    "label": "↵",
+                    "rect": {
+                      "x": 589.359375,
+                      "y": 483.5,
+                      "width": 20,
+                      "height": 20
+                    }
+                  }
+                ],
+                "font": {
+                  "family": "\"Geist Mono\", ui-monospace, monospace",
+                  "size": "11px",
+                  "weight": "500"
+                },
+                "background": "rgb(201, 238, 106)"
+              }
+            }
+          }
+        }
+      ],
+      "steps": [
+        {
+          "action": "capture",
+          "name": "keycaps"
+        }
+      ]
+    }
+  ],
+  "fonts": [
+    {
+      "family": "Geist",
+      "weight": "400",
+      "style": "normal",
+      "status": "unloaded"
+    },
+    {
+      "family": "Geist",
+      "weight": "400",
+      "style": "normal",
+      "status": "unloaded"
+    },
+    {
+      "family": "Geist",
+      "weight": "400",
+      "style": "normal",
+      "status": "unloaded"
+    },
+    {
+      "family": "Geist",
+      "weight": "400",
+      "style": "normal",
+      "status": "unloaded"
+    },
+    {
+      "family": "Geist",
+      "weight": "400",
+      "style": "normal",
+      "status": "loaded"
+    },
+    {
+      "family": "Geist",
+      "weight": "500",
+      "style": "normal",
+      "status": "unloaded"
+    },
+    {
+      "family": "Geist",
+      "weight": "500",
+      "style": "normal",
+      "status": "unloaded"
+    },
+    {
+      "family": "Geist",
+      "weight": "500",
+      "style": "normal",
+      "status": "unloaded"
+    },
+    {
+      "family": "Geist",
+      "weight": "500",
+      "style": "normal",
+      "status": "unloaded"
+    },
+    {
+      "family": "Geist",
+      "weight": "500",
+      "style": "normal",
+      "status": "loaded"
+    },
+    {
+      "family": "Geist",
+      "weight": "600",
+      "style": "normal",
+      "status": "unloaded"
+    },
+    {
+      "family": "Geist",
+      "weight": "600",
+      "style": "normal",
+      "status": "unloaded"
+    },
+    {
+      "family": "Geist",
+      "weight": "600",
+      "style": "normal",
+      "status": "unloaded"
+    },
+    {
+      "family": "Geist",
+      "weight": "600",
+      "style": "normal",
+      "status": "unloaded"
+    },
+    {
+      "family": "Geist",
+      "weight": "600",
+      "style": "normal",
+      "status": "unloaded"
+    },
+    {
+      "family": "Geist Mono",
+      "weight": "400",
+      "style": "normal",
+      "status": "unloaded"
+    },
+    {
+      "family": "Geist Mono",
+      "weight": "400",
+      "style": "normal",
+      "status": "unloaded"
+    },
+    {
+      "family": "Geist Mono",
+      "weight": "400",
+      "style": "normal",
+      "status": "unloaded"
+    },
+    {
+      "family": "Geist Mono",
+      "weight": "400",
+      "style": "normal",
+      "status": "unloaded"
+    },
+    {
+      "family": "Geist Mono",
+      "weight": "400",
+      "style": "normal",
+      "status": "unloaded"
+    },
+    {
+      "family": "Geist Mono",
+      "weight": "400",
+      "style": "normal",
+      "status": "loaded"
+    },
+    {
+      "family": "Geist Mono",
+      "weight": "500",
+      "style": "normal",
+      "status": "unloaded"
+    },
+    {
+      "family": "Geist Mono",
+      "weight": "500",
+      "style": "normal",
+      "status": "unloaded"
+    },
+    {
+      "family": "Geist Mono",
+      "weight": "500",
+      "style": "normal",
+      "status": "unloaded"
+    },
+    {
+      "family": "Geist Mono",
+      "weight": "500",
+      "style": "normal",
+      "status": "unloaded"
+    },
+    {
+      "family": "Geist Mono",
+      "weight": "500",
+      "style": "normal",
+      "status": "unloaded"
+    },
+    {
+      "family": "Geist Mono",
+      "weight": "500",
+      "style": "normal",
+      "status": "loaded"
+    }
+  ],
+  "cleanup": {
+    "chromePid": 66408,
+    "chromeEnded": true,
+    "profileRemoved": true,
+    "server": "closed"
+  },
+  "finishedUtc": "2026-10-04T13:48:37.766Z"
+}

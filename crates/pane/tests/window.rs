@@ -13,6 +13,12 @@ mod platforms;
 #[path = "support/settle.rs"]
 mod settle;
 
+#[path = "support/paint.rs"]
+mod paint;
+
+#[path = "../../pane-core/tests/support/artifacts.rs"]
+mod artifacts;
+
 use settle::{settle, until};
 
 /// A sample command: its component and the language it is written in.
@@ -355,22 +361,22 @@ fn tab_and_shift_tab_visit_each_control_once_in_order(cx: &mut TestAppContext) {
         labels([
             "Hello",
             "Greet",
-            "More actions",
+            "Pane menu",
             "Name",
             "Hello",
             "Greet",
-            "More actions",
+            "Pane menu",
             "Name"
         ])
     );
     assert_eq!(
         backward,
         labels([
-            "More actions",
+            "Pane menu",
             "Greet",
             "Hello",
             "Name",
-            "More actions",
+            "Pane menu",
             "Greet",
             "Hello",
             "Name"
@@ -455,6 +461,57 @@ fn clicking_a_choice_and_the_submit_button_submits_the_form(cx: &mut TestAppCont
         settle(&window, cx).status,
         Status::Result("Welcome, Ada, from the Rust guest".into())
     );
+}
+
+/// The form is drawn with the Settings field families (#99), the
+/// launcher's own copies of their styling gone: each field a label 8px
+/// over its control — a text field a 34px well (black 24% under its
+/// ring), a choice the segmented track (black 24%) whose chosen segment
+/// takes the white 12% wash — and the submit control a 30px button on
+/// white 8%. A rejected field's error stands under its control.
+#[gpui::test]
+fn the_form_draws_the_settings_field_families(cx: &mut TestAppContext) {
+    let (window, cx) = open(cx, &RUST);
+    open_form(&window, cx);
+    // The form arrives over the view transition's fade; its fills are read
+    // once it has settled.
+    settle_frames(cx);
+
+    let name = cx.debug_bounds("field-name").expect("the name field");
+    assert_eq!(name.size.height, px(34.), "a field's well");
+    assert!(paint::paints_fill_at(cx, name, 0x0000003D), "black 24%");
+    let label = cx
+        .debug_bounds("field-label-name")
+        .expect("the name's label");
+    assert_eq!(name.top(), label.bottom() + px(8.), "the label over it");
+
+    let greeting = cx.debug_bounds("field-greeting").expect("the choice");
+    assert_eq!(greeting.size.height, px(36.), "a segmented track");
+    assert!(paint::paints_fill_at(cx, greeting, 0x0000003D), "black 24%");
+    let welcome = cx
+        .debug_bounds("choice-greeting-welcome")
+        .expect("a segment");
+    cx.simulate_click(welcome.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(field_value(&window, cx, "greeting"), "welcome");
+    assert_eq!(welcome.size.height, px(30.), "a segment");
+    assert!(
+        paint::paints_fill_at(cx, welcome, 0xFFFFFF1F),
+        "the chosen segment's white 12%"
+    );
+
+    let submit = cx.debug_bounds("submit").expect("the submit button");
+    assert_eq!(submit.size.height, px(30.), "a button");
+    assert!(paint::paints_fill_at(cx, submit, 0xFFFFFF14), "white 8%");
+
+    // Submitted with the name empty: the error stands under the field.
+    cx.simulate_click(submit.center(), Modifiers::none());
+    settle(&window, cx);
+    let error = cx
+        .debug_bounds("field-error-name")
+        .expect("the field's error");
+    let name = cx.debug_bounds("field-name").expect("the name field");
+    assert!(error.top() >= name.bottom(), "{error:?} under {name:?}");
 }
 
 #[gpui::test]
@@ -569,6 +626,72 @@ fn row_is_visible(cx: &mut VisualTestContext, element: &str) -> bool {
     let list = cx.debug_bounds("rows").expect("the list is rendered");
     let element = cx.debug_bounds(selector(element)).expect("it is rendered");
     element.top() >= list.top() && element.bottom() <= list.bottom()
+}
+
+/// The launcher's frame is the reference's: at its 760×518 client the
+/// search header, the list and the footer divide the whole panel — 64,
+/// 404 and 50 — edge to edge, with no border taking a pixel from any side
+/// (the panel's inner edge is an inset ring that takes no layout space).
+#[gpui::test]
+fn the_launcher_divides_its_reference_client_edge_to_edge(cx: &mut TestAppContext) {
+    let (window, cx) = open_with(cx, pane::sample_commands());
+    cx.simulate_resize(pane::launcher_client_size());
+    let view = settle(&window, cx);
+    assert_eq!(view.status, Status::Idle);
+    let search = cx.debug_bounds("search").expect("root search is rendered");
+    let list = cx.debug_bounds("rows").expect("the list is rendered");
+    let footer = cx
+        .debug_bounds("status-idle")
+        .expect("the footer is rendered");
+    assert_eq!(search.origin, gpui::point(px(0.), px(0.)));
+    assert_eq!(search.size.width, px(760.));
+    assert_eq!((list.left(), list.top()), (px(0.), px(64.)));
+    assert_eq!(list.size, gpui::size(px(760.), px(404.)));
+    assert_eq!((footer.left(), footer.top()), (px(0.), px(468.)));
+    assert_eq!(footer.size, gpui::size(px(760.), px(50.)));
+}
+
+/// Selecting a half-shown row with the pointer does not scroll the list:
+/// scrolling it into view under a still pointer would put another row
+/// under the pointer, which the next small movement would select and
+/// scroll in turn. The keys' selection still scrolls.
+#[gpui::test]
+fn the_pointer_selects_a_half_shown_row_without_scrolling(cx: &mut TestAppContext) {
+    let titles: Vec<String> = (1..=12).map(|n| format!("Row {n}")).collect();
+    let commands = titles
+        .iter()
+        .map(|title| command(title, "sample_rust"))
+        .collect();
+    let (window, cx) = open_with(cx, commands);
+    cx.simulate_resize(gpui::size(gpui::px(640.), gpui::px(420.)));
+    cx.run_until_parked();
+    let list = cx.debug_bounds("rows").expect("the list is rendered");
+    let (index, half) = titles
+        .iter()
+        .enumerate()
+        .find_map(|(index, title)| {
+            let row = cx.debug_bounds(selector(&format!("row-{title}")))?;
+            (row.top() < list.bottom() && row.bottom() > list.bottom()).then_some((index, row))
+        })
+        .expect("a row the list's bottom edge cuts");
+    let at = gpui::point(half.center().x, list.bottom() - px(3.));
+    arrive(cx, at - gpui::point(px(1.), px(0.)));
+    cx.simulate_mouse_move(at, None::<MouseButton>, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(settle(&window, cx).selected, Some(index));
+    assert!(row_is_visible(cx, "row-Row 1"), "the list did not scroll");
+    assert!(!row_is_visible(
+        cx,
+        selector(&format!("row-{}", titles[index]))
+    ));
+
+    cx.simulate_keystrokes("down");
+    cx.run_until_parked();
+    assert_eq!(settle(&window, cx).selected, Some(index + 1));
+    assert!(
+        row_is_visible(cx, selector(&format!("row-{}", titles[index + 1]))),
+        "the keys' selection scrolls into view"
+    );
 }
 
 #[gpui::test]
@@ -860,7 +983,7 @@ fn keys_change_the_color_the_view_shows(cx: &mut TestAppContext, sample: &Sample
     // The view and the footer's menu button are the screen's tab stops,
     // and Tab visits the button and comes back; Escape closes the view.
     cx.simulate_keystrokes("tab");
-    assert_eq!(focused_label(cx).as_deref(), Some("More actions"));
+    assert_eq!(focused_label(cx).as_deref(), Some("Pane menu"));
     cx.simulate_keystrokes("shift-tab");
     assert_eq!(focused_label(cx).as_deref(), Some("Color"));
     cx.simulate_keystrokes("escape");
@@ -1030,6 +1153,57 @@ fn arrow_keys_move_through_the_matches_while_the_query_keeps_focus(cx: &mut Test
 }
 
 #[gpui::test]
+fn the_production_scenario_edits_searches_selects_opens_and_back_navigates(
+    cx: &mut TestAppContext,
+) {
+    // The visual workbench's fixture data (#91) can match the reference by
+    // rendering the production components directly, which says nothing
+    // about the launcher's own wiring. This smoke is that missing half:
+    // the real adapter — the real launcher, its query field, its search,
+    // its selection and its navigation — edits, searches, selects, opens
+    // and back-navigates through the real sample components, so a fixture
+    // that renders beautifully can never hide a broken production path.
+    let (window, cx) = open_with(cx, pane::sample_commands());
+    assert!(
+        query_has_focus(&window, cx),
+        "root search opens ready to type"
+    );
+
+    // Edits: typing reaches the query field the launcher owns.
+    cx.simulate_input("script");
+    let view = settle(&window, cx);
+    assert_eq!(view.query(), Some("script"));
+    // Searches: the real root adapter narrows the real commands.
+    assert_eq!(
+        row_titles(&window, cx),
+        ["JavaScript sample", "TypeScript sample"]
+    );
+
+    // Selects: the keyboard moves the real selection, rows rendered.
+    cx.simulate_keystrokes("down");
+    let view = settle(&window, cx);
+    assert_eq!(view.selected, Some(1));
+    assert!(cx.debug_bounds("row-TypeScript sample").is_some());
+
+    // Opens: Enter opens the selected command's own screen.
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert_eq!(
+        (view.screen, view.title.as_str()),
+        (Screen::Command, "TypeScript sample")
+    );
+
+    // Back-navigates: Escape returns to root search, ready to edit again.
+    cx.simulate_keystrokes("escape");
+    let view = settle(&window, cx);
+    assert!(matches!(view.screen, Screen::Root { .. }));
+    assert_eq!(view.query(), Some(""));
+    assert!(query_has_focus(&window, cx));
+    cx.simulate_input("rust");
+    assert_eq!(row_titles(&window, cx), ["Rust sample"]);
+}
+
+#[gpui::test]
 fn a_query_that_matches_nothing_says_so_and_escape_clears_it(cx: &mut TestAppContext) {
     let (window, cx) = open_with(cx, pane::sample_commands());
     cx.simulate_input("zzz");
@@ -1039,6 +1213,12 @@ fn a_query_that_matches_nothing_says_so_and_escape_clears_it(cx: &mut TestAppCon
         cx.debug_bounds("no-results").is_some(),
         "the empty state is shown"
     );
+    // The notice names the query and, with no fallback, says where one is
+    // offered (#96).
+    let nodes = accessible_nodes(cx);
+    let notice = node(&nodes, "Note", "Nothing matches “zzz”");
+    let description = notice["description"].as_str().unwrap_or_default();
+    assert!(description.contains("Manage extensions"), "{description}");
     cx.simulate_keystrokes("enter");
     assert_eq!(settle(&window, cx).status, Status::Idle);
     assert!(cx.debug_bounds("status-idle").is_some(), "nothing failed");
@@ -1119,7 +1299,7 @@ fn assistive_technology_sees_the_search_field_and_the_selected_result(cx: &mut T
     let search = node(&nodes, "EditableComboBox", "Search");
     assert_eq!(
         (&search["value"], &search["placeholder"]),
-        (&"script".into(), &"Search commands".into())
+        (&"script".into(), &"Search apps and commands…".into())
     );
     node(&nodes, "ListBox", "Results");
     node(&nodes, "ListBoxOption", "TypeScript sample");
@@ -1195,6 +1375,63 @@ fn typing_an_expression_shows_its_answer_and_enter_copies_it(cx: &mut TestAppCon
     cx.simulate_input("*");
     wait_for_rows(&window, cx, &[]);
     assert!(cx.debug_bounds("no-results").is_some());
+}
+
+/// A computed answer is drawn as the answer card (#96): under its
+/// command's title, named for what was typed and its answer, the selected
+/// result, whose primary action copies the answer. An expression with no
+/// answer shows the notice in its place and the field keeps focus; the
+/// expression completed brings the card back, selected.
+#[gpui::test]
+fn a_computed_answer_shows_as_the_card_under_its_commands_title(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let launcher = with_calculator(cx, data.path());
+    let (window, cx) = open_launcher(cx, launcher);
+
+    cx.simulate_input("6*7");
+    wait_for_rows(&window, cx, &["42"]);
+    let label = cx
+        .debug_bounds("section-Calculator")
+        .expect("the card is labelled with its command's title");
+    let card = cx.debug_bounds("row-42").expect("the answer is drawn");
+    assert!(cx.debug_bounds("answer-value").is_some(), "as the card");
+    assert_eq!(
+        card.top(),
+        label.bottom() + px(4.),
+        "the list's gap and the card's margin"
+    );
+    assert_eq!(card.size.height, px(20. + 44. + 16.));
+    let nodes = accessible_nodes(cx);
+    node(&nodes, "ListBoxOption", "6*7 = 42");
+    // The footer's primary button gives way to the install's status
+    // ("Installed Calculator") here; Enter below is the primary action.
+    assert_eq!(focused_label(cx).as_deref(), Some("6*7 = 42"));
+    assert!(query_has_focus(&window, cx));
+
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert_eq!(
+        view.status,
+        Status::Result("Copied 42 to the clipboard".into())
+    );
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("42".into())
+    );
+
+    // No answer: the notice for the query, no card, the field focused.
+    cx.simulate_input("*");
+    wait_for_rows(&window, cx, &[]);
+    assert!(cx.debug_bounds("no-results").is_some());
+    assert!(cx.debug_bounds("answer-value").is_none());
+    assert!(query_has_focus(&window, cx));
+    node(&accessible_nodes(cx), "Note", "Nothing matches “6*7*”");
+
+    // Completed, the card is back, selected.
+    cx.simulate_input("2");
+    wait_for_rows(&window, cx, &["84"]);
+    assert!(cx.debug_bounds("no-results").is_none());
+    assert_eq!(focused_label(cx).as_deref(), Some("6*7*2 = 84"));
 }
 
 /// A system with two applications, recording which one Pane opens.
@@ -1462,8 +1699,8 @@ fn the_footer_button_runs_the_selected_action_like_enter(cx: &mut TestAppContext
     cx.simulate_resize(gpui::size(px(380.), px(420.)));
     settle(&window, cx);
 
-    // The button sits in the strip's right half — the far left stays free
-    // for the app menu a later slice delivers there — and the keycap sits
+    // The button sits at the strip's right, before the Actions button —
+    // the far left holds the Pane mark and the hint — and the keycap sits
     // inside the button, at its right end.
     let footer = cx
         .debug_bounds("status-idle")
@@ -1471,9 +1708,12 @@ fn the_footer_button_runs_the_selected_action_like_enter(cx: &mut TestAppContext
     let button = cx
         .debug_bounds("primary-action")
         .expect("the action button is rendered");
+    let actions = cx
+        .debug_bounds("actions-button")
+        .expect("the Actions button is rendered");
     assert!(
-        button.left() > footer.left() + footer.size.width / 2.,
-        "the button is right-aligned: {button:?} in {footer:?}"
+        button.right() < actions.left() && actions.right() <= footer.right(),
+        "the buttons are right-aligned: {button:?}, {actions:?} in {footer:?}"
     );
     assert!(button.right() <= footer.right(), "inside the strip");
     assert!(
@@ -1488,7 +1728,9 @@ fn the_footer_button_runs_the_selected_action_like_enter(cx: &mut TestAppContext
         (above - below).abs() <= px(1.),
         "the button is centered in the strip: {above:?} above, {below:?} below"
     );
-    let keycap = cx.debug_bounds("keycap").expect("the keycap is rendered");
+    let keycap = cx
+        .debug_bounds("primary-action-keys")
+        .expect("the keycap is rendered");
     assert!(
         keycap.left() > button.left() && keycap.right() <= button.right(),
         "the keycap sits inside the button: {keycap:?} in {button:?}"
@@ -1727,6 +1969,10 @@ fn the_footer_button_labels_the_action_from_identity_not_the_row_title(cx: &mut 
     let manage = cx
         .debug_bounds("row-Manage extensions…")
         .expect("the row is rendered");
+    // The pointer moves onto the row, which selects it, and the click
+    // runs it.
+    arrive(cx, manage.center() - gpui::point(px(1.), px(0.)));
+    cx.simulate_mouse_move(manage.center(), None::<MouseButton>, Modifiers::none());
     cx.simulate_click(manage.center(), Modifiers::none());
     settle(&window, cx);
 
@@ -1750,6 +1996,11 @@ fn the_footer_button_labels_the_action_from_identity_not_the_row_title(cx: &mut 
     let manage = cx
         .debug_bounds("row-Manage extensions…")
         .expect("the row is rendered");
+    cx.simulate_mouse_move(
+        manage.center() + gpui::point(px(3.), px(0.)),
+        None::<MouseButton>,
+        Modifiers::none(),
+    );
     cx.simulate_click(manage.center(), Modifiers::none());
     settle(&window, cx);
 
@@ -1758,9 +2009,9 @@ fn the_footer_button_labels_the_action_from_identity_not_the_row_title(cx: &mut 
     node(&nodes, "Button", "Enable");
 }
 
-/// A long status owns the strip in place of the idle action, and stays
-/// readable: it wraps within the strip's width and the strip grows with
-/// it, as it did before the idle hint became the action.
+/// A long status takes the hint's place, and the primary action steps
+/// aside while Actions stays; the message stays readable: it wraps within
+/// the strip's room and the strip grows with it.
 #[gpui::test]
 fn a_long_status_replaces_the_idle_strip_and_stays_readable(cx: &mut TestAppContext) {
     let detail = "the operation could not be completed because the target \
@@ -1775,10 +2026,6 @@ fn a_long_status_replaces_the_idle_strip_and_stays_readable(cx: &mut TestAppCont
     let view = settle(&window, cx);
     assert_eq!(view.status, Status::Error(message));
 
-    assert!(
-        cx.debug_bounds("primary-action").is_none(),
-        "no idle action button while a status shows"
-    );
     let footer = cx
         .debug_bounds("status-error")
         .expect("the footer is rendered");
@@ -1786,8 +2033,19 @@ fn a_long_status_replaces_the_idle_strip_and_stays_readable(cx: &mut TestAppCont
         .debug_bounds("status-message")
         .expect("the message is rendered");
     assert!(
-        text.right() <= footer.right(),
-        "the message wraps within the footer, not past its right edge"
+        cx.debug_bounds("primary-action").is_none(),
+        "no primary action while a status shows"
+    );
+    let actions = cx
+        .debug_bounds("actions-button")
+        .expect("Actions stays while a status shows");
+    assert!(
+        cx.debug_bounds("footer-hint").is_none(),
+        "the message takes the hint's place"
+    );
+    assert!(
+        text.right() <= actions.left(),
+        "the message wraps short of Actions: {text:?}, {actions:?}"
     );
     assert!(
         text.size.height > px(50.),
@@ -2131,14 +2389,14 @@ fn typing_selection_and_row_changes_never_transition(cx: &mut TestAppContext) {
 /// under it starts no arrival, and reducing motion mid-arrival ends it on
 /// the next drawn frame. Either way the window schedules no frame for
 /// presentation.
-/// The launcher's result rows take the pointer feedback: the hover wash
-/// fades in over the shared pointer span, the press takes the stronger
-/// wash and hands it to the selection when the click lands, and a fast
-/// reversal settles with the window idle. The keyboard's selection still
-/// moves at once — nothing of the wash fades for it — and reduced motion
-/// snaps the wash with no frame at all.
+/// Root search's rows follow the reference's pointer (#94): movement onto
+/// a row selects it at once — the selected wash arrives with no fade, and
+/// the window asks for no frame — and the footer and Enter act on it,
+/// once. Off root search, an opened command's items keep the shared
+/// pointer fade: their hover wash fades in and settles with the window
+/// idle.
 #[gpui::test]
-fn a_result_row_fades_its_pointer_washes(cx: &mut TestAppContext) {
+fn root_rows_select_under_the_moving_pointer_at_once(cx: &mut TestAppContext) {
     let (window, cx) = open_with(
         cx,
         vec![
@@ -2150,88 +2408,522 @@ fn a_result_row_fades_its_pointer_washes(cx: &mut TestAppContext) {
     settle_frames(cx);
     assert_eq!(view.selected, Some(0));
 
-    // The pointer arrives on an unselected row: the hover wash fades in,
-    // so the window asks for frames while it runs and none once it has.
     let row = cx
         .debug_bounds("row-JavaScript sample")
         .expect("an unselected row");
-    cx.simulate_mouse_move(row.center(), None::<MouseButton>, Modifiers::none());
-    cx.run_until_parked();
-    assert!(
-        frame(cx, Duration::from_millis(40)) >= 1,
-        "the hover wash is fading"
-    );
-    assert!(
-        frame(cx, Duration::from_millis(160)) >= 1,
-        "the hover wash finished fading"
-    );
-    assert_eq!(settle_frames(cx), 0, "a settled wash requests no frame");
-
-    // Pressed: the wash strengthens, and the activation is immediate —
-    // the release's click selects and opens the row without waiting on
-    // any fade. The pointer leaves the row it opened, and the wash it
-    // held there settles with it, so the frames this test counts are
-    // the view's own — none of the pointer's.
-    cx.simulate_click(row.center(), Modifiers::none());
-    let view = settle(&window, cx);
-    assert_eq!(view.selected, Some(1), "the click selected the row");
-    assert!(
-        matches!(view.screen, Screen::Command),
-        "the click opened the row"
+    // The first event after the window shows only records where the
+    // pointer is (a window appearing under a resting pointer gets one).
+    arrive(cx, row.center());
+    assert_eq!(
+        settle(&window, cx).selected,
+        Some(0),
+        "the first event selected nothing"
     );
     cx.simulate_mouse_move(
-        gpui::point(px(-100.), px(-100.)),
+        row.center() + gpui::point(px(1.), px(0.)),
         None::<MouseButton>,
         Modifiers::none(),
     );
+    let view = settle(&window, cx);
+    assert_eq!(view.selected, Some(1), "the pointer's movement selected it");
+    assert_eq!(settle_frames(cx), 0, "the root wash does not fade");
+
+    // The footer's action follows what the pointer selected: Pane's own
+    // rows name their actions differently from a command's.
+    let own = view
+        .rows
+        .iter()
+        .position(|row| !["Rust sample", "JavaScript sample"].contains(&row.title.as_str()))
+        .expect("Pane lists its own rows after the commands");
+    let own_row = cx
+        .debug_bounds(selector(&format!("row-{}", view.rows[own].title)))
+        .expect("Pane's own row is drawn");
+    cx.simulate_mouse_move(own_row.center(), None::<MouseButton>, Modifiers::none());
+    assert_eq!(settle(&window, cx).selected, Some(own));
+    let nodes = accessible_nodes(cx);
+    assert!(
+        !nodes
+            .iter()
+            .any(|node| node["role"] == "Button" && node["label"] == "Open command"),
+        "the footer names the selected row's own action"
+    );
+    cx.simulate_mouse_move(row.center(), None::<MouseButton>, Modifiers::none());
+    assert_eq!(settle(&window, cx).selected, Some(1));
+    node(&accessible_nodes(cx), "Button", "Open command");
+
+    // Enter opens what the pointer selected.
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert!(matches!(view.screen, Screen::Command));
+    assert_eq!(view.title, "JavaScript sample");
     settle_frames(cx);
 
-    // Back at root, a fast reversal: the pointer enters part-way
-    // through the fade-in and leaves again, and the wash settles back
-    // to rest with the window idle.
-    cx.simulate_keystrokes("escape");
-    let view = settle(&window, cx);
-    assert!(matches!(view.screen, Screen::Root { .. }));
-    let row = cx
-        .debug_bounds("row-JavaScript sample")
-        .expect("an unselected row");
-    cx.simulate_mouse_move(row.center(), None::<MouseButton>, Modifiers::none());
+    // The opened command's items share root search's visuals (#100):
+    // their washes change at once, and hovering selects nothing.
+    let item = view
+        .rows
+        .get(1)
+        .map(|row| format!("row-{}", row.title))
+        .expect("the sample lists more than one item");
+    let item = cx
+        .debug_bounds(selector(&item))
+        .expect("an unselected item");
+    cx.simulate_mouse_move(item.center(), None::<MouseButton>, Modifiers::none());
     cx.run_until_parked();
-    assert!(frame(cx, Duration::from_millis(40)) >= 1);
-    cx.simulate_mouse_move(
-        gpui::point(px(-100.), px(-100.)),
-        None::<MouseButton>,
-        Modifiers::none(),
-    );
-    cx.run_until_parked();
-    assert!(frame(cx, Duration::from_millis(40)) >= 1);
-    assert!(frame(cx, Duration::from_millis(160)) >= 1);
-    assert_eq!(settle_frames(cx), 0, "the reversal settled the wash");
-
-    // The keyboard's selection still moves at once: nothing of the wash
-    // fades for it, and no frame is asked.
-    cx.simulate_keystrokes("down");
-    let view = settle(&window, cx);
-    assert_eq!(view.selected, Some(1));
     assert_eq!(
         settle_frames(cx),
         0,
-        "the selection's move requested no frame"
+        "the item's hover wash asks for no frame"
     );
-
-    // Reduced motion: the wash snaps, and no frame is asked for at all.
-    cx.update(|_, cx| cx.set_reduce_motion(true));
-    cx.simulate_mouse_move(row.center(), None::<MouseButton>, Modifiers::none());
-    cx.run_until_parked();
-    assert_eq!(settle_frames(cx), 0, "the wash snapped in");
+    assert_eq!(
+        settle(&window, cx).selected,
+        Some(0),
+        "an item's hover selects nothing"
+    );
 }
 
-/// The footer's primary action takes the pointer feedback: the wash
-/// relaxes one rung while the button is held and fades back on release,
-/// and the activation is immediate — the click acts the moment it
-/// happens, never waiting on the fade.
+/// Root search's rows sit under section labels from the launcher's
+/// presentation: "Commands" over a blank query's list — no claim of
+/// recent use — and "Results" with their count over a query's, each row
+/// a label's height below it. (Scrolling to the selection past a label is
+/// `the_list_scrolls_to_keep_the_selected_row_visible`'s.)
 #[gpui::test]
-fn the_primary_action_fades_its_pressed_wash(cx: &mut TestAppContext) {
+fn root_rows_sit_under_their_section_labels(cx: &mut TestAppContext) {
+    let (window, cx) = three_rows(cx);
+    let label = cx
+        .debug_bounds("section-Commands")
+        .expect("a blank query's rows are its commands");
+    let first = cx.debug_bounds("row-Alpha").expect("the first row");
+    assert_eq!(label.size.height, px(30.));
+    assert_eq!(first.top(), label.bottom() + px(2.), "the list's 2px gap");
+    assert!(cx.debug_bounds("section-Results").is_none());
+
+    cx.simulate_input("char");
+    let view = settle(&window, cx);
+    assert_eq!(view.rows[0].title, "Charlie");
+    let label = cx
+        .debug_bounds("section-Results")
+        .expect("a query's rows are its results");
+    let first = cx.debug_bounds("row-Charlie").expect("the match");
+    assert_eq!(first.top(), label.bottom() + px(2.));
+    assert!(cx.debug_bounds("section-Commands").is_none());
+}
+
+/// Three root rows — Alpha, Bravo and Charlie, which open the Rust,
+/// JavaScript and TypeScript samples — the pointer outside the window.
+fn three_rows(cx: &mut TestAppContext) -> (gpui::Entity<LauncherWindow>, &mut VisualTestContext) {
+    let (window, cx) = open_with(
+        cx,
+        vec![
+            command("Alpha", RUST.component),
+            command("Bravo", JAVASCRIPT.component),
+            command("Charlie", TYPESCRIPT.component),
+        ],
+    );
+    settle(&window, cx);
+    (window, cx)
+}
+
+/// The pointer's first event in the window, at `at`: it only records
+/// where the pointer is.
+fn arrive(cx: &mut VisualTestContext, at: gpui::Point<gpui::Pixels>) {
+    cx.simulate_mouse_move(at, None::<MouseButton>, Modifiers::none());
+}
+
+fn center_of(cx: &mut VisualTestContext, row: &'static str) -> gpui::Point<gpui::Pixels> {
+    cx.debug_bounds(row)
+        .unwrap_or_else(|| panic!("{row} is drawn"))
+        .center()
+}
+
+/// Move to B, then Down with the pointer resting on B: C stays selected —
+/// a resting pointer never undoes the keys, even when the platform repeats
+/// its position — and moving again over B selects B.
+#[gpui::test]
+fn a_resting_pointer_leaves_the_keys_selection_alone(cx: &mut TestAppContext) {
+    let (window, cx) = three_rows(cx);
+    let bravo = center_of(cx, "row-Bravo");
+    arrive(cx, bravo - gpui::point(px(1.), px(0.)));
+    cx.simulate_mouse_move(bravo, None::<MouseButton>, Modifiers::none());
+    assert_eq!(settle(&window, cx).selected, Some(1));
+    cx.simulate_keystrokes("down");
+    assert_eq!(settle(&window, cx).selected, Some(2));
+    // The same position again is not movement.
+    cx.simulate_mouse_move(bravo, None::<MouseButton>, Modifiers::none());
+    assert_eq!(
+        settle(&window, cx).selected,
+        Some(2),
+        "the keys' selection stays"
+    );
+    // Real movement over B selects it again.
+    cx.simulate_mouse_move(
+        bravo + gpui::point(px(6.), px(0.)),
+        None::<MouseButton>,
+        Modifiers::none(),
+    );
+    assert_eq!(settle(&window, cx).selected, Some(1));
+    // The keys stay in range at the ends.
+    cx.simulate_keystrokes("up up up");
+    assert_eq!(settle(&window, cx).selected, Some(0));
+    let last = settle(&window, cx).rows.len() - 1;
+    for _ in 0..=last {
+        cx.simulate_keystrokes("down");
+    }
+    assert_eq!(settle(&window, cx).selected, Some(last));
+}
+
+/// A click on an unselected row with no movement before it selects it;
+/// a click on the selected row runs it. A pointer that moved onto a row
+/// selected it already, so an ordinary click runs it, once.
+#[gpui::test]
+fn a_click_selects_an_unselected_row_and_runs_the_selected_one(cx: &mut TestAppContext) {
+    let (window, cx) = three_rows(cx);
+    let bravo = center_of(cx, "row-Bravo");
+    cx.simulate_click(bravo, Modifiers::none());
+    let view = settle(&window, cx);
+    assert!(matches!(view.screen, Screen::Root { .. }), "nothing ran");
+    assert_eq!(view.selected, Some(1), "the click selected Bravo");
+    cx.simulate_click(bravo, Modifiers::none());
+    let view = settle(&window, cx);
+    assert_eq!(
+        (view.screen, view.title.as_str()),
+        (Screen::Command, "JavaScript sample"),
+        "the second click ran Bravo"
+    );
+
+    cx.simulate_keystrokes("escape");
+    settle(&window, cx);
+    let charlie = center_of(cx, "row-Charlie");
+    arrive(cx, charlie - gpui::point(px(1.), px(0.)));
+    cx.simulate_mouse_move(charlie, None::<MouseButton>, Modifiers::none());
+    cx.simulate_click(charlie, Modifiers::none());
+    let view = settle(&window, cx);
+    assert_eq!(
+        (view.screen, view.title.as_str()),
+        (Screen::Command, "TypeScript sample"),
+        "moving then clicking ran Charlie"
+    );
+    assert!(
+        !matches!(view.status, Status::Error(_)),
+        "{:?}",
+        view.status
+    );
+}
+
+/// The selection-freeze input at the root interaction boundary: while a
+/// layer owns the selected target (the contextual Actions panel, #95),
+/// moving over or clicking another row changes nothing; the keys still
+/// move the selection. Thawed, movement selects again.
+#[gpui::test]
+fn a_frozen_selection_ignores_the_pointer(cx: &mut TestAppContext) {
+    let (window, cx) = three_rows(cx);
+    window.update(cx, |this, cx| this.freeze_pointer_selection(true, cx));
+    let bravo = center_of(cx, "row-Bravo");
+    arrive(cx, bravo - gpui::point(px(1.), px(0.)));
+    cx.simulate_mouse_move(bravo, None::<MouseButton>, Modifiers::none());
+    cx.simulate_click(bravo, Modifiers::none());
+    let view = settle(&window, cx);
+    assert!(matches!(view.screen, Screen::Root { .. }));
+    assert_eq!(view.selected, Some(0), "the frozen target stayed");
+    cx.simulate_keystrokes("down down");
+    assert_eq!(
+        settle(&window, cx).selected,
+        Some(2),
+        "the keys still move it"
+    );
+
+    window.update(cx, |this, cx| this.freeze_pointer_selection(false, cx));
+    cx.simulate_mouse_move(
+        bravo + gpui::point(px(4.), px(0.)),
+        None::<MouseButton>,
+        Modifiers::none(),
+    );
+    assert_eq!(
+        settle(&window, cx).selected,
+        Some(1),
+        "thawed, movement selects"
+    );
+}
+
+fn actions_open(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> bool {
+    cx.read_entity(window, |window, _| window.actions_open())
+}
+
+/// Whether the Actions panel's search field has keyboard focus.
+fn actions_filter_has_focus(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> bool {
+    use gpui::Focusable;
+    let Some(filter) = cx.read_entity(window, |window, _| window.actions_filter()) else {
+        return false;
+    };
+    cx.update(|window, cx| filter.focus_handle(cx).is_focused(window))
+}
+
+/// The open binding opens the selected result's actions with focus in
+/// their search; Escape closes only the panel, giving focus back to the
+/// query, and changes neither the query nor the selection.
+#[gpui::test]
+fn the_open_binding_shows_the_selected_results_actions_and_escape_closes_only_them(
+    cx: &mut TestAppContext,
+) {
+    let (window, cx) = three_rows(cx);
+    cx.simulate_input("a");
+    settle(&window, cx);
+    cx.simulate_keystrokes("down");
+    let before = settle(&window, cx);
+    let target = before.selected;
+
+    cx.simulate_keystrokes("ctrl-k");
+    settle(&window, cx);
+    assert!(actions_open(&window, cx));
+    assert!(actions_filter_has_focus(&window, cx), "typing filters");
+    assert!(cx.debug_bounds("actions-panel").is_some());
+    assert!(cx.debug_bounds("actions-dimmer").is_some());
+    let primary = cx.read_entity(&window, |window, _| window.launcher().selected_action());
+    assert!(
+        cx.debug_bounds(selector(&format!("action-{}", primary.label)))
+            .is_some(),
+        "the primary action is listed"
+    );
+
+    cx.simulate_keystrokes("escape");
+    let view = settle(&window, cx);
+    assert!(!actions_open(&window, cx));
+    assert!(cx.debug_bounds("actions-dimmer").is_none());
+    assert!(query_has_focus(&window, cx), "focus returns to the query");
+    assert_eq!(view.query(), Some("a"), "the query is untouched");
+    assert_eq!(view.selected, target, "the target is untouched");
+
+    // The next Escape follows the launcher's own rules: it clears the
+    // query.
+    cx.simulate_keystrokes("escape");
+    assert_eq!(settle(&window, cx).query(), Some(""));
+}
+
+/// The footer's Actions button and the binding open and close the same
+/// panel; while it is open the button shows it pressed.
+#[gpui::test]
+fn the_actions_button_and_the_binding_toggle_one_panel(cx: &mut TestAppContext) {
+    let (window, cx) = three_rows(cx);
+    let button = center_of(cx, "actions-button");
+    arrive(cx, button - gpui::point(px(1.), px(0.)));
+    cx.simulate_click(button, Modifiers::none());
+    settle(&window, cx);
+    assert!(actions_open(&window, cx), "the button opens it");
+
+    // A click on the button while open lands outside the panel: it closes
+    // it, consumed, and does not reopen it.
+    cx.simulate_click(button, Modifiers::none());
+    settle(&window, cx);
+    assert!(!actions_open(&window, cx), "a second click closes it");
+
+    cx.simulate_keystrokes("ctrl-k");
+    settle(&window, cx);
+    assert!(actions_open(&window, cx));
+    cx.simulate_keystrokes("ctrl-k");
+    settle(&window, cx);
+    assert!(!actions_open(&window, cx), "the binding toggles it too");
+}
+
+/// Enter in the panel runs the primary action on the panel's target, as
+/// the footer's button and Enter on the list do.
+#[gpui::test]
+fn the_primary_action_runs_on_the_target_from_the_panel(cx: &mut TestAppContext) {
+    let (window, cx) = three_rows(cx);
+    cx.simulate_keystrokes("down");
+    settle(&window, cx);
+    cx.simulate_keystrokes("ctrl-k");
+    settle(&window, cx);
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert!(!actions_open(&window, cx));
+    // Bravo is the JavaScript sample's component, which titles its view.
+    assert_eq!(
+        (view.screen, view.title.as_str()),
+        (Screen::Command, "JavaScript sample")
+    );
+}
+
+/// Typing filters the panel by label, without touching root search's
+/// query; text that matches nothing says so, and runs nothing.
+#[gpui::test]
+fn typing_filters_the_actions_and_nothing_matching_says_so(cx: &mut TestAppContext) {
+    let (window, cx) = three_rows(cx);
+    cx.simulate_keystrokes("ctrl-k");
+    settle(&window, cx);
+    cx.simulate_input("zzz");
+    let view = settle(&window, cx);
+    assert_eq!(view.query(), Some(""), "root search's query is untouched");
+    assert!(cx.debug_bounds("actions-empty").is_some());
+
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert!(matches!(view.screen, Screen::Root { .. }), "nothing ran");
+}
+
+/// A click outside the panel closes it and is consumed: the result under
+/// the pointer is neither selected nor run.
+#[gpui::test]
+fn an_outside_click_closes_the_panel_without_invoking_what_it_covered(cx: &mut TestAppContext) {
+    let (window, cx) = three_rows(cx);
+    cx.simulate_keystrokes("ctrl-k");
+    settle(&window, cx);
+    let charlie = center_of(cx, "row-Charlie");
+    cx.simulate_click(charlie, Modifiers::none());
+    let view = settle(&window, cx);
+    assert!(!actions_open(&window, cx));
+    assert!(matches!(view.screen, Screen::Root { .. }), "nothing ran");
+    assert_eq!(view.selected, Some(0), "nor was it selected");
+}
+
+/// While the panel is open, pointer movement over the results leaves its
+/// target selected.
+#[gpui::test]
+fn the_pointer_cannot_change_the_panels_target(cx: &mut TestAppContext) {
+    let (window, cx) = three_rows(cx);
+    let bravo = center_of(cx, "row-Bravo");
+    arrive(cx, bravo - gpui::point(px(1.), px(0.)));
+    cx.simulate_keystrokes("ctrl-k");
+    settle(&window, cx);
+    cx.simulate_mouse_move(bravo, None::<MouseButton>, Modifiers::none());
+    assert_eq!(settle(&window, cx).selected, Some(0));
+}
+
+/// A target that leaves the results while the panel is open (a new
+/// search behind it, a package removed or disabled) shows its entries
+/// unavailable, and Enter runs nothing.
+#[gpui::test]
+fn a_target_gone_from_behind_the_panel_runs_nothing(cx: &mut TestAppContext) {
+    let (window, cx) = three_rows(cx);
+    cx.simulate_keystrokes("down");
+    settle(&window, cx);
+    cx.simulate_keystrokes("ctrl-k");
+    settle(&window, cx);
+    // Bravo leaves the results behind the open panel.
+    let launcher = cx.read_entity(&window, |window, _| window.launcher().clone());
+    cx.foreground_executor()
+        .block_on(launcher.set_query("charlie"));
+    redraw(&window, cx);
+    assert_eq!(row_titles(&window, cx), ["Charlie"]);
+    assert!(actions_open(&window, cx));
+
+    // Neither Enter nor a click on the entry runs it.
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert!(matches!(view.screen, Screen::Root { .. }), "nothing ran");
+    let entry = center_of(cx, "action-Open command");
+    cx.simulate_click(entry, Modifiers::none());
+    let view = settle(&window, cx);
+    assert!(matches!(view.screen, Screen::Root { .. }), "nothing ran");
+}
+
+/// With no result selected, the panel says there is nothing to act on.
+#[gpui::test]
+fn with_nothing_selected_the_panel_says_so(cx: &mut TestAppContext) {
+    let (window, cx) = three_rows(cx);
+    cx.simulate_input("zzzz");
+    let view = settle(&window, cx);
+    assert_eq!(view.selected, None);
+    cx.simulate_keystrokes("ctrl-k");
+    settle(&window, cx);
+    assert!(cx.debug_bounds("actions-empty").is_some());
+    assert!(
+        cx.debug_bounds("actions-header").is_none(),
+        "no target to name"
+    );
+    cx.simulate_keystrokes("enter");
+    assert!(matches!(settle(&window, cx).screen, Screen::Root { .. }));
+}
+
+/// An installed command's actions route to its existing alias
+/// configuration; the form returns to the search it came from.
+#[gpui::test]
+fn an_installed_commands_alias_action_opens_its_alias_form(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let folder = source.path().join("hello");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("pane.json"),
+        r#"{ "manifestVersion": 1, "title": "Hello", "apiVersion": "0.1",
+  "commands": [{ "id": "hello", "title": "Say hello", "component": "hello.wasm" }] }"#,
+    )
+    .unwrap();
+    std::fs::copy(
+        command("hello", "sample_rust").component,
+        folder.join("hello.wasm"),
+    )
+    .unwrap();
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    let (window, cx) = open_launcher(cx, launcher.clone());
+    cx.foreground_executor()
+        .block_on(launcher.install_package(&folder));
+    launcher.show_root_search();
+    redraw(&window, cx);
+    cx.simulate_input("say");
+    settle(&window, cx);
+
+    cx.simulate_keystrokes("ctrl-k");
+    settle(&window, cx);
+    assert!(cx.debug_bounds("action-Add Alias…").is_some());
+    assert!(cx.debug_bounds("action-group-Pane").is_some());
+    cx.simulate_input("alias");
+    settle(&window, cx);
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert!(view.form().is_some(), "{view:?}");
+    assert_eq!(view.title, "Alias for Say hello");
+
+    cx.simulate_keystrokes("escape");
+    let view = settle(&window, cx);
+    assert_eq!(
+        view.screen,
+        Screen::Root {
+            query: "say".into()
+        }
+    );
+}
+
+/// The footer menu acts on the row it opened for: while it is open,
+/// moving over another row leaves the selection where it was; once it
+/// closes, movement selects again.
+#[gpui::test]
+fn an_open_footer_menu_holds_the_selection_against_the_pointer(cx: &mut TestAppContext) {
+    let (window, cx) = three_rows(cx);
+    let menu = center_of(cx, "footer-menu");
+    arrive(cx, menu - gpui::point(px(1.), px(0.)));
+    cx.simulate_click(menu, Modifiers::none());
+    settle(&window, cx);
+    assert!(cx.debug_bounds("menu").is_some(), "the menu is open");
+
+    let bravo = center_of(cx, "row-Bravo");
+    cx.simulate_mouse_move(bravo, None::<MouseButton>, Modifiers::none());
+    assert_eq!(
+        settle(&window, cx).selected,
+        Some(0),
+        "the menu's target stayed"
+    );
+
+    cx.simulate_keystrokes("escape");
+    settle(&window, cx);
+    assert!(cx.debug_bounds("menu").is_none(), "the menu closed");
+    cx.simulate_mouse_move(
+        bravo + gpui::point(px(4.), px(0.)),
+        None::<MouseButton>,
+        Modifiers::none(),
+    );
+    assert_eq!(
+        settle(&window, cx).selected,
+        Some(1),
+        "closed, movement selects"
+    );
+}
+
+/// The footer's buttons take the reference's `.fbtn` feedback: a hover
+/// wash that changes at once, never a fade, and a press that moves no
+/// geometry; the click acts the moment it happens.
+#[gpui::test]
+fn the_footer_buttons_change_their_washes_at_once(cx: &mut TestAppContext) {
     let (window, cx) = open(cx, &RUST);
     settle(&window, cx);
     settle_frames(cx);
@@ -2240,14 +2932,6 @@ fn the_primary_action_fades_its_pressed_wash(cx: &mut TestAppContext) {
         .expect("the primary action");
     let at_rest = button.origin;
 
-    // Press and hold: the wash relaxes one rung — the frames the fade
-    // asks for are delivered while the button is held, and the button
-    // stays exactly where it was (the press moves color, not geometry).
-    // The pointer moves onto the button before pressing it, as a user's
-    // does: a click's landing alone does not tell a control it is
-    // hovered, and the wash the button keeps would never settle with
-    // the layout saying the pointer is gone and the paint saying it is
-    // there.
     cx.simulate_mouse_move(button.center(), None::<MouseButton>, Modifiers::none());
     cx.simulate_mouse_down(button.center(), MouseButton::Left, Modifiers::none());
     let held = cx
@@ -2258,31 +2942,13 @@ fn the_primary_action_fades_its_pressed_wash(cx: &mut TestAppContext) {
         "the press moved no geometry: {:?} vs {:?}",
         held, at_rest
     );
-    assert!(
-        frame(cx, Duration::from_millis(40)) >= 1,
-        "the pressed wash is fading"
-    );
-    // Release: the click activates at once — the row opens — and the
-    // wash fades back to the selected chrome, leaving the window idle.
+    assert_eq!(settle_frames(cx), 0, "the hover wash asks for no frame");
     cx.simulate_mouse_up(button.center(), MouseButton::Left, Modifiers::none());
     let view = settle(&window, cx);
     assert!(
         matches!(view.screen, Screen::Command),
         "the release activated the selected row at once"
     );
-    assert!(frame(cx, Duration::from_millis(160)) >= 1);
-    assert_eq!(settle_frames(cx), 0, "the release settled the wash");
-
-    // Reduced motion: the press snaps, and no frame is asked for.
-    cx.simulate_keystrokes("escape");
-    settle(&window, cx);
-    settle_frames(cx);
-    cx.update(|_, cx| cx.set_reduce_motion(true));
-    let button = cx
-        .debug_bounds("primary-action")
-        .expect("the primary action");
-    cx.simulate_mouse_down(button.center(), MouseButton::Left, Modifiers::none());
-    assert_eq!(settle_frames(cx), 0, "the pressed wash snapped in");
 }
 
 #[gpui::test]
@@ -2361,4 +3027,789 @@ fn a_window_that_stops_drawing_settles_its_arrival_on_the_next_frame_it_draws(
         "the arrival settled while the window did not draw"
     );
     assert_eq!(settle_frames(cx), 0, "the shown frame asked for nothing");
+}
+
+/// Pane's Clipboard History in the split view (#102), through the window:
+/// the real default extension from `cargo xtask guests`, acquired from an
+/// artifact source on 127.0.0.1, over a fake system clipboard that never
+/// touches the real one.
+mod clipboard_split {
+    use std::fs;
+    use std::sync::{Arc, Mutex};
+
+    use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext, prelude::*};
+    use pane::LauncherWindow;
+    use pane_core::clipboard::{
+        CaptureState, ClipboardSystem, Content, ManualClock, Markers, Observation, Sink, Watch,
+    };
+    use pane_core::defaults::ArtifactSource;
+    use pane_core::{DefaultExtension, Launcher, PackageIdentity, Runtime, Screen};
+    use tempfile::TempDir;
+
+    use super::artifacts::Artifacts;
+    use super::{open_launcher, settle, until};
+
+    #[derive(Default)]
+    struct Kept {
+        sink: Option<Arc<dyn Sink>>,
+        written: Vec<String>,
+    }
+
+    /// A system clipboard that records what Pane writes and reports only
+    /// the copies a test makes.
+    #[derive(Clone, Default)]
+    struct FakeClipboard(Arc<Mutex<Kept>>);
+
+    struct FakeWatch(Arc<Mutex<Kept>>);
+
+    impl Drop for FakeWatch {
+        fn drop(&mut self) {
+            self.0.lock().unwrap().sink = None;
+        }
+    }
+
+    impl FakeClipboard {
+        /// `text` copied from `source`: whether Pane watched.
+        fn copy(&self, text: &str, source: Option<&str>) -> bool {
+            let Some(sink) = self.0.lock().unwrap().sink.clone() else {
+                return false;
+            };
+            let ticket = sink.reading();
+            sink.observed(
+                ticket,
+                Observation {
+                    content: Content::Text(text.into()),
+                    markers: Markers::default(),
+                    source: source.map(str::to_owned),
+                },
+            );
+            true
+        }
+
+        fn written(&self) -> Vec<String> {
+            self.0.lock().unwrap().written.clone()
+        }
+    }
+
+    impl ClipboardSystem for FakeClipboard {
+        fn unavailable(&self) -> Option<String> {
+            None
+        }
+
+        fn watch(&self, sink: Arc<dyn Sink>) -> Result<Watch, String> {
+            self.0.lock().unwrap().sink = Some(sink);
+            Ok(Watch::new(FakeWatch(self.0.clone())))
+        }
+
+        fn write_text(&self, text: &str) -> Result<(), String> {
+            self.0.lock().unwrap().written.push(text.into());
+            Ok(())
+        }
+    }
+
+    /// The assembled Clipboard History package's files.
+    fn package_files() -> Vec<(String, Vec<u8>)> {
+        let folder = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/guests/packages/clipboard-history");
+        assert!(
+            folder.is_dir(),
+            "{} is missing; run `cargo xtask guests`",
+            folder.display()
+        );
+        let mut files: Vec<(String, Vec<u8>)> = fs::read_dir(&folder)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.is_file())
+            .map(|path| {
+                let name = path.file_name().unwrap().to_str().unwrap().to_owned();
+                (name, fs::read(&path).unwrap())
+            })
+            .collect();
+        files.sort();
+        files
+    }
+
+    /// One test's Pane: its data, artifact source, clock and clipboard.
+    struct World {
+        data: TempDir,
+        artifacts: Artifacts,
+        clipboard: FakeClipboard,
+        clock: Arc<ManualClock>,
+    }
+
+    impl World {
+        fn new() -> World {
+            let world = World {
+                data: tempfile::tempdir().unwrap(),
+                artifacts: Artifacts::start(),
+                clipboard: FakeClipboard::default(),
+                clock: ManualClock::at(1_791_208_920_000),
+            };
+            let files = package_files();
+            let manifest: serde_json::Value = serde_json::from_slice(
+                &files
+                    .iter()
+                    .find(|(path, _)| path == "pane.json")
+                    .expect("the package has a pane.json")
+                    .1,
+            )
+            .unwrap();
+            let borrowed: Vec<(&str, Vec<u8>)> = files
+                .iter()
+                .map(|(path, contents)| (path.as_str(), contents.clone()))
+                .collect();
+            world.artifacts.publish(
+                "clipboard-history",
+                manifest["version"].as_str().unwrap(),
+                &borrowed,
+            );
+            world
+        }
+
+        /// Pane with Clipboard History acquired as its default extension,
+        /// history on and `texts` copied in order (the last newest).
+        fn launcher(&self, cx: &mut TestAppContext, texts: &[&str]) -> Launcher {
+            cx.executor().allow_parking();
+            let launcher = Launcher::with_packages(
+                Runtime::start(),
+                vec![],
+                self.data.path().join("extensions"),
+            )
+            .with_defaults(
+                ArtifactSource::local(self.artifacts.url()).unwrap(),
+                vec![DefaultExtension {
+                    id: "clipboard-history".into(),
+                    title: "Clipboard History".into(),
+                }],
+            )
+            .with_clock(self.clock.clone())
+            .with_clipboard(Arc::new(self.clipboard.clone()));
+            cx.foreground_executor()
+                .block_on(launcher.acquire_defaults());
+            open_command(cx, &launcher, COMMAND);
+            let view = launcher.clipboard_history().expect("the history is shown");
+            launcher
+                .set_clipboard_capture(&view, CaptureState::On)
+                .unwrap();
+            for text in texts {
+                assert!(self.clipboard.copy(text, Some("notepad.exe")));
+                self.clock.advance(std::time::Duration::from_secs(60));
+            }
+            launcher.show_root_search();
+            launcher
+        }
+    }
+
+    const COMMAND: &str = "default:clipboard-history#clipboard-history";
+
+    /// Opens the command whose root row has id `id`, through the launcher.
+    fn open_command(cx: &mut TestAppContext, launcher: &Launcher, id: &str) {
+        launcher.show_root_search();
+        cx.foreground_executor()
+            .block_on(launcher.set_query("clipboard"));
+        let index = launcher
+            .view()
+            .rows
+            .iter()
+            .position(|row| row.id == id)
+            .expect("the command's row");
+        launcher.select(index);
+        cx.foreground_executor()
+            .block_on(launcher.activate_selected());
+        assert_eq!(launcher.view().screen, Screen::Command);
+    }
+
+    /// Opens the window over `launcher` and the history in it, as a user
+    /// does: typing in root search, then Enter.
+    fn open_history(
+        cx: &mut TestAppContext,
+        launcher: Launcher,
+    ) -> (Entity<LauncherWindow>, &mut VisualTestContext) {
+        let (window, cx) = open_launcher(cx, launcher);
+        cx.simulate_input("clipboard history");
+        until(&window, cx, |view| {
+            view.rows.first().is_some_and(|row| row.id == COMMAND)
+        });
+        cx.simulate_keystrokes("enter");
+        until(&window, cx, |view| view.screen == Screen::Command);
+        assert!(split_shown(&window, cx), "the split view shows");
+        (window, cx)
+    }
+
+    fn split_shown(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> bool {
+        cx.read_entity(window, |window, _| window.clipboard_split_shown())
+    }
+
+    fn listed(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> Vec<String> {
+        cx.read_entity(window, |window, _| {
+            window
+                .launcher()
+                .clipboard_history()
+                .map(|view| view.records.into_iter().map(|record| record.text).collect())
+                .unwrap_or_default()
+        })
+    }
+
+    fn click(cx: &mut VisualTestContext, selector: &'static str) {
+        let bounds = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} is drawn"));
+        cx.simulate_click(bounds.center(), Modifiers::none());
+    }
+
+    #[gpui::test]
+    fn a_click_selects_a_record_without_copying_it_and_enter_copies_it(cx: &mut TestAppContext) {
+        let world = World::new();
+        let launcher = world.launcher(cx, &["first", "second", "third"]);
+        let (window, cx) = open_history(cx, launcher);
+        // Newest first, the newest selected and previewed as text.
+        assert_eq!(listed(&window, cx), ["third", "second", "first"]);
+        for row in ["clip-third", "clip-second", "clip-first"] {
+            assert!(cx.debug_bounds(row).is_some(), "{row} is drawn");
+        }
+        assert!(cx.debug_bounds("clipboard-preview-text").is_some());
+        assert!(cx.debug_bounds("section-Today").is_some());
+
+        click(cx, "clip-first");
+        settle(&window, cx);
+        assert!(world.clipboard.written().is_empty(), "a click only selects");
+
+        cx.simulate_keystrokes("enter");
+        settle(&window, cx);
+        assert_eq!(world.clipboard.written(), ["first"]);
+        assert!(
+            cx.debug_bounds("status-result").is_some(),
+            "the outcome shows"
+        );
+        assert!(split_shown(&window, cx), "copying keeps the view");
+    }
+
+    #[gpui::test]
+    fn the_keys_move_the_selection_and_the_footer_copies_and_deletes(cx: &mut TestAppContext) {
+        let world = World::new();
+        let launcher = world.launcher(cx, &["first", "second", "third"]);
+        let (window, cx) = open_history(cx, launcher);
+
+        // Down past the end stays on the last record.
+        cx.simulate_keystrokes("down down down");
+        click(cx, "clipboard-copy");
+        settle(&window, cx);
+        assert_eq!(world.clipboard.written(), ["first"]);
+
+        // Ctrl+D deletes the selected record through the existing delete;
+        // the selection falls back to the first record left.
+        cx.simulate_keystrokes("up ctrl-d");
+        settle(&window, cx);
+        assert_eq!(listed(&window, cx), ["third", "first"]);
+        cx.simulate_keystrokes("enter");
+        settle(&window, cx);
+        assert_eq!(world.clipboard.written(), ["first", "third"]);
+
+        // The footer's Delete does the same.
+        click(cx, "clipboard-delete");
+        settle(&window, cx);
+        assert_eq!(listed(&window, cx), ["first"]);
+    }
+
+    #[gpui::test]
+    fn a_query_that_matches_nothing_previews_nothing_and_copies_nothing(cx: &mut TestAppContext) {
+        let world = World::new();
+        let launcher = world.launcher(cx, &["alpha", "beta"]);
+        let (window, cx) = open_history(cx, launcher);
+
+        // The search reaches the source program too.
+        cx.simulate_input("NOTEPAD");
+        settle(&window, cx);
+        assert!(cx.debug_bounds("clip-alpha").is_some());
+        cx.simulate_keystrokes("escape");
+        cx.simulate_input("zzz");
+        settle(&window, cx);
+        assert!(cx.debug_bounds("clipboard-empty").is_some());
+        assert!(cx.debug_bounds("clipboard-preview-text").is_none());
+        assert!(
+            cx.debug_bounds("clipboard-copy").is_none(),
+            "no primary action"
+        );
+        cx.simulate_keystrokes("enter");
+        settle(&window, cx);
+        assert!(world.clipboard.written().is_empty());
+
+        // Escape clears the query, then leaves for root search.
+        cx.simulate_keystrokes("escape");
+        settle(&window, cx);
+        assert!(cx.debug_bounds("clipboard-preview-text").is_some());
+        cx.simulate_keystrokes("escape");
+        let view = settle(&window, cx);
+        assert!(matches!(view.screen, Screen::Root { .. }));
+        assert!(!split_shown(&window, cx));
+    }
+
+    #[gpui::test]
+    fn the_capture_button_pauses_and_resumes_the_actual_history(cx: &mut TestAppContext) {
+        let world = World::new();
+        let launcher = world.launcher(cx, &["kept"]);
+        let (window, cx) = open_history(cx, launcher);
+        let capture = |window: &Entity<LauncherWindow>, cx: &mut VisualTestContext| {
+            cx.read_entity(window, |window, _| {
+                window
+                    .launcher()
+                    .clipboard_history()
+                    .map(|view| view.capture)
+            })
+        };
+
+        click(cx, "clipboard-capture");
+        settle(&window, cx);
+        assert_eq!(capture(&window, cx), Some(CaptureState::Paused));
+        assert!(
+            !world.clipboard.copy("while paused", None),
+            "nothing is watched"
+        );
+
+        click(cx, "clipboard-capture");
+        settle(&window, cx);
+        assert_eq!(capture(&window, cx), Some(CaptureState::On));
+        assert!(world.clipboard.copy("again", None));
+    }
+
+    #[gpui::test]
+    fn manage_routes_to_the_commands_own_controls_and_escape_comes_back(cx: &mut TestAppContext) {
+        let world = World::new();
+        let launcher = world.launcher(cx, &["kept"]);
+        let (window, cx) = open_history(cx, launcher);
+
+        cx.simulate_keystrokes("ctrl-k");
+        settle(&window, cx);
+        assert!(!split_shown(&window, cx));
+        // The extension's own rows: retention, exclusions, clearing.
+        for row in [
+            "row-Exclude a program",
+            "row-Clear clipboard history",
+            "row-Turn off and delete clipboard history",
+        ] {
+            assert!(cx.debug_bounds(row).is_some(), "{row} is drawn");
+        }
+
+        cx.simulate_keystrokes("escape");
+        settle(&window, cx);
+        assert!(split_shown(&window, cx), "Escape returns to the split view");
+        assert_eq!(
+            cx.read_entity(&window, |window, _| window.launcher().view().screen),
+            Screen::Command
+        );
+    }
+
+    #[gpui::test]
+    fn a_similarly_titled_package_keeps_its_generic_list(cx: &mut TestAppContext) {
+        let world = World::new();
+        let launcher = world.launcher(cx, &["kept"]);
+        let copy = tempfile::tempdir().unwrap();
+        for (path, contents) in package_files() {
+            fs::write(copy.path().join(path), contents).unwrap();
+        }
+        cx.foreground_executor()
+            .block_on(launcher.install_package(copy.path()));
+        let local = PackageIdentity::local(copy.path()).unwrap();
+        open_command(cx, &launcher, &format!("{}#clipboard-history", local.key()));
+        let (window, cx) = open_launcher(cx, launcher);
+        settle(&window, cx);
+        assert!(!split_shown(&window, cx));
+        assert!(cx.debug_bounds("row-Turn on clipboard history").is_some());
+        assert!(cx.debug_bounds("clipboard-list").is_none());
+    }
+}
+
+/// Alpha, Bravo and Charlie (the Rust, JavaScript and TypeScript samples,
+/// by the ids `sample_rust`, `sample_js` and `sample_ts`) over a data
+/// folder keeping the quick slots, whose record first pins `pins` (command
+/// ids, slot by slot; no record when empty). The pointer is outside the
+/// window.
+fn pinned_rows<'a>(
+    cx: &'a mut TestAppContext,
+    data: &std::path::Path,
+    pins: &[Option<&str>],
+) -> (Entity<LauncherWindow>, &'a mut VisualTestContext) {
+    if !pins.is_empty() {
+        let slots: Vec<serde_json::Value> = pins
+            .iter()
+            .map(|pin| match pin {
+                Some(id) => serde_json::json!({ "command": id }),
+                None => serde_json::Value::Null,
+            })
+            .collect();
+        let record = serde_json::json!({ "version": 1, "slots": slots });
+        std::fs::write(data.join("quick-slots.json"), record.to_string()).unwrap();
+    }
+    let launcher = Launcher::new(
+        Runtime::start(),
+        vec![
+            command("Alpha", RUST.component),
+            command("Bravo", JAVASCRIPT.component),
+            command("Charlie", TYPESCRIPT.component),
+        ],
+    )
+    .with_quick_slots(data);
+    let (window, cx) = open_launcher(cx, launcher);
+    settle(&window, cx);
+    (window, cx)
+}
+
+/// The quick slots' titles, "" for an empty one.
+fn slot_titles(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> Vec<String> {
+    cx.read_entity(window, |window, _| window.launcher().quick_slots())
+        .into_iter()
+        .map(|slot| slot.title)
+        .collect()
+}
+
+/// A blank query shows the pinned home — the "Pinned" label and its five
+/// slots, empty on a fresh launcher — above the rows' "Commands"; a query
+/// hides it, and clearing the query brings it back.
+#[gpui::test]
+fn a_blank_query_shows_the_pinned_home_and_a_query_hides_it(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let (window, cx) = pinned_rows(cx, data.path(), &[]);
+    let label = cx.debug_bounds("section-Pinned").expect("the home's label");
+    let strip = cx.debug_bounds("pinned-strip").expect("the strip");
+    let commands = cx
+        .debug_bounds("section-Commands")
+        .expect("the rows' label");
+    assert_eq!(label.size.height, px(30.));
+    assert_eq!(strip.top(), label.bottom() + px(2.), "the list's gap");
+    assert_eq!(strip.size.height, px(2. + 100. + 6.));
+    assert_eq!(commands.top(), strip.bottom() + px(2.));
+    for number in 1..=5 {
+        let slot = cx
+            .debug_bounds(selector(&format!("slot-{number}")))
+            .expect("five slots");
+        assert_eq!(slot.size.height, px(100.));
+    }
+    // An empty slot says how to fill it, and shows no chord: pressing it
+    // does nothing.
+    let nodes = accessible_nodes(cx);
+    let empty = node(&nodes, "Button", "Quick slot 1");
+    let hint = empty["description"].as_str().unwrap_or_default();
+    assert!(hint.contains("Pin to Quick Slot"), "{empty:#}");
+    assert!(empty.get("keyboard_shortcut").is_none(), "{empty:#}");
+    assert!(
+        !data.path().join("quick-slots.json").exists(),
+        "a fresh launcher pins nothing"
+    );
+
+    cx.simulate_input("al");
+    settle(&window, cx);
+    assert!(
+        cx.debug_bounds("pinned-strip").is_none(),
+        "a query hides it"
+    );
+    assert!(cx.debug_bounds("section-Pinned").is_none());
+    cx.simulate_keystrokes("escape");
+    assert_eq!(settle(&window, cx).query(), Some(""));
+    assert!(
+        cx.debug_bounds("pinned-strip").is_some(),
+        "clearing restores it"
+    );
+}
+
+/// The Actions panel pins the selected result to the first empty slot and
+/// records it; the slot then shows the result with its chord, Ctrl+1,
+/// which opens it — once, one screen deep.
+#[gpui::test]
+fn pinning_from_the_actions_panel_fills_a_slot_whose_chord_opens_it(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let (window, cx) = pinned_rows(cx, data.path(), &[]);
+    cx.simulate_keystrokes("down");
+    settle(&window, cx);
+    cx.simulate_keystrokes("ctrl-k");
+    settle(&window, cx);
+    assert!(cx.debug_bounds("action-Pin to Quick Slot").is_some());
+    cx.simulate_input("pin");
+    settle(&window, cx);
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert!(!actions_open(&window, cx));
+    assert_eq!(
+        view.status,
+        Status::Result("Pinned Bravo to Quick Slot 1".into())
+    );
+    assert!(query_has_focus(&window, cx), "focus is back in the query");
+    assert_eq!(slot_titles(&window, cx), ["Bravo", "", "", "", ""]);
+    assert!(data.path().join("quick-slots.json").exists());
+    let nodes = accessible_nodes(cx);
+    let pinned = node(&nodes, "Button", "Quick slot 1: Bravo");
+    assert_eq!(pinned["keyboard_shortcut"], "Ctrl+1", "{pinned:#}");
+
+    cx.simulate_keystrokes("ctrl-1");
+    let view = settle(&window, cx);
+    assert_eq!(
+        (view.screen, view.title.as_str()),
+        (Screen::Command, "JavaScript sample")
+    );
+    cx.simulate_keystrokes("escape");
+    assert!(
+        matches!(settle(&window, cx).screen, Screen::Root { .. }),
+        "it opened once"
+    );
+}
+
+/// A click on a slot runs what it holds; a click on an empty slot runs
+/// nothing and leaves the query focused, so typing still searches.
+#[gpui::test]
+fn a_click_on_a_slot_opens_what_it_holds_and_an_empty_one_runs_nothing(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let (window, cx) = pinned_rows(cx, data.path(), &[Some("sample_ts"), None]);
+    assert_eq!(slot_titles(&window, cx), ["Charlie", "", "", "", ""]);
+    let empty = center_of(cx, "slot-2");
+    cx.simulate_click(empty, Modifiers::none());
+    let view = settle(&window, cx);
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "an empty slot runs nothing"
+    );
+    assert!(
+        query_has_focus(&window, cx),
+        "typing still reaches the query"
+    );
+
+    let charlie = center_of(cx, "slot-1");
+    cx.simulate_click(charlie, Modifiers::none());
+    let view = settle(&window, cx);
+    assert_eq!(
+        (view.screen, view.title.as_str()),
+        (Screen::Command, "TypeScript sample")
+    );
+}
+
+/// A slot's chord runs nothing for an empty slot, while the Actions
+/// panel has the keys, or while an input method composes in the query;
+/// with none of those, it opens what the slot holds.
+#[gpui::test]
+fn a_slots_chord_runs_nothing_while_an_overlay_or_a_composition_has_the_keys(
+    cx: &mut TestAppContext,
+) {
+    use gpui::EntityInputHandler;
+
+    let data = tempfile::tempdir().unwrap();
+    let (window, cx) = pinned_rows(cx, data.path(), &[Some("sample_rust")]);
+    cx.simulate_keystrokes("ctrl-2");
+    assert!(matches!(settle(&window, cx).screen, Screen::Root { .. }));
+
+    cx.simulate_keystrokes("ctrl-k");
+    settle(&window, cx);
+    cx.simulate_keystrokes("ctrl-1");
+    let view = settle(&window, cx);
+    assert!(matches!(view.screen, Screen::Root { .. }), "{view:?}");
+    assert!(actions_open(&window, cx));
+    cx.simulate_keystrokes("escape");
+    settle(&window, cx);
+
+    let input = cx.read_entity(&window, |window, _| window.query_field());
+    cx.update(|window, cx| {
+        input.update(cx, |input, cx| {
+            input.replace_and_mark_text_in_range(None, "に", None, window, cx);
+        })
+    });
+    cx.simulate_keystrokes("ctrl-1");
+    let view = settle(&window, cx);
+    assert!(matches!(view.screen, Screen::Root { .. }), "{view:?}");
+    cx.update(|window, cx| {
+        input.update(cx, |input, cx| {
+            input.replace_text_in_range(None, "", window, cx);
+        })
+    });
+    settle(&window, cx);
+
+    cx.simulate_keystrokes("ctrl-1");
+    let view = settle(&window, cx);
+    assert_eq!(
+        (view.screen, view.title.as_str()),
+        (Screen::Command, "Rust sample")
+    );
+}
+
+/// A slot whose target is gone keeps its place and says why, on a click
+/// or its chord, running nothing; its own actions, from a secondary click,
+/// remove it.
+#[gpui::test]
+fn a_slot_whose_target_is_gone_says_why_and_its_own_actions_remove_it(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let (window, cx) = pinned_rows(cx, data.path(), &[Some("local:/nowhere#gone")]);
+    cx.simulate_keystrokes("ctrl-1");
+    let view = settle(&window, cx);
+    assert!(matches!(view.screen, Screen::Root { .. }));
+    assert_eq!(
+        view.status,
+        Status::Error("Its extension is not installed".into())
+    );
+
+    let slot = center_of(cx, "slot-1");
+    cx.simulate_mouse_down(slot, MouseButton::Right, Modifiers::none());
+    cx.simulate_mouse_up(slot, MouseButton::Right, Modifiers::none());
+    settle(&window, cx);
+    assert!(actions_open(&window, cx), "the slot's own actions");
+    assert!(cx.debug_bounds("action-group-Quick Slot").is_some());
+    // The secondary click leaves focus in the panel's field, not on the
+    // slot it pressed: typing filters, and Enter runs the entry.
+    assert!(actions_filter_has_focus(&window, cx));
+    cx.simulate_input("remove");
+    settle(&window, cx);
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert_eq!(
+        view.status,
+        Status::Result("Removed gone from Quick Slot 1".into())
+    );
+    assert_eq!(slot_titles(&window, cx), ["", "", "", "", ""]);
+}
+
+/// With all five slots taken, Pin to Quick Slot keeps the panel open on
+/// the five slots, and the one chosen is replaced.
+#[gpui::test]
+fn with_every_slot_taken_pinning_asks_which_slot_to_replace(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let full = [
+        Some("one"),
+        Some("two"),
+        Some("three"),
+        Some("four"),
+        Some("five"),
+    ];
+    let (window, cx) = pinned_rows(cx, data.path(), &full);
+    cx.simulate_keystrokes("ctrl-k");
+    settle(&window, cx);
+    cx.simulate_input("pin");
+    settle(&window, cx);
+    cx.simulate_keystrokes("enter");
+    settle(&window, cx);
+    assert!(actions_open(&window, cx), "the panel stays, on the slots");
+    assert!(
+        cx.debug_bounds("action-group-Replace a Quick Slot")
+            .is_some()
+    );
+    assert!(cx.debug_bounds("action-Replace Slot 3: three").is_some());
+    cx.simulate_keystrokes("down down enter");
+    let view = settle(&window, cx);
+    assert_eq!(
+        view.status,
+        Status::Result("Pinned Alpha to Quick Slot 3".into())
+    );
+    assert_eq!(
+        slot_titles(&window, cx),
+        ["one", "two", "Alpha", "four", "five"]
+    );
+}
+
+/// Pinning what a slot already holds changes nothing, says which slot
+/// holds it and moves keyboard focus to that slot — clearing the typed
+/// query it was found by, so the home and the slot show.
+#[gpui::test]
+fn pinning_what_a_slot_holds_names_that_slot_and_focuses_it(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let (window, cx) = pinned_rows(cx, data.path(), &[None, Some("sample_rust")]);
+    let before = std::fs::read_to_string(data.path().join("quick-slots.json")).unwrap();
+    cx.simulate_input("alpha");
+    let view = settle(&window, cx);
+    assert_eq!(view.rows[view.selected.unwrap()].title, "Alpha");
+    assert!(cx.debug_bounds("pinned-strip").is_none());
+    cx.simulate_keystrokes("ctrl-k");
+    settle(&window, cx);
+    cx.simulate_input("pin");
+    settle(&window, cx);
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert_eq!(
+        view.status,
+        Status::Result("Alpha is already in Quick Slot 2".into())
+    );
+    assert_eq!(view.query(), Some(""), "the query is cleared");
+    assert!(cx.debug_bounds("pinned-strip").is_some(), "the home shows");
+    assert_eq!(focused_label(cx).as_deref(), Some("Quick slot 2: Alpha"));
+    assert_eq!(
+        std::fs::read_to_string(data.path().join("quick-slots.json")).unwrap(),
+        before
+    );
+}
+
+/// A slot runs once per press: Enter on a focused empty slot does nothing
+/// at all, a held chord's repeats run nothing, and neither does a double
+/// click's second click.
+#[gpui::test]
+fn a_slot_runs_once_per_press_and_an_empty_one_ignores_its_keys(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let (window, cx) = pinned_rows(cx, data.path(), &[Some("sample_rust"), None]);
+    // From the query, Tab reaches the slots in order.
+    cx.simulate_keystrokes("tab");
+    assert_eq!(focused_label(cx).as_deref(), Some("Quick slot 1: Alpha"));
+    cx.simulate_keystrokes("tab");
+    assert_eq!(focused_label(cx).as_deref(), Some("Quick slot 2"));
+    let before = settle(&window, cx);
+    cx.simulate_keystrokes("enter");
+    cx.simulate_keystrokes("space");
+    assert_eq!(settle(&window, cx), before, "an empty slot does nothing");
+    assert_eq!(focused_label(cx).as_deref(), Some("Quick slot 2"));
+
+    // The system's repeat of a chord held from before is not a press.
+    cx.simulate_event(gpui::KeyDownEvent {
+        keystroke: gpui::Keystroke::parse("ctrl-1").unwrap(),
+        is_held: true,
+        prefer_character_input: false,
+    });
+    assert!(
+        matches!(settle(&window, cx).screen, Screen::Root { .. }),
+        "a repeat runs nothing"
+    );
+
+    // A double click's second click.
+    let slot = center_of(cx, "slot-1");
+    cx.simulate_event(gpui::MouseDownEvent {
+        position: slot,
+        modifiers: Modifiers::none(),
+        button: MouseButton::Left,
+        click_count: 2,
+        first_mouse: false,
+    });
+    cx.simulate_event(gpui::MouseUpEvent {
+        position: slot,
+        modifiers: Modifiers::none(),
+        button: MouseButton::Left,
+        click_count: 2,
+    });
+    assert!(
+        matches!(settle(&window, cx).screen, Screen::Root { .. }),
+        "a second click runs nothing"
+    );
+
+    // A press is a press: Enter on the pinned slot, which the press of the
+    // pointer focused, opens it.
+    assert_eq!(focused_label(cx).as_deref(), Some("Quick slot 1: Alpha"));
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert_eq!(
+        (view.screen, view.title.as_str()),
+        (Screen::Command, "Rust sample")
+    );
+}
+
+/// A record that cannot be written puts back the arrangement it holds and
+/// says why on the status line.
+#[gpui::test]
+fn a_pin_that_cannot_be_recorded_is_put_back_and_reported(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let (window, cx) = pinned_rows(cx, data.path(), &[]);
+    // Something that is not a file stands where the record goes.
+    std::fs::create_dir(data.path().join("quick-slots.json")).unwrap();
+    cx.simulate_keystrokes("ctrl-k");
+    settle(&window, cx);
+    cx.simulate_input("pin");
+    settle(&window, cx);
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert!(
+        matches!(&view.status, Status::Error(problem)
+            if problem.starts_with("Could not keep the quick slots")),
+        "{:?}",
+        view.status
+    );
+    assert!(cx.debug_bounds("status-error").is_some());
+    assert_eq!(slot_titles(&window, cx), ["", "", "", "", ""]);
 }

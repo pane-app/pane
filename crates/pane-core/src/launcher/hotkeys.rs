@@ -130,6 +130,12 @@ impl Bindings {
             .map(|(command, _)| command.as_str())
     }
 
+    /// The hotkey registered with the system for `command`: the one that
+    /// actually opens it now, which root search shows beside its row.
+    pub(super) fn registered_of(&self, command: &str) -> Option<Shortcut> {
+        self.registered.get(command).cloned()
+    }
+
     /// The hotkey recorded for `command`, for the Shortcuts catalog.
     pub(super) fn hotkey_of(&self, command: &str) -> Option<Shortcut> {
         self.chosen().get(command).cloned()
@@ -349,6 +355,7 @@ impl Launcher {
     /// Shows the hotkey screen of the command `command`: it asks for the
     /// keys, and offers to remove its hotkey if it has one.
     pub(super) fn show_hotkey(&self, state: &mut State, command: &str) {
+        state.actions_return = None;
         let Some((registration, _)) = offered(&state.packages)
             .into_iter()
             .find(|(offered, _)| offered.id == command)
@@ -423,7 +430,7 @@ impl Launcher {
             }
             Ok(set) => set,
         };
-        self.show_extensions_at_hotkey(state, &command);
+        self.leave_hotkey(state, &command);
         if set.write {
             state.view.status = Status::Running;
             Some(HotkeyChange {
@@ -605,7 +612,7 @@ impl Launcher {
         let set = self
             .set_hotkey_of(state, command, None)
             .expect("clearing a hotkey takes no check");
-        self.show_extensions_at_hotkey(state, command);
+        self.leave_hotkey(state, command);
         state.view.status = Status::Running;
         Some(HotkeyChange {
             command: set.command,
@@ -636,6 +643,14 @@ impl Launcher {
         };
         if state.screen_epoch == epoch {
             state.view.status = status;
+        }
+    }
+
+    /// Leaves the hotkey screen of `command`: for the search the Actions
+    /// panel opened it from, or else the extension list at its hotkey row.
+    pub(super) fn leave_hotkey(&self, state: &mut State, command: &str) {
+        if !self.return_from_actions_flow(state) {
+            self.show_extensions_at_hotkey(state, command);
         }
     }
 

@@ -1,7 +1,9 @@
 //! Pane's shared visual layer: semantic tokens, frost materials, the
 //! reference's icon treatment, and the shared control chrome — result
-//! rows and keycaps — plus the motion policy (see [`motion`]) that the
-//! launcher's subtle transitions share.
+//! rows, keycaps, the Settings window's shell and sidebar items (see
+//! [`settings_shell`]), the Settings controls (see [`controls`]) and the
+//! Appearance page's live preview (see [`preview`]) — plus the motion
+//! policy (see [`motion`]) that the launcher's subtle transitions share.
 //!
 //! This layer owns presentation only. It imports no `pane-core` types, so
 //! the visual system is usable and reviewable without launcher state, and
@@ -32,13 +34,21 @@ use std::borrow::Cow;
 
 use gpui::App;
 
+pub(crate) mod controls;
+pub(crate) mod footer;
 pub(crate) mod icon;
 pub(crate) mod input;
 pub(crate) mod keycap;
 pub(crate) mod material;
 pub(crate) mod motion;
+pub(crate) mod pinned;
+pub(crate) mod preview;
+pub(crate) mod result_layouts;
 pub(crate) mod result_row;
 pub(crate) mod select;
+pub(crate) mod settings_shell;
+pub(crate) mod shell;
+pub(crate) mod split_view;
 pub(crate) mod theme;
 
 use material::Material;
@@ -60,12 +70,34 @@ pub(crate) struct Visuals {
 /// error; a caller that continues past it gets the system default font
 /// wherever the theme names `Geist`.
 pub(crate) fn load_fonts(cx: &App) -> gpui::Result<()> {
-    let fonts: Vec<Cow<'static, [u8]>> = vec![
-        Cow::Borrowed(include_bytes!("../../assets/fonts/Geist-Regular.ttf")),
-        Cow::Borrowed(include_bytes!("../../assets/fonts/Geist-Medium.ttf")),
-        Cow::Borrowed(include_bytes!("../../assets/fonts/Geist-SemiBold.ttf")),
-        Cow::Borrowed(include_bytes!("../../assets/fonts/GeistMono-Regular.ttf")),
-        Cow::Borrowed(include_bytes!("../../assets/fonts/GeistMono-Medium.ttf")),
-    ];
+    let fonts: Vec<Cow<'static, [u8]>> = FONTS
+        .iter()
+        .map(|&(_, bytes)| Cow::Borrowed(bytes))
+        .collect();
     cx.text_system().add_fonts(fonts)
 }
+
+/// The embedded font files, by name (the visual workbench's manifest
+/// records their hashes).
+pub(crate) const FONTS: &[(&str, &[u8])] = &[
+    (
+        "Geist-Regular.ttf",
+        include_bytes!("../../assets/fonts/Geist-Regular.ttf"),
+    ),
+    (
+        "Geist-Medium.ttf",
+        include_bytes!("../../assets/fonts/Geist-Medium.ttf"),
+    ),
+    (
+        "Geist-SemiBold.ttf",
+        include_bytes!("../../assets/fonts/Geist-SemiBold.ttf"),
+    ),
+    (
+        "GeistMono-Regular.ttf",
+        include_bytes!("../../assets/fonts/GeistMono-Regular.ttf"),
+    ),
+    (
+        "GeistMono-Medium.ttf",
+        include_bytes!("../../assets/fonts/GeistMono-Medium.ttf"),
+    ),
+];

@@ -23,6 +23,10 @@ mod ui;
 
 pub mod placement;
 pub mod settings;
+/// The visual workbench's native fixture (#91), for the
+/// `pane-visual-fixture` binary; not part of the launcher.
+#[doc(hidden)]
+pub mod visual_fixture;
 
 pub use app::LauncherWindow;
 pub use features::settings::SettingsWindow;
@@ -38,6 +42,7 @@ actions!(
         FocusNext,
         FocusPrevious,
         OpenSettings,
+        OpenActions,
         ReturnToRoot,
         DismissLauncher
     ]
@@ -65,7 +70,10 @@ pub(crate) fn bind_keys_with(cx: &mut App, keyboard: &Keyboard) {
     let text_editing = ui::input::bind_text_editing(cx);
     extension_views::form::bind_keys(cx, &text_editing);
     features::root_search::bind_keys(cx, &text_editing, keyboard);
+    features::clipboard_history::bind_keys(cx, &text_editing, keyboard);
+    features::quick_slots::bind_keys(cx);
     features::footer_menu::bind_keys(cx);
+    features::actions_panel::bind_keys(cx, &text_editing);
     features::settings::bind_keys(cx);
     ui::select::bind_keys(cx);
     extension_views::custom_view::bind_keys(cx);
@@ -206,6 +214,14 @@ pub fn configure_visuals(cx: &mut App) -> gpui::Result<()> {
 /// [`gpui::App::reduce_motion`]) then follow the preference.
 pub fn observe_reduced_motion(cx: &mut App) {
     ui::motion::observe_reduced_motion(cx)
+}
+
+/// The launcher window's client size: the reference root panel's 760×518
+/// logical pixels (64 search header + 404 results + 50 footer), which the
+/// binary opens the window at.
+pub fn launcher_client_size() -> gpui::Size<gpui::Pixels> {
+    let (width, height) = ui::shell::LAUNCHER_CLIENT;
+    gpui::size(gpui::px(width), gpui::px(height))
 }
 
 /// The window background appearance the host settings' material asks for,

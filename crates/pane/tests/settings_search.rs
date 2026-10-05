@@ -25,6 +25,10 @@ use pane_core::{Launcher, Runtime, SavedData};
 #[path = "support/settle.rs"]
 mod settle;
 
+#[path = "support/paint.rs"]
+mod paint;
+
+use paint::paints_fill_at;
 use settle::settle;
 
 /// The keystroke that opens Settings on this platform: Cmd+, on macOS,
@@ -247,6 +251,33 @@ fn find_focuses_the_search_and_typing_matches_registered_settings(cx: &mut TestA
     // Nothing reached the launcher window behind Settings.
     let view = cx.read_entity(&launcher, |window, _| window.launcher().view());
     assert_eq!(view.query(), Some(""));
+}
+
+/// The results are the sidebar's own items (#97), not the launcher's
+/// result rows: as wide as the search field above them, 36px tall with
+/// the place each setting lives under its name, and the selected one in
+/// the sidebar's white 9% wash.
+#[gpui::test]
+fn the_results_are_sidebar_items_not_launcher_rows(cx: &mut TestAppContext) {
+    let (_launcher, settings, cx) = open(cx);
+    let mut sc = settings_context(&settings, cx);
+
+    sc.simulate_keystrokes(find_shortcut());
+    sc.simulate_input("dark");
+    sc.run_until_parked();
+    let result = sc
+        .debug_bounds("settings-search-result-Dark")
+        .expect("the Dark result");
+    let field = sc
+        .debug_bounds("settings-search-field")
+        .expect("the search field");
+    assert_eq!(result.left(), field.left());
+    assert_eq!(result.size.width, field.size.width);
+    assert_eq!(result.size.height, px(36.), "the sidebar item's height");
+    assert!(
+        paints_fill_at(&mut sc, result, 0xFFFFFF17),
+        "the selected result takes the sidebar's white 9% wash"
+    );
 }
 
 #[gpui::test]

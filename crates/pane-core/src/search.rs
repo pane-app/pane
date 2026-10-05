@@ -174,6 +174,62 @@ pub(crate) fn ranked_matches<'a>(
     matches.into_iter().map(|(_, index)| index).collect()
 }
 
+/// Where `query` matched `title`, for the window to highlight: byte ranges
+/// into `title`, in order and not overlapping. The whole query where the
+/// title holds it, as one run; otherwise each word of the query where it
+/// appears in the title — at the start of a word of the title if it does,
+/// else its first appearance — so a word that matched the subtitle or the
+/// package title instead highlights nothing. Compared lowercased, as
+/// matching compares; a title whose text only matches once normalized
+/// (a decomposed accent, collapsed spaces) highlights what still matches
+/// as written. Empty for a blank query.
+pub fn title_matches(title: &str, query: &str) -> Vec<std::ops::Range<usize>> {
+    let query = normalize(query);
+    if query.is_empty() {
+        return Vec::new();
+    }
+    // The title lowercased, with each byte's origin: the title byte where
+    // the character it came from starts, and where that character ends.
+    let mut lowered = String::new();
+    let mut origin: Vec<(usize, usize)> = Vec::new();
+    for (start, character) in title.char_indices() {
+        let end = start + character.len_utf8();
+        for lower in character.to_lowercase() {
+            lowered.push(lower);
+            origin.extend(std::iter::repeat_n((start, end), lower.len_utf8()));
+        }
+    }
+    let to_title = |found: usize, len: usize| origin[found].0..origin[found + len - 1].1;
+    if let Some(found) = lowered.find(&query) {
+        return vec![to_title(found, query.len())];
+    }
+    let starts_word = |at: usize| {
+        lowered[..at]
+            .chars()
+            .next_back()
+            .is_none_or(|before| !before.is_alphanumeric())
+    };
+    let mut ranges: Vec<std::ops::Range<usize>> = query
+        .split(' ')
+        .filter(|word| !word.is_empty())
+        .filter_map(|word| {
+            let mut found = lowered.match_indices(word).map(|(at, _)| at);
+            let first = found.clone().next()?;
+            let at = found.find(|&at| starts_word(at)).unwrap_or(first);
+            Some(to_title(at, word.len()))
+        })
+        .collect();
+    ranges.sort_by_key(|range| range.start);
+    let mut merged: Vec<std::ops::Range<usize>> = Vec::new();
+    for range in ranges {
+        match merged.last_mut() {
+            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+            _ => merged.push(range),
+        }
+    }
+    merged
+}
+
 /// One entry of Pane's Settings search, as the Settings window registers
 /// it: a setting or section's title, the group the control sits in (the
 /// page's own words, such as "Theme"), and the title of the Settings page
@@ -215,7 +271,7 @@ pub fn settings_matches(query: &str, entries: &[SettingsEntry]) -> Vec<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SettingsEntry, settings_matches};
+    use super::{SettingsEntry, settings_matches, title_matches};
 
     /// A small catalog, as the Settings window registers one.
     fn catalog() -> Vec<SettingsEntry> {
@@ -282,6 +338,37 @@ mod tests {
         // Every word must appear somewhere: one that does not matches
         // nothing.
         assert!(titles("dark material").is_empty());
+    }
+
+    #[test]
+    fn the_whole_query_highlights_as_one_run_where_the_title_holds_it() {
+        assert_eq!(title_matches("Clipboard History", "clip"), [0..4]);
+        assert_eq!(title_matches("Clipboard History", "CLIP"), [0..4]);
+        assert_eq!(title_matches("Clipboard History", "board hi"), [4..12]);
+        assert_eq!(title_matches("Clipboard History", "  hist "), [10..14]);
+    }
+
+    #[test]
+    fn each_word_highlights_where_it_starts_a_word_of_the_title() {
+        // "is" appears in "History" before it starts a word of the title.
+        assert_eq!(
+            title_matches("History is clipped", "clip is"),
+            [8..10, 11..15]
+        );
+        // A word the title does not hold highlights nothing.
+        assert_eq!(title_matches("Clipboard History", "clip pane"), [0..4]);
+        assert!(title_matches("Clipboard History", "pane").is_empty());
+        assert!(title_matches("Clipboard History", " ").is_empty());
+    }
+
+    #[test]
+    fn ranges_are_bytes_of_the_title_as_written() {
+        // Ä is two bytes, lowercased to ä of two bytes.
+        assert_eq!(title_matches("Ärger übersetzen", "är"), [0..3]);
+        assert_eq!(title_matches("Ärger übersetzen", "über"), [7..12]);
+        let title = "Straße";
+        let ranges = title_matches(title, "ße");
+        assert_eq!(&title[ranges[0].clone()], "ße");
     }
 
     #[test]

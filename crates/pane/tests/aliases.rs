@@ -143,7 +143,13 @@ fn an_alias_and_a_fallback_set_in_the_window_send_the_typed_text_to_the_command(
     assert!(!block_on(runtime.running()).contains(&echo));
     cx.run_until_parked();
     assert_eq!(view.status, Status::Idle);
-    cx.simulate_keystrokes("down enter");
+    // The notice stays over the fallback the user selects (#96).
+    cx.simulate_keystrokes("down");
+    assert_eq!(settle(&window, cx).selected, Some(0));
+    let notice = cx.debug_bounds("no-results").expect("the notice stays");
+    let fallback = cx.debug_bounds("row-Echo").expect("the fallback is drawn");
+    assert!(fallback.top() > notice.bottom(), "the fallback is below it");
+    cx.simulate_keystrokes("enter");
     let view = settle(&window, cx);
     assert_eq!(view.status, Status::Result("Echo heard “zqx”".into()));
     assert_eq!(view.query(), Some("zqx"));

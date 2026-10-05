@@ -1,0 +1,43 @@
+﻿{
+    "scenario":  "keycap-windows",
+    "pid":  57608,
+    "dpi":  96,
+    "scale":  1,
+    "expectedClient":  [
+                           760,
+                           518
+                       ],
+    "client":  [
+                   760,
+                   518
+               ],
+    "clientOrigin":  "4248,100",
+    "windowRect":  "4240,100,5016,626",
+    "frameBounds":  "4247,100,5009,619",
+    "foregroundWasFixture":  false,
+    "offscreen":  true,
+    "captures":  [
+                     {
+                         "name":  "keycaps",
+                         "file":  "keycap-windows/keycaps.png",
+                         "size":  [
+                                      760,
+                                      518
+                                  ],
+                         "utc":  "2026-10-04T15:08:01.0256553Z"
+                     }
+                 ],
+    "steps":  [
+                  {
+                      "index":  1,
+                      "action":  "capture",
+                      "detail":  "{\"action\":\"capture\",\"name\":\"keycaps\"}",
+                      "utc":  "2026-10-04T15:08:01.0271704Z"
+                  }
+              ],
+    "dataDir":  "C:\\Users\\ADMIN\\AppData\\Local\\Temp\\pane-visual-fixture-b7b5e5db880b\\data",
+    "scratchRemoved":  true,
+    "processExited":  true,
+    "exitCode":  0,
+    "error":  null
+}

@@ -1,0 +1,985 @@
+{
+  "kind": "pane-visual-fixture-registry",
+  "scenarios": [
+    {
+      "name": "root-rest",
+      "description": "The reference's empty query over its own fixture rows, row 0 selected",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": true,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "rest"
+        }
+      ]
+    },
+    {
+      "name": "root-hover",
+      "description": "Rest, then the pointer moves onto unselected row 1, which selects it",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": true,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "rest"
+        },
+        {
+          "action": "pointer",
+          "row": 1,
+          "nudge": 0
+        },
+        {
+          "action": "capture",
+          "name": "hover"
+        }
+      ]
+    },
+    {
+      "name": "root-selected",
+      "description": "Rest, then the selection keys move the selection to row 2, one step at a time",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": true,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "rest"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "capture",
+          "name": "down-1"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "capture",
+          "name": "selected"
+        }
+      ]
+    },
+    {
+      "name": "root-pointer-keys",
+      "description": "The pointer selects row 1; Down moves the selection to row 2 with the pointer resting on row 1, which keeps its hover wash; moving again over row 1 selects it",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": true,
+      "frame": false,
+      "steps": [
+        {
+          "action": "pointer",
+          "row": 1,
+          "nudge": 0
+        },
+        {
+          "action": "capture",
+          "name": "pointed"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "capture",
+          "name": "down-under-pointer"
+        },
+        {
+          "action": "pointer",
+          "row": 1,
+          "nudge": 6
+        },
+        {
+          "action": "capture",
+          "name": "moved-again"
+        }
+      ]
+    },
+    {
+      "name": "root-selected-hover",
+      "description": "Row 2 selected by the keys, then the pointer arrives on that selected row",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": true,
+      "frame": false,
+      "steps": [
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "capture",
+          "name": "selected"
+        },
+        {
+          "action": "pointer",
+          "row": 2,
+          "nudge": 0
+        },
+        {
+          "action": "capture",
+          "name": "selected-hover"
+        }
+      ]
+    },
+    {
+      "name": "root-focus",
+      "description": "Typing 'clip' into the focused field filters to the one matching row; Escape returns to rest",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": true,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "rest"
+        },
+        {
+          "action": "type",
+          "text": "clip"
+        },
+        {
+          "action": "capture",
+          "name": "focus-typed"
+        },
+        {
+          "action": "key",
+          "key": "escape"
+        },
+        {
+          "action": "capture",
+          "name": "back-to-rest"
+        }
+      ]
+    },
+    {
+      "name": "root-actions",
+      "description": "Down selects Clipboard History; the footer's Actions button opens its actions over the dimmed results; typing filters them to one, then to none; Escape closes the panel only",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": true,
+      "frame": false,
+      "steps": [
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "capture",
+          "name": "selected"
+        },
+        {
+          "action": "click",
+          "target": "actions-button"
+        },
+        {
+          "action": "capture",
+          "name": "open"
+        },
+        {
+          "action": "type",
+          "text": "alias"
+        },
+        {
+          "action": "capture",
+          "name": "filtered"
+        },
+        {
+          "action": "type",
+          "text": "zz"
+        },
+        {
+          "action": "capture",
+          "name": "empty"
+        },
+        {
+          "action": "key",
+          "key": "escape"
+        },
+        {
+          "action": "capture",
+          "name": "closed"
+        }
+      ]
+    },
+    {
+      "name": "actions-panel",
+      "description": "The Actions board: the query 'fig' with Figma selected and its actions open over the dimmed results",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": true,
+      "board": "actions",
+      "frame": false,
+      "steps": [
+        {
+          "action": "type",
+          "text": "fig"
+        },
+        {
+          "action": "click",
+          "target": "actions-button"
+        },
+        {
+          "action": "capture",
+          "name": "open"
+        }
+      ]
+    },
+    {
+      "name": "root-unavailable",
+      "description": "A row that cannot run here, with its reason (no reference counterpart)",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": false,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "rest"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "capture",
+          "name": "unavailable-selected"
+        }
+      ]
+    },
+    {
+      "name": "root-long-content",
+      "description": "A long title and subtitle under the row's truncation (no reference counterpart)",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": false,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "long-content"
+        }
+      ]
+    },
+    {
+      "name": "launcher-frame",
+      "description": "The launcher's frame at rest: the 760x518 panel, its inset edges and corners, and the header, list and footer boundaries",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": true,
+      "frame": true,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "frame"
+        }
+      ]
+    },
+    {
+      "name": "launcher-frame-light",
+      "description": "The same frame in the derived light appearance, at the same dimensions (no reference counterpart)",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": false,
+      "theme": "light",
+      "frame": true,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "frame-light"
+        }
+      ]
+    },
+    {
+      "name": "launcher-frame-narrow",
+      "description": "A narrow launcher: the keys select the last row, which the list scrolls into view above the footer (no reference counterpart)",
+      "family": "root",
+      "client": [
+        480.0,
+        360.0
+      ],
+      "reference": false,
+      "frame": true,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "narrow-rest"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "capture",
+          "name": "narrow-last-selected"
+        }
+      ]
+    },
+    {
+      "name": "tile-sizes",
+      "description": "The icon tile at the row's, a pinned slot's and the Actions header's size, as an application and as a command (no reference counterpart side by side)",
+      "family": "tiles",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": false,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "tiles"
+        }
+      ]
+    },
+    {
+      "name": "keycap-windows",
+      "description": "The production key sequences for the reference's Windows chords, its accent Enter and a compact pinned hint, and rebound chords the reference never shows",
+      "family": "keycap",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": true,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "keycaps"
+        }
+      ]
+    },
+    {
+      "name": "settings-shell",
+      "description": "The Settings board's shell: the titlebar, the sidebar's search and sections with Appearance selected, the page's heading block and columns; then the pointer over an unselected section, and over the selected one",
+      "family": "settings",
+      "client": [
+        1120.0,
+        720.0
+      ],
+      "reference": true,
+      "board": "settings",
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "rest"
+        },
+        {
+          "action": "pointer",
+          "row": 0,
+          "nudge": 0
+        },
+        {
+          "action": "capture",
+          "name": "hover"
+        },
+        {
+          "action": "pointer",
+          "row": 1,
+          "nudge": 0
+        },
+        {
+          "action": "capture",
+          "name": "selected-hover"
+        }
+      ]
+    },
+    {
+      "name": "settings-shell-narrow",
+      "description": "The same shell at 760x520: the titlebar and sidebar keep their size and the page's columns collapse into one (no reference counterpart)",
+      "family": "settings",
+      "client": [
+        760.0,
+        520.0
+      ],
+      "reference": false,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "narrow"
+        }
+      ]
+    },
+    {
+      "name": "appearance-page",
+      "description": "The Settings board's Appearance page: Material with Glass chosen and its note, the accent swatches, the blur and tint sliders, Density and the two toggles, beside the preview's stage and miniature launcher; then the pointer over Frost, whose label lightens (#98). The swatches, sliders, Frost, density and toggles are the board's, deferred in production (#100)",
+      "family": "settings",
+      "client": [
+        1120.0,
+        720.0
+      ],
+      "reference": true,
+      "board": "settings",
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "rest"
+        },
+        {
+          "action": "point",
+          "target": "segment-frost"
+        },
+        {
+          "action": "capture",
+          "name": "segment-hover"
+        }
+      ]
+    },
+    {
+      "name": "appearance-solid",
+      "description": "A click on Solid: its segment takes the wash, its note replaces Glass's, the blur and tint sliders keep their values at the board's 40% disabled opacity, and the miniature takes the solid surface (#98)",
+      "family": "settings",
+      "client": [
+        1120.0,
+        720.0
+      ],
+      "reference": true,
+      "board": "settings",
+      "frame": false,
+      "steps": [
+        {
+          "action": "click",
+          "target": "segment-solid"
+        },
+        {
+          "action": "capture",
+          "name": "solid"
+        }
+      ]
+    },
+    {
+      "name": "appearance-production",
+      "description": "Production's own Appearance page through its composition: Theme (System, Light, Dark) and Material (Glass, Solid) with their descriptions, beside the preview in the appearance in effect (no reference counterpart: the board shows no theme choice)",
+      "family": "settings",
+      "client": [
+        1120.0,
+        720.0
+      ],
+      "reference": false,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "production"
+        }
+      ]
+    },
+    {
+      "name": "appearance-light",
+      "description": "Production's Appearance page in the derived light palette: Light chosen, the preview light (no reference counterpart)",
+      "family": "settings",
+      "client": [
+        1120.0,
+        720.0
+      ],
+      "reference": false,
+      "theme": "light",
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "light"
+        }
+      ]
+    },
+    {
+      "name": "appearance-override",
+      "description": "Production's Appearance page under the run's development overrides: the notice naming them, both fields' labels and choices at the disabled opacity (no reference counterpart)",
+      "family": "settings",
+      "client": [
+        1120.0,
+        720.0
+      ],
+      "reference": false,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "override"
+        }
+      ]
+    },
+    {
+      "name": "appearance-narrow",
+      "description": "Production's Appearance page at 760x520: the fields take the page's width and the preview wraps below them (no reference counterpart)",
+      "family": "settings",
+      "client": [
+        760.0,
+        520.0
+      ],
+      "reference": false,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "narrow"
+        }
+      ]
+    },
+    {
+      "name": "empty-state",
+      "description": "The empty board: 'kubectx' matches nothing, so the notice heads the fallbacks, none selected — the board preselects the first, which Pane never does (#100) — until Down selects it; the board's store suggestions are fixture content",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": true,
+      "board": "empty",
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "notice"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "capture",
+          "name": "fallback-selected"
+        }
+      ]
+    },
+    {
+      "name": "calculator-card",
+      "description": "The calculator board: '72 in to cm' answered by the selected card, with the board's units, conversions and recent calculations as fixture content (Pane's calculator answers arithmetic only, #100)",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": true,
+      "board": "calculator",
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "card"
+        }
+      ]
+    },
+    {
+      "name": "answer-plain",
+      "description": "A computed answer as production presents it: '6*7' and 42 on the card under 'Calculator', no captions or chips (no reference counterpart)",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": false,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "answer"
+        }
+      ]
+    },
+    {
+      "name": "answer-long",
+      "description": "A computed answer whose expression is too long for the authored 34px: the values step down to fit their columns (no reference counterpart)",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": false,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "long-answer"
+        }
+      ]
+    },
+    {
+      "name": "empty-no-fallbacks",
+      "description": "The notice with no fallback under it, as production shows it to a user who chose none (no reference counterpart)",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": false,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "notice"
+        }
+      ]
+    },
+    {
+      "name": "clipboard-rest",
+      "description": "The clipboard board at rest: its fixture clips under Pinned, Today and Yesterday, the code clip selected and previewed (#102)",
+      "family": "clipboard",
+      "client": [
+        940.0,
+        600.0
+      ],
+      "reference": true,
+      "board": "clipboard",
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "rest"
+        }
+      ]
+    },
+    {
+      "name": "clipboard-previews",
+      "description": "A click selects a clip without copying it: the text, color, link and image previews in turn",
+      "family": "clipboard",
+      "client": [
+        940.0,
+        600.0
+      ],
+      "reference": true,
+      "board": "clipboard",
+      "frame": false,
+      "steps": [
+        {
+          "action": "click",
+          "target": "clip-standup"
+        },
+        {
+          "action": "capture",
+          "name": "text"
+        },
+        {
+          "action": "click",
+          "target": "clip-lime"
+        },
+        {
+          "action": "capture",
+          "name": "color"
+        },
+        {
+          "action": "click",
+          "target": "clip-link"
+        },
+        {
+          "action": "capture",
+          "name": "link"
+        },
+        {
+          "action": "click",
+          "target": "clip-shot"
+        },
+        {
+          "action": "capture",
+          "name": "image"
+        }
+      ]
+    },
+    {
+      "name": "clipboard-keys",
+      "description": "Down moves the selection from the code clip; five more reach the last clip, which the list scrolls into view",
+      "family": "clipboard",
+      "client": [
+        940.0,
+        600.0
+      ],
+      "reference": true,
+      "board": "clipboard",
+      "frame": false,
+      "steps": [
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "capture",
+          "name": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "capture",
+          "name": "last"
+        }
+      ]
+    },
+    {
+      "name": "clipboard-filter",
+      "description": "A query no clip matches: no preview and nothing selected; Escape clears it; the Text tab keeps the text clips",
+      "family": "clipboard",
+      "client": [
+        940.0,
+        600.0
+      ],
+      "reference": true,
+      "board": "clipboard",
+      "frame": false,
+      "steps": [
+        {
+          "action": "type",
+          "text": "zzz"
+        },
+        {
+          "action": "capture",
+          "name": "no-match"
+        },
+        {
+          "action": "key",
+          "key": "escape"
+        },
+        {
+          "action": "capture",
+          "name": "cleared"
+        },
+        {
+          "action": "click",
+          "target": "clip-tab-text"
+        },
+        {
+          "action": "capture",
+          "name": "text-tab"
+        }
+      ]
+    },
+    {
+      "name": "clipboard-production",
+      "description": "Production's own content: text records under Today, Yesterday and Older, the All and Text tabs, what is kept, Copy, Delete and Manage (no reference counterpart)",
+      "family": "clipboard",
+      "client": [
+        940.0,
+        600.0
+      ],
+      "reference": false,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "rest"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "capture",
+          "name": "long-text"
+        }
+      ]
+    },
+    {
+      "name": "clipboard-off",
+      "description": "No records with history off: the note saying so, Turn on, no preview and no primary action (no reference counterpart)",
+      "family": "clipboard",
+      "client": [
+        940.0,
+        600.0
+      ],
+      "reference": false,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "off"
+        }
+      ]
+    },
+    {
+      "name": "clipboard-narrow",
+      "description": "The split view in the launcher's own 760x518: the list keeps its width, the preview takes the rest, the keys reach the last record (no reference counterpart)",
+      "family": "clipboard",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": false,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "narrow"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "capture",
+          "name": "narrow-last"
+        }
+      ]
+    },
+    {
+      "name": "pinned-strip",
+      "description": "The pinned home: five sample pins under the Pinned label above a blank query's rows; a query hides the strip and clearing it restores it; the pointer over slot 2 takes the slot's hover wash",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": true,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "rest"
+        },
+        {
+          "action": "type",
+          "text": "clip"
+        },
+        {
+          "action": "capture",
+          "name": "query-hides"
+        },
+        {
+          "action": "key",
+          "key": "escape"
+        },
+        {
+          "action": "capture",
+          "name": "cleared-restores"
+        },
+        {
+          "action": "point",
+          "target": "slot-2"
+        },
+        {
+          "action": "capture",
+          "name": "slot-hover"
+        }
+      ]
+    },
+    {
+      "name": "pinned-partial",
+      "description": "A partly filled home: two pins, one whose target cannot run with its reason, and three empty slots (no reference counterpart)",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": false,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "partial"
+        }
+      ]
+    }
+  ],
+  "pending": []
+}

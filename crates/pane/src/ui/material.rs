@@ -37,8 +37,8 @@
 
 use gpui::prelude::*;
 use gpui::{
-    BoxShadow, Div, WindowBackgroundAppearance, div, linear_color_stop, linear_gradient, px,
-    relative, solid_background, transparent_black,
+    BoxShadow, Div, Hsla, Pixels, WindowBackgroundAppearance, div, linear_color_stop,
+    linear_gradient, px, relative, solid_background, transparent_black,
 };
 
 use crate::ui::theme::Theme;
@@ -127,6 +127,21 @@ impl MaterialMode {
     }
 }
 
+/// The reference's inset edges, as one box shadow list: the 1px ring
+/// (`inset 0 0 0 1px edge`) and the top inset line (`inset 0 1px 0 top`).
+/// Box shadows take no layout space, so — unlike a border — the ring
+/// leaves the content's box the surface's full size, as the reference's
+/// `box-shadow` does: a 760px panel lays its header, list and footer out
+/// across all 760px.
+fn inset_edges(edge: Hsla, top: Hsla) -> Vec<BoxShadow> {
+    vec![
+        BoxShadow::new(px(0.), px(0.), edge)
+            .spread_radius(px(1.))
+            .inset(),
+        BoxShadow::new(px(0.), px(1.), top).inset(),
+    ]
+}
+
 /// The launcher's surfaces. Construct once from the material mode and reuse
 /// across frames; it holds no state beyond the mode.
 #[derive(Clone, Copy, Debug)]
@@ -164,28 +179,86 @@ impl Material {
     /// panel fills the window. GPUI drop shadows also paint under its
     /// interior, so stacking the reference's outer shadows here would
     /// obscure the desktop through the translucent fill. Keep the inset
-    /// highlight and border; the native window owns the outside shadow.
+    /// ring and top highlight; the native window owns the outside shadow.
+    ///
+    /// The ring and highlight are inset box shadows, as the reference's
+    /// are, not a border: they paint over the panel's own fill and under
+    /// its content, and take no layout space, so the content spans the
+    /// whole panel (see [`inset_edges`]). Content that paints a fill to
+    /// the panel's edge (the footer's wash) covers them there, as it does
+    /// in the reference.
+    ///
+    /// On Windows the corner and the outside shadow are the window's, not
+    /// the panel's: the Desktop Window Manager rounds the window (its
+    /// corner preference, documented at 8px — the reference curves at 18)
+    /// and draws its own shadow in place of the reference's two. The
+    /// acrylic covers the whole window rectangle, so an 18px curve painted
+    /// here would show it as a plate behind the curve. The visual
+    /// workbench records the corner as an accepted discrepancy (#92).
     pub(crate) fn panel(&self, theme: &Theme, content: impl IntoElement) -> Div {
+        self.tinted_panel(theme, theme.panel_tint, content)
+    }
+
+    /// The Settings window's L1 panel: [`Material::panel`]'s surface at
+    /// the Settings board's own glass tint, `.78` against the root's
+    /// `.70` ([`Theme::settings_tint`]). The solid fallback, the sheen and
+    /// the inset edges are the panel's.
+    pub(crate) fn settings_panel(&self, theme: &Theme, content: impl IntoElement) -> Div {
+        self.tinted_panel(theme, theme.settings_tint, content)
+    }
+
+    /// Whether this material paints the glass tint, rather than the solid
+    /// surface: what the Appearance preview shows is in effect.
+    pub(crate) fn is_glass(&self) -> bool {
+        self.mode == MaterialMode::Glass
+    }
+
+    /// The Appearance preview's miniature launcher (#98): the L1 panel's
+    /// surface — the launcher's glass tint, or the solid fallback, under
+    /// the sheen fading out over its top 36% — at the miniature's 14px
+    /// radius, under its own 1px ring (the board's white 8%) and the
+    /// panel's top highlight. It is drawn with the material in effect, so
+    /// it shows what the launcher shows: the tint where glass stands, the
+    /// solid surface where it does not. Its drop shadow belongs to a
+    /// wrapper (GPUI paints an outer shadow under the element's own
+    /// translucent fill; see [`Material::popover`]).
+    pub(crate) fn preview_panel(&self, theme: &Theme, content: impl IntoElement) -> Div {
+        let shape = (
+            theme.geometry.preview.panel_radius,
+            theme.controls.preview_panel_edge,
+        );
+        self.l1_surface(theme, theme.panel_tint, shape, content)
+    }
+
+    /// The L1 panel with `tint` as its glass (see [`Material::panel`]).
+    fn tinted_panel(&self, theme: &Theme, tint: Hsla, content: impl IntoElement) -> Div {
+        let shape = (theme.geometry.panel_radius, theme.hairline);
+        self.l1_surface(theme, tint, shape, content).size_full()
+    }
+
+    /// The L1 surface: `tint` as its glass (the solid panel otherwise),
+    /// rounded and ringed as `shape` (its radius, and its inset edge's
+    /// color) says, under the panel's top highlight, with the sheen
+    /// beneath `content`.
+    fn l1_surface(
+        &self,
+        theme: &Theme,
+        tint: Hsla,
+        (radius, edge): (Pixels, Hsla),
+        content: impl IntoElement,
+    ) -> Div {
         let background = match self.mode {
-            MaterialMode::Glass => solid_background(theme.panel_tint),
+            MaterialMode::Glass => solid_background(tint),
             MaterialMode::Opaque => solid_background(theme.panel_solid),
         };
-        let geometry = &theme.geometry;
         div()
             .relative()
-            .size_full()
             .flex()
             .flex_col()
             .overflow_hidden()
-            .rounded(geometry.panel_radius)
+            .rounded(radius)
             .bg(background)
-            // The reference's inner edge is an inset 1px box-shadow ring;
-            // a 1px border at the same color is the same line.
-            .border_1()
-            .border_color(theme.hairline)
-            .shadow(vec![
-                BoxShadow::new(px(0.), px(1.), theme.panel_top_highlight).inset(),
-            ])
+            .shadow(inset_edges(edge, theme.panel_top_highlight))
             // The sheen paints beneath the content: earlier child, and a
             // plain div, so it never intercepts input.
             .child(div().absolute().size_full().bg(linear_gradient(
@@ -206,14 +279,19 @@ impl Material {
     /// way the launcher's auto-height status line behaved before it was
     /// styled. The strip is a column with no vertical centering, so the
     /// first line stays reachable when the content scrolls.
+    ///
+    /// Its padding is the reference's: 16 on the left, 8 on the right,
+    /// where the strip's buttons carry their own padding.
     pub(crate) fn footer(theme: &Theme) -> Div {
+        let geometry = &theme.geometry;
         div()
             .flex_none()
             .flex()
             .flex_col()
-            .min_h(theme.geometry.footer_height)
+            .min_h(geometry.footer_height)
             .max_h(relative(0.35))
-            .px(px(16.))
+            .pl(geometry.footer_padding_left)
+            .pr(geometry.footer_padding_right)
             .bg(theme.footer_tint)
             .border_t_1()
             .border_color(theme.hairline_soft)
@@ -254,12 +332,8 @@ impl Material {
             .when(blur > px(0.), |surface| surface.backdrop_blur(blur))
             .bg(background)
             // The reference's inset edge (`inset 0 0 0 1px`) and top inset
-            // (`inset 0 1px 0`), as the panel renders its own.
-            .border_1()
-            .border_color(theme.popover_edge)
-            .shadow(vec![
-                BoxShadow::new(px(0.), px(1.), theme.popover_top_highlight).inset(),
-            ])
+            // (`inset 0 1px 0`), as the panel renders its own: layout-free.
+            .shadow(inset_edges(theme.popover_edge, theme.popover_top_highlight))
             // The sheen paints beneath the content, as on the panel.
             .child(div().absolute().size_full().bg(linear_gradient(
                 180.,
@@ -268,4 +342,19 @@ impl Material {
             )))
             .child(content)
     }
+}
+
+/// A popover's outer shadows (the reference's `.pop`), for the element
+/// that carries the popover: its 0.5px dark outline and its long soft
+/// drop. GPUI paints them outside the popover's own clip, so they belong
+/// to a wrapper around it (the Pane menu's, the Actions panel's).
+pub(crate) fn popover_shadows(theme: &Theme) -> Vec<BoxShadow> {
+    let geometry = &theme.geometry;
+    vec![
+        BoxShadow::new(px(0.), px(0.), theme.popover_outline)
+            .spread_radius(geometry.popover_outline_width),
+        BoxShadow::new(px(0.), geometry.popover_drop_offset, theme.popover_drop)
+            .blur_radius(geometry.popover_drop_blur)
+            .spread_radius(geometry.popover_drop_spread),
+    ]
 }

@@ -1,0 +1,43 @@
+﻿{
+    "scenario":  "launcher-frame",
+    "pid":  49236,
+    "dpi":  96,
+    "scale":  1,
+    "expectedClient":  [
+                           760,
+                           518
+                       ],
+    "client":  [
+                   760,
+                   518
+               ],
+    "clientOrigin":  "4248,100",
+    "windowRect":  "4240,100,5016,626",
+    "frameBounds":  "4247,100,5009,619",
+    "foregroundWasFixture":  false,
+    "offscreen":  true,
+    "captures":  [
+                     {
+                         "name":  "frame",
+                         "file":  "launcher-frame/frame.png",
+                         "size":  [
+                                      760,
+                                      518
+                                  ],
+                         "utc":  "2026-10-04T14:39:22.0522533Z"
+                     }
+                 ],
+    "steps":  [
+                  {
+                      "index":  1,
+                      "action":  "capture",
+                      "detail":  "{\"action\":\"capture\",\"name\":\"frame\"}",
+                      "utc":  "2026-10-04T14:39:22.0542542Z"
+                  }
+              ],
+    "dataDir":  "C:\\Users\\ADMIN\\AppData\\Local\\Temp\\pane-visual-fixture-6989cf8755f5\\data",
+    "scratchRemoved":  true,
+    "processExited":  true,
+    "exitCode":  0,
+    "error":  null
+}

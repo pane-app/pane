@@ -365,8 +365,8 @@ fn the_footers_keycap_follows_the_invoke_binding(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
     let (window, cx) = open_sample(cx, Some(data.path()));
 
-    // The default: the footer's action announces Enter, with the Enter
-    // glyph's keycap.
+    // The default: the footer's action announces Enter, with the return
+    // key's cap.
     let nodes = accessible_nodes(cx);
     let action = node(&nodes, "Button", "Open command");
     assert_eq!(action["keyboard_shortcut"].as_str(), Some("Enter"));
@@ -386,8 +386,8 @@ fn the_footers_keycap_follows_the_invoke_binding(cx: &mut TestAppContext) {
         "ctrl-j",
     );
 
-    // The keycap follows: the button announces Ctrl+J, and the keycap
-    // names it — the glyph stays the Enter key's alone.
+    // The keycaps follow: the button announces Ctrl+J, and the caps name
+    // it — no return-key cap is left behind.
     let nodes = accessible_nodes(cx);
     let action = node(&nodes, "Button", "Open command");
     assert_eq!(action["keyboard_shortcut"].as_str(), Some("Ctrl+J"));
@@ -415,6 +415,116 @@ fn the_footers_keycap_follows_the_invoke_binding(cx: &mut TestAppContext) {
         },
         "Enter opens nothing"
     );
+}
+
+/// A chord on the invoke action is shown and announced whole — every
+/// modifier its own cap beside the return key, the button's shortcut the
+/// full chord — and the chord, not the bare key, is what opens the
+/// selection. Shift+Enter is never shown or read as Enter.
+/// Open actions follows the Keyboard page: a recorded key opens the
+/// panel, and the Actions button and the footer's hint show and announce
+/// it.
+#[gpui::test]
+fn the_actions_binding_follows_the_keyboard_page(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let (window, cx) = open_sample(cx, Some(data.path()));
+    let nodes = accessible_nodes(cx);
+    let button = node(&nodes, "Button", "Actions");
+    assert_eq!(button["keyboard_shortcut"].as_str(), Some("Ctrl+K"));
+
+    let (_settings, mut settings_cx) = keyboard_page(cx);
+    record(&mut settings_cx, "keyboard-open-actions", "ctrl-j");
+    until_record(&mut settings_cx, data.path(), "open-actions", "ctrl-j");
+
+    let nodes = accessible_nodes(cx);
+    let button = node(&nodes, "Button", "Actions");
+    assert_eq!(button["keyboard_shortcut"].as_str(), Some("Ctrl+J"));
+    node(&nodes, "Image", "Ctrl+J");
+    cx.simulate_keystrokes("ctrl-j");
+    settle(&window, cx);
+    assert!(cx.read_entity(&window, |window, _| window.actions_open()));
+    cx.simulate_keystrokes("ctrl-j");
+    settle(&window, cx);
+    assert!(!cx.read_entity(&window, |window, _| window.actions_open()));
+}
+
+#[gpui::test]
+fn a_chord_on_the_invoke_action_is_shown_announced_and_pressed_whole(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let (window, cx) = open_sample(cx, Some(data.path()));
+    let (_settings, mut settings_cx) = keyboard_page(cx);
+    for (keystroke, id, name) in [
+        ("shift-enter", "shift-enter", "Shift+Enter"),
+        ("ctrl-shift-j", "ctrl-shift-j", "Ctrl+Shift+J"),
+    ] {
+        record(
+            &mut settings_cx,
+            "keyboard-invoke-selected-action",
+            keystroke,
+        );
+        until_record(&mut settings_cx, data.path(), "invoke-selected-action", id);
+        let nodes = accessible_nodes(cx);
+        let action = node(&nodes, "Button", "Open command");
+        assert_eq!(action["keyboard_shortcut"].as_str(), Some(name));
+        node(&nodes, "Image", name);
+        assert!(
+            !nodes.iter().any(|node| node["label"] == "Enter"),
+            "no bare Enter hint for {name}, {nodes:#?}"
+        );
+
+        // The chord opens the selected command; the bare Enter does not.
+        cx.simulate_keystrokes("enter");
+        let view = settle(&window, cx);
+        assert!(
+            matches!(view.screen, Screen::Root { .. }),
+            "Enter alone opens nothing under {name}"
+        );
+        cx.simulate_keystrokes(keystroke);
+        let view = settle(&window, cx);
+        assert_eq!(
+            (view.screen, view.title.as_str()),
+            (Screen::Command, "Rust sample"),
+            "{name} opens the selection"
+        );
+        cx.simulate_keystrokes("escape");
+        settle(&window, cx);
+    }
+}
+
+/// A long chord on the invoke action stays inside the footer of a narrow
+/// launcher: the label gives way, the caps keep their size, and the
+/// button never reaches past the strip's right edge.
+#[gpui::test]
+fn a_long_invoke_chord_stays_inside_a_narrow_footer(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let (window, cx) = open_sample(cx, Some(data.path()));
+    let (_settings, mut settings_cx) = keyboard_page(cx);
+    record(
+        &mut settings_cx,
+        "keyboard-invoke-selected-action",
+        "ctrl-alt-shift-pagedown",
+    );
+    until_record(
+        &mut settings_cx,
+        data.path(),
+        "invoke-selected-action",
+        "ctrl-alt-shift-pagedown",
+    );
+    cx.simulate_resize(gpui::size(gpui::px(300.), gpui::px(360.)));
+    settle(&window, cx);
+    let footer = cx.debug_bounds("status-idle").expect("the footer is drawn");
+    let button = cx
+        .debug_bounds("primary-action")
+        .expect("the action is drawn");
+    let caps = cx
+        .debug_bounds("primary-action-keys")
+        .expect("the chord is drawn");
+    assert!(
+        button.right() <= footer.right() && caps.right() <= button.right(),
+        "the chord stays inside the footer: {button:?} {caps:?} in {footer:?}"
+    );
+    let nodes = accessible_nodes(cx);
+    node(&nodes, "Image", "Ctrl+Alt+Shift+Page Down");
 }
 
 #[gpui::test]

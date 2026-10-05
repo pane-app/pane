@@ -1,0 +1,492 @@
+{
+  "kind": "pane-visual-fixture-manifest",
+  "scenario": {
+    "name": "keycap-windows",
+    "description": "The production key sequences for the reference's Windows chords, its accent Enter and a compact pinned hint, and rebound chords the reference never shows",
+    "family": "keycap",
+    "client": [
+      760.0,
+      518.0
+    ],
+    "reference": true,
+    "frame": false,
+    "steps": [
+      {
+        "action": "capture",
+        "name": "keycaps"
+      }
+    ]
+  },
+  "perturbation": null,
+  "material": "opaque",
+  "appearance": "dark",
+  "window": {
+    "bounds": [
+      580.0,
+      277.0,
+      760.0,
+      518.0
+    ],
+    "viewport": [
+      760.0,
+      518.0
+    ],
+    "scaleFactor": 1.0
+  },
+  "declared": {
+    "geometry": {
+      "searchHeight": 64.0,
+      "searchPaddingX": 20.0,
+      "searchGap": 14.0,
+      "searchSize": 19.0,
+      "rowMinHeight": 44.0,
+      "rowRadius": 10.0,
+      "rowPaddingX": 10.0,
+      "rowGap": 12.0,
+      "rowListGap": 2.0,
+      "rowTitleSize": 14.0,
+      "rowSubtitleSize": 13.0,
+      "listPaddingTop": 4.0,
+      "listPaddingBottom": 10.0,
+      "listPaddingX": 10.0,
+      "tileSize": 28.0,
+      "tileRadius": 7.0,
+      "footerHeight": 50.0,
+      "footerPaddingLeft": 16.0,
+      "footerPaddingRight": 8.0,
+      "actionHeight": 28.0,
+      "actionRadius": 7.0,
+      "actionPaddingX": 10.0,
+      "actionGap": 8.0,
+      "keycapHeight": 20.0,
+      "keycapRadius": 5.0,
+      "keycapPaddingX": 5.0,
+      "keycapCompactHeight": 17.0,
+      "keycapCompactPaddingX": 4.0,
+      "keyGap": 3.0
+    },
+    "colors": {
+      "panelSolid": "#16171AFF",
+      "keycapBackground": "#FFFFFF12",
+      "keycapBottom": "#00000059",
+      "keycapText": "#C9CACEFF",
+      "accent": "#C9EE6AFF",
+      "accentInk": "#111210FF",
+      "panelTopHighlight": "#FFFFFF1A",
+      "rowHover": "#FFFFFF09",
+      "rowSelected": "#FFFFFF16",
+      "rowSelectedBorder": "#FFFFFF0D",
+      "footerTint": "#00000024",
+      "hairline": "#FFFFFF13",
+      "hairlineSoft": "#FFFFFF0F",
+      "tileBackground": "#FFFFFF14",
+      "tileForeground": "#E9E9ECFF",
+      "textTitle": "#EDEDEFFF",
+      "textMuted": "#8E8F94FF",
+      "textQuery": "#F3F3F5FF",
+      "textPlaceholder": "#86878CFF"
+    }
+  },
+  "searchHeader": {
+    "x": 0.0,
+    "y": 0.0,
+    "width": 760.0,
+    "height": 64.0
+  },
+  "list": {
+    "x": 0.0,
+    "y": 64.0,
+    "width": 760.0,
+    "height": 404.0
+  },
+  "footer": {
+    "x": 0.0,
+    "y": 468.0,
+    "width": 760.0,
+    "height": 50.0
+  },
+  "captures": [
+    {
+      "name": "keycaps",
+      "after": [],
+      "query": "",
+      "pointer": null,
+      "rows": [],
+      "action": null
+    }
+  ],
+  "steps": [
+    {
+      "action": "capture",
+      "name": "keycaps"
+    }
+  ],
+  "keycaps": [
+    {
+      "binding": "ctrl-k",
+      "group": "footer-actions",
+      "style": "regular",
+      "name": "Ctrl+K",
+      "font": "11px Geist Mono 500",
+      "rect": {
+        "x": 20.0,
+        "y": 20.0,
+        "width": 59.4,
+        "height": 20.0
+      },
+      "caps": [
+        {
+          "label": "Ctrl",
+          "labelWidth": 26.4,
+          "rect": {
+            "x": 20.0,
+            "y": 20.0,
+            "width": 36.4,
+            "height": 20.0
+          }
+        },
+        {
+          "label": "K",
+          "labelWidth": 6.6,
+          "rect": {
+            "x": 59.4,
+            "y": 20.0,
+            "width": 20.0,
+            "height": 20.0
+          }
+        }
+      ]
+    },
+    {
+      "binding": "win-alt-left",
+      "group": "left-half",
+      "style": "regular",
+      "name": "Win+Alt+Left",
+      "font": "11px Geist Mono 500",
+      "rect": {
+        "x": 20.0,
+        "y": 52.0,
+        "width": 85.6,
+        "height": 20.0
+      },
+      "caps": [
+        {
+          "label": "Win",
+          "labelWidth": 19.8,
+          "rect": {
+            "x": 20.0,
+            "y": 52.0,
+            "width": 29.8,
+            "height": 20.0
+          }
+        },
+        {
+          "label": "Alt",
+          "labelWidth": 19.8,
+          "rect": {
+            "x": 52.8,
+            "y": 52.0,
+            "width": 29.8,
+            "height": 20.0
+          }
+        },
+        {
+          "label": "←",
+          "labelWidth": 6.6,
+          "rect": {
+            "x": 85.6,
+            "y": 52.0,
+            "width": 20.0,
+            "height": 20.0
+          }
+        }
+      ]
+    },
+    {
+      "binding": "ctrl-shift-v",
+      "group": "clipboard-history",
+      "style": "regular",
+      "name": "Ctrl+Shift+V",
+      "font": "11px Geist Mono 500",
+      "rect": {
+        "x": 20.0,
+        "y": 84.0,
+        "width": 105.399994,
+        "height": 20.0
+      },
+      "caps": [
+        {
+          "label": "Ctrl",
+          "labelWidth": 26.4,
+          "rect": {
+            "x": 20.0,
+            "y": 84.0,
+            "width": 36.4,
+            "height": 20.0
+          }
+        },
+        {
+          "label": "Shift",
+          "labelWidth": 33.0,
+          "rect": {
+            "x": 59.4,
+            "y": 84.0,
+            "width": 43.0,
+            "height": 20.0
+          }
+        },
+        {
+          "label": "V",
+          "labelWidth": 6.6,
+          "rect": {
+            "x": 105.4,
+            "y": 84.0,
+            "width": 20.0,
+            "height": 20.0
+          }
+        }
+      ]
+    },
+    {
+      "binding": "enter",
+      "group": "footer-primary",
+      "style": "accent",
+      "name": "Enter",
+      "font": "11px Geist Mono 500",
+      "rect": {
+        "x": 20.0,
+        "y": 116.0,
+        "width": 20.0,
+        "height": 20.0
+      },
+      "caps": [
+        {
+          "label": "↵",
+          "labelWidth": 6.6,
+          "rect": {
+            "x": 20.0,
+            "y": 116.0,
+            "width": 20.0,
+            "height": 20.0
+          }
+        }
+      ]
+    },
+    {
+      "binding": "ctrl-1",
+      "group": "pinned-1",
+      "style": "compact",
+      "name": "Ctrl+1",
+      "font": "10px Geist Mono 500",
+      "rect": {
+        "x": 20.0,
+        "y": 148.0,
+        "width": 52.0,
+        "height": 17.0
+      },
+      "caps": [
+        {
+          "label": "Ctrl",
+          "labelWidth": 24.0,
+          "rect": {
+            "x": 20.0,
+            "y": 148.0,
+            "width": 32.0,
+            "height": 17.0
+          }
+        },
+        {
+          "label": "1",
+          "labelWidth": 6.0,
+          "rect": {
+            "x": 55.0,
+            "y": 148.0,
+            "width": 17.0,
+            "height": 17.0
+          }
+        }
+      ]
+    },
+    {
+      "binding": "shift-enter",
+      "group": null,
+      "style": "accent",
+      "name": "Shift+Enter",
+      "font": "11px Geist Mono 500",
+      "rect": {
+        "x": 20.0,
+        "y": 177.0,
+        "width": 66.0,
+        "height": 20.0
+      },
+      "caps": [
+        {
+          "label": "Shift",
+          "labelWidth": 33.0,
+          "rect": {
+            "x": 20.0,
+            "y": 177.0,
+            "width": 43.0,
+            "height": 20.0
+          }
+        },
+        {
+          "label": "↵",
+          "labelWidth": 6.6,
+          "rect": {
+            "x": 66.0,
+            "y": 177.0,
+            "width": 20.0,
+            "height": 20.0
+          }
+        }
+      ]
+    },
+    {
+      "binding": "ctrl-enter",
+      "group": null,
+      "style": "accent",
+      "name": "Ctrl+Enter",
+      "font": "11px Geist Mono 500",
+      "rect": {
+        "x": 20.0,
+        "y": 209.0,
+        "width": 59.4,
+        "height": 20.0
+      },
+      "caps": [
+        {
+          "label": "Ctrl",
+          "labelWidth": 26.4,
+          "rect": {
+            "x": 20.0,
+            "y": 209.0,
+            "width": 36.4,
+            "height": 20.0
+          }
+        },
+        {
+          "label": "↵",
+          "labelWidth": 6.6,
+          "rect": {
+            "x": 59.4,
+            "y": 209.0,
+            "width": 20.0,
+            "height": 20.0
+          }
+        }
+      ]
+    },
+    {
+      "binding": "ctrl-shift-p",
+      "group": null,
+      "style": "regular",
+      "name": "Ctrl+Shift+P",
+      "font": "11px Geist Mono 500",
+      "rect": {
+        "x": 20.0,
+        "y": 241.0,
+        "width": 105.399994,
+        "height": 20.0
+      },
+      "caps": [
+        {
+          "label": "Ctrl",
+          "labelWidth": 26.4,
+          "rect": {
+            "x": 20.0,
+            "y": 241.0,
+            "width": 36.4,
+            "height": 20.0
+          }
+        },
+        {
+          "label": "Shift",
+          "labelWidth": 33.0,
+          "rect": {
+            "x": 59.4,
+            "y": 241.0,
+            "width": 43.0,
+            "height": 20.0
+          }
+        },
+        {
+          "label": "P",
+          "labelWidth": 6.6,
+          "rect": {
+            "x": 105.4,
+            "y": 241.0,
+            "width": 20.0,
+            "height": 20.0
+          }
+        }
+      ]
+    }
+  ],
+  "tiles": [],
+  "fonts": [
+    {
+      "file": "Geist-Regular.ttf",
+      "bytes": 126048,
+      "sha256": "5C8968EAFB98A4C4F47033DAF29E38E284A6F2A82EB017D171AB040FE7C4B615"
+    },
+    {
+      "file": "Geist-Medium.ttf",
+      "bytes": 127660,
+      "sha256": "0090E004725F6F64B841715B4167920580F883FCF9B67FC6D744089103FEC101"
+    },
+    {
+      "file": "Geist-SemiBold.ttf",
+      "bytes": 127872,
+      "sha256": "612EC98DF33935354F39E81E54101656961AB6E5549F64B63EB57868BA7BAB8D"
+    },
+    {
+      "file": "GeistMono-Regular.ttf",
+      "bytes": 148516,
+      "sha256": "42D8AD2E610238E64E8ABFCDE3037C63F7850A73928742B7AB7229D897BCB155"
+    },
+    {
+      "file": "GeistMono-Medium.ttf",
+      "bytes": 149328,
+      "sha256": "90B15711DC3779B2E64E8AFF5228154DD019A90BCE4947549C4A8A8A43F2AC25"
+    }
+  ],
+  "fontResolution": [
+    {
+      "family": "Geist",
+      "weight": 400.0,
+      "fontId": 1,
+      "probeWidth": 118.201996
+    },
+    {
+      "family": "Geist",
+      "weight": 500.0,
+      "fontId": 2,
+      "probeWidth": 121.36601
+    },
+    {
+      "family": "Geist Mono",
+      "weight": 400.0,
+      "fontId": 3,
+      "probeWidth": 151.2
+    },
+    {
+      "family": "Geist Mono",
+      "weight": 500.0,
+      "fontId": 0,
+      "probeWidth": 151.2
+    },
+    {
+      "family": "Pane Missing Font Probe",
+      "weight": 400.0,
+      "fontId": 4,
+      "probeWidth": 112.23242
+    },
+    {
+      "family": "Pane Missing Font Probe",
+      "weight": 500.0,
+      "fontId": 4,
+      "probeWidth": 112.23242
+    }
+  ]
+}

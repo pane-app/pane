@@ -11,6 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
+use super::quick_slots::PinTarget;
 use super::{CommandRegistration, Entry, RootResult, Row};
 use crate::runtime::{CallError, IndexedAction, IndexedResult};
 use crate::search::Keys;
@@ -28,6 +29,9 @@ struct Index {
     asking: bool,
     /// Whether its results were asked for since root search was last shown.
     fresh: bool,
+    /// Whether it ever answered (with results, or failing): until it
+    /// does, a quick slot pinning one of its results waits for it.
+    answered: bool,
     /// Its results, or the row explaining why it could not supply them.
     results: Vec<RootResult>,
     /// Why it could not supply them, listed for every query that is not
@@ -65,6 +69,7 @@ impl Indexes {
                             component: command.component.clone(),
                             asking: false,
                             fresh: false,
+                            answered: false,
                             results: Vec::new(),
                             failure: None,
                         });
@@ -96,6 +101,7 @@ impl Indexes {
             return;
         };
         index.asking = false;
+        index.answered = true;
         match answer {
             Ok(results) => {
                 index.failure = None;
@@ -131,6 +137,32 @@ impl Indexes {
         self.commands.iter().flat_map(|index| &index.results)
     }
 
+    /// Where the results of the command with component `component` stand:
+    /// a quick slot pinning one of them says so while it cannot be found.
+    pub(super) fn listing(&self, component: &Path) -> Listing {
+        match self
+            .commands
+            .iter()
+            .find(|index| index.component == component)
+        {
+            None => Listing::NotAsked,
+            Some(index) if index.asking => Listing::Asking,
+            Some(Index {
+                failure: Some((_, Entry::Broken(problem))),
+                ..
+            }) => Listing::Failed(problem.clone()),
+            Some(index) if index.answered => Listing::Listed,
+            Some(_) => Listing::NotAsked,
+        }
+    }
+
+    /// Whether the command with component `component` ever answered.
+    pub(super) fn answered(&self, component: &Path) -> bool {
+        self.commands
+            .iter()
+            .any(|index| index.component == component && index.answered)
+    }
+
     /// The rows explaining why a command could not supply its results.
     pub(super) fn failures(&self) -> impl Iterator<Item = &(Row, Entry)> {
         self.commands
@@ -139,8 +171,26 @@ impl Indexes {
     }
 }
 
-/// The root result for one of `command`'s indexed results.
+/// Where one command's kept results stand (see [`Indexes::listing`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Listing {
+    /// Never asked for, or forgotten since.
+    NotAsked,
+    /// Being asked for now, for the first time.
+    Asking,
+    /// Answered with its results.
+    Listed,
+    /// Answered with a failure, which says why.
+    Failed(String),
+}
+
+/// The root result for one of `command`'s indexed results. A quick slot
+/// can hold it by its identity: the result's own id scoped to `command`.
 fn indexed_result(command: &CommandRegistration, result: IndexedResult) -> RootResult {
+    let pin = PinTarget::Indexed {
+        command: command.id.clone(),
+        result: result.listing.id.clone(),
+    };
     let entry = match result.action {
         IndexedAction::OpenApplication(id) => Entry::OpenApplication {
             id,
@@ -154,5 +204,6 @@ fn indexed_result(command: &CommandRegistration, result: IndexedResult) -> RootR
         entry,
         keys,
         target: None,
+        pin: Some(pin),
     }
 }

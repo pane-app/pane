@@ -30,11 +30,15 @@ use tempfile::TempDir;
 #[path = "support/settle.rs"]
 mod settle;
 
+#[path = "support/paint.rs"]
+mod paint;
+
 #[path = "../../pane-core/tests/support/artifacts.rs"]
 mod artifacts;
 
 use artifacts::Artifacts;
 
+use paint::paints_fill_at;
 use settle::settle;
 
 /// The keystroke that opens Settings on this platform: Cmd+, on macOS,
@@ -44,6 +48,16 @@ fn settings_shortcut() -> &'static str {
         "cmd-,"
     } else {
         "ctrl-,"
+    }
+}
+
+/// The keystroke that focuses the Settings search: Cmd+F on macOS,
+/// Ctrl+F on Windows and Linux.
+fn find_shortcut() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "cmd-f"
+    } else {
+        "ctrl-f"
     }
 }
 
@@ -289,9 +303,35 @@ fn open_extensions(
 /// as its user would — the pointer moving onto it first, for the reason
 /// [`click_section`] gives.
 fn click_row(settings_cx: &mut VisualTestContext, row: &'static str) {
+    // A row below the fold is brought into view first, as a user turns
+    // the page's wheel to reach it: the page scrolls, and a click past the
+    // window's bottom edge would reach nothing.
+    let viewport = settings_cx.update(|window, _| window.viewport_size());
+    for _ in 0..10 {
+        let bounds = settings_cx
+            .debug_bounds(row)
+            .unwrap_or_else(|| panic!("no {row} on the Extensions page"));
+        if bounds.bottom() <= viewport.height {
+            break;
+        }
+        settings_cx.simulate_event(gpui::ScrollWheelEvent {
+            position: gpui::point(bounds.center().x, viewport.height / 2.),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(
+                px(0.),
+                viewport.height - bounds.bottom() - px(24.),
+            )),
+            modifiers: Modifiers::none(),
+            touch_phase: gpui::TouchPhase::Moved,
+        });
+        settings_cx.run_until_parked();
+    }
     let bounds = settings_cx
         .debug_bounds(row)
         .unwrap_or_else(|| panic!("no {row} on the Extensions page"));
+    assert!(
+        bounds.bottom() <= viewport.height,
+        "{row} scrolled into view: {bounds:?}"
+    );
     settings_cx.simulate_mouse_move(bounds.center(), None::<MouseButton>, Modifiers::none());
     settings_cx.simulate_click(bounds.center(), Modifiers::none());
     settings_cx.run_until_parked();
@@ -334,6 +374,20 @@ fn settings_context(
 fn focused_label(cx: &mut VisualTestContext) -> Option<String> {
     let (label, _) = accessibility(cx);
     label
+}
+
+/// Presses Tab until the node labelled `label` has focus, failing if a
+/// dozen stops never reach it; the labels focused on the way, in order.
+fn tab_to(cx: &mut VisualTestContext, label: &str) -> Vec<String> {
+    let mut passed = Vec::new();
+    for _ in 0..12 {
+        cx.simulate_keystrokes("tab");
+        match focused_label(cx) {
+            Some(focused) if focused == label => return passed,
+            focused => passed.push(focused.unwrap_or_default()),
+        }
+    }
+    panic!("Tab never reached {label:?}; it passed {passed:?}");
 }
 
 /// The window's accessibility tree as (focused label, raw JSON), forced on
@@ -814,10 +868,14 @@ fn the_footer_menu_opens_traverses_dismisses_and_restores_focus(cx: &mut TestApp
         "root search's selected result has focus"
     );
 
-    // The keyboard reaches the menu: Tab from the query field, then Enter
-    // presses the button.
-    cx.simulate_keystrokes("tab");
-    assert_eq!(focused_label(cx).as_deref(), Some("More actions"));
+    // The keyboard reaches the menu: Tab from the query field, past the
+    // pinned home's quick slots (tab stops between the query field and
+    // the footer), then Enter presses the button.
+    let passed = tab_to(cx, "Pane menu");
+    assert!(
+        passed.iter().all(|label| label.starts_with("Quick slot")),
+        "only the quick slots come between the query field and the menu: {passed:?}"
+    );
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     assert!(cx.debug_bounds("menu").is_some(), "the menu is open");
@@ -843,7 +901,7 @@ fn the_footer_menu_opens_traverses_dismisses_and_restores_focus(cx: &mut TestApp
     // The focus is restored at once, while the popup's exit still paints.
     assert_eq!(
         focused_label(cx).as_deref(),
-        Some("More actions"),
+        Some("Pane menu"),
         "focus is restored to what had it: the menu's button"
     );
     settle_frames(cx);
@@ -867,7 +925,7 @@ fn the_footer_menu_opens_traverses_dismisses_and_restores_focus(cx: &mut TestApp
         .expect("the menu's item opened the Settings window");
     assert_eq!(
         focused_label(cx).as_deref(),
-        Some("More actions"),
+        Some("Pane menu"),
         "focus is restored to what had it: the menu's button"
     );
     settle_frames(cx);
@@ -922,7 +980,7 @@ fn the_menu_button_toggles_and_assistive_technology_sees_it_named(cx: &mut TestA
     let nodes: Vec<&serde_json::Value> = tree["nodes"].as_object().unwrap().values().collect();
     let button = nodes
         .iter()
-        .find(|node| node["aria"]["role"] == "Button" && node["aria"]["label"] == "More actions")
+        .find(|node| node["aria"]["role"] == "Button" && node["aria"]["label"] == "Pane menu")
         .expect("the menu button is named");
     assert_eq!(
         button["aria"]["expanded"],
@@ -932,7 +990,7 @@ fn the_menu_button_toggles_and_assistive_technology_sees_it_named(cx: &mut TestA
     assert!(
         nodes
             .iter()
-            .any(|node| node["aria"]["role"] == "Menu" && node["aria"]["label"] == "More actions"),
+            .any(|node| node["aria"]["role"] == "Menu" && node["aria"]["label"] == "Pane menu"),
         "the menu is announced"
     );
     assert!(
@@ -1014,7 +1072,7 @@ fn the_menu_popup_enters_from_the_strip_and_exits_back_into_it(cx: &mut TestAppC
     cx.run_until_parked();
     assert_eq!(
         focused_label(cx).as_deref(),
-        Some("More actions"),
+        Some("Pane menu"),
         "the focus returned the frame the menu closed"
     );
     let leaving = menu_popup(&launcher, cx).expect("the exit is painting");
@@ -2238,6 +2296,665 @@ fn the_settings_window_keeps_its_layout_at_small_sizes(cx: &mut TestAppContext) 
     );
 }
 
+/// The bounds the element with the debug selector `selector` drew at, as
+/// `[x, y, width, height]` in logical px.
+fn rect_of(cx: &mut VisualTestContext, selector: &'static str) -> [f32; 4] {
+    let bounds = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector} is drawn"));
+    let (origin, size) = (bounds.origin, bounds.size);
+    [
+        f32::from(origin.x),
+        f32::from(origin.y),
+        f32::from(size.width),
+        f32::from(size.height),
+    ]
+}
+
+/// A debug selector built at run time, for the selectors a test derives
+/// from a page's title.
+fn selector(text: String) -> &'static str {
+    Box::leak(text.into_boxed_str())
+}
+
+/// The Settings window opens at the reference board's 1120×720 client,
+/// and its shell lands where the board puts it (#97): the 48px titlebar
+/// with its label centered and the Windows caption buttons at its right
+/// edge, the 232px sidebar below it with the 34px search and the 36px
+/// sections 2px apart, and the page beside the sidebar with its 26px top
+/// and 32px side padding.
+#[cfg(target_os = "windows")]
+#[gpui::test]
+fn the_settings_window_opens_at_the_reference_shell_geometry(cx: &mut TestAppContext) {
+    let (_launcher, _links, cx) = open_launcher(cx);
+    let (_settings, mut settings_cx) = opened_settings(cx);
+
+    let viewport = settings_cx.update(|window, _| window.viewport_size());
+    assert_eq!(
+        viewport,
+        gpui::size(px(1120.), px(720.)),
+        "the Settings board's client"
+    );
+    let sc = &mut settings_cx;
+    assert_eq!(rect_of(sc, "settings-titlebar"), [0., 0., 1120., 48.]);
+    assert_eq!(rect_of(sc, "settings-sidebar"), [0., 48., 232., 672.]);
+    assert_eq!(rect_of(sc, "settings-search-field"), [10., 60., 211., 34.]);
+    assert_eq!(rect_of(sc, "section-General"), [10., 104., 211., 36.]);
+    assert_eq!(rect_of(sc, "section-Launcher"), [10., 142., 211., 36.]);
+    assert_eq!(rect_of(sc, "settings-page"), [232., 48., 888., 672.]);
+    let heading = rect_of(sc, "general-title");
+    assert_eq!([heading[0], heading[1]], [264., 74.], "the page's padding");
+
+    // The label is centered over the whole window, as the reference's is;
+    // the caption buttons — the Windows adaptation of its lone close
+    // glyph — reach the window's right edge and fill the titlebar's
+    // height above its rule.
+    let label = rect_of(sc, "settings-title");
+    assert!(
+        (label[0] + label[2] / 2. - 560.).abs() <= 1.,
+        "the label is centered: {label:?}"
+    );
+    let close = rect_of(sc, "window-close");
+    assert_eq!(close[0] + close[2], 1120.);
+    assert_eq!([close[1], close[3]], [0., 47.]);
+
+    // At the window's floor the titlebar and its controls hold: the
+    // caption buttons still end at the window's edge, the label stays
+    // centered clear of them, and the sidebar keeps its width.
+    sc.simulate_resize(gpui::size(px(560.), px(400.)));
+    sc.run_until_parked();
+    let close = rect_of(sc, "window-close");
+    assert_eq!(close[0] + close[2], 560.);
+    let label = rect_of(sc, "settings-title");
+    assert!((label[0] + label[2] / 2. - 280.).abs() <= 1., "{label:?}");
+    assert_eq!(rect_of(sc, "settings-sidebar")[2], 232.);
+}
+
+/// The sidebar's sections are the reference's own item family (#97), not
+/// the launcher's result rows: 36px, the white 9% selected wash and the
+/// white 5% hover wash, which lands on the frame the pointer moves and
+/// never fades — the reference's `.nav` authors no transition — while the
+/// selected section keeps its wash under the pointer.
+#[gpui::test]
+fn the_sidebar_items_are_their_own_family_and_change_at_once(cx: &mut TestAppContext) {
+    let (_launcher, _links, cx) = open_launcher(cx);
+    let (_settings, mut settings_cx) = opened_settings(cx);
+
+    let general = settings_cx
+        .debug_bounds("section-General")
+        .expect("the General section");
+    assert_eq!(general.size.height, px(36.), "the sidebar item's height");
+    assert!(
+        paints_fill_at(&mut settings_cx, general, 0xFFFFFF17),
+        "the selected section takes the sidebar's white 9% wash"
+    );
+
+    // The pointer onto an unselected section: the hover wash at once, and
+    // nothing left running.
+    let launcher_row = settings_cx
+        .debug_bounds("section-Launcher")
+        .expect("the Launcher section");
+    settings_cx.simulate_mouse_move(
+        launcher_row.center(),
+        None::<MouseButton>,
+        Modifiers::none(),
+    );
+    settings_cx.run_until_parked();
+    assert!(
+        paints_fill_at(&mut settings_cx, launcher_row, 0xFFFFFF0D),
+        "the hover wash is the sidebar's white 5%, drawn at once"
+    );
+    assert_eq!(
+        frame(&mut settings_cx, Duration::ZERO),
+        0,
+        "the hover wash asks for no animation frame"
+    );
+
+    // Over the selected section the selected wash stays.
+    settings_cx.simulate_mouse_move(general.center(), None::<MouseButton>, Modifiers::none());
+    settings_cx.run_until_parked();
+    assert!(paints_fill_at(&mut settings_cx, general, 0xFFFFFF17));
+    assert!(!paints_fill_at(&mut settings_cx, general, 0xFFFFFF0D));
+    assert!(
+        !paints_fill_at(&mut settings_cx, launcher_row, 0xFFFFFF0D),
+        "the section the pointer left lost its wash at once"
+    );
+
+    pointer_leaves(&mut settings_cx);
+    settings_cx.run_until_parked();
+    assert_eq!(settle_frames(&mut settings_cx), 0, "the window is idle");
+}
+
+/// The Appearance page is the reference's two-column page (#97): the
+/// controls in a 388px column from the page's padding, the preview in a
+/// 400px column 36px to its right. A window narrower than the two
+/// columns collapses them — the preview wraps below the controls, inside
+/// the page — so every control stays reachable.
+#[gpui::test]
+fn the_appearance_preview_sits_beside_the_controls_and_below_them_when_narrow(
+    cx: &mut TestAppContext,
+) {
+    let (_launcher, _links, cx) = open_launcher(cx);
+    let mut settings_cx = open_settings(cx);
+    pointer_leaves(&mut settings_cx);
+    settle_frames(&mut settings_cx);
+
+    // The theme's segmented choice spans the controls column (#98).
+    let choice = settings_cx
+        .debug_bounds("appearance-theme-track")
+        .expect("a choice");
+    let preview = settings_cx
+        .debug_bounds("appearance-preview")
+        .expect("the preview");
+    let page = settings_cx.debug_bounds("settings-page").expect("the page");
+    assert_eq!(choice.left(), page.left() + px(32.));
+    assert_eq!(choice.size.width, px(388.), "the controls column");
+    assert_eq!(preview.left(), choice.right() + px(36.));
+    assert_eq!(preview.size.width, px(400.), "the preview column");
+
+    settings_cx.simulate_resize(gpui::size(px(760.), px(720.)));
+    settings_cx.run_until_parked();
+    let choice = settings_cx
+        .debug_bounds("appearance-theme-track")
+        .expect("a choice");
+    let preview = settings_cx
+        .debug_bounds("appearance-preview")
+        .expect("the preview");
+    let page = settings_cx.debug_bounds("settings-page").expect("the page");
+    assert!(
+        preview.top() > choice.bottom(),
+        "the preview wrapped below the controls: {preview:?} under {choice:?}"
+    );
+    assert_eq!(preview.left(), page.left() + px(32.));
+    assert!(preview.right() <= page.right() - px(32.));
+}
+
+/// The Appearance page's choices are the reference board's segmented
+/// family (#98), not launcher rows: each setting a field group — its
+/// 18px label 8px above the 36px track (black 24% under its ring), whose
+/// 30px segments share its width inside its 3px padding, 2px apart — 18px
+/// below the one before it, the chosen segment on the white 12% wash and
+/// no root-row wash on any of them.
+#[gpui::test]
+fn the_appearance_choices_are_the_reference_segmented_family(cx: &mut TestAppContext) {
+    let (_launcher, _links, cx) = open_launcher(cx);
+    let mut settings_cx = open_settings(cx);
+    pointer_leaves(&mut settings_cx);
+    settle_frames(&mut settings_cx);
+    let sc = &mut settings_cx;
+
+    let title = rect_of(sc, "appearance-title");
+    let theme_field = rect_of(sc, "appearance-theme-field");
+    let theme_track = rect_of(sc, "appearance-theme-track");
+    let material_field = rect_of(sc, "appearance-material-field");
+    let material_track = rect_of(sc, "appearance-material-track");
+    // The heading block's 4px below it, then the column's 18px.
+    let below_title = title[1] + title[3] + 4. + 18.;
+    assert_eq!(theme_field[1], below_title, "{theme_field:?}");
+    let below_theme = theme_field[1] + theme_field[3] + 18.;
+    assert_eq!(material_field[1], below_theme, "{material_field:?}");
+    for (field, track) in [(theme_field, theme_track), (material_field, material_track)] {
+        // The 18px label and the field's 8px before the track.
+        assert_eq!(track[1], field[1] + 18. + 8., "{track:?} in {field:?}");
+        assert_eq!([track[0], track[2], track[3]], [field[0], 388., 36.]);
+    }
+
+    // Three equal segments on the theme's track, two on the material's.
+    let themes: Vec<_> = ["System", "Light", "Dark"]
+        .into_iter()
+        .map(|name| rect_of(sc, selector(format!("appearance-theme-{name}"))))
+        .collect();
+    let materials: Vec<_> = ["Glass", "Solid"]
+        .into_iter()
+        .map(|name| rect_of(sc, selector(format!("appearance-material-{name}"))))
+        .collect();
+    for (track, row, width) in [
+        (theme_track, &themes, 126.),
+        (material_track, &materials, 190.),
+    ] {
+        assert_eq!([row[0][0], row[0][1]], [track[0] + 3., track[1] + 3.]);
+        for pair in row.windows(2) {
+            assert_eq!(pair[1][0], pair[0][0] + pair[0][2] + 2., "2px apart");
+        }
+        for segment in row {
+            assert_eq!([segment[2], segment[3]], [width, 30.], "{segment:?}");
+        }
+    }
+
+    // The fills: the track's black 24%, the chosen segment's white 12%
+    // (Dark and Glass are the defaults), and nothing on the others.
+    let track = sc
+        .debug_bounds("appearance-theme-track")
+        .expect("the track");
+    assert!(
+        paints_fill_at(sc, track, 0x0000003D),
+        "the track's black 24%"
+    );
+    let dark = sc
+        .debug_bounds("appearance-theme-Dark")
+        .expect("the Dark segment");
+    let system = sc
+        .debug_bounds("appearance-theme-System")
+        .expect("the System segment");
+    assert!(paints_fill_at(sc, dark, 0xFFFFFF1F), "the chosen white 12%");
+    assert!(!paints_fill_at(sc, system, 0xFFFFFF1F), "only the chosen");
+    for bounds in [dark, system] {
+        for root_wash in [0xFFFFFF16, 0xFFFFFF09] {
+            assert!(
+                !paints_fill_at(sc, bounds, root_wash),
+                "no root-row wash on a segment"
+            );
+        }
+    }
+
+    // Choosing moves the wash at once, and leaves nothing running.
+    click(sc, "appearance-material-Solid");
+    sc.run_until_parked();
+    assert!(chosen(sc, "Solid"), "the Solid choice is taken");
+    let solid = sc
+        .debug_bounds("appearance-material-Solid")
+        .expect("the Solid segment");
+    let glass = sc
+        .debug_bounds("appearance-material-Glass")
+        .expect("the Glass segment");
+    assert!(paints_fill_at(sc, solid, 0xFFFFFF1F), "the wash moved");
+    assert!(!paints_fill_at(sc, glass, 0xFFFFFF1F), "and left Glass");
+    pointer_leaves(sc);
+    sc.run_until_parked();
+    assert_eq!(settle_frames(sc), 0, "the window is idle");
+}
+
+/// The live preview is the reference's stage and miniature (#98): the
+/// 400x520 stage below the column's caption, the 340px miniature centered
+/// on it 56px below its top — its 46px search line, its pinned strip, its
+/// 38px rows (the first selected, on white 9%) and its 38px footer — drawn
+/// with the appearance in effect: the solid surface once Solid is chosen,
+/// in the palette chosen.
+#[gpui::test]
+fn the_live_preview_is_the_reference_miniature_in_the_appearance_in_effect(
+    cx: &mut TestAppContext,
+) {
+    let data = tempfile::tempdir().unwrap();
+    cx.update(|cx| {
+        pane::settings::init_with_overrides(
+            Some(data.path().to_owned()),
+            pane::settings::Overrides::default(),
+            cx,
+        )
+    });
+    let (_launcher, _links, cx) = open_launcher(cx);
+    let mut settings_cx = open_settings(cx);
+    pointer_leaves(&mut settings_cx);
+    settle_frames(&mut settings_cx);
+    let sc = &mut settings_cx;
+
+    let page = rect_of(sc, "settings-page");
+    let stage = rect_of(sc, "appearance-preview");
+    let panel = rect_of(sc, "appearance-preview-panel");
+    // The page's 26px, the caption's 16px line and the column's 10px.
+    assert_eq!(stage[1], page[1] + 26. + 16. + 10., "{stage:?}");
+    assert_eq!([stage[2], stage[3]], [400., 520.]);
+    assert_eq!([panel[0], panel[1]], [stage[0] + 30., stage[1] + 56.]);
+    assert_eq!(panel[2], 340.);
+    let search = rect_of(sc, "preview-search");
+    assert_eq!([search[1], search[3]], [panel[1], 46.]);
+    let pins = rect_of(sc, "preview-pins");
+    assert_eq!([pins[1], pins[3]], [panel[1] + 46. + 6., 52.]);
+    let first = rect_of(sc, "preview-row-0");
+    let second = rect_of(sc, "preview-row-1");
+    assert_eq!(first[1], pins[1] + pins[3] + 2.);
+    assert_eq!([first[3], second[1]], [38., first[1] + 40.]);
+    let footer = rect_of(sc, "preview-footer");
+    assert_eq!(footer[3], 38.);
+    assert_eq!(
+        footer[1] + footer[3],
+        panel[1] + panel[3],
+        "the footer closes it"
+    );
+    let row = sc.debug_bounds("preview-row-0").expect("the first row");
+    assert!(
+        paints_fill_at(sc, row, 0xFFFFFF17),
+        "the selected row's white 9%"
+    );
+
+    // Solid: the miniature takes the solid surface, as the windows do.
+    choose(sc, "appearance-material-Solid");
+    cx.run_until_parked();
+    sc.run_until_parked();
+    let panel = sc
+        .debug_bounds("appearance-preview-panel")
+        .expect("the miniature");
+    assert!(
+        paints_fill_at(sc, panel, 0x16171AFF),
+        "the solid dark surface"
+    );
+    assert!(!paints_fill_at(sc, panel, 0x16171AB3), "no glass tint");
+
+    // Light: the same miniature in the light palette.
+    choose(sc, "appearance-theme-Light");
+    cx.run_until_parked();
+    sc.run_until_parked();
+    let panel = sc
+        .debug_bounds("appearance-preview-panel")
+        .expect("the miniature");
+    assert!(
+        paints_fill_at(sc, panel, 0xF6F6F8FF),
+        "the solid light surface"
+    );
+    until_record(cx, data.path());
+}
+
+/// The keyboard reaches the segments (#98): Tab moves from the sidebar
+/// onto them, and Enter or Space chooses the one it is on, as a click
+/// does — and both windows follow.
+#[gpui::test]
+fn the_keyboard_reaches_and_chooses_a_segment(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    cx.update(|cx| {
+        pane::settings::init_with_overrides(
+            Some(data.path().to_owned()),
+            pane::settings::Overrides::default(),
+            cx,
+        )
+    });
+    let (_launcher, _links, cx) = open_launcher(cx);
+    let mut settings_cx = open_settings(cx);
+
+    tab_to(&mut settings_cx, "Light");
+    settings_cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    settings_cx.run_until_parked();
+    assert!(chosen(&mut settings_cx, "Light"), "Enter chose Light");
+    assert!(
+        paints_panel(cx, &light_panel()),
+        "the launcher follows the keyboard's choice"
+    );
+
+    tab_to(&mut settings_cx, "Dark");
+    settings_cx.simulate_keystrokes("space");
+    cx.run_until_parked();
+    settings_cx.run_until_parked();
+    assert!(chosen(&mut settings_cx, "Dark"), "Space chose Dark");
+    assert!(paints_panel(cx, &dark_panel()));
+    until_record(cx, data.path());
+}
+
+/// While an override is in force the segments are offered to neither the
+/// pointer nor the keyboard (#98): Tab passes them by.
+#[gpui::test]
+fn overridden_segments_take_no_keyboard_focus(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    cx.update(|cx| {
+        pane::settings::init_with_overrides(
+            Some(data.path().to_owned()),
+            pane::settings::Overrides {
+                theme: Some(pane_core::ThemePreference::Light),
+                material: None,
+            },
+            cx,
+        )
+    });
+    let (_launcher, _links, cx) = open_launcher(cx);
+    let mut settings_cx = open_settings(cx);
+    // The choices are drawn, as segments, and offered to nothing.
+    assert!(settings_cx.debug_bounds("appearance-theme-track").is_some());
+    let mut reached = Vec::new();
+    for _ in 0..8 {
+        settings_cx.simulate_keystrokes("tab");
+        reached.push(focused_label(&mut settings_cx).unwrap_or_default());
+    }
+    for name in ["System", "Light", "Dark", "Glass", "Solid"] {
+        assert!(
+            !reached.iter().any(|label| label == name),
+            "{name} took the focus while overridden: {reached:?}"
+        );
+    }
+}
+
+/// The seven real pages — and only those — are the sidebar's sections, in
+/// order: each opens its page, and the search finds each by its title.
+/// The reference's other labels (Window Manager, Clipboard, Privacy) add
+/// no page.
+#[gpui::test]
+fn all_seven_pages_are_listed_reachable_and_searchable(cx: &mut TestAppContext) {
+    let (_launcher, _links, cx) = open_launcher(cx);
+    let (_settings, mut settings_cx) = opened_settings(cx);
+    let pages = [
+        "General",
+        "Launcher",
+        "Appearance",
+        "Shortcuts",
+        "Keyboard",
+        "Extensions",
+        "About",
+    ];
+    let mut above = None;
+    for title in pages {
+        let section = selector(format!("section-{title}"));
+        let top = settings_cx
+            .debug_bounds(section)
+            .unwrap_or_else(|| panic!("{section} is listed"))
+            .top();
+        assert!(above.is_none_or(|above| above < top), "{section} in order");
+        above = Some(top);
+        click_section(&mut settings_cx, section);
+        let page = selector(title.to_lowercase());
+        assert!(
+            settings_cx.debug_bounds(page).is_some(),
+            "{section} opens its page"
+        );
+    }
+    for absent in [
+        "section-Window Manager",
+        "section-Clipboard",
+        "section-Privacy",
+    ] {
+        assert!(settings_cx.debug_bounds(absent).is_none(), "{absent}");
+    }
+    for title in pages {
+        settings_cx.simulate_keystrokes(find_shortcut());
+        settings_cx.simulate_input(&title.to_lowercase());
+        settings_cx.run_until_parked();
+        let result = selector(format!("settings-search-result-{title}"));
+        assert!(
+            settings_cx.debug_bounds(result).is_some(),
+            "the search finds {title}"
+        );
+        settings_cx.simulate_keystrokes("escape");
+        settings_cx.run_until_parked();
+    }
+}
+
+/// The General page is composed of the Settings board's families (#99),
+/// not launcher rows: its groups stand in the page's column 22px under the
+/// heading block (its 4px and the column's 18), each a field label 8px
+/// over its settings rows; the Open Pane hotkey's recorder is a 30px well
+/// (black 24%) at its row's right end with the Reset button beside it,
+/// and the launch-at-login choice is the board's 40x24 switch — white 16%
+/// with its knob at the left while off, the accent with the knob at the
+/// right once taken. No root-row wash is painted on the rows, and nothing
+/// fades.
+#[gpui::test]
+fn the_general_page_draws_the_settings_control_families(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let login = Arc::new(FakeLogin::default());
+    cx.update(|cx| {
+        pane::settings::init_with_login(
+            Some(data.path().to_owned()),
+            pane::settings::Overrides::default(),
+            login.clone(),
+            cx,
+        )
+    });
+    let (_launcher, _links, cx) = open_launcher(cx);
+    let (_settings, mut settings_cx) = opened_settings(cx);
+    let sc = &mut settings_cx;
+
+    let title = rect_of(sc, "general-title");
+    let field = rect_of(sc, "general-open-pane-field");
+    assert_eq!(
+        field[1],
+        title[1] + title[3] + 4. + 18.,
+        "the column's gap under the heading block"
+    );
+    let row = rect_of(sc, "general-open-pane-row");
+    assert_eq!(row[1], field[1] + 18. + 8., "the label's line and gap");
+    assert!(row[3] >= 44., "a settings row's floor: {row:?}");
+
+    let recorder = sc.debug_bounds("open-pane-recorder").expect("the recorder");
+    let row_bounds = sc.debug_bounds("general-open-pane-row").expect("its row");
+    assert_eq!(recorder.size.height, px(30.), "an inline well");
+    assert_eq!(recorder.right(), row_bounds.right(), "at the row's end");
+    assert!(
+        paints_fill_at(sc, recorder, 0x0000003D),
+        "the well's black 24%"
+    );
+    let reset = sc.debug_bounds("open-pane-reset").expect("the reset");
+    assert_eq!(reset.size.height, px(30.), "a button's height");
+    assert!(reset.right() <= recorder.left(), "beside the recorder");
+    for root_wash in [0xFFFFFF09, 0xFFFFFF16] {
+        assert!(
+            !paints_fill_at(sc, row_bounds, root_wash),
+            "no root-row wash on a settings row"
+        );
+    }
+
+    let switch = sc
+        .debug_bounds("general-launch-at-login")
+        .expect("the switch");
+    assert_eq!(switch.size, gpui::size(px(40.), px(24.)), "the switch");
+    let knob = |left: f32| gpui::Bounds {
+        origin: switch.origin + gpui::point(px(left), px(3.)),
+        size: gpui::size(px(18.), px(18.)),
+    };
+    assert!(paints_fill_at(sc, switch, 0xFFFFFF29), "off: white 16%");
+    assert!(paints_fill_at(sc, knob(3.), 0xFFFFFFFF), "the knob at left");
+    choose(sc, "general-launch-at-login");
+    cx.run_until_parked();
+    until_record_holds(sc, data.path(), "\"launchAtLogin\": true");
+    assert!(login_chosen(sc), "the choice is taken");
+    assert!(paints_fill_at(sc, switch, 0xC9EE6AFF), "on: the accent");
+    assert!(
+        paints_fill_at(sc, knob(19.), 0xFFFFFFFF),
+        "the knob at right"
+    );
+
+    pointer_leaves(sc);
+    sc.run_until_parked();
+    assert_eq!(settle_frames(sc), 0, "nothing fades: the window is idle");
+}
+
+/// The Keyboard page shows each action's binding as the reference's caps
+/// in a recorder's well (#99) at the end of its settings row — the
+/// binding's caps come from the launcher's own adapter — and offers a
+/// reset only for an action that is not at its default.
+#[gpui::test]
+fn the_keyboard_page_shows_bindings_in_recorder_wells(cx: &mut TestAppContext) {
+    let (_launcher, _links, cx) = open_launcher(cx);
+    let (_settings, mut settings_cx) = opened_settings(cx);
+    let sc = &mut settings_cx;
+    click_section(sc, "section-Keyboard");
+    pointer_leaves(sc);
+    settle_frames(sc);
+
+    let row = sc
+        .debug_bounds("keyboard-row-next-result")
+        .expect("the action's row");
+    let well = sc
+        .debug_bounds("keyboard-next-result")
+        .expect("the recorder");
+    assert_eq!(well.size.height, px(30.), "an inline well");
+    assert_eq!(well.right(), row.right(), "at the row's end");
+    assert!(row.size.height >= px(44.), "a settings row's floor");
+    assert!(paints_fill_at(sc, well, 0x0000003D), "the well's black 24%");
+    assert!(
+        sc.debug_bounds("keyboard-reset-next-result").is_none(),
+        "no reset while the binding is the default"
+    );
+    let field = rect_of(sc, "keyboard-field");
+    let title = rect_of(sc, "keyboard-title");
+    assert_eq!(field[1], title[1] + title[3] + 4. + 18.);
+}
+
+/// The About page's actions are the Settings buttons (#99): 30px, white
+/// 8% at rest and white 13% under the pointer, at once — no fade, no
+/// frame asked for — in field groups labelled as the board labels its
+/// fields.
+#[gpui::test]
+fn the_about_pages_actions_are_buttons_whose_washes_change_at_once(cx: &mut TestAppContext) {
+    let (_launcher, _links, cx) = open_launcher(cx);
+    let (_settings, mut settings_cx) = opened_settings(cx);
+    let sc = &mut settings_cx;
+    click_section(sc, "section-About");
+    pointer_leaves(sc);
+    settle_frames(sc);
+
+    for selector in ["about-documentation", "about-diagnostics"] {
+        let button = sc.debug_bounds(selector).expect("the button");
+        assert_eq!(button.size.height, px(30.), "{selector}: a button");
+        assert!(
+            paints_fill_at(sc, button, 0xFFFFFF14),
+            "{selector}: white 8% at rest"
+        );
+        sc.simulate_mouse_move(button.center(), None::<MouseButton>, Modifiers::none());
+        sc.run_until_parked();
+        assert!(
+            paints_fill_at(sc, button, 0xFFFFFF21),
+            "{selector}: white 13% under the pointer"
+        );
+        assert_eq!(
+            frame(sc, Duration::ZERO),
+            0,
+            "{selector}: the hover asks for no frame"
+        );
+        pointer_leaves(sc);
+        sc.run_until_parked();
+    }
+    let label = rect_of(sc, "about-label-Documentation");
+    let button = rect_of(sc, "about-documentation");
+    assert!(
+        button[1] >= label[1] + label[3],
+        "the field's label is over its control"
+    );
+}
+
+/// The Extensions page lists the launcher's management rows as Settings
+/// list items (#99), not root result rows: each at least 44 high, white 5%
+/// under the pointer (the sidebar item's hover), at once, and no root-row
+/// wash.
+#[gpui::test]
+fn the_extensions_page_lists_its_rows_as_list_items(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = settings_package(&sources.path().join("settings"));
+    let (_launcher, cx) = open_installed(cx, &data, &folder);
+    let (_settings, mut settings_cx) = open_extensions(cx);
+    let sc = &mut settings_cx;
+    pointer_leaves(sc);
+    settle_frames(sc);
+
+    for selector in [
+        "extension-row-Settings sample",
+        "extension-command-Greeting",
+        "extension-install-Install extension from folder…",
+    ] {
+        let row = sc.debug_bounds(selector).expect("the row");
+        assert!(row.size.height >= px(44.), "{selector}: {row:?}");
+        sc.simulate_mouse_move(row.center(), None::<MouseButton>, Modifiers::none());
+        sc.run_until_parked();
+        assert!(
+            paints_fill_at(sc, row, 0xFFFFFF0D),
+            "{selector}: the list item's white 5% under the pointer"
+        );
+        assert!(
+            !paints_fill_at(sc, row, 0xFFFFFF09),
+            "{selector}: not the root row's hover"
+        );
+        assert_eq!(frame(sc, Duration::ZERO), 0, "{selector}: at once");
+        pointer_leaves(sc);
+        sc.run_until_parked();
+    }
+}
+
 /// A helper for the section-transition tests: the Settings window over
 /// the sample launcher, opened and settled, as (window, its context).
 fn opened_settings(
@@ -2728,15 +3445,19 @@ fn the_material_choice_switches_the_panel_surface(cx: &mut TestAppContext) {
         );
     }
 
-    // The solid surface needs no note.
+    // The solid surface's description says what it is: no caveat about
+    // blur is left standing under it.
     choose(&mut settings_cx, "appearance-material-Solid");
     cx.run_until_parked();
     settings_cx.run_until_parked();
+    let (_, json) = accessibility(&mut settings_cx);
     assert!(
-        settings_cx
-            .debug_bounds("appearance-material-note")
-            .is_none(),
-        "nothing to explain about the solid surface"
+        json.contains("No transparency"),
+        "the solid surface is described, {json}"
+    );
+    assert!(
+        !json.contains("not see whether the blur") && !json.contains("Glass is unavailable"),
+        "no glass caveat is left under the solid choice, {json}"
     );
     until_record(cx, data.path());
 }

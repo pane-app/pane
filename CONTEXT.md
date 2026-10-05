@@ -72,9 +72,45 @@ _Avoid_: Every integration's internal search
 One entry root search lists for a query and can invoke, such as an extension command; it is matched by its title, subtitle and, for an installed command, its package's title, and ranked by the core.
 _Avoid_: Item (an item belongs to a command's own list), search hit
 
+**Result kind**:
+What invoking a root result reaches, shown on its row: Command, Application, File, Link or Fallback. The core derives it from the result's action, never from its title.
+_Avoid_: Type, category
+
+**Result section**:
+A labelled run of root results: "Commands" over a blank query's results, "Results" with their count over a query's, then "Fallbacks"; a run of computed answers sits under the title of the command that computed them ("Calculator"). Sections only label the list; they never reorder or filter it, and none claims recent use.
+_Avoid_: Group (a shortcut group is a Settings term), suggestions
+
+**Quick slot**:
+One of the five ordered places on root search's pinned home where the user pins a root result, to invoke it with one click or Ctrl+1 to Ctrl+5. It holds the result's identity — a registered command by its id, or an indexed result under the command that supplies it — never its row, title or a computed answer, and Pane keeps the five as its own record (`quick-slots.json`), not extension data. A target that is disabled, paused, missing or not listed yet keeps its slot and says why it cannot run; an empty slot invokes nothing.
+_Avoid_: Favorite, bookmark, shortcut, dock
+
+**Pinned home**:
+What root search shows above its results while the query is blank: the "Pinned" label and the five quick slots. A query hides it; clearing the query brings it back.
+_Avoid_: Start page, dashboard, recents (Pane shows no recent use)
+
+**Actions panel**:
+The panel, opened from the launcher's footer or its Open actions binding, that lists what can be done with root search's selected result: its primary action, then pinning it to a quick slot, then the alias and hotkey configuration of an installed command. A quick slot has one of its own, opening, removing and moving it. It lists only operations Pane can perform, and holds the result it opened for.
+_Avoid_: Context menu, app menu (the Pane menu is separate)
+
+**Appearance**:
+How Pane's windows look, as the user chooses it on Settings' Appearance page: a theme (System, which follows the system's light or dark appearance as it changes, Light or Dark) and a material (Glass, a translucent tint over the system's blur where the platform provides it, or Solid, an opaque window). Both windows render a choice at once, and Pane keeps it in its own settings record; a development override (`PANE_THEME`, `PANE_MATERIAL`) wins for its process, disables the choices and is never saved. The page's preview is a picture of the launcher in the appearance in effect, not the user's results. Accent colors, blur and tint strength, density and pinned or tip visibility are not Pane settings: only the visual workbench's reference fixture draws those controls.
+_Avoid_: Theme (one half of it), skin, style
+
+**Pane menu**:
+Pane's own menu, opened from the Pane mark at the left of the launcher's footer, holding Settings. It is not about any result.
+_Avoid_: App menu, footer menu, more actions
+
 **Computed result**:
 A root result an extension command computes from the query itself, such as the calculator's answer to "6*7", rather than one found by matching titles; it is listed above those (a file result below them), and invoking it performs its action, such as copying the answer. The search it answers owns the call asking for it: a newer query, or leaving root search, cancels a call still pending.
 _Avoid_: Suggestion, answer card, inline result
+
+**Computed answer**:
+A computed result whose action copies text, such as the calculator's answer: root search draws it as a card showing the query it answers and the text invoking it copies, and nothing else — Pane has no unit conversion and keeps no calculation history. It stays a root result: selectable, with its own id and its copy action.
+_Avoid_: Calculation, conversion, answer card (the card is how it is drawn)
+
+**No-results notice**:
+What root search shows above its fallbacks when nothing else is listed for a query that is not blank: the query, and what the user can do — pick a fallback, install an extension, or offer a command as one in Manage extensions. It selects nothing: a fallback is chosen only by the user.
+_Avoid_: Empty state (a screen's own line when it has no rows), zero state
 
 **Granted folder**:
 The one folder the user grants a package through Pane's own "Choose folder…" row, which Pane records itself (not as extension data) and lists for that package's commands under the scan policy; they name its files only by the ids Pane gave them, and Pane opens one after checking it again. The Files default extension's root results come from it.
@@ -103,6 +139,10 @@ _Avoid_: Clipboard (the system's current contents, which deleting history never 
 **Retention**:
 How long Pane keeps each clipboard history item after it was copied (7 days unless the user chose otherwise), counted from the copy, so disabling or re-enabling the package or stopping Pane never extends it. Clearing history deletes the items and keeps history on; turning it off and deleting it (the specification's Disable and delete history) also stops keeping what is copied.
 _Avoid_: Expiry date (an item's deadline follows from its copy and the retention), TTL
+
+**Clipboard history view**:
+How Pane's launcher shows the Clipboard History default extension's command: its kept items, newest first under Today, Yesterday and Older in local time, beside a plain-text preview of the selected one. Pane reads the items itself from the package's clipboard history, only for its own registered default extension (never by a command's title), and copies, deletes, pauses and resumes through the history's existing operations after checking the item, the screen and the package's code are still the ones read. The extension's own list stays reachable for the rest of its controls (retention, exclusions, clearing, turning off and deleting); every other command keeps its list. The view's projection calls each item it reads a record, as the approved contract does; the reference's word is clip, which only its fixture shows to users.
+_Avoid_: Clipboard manager, paste history
 
 **Global hotkey**:
 A key combination the user assigns to an installed command in Pane, which opens that command in Pane's window while any application has focus; Pane keeps it as its own record and registers it with the system only while the command's extension is enabled.

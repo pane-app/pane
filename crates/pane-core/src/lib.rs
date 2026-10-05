@@ -43,10 +43,14 @@ pub use host_settings::{
 #[doc(hidden)]
 pub use http::HttpLimits;
 pub use keyboard::{Binding, Keyboard, KeyboardAction};
+pub use launcher::clipboard_view;
 pub use launcher::{
-    AliasOutcome, ApplicationUpdate, BuildFailure, CommandRegistration, CustomViewSnapshot,
-    Development, FormField, FormView, HotkeyOutcome, Launcher, LauncherView, Question, Row, Screen,
-    SelectedAction, ShortcutCatalog, ShortcutCommand, ShortcutGroup, Status, Unavailable,
+    AliasOutcome, ApplicationUpdate, BuildFailure, CommandRegistration, ComputedAnswer,
+    CustomViewSnapshot, Development, FormField, FormView, HotkeyOutcome, Launcher, LauncherView,
+    PinTarget, Presentation, QUICK_SLOTS, Question, QuickSlot, ResultAction, ResultActionItem,
+    ResultActions, Row, RowKind, RowPresentation, Screen, Section, SelectedAction, ShortcutCatalog,
+    ShortcutCommand, ShortcutGroup, SlotChange, Status, Unavailable, answer_sections,
+    root_sections,
 };
 pub use links::LinkOpener;
 pub use operations::{MAX_CALL_DEPTH, MAX_OPERATION_JSON};
@@ -68,4 +72,4 @@ pub use runtime::{
     Rgb, Runtime, RuntimeFailure, RuntimeStatus, Shape, UNRESPONSIVE_LIMIT, View, ViewEvent,
     ViewId, WARN_AFTER,
 };
-pub use search::{SettingsEntry, settings_matches};
+pub use search::{SettingsEntry, settings_matches, title_matches};

@@ -12,16 +12,24 @@
 //! Tab and Shift-Tab move through the controls in order. Enter anywhere on
 //! the form submits it and Escape returns to the command. After a rejected
 //! submission, focus moves to the rejected field.
+//!
+//! The controls are drawn with the Settings board's families (#99,
+//! `ui::controls`), the launcher's own copies of their styling gone: each
+//! field a field group — its label over its control, its error under it —
+//! a text field a field's well, a choice field the segmented choice, and
+//! the submit control a button.
 
 use gpui::{
-    AnyElement, App, Context, Entity, FocusHandle, Focusable, KeyBinding, Role, Subscription,
-    Toggled, Window, actions, div, prelude::*, px,
+    AnyElement, App, Context, Div, Entity, FocusHandle, Focusable, KeyBinding, Role, Stateful,
+    Subscription, Toggled, Window, actions, div, prelude::*, px,
 };
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
 use pane_core::{FieldKind, FormField, FormView, Screen, Status};
 
 use crate::app::LauncherWindow;
+use crate::ui::controls;
 use crate::ui::input::TextEditingKeys;
+use crate::ui::theme::Theme;
 
 actions!(form, [NextChoice, PreviousChoice, Press]);
 
@@ -189,14 +197,16 @@ impl LauncherWindow {
         }
     }
 
-    /// The form's controls, for the launcher's form screen.
+    /// The form's controls, for the launcher's form screen: each field a
+    /// Settings field group (#99) — its label over its control, its error
+    /// under it — and the submit button, composed by [`compose`].
     pub(crate) fn render_form(
         &self,
         title: String,
         form: FormView,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let Some(controls) = &self.form else {
+        let Some(form_controls) = &self.form else {
             return div().into_any_element();
         };
         // The form keeps its own behavior; only its paint comes from the
@@ -206,51 +216,17 @@ impl LauncherWindow {
         let fields: Vec<AnyElement> = form
             .fields
             .into_iter()
-            .zip(&controls.fields)
+            .zip(&form_controls.fields)
             .enumerate()
             .map(|(index, (field, control))| self.render_field(index, field, control, cx))
             .collect();
-        div()
-            .id("form")
-            .role(Role::Form)
-            .aria_label(title)
-            .flex_1()
-            .min_h(px(0.))
-            .flex()
-            .flex_col()
-            .gap_3()
-            // The form keeps its own edge padding and scrolls when its
-            // fields outgrow the window, so they never meet the panel's
-            // edges.
-            .px(theme.geometry.search_padding_x)
-            .py(px(12.))
-            .overflow_y_scroll()
-            .children(fields)
-            .child(
-                div()
-                    .id("submit")
-                    .debug_selector(|| "submit".into())
-                    .key_context(BUTTON_CONTEXT)
-                    .track_focus(&controls.submit)
-                    .role(Role::Button)
-                    .aria_label(form.submit_label.clone())
-                    .on_action(cx.listener(|this, _: &Press, window, cx| {
-                        this.submit_form(window, cx);
-                    }))
-                    .on_click(cx.listener(|this, _, window, cx| this.submit_form(window, cx)))
-                    .self_start()
-                    .px_4()
-                    .py_1()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .border_2()
-                    .border_color(theme.row_selected_border)
-                    .bg(theme.row_selected)
-                    .focus(|button| button.border_color(theme.focus_ring))
-                    .text_color(theme.text_title)
-                    .child(form.submit_label),
-            )
-            .into_any_element()
+        let submit = submit_button(form.submit_label, theme)
+            .track_focus(&form_controls.submit)
+            .on_action(cx.listener(|this, _: &Press, window, cx| {
+                this.submit_form(window, cx);
+            }))
+            .on_click(cx.listener(|this, _, window, cx| this.submit_form(window, cx)));
+        compose(title, fields, submit, theme).into_any_element()
     }
 
     fn render_field(
@@ -264,127 +240,218 @@ impl LauncherWindow {
         let visuals = crate::settings::visuals(cx);
         let theme = &visuals.theme;
         let control = match (control, &field.kind) {
-            (Control::Text(input), FieldKind::Text { placeholder }) => {
-                let placeholder = placeholder.clone().unwrap_or_default();
-                div()
-                    .id(("field", index))
-                    .debug_selector(|| format!("field-{}", field.id))
-                    // The editable text element has no accessibility node of
-                    // its own; this wrapper is the field's node and tracks
-                    // the element's focus handle, so it is reported as
-                    // focused and is a tab stop.
-                    .track_focus(&input.focus_handle(cx))
-                    .role(Role::TextInput)
-                    .aria_label(field.label.clone())
-                    .aria_value(field.value.clone())
-                    .aria_placeholder(placeholder.clone())
-                    .when_some(error.clone(), |node, error| node.aria_description(error))
-                    .px_2()
-                    .py_1()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(theme.hairline)
-                    .bg(theme.tile_background)
-                    .focus(|node| node.border_color(theme.focus_ring))
-                    .child(
-                        text_input(("input", index))
-                            .state(input.downgrade())
-                            .placeholder(placeholder)
-                            .placeholder_color(theme.text_placeholder)
-                            .caret_color(theme.accent_text)
-                            .selection_color(theme.row_selected)
-                            .marked_color(theme.accent_text)
-                            .text_color(theme.text_title)
-                            .w_full()
-                            .whitespace_nowrap()
-                            .overflow_x_scroll(),
-                    )
-                    .into_any_element()
-            }
+            (Control::Text(input), FieldKind::Text { placeholder }) => text_control(
+                TextControl {
+                    index,
+                    id: &field.id,
+                    label: &field.label,
+                    value: &field.value,
+                    placeholder: placeholder.as_deref().unwrap_or_default(),
+                    error: error.as_deref(),
+                },
+                input,
+                &input.focus_handle(cx),
+                theme,
+            )
+            .into_any_element(),
             (Control::Choice(handle), FieldKind::Choice(choices)) => {
-                let options: Vec<AnyElement> = choices
+                let segments = choices
                     .iter()
                     .enumerate()
                     .map(|(position, choice)| {
                         let chosen = choice.id == field.value;
                         let (field_id, choice_id) = (field.id.clone(), choice.id.clone());
                         let handle = handle.clone();
-                        div()
-                            .id(("choice", position))
-                            .debug_selector(|| format!("choice-{field_id}-{choice_id}"))
-                            .role(Role::RadioButton)
-                            .aria_label(choice.label.clone())
-                            .aria_toggled(if chosen {
-                                Toggled::True
-                            } else {
-                                Toggled::False
-                            })
-                            .aria_position_in_set(position + 1)
-                            .aria_size_of_set(choices.len())
-                            .when(chosen, |option| option.aria_active_descendant())
-                            .flex()
-                            .gap_1()
-                            .px_2()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .when(chosen, |option| option.bg(theme.row_selected))
-                            .child(if chosen { "◉" } else { "○" })
-                            .child(choice.label.clone())
-                            .on_click(cx.listener(move |this, _, window, cx| {
+                        choice_segment(
+                            (field.id.as_str(), choice.id.as_str(), choice.label.as_str()),
+                            (position, choices.len()),
+                            chosen,
+                            theme,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
                                 this.launcher.set_field_value(&field_id, &choice_id);
                                 window.focus(&handle, cx);
                                 cx.notify();
-                            }))
-                            .into_any_element()
+                            },
+                        ))
                     })
                     .collect();
                 let (next, previous) = (field.id.clone(), field.id.clone());
-                div()
-                    .id(("field", index))
-                    .debug_selector(|| format!("field-{}", field.id))
-                    .key_context(CHOICE_CONTEXT)
-                    .track_focus(handle)
-                    .role(Role::RadioGroup)
-                    .aria_label(field.label.clone())
-                    .when_some(error.clone(), |node, error| node.aria_description(error))
-                    .on_action(cx.listener(move |this, _: &NextChoice, _, cx| {
-                        this.move_choice(&next, 1, cx)
-                    }))
-                    .on_action(cx.listener(move |this, _: &PreviousChoice, _, cx| {
-                        this.move_choice(&previous, -1, cx)
-                    }))
-                    .flex()
-                    .gap_2()
-                    .p_1()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(theme.hairline)
-                    .focus(|node| node.border_color(theme.focus_ring))
-                    .children(options)
-                    .into_any_element()
+                choice_track(
+                    (index, field.id.as_str(), field.label.as_str()),
+                    error.as_deref(),
+                    segments,
+                    theme,
+                )
+                .key_context(CHOICE_CONTEXT)
+                .track_focus(handle)
+                .on_action(
+                    cx.listener(move |this, _: &NextChoice, _, cx| this.move_choice(&next, 1, cx)),
+                )
+                .on_action(cx.listener(move |this, _: &PreviousChoice, _, cx| {
+                    this.move_choice(&previous, -1, cx)
+                }))
+                .into_any_element()
             }
             _ => unreachable!("controls are created from the form's fields"),
         };
-        div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(theme.text_muted)
-                    .child(field.label.clone()),
-            )
-            .child(control)
-            .when_some(error, |element, error| {
-                element.child(
-                    div()
-                        .debug_selector(|| format!("field-error-{}", field.id))
-                        .text_sm()
-                        .text_color(theme.danger)
-                        .child(error),
-                )
-            })
-            .into_any_element()
+        field_group(&field.id, field.label.clone(), control, error, theme).into_any_element()
     }
+}
+
+/// A form screen's composition, which the visual workbench's fixture
+/// draws too (#99): the form's field groups, 18px apart in a column that
+/// keeps its own edge padding and scrolls when its fields outgrow the
+/// window — so they never meet the panel's edges — then `submit`.
+pub(crate) fn compose(
+    title: String,
+    fields: Vec<AnyElement>,
+    submit: Stateful<Div>,
+    theme: &Theme,
+) -> Stateful<Div> {
+    div()
+        .id("form")
+        .role(Role::Form)
+        .aria_label(title)
+        .flex_1()
+        .min_h(px(0.))
+        .flex()
+        .flex_col()
+        .gap(theme.geometry.controls.group_gap)
+        .px(theme.geometry.search_padding_x)
+        .py(theme.geometry.screen_padding_y)
+        .overflow_y_scroll()
+        .children(fields)
+        .child(div().flex().child(submit))
+}
+
+/// One field's group (`ui::controls::field`): its label (13.5/500 over its
+/// control, 8px apart, as the Settings board's fields), its control, and —
+/// after a rejected submission — its error in the danger tone under it.
+pub(crate) fn field_group(
+    id: &str,
+    label: String,
+    control: impl IntoElement,
+    error: Option<String>,
+    theme: &Theme,
+) -> Div {
+    let label_selector = format!("field-label-{id}");
+    let error_selector = format!("field-error-{id}");
+    controls::field(theme)
+        .child(controls::field_label(label, theme).debug_selector(move || label_selector))
+        .child(control)
+        .when_some(error, |group, error| {
+            group.child(
+                controls::field_description(error, theme.danger, theme)
+                    .debug_selector(move || error_selector),
+            )
+        })
+}
+
+/// What a text field shows: its place in the form, its identity, label,
+/// value, placeholder and error.
+pub(crate) struct TextControl<'a> {
+    pub(crate) index: usize,
+    pub(crate) id: &'a str,
+    pub(crate) label: &'a str,
+    pub(crate) value: &'a str,
+    pub(crate) placeholder: &'a str,
+    pub(crate) error: Option<&'a str>,
+}
+
+/// A text field: GPUI CE's editable text element in a field's well (34px,
+/// black 24% under its ring, the focus color while it has the keyboard).
+/// The editable text element has no accessibility node of its own; the
+/// well is the field's node and tracks the element's `focus`, so it is
+/// reported as focused and is a tab stop.
+pub(crate) fn text_control(
+    field: TextControl<'_>,
+    input: &Entity<EditableTextState>,
+    focus: &FocusHandle,
+    theme: &Theme,
+) -> Stateful<Div> {
+    let selector = format!("field-{}", field.id);
+    let ring = controls::well_shadows(true, theme);
+    controls::well(false, theme)
+        .id(("field", field.index))
+        .debug_selector(move || selector)
+        .track_focus(focus)
+        .role(Role::TextInput)
+        .aria_label(field.label.to_owned())
+        .aria_value(field.value.to_owned())
+        .aria_placeholder(field.placeholder.to_owned())
+        .when_some(field.error, |node, error| {
+            node.aria_description(error.to_owned())
+        })
+        .focus(move |node| node.shadow(ring))
+        .child(controls::well_input(
+            text_input(("input", field.index)).state(input.downgrade()),
+            field.placeholder.to_owned(),
+            theme,
+        ))
+}
+
+/// One choice of a choice field: a segment of its track, a radio button
+/// (`(field, choice, label)` name it; `(position, count)` place it in its
+/// set), the chosen one the group's active descendant. The caller attaches
+/// its click.
+pub(crate) fn choice_segment(
+    (field, choice, label): (&str, &str, &str),
+    (position, count): (usize, usize),
+    chosen: bool,
+    theme: &Theme,
+) -> Stateful<Div> {
+    let selector = format!("choice-{field}-{choice}");
+    controls::segment(label.to_owned(), chosen, true, theme)
+        .id(("choice", position))
+        .debug_selector(move || selector)
+        .role(Role::RadioButton)
+        .aria_label(label.to_owned())
+        .aria_toggled(if chosen {
+            Toggled::True
+        } else {
+            Toggled::False
+        })
+        .aria_position_in_set(position + 1)
+        .aria_size_of_set(count)
+        .when(chosen, |segment| segment.aria_active_descendant())
+}
+
+/// A choice field: the segmented choice's track (`(index, field, label)`
+/// name it), a radio group holding `segments` and the keyboard — whose
+/// arrows change the choice, like a native radio group — under Pane's
+/// focus ring while the keyboard is on it. The caller attaches its focus
+/// and keys.
+pub(crate) fn choice_track(
+    (index, field, label): (usize, &str, &str),
+    error: Option<&str>,
+    segments: Vec<Stateful<Div>>,
+    theme: &Theme,
+) -> Stateful<Div> {
+    let selector = format!("field-{field}");
+    let ring = controls::focus_ring(theme);
+    controls::segment_track(theme)
+        .id(("field", index))
+        .debug_selector(move || selector)
+        .role(Role::RadioGroup)
+        .aria_label(label.to_owned())
+        .when_some(error, |node, error| node.aria_description(error.to_owned()))
+        .focus(move |node| node.shadow(ring))
+        .children(segments)
+}
+
+/// The submit button: a Settings button (`.pill`, 30px, white 8%) under
+/// Pane's focus ring while the keyboard is on it; Enter on the form and
+/// Space on the button press it. The caller attaches its focus and
+/// presses.
+pub(crate) fn submit_button(label: String, theme: &Theme) -> Stateful<Div> {
+    let ring = controls::focus_ring(theme);
+    controls::button(label.clone(), true, theme)
+        .id("submit")
+        .debug_selector(|| "submit".into())
+        .key_context(BUTTON_CONTEXT)
+        .role(Role::Button)
+        .aria_label(label)
+        .focus(move |button| button.shadow(ring))
 }

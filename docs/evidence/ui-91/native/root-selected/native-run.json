@@ -1,0 +1,85 @@
+﻿{
+    "scenario":  "root-selected",
+    "pid":  59992,
+    "dpi":  96,
+    "scale":  1,
+    "expectedClient":  [
+                           760,
+                           518
+                       ],
+    "client":  [
+                   760,
+                   518
+               ],
+    "clientOrigin":  "4248,100",
+    "windowRect":  "4240,100,5016,626",
+    "frameBounds":  "4247,100,5009,619",
+    "foregroundWasFixture":  false,
+    "offscreen":  true,
+    "captures":  [
+                     {
+                         "name":  "rest",
+                         "file":  "root-selected/rest.png",
+                         "size":  [
+                                      760,
+                                      518
+                                  ],
+                         "utc":  "2026-10-04T13:48:43.6660607Z"
+                     },
+                     {
+                         "name":  "down-1",
+                         "file":  "root-selected/down-1.png",
+                         "size":  [
+                                      760,
+                                      518
+                                  ],
+                         "utc":  "2026-10-04T13:48:44.2614531Z"
+                     },
+                     {
+                         "name":  "selected",
+                         "file":  "root-selected/selected.png",
+                         "size":  [
+                                      760,
+                                      518
+                                  ],
+                         "utc":  "2026-10-04T13:48:44.7855309Z"
+                     }
+                 ],
+    "steps":  [
+                  {
+                      "index":  1,
+                      "action":  "capture",
+                      "detail":  "{\"action\":\"capture\",\"name\":\"rest\"}",
+                      "utc":  "2026-10-04T13:48:43.6700675Z"
+                  },
+                  {
+                      "index":  2,
+                      "action":  "key",
+                      "detail":  "{\"action\":\"key\",\"key\":\"down\"}",
+                      "utc":  "2026-10-04T13:48:43.7822297Z"
+                  },
+                  {
+                      "index":  3,
+                      "action":  "capture",
+                      "detail":  "{\"action\":\"capture\",\"name\":\"down-1\"}",
+                      "utc":  "2026-10-04T13:48:44.2635939Z"
+                  },
+                  {
+                      "index":  4,
+                      "action":  "key",
+                      "detail":  "{\"action\":\"key\",\"key\":\"down\"}",
+                      "utc":  "2026-10-04T13:48:44.3023028Z"
+                  },
+                  {
+                      "index":  5,
+                      "action":  "capture",
+                      "detail":  "{\"action\":\"capture\",\"name\":\"selected\"}",
+                      "utc":  "2026-10-04T13:48:44.7865291Z"
+                  }
+              ],
+    "dataDir":  "C:\\Users\\ADMIN\\AppData\\Local\\Temp\\pane-visual-fixture-d8aaf27c9ac3\\data",
+    "scratchRemoved":  true,
+    "processExited":  true,
+    "exitCode":  0,
+    "error":  null
+}

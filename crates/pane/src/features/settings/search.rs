@@ -53,15 +53,14 @@ use std::collections::HashMap;
 
 use gpui::{
     App, Context, Div, Entity, Focusable, KeyBinding, Role, ScrollAnchor, ScrollHandle,
-    SharedString, Stateful, Subscription, Window, actions, div, prelude::*, px,
+    SharedString, Stateful, Subscription, Window, actions, div, prelude::*,
 };
 use gpui_elements::editable_text::actions::DEFAULT_INPUT_CONTEXT;
-use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
+use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged};
 use pane_core::Launcher;
 
 use super::{Page, SettingsWindow};
-use crate::ui::icon::{Glyph, glyph};
-use crate::ui::result_row::{RowContent, result_row};
+use crate::ui::settings_shell::{self, SidebarItem};
 use crate::ui::theme::Theme;
 
 /// The search field's key context: the results' keys are bound in it,
@@ -72,7 +71,7 @@ use crate::ui::theme::Theme;
 const FIELD: &str = "SettingsSearch";
 
 /// The field's placeholder, and its accessible name.
-const PLACEHOLDER: &str = "Search settings";
+const PLACEHOLDER: &str = settings_shell::SEARCH_PLACEHOLDER;
 
 actions!(
     settings_search,
@@ -443,11 +442,12 @@ impl SettingsWindow {
     }
 }
 
-/// The search field: the shared editable text element in a boxed field
-/// with the magnifier, as the Shortcuts page's filter is. The boxed
-/// element is the field's accessibility node — an editable combo box, as
-/// root search's field is, with the results list below it as its list —
-/// and carries the key context the results' keys are bound in.
+/// The search field: the shared editable text element in the sidebar's
+/// search well with the magnifier (see
+/// [`settings_shell::search_field`]). The well is the field's
+/// accessibility node — an editable combo box, as root search's field
+/// is, with the results list below it as its list — and carries the key
+/// context the results' keys are bound in.
 pub(super) fn field(
     this: &SettingsWindow,
     theme: &Theme,
@@ -455,7 +455,7 @@ pub(super) fn field(
 ) -> Stateful<Div> {
     let input = &this.search.query;
     let query = input.read(cx).as_str().to_owned();
-    div()
+    settings_shell::search_field(input, PLACEHOLDER, theme)
         .id("settings-search-field")
         .debug_selector(|| "settings-search-field".into())
         .key_context(FIELD)
@@ -468,33 +468,6 @@ pub(super) fn field(
         .on_action(cx.listener(SettingsWindow::search_previous))
         .on_action(cx.listener(SettingsWindow::search_open_action))
         .on_action(cx.listener(SettingsWindow::search_leave))
-        .flex()
-        .items_center()
-        .gap(px(6.))
-        .mb(px(8.))
-        .px(px(7.))
-        .py(px(5.))
-        .rounded_md()
-        .border_1()
-        .border_color(theme.hairline)
-        .bg(theme.tile_background)
-        .focus(|field| field.border_color(theme.focus_ring))
-        .child(glyph(Glyph::Search, px(14.), theme.text_muted))
-        .child(
-            text_input("settings-search")
-                .state(input.downgrade())
-                .placeholder(PLACEHOLDER)
-                .placeholder_color(theme.text_placeholder)
-                .caret_color(theme.accent_text)
-                .selection_color(theme.row_selected)
-                .marked_color(theme.accent_text)
-                .text_color(theme.text_body)
-                .text_size(theme.typography.row_subtitle_size)
-                .w_full()
-                .min_w(px(0.))
-                .whitespace_nowrap()
-                .overflow_x_scroll(),
-        )
 }
 
 /// The results the sidebar lists while a query shows: one row per result,
@@ -520,7 +493,7 @@ pub(super) fn result_rows(
                 // the tree without a role).
                 .role(Role::Status)
                 .aria_label(message.clone())
-                .px(theme.geometry.row_padding_x)
+                .px(theme.geometry.settings.item_padding_x)
                 .text_size(theme.typography.row_kind_size)
                 .text_color(theme.text_muted)
                 .child(message)
@@ -538,39 +511,27 @@ pub(super) fn result_rows(
                 Some(group) => format!("{page} · {group}"),
                 None => page.to_owned(),
             };
-            // A page's own result carries its icon, as its sidebar row
-            // does; a control's result is its name and where it lives.
-            let icon = hit
-                .entry
-                .control
-                .is_none()
-                .then(|| this.pages[hit.page].icon);
             let description = match hit.entry.unavailable.as_deref() {
                 Some(reason) => format!("{subtitle}. {reason}"),
                 None => subtitle.clone(),
             };
             let title = hit.entry.title.clone();
             let hit_for_click = hit.clone();
-            result_row(
-                RowContent {
-                    title: hit.entry.title.clone().into(),
-                    subtitle: Some(subtitle.into()),
-                    unavailable_reason: hit.entry.unavailable.clone().map(SharedString::from),
-                    unavailable_id: ("settings-search-unavailable", index).into(),
+            // The sidebar's own item, as the sections it stands in for:
+            // the result's name with its page's glyph, where it lives
+            // under it, and why it cannot be used here, if it cannot.
+            settings_shell::sidebar_item(
+                SidebarItem {
+                    label: hit.entry.title.clone().into(),
+                    glyph: this.pages[hit.page].icon,
+                    detail: Some(subtitle.into()),
+                    reason: hit.entry.unavailable.clone().map(SharedString::from),
+                    count: None,
                     selected,
-                    icon,
                 },
                 theme,
             )
             .id(("settings-search-result", index))
-            // Pressed: the selected wash, one rung above the hover one,
-            // fading on the shared pointer span — and only while the
-            // result is unselected, so the search's selected wash lands
-            // at once.
-            .when(!selected, |row| {
-                row.active(|row| row.bg(theme.row_selected))
-                    .transitions(|fades| fades.bg(crate::ui::motion::pointer_fade()))
-            })
             .debug_selector(move || format!("settings-search-result-{title}"))
             .role(Role::ListBoxOption)
             .aria_label(hit.entry.title.clone())

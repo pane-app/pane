@@ -31,6 +31,9 @@ use tempfile::TempDir;
 #[path = "support/settle.rs"]
 mod settle;
 
+#[path = "support/paint.rs"]
+mod paint;
+
 use settle::settle;
 
 /// The keystroke that opens Settings on this platform: Cmd+, on macOS,
@@ -1695,6 +1698,53 @@ fn opened_shortcuts(
         "a settled page asks for no frame"
     );
     (window, settings, settings_cx)
+}
+
+/// The page's controls are the Settings families (#99), not launcher rows:
+/// the filter is a 34px well (black 24% under its ring), a command's alias
+/// cell a 30px well in the command's settings row, and a group's header a
+/// list header that takes the sidebar item's white 5% under the pointer
+/// at once — no fade, no frame — with no root-row wash anywhere.
+#[gpui::test]
+fn the_pages_controls_are_the_settings_families(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let query = query_package(&sources.path().join("query"));
+    let (_window, _settings, mut settings_cx) = opened_shortcuts(cx, &data, &[&query]);
+    let sc = &mut settings_cx;
+    pointer_leaves(sc);
+    settle_frames(sc);
+
+    let filter = sc.debug_bounds("shortcut-filter").expect("the filter");
+    assert_eq!(filter.size.height, px(34.), "a field's well");
+    assert!(paint::paints_fill_at(sc, filter, 0x0000003D), "black 24%");
+
+    let id = command_id(&query);
+    let alias = sc
+        .debug_bounds(selector(format!("shortcut-alias-{id}")))
+        .expect("the alias cell");
+    assert_eq!(alias.size.height, px(30.), "an inline well");
+    assert!(paint::paints_fill_at(sc, alias, 0x0000003D), "black 24%");
+    let row = sc
+        .debug_bounds(selector(format!("shortcut-row-{id}")))
+        .expect("the command's row");
+    assert!(row.size.height >= px(44.), "a settings row's floor");
+    for root_wash in [0xFFFFFF09, 0xFFFFFF16] {
+        assert!(!paint::paints_fill_at(sc, row, root_wash));
+    }
+
+    let header = sc
+        .debug_bounds(selector(format!("shortcut-group-{}", key_of(&query))))
+        .expect("the group's header");
+    sc.simulate_mouse_move(header.center(), None::<MouseButton>, Modifiers::none());
+    sc.run_until_parked();
+    assert!(
+        paint::paints_fill_at(sc, header, 0xFFFFFF0D),
+        "the header's white 5% under the pointer"
+    );
+    assert_eq!(frame(sc, Duration::ZERO), 0, "the hover asks for no frame");
+    pointer_leaves(sc);
+    sc.run_until_parked();
+    assert_eq!(settle_frames(sc), 0, "the window is idle");
 }
 
 /// Expanding a group discloses on the shared policy: the rows mount at

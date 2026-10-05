@@ -8,10 +8,13 @@
 //!
 //! Interaction reference: the Raycast dropdown and the shadcn combobox
 //! as *behavior* references only (`docs/research/searchable-settings-
-//! selects.md`) — the visual language is entirely Pane's: the reference's
-//! row chrome, the L2 popover material, the shared editable text element
-//! for the field, and the semantic theme. Nothing here imports a React
-//! toolkit, re-creates the theme, or knows what a setting is.
+//! selects.md`) — the visual language is entirely Pane's, the reference's
+//! families (#99, `ui::controls`): a Settings field — the name as its
+//! label, the trigger a field's well, the description under it — the L2
+//! popover material with its own shadows, the well for the popup's search
+//! field, and the Actions panel's entries for the choices. Nothing fades:
+//! the Settings board's controls change at once. Nothing here imports a
+//! React toolkit, re-creates the theme, or knows what a setting is.
 //!
 //! ## State: the control's own, and only the control's
 //!
@@ -87,15 +90,16 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, BoxShadow, ClickEvent, Context, Entity, FocusHandle, Focusable, KeyBinding,
+    AnyElement, App, ClickEvent, Context, Entity, FocusHandle, Focusable, KeyBinding,
     MouseDownEvent, Pixels, Role, ScrollHandle, SharedString, Subscription, Window, actions,
     anchored, deferred, div, prelude::*, px,
 };
 use gpui_elements::editable_text::actions::DEFAULT_INPUT_CONTEXT;
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
 
-use super::icon::{Glyph, glyph, glyph_rotated};
-use super::material::Material;
+use super::controls;
+use super::icon::Glyph;
+use super::material::{Material, popover_shadows};
 use super::theme::Theme;
 
 /// The trigger's key context: its activation keys (Enter, Space, Down)
@@ -646,94 +650,29 @@ impl Select {
         cx.notify();
     }
 
-    /// The trigger row: the reference's row chrome carrying a combo
-    /// box's semantics — the setting's name and description on the
-    /// left, the committed choice and the chevron on the right. The
-    /// committed choice is what the consumer's model holds, read this
+    /// The trigger: a field's well (`ui::controls::select_trigger`, #99)
+    /// carrying a combo box's semantics — the committed choice and the
+    /// chevron that says a list opens; the setting's name and description
+    /// are the field's label and description around it (see the render).
+    /// The committed choice is what the consumer's model holds, read this
     /// frame: a save that failed has rolled it back by the time this
-    /// draws, and the trigger shows the honest value.
+    /// draws, and the trigger shows the honest value. Like the Settings
+    /// board's controls it answers the pointer with nothing that fades;
+    /// the keyboard's focus rings the well.
     fn trigger_row(&self, model: &Model, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
         let theme = &model.theme;
-        let typography = &theme.typography;
-        let geometry = &theme.geometry;
         let committed = model
             .committed
             .as_ref()
             .and_then(|id| model.choices.iter().find(|choice| &choice.id == id))
             .map(|choice| choice.label.clone())
             .unwrap_or_else(|| "None".into());
-        let row = div()
-            .flex()
-            .items_center()
-            .gap(geometry.row_gap)
-            .min_h(geometry.row_min_height)
-            .px(geometry.row_padding_x)
-            .rounded(geometry.row_radius)
-            .cursor_pointer()
-            // Visible keyboard focus, the shared focus-ring treatment.
-            .focus(|row| {
-                row.shadow(vec![
-                    BoxShadow::new(px(0.), px(0.), theme.focus_ring)
-                        .spread_radius(px(1.))
-                        .inset(),
-                ])
-            })
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.))
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .truncate()
-                            .text_size(typography.row_title_size)
-                            .font_weight(typography.medium)
-                            .text_color(theme.text_title)
-                            .child(self.name.clone()),
-                    )
-                    .child(
-                        div()
-                            .text_size(typography.row_subtitle_size)
-                            .text_color(theme.text_muted)
-                            .child(self.description.clone()),
-                    ),
-            )
-            // The committed choice, in the chip chrome the General
-            // page's binding shows, beside the chevron that says the
-            // list opens.
-            .child(
-                div()
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .child(
-                        div()
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .h(geometry.keycap_height)
-                            .px(geometry.keycap_padding_x)
-                            .rounded(geometry.keycap_radius)
-                            .bg(theme.tile_background)
-                            .text_size(typography.row_title_size)
-                            .font_weight(typography.medium)
-                            .text_color(theme.text_title)
-                            .child(committed.clone()),
-                    )
-                    .child(glyph_rotated_down(theme)),
-            );
+        let ring = controls::well_shadows(true, theme);
+        let row =
+            controls::select_trigger(committed.clone(), theme).focus(move |row| row.shadow(ring));
         let name = self.name.clone();
         let debug = self.debug.clone();
         row.id("trigger")
-            // The pointer feedback, on the named row: the hover wash
-            // fades over the shared pointer span, and the press takes
-            // the selected wash, one rung above the hover one.
-            .hover(|row| row.bg(theme.row_hover))
-            .active(|row| row.bg(theme.row_selected))
-            .transitions(|fades| fades.bg(crate::ui::motion::pointer_fade()))
             .debug_selector(move || debug.to_string())
             .key_context(TRIGGER)
             .track_focus(&self.trigger)
@@ -766,19 +705,12 @@ impl Select {
     ) -> gpui::Div {
         let theme = &model.theme;
         let input = &self.query;
-        let field = div()
-            .flex()
-            .items_center()
-            .gap(px(6.))
-            .mb(px(4.))
-            .px(px(7.))
-            .py(px(5.))
-            .rounded_md()
-            .border_1()
-            .border_color(theme.hairline)
-            .when(field_focused, |field| field.border_color(theme.focus_ring))
-            .bg(theme.tile_background)
-            .child(glyph(Glyph::Search, px(14.), theme.text_muted));
+        // A field's well (#99), the Settings search's own family, its ring
+        // the focus color while the keyboard is in it.
+        let field = controls::well(false, theme)
+            .mb(theme.geometry.actions.list_padding)
+            .shadow(controls::well_shadows(field_focused, theme))
+            .child(controls::well_glyph(Glyph::Search, theme));
         // While the popup's exit paints, the draft shows as plain text:
         // an editable field takes focus on a click, and the exiting
         // visuals expose nothing interactive — not even focus, which the
@@ -794,30 +726,19 @@ impl Select {
                     .flex_1()
                     .min_w(px(0.))
                     .truncate()
-                    .text_size(theme.typography.row_subtitle_size)
                     .text_color(if draft.is_empty() {
                         theme.text_placeholder
                     } else {
-                        theme.text_body
+                        theme.text_title
                     })
                     .child(text),
             )
         } else {
-            field.child(
-                text_input("query")
-                    .state(input.downgrade())
-                    .placeholder(PLACEHOLDER)
-                    .placeholder_color(theme.text_placeholder)
-                    .caret_color(theme.accent_text)
-                    .selection_color(theme.row_selected)
-                    .marked_color(theme.accent_text)
-                    .text_color(theme.text_body)
-                    .text_size(theme.typography.row_subtitle_size)
-                    .w_full()
-                    .min_w(px(0.))
-                    .whitespace_nowrap()
-                    .overflow_x_scroll(),
-            )
+            field.child(controls::well_input(
+                text_input("query").state(input.downgrade()),
+                PLACEHOLDER,
+                theme,
+            ))
         }
     }
 
@@ -844,7 +765,7 @@ impl Select {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = &model.theme;
-        let geometry = &theme.geometry;
+        let actions = &theme.geometry.actions;
         let query = self.query.read(cx).as_str().to_owned();
         let rows: Vec<AnyElement> = if filtered.is_empty() {
             let message = format!("No choices match “{}”", query.trim());
@@ -853,14 +774,14 @@ impl Select {
                     .id("empty")
                     .debug_selector(move || format!("{}-empty", self.debug))
                     // A live status, so assistive technology announces that
-                    // the query found nothing; not selectable.
+                    // the query found nothing; not selectable. The Actions
+                    // panel's own empty note ("No actions match").
                     .role(Role::Status)
                     .aria_label(message.clone())
-                    .px(geometry.row_padding_x)
-                    .min_h(geometry.row_min_height)
-                    .flex()
-                    .items_center()
-                    .text_size(theme.typography.row_kind_size)
+                    .py(actions.empty_padding_y)
+                    .px(actions.empty_padding_x)
+                    .text_size(theme.typography.action_size)
+                    .line_height(theme.typography.action_size * theme.typography.line_height)
                     .text_color(theme.text_muted)
                     .child(message)
                     .into_any_element(),
@@ -876,6 +797,7 @@ impl Select {
             .debug_selector(move || format!("{}-list", self.debug))
             .flex()
             .flex_col()
+            .gap(actions.list_gap)
             .flex_1()
             .min_h(px(0.))
             .max_h(LIST_MAX_HEIGHT)
@@ -905,7 +827,7 @@ impl Select {
             .aria_placeholder(PLACEHOLDER)
             .flex()
             .flex_col()
-            .p(px(6.))
+            .p(actions.list_padding)
             .when(self.open, |content| {
                 content.track_focus(&input.focus_handle(cx))
             })
@@ -974,12 +896,10 @@ impl Select {
                 .relative()
                 .top(px(offset))
                 .when(opacity < 1., |wrapper| wrapper.opacity(opacity))
-                .shadow(vec![
-                    BoxShadow::new(px(0.), px(0.), gpui::rgba(0x000000CC)).spread_radius(px(0.5)),
-                    BoxShadow::new(px(0.), px(28.), gpui::rgba(0x000000BF))
-                        .blur_radius(px(70.))
-                        .spread_radius(px(-14.)),
-                ])
+                // The popover's own outer shadows (`.pop`), as every
+                // popover of Pane's carries them.
+                .rounded(theme.geometry.popover_radius)
+                .shadow(popover_shadows(theme))
                 .debug_selector(move || debug.clone())
                 .child(model.material.popover(theme, content)),
         );
@@ -992,12 +912,14 @@ impl Select {
         .into_any_element()
     }
 
-    /// One choice row: the reference's row chrome carrying a list-box
-    /// option's semantics. The committed choice is marked selected and
-    /// carries the radio's dot, as the settings pages' choice rows do;
-    /// the highlighted choice takes the selected wash and is the
-    /// focused field's active descendant; a choice the system cannot
-    /// answer is listed with its reason and cannot be committed.
+    /// One choice row: the Actions panel's entry family
+    /// (`ui::controls::menu_row`, #99) carrying a list-box option's
+    /// semantics. The committed choice is marked selected and carries the
+    /// accent mark; the highlighted choice takes the entry's selected wash
+    /// and is the focused field's active descendant; a choice the system
+    /// cannot answer is listed with its reason and cannot be committed.
+    /// Every wash changes at once, and every row carries its hover style
+    /// whatever its state (see `ui::controls`).
     fn choice_row(
         &self,
         model: &Model,
@@ -1006,8 +928,6 @@ impl Select {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = &model.theme;
-        let typography = &theme.typography;
-        let geometry = &theme.geometry;
         let choice = &model.choices[index];
         let committed = model.committed.as_ref() == Some(&choice.id);
         let highlighted = active.is_some_and(|id| id == &choice.id);
@@ -1019,76 +939,18 @@ impl Select {
             .clone()
             .or_else(|| choice.subtitle.clone())
             .unwrap_or_default();
-        let row_element = div()
-            .flex()
-            .items_center()
-            .gap(geometry.row_gap)
-            .min_h(geometry.row_min_height)
-            .px(geometry.row_padding_x)
-            .rounded(geometry.row_radius)
-            .when(offered, |row| row.cursor_pointer())
-            .when(!offered, |row| row.opacity(0.5).cursor_default())
-            .when(highlighted, |row| {
-                row.bg(theme.row_selected).shadow(vec![
-                    BoxShadow::new(px(0.), px(0.), theme.row_selected_border)
-                        .spread_radius(px(1.))
-                        .inset(),
-                ])
-            })
-            .child(
-                // The committed choice's mark, as the settings pages'
-                // choice rows render theirs.
-                div()
-                    .flex_none()
-                    .w(px(18.))
-                    .text_size(typography.row_title_size)
-                    .text_color(theme.text_title)
-                    .child(if committed { "◉" } else { "○" }),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.))
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .truncate()
-                            .text_size(typography.row_title_size)
-                            .font_weight(typography.medium)
-                            .text_color(theme.text_title)
-                            .child(choice.label.clone()),
-                    )
-                    .when_some(
-                        (!description.is_empty()).then(|| description.clone()),
-                        |column, description| {
-                            column.child(
-                                div()
-                                    .text_size(typography.row_subtitle_size)
-                                    .text_color(theme.text_muted)
-                                    .child(description),
-                            )
-                        },
-                    ),
-            );
+        let row_element = controls::menu_row(
+            choice.label.clone(),
+            (!description.is_empty()).then(|| description.clone()),
+            (highlighted, committed, offered),
+            theme,
+        );
         let id = choice.id.clone();
         let debug = format!("{}-{}", self.debug, choice.id);
         let label = choice.label.clone();
         let description_label = description.clone();
         let row_element = row_element
             .id(choice.id.clone())
-            // The pointer feedback, on the named row: the hover wash
-            // fades over the shared pointer span, and the press takes
-            // the selected wash, the rung above the hover one. The fade
-            // attaches only while the row is unhighlighted, so the
-            // highlight's wash both arrives and leaves at once — the
-            // keyboard's active option stays immediately legible — and
-            // only the pointer's own wash fades.
-            .when(offered && !highlighted, |row| {
-                row.hover(|row| row.bg(theme.row_hover))
-                    .active(|row| row.bg(theme.row_selected))
-                    .transitions(|fades| fades.bg(crate::ui::motion::pointer_fade()))
-            })
             .debug_selector(move || debug.clone())
             .role(Role::ListBoxOption)
             .aria_label(label)
@@ -1186,7 +1048,13 @@ impl Render for Select {
         // however tall the trigger grew, and the popup is deferred from
         // there (painting above the window, following the page's
         // scroll).
-        div()
+        //
+        // The block is a Settings field (#99): the setting's name as its
+        // label over the trigger and its anchoring row, its description
+        // under them — 8px apart, the field group's own gap.
+        let theme = &model.theme;
+        let debug = self.debug.clone();
+        let block = div()
             .relative()
             .flex()
             .flex_col()
@@ -1198,7 +1066,19 @@ impl Render for Select {
                     .h(px(0.))
                     .w_full()
                     .when_some(popup, |anchor, popup| anchor.child(popup)),
+            );
+        controls::field(theme)
+            .w_full()
+            .child(
+                controls::field_label(self.name.clone(), theme)
+                    .debug_selector(move || format!("{debug}-label")),
             )
+            .child(block)
+            .child(controls::field_description(
+                self.description.clone(),
+                theme.text_muted,
+                theme,
+            ))
     }
 }
 
@@ -1209,15 +1089,4 @@ fn first_enabled(model: &Model, query: &str) -> Option<SharedString> {
         .iter()
         .find(|choice| choice.unavailable_reason.is_none() && Select::matches(choice, query))
         .map(|choice| choice.id.clone())
-}
-
-/// The chevron that says the list opens, pointing down as an open list
-/// does: the disclosure groups' own glyph, turned to its open angle.
-fn glyph_rotated_down(theme: &Theme) -> gpui::Svg {
-    glyph_rotated(
-        Glyph::ChevronRight,
-        px(14.),
-        theme.text_muted,
-        gpui::radians(std::f32::consts::FRAC_PI_2),
-    )
 }

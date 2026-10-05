@@ -1,6 +1,9 @@
-//! The launcher footer's ellipsis menu: the leftmost control of the bottom
-//! strip, opened by pointer or keyboard, holding Settings as its only
-//! entry this milestone.
+//! The launcher footer's app menu: Pane's own menu, opened from the Pane
+//! mark at the bottom strip's far left by pointer or keyboard, holding
+//! Settings as its only entry. It is not the contextual Actions panel
+//! (see [`crate::features::actions_panel`]): the reference's footer draws
+//! the mark as decoration, and Pane makes it the app menu's button so
+//! Settings stays reachable by mouse (a Windows/Pane adaptation, #95).
 //!
 //! The popup is the reference's L2 popover ([`Material::popover`]), laid
 //! out above the footer strip: it overlays the results, and its events
@@ -28,15 +31,15 @@
 
 use gpui::{
     AnyElement, App, BoxShadow, ClickEvent, Context, Div, FocusHandle, KeyBinding, MouseDownEvent,
-    Role, Stateful, Subscription, Window, actions, div, prelude::*, px, relative, rgba,
+    Role, Stateful, Subscription, Window, actions, div, prelude::*, px, relative,
 };
 use pane_core::KeyboardAction;
 
 use crate::app::LauncherWindow;
 use crate::features::settings;
-use crate::ui::icon::{Glyph, glyph};
-use crate::ui::keycap::binding_keycap;
-use crate::ui::{self, motion};
+use crate::ui;
+use crate::ui::footer;
+use crate::ui::keycap::{CapStyle, key_sequence};
 
 actions!(
     footer_menu,
@@ -52,6 +55,8 @@ actions!(
 );
 
 const CONTEXT: &str = "FooterMenu";
+/// The app menu's name, its button's and its list's.
+const MENU_NAME: &str = "Pane menu";
 /// The menu button's own context, so its activation keys do not fall
 /// through to the launcher's confirm while it is focused.
 const BUTTON_CONTEXT: &str = "FooterMenuButton";
@@ -225,41 +230,32 @@ impl LauncherWindow {
         window.focus_prev(cx);
     }
 
-    /// The open menu's button: the leftmost control of the footer
-    /// strip. Its click opens the menu — and while the menu is open, the
-    /// popup's outside-click dismissal consumes the click, so the button
-    /// toggles rather than reopening.
+    /// The open menu's button: the Pane mark, the leftmost control of the
+    /// footer strip, drawn at rest exactly as the reference's mark (its
+    /// 18px box at the strip's 16px padding; the hover and focus chrome
+    /// bleed 5px around it). Its click opens the menu — and while the menu
+    /// is open, the popup's outside-click dismissal consumes the click, so
+    /// the button toggles rather than reopening.
     pub(crate) fn render_menu_button(
         &self,
         theme: &ui::theme::Theme,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let open = self.menu.is_some();
-        let icon_color = if open {
-            theme.text_title
-        } else {
-            theme.text_muted
-        };
-        div()
+        footer::mark_button(theme)
             .id("footer-menu")
             .debug_selector(|| "footer-menu".into())
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .self_center()
-            .size(px(32.))
-            .rounded(theme.geometry.row_radius)
+            .when(open, |button| button.bg(theme.control_hover))
             .key_context(BUTTON_CONTEXT)
             .track_focus(&self.menu_button)
             .role(Role::Button)
-            .aria_label("More actions")
+            .aria_label(MENU_NAME)
             .aria_expanded(open)
             .on_action(cx.listener(Self::press_menu_button))
-            .hover(|button| button.bg(theme.row_hover))
-            // Pressed: the selected wash, one rung above the hover one.
-            .active(|button| button.bg(theme.row_selected))
-            .transitions(|fades| fades.bg(motion::pointer_fade()))
+            // The footer buttons' washes (`.fbtn`), changing at once: the
+            // hover one, and the open one while pressed.
+            .hover(|button| button.bg(theme.control_hover))
+            .active(|button| button.bg(theme.footer_button_open))
             // Visible keyboard focus, the list's focus ring treatment.
             .focus(|button| {
                 button.shadow(vec![
@@ -271,7 +267,6 @@ impl LauncherWindow {
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 this.open_menu(window, cx);
             }))
-            .child(glyph(Glyph::Ellipsis, px(16.), icon_color))
     }
 
     /// The menu popup the footer strip carries: the open menu's popup,
@@ -323,11 +318,14 @@ fn menu_list(
     theme: &ui::theme::Theme,
     cx: &mut Context<LauncherWindow>,
 ) -> Stateful<Div> {
-    let geometry = &theme.geometry;
+    let geometry = &theme.geometry.actions;
     let list = div()
         .id("menu")
         .debug_selector(|| "menu".into())
-        .p(px(6.))
+        .flex()
+        .flex_col()
+        .gap(geometry.list_gap)
+        .p(geometry.list_padding)
         .min_w(px(200.));
     let inert = focus.is_none();
     // The interactive list: the open menu's focus, semantics and
@@ -339,7 +337,7 @@ fn menu_list(
             .key_context(CONTEXT)
             .track_focus(focus)
             .role(Role::Menu)
-            .aria_label("More actions")
+            .aria_label(MENU_NAME)
             .on_action(cx.listener(LauncherWindow::menu_next_item))
             .on_action(cx.listener(LauncherWindow::menu_previous_item))
             .on_action(cx.listener(LauncherWindow::menu_choose_item))
@@ -371,28 +369,23 @@ fn menu_list(
         div()
             .id(("menu-item", index))
             .debug_selector(move || format!("menu-item-{}", item.title))
+            // The Actions panel's entries (`.arow`): one family for the
+            // footer's two menus.
             .flex()
             .items_center()
-            .min_h(geometry.row_min_height)
+            .gap(geometry.row_gap)
+            .h(geometry.row_height)
             .px(geometry.row_padding_x)
             .rounded(geometry.row_radius)
-            .text_size(theme.typography.row_title_size)
-            .font_weight(theme.typography.medium)
-            .text_color(theme.text_title)
+            .text_size(theme.typography.action_size)
+            .font_weight(theme.typography.action_weight)
+            .text_color(theme.action_text)
             .when(!inert, |item| item.cursor_pointer())
             .when(!inert && !item_selected, |item| {
-                item.hover(|item| item.bg(theme.row_hover))
-                    // Pressed: the selected wash, one rung above the hover
-                    // one. The fade attaches only while the item is
-                    // unselected, so the selected wash both arrives and
-                    // leaves at once — the keyboard's active option is
-                    // immediately legible, as the policy requires — and
-                    // only the pointer's own wash fades.
-                    .active(|item| item.bg(theme.row_selected))
-                    .transitions(|fades| fades.bg(motion::pointer_fade()))
+                item.hover(|item| item.bg(theme.control_hover))
             })
             .when(item_selected, |item| {
-                item.bg(theme.row_selected)
+                item.bg(theme.action_selected)
                     .when(!inert, |item| item.aria_active_descendant())
             })
             .when(!inert, |entry| {
@@ -409,8 +402,11 @@ fn menu_list(
             })
             .child(item.title)
             .when_some(hint, |item, hint| {
-                item.child(div().flex_1().min_w(px(0.)))
-                    .child(binding_keycap(&hint, theme))
+                item.child(div().flex_1().min_w(px(0.))).child(key_sequence(
+                    &crate::keyboard::binding_keys(&hint),
+                    CapStyle::Regular,
+                    theme,
+                ))
             })
     }))
 }
@@ -436,8 +432,11 @@ fn menu_popup(
     div()
         .id("menu-popup")
         .absolute()
-        .left_0()
+        // The Actions panel's insets, mirrored: 10px in from the window's
+        // left edge, 8px above the strip.
+        .left(theme.geometry.actions.inset)
         .bottom(relative(1.))
+        .pb(theme.geometry.actions.above_footer)
         .flex_none()
         .occlude()
         .child(
@@ -445,12 +444,7 @@ fn menu_popup(
                 .relative()
                 .top(px(offset))
                 .when(opacity < 1., |wrapper| wrapper.opacity(opacity))
-                .shadow(vec![
-                    BoxShadow::new(px(0.), px(0.), rgba(0x000000CC)).spread_radius(px(0.5)),
-                    BoxShadow::new(px(0.), px(28.), rgba(0x000000BF))
-                        .blur_radius(px(70.))
-                        .spread_radius(px(-14.)),
-                ])
+                .shadow(ui::material::popover_shadows(theme))
                 .child(material.popover(theme, list)),
         )
         .into_any_element()

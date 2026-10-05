@@ -1,0 +1,115 @@
+﻿{
+    "script":  "real-app-smoke.ps1",
+    "binary":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\target\\debug\\pane.exe",
+    "binarySha256":  "A5A9317B0216DC30B5CFBF24719A408FCC334E932340F992869A9AC2E178989A",
+    "applicationRevision":  "582b73af41dd158f497315074c6d70ac561cc17e",
+    "os":  "Microsoft Windows NT 10.0.26200.0",
+    "windowsBuild":  {
+                         "ProductName":  "Windows 10 Pro",
+                         "DisplayVersion":  "25H2",
+                         "CurrentBuild":  "26200",
+                         "UBR":  8737
+                     },
+    "theme":  "dark",
+    "material":  "opaque",
+    "paneDataDir":  "C:\\Users\\ADMIN\\AppData\\Local\\Temp\\pane-real-smoke-6aeb0a73ca18\\data",
+    "localAppData":  "C:\\Users\\ADMIN\\AppData\\Local\\Temp\\pane-real-smoke-6aeb0a73ca18\\localappdata",
+    "extensionsDir":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\scripts\\visual-workbench\\..\\..\\target\\guests",
+    "inputMethod":  "window messages posted to the launcher HWND (WM_CHAR / WM_KEYDOWN+WM_KEYUP); the real pointer and keyboard are never used",
+    "captureMethod":  "PrintWindow(PW_CLIENTONLY | PW_RENDERFULLCONTENT)",
+    "pid":  70880,
+    "dpi":  96,
+    "client":  [
+                   760,
+                   518
+               ],
+    "windowRectAtOpen":  "580,257,1356,783",
+    "windowRectOffscreen":  "4240,100,5016,626",
+    "foregroundAtOpenWasPane":  true,
+    "steps":  [
+                  "typed \"install\" (WM_CHAR)",
+                  "Down",
+                  "Enter",
+                  "Escape",
+                  "Escape"
+              ],
+    "captures":  [
+                     {
+                         "file":  "00-root.png",
+                         "label":  "root search at rest",
+                         "size":  [
+                                      760,
+                                      518
+                                  ],
+                         "utc":  "2026-10-05T09:08:28.9824390Z"
+                     },
+                     {
+                         "file":  "01-typed-install.png",
+                         "label":  "after typing \"install\": root search filtered",
+                         "size":  [
+                                      760,
+                                      518
+                                  ],
+                         "utc":  "2026-10-05T09:08:30.3595324Z"
+                     },
+                     {
+                         "file":  "02-down.png",
+                         "label":  "after Down: the second result selected",
+                         "size":  [
+                                      760,
+                                      518
+                                  ],
+                         "utc":  "2026-10-05T09:08:31.3657597Z"
+                     },
+                     {
+                         "file":  "03-enter.png",
+                         "label":  "after Enter: the selected command opened",
+                         "size":  [
+                                      760,
+                                      518
+                                  ],
+                         "utc":  "2026-10-05T09:08:32.3400252Z"
+                     },
+                     {
+                         "file":  "04-escape.png",
+                         "label":  "after Escape: back to root search, where the form was opened",
+                         "size":  [
+                                      760,
+                                      518
+                                  ],
+                         "utc":  "2026-10-05T09:08:33.3094215Z"
+                     },
+                     {
+                         "file":  "05-escape-again.png",
+                         "label":  "after Escape again: the query cleared, root search at rest",
+                         "size":  [
+                                      760,
+                                      518
+                                  ],
+                         "utc":  "2026-10-05T09:08:34.2764180Z"
+                     }
+                 ],
+    "assertions":  [
+                       {
+                           "check":  "--distinct 00-root.png 01-typed-install.png 02-down.png 03-enter.png",
+                           "passed":  true,
+                           "output":  "4 screenshots show different Pane windows"
+                       },
+                       {
+                           "check":  "--same 02-down.png 04-escape.png",
+                           "passed":  true,
+                           "output":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\visual-workbench\\run-103-smoke\\real-app-smoke\\02-down.png and C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\visual-workbench\\run-103-smoke\\real-app-smoke\\04-escape.png show the same Pane window"
+                       },
+                       {
+                           "check":  "--same 00-root.png 05-escape-again.png",
+                           "passed":  true,
+                           "output":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\visual-workbench\\run-103-smoke\\real-app-smoke\\00-root.png and C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\visual-workbench\\run-103-smoke\\real-app-smoke\\05-escape-again.png show the same Pane window"
+                       }
+                   ],
+    "processExited":  true,
+    "exitCode":  0,
+    "scratchRemoved":  true,
+    "error":  null,
+    "startedUtc":  "2026-10-05T09:08:26.7542532Z",
+    "finishedUtc":  "2026-10-05T09:08:38.4066100Z"
+}

@@ -1,0 +1,1436 @@
+{
+  "kind": "pane-visual-fixture-manifest",
+  "scenario": {
+    "name": "root-pointer-keys",
+    "description": "The pointer selects row 1; Down moves the selection to row 2 with the pointer resting on row 1, which keeps its hover wash; moving again over row 1 selects it",
+    "family": "root",
+    "client": [
+      760.0,
+      518.0
+    ],
+    "reference": true,
+    "frame": false,
+    "steps": [
+      {
+        "action": "pointer",
+        "row": 1,
+        "nudge": 0
+      },
+      {
+        "action": "capture",
+        "name": "pointed"
+      },
+      {
+        "action": "key",
+        "key": "down"
+      },
+      {
+        "action": "capture",
+        "name": "down-under-pointer"
+      },
+      {
+        "action": "pointer",
+        "row": 1,
+        "nudge": 6
+      },
+      {
+        "action": "capture",
+        "name": "moved-again"
+      }
+    ]
+  },
+  "perturbation": null,
+  "material": "opaque",
+  "appearance": "dark",
+  "window": {
+    "bounds": [
+      580.0,
+      277.0,
+      760.0,
+      518.0
+    ],
+    "viewport": [
+      760.0,
+      518.0
+    ],
+    "scaleFactor": 1.0
+  },
+  "declared": {
+    "geometry": {
+      "searchHeight": 64.0,
+      "searchPaddingX": 20.0,
+      "searchGap": 14.0,
+      "searchSize": 19.0,
+      "rowMinHeight": 44.0,
+      "rowRadius": 10.0,
+      "rowPaddingX": 10.0,
+      "rowGap": 12.0,
+      "rowListGap": 2.0,
+      "rowTitleSize": 14.0,
+      "rowSubtitleSize": 13.0,
+      "listPaddingTop": 4.0,
+      "listPaddingBottom": 10.0,
+      "listPaddingX": 10.0,
+      "tileSize": 28.0,
+      "tileRadius": 7.0,
+      "footerHeight": 50.0,
+      "footerPaddingLeft": 16.0,
+      "footerPaddingRight": 8.0,
+      "actionHeight": 28.0,
+      "actionRadius": 7.0,
+      "actionPaddingX": 10.0,
+      "actionGap": 8.0,
+      "keycapHeight": 20.0,
+      "keycapRadius": 5.0,
+      "keycapPaddingX": 5.0,
+      "keycapCompactHeight": 17.0,
+      "keycapCompactPaddingX": 4.0,
+      "keyGap": 3.0
+    },
+    "colors": {
+      "panelSolid": "#16171AFF",
+      "keycapBackground": "#FFFFFF12",
+      "keycapBottom": "#00000059",
+      "aliasText": "#B9BABEFF",
+      "keycapText": "#C9CACEFF",
+      "accent": "#C9EE6AFF",
+      "accentInk": "#111210FF",
+      "panelTopHighlight": "#FFFFFF1A",
+      "rowHover": "#FFFFFF09",
+      "rowSelected": "#FFFFFF16",
+      "rowSelectedBorder": "#FFFFFF0D",
+      "footerTint": "#00000024",
+      "hairline": "#FFFFFF13",
+      "hairlineSoft": "#FFFFFF0F",
+      "tileBackground": "#FFFFFF14",
+      "tileForeground": "#E9E9ECFF",
+      "textTitle": "#EDEDEFFF",
+      "textMuted": "#8E8F94FF",
+      "textQuery": "#F3F3F5FF",
+      "textPlaceholder": "#86878CFF"
+    }
+  },
+  "searchHeader": {
+    "x": 0.0,
+    "y": 0.0,
+    "width": 760.0,
+    "height": 64.0
+  },
+  "list": {
+    "x": 0.0,
+    "y": 64.0,
+    "width": 760.0,
+    "height": 404.0
+  },
+  "footer": {
+    "x": 0.0,
+    "y": 468.0,
+    "width": 760.0,
+    "height": 50.0
+  },
+  "captures": [
+    {
+      "name": "pointed",
+      "after": [
+        {
+          "action": "pointer",
+          "row": 1,
+          "nudge": 0
+        }
+      ],
+      "query": "",
+      "pointer": [
+        380.0,
+        168.0
+      ],
+      "rows": [
+        {
+          "title": "Figma",
+          "tone": "app",
+          "subtitle": null,
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 100.0,
+            "width": 740.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true,
+          "kind": "Application",
+          "alias": null,
+          "keys": null,
+          "matched": [],
+          "kindRect": {
+            "x": 652.0,
+            "y": 100.0,
+            "width": 88.0,
+            "height": 44.0
+          }
+        },
+        {
+          "title": "Clipboard History",
+          "tone": "command",
+          "subtitle": "Clipboard",
+          "unavailable": null,
+          "selected": true,
+          "hovered": true,
+          "rect": {
+            "x": 10.0,
+            "y": 146.0,
+            "width": 740.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true,
+          "kind": "Command",
+          "alias": "cb",
+          "keys": "ctrl-shift-v",
+          "matched": [],
+          "kindRect": {
+            "x": 652.0,
+            "y": 146.0,
+            "width": 88.0,
+            "height": 44.0
+          },
+          "aliasRect": {
+            "x": 497.39996,
+            "y": 146.0,
+            "width": 25.2,
+            "height": 44.0
+          },
+          "keyGroup": {
+            "binding": "ctrl-shift-v",
+            "group": null,
+            "style": "regular",
+            "name": "Ctrl+Shift+V",
+            "font": "11px Geist Mono 500",
+            "rect": {
+              "x": 534.6,
+              "y": 158.0,
+              "width": 105.4,
+              "height": 20.0
+            },
+            "caps": [
+              {
+                "label": "Ctrl",
+                "labelWidth": 26.4,
+                "rect": {
+                  "x": 534.6,
+                  "y": 158.0,
+                  "width": 36.4,
+                  "height": 20.0
+                }
+              },
+              {
+                "label": "Shift",
+                "labelWidth": 33.0,
+                "rect": {
+                  "x": 574.0,
+                  "y": 158.0,
+                  "width": 43.0,
+                  "height": 20.0
+                }
+              },
+              {
+                "label": "V",
+                "labelWidth": 6.6,
+                "rect": {
+                  "x": 620.0,
+                  "y": 158.0,
+                  "width": 20.0,
+                  "height": 20.0
+                }
+              }
+            ]
+          }
+        },
+        {
+          "title": "Left Half",
+          "tone": "command",
+          "subtitle": "Window Manager",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 192.0,
+            "width": 740.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true,
+          "kind": "Command",
+          "alias": null,
+          "keys": "win-alt-left",
+          "matched": [],
+          "kindRect": {
+            "x": 652.0,
+            "y": 192.0,
+            "width": 88.0,
+            "height": 44.0
+          },
+          "keyGroup": {
+            "binding": "win-alt-left",
+            "group": null,
+            "style": "regular",
+            "name": "Win+Alt+Left",
+            "font": "11px Geist Mono 500",
+            "rect": {
+              "x": 554.4,
+              "y": 204.0,
+              "width": 85.6,
+              "height": 20.0
+            },
+            "caps": [
+              {
+                "label": "Win",
+                "labelWidth": 19.8,
+                "rect": {
+                  "x": 554.4,
+                  "y": 204.0,
+                  "width": 29.8,
+                  "height": 20.0
+                }
+              },
+              {
+                "label": "Alt",
+                "labelWidth": 19.8,
+                "rect": {
+                  "x": 587.2,
+                  "y": 204.0,
+                  "width": 29.8,
+                  "height": 20.0
+                }
+              },
+              {
+                "label": "←",
+                "labelWidth": 6.6,
+                "rect": {
+                  "x": 620.0,
+                  "y": 204.0,
+                  "width": 20.0,
+                  "height": 20.0
+                }
+              }
+            ]
+          }
+        },
+        {
+          "title": "Search Files",
+          "tone": "command",
+          "subtitle": "Files",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 238.0,
+            "width": 740.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true,
+          "kind": "Command",
+          "alias": "f",
+          "keys": null,
+          "matched": [],
+          "kindRect": {
+            "x": 652.0,
+            "y": 238.0,
+            "width": 88.0,
+            "height": 44.0
+          },
+          "aliasRect": {
+            "x": 621.4,
+            "y": 238.0,
+            "width": 18.6,
+            "height": 44.0
+          }
+        },
+        {
+          "title": "Plugin Store",
+          "tone": "command",
+          "subtitle": "Pane",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 284.0,
+            "width": 740.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true,
+          "kind": "Command",
+          "alias": "store",
+          "keys": null,
+          "matched": [],
+          "kindRect": {
+            "x": 652.0,
+            "y": 284.0,
+            "width": 88.0,
+            "height": 44.0
+          },
+          "aliasRect": {
+            "x": 595.0,
+            "y": 284.0,
+            "width": 45.0,
+            "height": 44.0
+          }
+        },
+        {
+          "title": "Toggle Dark Mode",
+          "tone": "command",
+          "subtitle": "System",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 330.0,
+            "width": 740.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true,
+          "kind": "Command",
+          "alias": null,
+          "keys": null,
+          "matched": [],
+          "kindRect": {
+            "x": 652.0,
+            "y": 330.0,
+            "width": 88.0,
+            "height": 44.0
+          }
+        },
+        {
+          "title": "Lock Screen",
+          "tone": "command",
+          "subtitle": "System",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 376.0,
+            "width": 740.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true,
+          "kind": "Command",
+          "alias": null,
+          "keys": null,
+          "matched": [],
+          "kindRect": {
+            "x": 652.0,
+            "y": 376.0,
+            "width": 88.0,
+            "height": 44.0
+          }
+        },
+        {
+          "title": "Settings",
+          "tone": "command",
+          "subtitle": "Pane",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 422.0,
+            "width": 740.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true,
+          "kind": "Command",
+          "alias": null,
+          "keys": "ctrl-,",
+          "matched": [],
+          "kindRect": {
+            "x": 652.0,
+            "y": 422.0,
+            "width": 88.0,
+            "height": 44.0
+          },
+          "keyGroup": {
+            "binding": "ctrl-,",
+            "group": null,
+            "style": "regular",
+            "name": "Ctrl+,",
+            "font": "11px Geist Mono 500",
+            "rect": {
+              "x": 580.6,
+              "y": 434.0,
+              "width": 59.4,
+              "height": 20.0
+            },
+            "caps": [
+              {
+                "label": "Ctrl",
+                "labelWidth": 26.4,
+                "rect": {
+                  "x": 580.6,
+                  "y": 434.0,
+                  "width": 36.4,
+                  "height": 20.0
+                }
+              },
+              {
+                "label": ",",
+                "labelWidth": 6.6,
+                "rect": {
+                  "x": 620.0,
+                  "y": 434.0,
+                  "width": 20.0,
+                  "height": 20.0
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "sections": [
+        {
+          "label": "Commands",
+          "note": null,
+          "rect": {
+            "x": 10.0,
+            "y": 68.0,
+            "width": 740.0,
+            "height": 30.0
+          }
+        }
+      ],
+      "action": "Run Command",
+      "actionButton": {
+        "x": 617.3125,
+        "y": 479.5,
+        "width": 134.6875,
+        "height": 28.0
+      }
+    },
+    {
+      "name": "down-under-pointer",
+      "after": [
+        {
+          "action": "pointer",
+          "row": 1,
+          "nudge": 0
+        },
+        {
+          "action": "key",
+          "key": "down"
+        }
+      ],
+      "query": "",
+      "pointer": [
+        380.0,
+        168.0
+      ],
+      "rows": [
+        {
+          "title": "Figma",
+          "tone": "app",
+          "subtitle": null,
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 100.0,
+            "width": 740.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true,
+          "kind": "Application",
+          "alias": null,
+          "keys": null,
+          "matched": [],
+          "kindRect": {
+            "x": 652.0,
+            "y": 100.0,
+            "width": 88.0,
+            "height": 44.0
+          }
+        },
+        {
+          "title": "Clipboard History",
+          "tone": "command",
+          "subtitle": "Clipboard",
+          "unavailable": null,
+          "selected": false,
+          "hovered": true,
+          "rect": {
+            "x": 10.0,
+            "y": 146.0,
+            "width": 740.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true,
+          "kind": "Command",
+          "alias": "cb",
+          "keys": "ctrl-shift-v",
+          "matched": [],
+          "kindRect": {
+            "x": 652.0,
+            "y": 146.0,
+            "width": 88.0,
+            "height": 44.0
+          },
+          "aliasRect": {
+            "x": 497.39996,
+            "y": 146.0,
+            "width": 25.2,
+            "height": 44.0
+          },
+          "keyGroup": {
+            "binding": "ctrl-shift-v",
+            "group": null,
+            "style": "regular",
+            "name": "Ctrl+Shift+V",
+            "font": "11px Geist Mono 500",
+            "rect": {
+              "x": 534.6,
+              "y": 158.0,
+              "width": 105.4,
+              "height": 20.0
+            },
+            "caps": [
+              {
+                "label": "Ctrl",
+                "labelWidth": 26.4,
+                "rect": {
+                  "x": 534.6,
+                  "y": 158.0,
+                  "width": 36.4,
+                  "height": 20.0
+                }
+              },
+              {
+                "label": "Shift",
+                "labelWidth": 33.0,
+                "rect": {
+                  "x": 574.0,
+                  "y": 158.0,
+                  "width": 43.0,
+                  "height": 20.0
+                }
+              },
+              {
+                "label": "V",
+                "labelWidth": 6.6,
+                "rect": {
+                  "x": 620.0,
+                  "y": 158.0,
+                  "width": 20.0,
+                  "height": 20.0
+                }
+              }
+            ]
+          }
+        },
+        {
+          "title": "Left Half",
+          "tone": "command",
+          "subtitle": "Window Manager",
+          "unavailable": null,
+          "selected": true,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 192.0,
+            "width": 740.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true,
+          "kind": "Command",
+          "alias": null,
+          "keys": "win-alt-left",
+          "matched": [],
+          "kindRect": {
+            "x": 652.0,
+            "y": 192.0,
+            "width": 88.0,
+            "height": 44.0
+          },
+          "keyGroup": {
+            "binding": "win-alt-left",
+            "group": null,
+            "style": "regular",
+            "name": "Win+Alt+Left",
+            "font": "11px Geist Mono 500",
+            "rect": {
+              "x": 554.4,
+              "y": 204.0,
+              "width": 85.6,
+              "height": 20.0
+            },
+            "caps": [
+              {
+                "label": "Win",
+                "labelWidth": 19.8,
+                "rect": {
+                  "x": 554.4,
+                  "y": 204.0,
+                  "width": 29.8,
+                  "height": 20.0
+                }
+              },
+              {
+                "label": "Alt",
+                "labelWidth": 19.8,
+                "rect": {
+                  "x": 587.2,
+                  "y": 204.0,
+                  "width": 29.8,
+                  "height": 20.0
+                }
+              },
+              {
+                "label": "←",
+                "labelWidth": 6.6,
+                "rect": {
+                  "x": 620.0,
+                  "y": 204.0,
+                  "width": 20.0,
+                  "height": 20.0
+                }
+              }
+            ]
+          }
+        },
+        {
+          "title": "Search Files",
+          "tone": "command",
+          "subtitle": "Files",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 238.0,
+            "width": 740.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true,
+          "kind": "Command",
+          "alias": "f",
+          "keys": null,
+          "matched": [],
+          "kindRect": {
+            "x": 652.0,
+            "y": 238.0,
+            "width": 88.0,
+            "height": 44.0
+          },
+          "aliasRect": {
+            "x": 621.4,
+            "y": 238.0,
+            "width": 18.6,
+            "height": 44.0
+          }
+        },
+        {
+          "title": "Plugin Store",
+          "tone": "command",
+          "subtitle": "Pane",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 284.0,
+            "width": 740.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true,
+          "kind": "Command",
+          "alias": "store",
+          "keys": null,
+          "matched": [],
+          "kindRect": {
+            "x": 652.0,
+            "y": 284.0,
+            "width": 88.0,
+            "height": 44.0
+          },
+          "aliasRect": {
+            "x": 595.0,
+            "y": 284.0,
+            "width": 45.0,
+            "height": 44.0
+          }
+        },
+        {
+          "title": "Toggle Dark Mode",
+          "tone": "command",
+          "subtitle": "System",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 330.0,
+            "width": 740.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true,
+          "kind": "Command",
+          "alias": null,
+          "keys": null,
+          "matched": [],
+          "kindRect": {
+            "x": 652.0,
+            "y": 330.0,
+            "width": 88.0,
+            "height": 44.0
+          }
+        },
+        {
+          "title": "Lock Screen",
+          "tone": "command",
+          "subtitle": "System",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 376.0,
+            "width": 740.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true,
+          "kind": "Command",
+          "alias": null,
+          "keys": null,
+          "matched": [],
+          "kindRect": {
+            "x": 652.0,
+            "y": 376.0,
+            "width": 88.0,
+            "height": 44.0
+          }
+        },
+        {
+          "title": "Settings",
+          "tone": "command",
+          "subtitle": "Pane",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 422.0,
+            "width": 740.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true,
+          "kind": "Command",
+          "alias": null,
+          "keys": "ctrl-,",
+          "matched": [],
+          "kindRect": {
+            "x": 652.0,
+            "y": 422.0,
+            "width": 88.0,
+            "height": 44.0
+          },
+          "keyGroup": {
+            "binding": "ctrl-,",
+            "group": null,
+            "style": "regular",
+            "name": "Ctrl+,",
+            "font": "11px Geist Mono 500",
+            "rect": {
+              "x": 580.6,
+              "y": 434.0,
+              "width": 59.4,
+              "height": 20.0
+            },
+            "caps": [
+              {
+                "label": "Ctrl",
+                "labelWidth": 26.4,
+                "rect": {
+                  "x": 580.6,
+                  "y": 434.0,
+                  "width": 36.4,
+                  "height": 20.0
+                }
+              },
+              {
+                "label": ",",
+                "labelWidth": 6.6,
+                "rect": {
+                  "x": 620.0,
+                  "y": 434.0,
+                  "width": 20.0,
+                  "height": 20.0
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "sections": [
+        {
+          "label": "Commands",
+          "note": null,
+          "rect": {
+            "x": 10.0,
+            "y": 68.0,
+            "width": 740.0,
+            "height": 30.0
+          }
+        }
+      ],
+      "action": "Run Command",
+      "actionButton": {
+        "x": 617.3125,
+        "y": 479.5,
+        "width": 134.6875,
+        "height": 28.0
+      }
+    },
+    {
+      "name": "moved-again",
+      "after": [
+        {
+          "action": "pointer",
+          "row": 1,
+          "nudge": 0
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "pointer",
+          "row": 1,
+          "nudge": 6
+        }
+      ],
+      "query": "",
+      "pointer": [
+        386.0,
+        168.0
+      ],
+      "rows": [
+        {
+          "title": "Figma",
+          "tone": "app",
+          "subtitle": null,
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 100.0,
+            "width": 740.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true,
+          "kind": "Application",
+          "alias": null,
+          "keys": null,
+          "matched": [],
+          "kindRect": {
+            "x": 652.0,
+            "y": 100.0,
+            "width": 88.0,
+            "height": 44.0
+          }
+        },
+        {
+          "title": "Clipboard History",
+          "tone": "command",
+          "subtitle": "Clipboard",
+          "unavailable": null,
+          "selected": true,
+          "hovered": true,
+          "rect": {
+            "x": 10.0,
+            "y": 146.0,
+            "width": 740.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true,
+          "kind": "Command",
+          "alias": "cb",
+          "keys": "ctrl-shift-v",
+          "matched": [],
+          "kindRect": {
+            "x": 652.0,
+            "y": 146.0,
+            "width": 88.0,
+            "height": 44.0
+          },
+          "aliasRect": {
+            "x": 497.39996,
+            "y": 146.0,
+            "width": 25.2,
+            "height": 44.0
+          },
+          "keyGroup": {
+            "binding": "ctrl-shift-v",
+            "group": null,
+            "style": "regular",
+            "name": "Ctrl+Shift+V",
+            "font": "11px Geist Mono 500",
+            "rect": {
+              "x": 534.6,
+              "y": 158.0,
+              "width": 105.4,
+              "height": 20.0
+            },
+            "caps": [
+              {
+                "label": "Ctrl",
+                "labelWidth": 26.4,
+                "rect": {
+                  "x": 534.6,
+                  "y": 158.0,
+                  "width": 36.4,
+                  "height": 20.0
+                }
+              },
+              {
+                "label": "Shift",
+                "labelWidth": 33.0,
+                "rect": {
+                  "x": 574.0,
+                  "y": 158.0,
+                  "width": 43.0,
+                  "height": 20.0
+                }
+              },
+              {
+                "label": "V",
+                "labelWidth": 6.6,
+                "rect": {
+                  "x": 620.0,
+                  "y": 158.0,
+                  "width": 20.0,
+                  "height": 20.0
+                }
+              }
+            ]
+          }
+        },
+        {
+          "title": "Left Half",
+          "tone": "command",
+          "subtitle": "Window Manager",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 192.0,
+            "width": 740.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true,
+          "kind": "Command",
+          "alias": null,
+          "keys": "win-alt-left",
+          "matched": [],
+          "kindRect": {
+            "x": 652.0,
+            "y": 192.0,
+            "width": 88.0,
+            "height": 44.0
+          },
+          "keyGroup": {
+            "binding": "win-alt-left",
+            "group": null,
+            "style": "regular",
+            "name": "Win+Alt+Left",
+            "font": "11px Geist Mono 500",
+            "rect": {
+              "x": 554.4,
+              "y": 204.0,
+              "width": 85.6,
+              "height": 20.0
+            },
+            "caps": [
+              {
+                "label": "Win",
+                "labelWidth": 19.8,
+                "rect": {
+                  "x": 554.4,
+                  "y": 204.0,
+                  "width": 29.8,
+                  "height": 20.0
+                }
+              },
+              {
+                "label": "Alt",
+                "labelWidth": 19.8,
+                "rect": {
+                  "x": 587.2,
+                  "y": 204.0,
+                  "width": 29.8,
+                  "height": 20.0
+                }
+              },
+              {
+                "label": "←",
+                "labelWidth": 6.6,
+                "rect": {
+                  "x": 620.0,
+                  "y": 204.0,
+                  "width": 20.0,
+                  "height": 20.0
+                }
+              }
+            ]
+          }
+        },
+        {
+          "title": "Search Files",
+          "tone": "command",
+          "subtitle": "Files",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 238.0,
+            "width": 740.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true,
+          "kind": "Command",
+          "alias": "f",
+          "keys": null,
+          "matched": [],
+          "kindRect": {
+            "x": 652.0,
+            "y": 238.0,
+            "width": 88.0,
+            "height": 44.0
+          },
+          "aliasRect": {
+            "x": 621.4,
+            "y": 238.0,
+            "width": 18.6,
+            "height": 44.0
+          }
+        },
+        {
+          "title": "Plugin Store",
+          "tone": "command",
+          "subtitle": "Pane",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 284.0,
+            "width": 740.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true,
+          "kind": "Command",
+          "alias": "store",
+          "keys": null,
+          "matched": [],
+          "kindRect": {
+            "x": 652.0,
+            "y": 284.0,
+            "width": 88.0,
+            "height": 44.0
+          },
+          "aliasRect": {
+            "x": 595.0,
+            "y": 284.0,
+            "width": 45.0,
+            "height": 44.0
+          }
+        },
+        {
+          "title": "Toggle Dark Mode",
+          "tone": "command",
+          "subtitle": "System",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 330.0,
+            "width": 740.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true,
+          "kind": "Command",
+          "alias": null,
+          "keys": null,
+          "matched": [],
+          "kindRect": {
+            "x": 652.0,
+            "y": 330.0,
+            "width": 88.0,
+            "height": 44.0
+          }
+        },
+        {
+          "title": "Lock Screen",
+          "tone": "command",
+          "subtitle": "System",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 376.0,
+            "width": 740.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true,
+          "kind": "Command",
+          "alias": null,
+          "keys": null,
+          "matched": [],
+          "kindRect": {
+            "x": 652.0,
+            "y": 376.0,
+            "width": 88.0,
+            "height": 44.0
+          }
+        },
+        {
+          "title": "Settings",
+          "tone": "command",
+          "subtitle": "Pane",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 422.0,
+            "width": 740.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true,
+          "kind": "Command",
+          "alias": null,
+          "keys": "ctrl-,",
+          "matched": [],
+          "kindRect": {
+            "x": 652.0,
+            "y": 422.0,
+            "width": 88.0,
+            "height": 44.0
+          },
+          "keyGroup": {
+            "binding": "ctrl-,",
+            "group": null,
+            "style": "regular",
+            "name": "Ctrl+,",
+            "font": "11px Geist Mono 500",
+            "rect": {
+              "x": 580.6,
+              "y": 434.0,
+              "width": 59.4,
+              "height": 20.0
+            },
+            "caps": [
+              {
+                "label": "Ctrl",
+                "labelWidth": 26.4,
+                "rect": {
+                  "x": 580.6,
+                  "y": 434.0,
+                  "width": 36.4,
+                  "height": 20.0
+                }
+              },
+              {
+                "label": ",",
+                "labelWidth": 6.6,
+                "rect": {
+                  "x": 620.0,
+                  "y": 434.0,
+                  "width": 20.0,
+                  "height": 20.0
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "sections": [
+        {
+          "label": "Commands",
+          "note": null,
+          "rect": {
+            "x": 10.0,
+            "y": 68.0,
+            "width": 740.0,
+            "height": 30.0
+          }
+        }
+      ],
+      "action": "Run Command",
+      "actionButton": {
+        "x": 617.3125,
+        "y": 479.5,
+        "width": 134.6875,
+        "height": 28.0
+      }
+    }
+  ],
+  "steps": [
+    {
+      "action": "pointer",
+      "row": 1,
+      "nudge": 0,
+      "point": [
+        380.0,
+        168.0
+      ]
+    },
+    {
+      "action": "capture",
+      "name": "pointed"
+    },
+    {
+      "action": "key",
+      "key": "down"
+    },
+    {
+      "action": "capture",
+      "name": "down-under-pointer"
+    },
+    {
+      "action": "pointer",
+      "row": 1,
+      "nudge": 6,
+      "point": [
+        386.0,
+        168.0
+      ]
+    },
+    {
+      "action": "capture",
+      "name": "moved-again"
+    }
+  ],
+  "keycaps": [
+    {
+      "binding": "invoke",
+      "group": "footer-primary",
+      "style": "accent",
+      "name": "Enter",
+      "font": "11px Geist Mono 500",
+      "rect": {
+        "x": 722.0,
+        "y": 483.5,
+        "width": 20.0,
+        "height": 20.0
+      },
+      "caps": [
+        {
+          "label": "↵",
+          "labelWidth": 6.6,
+          "rect": {
+            "x": 722.0,
+            "y": 483.5,
+            "width": 20.0,
+            "height": 20.0
+          }
+        }
+      ]
+    }
+  ],
+  "tiles": [],
+  "fonts": [
+    {
+      "file": "Geist-Regular.ttf",
+      "bytes": 126048,
+      "sha256": "5C8968EAFB98A4C4F47033DAF29E38E284A6F2A82EB017D171AB040FE7C4B615"
+    },
+    {
+      "file": "Geist-Medium.ttf",
+      "bytes": 127660,
+      "sha256": "0090E004725F6F64B841715B4167920580F883FCF9B67FC6D744089103FEC101"
+    },
+    {
+      "file": "Geist-SemiBold.ttf",
+      "bytes": 127872,
+      "sha256": "612EC98DF33935354F39E81E54101656961AB6E5549F64B63EB57868BA7BAB8D"
+    },
+    {
+      "file": "GeistMono-Regular.ttf",
+      "bytes": 148516,
+      "sha256": "42D8AD2E610238E64E8ABFCDE3037C63F7850A73928742B7AB7229D897BCB155"
+    },
+    {
+      "file": "GeistMono-Medium.ttf",
+      "bytes": 149328,
+      "sha256": "90B15711DC3779B2E64E8AFF5228154DD019A90BCE4947549C4A8A8A43F2AC25"
+    }
+  ],
+  "fontResolution": [
+    {
+      "family": "Geist",
+      "weight": 400.0,
+      "fontId": 0,
+      "probeWidth": 118.201996
+    },
+    {
+      "family": "Geist",
+      "weight": 500.0,
+      "fontId": 1,
+      "probeWidth": 121.36601
+    },
+    {
+      "family": "Geist Mono",
+      "weight": 400.0,
+      "fontId": 2,
+      "probeWidth": 151.2
+    },
+    {
+      "family": "Geist Mono",
+      "weight": 500.0,
+      "fontId": 3,
+      "probeWidth": 151.2
+    },
+    {
+      "family": "Pane Missing Font Probe",
+      "weight": 400.0,
+      "fontId": 4,
+      "probeWidth": 112.23242
+    },
+    {
+      "family": "Pane Missing Font Probe",
+      "weight": 500.0,
+      "fontId": 4,
+      "probeWidth": 112.23242
+    }
+  ]
+}

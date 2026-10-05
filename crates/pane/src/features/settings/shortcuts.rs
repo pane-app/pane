@@ -48,9 +48,9 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, App, BoxShadow, Context, Div, Entity, FocusHandle, Focusable, Hsla, KeyBinding,
-    KeyDownEvent, MouseDownEvent, Pixels, Role, Stateful, StyleRefinement, Subscription, Window,
-    actions, div, prelude::*, px,
+    AnyElement, App, Context, Div, Entity, FocusHandle, Focusable, Hsla, KeyBinding, KeyDownEvent,
+    MouseDownEvent, Pixels, Role, SharedString, Stateful, Subscription, Window, actions, div,
+    prelude::*, px,
 };
 use gpui_elements::editable_text::actions::DEFAULT_INPUT_CONTEXT;
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
@@ -60,13 +60,20 @@ use pane_core::{
 };
 
 use super::{Page, SettingsWindow, search};
-use crate::ui::icon::{Glyph, IconTone, glyph, glyph_rotated};
+use crate::ui::controls;
+use crate::ui::icon::{Glyph, glyph_rotated};
+use crate::ui::keycap::{CapStyle, key_sequence};
 use crate::ui::motion;
+use crate::ui::settings_shell;
 use crate::ui::theme::Theme;
 
 /// The page's sidebar title, its identity in the sidebar and the tests'
 /// selectors.
 pub(crate) const TITLE: &str = "Shortcuts";
+
+/// What the page is, in one line: its sidebar entry's description in
+/// the search, and its heading's subtitle.
+const ABOUT: &str = "Aliases and global hotkeys for installed commands";
 
 /// The target id of the page's filter field, the control the sidebar's
 /// search jumps to (see [`entries`]).
@@ -159,11 +166,12 @@ pub(crate) fn bind_keys(cx: &mut App) {
 pub(crate) fn page() -> Page {
     Page {
         title: TITLE,
-        about: "Aliases and global hotkeys for installed commands",
+        about: ABOUT,
         // The magnifier: the page is the searchable catalog of the
         // commands' aliases and hotkeys. (The Keyboard page takes the
         // keyboard glyph — the sidebar keeps its entries distinct.)
-        icon: (IconTone::Command, Glyph::Search),
+        icon: Glyph::Search,
+        count: None,
         render,
         search: entries,
         focus,
@@ -782,143 +790,145 @@ fn render(
     if this.shortcuts.disclosing {
         window.request_animation_frame();
     }
-    div()
-        .id("shortcuts")
-        .debug_selector(|| "shortcuts".into())
-        .key_context(PAGE)
+    // The page is the Settings families' (#99): the heading block, the
+    // filter's well, then the catalog — its column captions over the
+    // groups, each a list header over its commands' settings rows — and
+    // the status line, in the page's column.
+    let focused = this.shortcuts.query.focus_handle(cx).is_focused(window);
+    let filter = filter_field(this, &query, focused, &theme, cx);
+    let empty = groups.is_empty().then(|| {
+        controls::field_description(
+            if query.trim().is_empty() {
+                "No extensions are installed.".to_owned()
+            } else {
+                format!("No commands match “{}”", query.trim())
+            },
+            theme.text_muted,
+            &theme,
+        )
+        .id("shortcuts-empty")
+        .debug_selector(|| "shortcuts-empty".into())
+    });
+    let catalog_block = div()
         .flex()
         .flex_col()
-        .gap(px(4.))
-        .child(
-            div()
-                .id("shortcuts-title")
-                .debug_selector(|| "shortcuts-title".into())
-                .pb(px(8.))
-                .text_size(theme.typography.search_size)
-                .font_weight(theme.typography.medium)
-                .text_color(theme.text_title)
-                .child(TITLE),
-        )
-        .child(filter_field(this, &query, &theme, cx))
+        .gap(theme.geometry.controls.list_gap)
         .child(columns_header(
             catalog.hotkeys_unavailable.as_deref(),
             &theme,
         ))
-        .when(groups.is_empty(), |page| {
-            page.child(
-                div()
-                    .id("shortcuts-empty")
-                    .debug_selector(|| "shortcuts-empty".into())
-                    .text_size(theme.typography.row_subtitle_size)
-                    .text_color(theme.text_muted)
-                    .child(if query.trim().is_empty() {
-                        "No extensions are installed.".to_owned()
-                    } else {
-                        format!("No commands match “{}”", query.trim())
-                    }),
-            )
-        })
-        .children(groups)
-        .when_some(this.shortcuts.status.as_ref(), |page, status| {
-            page.child(status_line(status, &theme))
-        })
+        .children(empty)
+        .children(groups);
+    let column = controls::column(&theme)
+        .child(
+            settings_shell::page_header(TITLE, Some(ABOUT.into()), &theme)
+                .id("shortcuts-title")
+                .debug_selector(|| "shortcuts-title".into()),
+        )
+        .child(filter)
+        .child(catalog_block)
+        .children(
+            this.shortcuts
+                .status
+                .as_ref()
+                .map(|status| status_line(status, &theme)),
+        );
+    div()
+        .id("shortcuts")
+        .debug_selector(|| "shortcuts".into())
+        .key_context(PAGE)
+        .child(column)
         .into_any_element()
 }
 
-/// The page's filter field: the shared editable text element in a boxed
-/// field, with the magnifier the reference's search inputs carry. The
-/// wrapper is the field's accessibility node, as a form field's is, and
-/// carries the scroll anchor the search's reveal scrolls to.
-fn filter_field(this: &mut SettingsWindow, query: &str, theme: &Theme, cx: &App) -> Stateful<Div> {
+/// The page's filter field: a field's well (#99, the sidebar search's
+/// family) with the magnifier, holding the shared editable text element,
+/// its ring the focus color while it has the keyboard (`focused`). The
+/// text's wrapper is the field's accessibility node, as a form field's
+/// is, and carries the scroll anchor the search's reveal scrolls to.
+fn filter_field(
+    this: &mut SettingsWindow,
+    query: &str,
+    focused: bool,
+    theme: &Theme,
+    cx: &App,
+) -> Stateful<Div> {
     let anchor = this.search_anchor(FILTER);
     let input = &this.shortcuts.query;
-    div()
+    controls::well(false, theme)
         .id("shortcut-filter")
         .debug_selector(|| "shortcut-filter".into())
-        .flex()
-        .items_center()
-        .gap(px(8.))
-        .mb(px(8.))
-        .child(glyph(Glyph::Search, px(16.), theme.text_muted))
+        .shadow(controls::well_shadows(focused, theme))
+        .child(controls::well_glyph(Glyph::Search, theme))
         .child(
             div()
+                .id("shortcut-field")
                 .flex_1()
                 .min_w(px(0.))
-                .id("shortcut-field")
                 .anchor_scroll(Some(anchor))
                 .track_focus(&input.focus_handle(cx))
                 .role(Role::TextInput)
                 .aria_label("Filter commands and extensions")
-                .aria_value(query)
+                .aria_value(query.to_owned())
                 .aria_placeholder(PLACEHOLDER)
-                .px(px(8.))
-                .py(px(5.))
-                .rounded_md()
-                .border_1()
-                .border_color(theme.hairline)
-                .bg(theme.tile_background)
-                .focus(|field| field.border_color(theme.focus_ring))
-                .child(
-                    text_input("filter")
-                        .state(input.downgrade())
-                        .placeholder(PLACEHOLDER)
-                        .placeholder_color(theme.text_placeholder)
-                        .caret_color(theme.accent_text)
-                        .selection_color(theme.row_selected)
-                        .marked_color(theme.accent_text)
-                        .text_color(theme.text_body)
-                        .w_full()
-                        .min_w(px(0.))
-                        .whitespace_nowrap()
-                        .overflow_x_scroll(),
-                ),
+                .child(controls::well_input(
+                    text_input("filter").state(input.downgrade()),
+                    PLACEHOLDER,
+                    theme,
+                )),
         )
 }
 
-/// The column labels over the rows: Name, Alias and Hotkey, aligned with
-/// the columns the rows lay out below. Beside the Hotkey label, why this
-/// system has no global hotkeys at all, when it has none.
+/// The column labels over the rows: Name, Alias and Hotkey in the
+/// caption type (#99), aligned with the columns the rows lay out below
+/// (the commands' own inset, see [`group_element`]). Beside the Hotkey
+/// label, why this system has no global hotkeys at all, when it has none.
 fn columns_header(hotkeys_unavailable: Option<&str>, theme: &Theme) -> Stateful<Div> {
     div()
         .id("shortcut-columns")
         .debug_selector(|| "shortcut-columns".into())
         .flex()
         .flex_col()
-        .gap(px(2.))
-        .pb(px(4.))
+        .gap(theme.geometry.controls.list_gap)
+        .pb(theme.geometry.controls.field_gap)
         .child(
             div()
                 .flex()
                 .flex_row()
-                .text_size(theme.typography.row_kind_size)
-                .font_weight(theme.typography.medium)
-                .text_color(theme.text_muted)
-                .child(div().flex_1().min_w(px(0.)).child("Name"))
+                .gap(theme.geometry.controls.row_gap)
+                .pl(commands_inset(theme))
+                .child(controls::caption("Name", theme).flex_1().min_w(px(0.)))
                 .child(
-                    div()
+                    controls::caption("Alias", theme)
                         .w(ALIAS_WIDTH)
                         .flex_none()
-                        .debug_selector(|| "shortcut-column-alias".into())
-                        .child("Alias"),
+                        .debug_selector(|| "shortcut-column-alias".into()),
                 )
                 .child(
-                    div()
+                    controls::caption("Hotkey", theme)
                         .w(HOTKEY_WIDTH)
                         .flex_none()
-                        .debug_selector(|| "shortcut-column-hotkey".into())
-                        .child("Hotkey"),
+                        .debug_selector(|| "shortcut-column-hotkey".into()),
                 ),
         )
         .when_some(hotkeys_unavailable, |header, why| {
             header.child(
-                div()
-                    .id("shortcut-hotkeys-unavailable")
-                    .debug_selector(|| "shortcut-hotkeys-unavailable".into())
-                    .text_size(theme.typography.row_kind_size)
-                    .text_color(theme.warning)
-                    .child(format!("Hotkeys are unavailable here: {why}")),
+                controls::field_description(
+                    format!("Hotkeys are unavailable here: {why}"),
+                    theme.warning,
+                    theme,
+                )
+                .id("shortcut-hotkeys-unavailable")
+                .debug_selector(|| "shortcut-hotkeys-unavailable".into()),
             )
         })
+}
+
+/// Where a group's commands begin: under the group's title, past its
+/// header's padding, chevron and gap.
+fn commands_inset(theme: &Theme) -> Pixels {
+    let settings = &theme.geometry.settings;
+    settings.item_padding_x + theme.geometry.controls.chevron + settings.item_gap
 }
 
 /// One group: the header that expands and collapses it, then its commands
@@ -1006,7 +1016,31 @@ fn group_element(
     // Paint only: the element's layout and hit target are the unrotated
     // box's.
     let angle = std::f32::consts::FRAC_PI_2 * look.unwrap_or(if collapsed { 0. } else { 1. });
-    let header = div()
+    // The header: a list header (#99) — the chevron, the group's title
+    // over its source and why it is not active — with the sidebar item's
+    // hover, at once, and Pane's focus ring.
+    let mut lines = Vec::new();
+    if let Some(identity) = group.identity.as_ref() {
+        lines.push(
+            controls::field_description(identity.to_string(), theme.text_muted, theme)
+                .truncate()
+                .into_any_element(),
+        );
+    }
+    if let Some(why) = group.inactive.as_ref() {
+        lines.push(
+            controls::field_description(format!("Not active: {why}"), theme.warning, theme)
+                .into_any_element(),
+        );
+    }
+    let chevron = glyph_rotated(
+        Glyph::ChevronRight,
+        theme.geometry.controls.chevron,
+        theme.nav_icon,
+        gpui::radians(angle),
+    );
+    let ring = controls::focus_ring(theme);
+    let header = controls::group_header(chevron, group.title.clone(), lines, theme)
         .id(key.clone())
         .debug_selector(|| format!("shortcut-group-{key}"))
         .key_context(GROUP)
@@ -1014,65 +1048,13 @@ fn group_element(
         .role(Role::Button)
         .aria_label(group_label(group))
         .aria_expanded(!collapsed)
+        .focus(move |header| header.shadow(ring))
         .on_action(cx.listener(move |this, _: &ToggleGroup, window, cx| {
             this.shortcuts_toggle_group(&for_keys.0, &for_keys.1, window, cx);
         }))
         .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
             this.shortcuts_toggle_group(&for_click.0, &for_click.1, window, cx);
-        }))
-        .flex()
-        .items_center()
-        .gap(px(6.))
-        .min_h(theme.geometry.row_min_height)
-        .px(theme.geometry.row_padding_x)
-        .rounded(theme.geometry.row_radius)
-        .cursor_pointer()
-        .hover(|header| header.bg(theme.row_hover))
-        // Pressed: the selected wash, one rung above the hover one.
-        .active(|header| header.bg(theme.row_selected))
-        .transitions(|fades| fades.bg(crate::ui::motion::pointer_fade()))
-        .focus(|header| focus_ring(header, theme.focus_ring))
-        .child(glyph_rotated(
-            Glyph::ChevronRight,
-            px(14.),
-            theme.text_muted,
-            gpui::radians(angle),
-        ))
-        .child(
-            div()
-                .flex_1()
-                .min_w(px(0.))
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .truncate()
-                        .text_size(theme.typography.row_title_size)
-                        .font_weight(theme.typography.medium)
-                        .text_color(theme.text_title)
-                        .child(group.title.clone()),
-                )
-                .when_some(
-                    group.identity.as_ref().map(|identity| identity.to_string()),
-                    |header, identity| {
-                        header.child(
-                            div()
-                                .truncate()
-                                .text_size(theme.typography.row_kind_size)
-                                .text_color(theme.text_muted)
-                                .child(identity),
-                        )
-                    },
-                )
-                .when_some(group.inactive.as_ref(), |header, why| {
-                    header.child(
-                        div()
-                            .text_size(theme.typography.row_kind_size)
-                            .text_color(theme.warning)
-                            .child(format!("Not active: {why}")),
-                    )
-                }),
-        );
+        }));
     let rows: Vec<AnyElement> = if blank && collapsed {
         // Collapsed: the rows are unmounted — the departing content is
         // never drawn fading out, so it can expose no hit targets or
@@ -1119,7 +1101,7 @@ fn group_element(
         .debug_selector(|| format!("commands-{key}"))
         .flex()
         .flex_col()
-        .gap(px(2.))
+        .pl(commands_inset(theme))
         .relative()
         .top(px(offset))
         .when(opacity < 1., |commands| commands.opacity(opacity))
@@ -1128,7 +1110,7 @@ fn group_element(
         div()
             .flex()
             .flex_col()
-            .gap(px(2.))
+            .gap(theme.geometry.controls.list_gap)
             .child(header)
             .child(commands)
             .into_any_element(),
@@ -1153,9 +1135,10 @@ fn group_label(group: &ShortcutGroup) -> String {
     }
 }
 
-/// One command's row: the Name column, the Alias column (the cell, or the
-/// editor in its place) and the Hotkey column, each with the reason its
-/// configuration is not active below it.
+/// One command's row: a settings row (#99) — the command's name over its
+/// subtitle — then the Alias column (the cell, or the editor in its place)
+/// and the Hotkey column, each with the reason its configuration is not
+/// active below it.
 fn row_element(
     this: &mut SettingsWindow,
     command: &ShortcutCommand,
@@ -1164,55 +1147,65 @@ fn row_element(
     cx: &mut Context<SettingsWindow>,
 ) -> AnyElement {
     let id = command.id.clone();
-    let name = div()
-        .flex_1()
-        .min_w(px(0.))
-        .flex()
-        .flex_col()
-        .justify_center()
-        .py(px(6.))
-        .child(
-            div()
+    let lines = command
+        .subtitle
+        .as_ref()
+        .map(|subtitle| {
+            controls::field_description(subtitle.clone(), theme.text_muted, theme)
                 .truncate()
-                .text_size(theme.typography.row_title_size)
-                .text_color(theme.text_title)
-                .child(command.title.clone()),
-        )
-        .when_some(command.subtitle.as_ref(), |name, subtitle| {
-            name.child(
-                div()
-                    .truncate()
-                    .text_size(theme.typography.row_kind_size)
-                    .text_color(theme.text_muted)
-                    .child(subtitle.clone()),
-            )
-        });
+                .into_any_element()
+        })
+        .into_iter()
+        .collect();
     let alias = if editing.as_deref() == Some(id.as_str()) {
         editor_element(this, command, theme, cx)
     } else {
         alias_cell(this, command, theme, cx)
     };
     let hotkey = hotkey_cell(this, command, theme, cx);
-    div()
+    // The row's parts align at their tops, padded as a described row is,
+    // so a note growing under a cell never moves the others.
+    controls::setting_row(command.title.clone(), lines, theme)
+        .items_start()
+        .py(theme.geometry.controls.row_padding_y)
         .id(format!("row-{id}"))
         .debug_selector(|| format!("shortcut-row-{id}"))
-        .flex()
-        .flex_row()
-        .items_start()
-        .gap(px(8.))
-        .min_h(theme.geometry.row_min_height)
-        .px(theme.geometry.row_padding_x)
-        .rounded(theme.geometry.row_radius)
-        .child(name)
         .child(alias)
         .child(hotkey)
         .into_any_element()
 }
 
-/// The Alias column's cell: the command's alias (or none) as a button
-/// that opens the inline editor, with why the alias is not active below
-/// it. A command an alias cannot be given to (one that is gone) shows its
-/// recorded alias as plain text instead.
+/// What a cell shows as its text: the alias, quoted, or "None" muted.
+fn cell_text(alias: Option<&str>, theme: &Theme) -> Div {
+    div()
+        .flex_1()
+        .min_w(px(0.))
+        .truncate()
+        .text_color(if alias.is_some() {
+            theme.text_title
+        } else {
+            theme.text_muted
+        })
+        .child(
+            alias
+                .map(|alias| format!("“{alias}”"))
+                .unwrap_or_else(|| "None".into()),
+        )
+}
+
+/// A cell's note under its well: why the configuration is not active, a
+/// refusal, a hint — a field's description in `color`.
+fn cell_note(selector: String, text: String, color: Hsla, theme: &Theme) -> Stateful<Div> {
+    controls::field_description(text, color, theme)
+        .id(SharedString::from(selector.clone()))
+        .debug_selector(move || selector.clone())
+}
+
+/// The Alias column's cell: the command's alias (or none) in an inline
+/// field's well (#99) that, as a button, opens the inline editor, with why
+/// the alias is not active below it. A command an alias cannot be given to
+/// (one that is gone) shows its recorded alias in the well, as a label, at
+/// the disabled opacity.
 fn alias_cell(
     this: &mut SettingsWindow,
     command: &ShortcutCommand,
@@ -1234,103 +1227,56 @@ fn alias_cell(
         command.title,
         current.as_deref().unwrap_or("none")
     );
+    let well = controls::well(true, theme)
+        .w_full()
+        .child(cell_text(current.as_deref(), theme))
+        .id(format!("alias-{id}"))
+        .debug_selector(|| format!("shortcut-alias-{id}"))
+        .aria_label(label)
+        // The reason the alias is not active, if it is not, announced
+        // after the cell's name.
+        .when_some(command.alias_inactive.as_ref(), |cell, why| {
+            cell.aria_description(format!("Not active: {why}"))
+        });
     let cell = if command.editable {
-        div()
-            .id(format!("alias-{id}"))
-            .debug_selector(|| format!("shortcut-alias-{id}"))
-            .key_context(CELL)
+        let ring = controls::well_shadows(true, theme);
+        well.key_context(CELL)
             .track_focus(&handle)
             .role(Role::Button)
-            .aria_label(label.clone())
-            // The reason the alias is not active, if it is not, announced
-            // after the cell's name.
-            .when_some(command.alias_inactive.as_ref(), |cell, why| {
-                cell.aria_description(format!("Not active: {why}"))
-            })
+            .cursor_pointer()
+            .focus(move |cell| cell.shadow(ring))
             .on_action(cx.listener(move |this, _: &EditAlias, window, cx| {
                 this.shortcuts_edit_alias(for_keys.0.clone(), for_keys.1.clone(), window, cx);
             }))
             .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
                 this.shortcuts_edit_alias(for_click.0.clone(), for_click.1.clone(), window, cx);
             }))
-            .flex()
-            .items_center()
-            .min_h(px(30.))
-            .px(px(8.))
-            .rounded_md()
-            .border_1()
-            .border_color(theme.hairline)
-            .bg(theme.tile_background)
-            .cursor_pointer()
-            .hover(|cell| cell.bg(theme.row_hover))
-            // Pressed: the selected wash, one rung above the hover one.
-            .active(|cell| cell.bg(theme.row_selected))
-            .transitions(|fades| fades.bg(crate::ui::motion::pointer_fade()))
-            .focus(|cell| cell.border_color(theme.focus_ring))
-            .text_size(theme.typography.row_subtitle_size)
-            .text_color(if current.is_some() {
-                theme.text_title
-            } else {
-                theme.text_muted
-            })
-            .child(
-                current
-                    .as_deref()
-                    .map(|alias| format!("“{alias}”"))
-                    .unwrap_or_else(|| "None".into()),
-            )
-            .into_any_element()
     } else {
-        div()
-            .id(format!("alias-{id}"))
-            .debug_selector(|| format!("shortcut-alias-{id}"))
-            .role(Role::Label)
-            .aria_label(label)
-            .when_some(command.alias_inactive.as_ref(), |cell, why| {
-                cell.aria_description(format!("Not active: {why}"))
-            })
-            .flex()
-            .items_center()
-            .min_h(px(30.))
-            .px(px(8.))
-            .rounded_md()
-            .border_1()
-            .border_color(theme.hairline)
-            .opacity(0.6)
-            .text_size(theme.typography.row_subtitle_size)
-            .text_color(theme.text_muted)
-            .child(
-                current
-                    .as_deref()
-                    .map(|alias| format!("“{alias}”"))
-                    .unwrap_or_else(|| "None".into()),
-            )
-            .into_any_element()
+        well.role(Role::Label)
+            .opacity(theme.geometry.controls.disabled_opacity)
     };
     div()
         .w(ALIAS_WIDTH)
         .flex_none()
         .flex()
         .flex_col()
-        .gap(px(2.))
-        .py(px(6.))
+        .gap(theme.geometry.controls.list_gap)
         .child(cell)
         .when_some(command.alias_inactive.as_ref(), |value, why| {
-            value.child(
-                div()
-                    .id(format!("alias-inactive-{}", command.id))
-                    .debug_selector(|| format!("shortcut-alias-inactive-{}", command.id))
-                    .text_size(theme.typography.row_kind_size)
-                    .text_color(theme.warning)
-                    .child(format!("Not active: {why}")),
-            )
+            value.child(cell_note(
+                format!("shortcut-alias-inactive-{}", command.id),
+                format!("Not active: {why}"),
+                theme.warning,
+                theme,
+            ))
         })
 }
 
 /// The Alias column's inline editor, in the place of the cell: the shared
-/// editable text element filled with the current alias, the hint the alias
-/// form gives, and why the last commit was refused. Enter commits and
-/// Escape cancels (see the module docs).
+/// editable text element in the same inline well, filled with the current
+/// alias, its ring the focus color while it has the keyboard; under it the
+/// hint the alias form gives and why the last commit was refused. Enter
+/// commits and Escape cancels (see the module docs).
 fn editor_element(
     this: &mut SettingsWindow,
     command: &ShortcutCommand,
@@ -1348,86 +1294,65 @@ fn editor_element(
         "Alias: one word that finds {} in root search; empty for none",
         command.title
     );
+    let ring = controls::well_shadows(true, theme);
     div()
         .w(ALIAS_WIDTH)
         .flex_none()
         .flex()
         .flex_col()
-        .gap(px(2.))
-        .py(px(6.))
+        .gap(theme.geometry.controls.list_gap)
         .key_context(EDITOR)
         .on_action(cx.listener(SettingsWindow::shortcuts_commit_alias))
         .on_action(cx.listener(SettingsWindow::shortcuts_cancel_alias))
         .child(
-            div()
+            controls::well(true, theme)
+                .w_full()
                 .id("shortcut-editor")
                 .debug_selector(|| "shortcut-editor".into())
                 .track_focus(&input.focus_handle(cx))
+                .focus(move |field| field.shadow(ring))
                 .role(Role::TextInput)
                 .aria_label(hint.clone())
                 .when_some(error.as_ref(), |field, error| {
                     field.aria_description(error.clone())
                 })
-                .px(px(8.))
-                .py(px(5.))
-                .rounded_md()
-                .border_1()
-                .border_color(theme.hairline)
-                .bg(theme.tile_background)
-                .focus(|field| field.border_color(theme.focus_ring))
-                .child(
-                    text_input("alias")
-                        .state(input.downgrade())
-                        .placeholder("such as ec")
-                        .placeholder_color(theme.text_placeholder)
-                        .caret_color(theme.accent_text)
-                        .selection_color(theme.row_selected)
-                        .marked_color(theme.accent_text)
-                        .text_color(theme.text_title)
-                        .w_full()
-                        .min_w(px(0.))
-                        .whitespace_nowrap()
-                        .overflow_x_scroll(),
-                ),
+                .child(controls::well_input(
+                    text_input("alias").state(input.downgrade()),
+                    "such as ec",
+                    theme,
+                )),
         )
-        .child(
-            div()
-                .text_size(theme.typography.row_kind_size)
-                .text_color(theme.text_muted)
-                .child(hint),
-        )
+        .child(controls::field_description(hint, theme.text_muted, theme))
         .when_some(error.as_ref(), |editor, error| {
-            editor.child(
-                div()
-                    .id("shortcut-alias-error")
-                    .debug_selector(|| "shortcut-alias-error".into())
-                    .text_size(theme.typography.row_kind_size)
-                    .text_color(theme.danger)
-                    .child(error.clone()),
-            )
+            editor.child(cell_note(
+                "shortcut-alias-error".into(),
+                error.clone(),
+                theme.danger,
+                theme,
+            ))
         })
         .when_some(command.alias_inactive.as_ref(), |editor, why| {
-            editor.child(
-                div()
-                    .id(format!("alias-inactive-{}", command.id))
-                    .debug_selector(|| format!("shortcut-alias-inactive-{}", command.id))
-                    .text_size(theme.typography.row_kind_size)
-                    .text_color(theme.warning)
-                    .child(format!("Not active: {why}")),
-            )
+            editor.child(cell_note(
+                format!("shortcut-alias-inactive-{}", command.id),
+                format!("Not active: {why}"),
+                theme.warning,
+                theme,
+            ))
         })
 }
 
-/// The Hotkey column's cell: the command's hotkey in the keycap chrome —
-/// or "None" — as a button that starts the recorder, with a Clear button
-/// beside it while a hotkey is recorded. While the recorder listens, the
-/// button shows it — the keys pressed next are the binding being recorded,
-/// captured, Escape cancels — with why the last capture was refused below,
-/// and the hint of what is being recorded; the Clear button hides, since
-/// a click while it listens only cancels. A command a hotkey cannot be
-/// recorded for (its package is disabled, or it is unavailable on this
-/// system) shows its recorded hotkey as a plain label instead. Whatever
-/// the cell shows, why the hotkey is not active is below it.
+/// The Hotkey column's cell: the command's hotkey as the reference's caps
+/// (from the launcher's binding adapter, `crate::keyboard::hotkey_keys`) —
+/// or "None" — in an inline field's well (#99) that, as a button, starts
+/// the recorder, with a Clear button beside it while a hotkey is recorded.
+/// While the recorder listens, the well shows it — the keys pressed next
+/// are the binding being recorded, captured, Escape cancels — with why
+/// the last capture was refused below, and the hint of what is being
+/// recorded; Clear hides, since a click while it listens only cancels. A
+/// command a hotkey cannot be recorded for (its package is disabled, or it
+/// is unavailable on this system) shows its recorded hotkey in the well,
+/// as a label, at the disabled opacity. Whatever the cell shows, why the
+/// hotkey is not active is below it.
 fn hotkey_cell(
     this: &mut SettingsWindow,
     command: &ShortcutCommand,
@@ -1467,23 +1392,32 @@ fn hotkey_cell(
         inactive.clone()
     };
 
-    // The recorder button, or the plain label of a command that cannot
-    // record here.
+    // What the well shows: the listening mark, the hotkey's caps, or
+    // "None".
     let value = if listening {
-        // The listening mark, as the General page's recorder shows it.
-        hotkey_chip("…", theme.warning, theme).into_any_element()
+        controls::listening_mark(theme).into_any_element()
     } else {
-        match shown.as_deref() {
-            Some(shortcut) => {
-                hotkey_chip(shortcut, theme.tile_foreground, theme).into_any_element()
-            }
-            None => div()
-                .text_size(theme.typography.row_subtitle_size)
-                .text_color(theme.text_muted)
-                .child("None")
+        match command.hotkey.as_ref() {
+            Some(shortcut) => div()
+                .id(SharedString::from(format!("hotkey-keys-{id}")))
+                .flex()
+                .child(key_sequence(
+                    &crate::keyboard::hotkey_keys(shortcut),
+                    CapStyle::Regular,
+                    theme,
+                ))
                 .into_any_element(),
+            None => cell_text(None, theme).into_any_element(),
         }
     };
+    let well = controls::well(true, theme)
+        .flex_1()
+        .min_w(px(0.))
+        .child(value)
+        .id(format!("hotkey-{id}"))
+        .debug_selector(|| format!("shortcut-hotkey-{id}"))
+        .aria_label(label)
+        .when_some(description.clone(), |cell, why| cell.aria_description(why));
     let cell = if command.hotkey_editable {
         let handle = this
             .shortcuts
@@ -1494,70 +1428,44 @@ fn hotkey_cell(
         let for_keys = id.clone();
         let for_click = id.clone();
         let for_out = id.clone();
+        let ring = controls::well_shadows(true, theme);
         // While the recorder listens, the cell's context is the recorder's
         // (see [`bind_keys`]): its keys are the binding being recorded.
-        div()
-            .id(format!("hotkey-{id}"))
-            .debug_selector(|| format!("shortcut-hotkey-{id}"))
-            .key_context(if listening {
-                HOTKEY_RECORDER
-            } else {
-                HOTKEY_CELL
-            })
-            .track_focus(&handle)
-            .role(Role::Button)
-            .aria_label(label)
-            .when_some(description.clone(), |cell, why| cell.aria_description(why))
-            .on_action(cx.listener(move |this, _: &RecordHotkey, window, cx| {
-                this.shortcuts_record_hotkey(&for_keys, window, cx);
-            }))
-            .on_action(cx.listener(SettingsWindow::shortcuts_cancel_hotkey))
-            .on_key_down(cx.listener(SettingsWindow::shortcuts_hotkey_key_down))
-            // A mouse-down anywhere outside the cell while it listens
-            // cancels the recording and is consumed, as the General page's
-            // recorder and the footer menu's popup do: the click
-            // underneath does not act, and the recorder gives up the keys.
-            .on_mouse_down_out(cx.listener(move |this, _: &MouseDownEvent, _window, cx| {
-                if this
-                    .shortcuts
-                    .recording
-                    .as_ref()
-                    .is_some_and(|recording| recording.command == for_out)
-                {
-                    this.shortcuts_cancel_recording(cx);
-                    cx.stop_propagation();
-                }
-            }))
-            .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
-                this.shortcuts_record_hotkey(&for_click, window, cx);
-            }))
-            .flex()
-            .items_center()
-            .min_h(px(30.))
-            .px(px(4.))
-            .rounded_md()
-            .cursor_pointer()
-            .hover(|cell| cell.bg(theme.row_hover))
-            // Pressed: the selected wash, one rung above the hover one.
-            .active(|cell| cell.bg(theme.row_selected))
-            .transitions(|fades| fades.bg(crate::ui::motion::pointer_fade()))
-            .focus(|cell| focus_ring(cell, theme.focus_ring))
-            .child(value)
-            .into_any_element()
+        well.key_context(if listening {
+            HOTKEY_RECORDER
+        } else {
+            HOTKEY_CELL
+        })
+        .track_focus(&handle)
+        .role(Role::Button)
+        .cursor_pointer()
+        .focus(move |cell| cell.shadow(ring))
+        .on_action(cx.listener(move |this, _: &RecordHotkey, window, cx| {
+            this.shortcuts_record_hotkey(&for_keys, window, cx);
+        }))
+        .on_action(cx.listener(SettingsWindow::shortcuts_cancel_hotkey))
+        .on_key_down(cx.listener(SettingsWindow::shortcuts_hotkey_key_down))
+        // A mouse-down anywhere outside the cell while it listens cancels
+        // the recording and is consumed, as the General page's recorder
+        // and the footer menu's popup do: the click underneath does not
+        // act, and the recorder gives up the keys.
+        .on_mouse_down_out(cx.listener(move |this, _: &MouseDownEvent, _window, cx| {
+            if this
+                .shortcuts
+                .recording
+                .as_ref()
+                .is_some_and(|recording| recording.command == for_out)
+            {
+                this.shortcuts_cancel_recording(cx);
+                cx.stop_propagation();
+            }
+        }))
+        .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
+            this.shortcuts_record_hotkey(&for_click, window, cx);
+        }))
     } else {
-        div()
-            .id(format!("hotkey-{id}"))
-            .debug_selector(|| format!("shortcut-hotkey-{id}"))
-            .role(Role::Label)
-            .aria_label(label)
-            .when_some(description, |cell, why| cell.aria_description(why))
-            .flex()
-            .items_center()
-            .min_h(px(30.))
-            .px(px(4.))
-            .opacity(0.6)
-            .child(value)
-            .into_any_element()
+        well.role(Role::Label)
+            .opacity(theme.geometry.controls.disabled_opacity)
     };
 
     // The Clear button, beside a recorded hotkey of a command that can
@@ -1573,33 +1481,21 @@ fn hotkey_cell(
             .clone();
         let for_keys = id.clone();
         let for_click = id.clone();
-        div()
+        let ring = controls::focus_ring(theme);
+        controls::ghost_button("Clear", true, theme)
             .id(format!("hotkey-clear-{id}"))
             .debug_selector(|| format!("shortcut-hotkey-clear-{id}"))
             .key_context(HOTKEY_CLEAR)
             .track_focus(&handle)
             .role(Role::Button)
             .aria_label(format!("Clear the hotkey for {}", command.title))
+            .focus(move |button| button.shadow(ring))
             .on_action(cx.listener(move |this, _: &ClearHotkey, window, cx| {
                 this.shortcuts_apply_hotkey(&for_keys, None, window, cx);
             }))
             .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
                 this.shortcuts_apply_hotkey(&for_click, None, window, cx);
             }))
-            .flex()
-            .items_center()
-            .min_h(px(30.))
-            .px(px(6.))
-            .rounded_md()
-            .cursor_pointer()
-            .hover(|button| button.bg(theme.row_hover))
-            // Pressed: the selected wash, one rung above the hover one.
-            .active(|button| button.bg(theme.row_selected))
-            .transitions(|fades| fades.bg(crate::ui::motion::pointer_fade()))
-            .focus(|button| focus_ring(button, theme.focus_ring))
-            .text_size(theme.typography.row_kind_size)
-            .text_color(theme.text_muted)
-            .child("Clear")
     });
 
     // The hint of what is being recorded, and why the last capture was
@@ -1616,74 +1512,45 @@ fn hotkey_cell(
         .flex_none()
         .flex()
         .flex_col()
-        .gap(px(2.))
-        .py(px(6.))
+        .gap(theme.geometry.controls.list_gap)
         .child(
             div()
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(6.))
+                .gap(theme.geometry.controls.button_gap)
                 .child(cell)
                 .when_some(clear, |row, clear| row.child(clear)),
         )
         .when_some(hint, |column, hint| {
-            column.child(
-                div()
-                    .id("shortcut-hotkey-hint")
-                    .debug_selector(|| "shortcut-hotkey-hint".into())
-                    .text_size(theme.typography.row_kind_size)
-                    .text_color(theme.text_muted)
-                    .child(hint),
-            )
+            column.child(cell_note(
+                "shortcut-hotkey-hint".into(),
+                hint,
+                theme.text_muted,
+                theme,
+            ))
         })
         .when_some(rejection, |column, why| {
-            column.child(
-                div()
-                    .id("shortcut-hotkey-error")
-                    .debug_selector(|| "shortcut-hotkey-error".into())
-                    .text_size(theme.typography.row_kind_size)
-                    .text_color(theme.danger)
-                    .child(why),
-            )
+            column.child(cell_note(
+                "shortcut-hotkey-error".into(),
+                why,
+                theme.danger,
+                theme,
+            ))
         })
-        .when_some(command.hotkey_inactive.as_ref(), |cell, why| {
-            cell.child(
-                div()
-                    .id(format!("hotkey-inactive-{}", command.id))
-                    .debug_selector(|| format!("shortcut-hotkey-inactive-{}", command.id))
-                    .text_size(theme.typography.row_kind_size)
-                    .text_color(theme.warning)
-                    .child(format!("Not active: {why}")),
-            )
+        .when_some(inactive, |cell, why| {
+            cell.child(cell_note(
+                format!("shortcut-hotkey-inactive-{}", command.id),
+                why,
+                theme.warning,
+                theme,
+            ))
         })
-}
-
-/// The hotkey as text in the neutral control chrome — the keycap's tile
-/// colors at text scale, since a hotkey is more than one key and the
-/// keycap shows one glyph. The listening mark passes the warning tone.
-fn hotkey_chip(text: &str, color: Hsla, theme: &Theme) -> Div {
-    div()
-        .flex_none()
-        .flex()
-        .items_center()
-        .h(theme.geometry.keycap_height)
-        .px(theme.geometry.keycap_padding_x)
-        .rounded(theme.geometry.keycap_radius)
-        .bg(theme.tile_background)
-        .shadow(vec![
-            BoxShadow::new(px(0.), px(0.), theme.tile_border)
-                .spread_radius(px(1.))
-                .inset(),
-            BoxShadow::new(px(0.), px(1.), theme.tile_highlight).inset(),
-        ])
-        .text_size(theme.typography.footer_size)
-        .text_color(color)
-        .child(text.to_owned())
 }
 
 /// The page's status line: what the last change the page started came
-/// to, a live region so assistive technology announces it.
+/// to, as a field's description in its tone (#99), a live region so
+/// assistive technology announces it.
 fn status_line(status: &StatusLine, theme: &Theme) -> Stateful<Div> {
     let (text, color): (String, Hsla) = match status {
         StatusLine::Saving(saving) => (saving.clone(), theme.warning),
@@ -1693,24 +1560,11 @@ fn status_line(status: &StatusLine, theme: &Theme) -> Stateful<Div> {
             theme.danger,
         ),
     };
-    div()
+    controls::field_description(text.clone(), color, theme)
         .id("shortcut-status")
         .debug_selector(|| "shortcut-status".into())
-        .pt(px(10.))
         .role(Role::Status)
-        .aria_label(text.clone())
-        .text_size(theme.typography.row_subtitle_size)
-        .text_color(color)
-        .child(text)
-}
-
-/// The keyboard focus ring, as the sidebar rows' and the menu button's.
-fn focus_ring(style: StyleRefinement, color: Hsla) -> StyleRefinement {
-    style.shadow(vec![
-        BoxShadow::new(px(0.), px(0.), color)
-            .spread_radius(px(1.))
-            .inset(),
-    ])
+        .aria_label(text)
 }
 
 /// Whether the filter matches the group itself: its title or the source

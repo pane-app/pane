@@ -1,0 +1,632 @@
+{
+ "command": "scripts/visual-workbench.ps1 -Theme light -SkipSensitivity -SkipBuild",
+ "revision": "6102aa6114132c48ae65acd4a57bd51884bf2c97",
+ "workingTreeDirty": false,
+ "theme": "light",
+ "material": "opaque",
+ "fixture": {
+  "path": "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\target\\debug\\pane-visual-fixture.exe",
+  "sha256": "F8C509A7575956E7ECDA6E0DFCADC2C0864F93E7B16951639ECC103D3241994F",
+  "freshness": {
+   "fresh": true,
+   "reason": null,
+   "binarySha256": "F8C509A7575956E7ECDA6E0DFCADC2C0864F93E7B16951639ECC103D3241994F",
+   "inputsSha256": "CD93FD3E44573B6C5D77D44A649523C60B68CDDF9D967FD03A11C734B52A88B8",
+   "recordedUtc": "2026-10-05T05:30:55.352627+00:00"
+  }
+ },
+ "totals": {
+  "harness-reference": {
+   "passed": 829,
+   "failed": 7,
+   "accepted": 0
+  },
+  "harness-native": {
+   "passed": 6740,
+   "failed": 59,
+   "accepted": 0
+  },
+  "parity": {
+   "passed": 7933,
+   "failed": 1747,
+   "accepted": 142
+  }
+ },
+ "note": "The reference boards are dark only, so parity and harness-reference are not meaningful in a light run; only harness-native is read. Light measurement was tuned only for launcher-frame-light and appearance-light.",
+ "harnessFailures": [
+  {
+   "scenario": "actions-panel",
+   "capture": "open",
+   "subject": "search-header",
+   "property": "rule y",
+   "measured": null,
+   "expected": 63.0,
+   "note": "not measurable"
+  },
+  {
+   "scenario": "actions-panel",
+   "capture": "open",
+   "subject": "footer",
+   "property": "rule y",
+   "measured": 471.0,
+   "expected": 468.0,
+   "note": null
+  },
+  {
+   "scenario": "actions-panel",
+   "capture": "open",
+   "subject": "footer-actions",
+   "property": "label ink left",
+   "measured": 629.0,
+   "expected": 634.36,
+   "note": "a glyph's side bearing allowed"
+  },
+  {
+   "scenario": "actions-panel",
+   "capture": "open",
+   "subject": "actions-header",
+   "property": "tile top",
+   "measured": 276.0,
+   "expected": 274.0,
+   "note": null
+  },
+  {
+   "scenario": "actions-panel",
+   "capture": "open",
+   "subject": "action-rule",
+   "property": "alpha",
+   "measured": 14.47,
+   "expected": 18,
+   "note": null
+  },
+  {
+   "scenario": "answer-long",
+   "capture": "long-answer",
+   "subject": "answer-card",
+   "property": "accent ring",
+   "measured": "no",
+   "expected": "yes",
+   "note": "the selected card's 1px accent ring"
+  },
+  {
+   "scenario": "answer-plain",
+   "capture": "answer",
+   "subject": "answer-card",
+   "property": "accent ring",
+   "measured": "no",
+   "expected": "yes",
+   "note": "the selected card's 1px accent ring"
+  },
+  {
+   "scenario": "appearance-override",
+   "capture": "override",
+   "subject": "segment:Light",
+   "property": "segment wash top",
+   "measured": 252.0,
+   "expected": 246.38,
+   "note": null
+  },
+  {
+   "scenario": "appearance-override",
+   "capture": "override",
+   "subject": "segment:Light",
+   "property": "segment wash height",
+   "measured": 24.0,
+   "expected": 30.0,
+   "note": null
+  },
+  {
+   "scenario": "appearance-page",
+   "capture": "rest",
+   "subject": "mini-row:Figma",
+   "property": "mini wash alpha (selected)",
+   "measured": 24.06,
+   "expected": 22,
+   "note": null
+  },
+  {
+   "scenario": "appearance-page",
+   "capture": "rest",
+   "subject": "mini-row:Figma",
+   "property": "title ink left",
+   "measured": null,
+   "expected": 764,
+   "note": "a glyph's side bearing allowed; not measurable"
+  },
+  {
+   "scenario": "appearance-page",
+   "capture": "rest",
+   "subject": "mini-row:figma-tokens.json",
+   "property": "title ink left",
+   "measured": 760.0,
+   "expected": 764,
+   "note": "a glyph's side bearing allowed"
+  },
+  {
+   "scenario": "appearance-page",
+   "capture": "rest",
+   "subject": "mini-row:Recent Figma Files",
+   "property": "title ink left",
+   "measured": 760.0,
+   "expected": 764,
+   "note": "a glyph's side bearing allowed"
+  },
+  {
+   "scenario": "appearance-page",
+   "capture": "segment-hover",
+   "subject": "mini-row:Figma",
+   "property": "mini wash alpha (selected)",
+   "measured": 24.06,
+   "expected": 22,
+   "note": null
+  },
+  {
+   "scenario": "appearance-page",
+   "capture": "segment-hover",
+   "subject": "mini-row:Figma",
+   "property": "title ink left",
+   "measured": null,
+   "expected": 764,
+   "note": "a glyph's side bearing allowed; not measurable"
+  },
+  {
+   "scenario": "appearance-page",
+   "capture": "segment-hover",
+   "subject": "mini-row:figma-tokens.json",
+   "property": "title ink left",
+   "measured": 760.0,
+   "expected": 764,
+   "note": "a glyph's side bearing allowed"
+  },
+  {
+   "scenario": "appearance-page",
+   "capture": "segment-hover",
+   "subject": "mini-row:Recent Figma Files",
+   "property": "title ink left",
+   "measured": 760.0,
+   "expected": 764,
+   "note": "a glyph's side bearing allowed"
+  },
+  {
+   "scenario": "appearance-solid",
+   "capture": "solid",
+   "subject": "mini-row:Figma",
+   "property": "title ink left",
+   "measured": null,
+   "expected": 764,
+   "note": "a glyph's side bearing allowed; not measurable"
+  },
+  {
+   "scenario": "calculator-card",
+   "capture": "card",
+   "subject": "answer-card",
+   "property": "accent ring",
+   "measured": "no",
+   "expected": "yes",
+   "note": "the selected card's 1px accent ring"
+  },
+  {
+   "scenario": "clipboard-filter",
+   "capture": "cleared",
+   "subject": "clip-preview",
+   "property": "card top (inside its ring)",
+   "measured": 116.0,
+   "expected": 123.0,
+   "note": null
+  },
+  {
+   "scenario": "clipboard-filter",
+   "capture": "cleared",
+   "subject": "clip-preview",
+   "property": "card width (inside its ring)",
+   "measured": 556.0,
+   "expected": 554.0,
+   "note": null
+  },
+  {
+   "scenario": "clipboard-filter",
+   "capture": "cleared",
+   "subject": "clip-preview",
+   "property": "card height (inside its ring)",
+   "measured": 420.0,
+   "expected": 412.0,
+   "note": null
+  },
+  {
+   "scenario": "clipboard-filter",
+   "capture": "text-tab",
+   "subject": "clip-preview",
+   "property": "card top (inside its ring)",
+   "measured": 116.0,
+   "expected": 123.0,
+   "note": null
+  },
+  {
+   "scenario": "clipboard-filter",
+   "capture": "text-tab",
+   "subject": "clip-preview",
+   "property": "card width (inside its ring)",
+   "measured": 556.0,
+   "expected": 554.0,
+   "note": null
+  },
+  {
+   "scenario": "clipboard-filter",
+   "capture": "text-tab",
+   "subject": "clip-preview",
+   "property": "card height (inside its ring)",
+   "measured": 420.0,
+   "expected": 412.0,
+   "note": null
+  },
+  {
+   "scenario": "clipboard-narrow",
+   "capture": "narrow",
+   "subject": "clip:git commit -m \"Port the split view\"",
+   "property": "wash height",
+   "measured": 37.0,
+   "expected": 44.0,
+   "note": null
+  },
+  {
+   "scenario": "clipboard-narrow",
+   "capture": "narrow",
+   "subject": "clip-preview",
+   "property": "card top (inside its ring)",
+   "measured": 116.0,
+   "expected": 123.0,
+   "note": null
+  },
+  {
+   "scenario": "clipboard-narrow",
+   "capture": "narrow",
+   "subject": "clip-preview",
+   "property": "card width (inside its ring)",
+   "measured": 376.0,
+   "expected": 374.0,
+   "note": null
+  },
+  {
+   "scenario": "clipboard-narrow",
+   "capture": "narrow",
+   "subject": "clip-preview",
+   "property": "card height (inside its ring)",
+   "measured": 338.0,
+   "expected": 330.0,
+   "note": null
+  },
+  {
+   "scenario": "clipboard-narrow",
+   "capture": "narrow-last",
+   "subject": "clip-preview",
+   "property": "card top (inside its ring)",
+   "measured": 116.0,
+   "expected": 123.0,
+   "note": null
+  },
+  {
+   "scenario": "clipboard-narrow",
+   "capture": "narrow-last",
+   "subject": "clip-preview",
+   "property": "card width (inside its ring)",
+   "measured": 376.0,
+   "expected": 374.0,
+   "note": null
+  },
+  {
+   "scenario": "clipboard-narrow",
+   "capture": "narrow-last",
+   "subject": "clip-preview",
+   "property": "card height (inside its ring)",
+   "measured": 338.0,
+   "expected": 330.0,
+   "note": null
+  },
+  {
+   "scenario": "clipboard-previews",
+   "capture": "text",
+   "subject": "clip-preview",
+   "property": "card top (inside its ring)",
+   "measured": 116.0,
+   "expected": 123.0,
+   "note": null
+  },
+  {
+   "scenario": "clipboard-previews",
+   "capture": "text",
+   "subject": "clip-preview",
+   "property": "card width (inside its ring)",
+   "measured": 556.0,
+   "expected": 554.0,
+   "note": null
+  },
+  {
+   "scenario": "clipboard-previews",
+   "capture": "text",
+   "subject": "clip-preview",
+   "property": "card height (inside its ring)",
+   "measured": 420.0,
+   "expected": 412.0,
+   "note": null
+  },
+  {
+   "scenario": "clipboard-production",
+   "capture": "rest",
+   "subject": "clip-preview",
+   "property": "card top (inside its ring)",
+   "measured": 116.0,
+   "expected": 123.0,
+   "note": null
+  },
+  {
+   "scenario": "clipboard-production",
+   "capture": "rest",
+   "subject": "clip-preview",
+   "property": "card width (inside its ring)",
+   "measured": 556.0,
+   "expected": 554.0,
+   "note": null
+  },
+  {
+   "scenario": "clipboard-production",
+   "capture": "rest",
+   "subject": "clip-preview",
+   "property": "card height (inside its ring)",
+   "measured": 420.0,
+   "expected": 412.0,
+   "note": null
+  },
+  {
+   "scenario": "clipboard-production",
+   "capture": "long-text",
+   "subject": "clip-preview",
+   "property": "card top (inside its ring)",
+   "measured": 116.0,
+   "expected": 123.0,
+   "note": null
+  },
+  {
+   "scenario": "clipboard-production",
+   "capture": "long-text",
+   "subject": "clip-preview",
+   "property": "card width (inside its ring)",
+   "measured": 556.0,
+   "expected": 554.0,
+   "note": null
+  },
+  {
+   "scenario": "clipboard-production",
+   "capture": "long-text",
+   "subject": "clip-preview",
+   "property": "card height (inside its ring)",
+   "measured": 420.0,
+   "expected": 412.0,
+   "note": null
+  },
+  {
+   "scenario": "clipboard-rest",
+   "capture": "rest",
+   "subject": "clip-preview",
+   "property": "card top (inside its ring)",
+   "measured": 116.0,
+   "expected": 123.0,
+   "note": null
+  },
+  {
+   "scenario": "clipboard-rest",
+   "capture": "rest",
+   "subject": "clip-preview",
+   "property": "card width (inside its ring)",
+   "measured": 556.0,
+   "expected": 554.0,
+   "note": null
+  },
+  {
+   "scenario": "clipboard-rest",
+   "capture": "rest",
+   "subject": "clip-preview",
+   "property": "card height (inside its ring)",
+   "measured": 420.0,
+   "expected": 412.0,
+   "note": null
+  },
+  {
+   "scenario": "form-validation",
+   "capture": "rejected",
+   "subject": "segment:Good morning",
+   "property": "segment wash alpha (chosen)",
+   "measured": -17.58,
+   "expected": 217,
+   "note": "over the track's fill"
+  },
+  {
+   "scenario": "launcher-frame-narrow",
+   "capture": "narrow-rest",
+   "subject": "keys:quick-slot-5",
+   "property": "cap 0 fill alpha",
+   "measured": 10.84,
+   "expected": 13,
+   "note": null
+  },
+  {
+   "scenario": "launcher-frame-narrow",
+   "capture": "narrow-last-selected",
+   "subject": "row:Settings",
+   "property": "wash alpha (selected)",
+   "measured": 18.59,
+   "expected": 22,
+   "note": null
+  },
+  {
+   "scenario": "launcher-frame-narrow",
+   "capture": "narrow-last-selected",
+   "subject": "row:Settings",
+   "property": "wash height",
+   "measured": 52.0,
+   "expected": 44.0,
+   "note": null
+  },
+  {
+   "scenario": "root-actions",
+   "capture": "open",
+   "subject": "search-header",
+   "property": "rule y",
+   "measured": null,
+   "expected": 63.0,
+   "note": "not measurable"
+  },
+  {
+   "scenario": "root-actions",
+   "capture": "open",
+   "subject": "footer",
+   "property": "rule y",
+   "measured": 471.0,
+   "expected": 468.0,
+   "note": null
+  },
+  {
+   "scenario": "root-actions",
+   "capture": "open",
+   "subject": "footer-actions",
+   "property": "label ink left",
+   "measured": 629.0,
+   "expected": 634.36,
+   "note": "a glyph's side bearing allowed"
+  },
+  {
+   "scenario": "root-actions",
+   "capture": "filtered",
+   "subject": "search-header",
+   "property": "rule y",
+   "measured": null,
+   "expected": 63.0,
+   "note": "not measurable"
+  },
+  {
+   "scenario": "root-actions",
+   "capture": "filtered",
+   "subject": "footer",
+   "property": "rule y",
+   "measured": 471.0,
+   "expected": 468.0,
+   "note": null
+  },
+  {
+   "scenario": "root-actions",
+   "capture": "filtered",
+   "subject": "footer-actions",
+   "property": "label ink left",
+   "measured": 629.0,
+   "expected": 634.36,
+   "note": "a glyph's side bearing allowed"
+  },
+  {
+   "scenario": "root-actions",
+   "capture": "filtered",
+   "subject": "actions-panel",
+   "property": "top",
+   "measured": 340.0,
+   "expected": 338.0,
+   "note": null
+  },
+  {
+   "scenario": "root-actions",
+   "capture": "filtered",
+   "subject": "actions-panel",
+   "property": "width",
+   "measured": 318.0,
+   "expected": 320.0,
+   "note": null
+  },
+  {
+   "scenario": "root-actions",
+   "capture": "filtered",
+   "subject": "actions-panel",
+   "property": "height",
+   "measured": 120.0,
+   "expected": 122.0,
+   "note": null
+  },
+  {
+   "scenario": "root-actions",
+   "capture": "filtered",
+   "subject": "actions-header",
+   "property": "tile top",
+   "measured": 350.0,
+   "expected": 348.0,
+   "note": null
+  },
+  {
+   "scenario": "root-actions",
+   "capture": "empty",
+   "subject": "search-header",
+   "property": "rule y",
+   "measured": null,
+   "expected": 63.0,
+   "note": "not measurable"
+  },
+  {
+   "scenario": "root-actions",
+   "capture": "empty",
+   "subject": "footer",
+   "property": "rule y",
+   "measured": 471.0,
+   "expected": 468.0,
+   "note": null
+  },
+  {
+   "scenario": "root-actions",
+   "capture": "empty",
+   "subject": "footer-actions",
+   "property": "label ink left",
+   "measured": 629.0,
+   "expected": 634.36,
+   "note": "a glyph's side bearing allowed"
+  },
+  {
+   "scenario": "root-actions",
+   "capture": "empty",
+   "subject": "actions-header",
+   "property": "tile top",
+   "measured": 341.0,
+   "expected": 339.1,
+   "note": null
+  },
+  {
+   "scenario": "settings-keyboard",
+   "capture": "keyboard",
+   "subject": "well:invoke-selected-action",
+   "property": "well width",
+   "measured": 97.5,
+   "expected": 96.0,
+   "note": null
+  },
+  {
+   "scenario": "settings-launcher",
+   "capture": "closed",
+   "subject": "segment:Restore the current view",
+   "property": "segment wash alpha (chosen)",
+   "measured": -17.29,
+   "expected": 217,
+   "note": "over the track's fill"
+  },
+  {
+   "scenario": "settings-launcher",
+   "capture": "open",
+   "subject": "well:select-trigger",
+   "property": "well height",
+   "measured": 37.0,
+   "expected": 34.0,
+   "note": null
+  },
+  {
+   "scenario": "tile-sizes",
+   "capture": "tiles",
+   "subject": "tile:slot",
+   "property": "app stroke heavier than command (%)",
+   "measured": 1000.0,
+   "expected": 25,
+   "note": "same pen glyph and size; 2px against 1.6px is +25% stroke"
+  }
+ ]
+}

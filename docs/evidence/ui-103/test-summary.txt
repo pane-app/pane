@@ -1,0 +1,76 @@
+cargo test -p pane-core -p pane --locked -j 1 --no-fail-fast
+source: 500efe6 (Rust sources identical at 6102aa6, which changes scripts only); clean tree
+toolchain: rustc 1.98.1 (48a229cea 2026-09-01), cargo 1.98.1, x86_64-pc-windows-msvc
+ran 2026-10-05 11:54-12:28 +07:00, one run, nothing else building
+exit code 0
+
+targets / tests passed / failed:
+68 targets; passed 1453 failed 0 ignored 0
+pane :: unittests src\lib.rs 58 0
+pane :: unittests src\main.rs 0 0
+pane_visual_fixture :: unittests src\bin\visual-fixture.rs 0 0
+aliases :: tests\aliases.rs 1 0
+command_search :: tests\command_search.rs 1 0
+develop :: tests\develop.rs 1 0
+hotkeys :: tests\hotkeys.rs 2 0
+install :: tests\install.rs 12 0
+keyboard :: tests\keyboard.rs 19 0
+launcher_settings :: tests\launcher_settings.rs 27 0
+npm :: tests\npm.rs 1 0
+open_pane :: tests\open_pane.rs 12 0
+repositories :: tests\repositories.rs 1 0
+runtime_crash :: tests\runtime_crash.rs 1 0
+settings :: tests\settings.rs 62 0
+settings_search :: tests\settings_search.rs 8 0
+shortcuts :: tests\shortcuts.rs 24 0
+tray :: tests\tray.rs 9 0
+unresponsive :: tests\unresponsive.rs 1 0
+update :: tests\update.rs 1 0
+window :: tests\window.rs 101 0
+pane_core :: unittests src\lib.rs 222 0
+aliases :: tests\aliases.rs 27 0
+application_adapters :: tests\application_adapters.rs 9 0
+application_cache :: tests\application_cache.rs 4 0
+application_update :: tests\application_update.rs 12 0
+applications :: tests\applications.rs 13 0
+calculator :: tests\calculator.rs 14 0
+clear_cache :: tests\clear_cache.rs 21 0
+clipboard :: tests\clipboard.rs 66 0
+clipboard_adapter :: tests\clipboard_adapter.rs 1 0
+clipboard_adapter_linux :: tests\clipboard_adapter_linux.rs 0 0
+clipboard_adapter_macos :: tests\clipboard_adapter_macos.rs 0 0
+clipboard_view :: tests\clipboard_view.rs 11 0
+command_search :: tests\command_search.rs 18 0
+dependencies :: tests\dependencies.rs 26 0
+develop :: tests\develop.rs 19 0
+develop_builds :: tests\develop_builds.rs 4 0
+disable :: tests\disable.rs 36 0
+disable_dependents :: tests\disable_dependents.rs 9 0
+files :: tests\files.rs 20 0
+helpers :: tests\helpers.rs 44 0
+hotkey_adapters :: tests\hotkey_adapters.rs 2 0
+hotkeys :: tests\hotkeys.rs 21 0
+installer :: tests\installer.rs 11 0
+launcher :: tests\launcher.rs 34 0
+npm :: tests\npm.rs 29 0
+operations :: tests\operations.rs 34 0
+packages :: tests\packages.rs 27 0
+pausing :: tests\pausing.rs 20 0
+quick_slots :: tests\quick_slots.rs 14 0
+quicklinks :: tests\quicklinks.rs 8 0
+reload :: tests\reload.rs 16 0
+repositories :: tests\repositories.rs 18 0
+result_actions :: tests\result_actions.rs 9 0
+runtime_cache :: tests\runtime_cache.rs 2 0
+runtime_crash :: tests\runtime_crash.rs 4 0
+samples :: tests\samples.rs 67 0
+schedules :: tests\schedules.rs 42 0
+search :: tests\search.rs 22 0
+services :: tests\services.rs 45 0
+stopping :: tests\stopping.rs 18 0
+uninstall :: tests\uninstall.rs 57 0
+uninstall_dependents :: tests\uninstall_dependents.rs 12 0
+unresponsive :: tests\unresponsive.rs 5 0
+update :: tests\update.rs 18 0
+doc pane 0 0
+doc pane_core 0 0

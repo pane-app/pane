@@ -10,11 +10,14 @@
 //! Appearance page chooses repaints both, without a restart, and what the
 //! General page chooses — today, the Open Pane hotkey and whether Pane
 //! starts at login — reaches the platform through the same entity. Its shell is
-//! the reference's Settings composition: the frost panel with the custom
-//! titlebar where the platform hides its own (macOS's traffic lights,
-//! Windows's caption buttons; Linux keeps the window manager's frame), a
-//! sidebar of sections with the search field above them ([`search`]),
-//! and the selected page's content.
+//! the reference's Settings board (#97, [`crate::ui::settings_shell`]): the
+//! 1120×720 panel at the board's own glass tint, the 48px custom titlebar
+//! where the platform hides its own (macOS's traffic lights; on Windows,
+//! Pane's caption buttons in place of the board's lone close glyph; Linux
+//! keeps the window manager's frame), the 232px sidebar of section items
+//! with the search field above them ([`search`]), and the selected page,
+//! which opens with its heading block. The shell module documents the
+//! policy for windows smaller than the board.
 //!
 //! ## Section transitions
 //!
@@ -31,7 +34,7 @@
 //!
 //! ## Page registration
 //!
-//! A page is one [`Page`]: its sidebar entry (title, description, icon),
+//! A page is one [`Page`]: its sidebar entry (title, description, glyph),
 //! a function that draws its content, the settings it offers the
 //! sidebar's search (see [`search`]), and the focus it gives a control
 //! the search jumps to — registered by pushing it in
@@ -58,21 +61,23 @@ use gpui::WindowControlArea;
 use pane_core::Launcher;
 
 use crate::ui;
-use crate::ui::icon::{Glyph, IconTone};
+use crate::ui::icon::Glyph;
 // The caption buttons' glyph painter, Windows-only like the buttons it
 // draws; the import follows the same gate so it is not unused elsewhere.
 #[cfg(target_os = "windows")]
 use crate::ui::icon::glyph;
 use crate::ui::motion;
-use crate::ui::result_row::{RowContent, result_row};
+use crate::ui::settings_shell::{self, SidebarItem};
 use crate::{FocusNext, FocusPrevious};
 
-mod about;
-mod appearance;
-mod extensions;
-mod general;
-mod keyboard;
-mod launcher;
+// The pages the visual workbench's fixture draws through their own
+// compositions (#98, #99) are visible to it.
+pub(crate) mod about;
+pub(crate) mod appearance;
+pub(crate) mod extensions;
+pub(crate) mod general;
+pub(crate) mod keyboard;
+pub(crate) mod launcher;
 mod search;
 mod shortcuts;
 
@@ -112,6 +117,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
             Some(CONTEXT),
         ),
     ]);
+    appearance::bind_keys(cx);
     general::bind_keys(cx);
     search::bind_keys(cx);
     shortcuts::bind_keys(cx);
@@ -146,6 +152,9 @@ pub struct SettingsWindow {
     focus: FocusHandle,
     /// The About page's state, owned by its module.
     about: about::State,
+    /// The Appearance page's state (its segments' focus), owned by its
+    /// module.
+    appearance: appearance::State,
     /// The General page's state, owned by its module.
     general: general::State,
     /// The Launcher page's state, owned by its module.
@@ -222,6 +231,7 @@ impl SettingsWindow {
             arriving: None,
             focus,
             about: about::State::default(),
+            appearance: appearance::State::new(cx),
             general: general::State::new(cx),
             launcher_page: launcher::State::new(window, cx),
             shortcuts: shortcuts::State::new(launcher, cx),
@@ -292,29 +302,26 @@ impl SettingsWindow {
                 .enumerate()
                 .map(|(index, page)| {
                     let selected = index == self.selected;
-                    // Presentation only: the shared row paints the chrome, and
-                    // the identity, accessibility and click behavior are
-                    // attached here.
-                    result_row(
-                        RowContent {
-                            title: page.title.into(),
-                            subtitle: None,
-                            unavailable_reason: None,
-                            unavailable_id: ("section-unavailable", index).into(),
+                    // Presentation only: the sidebar's own item paints the
+                    // chrome — its washes change at once, as the
+                    // reference's `.nav` does — and the identity,
+                    // accessibility and click behavior are attached here.
+                    settings_shell::sidebar_item(
+                        SidebarItem {
+                            label: page.title.into(),
+                            glyph: page.icon,
+                            detail: None,
+                            reason: None,
+                            count: page
+                                .count
+                                .map(|count| count(&self.launcher))
+                                .filter(|&count| count > 0)
+                                .map(|count| count.to_string().into()),
                             selected,
-                            icon: Some(page.icon),
                         },
                         theme,
                     )
                     .id(("section", index))
-                    // Pressed: the selected wash, one rung above the
-                    // hover one, fading on the shared pointer span — and
-                    // only while the section is unselected, so the
-                    // sidebar's selected wash lands at once.
-                    .when(!selected, |row| {
-                        row.active(|row| row.bg(theme.row_selected))
-                            .transitions(|fades| fades.bg(crate::ui::motion::pointer_fade()))
-                    })
                     .debug_selector(move || format!("section-{}", page.title))
                     .role(Role::ListBoxOption)
                     .aria_label(page.title)
@@ -334,38 +341,25 @@ impl SettingsWindow {
                 })
                 .collect()
         };
-        div()
-            .flex_none()
-            .w(px(200.))
-            .h_full()
-            .flex()
-            .flex_col()
-            .p(px(8.))
-            .gap(px(2.))
-            .border_r_1()
-            .border_color(theme.hairline_soft)
-            .child(search::field(self, theme, cx))
-            .child(
-                div()
-                    .id("sections")
-                    .debug_selector(|| "sections".into())
-                    .flex_1()
-                    .min_h(px(0.))
-                    .overflow_y_scroll()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .track_focus(&self.focus)
-                    .role(Role::ListBox)
-                    .aria_label(if searching {
-                        "Settings search results"
-                    } else {
-                        "Settings sections"
-                    })
-                    .on_action(cx.listener(Self::next_section))
-                    .on_action(cx.listener(Self::previous_section))
-                    .children(rows),
-            )
+        // The sidebar's sections scroll inside it when the window is short,
+        // independent of the page (see the shell's smaller-window policy).
+        let sections = settings_shell::section_list(theme)
+            .id("sections")
+            .debug_selector(|| "sections".into())
+            .overflow_y_scroll()
+            .track_focus(&self.focus)
+            .role(Role::ListBox)
+            .aria_label(if searching {
+                "Settings search results"
+            } else {
+                "Settings sections"
+            })
+            .on_action(cx.listener(Self::next_section))
+            .on_action(cx.listener(Self::previous_section))
+            .children(rows);
+        let field = search::field(self, theme, cx);
+        let sidebar = settings_shell::sidebar(field, sections, theme);
+        sidebar.debug_selector(|| "settings-sidebar".into())
     }
 
     /// The selected page's content, scrolling when the window is short.
@@ -424,18 +418,13 @@ impl SettingsWindow {
         if arriving.is_some() {
             window.request_animation_frame();
         }
-        div()
+        // The board's page padding, inside a viewport that scrolls on its
+        // own, independent of the sidebar.
+        settings_shell::page_viewport(theme)
             .id("settings-page")
             .debug_selector(|| "settings-page".into())
-            .flex_1()
-            .min_w(px(0.))
-            .h_full()
             .overflow_y_scroll()
             .track_scroll(self.search.scroll())
-            .px(px(28.))
-            .py(px(20.))
-            .text_size(theme.typography.row_subtitle_size)
-            .text_color(theme.text_body)
             .child(motion::arriving_page(content, arriving))
     }
 }
@@ -451,37 +440,52 @@ impl Render for SettingsWindow {
         let visuals = crate::settings::visuals(cx);
         let theme = visuals.theme;
         let material = visuals.material;
-        // The content: the shared Geist family and base text color on
-        // everything, the custom titlebar where the platform's is hidden,
-        // then the sidebar and the selected page.
-        let content = div()
+        // The window's root carries its key context and actions; the
+        // shell — titlebar, sidebar and selected page — is laid out on it
+        // by [`compose`].
+        let root = div()
             .key_context(CONTEXT)
             .on_action(cx.listener(Self::focus_next))
             .on_action(cx.listener(Self::focus_previous))
             .on_action(cx.listener(Self::search_focus))
-            .on_action(cx.listener(Self::close_settings))
-            .size_full()
-            .flex()
-            .flex_col()
-            .font_family(theme.typography.family.clone())
-            .text_color(theme.text_title);
-        // The titlebar exists only on the platforms whose own is hidden
-        // (see [`titlebar`]), so the child is added under the same
-        // compile-time gate — `cfg!` would leave the call compiled on
-        // Linux, where the function does not exist.
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        let content = content.child(titlebar(&theme));
-        let content = content.child(
-            div()
-                .flex_1()
-                .min_h(px(0.))
-                .flex()
-                .flex_row()
-                .child(self.render_sidebar(&theme, cx))
-                .child(self.render_page(&theme, window, cx)),
-        );
-        material.panel(&theme, content)
+            .on_action(cx.listener(Self::close_settings));
+        compose(
+            root,
+            self.render_sidebar(&theme, cx),
+            self.render_page(&theme, window, cx),
+            &theme,
+            material,
+        )
     }
+}
+
+/// The Settings window's composition, which the visual workbench's
+/// fixture draws too: `root` — the window's key context and actions —
+/// made the shell's column, with the shared Geist family and base text
+/// color on everything, the custom titlebar where the platform hides its
+/// own, then `sidebar` beside `page`, on the Settings panel.
+pub(crate) fn compose(
+    root: Div,
+    sidebar: impl IntoElement,
+    page: impl IntoElement,
+    theme: &ui::theme::Theme,
+    material: ui::material::Material,
+) -> Div {
+    let content = root
+        .size_full()
+        .flex()
+        .flex_col()
+        .font_family(theme.typography.family.clone())
+        .font_features(theme.typography.features.clone())
+        .text_color(theme.text_title);
+    // The titlebar exists only on the platforms whose own is hidden (see
+    // [`titlebar`]), so the child is added under the same compile-time
+    // gate — `cfg!` would leave the call compiled on Linux, where the
+    // function does not exist.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    let content = content.child(titlebar(theme));
+    let content = content.child(settings_shell::body(sidebar, page));
+    material.settings_panel(theme, content)
 }
 
 /// The custom titlebar, drawn only where the platform's own titlebar is
@@ -495,29 +499,33 @@ impl Render for SettingsWindow {
 /// pointer, so a drag region wrapping the buttons would swallow them.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn titlebar(theme: &ui::theme::Theme) -> Div {
-    let titlebar = div()
-        .flex_none()
-        .flex()
-        .h(px(44.))
-        .items_center()
-        .gap(px(8.));
+    let titlebar = settings_shell::titlebar(theme);
+    let titlebar = titlebar.debug_selector(|| "settings-titlebar".into());
     // macOS: clear of the traffic lights, which stay where AppKit puts
     // them over the transparent titlebar.
     #[cfg(target_os = "macos")]
     let titlebar = titlebar.child(div().flex_none().w(px(78.)));
+    // Windows: the label centers over the whole window, as the board's
+    // does — the drag region starts as far in from the left as the
+    // caption buttons reach in from the right.
+    #[cfg(target_os = "windows")]
+    let inset = theme.geometry.settings.caption_width * 3.;
+    #[cfg(not(target_os = "windows"))]
+    let inset = px(0.);
+    let label = settings_shell::titlebar_label("Settings", theme);
     let titlebar = titlebar.child(
         // The one place to grab the window by, outside the page and
         // the sidebar.
         div()
             .flex_1()
             .min_w(px(0.))
+            .h_full()
             .window_control_area(WindowControlArea::Drag)
-            .px(px(16.))
-            .truncate()
-            .text_size(theme.typography.row_title_size)
-            .font_weight(theme.typography.medium)
-            .text_color(theme.text_title)
-            .child("Settings"),
+            .pl(inset)
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(label.debug_selector(|| "settings-title".into())),
     );
     // Windows: the caption buttons, marked with the platform's window
     // control areas so the hit test routes them to the system's real
@@ -540,6 +548,7 @@ fn titlebar(theme: &ui::theme::Theme) -> Div {
 fn window_controls(theme: &ui::theme::Theme) -> Div {
     div()
         .flex_none()
+        .h_full()
         .flex()
         .child(control_button(
             "window-minimize",
@@ -579,6 +588,7 @@ fn control_button(
     activate: fn(&mut Window),
     theme: &ui::theme::Theme,
 ) -> impl IntoElement {
+    let glyph_size = theme.geometry.settings.caption_glyph;
     div()
         .id(id)
         .debug_selector(move || id.into())
@@ -586,7 +596,10 @@ fn control_button(
         .flex()
         .items_center()
         .justify_center()
-        .size(px(44.))
+        // The platform's caption button: 46 wide, the titlebar's height
+        // above its rule.
+        .w(theme.geometry.settings.caption_width)
+        .h_full()
         .window_control_area(area)
         .role(Role::Button)
         .aria_label(label)
@@ -608,7 +621,7 @@ fn control_button(
             button.active(|button| button.bg(theme.row_selected))
         })
         .transitions(|fades| fades.bg(crate::ui::motion::pointer_fade()))
-        .child(glyph(mark, px(16.), theme.text_title))
+        .child(glyph(mark, glyph_size, theme.text_title))
 }
 
 /// Opens Pane's Settings window, or focuses the one already open: the
@@ -630,15 +643,22 @@ pub(crate) fn open(launcher: &Launcher, cx: &mut App) -> WindowHandle<SettingsWi
             return open;
         }
     }
-    // The window is the reference's settings composition: as wide as the
-    // launcher, tall enough for the sidebar and the page, with the same
-    // frost background, a floor that keeps the layout usable at small
-    // sizes and display scaling, and the custom titlebar where the
-    // platform hides its own.
-    let bounds = Bounds::centered(None, size(px(740.), px(530.)), cx);
+    // The window is the reference's Settings board: 1120×720, or the
+    // primary display's work area less a margin where that is smaller,
+    // with the frost background, a floor that keeps every control
+    // reachable at small sizes and display scaling, and the custom
+    // titlebar where the platform hides its own. See the shell module
+    // for the smaller-window policy.
+    let work_area = cx
+        .primary_display()
+        .map(|display| display.visible_bounds().size)
+        .map(|area| (f32::from(area.width), f32::from(area.height)));
+    let (width, height) = settings_shell::opening_size(work_area);
+    let (min_width, min_height) = settings_shell::SETTINGS_MINIMUM;
+    let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
-        window_min_size: Some(size(px(560.), px(400.))),
+        window_min_size: Some(size(px(min_width), px(min_height))),
         window_background: crate::settings::window_background(cx),
         titlebar: Some(TitlebarOptions {
             title: Some("Settings".into()),
@@ -676,8 +696,12 @@ pub(crate) struct Page {
     /// What the page is, in one line: the description its entry in the
     /// sidebar's search carries, matched beside the page's title.
     pub(crate) about: &'static str,
-    /// The icon the sidebar entry shows.
-    pub(crate) icon: (IconTone, Glyph),
+    /// The 16px glyph the sidebar entry shows.
+    pub(crate) icon: Glyph,
+    /// The count the sidebar entry shows at its right end, read live, if
+    /// the page has one (the Extensions page's installed extensions, as
+    /// the reference counts its plugins); none shows while it is zero.
+    pub(crate) count: Option<fn(&Launcher) -> usize>,
     /// Draws the page's content into the page area; the window hands
     /// itself over, since a page's state lives in its module, held by the
     /// window as a field.

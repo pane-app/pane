@@ -172,7 +172,11 @@ impl LauncherWindow {
                     .absolute()
                     .size_full(),
             );
-        let view = div()
+        // The host's frame (#99): the field's ring at the frame's radius,
+        // layout-free, the focus color while the view has the keyboard;
+        // the drawing inside keeps the colors its extension gave it.
+        let ring = crate::ui::controls::well_shadows(true, &visuals.theme);
+        let view = crate::ui::controls::frame(&visuals.theme)
             .id("custom-view")
             .key_context(CONTEXT)
             .track_focus(&controls.focus)
@@ -218,11 +222,7 @@ impl LauncherWindow {
                         .ok();
                 }
             })
-            .p_1()
-            .rounded_md()
-            .border_1()
-            .border_color(visuals.theme.hairline)
-            .focus(|node| node.border_color(visuals.theme.focus_ring))
+            .focus(move |node| node.shadow(ring))
             .child(drawing);
         // Fills the body, like the list and the form, so the status line
         // stays at the bottom.

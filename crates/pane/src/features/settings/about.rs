@@ -35,14 +35,16 @@ use std::future::Future;
 
 use gpui::{
     AnyElement, App, ClipboardItem, Context, Div, Hsla, Role, SharedString, Stateful, Window, div,
-    prelude::*, px,
+    prelude::*,
 };
 use pane_core::{ApplicationUpdate, Status};
 
 use super::{Page, SettingsWindow, search};
 use crate::app::launcher_changed_outside;
-use crate::ui::icon::{Glyph, IconTone};
-use crate::ui::result_row::{RowContent, result_row};
+use crate::ui::controls::{self, status_note};
+use crate::ui::icon::Glyph;
+use crate::ui::settings_shell;
+use crate::ui::theme::Theme;
 
 /// The documentation entry's address: Pane's repository, whose README is
 /// the documentation of this build.
@@ -52,13 +54,32 @@ const DOCUMENTATION: &str = "https://github.com/hoangvu12/pane";
 /// search jumps to (see [`entries`]).
 const DOCUMENTATION_ROW: &str = "documentation";
 
+/// The page's heading.
+pub(crate) const TITLE: &str = "About";
+
+/// What the page is, in one line: its sidebar entry's description in
+/// the search, and its heading's subtitle.
+pub(crate) const ABOUT: &str = "Pane's version, documentation and diagnostics";
+
+/// What the page's sections say under their labels.
+pub(crate) const VERSION_NOTE: &str = "The version of this Pane build";
+pub(crate) const DOCUMENTATION_NOTE: &str = "Open Pane's repository documentation";
+pub(crate) const DIAGNOSTICS_NOTE: &str = "Copy what Pane knows of this installation";
+
+/// The buttons' labels.
+pub(crate) const CHECK_LABEL: &str = "Check for updates";
+pub(crate) const DOCUMENTATION_LABEL: &str = "Open documentation";
+pub(crate) const DIAGNOSTICS_LABEL: &str = "Copy diagnostics";
+pub(crate) const COPIED: &str = "Copied the diagnostics to the clipboard";
+
 /// The About page, registered last in the window's page list: the spec's
 /// section order names it the last of the seven.
 pub(crate) fn page() -> Page {
     Page {
         title: "About",
-        about: "Pane's version, documentation and diagnostics",
-        icon: (IconTone::Command, Glyph::Gear),
+        about: ABOUT,
+        icon: Glyph::Gear,
+        count: None,
         render,
         search: entries,
         focus,
@@ -128,7 +149,6 @@ fn render(
     cx: &mut Context<SettingsWindow>,
 ) -> AnyElement {
     let theme = crate::settings::visuals(cx).theme;
-    let typography = &theme.typography;
     let opened = this.about.opened.clone();
     let copied = this.about.copied;
     // The update flow's state, read from the same records the root rows
@@ -218,257 +238,253 @@ fn render(
             Action::None,
         ),
     };
-    // The update section's row, from the action the state offers. Each
-    // row's subtitle is also its accessible description, as root search's
-    // rows' are, so what a row explains is read, not only painted.
-    let update_row = match action {
-        Action::None => None,
-        Action::Check => Some(
-            result_row(
-                RowContent {
-                    title: "Check for updates".into(),
-                    subtitle: Some(
-                        "Read the artifact source's index for a newer version of Pane".into(),
-                    ),
-                    unavailable_reason: None,
-                    unavailable_id: "about-check-unavailable".into(),
-                    selected: false,
-                    icon: Some((IconTone::Command, Glyph::Download)),
-                },
-                &theme,
-            )
-            .id("about-check-update")
-            // Pressed: the selected wash, one rung above the hover one,
-            // fading on the shared pointer span.
-            .active(|row| row.bg(theme.row_selected))
-            .transitions(|fades| fades.bg(crate::ui::motion::pointer_fade()))
-            .debug_selector(|| "about-check-update".into())
-            .role(Role::Button)
-            .aria_label("Check for updates")
-            .aria_description("Read the artifact source's index for a newer version of Pane")
-            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+    let view = AboutView {
+        version: crate::APP_VERSION.to_owned(),
+        update_status,
+        update_tone,
+        action,
+        opened: opened.map(|opened| match opened {
+            Ok(()) => (format!("Opened {DOCUMENTATION}").into(), theme.success),
+            Err(why) => (
+                format!("Could not open the documentation: {why}").into(),
+                theme.danger,
+            ),
+        }),
+        copied,
+    };
+    let documentation = this.search_anchor(DOCUMENTATION_ROW);
+    compose(&view, &theme, |control, element| match control {
+        AboutControl::Check => {
+            element.on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
                 this.about.started = Some(Started::Check);
                 run(this.launcher.check_application_update_again(), cx);
-            })),
-        ),
-        Action::Update(version) => {
-            let row_title = format!("Update Pane to {version}");
-            Some(
-                result_row(
-                    RowContent {
-                        title: row_title.clone().into(),
-                        // The root row's own explanation of what
-                        // installing does, so both entry points say the
-                        // same thing.
-                        subtitle: Some(
-                            "Your extensions and settings are kept; the new version is used \
-                             the next time Pane starts"
-                                .into(),
-                        ),
-                        unavailable_reason: None,
-                        unavailable_id: "about-update-unavailable".into(),
-                        selected: false,
-                        icon: Some((IconTone::Command, Glyph::Download)),
-                    },
-                    &theme,
-                )
-                .id("about-update")
-                // Pressed: the selected wash, one rung above the hover
-                // one, fading on the shared pointer span.
-                .active(|row| row.bg(theme.row_selected))
-                .transitions(|fades| fades.bg(crate::ui::motion::pointer_fade()))
-                .debug_selector(|| "about-update".into())
-                .role(Role::Button)
-                .aria_label(row_title)
-                .aria_description(
-                    "Your extensions and settings are kept; the new version is used the next \
-                     time Pane starts",
-                )
-                .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                    this.about.started = Some(Started::Install);
-                    run(this.launcher.install_application_update(), cx);
-                })),
-            )
+            }))
         }
-    };
-
-    div()
-        .id("about")
-        .debug_selector(|| "about".into())
-        .flex()
-        .flex_col()
-        .gap(px(4.))
-        .child(
-            div()
-                .id("about-title")
-                .debug_selector(|| "about-title".into())
-                .pb(px(8.))
-                .text_size(typography.search_size)
-                .font_weight(typography.medium)
-                .text_color(theme.text_title)
-                .child("About"),
-        )
-        .child(
-            // The version row: what this build runs, as `pane --version`
-            // prints it. A labelled node, so assistive technology reads
-            // the version rather than passing it by.
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(2.))
-                .py(px(10.))
-                .child(
-                    div()
-                        .id("about-version")
-                        .debug_selector(|| "about-version".into())
-                        .role(Role::Label)
-                        .aria_label(format!("Pane {}", crate::APP_VERSION))
-                        .aria_description("The version of this Pane build")
-                        .text_size(typography.row_title_size)
-                        .font_weight(typography.medium)
-                        .text_color(theme.text_title)
-                        .child(format!("Pane {}", crate::APP_VERSION)),
-                )
-                .child(
-                    div()
-                        .text_size(typography.row_subtitle_size)
-                        .text_color(theme.text_muted)
-                        .child("The version of this Pane build"),
-                ),
-        )
-        // The update flow: the status of the check, the offer and the
-        // install, with the row that acts on it — a second surface of the
-        // root rows' own flow (see the module docs).
-        .child(label("Updates", &theme))
-        .child(
-            div()
-                .id("about-update-status")
-                .debug_selector(|| "about-update-status".into())
-                .role(Role::Status)
-                .aria_label(update_status.clone())
-                .text_size(typography.row_subtitle_size)
-                .text_color(update_tone)
-                .child(update_status),
-        )
-        .when_some(update_row, |page, row| page.child(row))
-        // The documentation entry: a navigation row like the launcher's
-        // results, opening Pane's repository with the launcher's link
-        // opener.
-        .child(label("Documentation", &theme))
-        .child(
-            result_row(
-                RowContent {
-                    title: "Documentation".into(),
-                    subtitle: Some("Open Pane's repository documentation".into()),
-                    unavailable_reason: None,
-                    unavailable_id: "about-unavailable".into(),
-                    selected: false,
-                    icon: Some((IconTone::Web, Glyph::Globe)),
-                },
-                &theme,
-            )
-            .id("about-documentation")
-            // Pressed: the selected wash, one rung above the hover one,
-            // fading on the shared pointer span.
-            .active(|row| row.bg(theme.row_selected))
-            .transitions(|fades| fades.bg(crate::ui::motion::pointer_fade()))
-            .debug_selector(|| "about-documentation".into())
-            .anchor_scroll(Some(this.search_anchor(DOCUMENTATION_ROW)))
-            .role(Role::Link)
-            .aria_label("Documentation")
-            .aria_description("Open Pane's repository documentation")
-            .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                // A system handler may take a moment to start, so the
-                // opening happens off the window's thread; what it
-                // reports becomes the page's status.
-                let links = this.launcher.link_opener();
-                cx.spawn(async move |this, cx| {
-                    let opened = cx
-                        .background_executor()
-                        .spawn(async move { links.open(DOCUMENTATION) })
-                        .await;
-                    this.update(cx, |this, cx| {
-                        this.about.record(opened);
-                        cx.notify();
+        AboutControl::Update => {
+            element.on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                this.about.started = Some(Started::Install);
+                run(this.launcher.install_application_update(), cx);
+            }))
+        }
+        AboutControl::Documentation => {
+            element
+                .anchor_scroll(Some(documentation.clone()))
+                .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                    // A system handler may take a moment to start, so the
+                    // opening happens off the window's thread; what it
+                    // reports becomes the page's status.
+                    let links = this.launcher.link_opener();
+                    cx.spawn(async move |this, cx| {
+                        let opened = cx
+                            .background_executor()
+                            .spawn(async move { links.open(DOCUMENTATION) })
+                            .await;
+                        this.update(cx, |this, cx| {
+                            this.about.record(opened);
+                            cx.notify();
+                        })
+                        .ok();
                     })
-                    .ok();
-                })
-                .detach();
-            })),
-        )
-        .when_some(opened, |page, opened| {
-            let (text, color): (SharedString, Hsla) = match &opened {
-                Ok(()) => (format!("Opened {DOCUMENTATION}").into(), theme.success),
-                Err(why) => (
-                    format!("Could not open the documentation: {why}").into(),
-                    theme.danger,
-                ),
-            };
-            page.child(
-                div()
-                    .id("about-status")
-                    .debug_selector(|| "about-status".into())
-                    .pt(px(10.))
-                    .role(Role::Status)
-                    .aria_label(text.clone())
-                    .text_size(typography.row_subtitle_size)
-                    .text_color(color)
-                    .child(text),
-            )
-        })
-        // The diagnostics: what Pane already knows of this installation,
-        // copied to this computer's clipboard by the user's explicit
-        // choice (see the module docs).
-        .child(label("Diagnostics", &theme))
-        .child(
-            result_row(
-                RowContent {
-                    title: "Copy diagnostics".into(),
-                    subtitle: Some("Copy what Pane knows of this installation".into()),
-                    unavailable_reason: None,
-                    unavailable_id: "about-diagnostics-unavailable".into(),
-                    selected: false,
-                    icon: Some((IconTone::Command, Glyph::Copy)),
-                },
-                &theme,
-            )
-            .id("about-diagnostics")
-            // Pressed: the selected wash, one rung above the hover one,
-            // fading on the shared pointer span.
-            .active(|row| row.bg(theme.row_selected))
-            .transitions(|fades| fades.bg(crate::ui::motion::pointer_fade()))
-            .debug_selector(|| "about-diagnostics".into())
-            .role(Role::Button)
-            .aria_label("Copy diagnostics")
-            .aria_description("Copy what Pane knows of this installation")
-            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                    .detach();
+                }))
+        }
+        AboutControl::Diagnostics => {
+            element.on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
                 // The report is what the launcher holds as of this click,
-                // not as of the frame that drew the row.
+                // not as of the frame that drew the button.
                 let report = diagnostics(&this.launcher.application_update());
                 cx.write_to_clipboard(ClipboardItem::new_string(report));
                 this.about.copied = true;
                 cx.notify();
-            })),
-        )
-        .when(copied, |page| {
-            page.child(
-                div()
-                    .id("about-diagnostics-status")
-                    .debug_selector(|| "about-diagnostics-status".into())
-                    .pt(px(10.))
-                    .role(Role::Status)
-                    .aria_label("Copied the diagnostics to the clipboard")
-                    .text_size(typography.row_subtitle_size)
-                    .text_color(theme.success)
-                    .child("Copied the diagnostics to the clipboard"),
-            )
-        })
-        .into_any_element()
+            }))
+        }
+    })
+    .into_any_element()
 }
 
-/// The update section's row, as the page offers it to the user.
-enum Action {
-    /// No row: nothing to check against, or work already running.
+/// What the About page shows, as plain values: what [`render`] reads from
+/// the launcher and the page's own state, and what the visual workbench's
+/// fixture supplies to draw the same page (#99).
+pub(crate) struct AboutView {
+    /// The running version, as `pane --version` prints it.
+    pub(crate) version: String,
+    /// What the update section says, and in which tone.
+    pub(crate) update_status: SharedString,
+    pub(crate) update_tone: Hsla,
+    /// The update section's button, if it offers one.
+    pub(crate) action: Action,
+    /// What opening the documentation last reported, in its tone.
+    pub(crate) opened: Option<(SharedString, Hsla)>,
+    /// Whether the diagnostics were copied.
+    pub(crate) copied: bool,
+}
+
+/// Which of the About page's controls an element is, for the caller of
+/// [`compose`] that attaches its behavior.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AboutControl {
+    /// "Check for updates".
+    Check,
+    /// "Update Pane to <version>".
+    Update,
+    /// The documentation's button.
+    Documentation,
+    /// "Copy diagnostics".
+    Diagnostics,
+}
+
+/// The About page's composition, which the visual workbench's fixture
+/// draws too: the heading block, then in the page's column a field group
+/// per section (#99) — the version, the updates (the status and the
+/// button the state offers), the documentation and the diagnostics, each
+/// action a Settings button — with what each last reported. `attach` adds
+/// each button's behavior; the composition gives each its identity, its
+/// accessibility and its look.
+pub(crate) fn compose(
+    view: &AboutView,
+    theme: &Theme,
+    attach: impl Fn(AboutControl, Stateful<Div>) -> Stateful<Div>,
+) -> Stateful<Div> {
+    // The version: what this build runs, as `pane --version` prints it. A
+    // labelled node, so assistive technology reads the version rather than
+    // passing it by.
+    let name = format!("Pane {}", view.version);
+    let version = controls::field(theme)
+        .child(
+            controls::field_label(name.clone(), theme)
+                .id("about-version")
+                .debug_selector(|| "about-version".into())
+                .role(Role::Label)
+                .aria_label(name)
+                .aria_description(VERSION_NOTE),
+        )
+        .child(controls::field_description(
+            VERSION_NOTE,
+            theme.text_muted,
+            theme,
+        ));
+    // The update flow: the status of the check, the offer and the install,
+    // with the button that acts on it — a second surface of the root rows'
+    // own flow (see the module docs). Each button's explanation is also its
+    // accessible description, as root search's rows' subtitles are.
+    let update_button = match &view.action {
+        Action::None => None,
+        Action::Check => Some(attach(
+            AboutControl::Check,
+            action_button(
+                "about-check-update",
+                CHECK_LABEL,
+                "Read the artifact source's index for a newer version of Pane",
+                theme,
+            ),
+        )),
+        Action::Update(version) => {
+            let title = format!("Update Pane to {version}");
+            Some(attach(
+                AboutControl::Update,
+                action_button(
+                    "about-update",
+                    &title,
+                    "Your extensions and settings are kept; the new version is used the next \
+                     time Pane starts",
+                    theme,
+                ),
+            ))
+        }
+    };
+    let updates = controls::field(theme)
+        .child(label("Updates", theme))
+        .child(
+            controls::field_description(view.update_status.clone(), view.update_tone, theme)
+                .id("about-update-status")
+                .debug_selector(|| "about-update-status".into())
+                .role(Role::Status)
+                .aria_label(view.update_status.clone()),
+        )
+        .children(update_button.map(|button| div().flex().child(button)));
+    // The documentation: Pane's repository, opened with the launcher's
+    // link opener, and what the opening reported.
+    let documentation = controls::field(theme)
+        .child(label("Documentation", theme))
+        .child(controls::field_description(
+            DOCUMENTATION_NOTE,
+            theme.text_muted,
+            theme,
+        ))
+        .child(
+            div().flex().child(attach(
+                AboutControl::Documentation,
+                controls::button(DOCUMENTATION_LABEL, true, theme)
+                    .id("about-documentation")
+                    .debug_selector(|| "about-documentation".into())
+                    .role(Role::Link)
+                    .aria_label(DOCUMENTATION_LABEL)
+                    .aria_description(DOCUMENTATION_NOTE),
+            )),
+        )
+        .children(
+            view.opened
+                .as_ref()
+                .map(|(text, color)| status_note("about-status", text.clone(), *color, theme)),
+        );
+    // The diagnostics: what Pane already knows of this installation,
+    // copied to this computer's clipboard by the user's explicit choice
+    // (see the module docs).
+    let diagnostics = controls::field(theme)
+        .child(label("Diagnostics", theme))
+        .child(controls::field_description(
+            DIAGNOSTICS_NOTE,
+            theme.text_muted,
+            theme,
+        ))
+        .child(div().flex().child(attach(
+            AboutControl::Diagnostics,
+            action_button(
+                "about-diagnostics",
+                DIAGNOSTICS_LABEL,
+                DIAGNOSTICS_NOTE,
+                theme,
+            ),
+        )))
+        .children(
+            view.copied
+                .then(|| status_note("about-diagnostics-status", COPIED, theme.success, theme)),
+        );
+    let column = controls::column(theme)
+        .child(
+            settings_shell::page_header(TITLE, Some(ABOUT.into()), theme)
+                .id("about-title")
+                .debug_selector(|| "about-title".into()),
+        )
+        .child(version)
+        .child(updates)
+        .child(documentation)
+        .child(diagnostics);
+    div()
+        .id("about")
+        .debug_selector(|| "about".into())
+        .child(column)
+}
+
+/// One of the page's buttons, named `selector`: `title` is what it says
+/// (and its accessible name), `description` what it does.
+fn action_button(
+    selector: &'static str,
+    title: &str,
+    description: &'static str,
+    theme: &Theme,
+) -> Stateful<Div> {
+    controls::button(title.to_owned(), true, theme)
+        .id(selector)
+        .debug_selector(move || selector.into())
+        .role(Role::Button)
+        .aria_label(title.to_owned())
+        .aria_description(description)
+}
+
+/// The update section's button, as the page offers it to the user.
+pub(crate) enum Action {
+    /// No button: nothing to check against, or work already running.
     None,
     /// "Check for updates": the check the user asks for.
     Check,
@@ -553,16 +569,9 @@ fn update_line(update: &ApplicationUpdate) -> String {
     }
 }
 
-/// A small muted label above one of the page's groups of rows, as the
-/// other Settings pages label theirs.
-fn label(text: &'static str, theme: &crate::ui::theme::Theme) -> Stateful<Div> {
-    div()
+/// A section's field label (#99), as the board labels its fields.
+fn label(text: &'static str, theme: &Theme) -> Stateful<Div> {
+    controls::field_label(text, theme)
         .id(text)
         .debug_selector(move || format!("about-label-{text}"))
-        .pt(px(12.))
-        .pb(px(2.))
-        .text_size(theme.typography.row_subtitle_size)
-        .font_weight(theme.typography.medium)
-        .text_color(theme.text_muted)
-        .child(text)
 }

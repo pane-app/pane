@@ -11,7 +11,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
-use pane_core::{Launcher, Limits, PackageIdentity, Runtime, Status};
+use pane_core::{ComputedAnswer, Launcher, Limits, PackageIdentity, Runtime, Section, Status};
 use tempfile::TempDir;
 
 fn built(path: &str) -> PathBuf {
@@ -245,6 +245,68 @@ fn enter_on_the_answer_reports_the_copy_of_its_text() {
     assert_eq!(launcher.selected_copy(), None);
 }
 
+/// The answer's presentation (#96): what the launcher holds of it — the
+/// query it answers, without its surrounding spaces, the text Enter copies
+/// and the command that computed it — under that command's title, the
+/// title matches after it under "Results" with their own count. A title
+/// match is no answer, and a query with no answer presents none: its
+/// title matches are root search's results again.
+#[test]
+fn an_answer_is_presented_with_its_query_under_its_commands_title() {
+    let dirs = Dirs::new();
+    let launcher = dirs.launcher(dirs.runtime());
+    let sums = dirs.package(
+        "sums",
+        &manifest("Sums", "Sum 1 + 1"),
+        &built("sample_rust.wasm"),
+    );
+    install(&launcher, &sums);
+    launcher.back();
+
+    search(&launcher, "1 + 1");
+    let (view, presentation) = launcher.presented_view();
+    assert_eq!(titles(&launcher), ["2", "Sum 1 + 1"]);
+    assert_eq!(
+        presentation.rows[0].answer,
+        Some(ComputedAnswer {
+            query: "1 + 1".into(),
+            answer: "2".into(),
+            command: "Calculator".into(),
+        })
+    );
+    assert_eq!(presentation.rows[1].answer, None);
+    assert_eq!(
+        presentation.sections,
+        [
+            Section {
+                label: "Calculator".into(),
+                note: None,
+                first: 0,
+            },
+            Section {
+                label: "Results".into(),
+                note: Some("1 match".into()),
+                first: 1,
+            },
+        ]
+    );
+    // It keeps its own id and its copy action.
+    assert!(view.rows[0].id.ends_with(":answer"), "{}", view.rows[0].id);
+    assert_eq!(launcher.selected_copy().as_deref(), Some("2"));
+
+    // The query as typed, without the spaces around it.
+    search(&launcher, " 6 * 7 ");
+    let answer = launcher.presentation().rows[0].answer.clone();
+    assert_eq!(answer.map(|answer| answer.query).as_deref(), Some("6 * 7"));
+
+    // No answer: the title matches alone, under "Results".
+    search(&launcher, "1 +");
+    let presentation = launcher.presentation();
+    assert_eq!(titles(&launcher), ["Sum 1 + 1"]);
+    assert_eq!(presentation.rows[0].answer, None);
+    assert_eq!(presentation.sections[0].label, "Results");
+}
+
 #[test]
 fn an_answer_arriving_after_the_query_changed_is_discarded() {
     let dirs = Dirs::new();
@@ -354,6 +416,11 @@ fn a_command_that_fails_to_answer_is_explained_and_other_results_stay() {
     search(&launcher, "error");
     let view = launcher.view();
     assert_eq!(titles(&launcher), ["Faulty answers"]);
+    assert_eq!(
+        launcher.presentation().rows[0].answer,
+        None,
+        "a failure is explained, never presented as an answer"
+    );
     assert_eq!(
         view.rows[0].subtitle.as_deref(),
         Some("Could not answer: The extension reported an error: the guest refused the query")

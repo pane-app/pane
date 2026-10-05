@@ -526,3 +526,146 @@ fn an_unavailable_command_matches_and_explains_why_it_does_not_run() {
     assert_eq!(launcher.view().status, Status::Error(reason));
     assert_eq!(block_on(runtime.running()), Vec::<PathBuf>::new());
 }
+
+/// The presentation root search hands the window: every row a command,
+/// under one "Commands" label for a blank query — root search's own
+/// order, claiming no recent use — and under "Results" with their count
+/// for a query, each title's match where the query matched it.
+#[test]
+fn root_search_presents_its_rows_with_kinds_sections_and_title_matches() {
+    let launcher = downloads();
+    let presentation = launcher.presentation();
+    let rows = launcher.view().rows;
+    assert_eq!(presentation.rows.len(), rows.len());
+    assert_eq!(
+        presentation.sections,
+        [pane_core::Section {
+            label: "Commands".into(),
+            note: None,
+            first: 0
+        }]
+    );
+    assert!(
+        presentation
+            .rows
+            .iter()
+            .all(|row| row.kind == Some(pane_core::RowKind::Command)),
+        "{presentation:?}"
+    );
+    assert!(presentation.rows.iter().all(|row| row.matched.is_empty()));
+
+    block_on(launcher.set_query("down"));
+    let view = launcher.view();
+    let presentation = launcher.presentation();
+    assert_eq!(
+        presentation.sections,
+        [pane_core::Section {
+            label: "Results".into(),
+            note: Some(format!("{} matches", view.rows.len())),
+            first: 0
+        }]
+    );
+    for (row, shown) in view.rows.iter().zip(&presentation.rows) {
+        let matched: Vec<&str> = shown
+            .matched
+            .iter()
+            .map(|range| &row.title[range.clone()])
+            .collect();
+        if row.title.to_lowercase().contains("down") {
+            assert_eq!(matched.len(), 1, "{}", row.title);
+            assert_eq!(matched[0].to_lowercase(), "down", "{}", row.title);
+        }
+    }
+
+    let (view, presented) = launcher.presented_view();
+    assert_eq!(presented, launcher.presentation());
+    assert_eq!(view.selected, launcher.selected());
+
+    block_on(launcher.set_query("download"));
+    let presentation = launcher.presentation();
+    assert_eq!(
+        presentation.sections[0].note.as_deref(),
+        Some(format!("{} matches", launcher.view().rows.len()).as_str())
+    );
+}
+
+/// Off root search nothing is projected: Manage extensions' rows show as
+/// they always did.
+#[test]
+fn rows_off_root_search_carry_no_presentation() {
+    let dirs = Dirs::new();
+    let launcher = Launcher::with_packages(Ok(dirs.runtime()), vec![], dirs.packages_dir());
+    install(
+        &launcher,
+        &dirs.package("weather", &manifest("Weather", "Forecast", None)),
+    );
+    block_on(launcher.set_query("manage"));
+    assert_eq!(selected_title(&launcher).as_deref(), Some(MANAGE_ROW));
+    assert_eq!(
+        launcher.presentation().rows[0].kind,
+        Some(pane_core::RowKind::Command),
+        "Pane's own rows are its commands"
+    );
+    block_on(launcher.activate_selected());
+    assert!(matches!(launcher.view().screen, Screen::Extensions { .. }));
+    let presentation = launcher.presentation();
+    assert!(presentation.sections.is_empty());
+    assert_eq!(presentation.rows.len(), launcher.view().rows.len());
+    assert!(
+        presentation
+            .rows
+            .iter()
+            .all(|row| *row == pane_core::RowPresentation::default())
+    );
+}
+
+/// A computed answer's section (#96): a run of answers among a query's
+/// results sits under the title of the command that computed it, the
+/// results around it under "Results" with their own count, the
+/// fallbacks under "Fallbacks"; with no answer listed, the sections are
+/// root search's own, and a blank query's rows are its commands.
+#[test]
+fn computed_answers_sit_under_their_commands_title_and_results_keep_their_count() {
+    use pane_core::{Section, answer_sections, root_sections};
+    let section = |label: &str, note: Option<&str>, first: usize| Section {
+        label: label.into(),
+        note: note.map(Into::into),
+        first,
+    };
+
+    // The calculator's answer, two title matches, then a fallback.
+    let answers = [Some("Calculator"), None, None, None];
+    assert_eq!(
+        answer_sections("6*7", &answers, 3),
+        [
+            section("Calculator", None, 0),
+            section("Results", Some("2 matches"), 1),
+            section("Fallbacks", None, 3),
+        ]
+    );
+    // The answer alone.
+    assert_eq!(
+        answer_sections("6*7", &[Some("Calculator")], 1),
+        [section("Calculator", None, 0)]
+    );
+    // A row the alias names first, then two commands' answers.
+    let sums = Some("Sums");
+    let answers = [None, Some("Calculator"), sums, sums, None];
+    assert_eq!(
+        answer_sections("ec 1 + 1", &answers, 5),
+        [
+            section("Results", Some("1 match"), 0),
+            section("Calculator", None, 1),
+            section("Sums", None, 2),
+            section("Results", Some("1 match"), 4),
+        ]
+    );
+    // No answer: root search's own sections, whatever the query.
+    for (query, rows, fallbacks) in [("down", 3, 2), ("", 4, 4), ("zqx", 1, 0), ("zqx", 0, 0)] {
+        assert_eq!(
+            answer_sections(query, &vec![None; rows], fallbacks),
+            root_sections(query, rows, fallbacks),
+            "{query:?}"
+        );
+    }
+}

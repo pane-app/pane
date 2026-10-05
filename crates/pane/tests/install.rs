@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext, prelude::*};
+use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, prelude::*, px};
 use pane::LauncherWindow;
 use pane_core::{Launcher, LauncherView, PackageIdentity, Runtime, Screen, Status};
 use tempfile::TempDir;
@@ -272,15 +272,29 @@ fn install(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, folder: 
 }
 
 /// From root search, clicks Manage extensions… and then the row whose
-/// debug selector is `row`.
+/// debug selector is `row`. The pointer moves onto Manage extensions…
+/// first, as a user's does: root search selects the row under a moving
+/// pointer, so the click runs it, where a click with no movement before
+/// it only selects an unselected row.
 fn click_in_extension_list(
     window: &Entity<LauncherWindow>,
     cx: &mut VisualTestContext,
     row: &'static str,
 ) -> LauncherView {
-    let manage = cx.debug_bounds("row-Manage extensions…").expect("row");
-    cx.simulate_click(manage.center(), Modifiers::none());
-    settle(window, cx);
+    let manage = cx
+        .debug_bounds("row-Manage extensions…")
+        .expect("row")
+        .center();
+    for at in [manage - gpui::point(px(1.), px(0.)), manage] {
+        cx.simulate_mouse_move(at, None::<MouseButton>, Modifiers::none());
+    }
+    cx.simulate_click(manage, Modifiers::none());
+    let view = settle(window, cx);
+    assert!(
+        matches!(view.screen, Screen::Extensions { .. }),
+        "the click opened the extension list: {:?}",
+        view.screen
+    );
     let row = cx.debug_bounds(row).expect("row rendered");
     cx.simulate_click(row.center(), Modifiers::none());
     settle(window, cx)

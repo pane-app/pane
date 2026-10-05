@@ -1,0 +1,488 @@
+{
+  "kind": "pane-visual-fixture-registry",
+  "scenarios": [
+    {
+      "name": "root-rest",
+      "description": "The reference's empty query over its own fixture rows, row 0 selected",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": true,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "rest"
+        }
+      ]
+    },
+    {
+      "name": "root-hover",
+      "description": "Rest, then the pointer moves onto unselected row 1, which selects it",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": true,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "rest"
+        },
+        {
+          "action": "pointer",
+          "row": 1,
+          "nudge": 0
+        },
+        {
+          "action": "capture",
+          "name": "hover"
+        }
+      ]
+    },
+    {
+      "name": "root-selected",
+      "description": "Rest, then the selection keys move the selection to row 2, one step at a time",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": true,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "rest"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "capture",
+          "name": "down-1"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "capture",
+          "name": "selected"
+        }
+      ]
+    },
+    {
+      "name": "root-pointer-keys",
+      "description": "The pointer selects row 1; Down moves the selection to row 2 with the pointer resting on row 1, which keeps its hover wash; moving again over row 1 selects it",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": true,
+      "frame": false,
+      "steps": [
+        {
+          "action": "pointer",
+          "row": 1,
+          "nudge": 0
+        },
+        {
+          "action": "capture",
+          "name": "pointed"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "capture",
+          "name": "down-under-pointer"
+        },
+        {
+          "action": "pointer",
+          "row": 1,
+          "nudge": 6
+        },
+        {
+          "action": "capture",
+          "name": "moved-again"
+        }
+      ]
+    },
+    {
+      "name": "root-selected-hover",
+      "description": "Row 2 selected by the keys, then the pointer arrives on that selected row",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": true,
+      "frame": false,
+      "steps": [
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "capture",
+          "name": "selected"
+        },
+        {
+          "action": "pointer",
+          "row": 2,
+          "nudge": 0
+        },
+        {
+          "action": "capture",
+          "name": "selected-hover"
+        }
+      ]
+    },
+    {
+      "name": "root-focus",
+      "description": "Typing 'clip' into the focused field filters to the one matching row; Escape returns to rest",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": true,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "rest"
+        },
+        {
+          "action": "type",
+          "text": "clip"
+        },
+        {
+          "action": "capture",
+          "name": "focus-typed"
+        },
+        {
+          "action": "key",
+          "key": "escape"
+        },
+        {
+          "action": "capture",
+          "name": "back-to-rest"
+        }
+      ]
+    },
+    {
+      "name": "root-actions",
+      "description": "Down selects Clipboard History; the footer's Actions button opens its actions over the dimmed results; typing filters them to one, then to none; Escape closes the panel only",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": true,
+      "frame": false,
+      "steps": [
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "capture",
+          "name": "selected"
+        },
+        {
+          "action": "click",
+          "target": "actions-button"
+        },
+        {
+          "action": "capture",
+          "name": "open"
+        },
+        {
+          "action": "type",
+          "text": "alias"
+        },
+        {
+          "action": "capture",
+          "name": "filtered"
+        },
+        {
+          "action": "type",
+          "text": "zz"
+        },
+        {
+          "action": "capture",
+          "name": "empty"
+        },
+        {
+          "action": "key",
+          "key": "escape"
+        },
+        {
+          "action": "capture",
+          "name": "closed"
+        }
+      ]
+    },
+    {
+      "name": "actions-panel",
+      "description": "The Actions board: the query 'fig' with Figma selected and its actions open over the dimmed results",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": true,
+      "board": "actions",
+      "frame": false,
+      "steps": [
+        {
+          "action": "type",
+          "text": "fig"
+        },
+        {
+          "action": "click",
+          "target": "actions-button"
+        },
+        {
+          "action": "capture",
+          "name": "open"
+        }
+      ]
+    },
+    {
+      "name": "root-unavailable",
+      "description": "A row that cannot run here, with its reason (no reference counterpart)",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": false,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "rest"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "capture",
+          "name": "unavailable-selected"
+        }
+      ]
+    },
+    {
+      "name": "root-long-content",
+      "description": "A long title and subtitle under the row's truncation (no reference counterpart)",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": false,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "long-content"
+        }
+      ]
+    },
+    {
+      "name": "launcher-frame",
+      "description": "The launcher's frame at rest: the 760x518 panel, its inset edges and corners, and the header, list and footer boundaries",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": true,
+      "frame": true,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "frame"
+        }
+      ]
+    },
+    {
+      "name": "launcher-frame-light",
+      "description": "The same frame in the derived light appearance, at the same dimensions (no reference counterpart)",
+      "family": "root",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": false,
+      "theme": "light",
+      "frame": true,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "frame-light"
+        }
+      ]
+    },
+    {
+      "name": "launcher-frame-narrow",
+      "description": "A narrow launcher: the keys select the last row, which the list scrolls into view above the footer (no reference counterpart)",
+      "family": "root",
+      "client": [
+        480.0,
+        360.0
+      ],
+      "reference": false,
+      "frame": true,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "narrow-rest"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "capture",
+          "name": "narrow-last-selected"
+        }
+      ]
+    },
+    {
+      "name": "tile-sizes",
+      "description": "The icon tile at the row's, a pinned slot's and the Actions header's size, as an application and as a command (no reference counterpart side by side)",
+      "family": "tiles",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": false,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "tiles"
+        }
+      ]
+    },
+    {
+      "name": "keycap-windows",
+      "description": "The production key sequences for the reference's Windows chords, its accent Enter and a compact pinned hint, and rebound chords the reference never shows",
+      "family": "keycap",
+      "client": [
+        760.0,
+        518.0
+      ],
+      "reference": true,
+      "frame": false,
+      "steps": [
+        {
+          "action": "capture",
+          "name": "keycaps"
+        }
+      ]
+    }
+  ],
+  "pending": [
+    {
+      "name": "calculator-card",
+      "board": "calculator",
+      "ticket": "https://github.com/hoangvu12/pane/issues/96",
+      "description": "The computed-result card from the calculator board",
+      "client": [
+        760.0,
+        518.0
+      ]
+    },
+    {
+      "name": "empty-state",
+      "board": "empty",
+      "ticket": "https://github.com/hoangvu12/pane/issues/96",
+      "description": "The no-results notice and fallback rows from the empty board",
+      "client": [
+        760.0,
+        518.0
+      ]
+    },
+    {
+      "name": "settings-shell",
+      "board": "settings",
+      "ticket": "https://github.com/hoangvu12/pane/issues/97",
+      "description": "The Settings window shell and sidebar at the Settings board's size",
+      "client": [
+        1120.0,
+        720.0
+      ]
+    },
+    {
+      "name": "appearance-page",
+      "board": "settings",
+      "ticket": "https://github.com/hoangvu12/pane/issues/98",
+      "description": "The Appearance page's controls and live preview",
+      "client": [
+        1120.0,
+        720.0
+      ]
+    },
+    {
+      "name": "pinned-strip",
+      "board": "root",
+      "ticket": "https://github.com/hoangvu12/pane/issues/101",
+      "description": "The five pinned quick slots above the root list",
+      "client": [
+        760.0,
+        518.0
+      ]
+    },
+    {
+      "name": "clipboard-split",
+      "board": "clipboard",
+      "ticket": "https://github.com/hoangvu12/pane/issues/102",
+      "description": "The supported text clipboard history in the split view",
+      "client": [
+        940.0,
+        600.0
+      ]
+    }
+  ]
+}
