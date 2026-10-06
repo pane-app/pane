@@ -666,15 +666,25 @@ impl Launcher {
             },
             None => None,
         };
-        // Only a command or an indexed result is ever pinned.
+        // Only a command or an indexed result is ever pinned. A command is
+        // launched from its quick slot.
         let entry = match entry {
-            Some(entry @ (Entry::Open(_) | Entry::OpenApplication { .. })) => Some(entry),
+            Some(Entry::Open(mut opening)) => {
+                opening.launch.source = crate::launch::LaunchSource::QuickSlot;
+                Some(Entry::Open(opening))
+            }
+            Some(entry @ Entry::OpenApplication { .. }) => Some(entry),
             _ => None,
         };
-        if entry.is_some() {
-            // The status line is about this action from now on.
-            state.sent_from = None;
-            state.view.status = Status::Running;
+        match &entry {
+            // Root search stays while a no-view command runs.
+            Some(Entry::Open(opening)) if opening.no_view => Launcher::begin_run(state),
+            Some(_) => {
+                // The status line is about this action from now on.
+                state.sent_from = None;
+                state.view.status = Status::Running;
+            }
+            None => {}
         }
         let data = match &entry {
             // A call into the package belongs to its generation as of now.
@@ -686,7 +696,7 @@ impl Launcher {
         let launcher = self.clone();
         async move {
             match entry {
-                Some(Entry::Open(opening)) => launcher.open_command(epoch, opening, data).await,
+                Some(Entry::Open(opening)) => launcher.launch_opening(epoch, opening, data).await,
                 Some(Entry::OpenApplication { id, name }) => {
                     launcher.open_application(epoch, id, name).await
                 }

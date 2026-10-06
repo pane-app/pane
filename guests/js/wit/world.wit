@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
 // The world JS/TS commands are componentized against. It exports exactly
-// Pane's contract and imports its extension data, operations and installed
-// applications (wit/extension.wit, wit/data.wit, wit/operations.wit and
+// Pane's contract and imports launching commands, its extension data,
+// operations and installed applications (wit/extension.wit,
+// wit/commands.wit, wit/data.wit, wit/operations.wit and
 // wit/applications.wit, copied into deps/ by the build), its native helpers
 // (wit/helpers.wit), and declares the
 // WASI 0.3 imports JS source may use: a JS module can import only what this
@@ -16,7 +17,7 @@
 // A command whose package.json sets `"pane": { ... }` options also exports
 // the interfaces they name: `rootResults` (wit/root-results.wit),
 // `indexedResults` (wit/applications.wit), `operations`
-// (wit/operations.wit), `takesQuery` (wit/query.wit), `search`
+// (wit/operations.wit), `search`
 // (wit/search.wit) and `service` (wit/service.wit); `files` makes it import the granted folder's listing
 // (wit/files.wit) and `clipboardHistory` the clipboard history Pane keeps
 // for it (wit/clipboard.wit), which no other command imports. The build

@@ -9,6 +9,7 @@
       "title": "Echo",
       "subtitle": "A TypeScript command that answers the text you send it from root search",
       "component": "sample_query_ts.wasm",
+      "mode": "no-view",
       "takesQuery": true
     }
   ]

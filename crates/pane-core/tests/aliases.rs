@@ -1,9 +1,10 @@
 //! Aliases and fallbacks through the launcher's public interface: the user
 //! gives an installed command an alias, or makes it a fallback, in Manage
 //! extensions, and reaches it from root search, where the text typed is sent
-//! to a command that takes a query only when the user invokes it. The
-//! command is a real guest: Echo, the query sample from `cargo xtask
-//! guests`, in Rust, JavaScript and TypeScript alike.
+//! to a command that takes a query only when the user invokes it, as its
+//! launch record's fallback text. The command is a real guest: Echo, the
+//! query sample from `cargo xtask guests`, a no-view command, in Rust,
+//! JavaScript and TypeScript alike.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -821,20 +822,27 @@ fn a_change_that_cannot_be_kept_never_brings_back_an_uninstalled_packages_choice
     assert_eq!(titles(&launcher), Vec::<String>::new());
 }
 
+/// Echo opened from its row, with no text sent: it runs without a screen
+/// and says how to send it text.
 #[test]
-fn a_command_declaring_a_query_without_the_interface_is_refused_at_install() {
+fn enter_on_echo_runs_it_without_text_and_opens_no_screen() {
     let dirs = Dirs::new();
     let (launcher, _runtime) = dirs.launcher();
-    let folder = dirs.source("sample-settings", "settings");
-    let manifest = fs::read_to_string(folder.join("pane.json")).unwrap();
-    let manifest = manifest.replacen("\"component\"", "\"takesQuery\": true, \"component\"", 1);
-    fs::write(folder.join("pane.json"), manifest).unwrap();
-    block_on(launcher.install_package(&folder));
-    let Status::Error(error) = launcher.view().status else {
-        panic!("{:?}", launcher.view().status);
-    };
-    assert!(
-        error.contains("its manifest says it takes a query, but it does not export pane:extension/query-command@0.1.0"),
-        "{error}"
+    dirs.install(&launcher, "sample-query", "query");
+    search(&launcher, "echo");
+    activate(&launcher, "Echo");
+    assert_eq!(
+        launcher.view().status,
+        Status::Result(
+            "Echo heard nothing: give it an alias or make it a fallback in Manage extensions, \
+             then send it text from root search"
+                .into()
+        )
+    );
+    assert_eq!(
+        launcher.view().screen,
+        Screen::Root {
+            query: "echo".into()
+        }
     );
 }

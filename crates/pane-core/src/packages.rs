@@ -428,18 +428,34 @@ pub struct ManifestOperation {
     pub platforms: Option<Vec<Platform>>,
 }
 
-/// The scheduled work a command declares: the action of its component's
-/// item `item` runs every `every_seconds` seconds while the package's code
-/// may run (see `launcher/schedules`). One schedule kind: a fixed
-/// interval.
+/// The scheduled work a command declares: every `every_seconds` seconds
+/// while the package's code may run (see `launcher/schedules`), the action
+/// of its component's item `item` runs (a view command), or the command
+/// itself runs with a `background` launch (a no-view command, which names
+/// no item). One schedule kind: a fixed interval.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ManifestSchedule {
-    /// How often the item's action runs, in seconds.
+    /// How often the work runs, in seconds.
     pub every_seconds: u64,
-    /// The id of the item whose action runs: Pane asks for the command's
-    /// tree and runs that item's action (its callback), as choosing it
-    /// would. The command's list lists it, so the user can run it too.
-    pub item: String,
+    /// The id of the item whose action runs, for a view command: Pane asks
+    /// for the command's tree and runs that item's action (its callback),
+    /// as choosing it would. The command's list lists it, so the user can
+    /// run it too. `None` for a no-view command, which Pane runs itself.
+    pub item: Option<String>,
+}
+
+/// What a command does when it is launched (`"mode"` in its `pane.json`
+/// entry, ADR 0037). Pane reads it from the manifest, so it knows at Enter
+/// whether to open a screen without running any guest code.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CommandMode {
+    /// `"view"`, also the mode of a command whose entry does not say: it
+    /// opens a screen, its list (`render`).
+    #[default]
+    View,
+    /// `"no-view"`: launching it calls its run entry point (`run`) and
+    /// opens no screen.
+    NoView,
 }
 
 /// The shortest interval a command's schedule may declare: 1 second.
@@ -473,10 +489,12 @@ pub struct ManifestCommand {
     /// (`"indexedResults": true`), such as the installed applications: its
     /// component then also exports `pane:extension/indexed-results`.
     pub indexed_results: bool,
+    /// Whether it opens a screen or runs without one (`"mode"`; `view` when
+    /// the entry does not say).
+    pub mode: CommandMode,
     /// Whether the command takes a query (`"takesQuery": true`): text typed
     /// into root search that Pane sends it when the user invokes it through
-    /// its alias or as a fallback. Its component then also exports
-    /// `pane:extension/query-command`.
+    /// its alias or as a fallback, as its launch record's fallback text.
     pub takes_query: bool,
     /// Whether the command searches as the user types into its own search
     /// field once it is open (`"search": true`), such as a command searching
@@ -484,8 +502,9 @@ pub struct ManifestCommand {
     /// also exports `pane:extension/command-search`.
     pub search: bool,
     /// The scheduled work the command declares (`"schedule"`), if any:
-    /// Pane runs the action of `schedule.item` every
-    /// `schedule.every_seconds` seconds while the package's code may run.
+    /// every `schedule.every_seconds` seconds while the package's code may
+    /// run, Pane runs the action of `schedule.item` (a view command) or the
+    /// command itself in the background (a no-view command).
     pub schedule: Option<ManifestSchedule>,
     /// Whether the command runs a continuing service (`"service": true`):
     /// while the package's code may run, Pane calls the component's
@@ -562,6 +581,8 @@ struct CommandJson {
     #[serde(default)]
     platforms: Option<Vec<String>>,
     #[serde(default)]
+    mode: Option<String>,
+    #[serde(default)]
     root_results: bool,
     #[serde(default)]
     indexed_results: bool,
@@ -580,7 +601,8 @@ struct CommandJson {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ScheduleJson {
     every_seconds: u64,
-    item: String,
+    #[serde(default)]
+    item: Option<String>,
 }
 
 impl Manifest {
@@ -682,7 +704,6 @@ impl Manifest {
         Exports {
             root_results: commands().any(|command| command.root_results),
             indexed_results: commands().any(|command| command.indexed_results),
-            query_command: commands().any(|command| command.takes_query),
             search: commands().any(|command| command.search),
             service: commands().any(|command| command.service),
             operations: self
@@ -746,9 +767,21 @@ impl Manifest {
                     command.id
                 )));
             }
+            let mode = match command.mode.as_deref() {
+                None | Some("view") => CommandMode::View,
+                Some("no-view") => CommandMode::NoView,
+                Some(other) => {
+                    return Err(invalid(format!(
+                        "command `{}` has the mode \"{}\"; a command's `mode` is \"view\" (it \
+                         opens a screen, the default) or \"no-view\" (it runs without one)",
+                        command.id,
+                        other.escape_debug()
+                    )));
+                }
+            };
             let schedule = command
                 .schedule
-                .map(|schedule| parse_schedule(&command.id, schedule))
+                .map(|schedule| parse_schedule(&command.id, mode, schedule))
                 .transpose()?;
             // A command may both be scheduled and run a continuing service;
             // they are separate activation models, and neither runs the
@@ -765,6 +798,7 @@ impl Manifest {
                 subtitle: command.subtitle,
                 component,
                 platforms,
+                mode,
                 root_results: command.root_results,
                 indexed_results: command.indexed_results,
                 takes_query: command.takes_query,
@@ -859,9 +893,14 @@ impl Manifest {
     }
 }
 
-/// The `schedule` of the command with id `id`, as `pane.json` writes it,
-/// checked.
-fn parse_schedule(id: &str, schedule: ScheduleJson) -> Result<ManifestSchedule, PackageError> {
+/// The `schedule` of the command with id `id` and `mode`, as `pane.json`
+/// writes it, checked: a view command's names the item whose action runs;
+/// a no-view command's names none, since Pane runs the command itself.
+fn parse_schedule(
+    id: &str,
+    mode: CommandMode,
+    schedule: ScheduleJson,
+) -> Result<ManifestSchedule, PackageError> {
     let invalid = |message: String| PackageError::InvalidManifest(message);
     if schedule.every_seconds < MIN_SCHEDULE_SECONDS {
         return Err(invalid(format!(
@@ -877,21 +916,35 @@ fn parse_schedule(id: &str, schedule: ScheduleJson) -> Result<ManifestSchedule, 
             schedule.every_seconds
         )));
     }
-    if schedule.item.trim().is_empty() {
-        return Err(invalid(format!(
-            "the schedule of command `{id}` names no `item`; name the item whose action the \
-             schedule runs"
-        )));
-    }
-    if schedule.item.chars().count() > MAX_SCHEDULE_ITEM {
-        return Err(invalid(format!(
-            "the `item` of the schedule of command `{id}` is longer than \
-             {MAX_SCHEDULE_ITEM} characters"
-        )));
-    }
+    let item = match (mode, schedule.item) {
+        (CommandMode::NoView, None) => None,
+        (CommandMode::NoView, Some(_)) => {
+            return Err(invalid(format!(
+                "the schedule of command `{id}` names an `item`, but the command is no-view: it \
+                 has no list, and Pane runs the command itself on its schedule; remove `item`"
+            )));
+        }
+        (CommandMode::View, item) => {
+            let item = item.unwrap_or_default();
+            if item.trim().is_empty() {
+                return Err(invalid(format!(
+                    "the schedule of command `{id}` names no `item`; name the item whose action \
+                     the schedule runs, or make the command no-view (\"mode\": \"no-view\") to \
+                     have the schedule run the command itself"
+                )));
+            }
+            if item.chars().count() > MAX_SCHEDULE_ITEM {
+                return Err(invalid(format!(
+                    "the `item` of the schedule of command `{id}` is longer than \
+                     {MAX_SCHEDULE_ITEM} characters"
+                )));
+            }
+            Some(item)
+        }
+    };
     Ok(ManifestSchedule {
         every_seconds: schedule.every_seconds,
-        item: schedule.item,
+        item,
     })
 }
 
@@ -1620,6 +1673,16 @@ impl InstalledPackage {
                     .map(|schedule| (registration, schedule))
             })
             .collect()
+    }
+
+    /// The mode of this package's command with manifest id `command`: how
+    /// launching it runs it. `view` for a command it does not have.
+    pub(crate) fn mode_of(&self, command: &str) -> CommandMode {
+        self.manifest
+            .as_ref()
+            .ok()
+            .and_then(|manifest| manifest.commands.iter().find(|c| c.id == command))
+            .map_or(CommandMode::View, |command| command.mode)
     }
 
     /// The commands of this package that run a continuing service and can

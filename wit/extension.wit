@@ -5,11 +5,15 @@
 // 0036's envelope: `render` and `handle-event`, see docs/list-tree.md),
 // forms with a text field and a choice, the operating systems an item's
 // action supports, and custom views the extension draws from rectangles and
-// text. This is not the full Pane SDK: the SDKs (`pane-guest`,
-// `@pane/extension`) hide the JSON and the callback ids.
+// text; and the run entry point of a command that opens no screen (ADR
+// 0037). Both receive the command's launch record (wit/commands.wit). This
+// is not the full Pane SDK: the SDKs (`pane-guest`, `@pane/extension`) hide
+// the JSON and the callback ids.
 package pane:extension@0.1.0;
 
 interface command {
+  use commands.{launch-record};
+
   /// An operating system Pane runs on. In the tree, an item's `platforms`
   /// names these as strings.
   enum platform {
@@ -169,7 +173,25 @@ interface command {
   /// understands of a tree naming a newer version than it knows; a tree it
   /// cannot read is the command's failure, shown as an error the extension
   /// answered with is, never a crash. An error is shown to the user.
-  render: async func() -> result<string, string>;
+  ///
+  /// `launch` is how the command's screen was opened: Pane passes the same
+  /// record each time it asks for the screen again while it is open. A
+  /// scheduled item's run (`"schedule"` with an `item`) draws the list
+  /// with a `background` record from its `schedule`.
+  render: async func(launch: launch-record) -> result<string, string>;
+
+  /// Runs the no-view command `command` (its id in `pane.json`, so one
+  /// component can serve several commands): one whose `pane.json` entry
+  /// says `"mode": "no-view"`. Pane calls it, never `render`, each time the
+  /// command is launched (Enter on its row, its alias, a fallback, its
+  /// global hotkey, its quick slot, another command, or its schedule), and
+  /// opens no screen. The answer is a JSON object, as `handle-event`'s is:
+  /// for now `{"status": "..."}` is text shown to the user as the result,
+  /// and `{}` shows nothing. An error is shown to the user as the failure;
+  /// it is an operation error, which never counts towards pausing the
+  /// extension (a crash does). A component that serves no no-view command
+  /// answers with an error; Pane never calls it then.
+  run: async func(command: string, launch: launch-record) -> result<string, string>;
 
   /// Handles the user's choice of the callback `callback`, an id the
   /// command's tree named (such as an item's action's), or a search
@@ -191,5 +213,6 @@ interface command {
 }
 
 world extension {
+  import commands;
   export command;
 }

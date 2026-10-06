@@ -46,7 +46,6 @@ EXPORT_OPTIONS = {
     "rootResults": "pane:extension/root-results@0.1.0",
     "indexedResults": "pane:extension/indexed-results@0.1.0",
     "operations": "pane:extension/published-operations@0.1.0",
-    "takesQuery": "pane:extension/query-command@0.1.0",
     "search": "pane:extension/command-search@0.1.0",
     "service": "pane:extension/service@0.1.0",
 }
@@ -71,6 +70,8 @@ SAMPLES = [
     ("sample_applications_ts.wasm", "guests/sample-applications-ts"),
     ("sample_query_js.wasm", "guests/sample-query-js"),
     ("sample_query_ts.wasm", "guests/sample-query-ts"),
+    ("sample_no_view_js.wasm", "guests/sample-no-view-js"),
+    ("sample_no_view_ts.wasm", "guests/sample-no-view-ts"),
     ("sample_search_js.wasm", "guests/sample-search-js"),
     ("sample_search_ts.wasm", "guests/sample-search-ts"),
     ("sample_helper_js.wasm", "guests/sample-helper-js"),
@@ -86,7 +87,7 @@ SAMPLES = [
     ("sample_service_ts.wasm", "guests/sample-service-ts"),
 ]
 # Pane's WIT, copied beside the world in guests/js/wit.
-PANE_WIT = ["extension.wit", "data.wit", "root-results.wit", "operations.wit", "applications.wit", "query.wit",
+PANE_WIT = ["extension.wit", "commands.wit", "data.wit", "root-results.wit", "operations.wit", "applications.wit",
             "search.wit", "helpers.wit", "files.wit", "clipboard.wit", "service.wit"]
 # WASI's WIT (clocks, and `wasi:http` with the packages it names), copied from
 # wit/deps into the world's deps/.
@@ -412,7 +413,6 @@ ADAPTED_PROVIDERS = {
     "rootResults": ("rootResults", "resultsFor"),
     "indexedResults": ("indexedResults", "results"),
     "operations": ("publishedOperations", "runOperation"),
-    "takesQuery": ("queryCommand", "runQuery"),
     "search": ("commandSearch", "search"),
     "service": ("service", "runCycle"),
 }

@@ -46,8 +46,9 @@ use super::{
     Entry, Launcher, LauncherView, Opening, Row, Screen, State, Status, Unavailable, off_thread,
 };
 use crate::hotkeys::Shortcut;
+use crate::launch::LaunchSource;
 use crate::launcher::CommandRegistration;
-use crate::packages::{InstalledPackage, PackageIdentity};
+use crate::packages::{CommandMode, InstalledPackage, PackageIdentity};
 
 /// Each command's hotkey by command id, recorded in `hotkeys.json` as
 /// `{ "version": 1, "hotkeys": { "<command id>": "ctrl+alt+g" } }`.
@@ -276,36 +277,59 @@ impl Launcher {
         Some(move || launcher.save::<HotkeyChoices>(None))
     }
 
-    /// Opens the command whose hotkey `shortcut` is, as the system reported
-    /// it pressed, leaving whatever Pane shows (an open command, form or
-    /// view closes); await the returned future to show the command. A
-    /// shortcut that opens nothing now, such as one released meanwhile,
-    /// changes nothing and returns `None`, so the window is not raised for
-    /// it.
-    pub fn press_hotkey(
-        &self,
-        shortcut: &Shortcut,
-    ) -> Option<impl Future<Output = ()> + Send + 'static> {
-        let mut state = self.lock();
+    /// What the hotkey `shortcut` launches now, if anything: the offered,
+    /// available command it is registered for.
+    pub(super) fn hotkey_opening(&self, state: &State, shortcut: &Shortcut) -> Option<Opening> {
         let command = state
             .bindings
             .registered
             .iter()
             .find(|(_, registered)| *registered == shortcut)
-            .map(|(command, _)| command.clone())?;
-        let opening = offered(&state.packages)
-            .into_iter()
-            .find(|(offered, unavailable)| offered.id == command && unavailable.is_none())
-            .map(|(offered, _)| Opening::of(&offered))?;
-        self.show_root(&mut state, Some(opening.component.clone()));
-        state.view.status = Status::Running;
+            .map(|(command, _)| command.as_str())?;
+        state
+            .packages
+            .iter()
+            .filter(|package| package.enabled)
+            .find_map(|package| {
+                let (offered, _) =
+                    package
+                        .available_commands()
+                        .into_iter()
+                        .find(|(offered, unavailable)| {
+                            offered.id == command && unavailable.is_none()
+                        })?;
+                let no_view = package.mode_of(offered.manifest_id()) == CommandMode::NoView;
+                Some(Opening::of(&offered, no_view, LaunchSource::Hotkey))
+            })
+    }
+
+    /// Launches the command whose hotkey `shortcut` is, as the system
+    /// reported it pressed; await the returned future to show the command
+    /// or its answer. A view command opens, leaving whatever Pane shows (an
+    /// open command, form or view closes). A no-view command runs without
+    /// changing what Pane shows, and without Pane's window
+    /// ([`Launcher::hotkey_shows_window`]). A shortcut that launches
+    /// nothing now, such as one released meanwhile, changes nothing and
+    /// returns `None`, so the window is not raised for it.
+    pub fn press_hotkey(
+        &self,
+        shortcut: &Shortcut,
+    ) -> Option<impl Future<Output = ()> + Send + 'static> {
+        let mut state = self.lock();
+        let opening = self.hotkey_opening(&state, shortcut)?;
+        if opening.no_view {
+            Launcher::begin_run(&mut state);
+        } else {
+            self.show_root(&mut state, Some(opening.component.clone()));
+            state.view.status = Status::Running;
+        }
         // Its data as the package is now, so a disable or reload meanwhile
         // stops the opening.
         let data = self.data_in(&state, &opening.component);
         let epoch = state.screen_epoch;
         drop(state);
         let launcher = self.clone();
-        Some(async move { launcher.open_command(epoch, opening, data).await })
+        Some(async move { launcher.launch_opening(epoch, opening, data).await })
     }
 
     /// The hotkey rows of the extension list: one per command of each

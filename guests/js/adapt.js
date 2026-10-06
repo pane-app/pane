@@ -11,7 +11,10 @@
 // its callback id. Pane's `handle-event` hands such an id back, and the
 // adapter runs the function, answering `{"status": text}`. An id the list
 // does not name (an instance that has not drawn the list yet asks it first)
-// is a search result's, which the command's `runSearchResult` runs.
+// is a search result's, which the command's `runSearchResult` runs. A
+// no-view command's `run` answers the same way. Both `render` and `run`
+// receive the command's launch record (wit/commands.wit); the adapter
+// passes it on, and draws the list again with the last one it was given.
 //
 // It also makes whatever a handler throws an error it answers with, never a
 // crash:
@@ -20,8 +23,8 @@
 //   it is, and anything else (an `Error`, a string) as a message about the
 //   whole form;
 // - from every other handler that answers with an error (`render`, an
-//   item's `onAction`, `runSearchResult`, `openView`, a custom view's
-//   `handleEvent`, `resultsFor`, `results`, `runOperation`, `runQuery`),
+//   item's `onAction`, `runSearchResult`, `run`, `openView`, a custom view's
+//   `handleEvent`, `resultsFor`, `results`, `runOperation`, `runCycle`),
 //   the message of an `Error` or of an object with a `message`, or the text
 //   of anything else.
 //
@@ -129,20 +132,64 @@ function tree(list, actions) {
   return JSON.stringify({ version: TREE_VERSION, view: { type: "list", title: list?.title, items } });
 }
 
-/** The exported `command`, adapted to Pane's `render` and `handle-event`. */
+/** What a command without `render`, `submitForm` or `openView` answers. */
+const missing = {
+  async render() {
+    throw new Error("this command opens no screen");
+  },
+  async submitForm() {
+    throw new Error("this command has no forms");
+  },
+  async openView() {
+    throw new Error("this command has no custom views");
+  },
+};
+
+/** What `handle-event` and `run` answer for `status`, the text shown. */
+function answer(status) {
+  // An action answers text; anything else is a crash, as it was.
+  if (typeof status !== "string") return status;
+  return JSON.stringify({ status });
+}
+
+/**
+ * The exported `command`, adapted to Pane's `render`, `handle-event` and
+ * `run`.
+ */
 export function adaptCommand(command) {
   if (command === null || typeof command !== "object") return command;
-  const render = adapted(command, "render", message);
+  const own = { ...missing, ...command };
+  const render = adapted(own, "render", message);
   /** The actions of the list the instance drew last, by callback id. */
   const actions = new Map();
-  const draw = async () => tree(await render(), actions);
+  /**
+   * The launch record the list was last drawn with: a launch by the user
+   * from root search before Pane has said.
+   */
+  let drawnFor = { launchType: "user-initiated", source: "root-search", arguments: [] };
+  const draw = async (launch) => {
+    drawnFor = launch;
+    return tree(await render(launch), actions);
+  };
   return {
-    ...command,
+    ...own,
     render: draw,
+    async run(id, launch) {
+      let status;
+      try {
+        if (typeof command.run !== "function") {
+          throw new Error(`\`${id}\` opens a screen; it has no run entry point`);
+        }
+        status = await command.run(id, launch);
+      } catch (thrown) {
+        throw message(thrown);
+      }
+      return answer(status);
+    },
     async handleEvent(callback, _details) {
       if (!actions.has(callback)) {
         // A fresh instance: the list names its actions once drawn.
-        await draw();
+        await draw(drawnFor);
       }
       const action = actions.get(callback);
       let status;
@@ -157,12 +204,10 @@ export function adaptCommand(command) {
       } catch (thrown) {
         throw message(thrown);
       }
-      // An action answers text; anything else is a crash, as it was.
-      if (typeof status !== "string") return status;
-      return JSON.stringify({ status });
+      return answer(status);
     },
-    submitForm: adapted(command, "submitForm", formError),
-    openView: adapted(command, "openView", message, adaptView),
+    submitForm: adapted(own, "submitForm", formError),
+    openView: adapted(own, "openView", message, adaptView),
   };
 }
 

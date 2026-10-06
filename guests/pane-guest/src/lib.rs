@@ -3,11 +3,13 @@
 //! An extension implements [`Command`] and calls [`export!`]: its screen is
 //! a [`List`] of [`Item`]s whose actions are closures, which the SDK hands
 //! Pane as the versioned JSON tree of ADR 0036's envelope (`render` and
-//! `handle-event`) and runs when the user chooses them. It may keep
+//! `handle-event`) and runs when the user chooses them; or, for a no-view
+//! command, [`Command::run`] runs each time it is launched. Every command
+//! receives its launch record and may launch another command with
+//! [`commands`]. It may keep
 //! values between runs with [`settings`], and its own records, disposable
 //! values and secrets with [`content`], [`cache`] and [`credentials`]. It
-//! may compute results from root search's query with [`root`], take a query
-//! the user sends it from root search with [`query`], run a continuing
+//! may compute results from root search's query with [`root`], run a continuing
 //! service while its package's code may run with [`service`], call
 //! operations other packages publish with [`operations::call`], serve those
 //! its own package publishes with [`publish`], find and open installed
@@ -48,9 +50,81 @@ pub use exports::pane::extension::command::{
     ViewEvent,
 };
 pub use list::{Command, Item, List};
+pub use pane::extension::commands::{LaunchRecord, LaunchSource, LaunchType};
 
 mod list;
 pub use pane::extension::{cache, content, credentials, operations, settings};
+
+/// How the command was launched, and launching another command
+/// (`pane:extension/commands`). A no-view command's [`Command::run`]
+/// receives its [`LaunchRecord`]; a view command's [`Command::render`]
+/// reads it with [`commands::current`]. [`commands::launch`] opens or runs
+/// another command of the package (by its id in `pane.json`) or of another
+/// installed package (by its package identity), passing JSON context:
+///
+/// ```ignore
+/// use pane_guest::commands::{CommandRef, LaunchType, launch};
+///
+/// let own = CommandRef { source: None, command: "report".into() };
+/// launch(&own, LaunchType::Background, &[], Some(r#"{"from":"launch"}"#))?;
+/// ```
+pub mod commands {
+    use core::cell::RefCell;
+
+    pub use crate::pane::extension::commands::{
+        ArgumentValue, CommandRef, LaunchRecord, LaunchSource, LaunchType, launch,
+    };
+
+    /// The launch record of the call in progress.
+    struct Current(RefCell<Option<LaunchRecord>>);
+
+    // SAFETY: a component's code runs on one thread, and no borrow is held
+    // across an `await`.
+    unsafe impl Sync for Current {}
+
+    static CURRENT: Current = Current(RefCell::new(None));
+
+    /// The launch record of the command's screen being drawn (in
+    /// [`Command::render`](crate::Command::render), and in the actions of
+    /// the list it drew), or of the run in progress: how the command was
+    /// launched, and with what. A launch by the user from root search with
+    /// nothing more before Pane has said.
+    pub fn current() -> LaunchRecord {
+        CURRENT.0.borrow().clone().unwrap_or(LaunchRecord {
+            launch_type: LaunchType::UserInitiated,
+            source: LaunchSource::RootSearch,
+            arguments: alloc::vec::Vec::new(),
+            fallback_text: None,
+            context: None,
+        })
+    }
+
+    /// Notes the record Pane passed to the call in progress.
+    pub(crate) fn set_current(launch: LaunchRecord) {
+        *CURRENT.0.borrow_mut() = Some(launch);
+    }
+
+    /// `launch`'s type in words, such as "by the user", for reporting it.
+    pub fn launch_type_name(launch_type: LaunchType) -> &'static str {
+        match launch_type {
+            LaunchType::UserInitiated => "user-initiated",
+            LaunchType::Background => "background",
+        }
+    }
+
+    /// `source` as `wit/commands.wit` names it, such as "root-search".
+    pub fn source_name(source: LaunchSource) -> &'static str {
+        match source {
+            LaunchSource::RootSearch => "root-search",
+            LaunchSource::Alias => "alias",
+            LaunchSource::Fallback => "fallback",
+            LaunchSource::Hotkey => "hotkey",
+            LaunchSource::QuickSlot => "quick-slot",
+            LaunchSource::Command => "command",
+            LaunchSource::Schedule => "schedule",
+        }
+    }
+}
 
 impl operations::CallErrorKind {
     /// The kind's WIT name, such as `not-found`, as JavaScript sees it too.
@@ -115,28 +189,6 @@ pub mod root {
     });
 
     pub use exports::pane::extension::root_results::{Guest, RootAction, RootResult};
-}
-
-/// A command that takes a query (`pane:extension/query-command`): text the
-/// user typed into root search, which Pane sends only when the user invokes
-/// the command through its alias ("ec hello") or chooses it as a fallback.
-/// A command whose `pane.json` entry sets `"takesQuery": true` implements
-/// [`query::Guest`] too and calls [`query::export!`](crate::query::export)
-/// beside [`export!`]:
-///
-/// ```ignore
-/// pane_guest::export!(Echo);
-/// pane_guest::query::export!(Echo);
-/// ```
-pub mod query {
-    wit_bindgen::generate!({
-        path: "../../wit",
-        world: "query-command-provider",
-        pub_export_macro: true,
-        default_bindings_module: "pane_guest::query",
-    });
-
-    pub use exports::pane::extension::query_command::Guest;
 }
 
 /// The applications installed on the system (`pane:extension/applications`),

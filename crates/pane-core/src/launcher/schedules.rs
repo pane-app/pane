@@ -1,8 +1,13 @@
-//! Scheduled work: Pane runs a command's action on the interval its
-//! package's manifest declares, while the package's code may run.
+//! Scheduled work: Pane runs a command's action, or a no-view command
+//! itself, on the interval its package's manifest declares, while the
+//! package's code may run.
 //!
-//! A command's `pane.json` entry declares a schedule: an interval and the
-//! item whose action runs. The scheduler is a thread of Pane's own, which
+//! A command's `pane.json` entry declares a schedule: an interval and, for
+//! a view command, the item whose action runs. A no-view command's
+//! schedule names no item: each run is the command itself, launched in the
+//! background from its schedule (its `run` with a `background` launch
+//! record, see `launching`), and shows nothing, as no window was shown for
+//! it. The scheduler is a thread of Pane's own, which
 //! looks for due work, and threads of their own run it, so neither the
 //! window nor the scheduler ever waits for a guest. It is driven by the
 //! launcher's clock ([`crate::clipboard::Clock`]): the system's clock, or
@@ -47,6 +52,7 @@ use std::time::Duration;
 use super::{Launcher, Screen, Status, WeakLauncher, stopped};
 use crate::clipboard::Clock;
 use crate::extension_data::PackageData;
+use crate::launch::LaunchRecord;
 use crate::runtime::{Answer, CallError};
 
 /// The longest the scheduler waits before it looks again, so that a change
@@ -73,12 +79,14 @@ struct Scheduling {
 }
 
 /// What one command's schedule runs: the command's component, in its
-/// package's managed copy; the item whose action runs; and the interval,
-/// in milliseconds of the clock.
+/// package's managed copy; the item whose action runs, or `None` for a
+/// no-view command, which runs itself; the command's manifest id; and the
+/// interval, in milliseconds of the clock.
 #[derive(Clone, PartialEq, Eq)]
 struct Scheduled {
     component: PathBuf,
-    item: String,
+    item: Option<String>,
+    command: String,
     every_ms: u64,
 }
 
@@ -131,8 +139,11 @@ fn next_tick(started: u64, every_ms: u64, now: u64) -> u64 {
 struct Run {
     /// The command's component, in the package's managed copy.
     component: PathBuf,
-    /// The item whose action runs.
-    item: String,
+    /// The item whose action runs; `None` for a no-view command, which
+    /// runs itself.
+    item: Option<String>,
+    /// The command's manifest id.
+    command: String,
     /// The extension data of the package's current generation: the run
     /// belongs to it.
     data: Option<PackageData>,
@@ -239,11 +250,13 @@ impl Schedules {
                 continue;
             }
             for (command, schedule) in package.scheduled_commands() {
+                let manifest_id = command.manifest_id().to_owned();
                 wanted.insert(
                     command.id,
                     Scheduled {
                         component: command.component,
                         item: schedule.item,
+                        command: manifest_id,
                         every_ms: schedule.every_seconds * 1000,
                     },
                 );
@@ -276,6 +289,7 @@ impl Schedules {
                 Run {
                     component: entry.runs.component.clone(),
                     item: entry.runs.item.clone(),
+                    command: entry.runs.command.clone(),
                     data,
                 },
             ));
@@ -375,24 +389,42 @@ fn start_run(schedules: &Arc<Schedules>, launcher: &WeakLauncher, key: String, r
     }
 }
 
-/// Runs one scheduled command's action and reports its answer. The run
-/// belongs to the generation the scheduler took when it asked for it, so
-/// disabling, reloading, updating, uninstalling or pausing the package
-/// meanwhile stops it, and its answer is not shown.
+/// Runs one scheduled command's action, or the no-view command itself,
+/// and reports the action's answer. The run belongs to the generation the
+/// scheduler took when it asked for it, so disabling, reloading, updating,
+/// uninstalling or pausing the package meanwhile stops it, and its answer
+/// is not shown. A no-view command's run is a background launch, which
+/// shows nothing.
 fn run_once(schedules: Weak<Schedules>, launcher: WeakLauncher, key: String, run: Run) {
     let alive = launcher.upgrade();
-    let answer = match &alive {
-        Some(launcher) => match launcher.runtime() {
-            Ok(runtime) => Some(futures::executor::block_on(runtime.run_item_with(
+    let scheduled = LaunchRecord::scheduled();
+    let answer = match (&alive, &run.item) {
+        (Some(launcher), Some(item)) => match launcher.runtime() {
+            Ok(runtime) => Some(futures::executor::block_on(runtime.run_item_launched_with(
                 &run.component,
-                &run.item,
+                item,
+                &scheduled,
                 run.data.clone(),
             ))),
             Err(error) => Some(Err(error.clone())),
         },
+        (Some(launcher), None) => {
+            if let Ok(runtime) = launcher.runtime() {
+                // Its answer, and an error it answers with, are not shown:
+                // no window was shown for it. A crash still counts towards
+                // pausing it.
+                let _ = futures::executor::block_on(runtime.run_command_with(
+                    &run.component,
+                    &run.command,
+                    &scheduled,
+                    run.data.clone(),
+                ));
+            }
+            None
+        }
         // This Pane stopped: no answer comes, and nothing remains to report
         // one to.
-        None => None,
+        (None, _) => None,
     };
     // The run's answer is shown, then the schedule may run again: a tick
     // that came due meanwhile is looked at now.

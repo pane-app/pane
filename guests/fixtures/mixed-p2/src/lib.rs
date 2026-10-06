@@ -2,7 +2,7 @@
 wit_bindgen::generate!({ path: "../../../wit", world: "extension" });
 
 use exports::pane::extension::command::{
-    CustomView, FieldValue, FormError, Frame, Guest, GuestCustomView, ViewEvent,
+    CustomView, FieldValue, FormError, Frame, Guest, GuestCustomView, LaunchRecord, ViewEvent,
 };
 
 struct Mixed;
@@ -24,7 +24,7 @@ impl GuestCustomView for NoView {
 impl Guest for Mixed {
     type CustomView = NoView;
 
-    async fn render() -> Result<String, String> {
+    async fn render(_launch: LaunchRecord) -> Result<String, String> {
         let now = std::time::SystemTime::now();
         eprintln!("listing at {now:?}");
         Ok(
@@ -32,6 +32,10 @@ impl Guest for Mixed {
             {"id": "x", "title": "x", "actions": [{"onAction": "x"}]}]}}"#
                 .into(),
         )
+    }
+
+    async fn run(command: String, _launch: LaunchRecord) -> Result<String, String> {
+        Err(command)
     }
 
     async fn handle_event(callback: String, _details: String) -> Result<String, String> {

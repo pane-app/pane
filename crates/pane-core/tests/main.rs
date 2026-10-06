@@ -32,6 +32,7 @@ mod installer;
 mod launcher;
 mod list_tree;
 mod memory;
+mod no_view;
 mod npm;
 mod operations;
 mod packages;
