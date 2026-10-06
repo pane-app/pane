@@ -44,6 +44,7 @@ pub mod clipboard_view;
 mod command_search;
 mod hotkeys;
 mod indexed;
+mod item_actions;
 mod network;
 mod presentation;
 mod quick_slots;
@@ -54,6 +55,7 @@ use crate::extension_data::{ExtensionData, PackageData};
 use crate::files::FileAccess;
 use crate::generation::End;
 use crate::hotkeys::{self as system_hotkeys, Hotkeys};
+use crate::keyboard::PaneKeys;
 use crate::links::{self, LinkOpener, NoOpener};
 use crate::operations::Installed;
 use crate::packages::{
@@ -95,6 +97,7 @@ use developing::Developing;
 pub use developing::{BuildFailure, Development};
 pub use hotkeys::HotkeyOutcome;
 use hotkeys::{Bindings, OpenPane};
+pub use item_actions::{ItemAction, ItemActions, UnboundShortcut};
 use pausing::{Pauses, Recorder};
 pub use presentation::{
     ComputedAnswer, Presentation, RowKind, RowPresentation, Section, answer_sections, root_sections,
@@ -298,23 +301,24 @@ struct CommandList {
 
 impl CommandList {
     /// The list of a command whose list view has `items`. Choosing an item
-    /// opens its form, else its custom view, else runs its action (the
-    /// first, by its callback id); an item with none of them does nothing
-    /// and says so.
+    /// opens its form, else its custom view, else runs its primary action
+    /// (the first, by its callback id); an item with none of them cannot be
+    /// activated and says so.
     fn of(items: Vec<Item>) -> CommandList {
         let (rows, entries) = items
             .into_iter()
             .map(|item| {
                 let unavailable = platform::unavailable(item.platforms.as_deref(), "this action");
-                let callback = item.action().map(|action| action.callback.clone());
-                let entry = match (&unavailable, item.form, item.custom_view, callback) {
+                let entry = match (&unavailable, item.form, item.custom_view) {
                     (Some(reason), ..) => Entry::Unavailable(reason.clone()),
-                    (None, Some(form), ..) => Entry::Form(item.id.clone(), form),
-                    (None, None, Some(info), _) => Entry::CustomView(item.id.clone(), info),
-                    (None, None, None, Some(callback)) => Entry::Run(callback),
-                    (None, None, None, None) => {
-                        Entry::Unavailable("This item has no action".into())
-                    }
+                    (None, Some(form), _) => Entry::Form(item.id.clone(), form),
+                    (None, None, Some(info)) => Entry::CustomView(item.id.clone(), info),
+                    (None, None, None) if item.actions.is_empty() => Entry::NoActions,
+                    (None, None, None) => Entry::Actions(item_actions::Listed {
+                        id: item.id.clone(),
+                        title: item.title.clone(),
+                        actions: item.actions,
+                    }),
                 };
                 let row = Row {
                     id: item.id,
@@ -703,6 +707,12 @@ struct State {
     /// eligible package updates in the background, and which packages the
     /// user turned it off for.
     update_controls: updates::UpdateControls,
+    /// Pane's own keys in force, which no action shortcut takes (see
+    /// `item_actions`).
+    pane_keys: PaneKeys,
+    /// The open command's unbound shortcuts as last noted, so a developed
+    /// package's report is made again only when they change.
+    reported_unbound: Vec<UnboundShortcut>,
 }
 
 /// What is happening to a package, which stops another change to it
@@ -973,9 +983,16 @@ enum Entry {
     /// Check for a Pane application update again, after the check failed
     /// (root).
     CheckUpdate,
-    /// Have the open command handle this callback: an item's action's, or a
-    /// search result's id (`handle-event`), then list it again.
+    /// Have the open command handle this callback, a search result's id
+    /// (`handle-event`), then list it again.
     Run(String),
+    /// Run the first of this item's actions (Enter), or another of them
+    /// (see `item_actions`): the open command handles its callback, then
+    /// lists it again.
+    Actions(item_actions::Listed),
+    /// Say that this item has no actions, so it cannot be activated
+    /// (command view).
+    NoActions,
     /// Open this form of the open command's item with this id.
     Form(String, Form),
     /// Open the custom view of the open command's item with this id.
@@ -1221,6 +1238,8 @@ impl Launcher {
             sent_from: None,
             runtime_slow: None,
             update_controls,
+            pane_keys: PaneKeys::default(),
+            reported_unbound: Vec::new(),
         };
         if let (Some(installation), Some(files)) = (&installation, &state.files) {
             files.open_record(&installation.dir);
@@ -2334,6 +2353,14 @@ impl Launcher {
             Entry::Run(callback) => {
                 state.view.status = Status::Running;
                 Pending::Run(callback)
+            }
+            Entry::Actions(listed) => {
+                state.view.status = Status::Running;
+                Pending::Run(listed.actions[0].callback.clone())
+            }
+            Entry::NoActions => {
+                state.view.status = Status::Error(item_actions::NO_ACTIONS.into());
+                Pending::Nothing
             }
             Entry::CustomView(item_id, info) => {
                 state.view.status = Status::Running;
@@ -3665,6 +3692,7 @@ impl Launcher {
         state.view.rows = list.rows;
         state.entries = list.entries;
         state.view.selected = selected;
+        self.report_unbound(state);
     }
 
     /// The open command's own list for `items`, its tree's: the package's
@@ -3755,6 +3783,8 @@ impl Launcher {
                 state.open = Some(component);
                 state.next_screen();
                 state.view = LauncherView::new(screen, view.title).with_rows(rows);
+                state.reported_unbound = Vec::new();
+                self.report_unbound(state);
             }
             Err(error) => state.view.status = Status::Error(error.to_string()),
         }

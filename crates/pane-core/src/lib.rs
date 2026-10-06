@@ -21,7 +21,7 @@ mod host_settings;
 pub mod hotkeys;
 mod http;
 mod integrity;
-mod keyboard;
+pub mod keyboard;
 mod launcher;
 mod links;
 pub mod npm;
@@ -45,15 +45,15 @@ pub use host_settings::{
 };
 #[doc(hidden)]
 pub use http::HttpLimits;
-pub use keyboard::{Binding, Keyboard, KeyboardAction};
+pub use keyboard::{Binding, Keyboard, KeyboardAction, PaneKeys};
 pub use launcher::clipboard_view;
 pub use launcher::{
     AliasOutcome, ApplicationUpdate, BuildFailure, CommandRegistration, ComputedAnswer,
-    CustomViewSnapshot, Development, FormField, FormView, HotkeyOutcome, Launcher, LauncherView,
-    PinTarget, Presentation, Question, QuickSlot, ResultAction, ResultActionItem, ResultActions,
-    Row, RowKind, RowPresentation, Screen, Section, SelectedAction, ShortcutCatalog,
-    ShortcutCommand, ShortcutGroup, SlotChange, Status, Unavailable, answer_sections,
-    root_sections,
+    CustomViewSnapshot, Development, FormField, FormView, HotkeyOutcome, ItemAction, ItemActions,
+    Launcher, LauncherView, PinTarget, Presentation, Question, QuickSlot, ResultAction,
+    ResultActionItem, ResultActions, Row, RowKind, RowPresentation, Screen, Section,
+    SelectedAction, ShortcutCatalog, ShortcutCommand, ShortcutGroup, SlotChange, Status,
+    Unavailable, UnboundShortcut, answer_sections, root_sections,
 };
 pub use links::LinkOpener;
 pub use operations::{MAX_CALL_DEPTH, MAX_OPERATION_JSON};
@@ -73,9 +73,9 @@ pub use runtime::Limits;
 #[doc(hidden)]
 pub use runtime::memory_peak;
 pub use runtime::{
-    Action, Answer, COMPUTE_LIMIT, CallError, Choice, CustomViewInfo, CustomViewRole, Field,
-    FieldKind, FieldValue, Form, FormError, Frame, GUEST_MEMORY, Item, Key, MAX_FRAME_SHAPES,
-    MAX_FRAME_SIZE, MAX_TEXT_CHARS, Point, Rgb, Runtime, RuntimeFailure, RuntimeStatus, Shape,
-    TREE_VERSION, UNRESPONSIVE_LIMIT, View, ViewEvent, ViewId, WARN_AFTER,
+    Action, ActionStyle, Answer, COMPUTE_LIMIT, CallError, Choice, CustomViewInfo, CustomViewRole,
+    Field, FieldKind, FieldValue, Form, FormError, Frame, GUEST_MEMORY, Item, Key,
+    MAX_FRAME_SHAPES, MAX_FRAME_SIZE, MAX_TEXT_CHARS, Point, Rgb, Runtime, RuntimeFailure,
+    RuntimeStatus, Shape, TREE_VERSION, UNRESPONSIVE_LIMIT, View, ViewEvent, ViewId, WARN_AFTER,
 };
 pub use search::{SettingsEntry, settings_matches, title_matches};

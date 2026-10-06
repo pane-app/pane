@@ -5,13 +5,16 @@
 // component, around the objects the command exports.
 //
 // It is the SDK's side of ADR 0036's envelope: the command's `render`
-// resolves with a list whose items' actions are functions (`onAction`), and
-// the adapter answers Pane's `render` with that list as the versioned JSON
-// tree of docs/list-tree.md, naming each item's action by the item's id as
-// its callback id. Pane's `handle-event` hands such an id back, and the
-// adapter runs the function, answering `{"status": text}`. An id the list
-// does not name (an instance that has not drawn the list yet asks it first)
-// is a search result's, which the command's `runSearchResult` runs.
+// resolves with a list whose items' actions are functions (an item's
+// `onAction`, and each of its `actions`' `onAction`), and the adapter
+// answers Pane's `render` with that list as the versioned JSON tree of
+// docs/list-tree.md. An item's first action is named by the item's id as
+// its callback id, and its later ones by the id and their place (`<id>#1`,
+// `<id>#2`, ...); an item's own `onAction` comes before its `actions`.
+// Pane's `handle-event` hands such an id back, and the adapter runs the
+// function, answering `{"status": text}`. An id the list does not name (an
+// instance that has not drawn the list yet asks it first) is a search
+// result's, which the command's `runSearchResult` runs.
 //
 // It also makes whatever a handler throws an error it answers with, never a
 // crash:
@@ -115,10 +118,22 @@ function tree(list, actions) {
     ? list.items.map((item) => {
         const node = { id: item?.id, title: item?.title };
         if (item?.subtitle != null) node.subtitle = item.subtitle;
-        if (typeof item?.onAction === "function") {
-          // The item's id names its action's callback.
-          node.actions = [{ onAction: item.id }];
-          actions.set(item.id, item.onAction);
+        const given = [];
+        if (typeof item?.onAction === "function") given.push({ onAction: item.onAction });
+        if (Array.isArray(item?.actions)) given.push(...item.actions);
+        if (given.length > 0) {
+          node.actions = given.map((action, index) => {
+            // The item's id names its first action's callback, and the id
+            // and their place its later ones'.
+            const callback = index === 0 ? item.id : `${item.id}#${index}`;
+            const wire = { onAction: callback };
+            if (action?.title != null) wire.title = action.title;
+            if (action?.section != null) wire.section = action.section;
+            if (action?.style != null) wire.style = action.style;
+            if (action?.shortcut != null) wire.shortcut = action.shortcut;
+            if (typeof action?.onAction === "function") actions.set(callback, action.onAction);
+            return wire;
+          });
         }
         if (item?.form != null) node.form = treeForm(item.form);
         if (item?.platforms != null) node.platforms = item.platforms;

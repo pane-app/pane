@@ -328,6 +328,10 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         // the launcher, acts; see [`Launcher::selected_opens_settings`]).
         (_, Some(Entry::Settings)) => acting("Open settings"),
         (_, Some(Entry::Run(_))) => acting("Run item"),
+        // An item of a command's list: its primary action, by the title the
+        // extension gave it (#137).
+        (_, Some(Entry::Actions(listed))) => acting(&listed.primary()),
+        (_, Some(Entry::NoActions)) => unusable("No actions"),
         (_, Some(Entry::Form(..))) => acting("Open form"),
         (_, Some(Entry::CustomView(..))) => acting("Open view"),
         (_, Some(Entry::ChooseFolder(_))) => acting("Choose folder"),

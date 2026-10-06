@@ -1,6 +1,16 @@
 //! The contextual Actions panel: the reference's searchable menu of what
-//! can be done with root search's selected result, opened over the footer
-//! by its Actions button or the Open actions binding (Ctrl+K by default).
+//! can be done with root search's selected result, or with the selected
+//! item of a command's list, opened over the footer by its Actions button
+//! or the Open actions binding (Ctrl+K by default).
+//!
+//! For an item of a command's list (#137) it lists the item's actions
+//! ([`pane_core::Launcher::item_actions`]) in their labelled sections, in
+//! order: the primary action shows the invoke binding in the accent caps,
+//! the second and third their chords (Ctrl+Enter, Ctrl+Shift+Enter), and an
+//! action with a shortcut Pane binds shows that shortcut instead; an action
+//! whose shortcut Pane does not bind shows none. Destructive actions are
+//! drawn in the destructive color. Choosing one runs it on the item the
+//! panel opened for, if that is still the selected item.
 //!
 //! What it lists is the core's ([`pane_core::Launcher::result_actions`]):
 //! the result's primary action — the footer's, the same dispatch — then
@@ -37,7 +47,7 @@ use gpui::{
 use gpui_elements::editable_text::actions::DEFAULT_INPUT_CONTEXT;
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
 use pane_core::{
-    KeyboardAction, PinnedLayout, ResultAction, ResultActionItem, ResultActions, RowKind, Screen,
+    ItemActions, KeyboardAction, PinnedLayout, ResultAction, ResultActions, RowKind, Screen,
     SlotChange,
 };
 
@@ -63,6 +73,8 @@ pub(crate) const PLACEHOLDER: &str = "Search actions…";
 pub(crate) const NO_MATCH: &str = "No actions match";
 /// What the list says when no result is selected: nothing to act on.
 pub(crate) const NOTHING_SELECTED: &str = "Select a result to see its actions";
+/// What the list says for an item of a command's list without actions.
+pub(crate) const NO_ACTIONS: &str = "This item has no actions";
 /// The group label over the command's configuration.
 pub(crate) const PANE_GROUP: &str = "Pane";
 /// The group label over a quick slot's own operations.
@@ -73,6 +85,8 @@ pub(crate) const MOVE_LEFT: &str = "Move Left";
 /// What a quick slot's later move says on the strip (the core's own label
 /// says down).
 pub(crate) const MOVE_RIGHT: &str = "Move Right";
+/// What assistive technology hears of a destructive entry, after its label.
+pub(crate) const DESTRUCTIVE: &str = "Destructive";
 
 /// The keys the quick slot entries show, the launcher's own fixed keys for
 /// them: the pin key on Pin and Unpin, and a move key on each move — the
@@ -163,11 +177,17 @@ pub(crate) struct ActionsPanel {
 }
 
 struct Opened {
-    actions: ResultActions,
+    /// The row the panel opened for, by its stable id: a result's, or the
+    /// item's.
+    target: String,
+    /// The target's title, as the header names it.
+    title: String,
     /// The target's kind: an application's primary action opens it.
     kind: Option<RowKind>,
     /// What the entries act on.
     subject: Subject,
+    /// The entries as they were when the panel opened.
+    entries: Vec<PanelEntry>,
 }
 
 /// What the panel's entries act on.
@@ -177,16 +197,123 @@ enum Subject {
     Result,
     /// The quick slot holding the target.
     Slot,
+    /// The selected item of a command's list.
+    Item,
 }
 
 impl Subject {
-    /// The label over the entries after the primary action.
+    /// The label over a result's or a slot's entries after the primary
+    /// action.
     fn group(self) -> &'static str {
         match self {
-            Subject::Result => PANE_GROUP,
+            Subject::Result | Subject::Item => PANE_GROUP,
             Subject::Slot => SLOT_GROUP,
         }
     }
+}
+
+/// What an entry runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EntryKind {
+    /// One of Pane's actions on a result or a slot.
+    Result(ResultAction),
+    /// The action at this index of the item's actions.
+    Item(usize),
+}
+
+/// One entry the panel lists.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PanelEntry {
+    pub(crate) kind: EntryKind,
+    /// What the entry says, and what the filter matches.
+    pub(crate) label: String,
+    /// Whether it can run now.
+    pub(crate) available: bool,
+    /// Whether it is drawn in the destructive style.
+    pub(crate) destructive: bool,
+    /// The label of its section; entries of one section follow each other,
+    /// and an untitled section has none.
+    pub(crate) section: Option<SharedString>,
+    /// Its glyph.
+    pub(crate) glyph: Glyph,
+    /// The keys shown at its right, in their caps' style.
+    pub(crate) keys: Option<(KeySequence, CapStyle)>,
+}
+
+/// `actions`, a result's or a slot's, as the panel's entries: the primary
+/// action with the invoke binding's accent caps, then the rest under
+/// `group`, the slot entries with their keys.
+fn result_entries(
+    actions: &ResultActions,
+    kind: Option<RowKind>,
+    group: &'static str,
+    invoke: &KeySequence,
+    slot_keys: &SlotKeys,
+) -> Vec<PanelEntry> {
+    let primary = primary_glyph(kind);
+    actions
+        .items
+        .iter()
+        .map(|item| {
+            let invoking = item.action == ResultAction::Invoke;
+            PanelEntry {
+                kind: EntryKind::Result(item.action),
+                label: item.label.clone(),
+                available: item.available,
+                destructive: false,
+                section: (!invoking).then(|| group.into()),
+                glyph: action_glyph(item.action, primary),
+                keys: if invoking {
+                    Some((invoke.clone(), CapStyle::Accent))
+                } else {
+                    slot_keys
+                        .of(item.action)
+                        .map(|keys| (keys.clone(), CapStyle::Regular))
+                },
+            }
+        })
+        .collect()
+}
+
+/// `actions`, an item's, as the panel's entries: each with its own
+/// shortcut's caps when Pane binds it, else the primary action with the
+/// invoke binding's accent caps and the next two with their chords.
+fn item_entries(actions: &ItemActions, invoke: &KeySequence) -> Vec<PanelEntry> {
+    actions
+        .actions
+        .iter()
+        .enumerate()
+        .map(|(index, action)| {
+            let keys = match (&action.shortcut, index) {
+                (Some(shortcut), _) => {
+                    Some((crate::keyboard::binding_keys(shortcut), CapStyle::Regular))
+                }
+                (None, 0) => Some((invoke.clone(), CapStyle::Accent)),
+                (None, index) => pane_core::keyboard::action_key(index)
+                    .map(|chord| (crate::keyboard::binding_keys(&chord), CapStyle::Regular)),
+            };
+            PanelEntry {
+                kind: EntryKind::Item(index),
+                label: action.title.clone(),
+                available: true,
+                destructive: action.destructive,
+                section: action.section.clone().map(SharedString::from),
+                glyph: Glyph::ActionRun,
+                keys,
+            }
+        })
+        .collect()
+}
+
+/// The entries whose label holds `query`, ignoring case and the spaces
+/// around it; all of them for a blank one. Filtering flattens the
+/// sections (see [`panel_children`]).
+fn matching(entries: Vec<PanelEntry>, query: &str) -> Vec<PanelEntry> {
+    let query = query.trim().to_lowercase();
+    entries
+        .into_iter()
+        .filter(|entry| entry.label.to_lowercase().contains(&query))
+        .collect()
 }
 
 impl ActionsPanel {
@@ -213,11 +340,37 @@ impl LauncherWindow {
     }
 
     /// Opens the Actions panel for root search's selected result — or, while
-    /// a quick slot has focus, for that slot — with focus in its search
-    /// field. Only root search has Actions.
+    /// a quick slot has focus, for that slot — or for the selected item of
+    /// a command's list, with focus in its search field. Root search and
+    /// commands' lists have Actions.
     pub(crate) fn open_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(slot) = self.focused_slot(window) {
             self.open_slot_actions(slot, window, cx);
+            return;
+        }
+        if commands_list(&self.launcher.view().screen) {
+            let invoke = invoke_keys(cx);
+            let opened = self.launcher.item_actions().map(|actions| Opened {
+                target: actions.target.clone(),
+                title: actions.title.clone(),
+                kind: None,
+                subject: Subject::Item,
+                entries: item_entries(&actions, &invoke),
+            });
+            // A row without actions of its own still opens the panel, which
+            // says so.
+            let opened = opened.or_else(|| {
+                let view = self.launcher.view();
+                let row = view.rows.get(view.selected?)?;
+                Some(Opened {
+                    target: row.id.clone(),
+                    title: row.title.clone(),
+                    kind: None,
+                    subject: Subject::Item,
+                    entries: Vec::new(),
+                })
+            });
+            self.open_panel(opened, window, cx);
             return;
         }
         let opened = self.launcher.result_actions().map(|actions| {
@@ -228,9 +381,17 @@ impl LauncherWindow {
                 .and_then(|index| presentation.rows.get(index))
                 .and_then(|row| row.kind);
             Opened {
-                actions,
+                target: actions.target.clone(),
+                title: actions.title.clone(),
                 kind,
                 subject: Subject::Result,
+                entries: result_entries(
+                    &actions,
+                    kind,
+                    Subject::Result.group(),
+                    &invoke_keys(cx),
+                    &SlotKeys::new(pins_horizontal(cx)),
+                ),
             }
         });
         self.open_panel(opened, window, cx);
@@ -248,14 +409,22 @@ impl LauncherWindow {
             return;
         };
         let target = slot.target.key();
-        let opened = self
-            .launcher
-            .quick_slot_actions(&target)
-            .map(|actions| Opened {
-                actions,
+        let opened = self.launcher.quick_slot_actions(&target).map(|actions| {
+            let actions = laid_out(actions, pins_horizontal(cx));
+            Opened {
+                target: actions.target.clone(),
+                title: actions.title.clone(),
                 kind: slot.kind,
                 subject: Subject::Slot,
-            });
+                entries: result_entries(
+                    &actions,
+                    slot.kind,
+                    Subject::Slot.group(),
+                    &invoke_keys(cx),
+                    &SlotKeys::new(pins_horizontal(cx)),
+                ),
+            }
+        });
         if opened.is_some() {
             self.open_panel(opened, window, cx);
         }
@@ -263,7 +432,9 @@ impl LauncherWindow {
 
     /// Opens the panel over `opened`, with focus in its search field.
     fn open_panel(&mut self, opened: Option<Opened>, window: &mut Window, cx: &mut Context<Self>) {
-        if self.actions.is_some() || !matches!(self.launcher.view().screen, Screen::Root { .. }) {
+        let screen = self.launcher.view().screen;
+        let has_actions = matches!(screen, Screen::Root { .. }) || commands_list(&screen);
+        if self.actions.is_some() || !has_actions {
             return;
         }
         self.close_open_menu(window, cx);
@@ -310,40 +481,61 @@ impl LauncherWindow {
     /// unavailable — a target removed or disabled behind the panel runs
     /// nothing. The moves are labelled for the pins' layout (see
     /// `laid_out`).
-    fn live_actions(&self, cx: &App) -> Option<ResultActions> {
-        let panel = self.actions.as_ref()?.opened.as_ref()?;
-        let opened = &panel.actions;
-        let live = match panel.subject {
-            Subject::Result => self.launcher.result_actions(),
-            Subject::Slot => self.launcher.quick_slot_actions(&opened.target),
+    fn live_entries(&self, cx: &App) -> Option<Vec<PanelEntry>> {
+        let opened = self.actions.as_ref()?.opened.as_ref()?;
+        let horizontal = pins_horizontal(cx);
+        let invoke = invoke_keys(cx);
+        let slot_keys = SlotKeys::new(horizontal);
+        let live = match opened.subject {
+            Subject::Result => self
+                .launcher
+                .result_actions()
+                .filter(|live| live.target == opened.target)
+                .map(|live| {
+                    result_entries(
+                        &laid_out(live, horizontal),
+                        opened.kind,
+                        Subject::Result.group(),
+                        &invoke,
+                        &slot_keys,
+                    )
+                }),
+            Subject::Slot => self
+                .launcher
+                .quick_slot_actions(&opened.target)
+                .map(|live| {
+                    result_entries(
+                        &laid_out(live, horizontal),
+                        opened.kind,
+                        Subject::Slot.group(),
+                        &invoke,
+                        &slot_keys,
+                    )
+                }),
+            Subject::Item => self
+                .launcher
+                .item_actions()
+                .filter(|live| live.target == opened.target)
+                .map(|live| item_entries(&live, &invoke)),
         };
-        let actions = match live {
-            Some(live) if live.target == opened.target => live,
-            _ => ResultActions {
-                items: opened
-                    .items
-                    .iter()
-                    .map(|item| ResultActionItem {
-                        available: false,
-                        ..item.clone()
-                    })
-                    .collect(),
-                ..opened.clone()
-            },
-        };
-        Some(laid_out(actions, pins_horizontal(cx)))
+        Some(live.unwrap_or_else(|| {
+            opened
+                .entries
+                .iter()
+                .map(|entry| PanelEntry {
+                    available: false,
+                    ..entry.clone()
+                })
+                .collect()
+        }))
     }
 
     /// What the filter lists now.
-    fn listed(&self, cx: &App) -> Vec<ResultActionItem> {
-        let (Some(panel), Some(actions)) = (self.actions.as_ref(), self.live_actions(cx)) else {
+    fn listed(&self, cx: &App) -> Vec<PanelEntry> {
+        let (Some(panel), Some(entries)) = (self.actions.as_ref(), self.live_entries(cx)) else {
             return Vec::new();
         };
-        actions
-            .matching(&panel.query(cx))
-            .into_iter()
-            .cloned()
-            .collect()
+        matching(entries, &panel.query(cx))
     }
 
     fn actions_next(&mut self, _: &NextAction, _: &mut Window, cx: &mut Context<Self>) {
@@ -385,14 +577,28 @@ impl LauncherWindow {
             .actions
             .as_ref()
             .and_then(|panel| panel.opened.as_ref())
-            .map(|opened| (opened.actions.target.clone(), opened.subject));
-        let action = self.listed(cx).get(index).map(|item| item.action);
-        let (Some((target, subject)), Some(action)) = (opened, action) else {
+            .map(|opened| (opened.target.clone(), opened.subject));
+        let entry = self.listed(cx).get(index).cloned();
+        let (Some((target, subject)), Some(entry)) = (opened, entry) else {
             return;
+        };
+        let action = match entry.kind {
+            EntryKind::Result(action) => action,
+            EntryKind::Item(index) => {
+                // The core runs it only on the item the panel opened for,
+                // still selected, and not while another action runs.
+                if entry.available {
+                    self.close_actions(window, cx);
+                    let pending = self.launcher.run_item_action(&target, index);
+                    self.show_until_done(pending, window, cx);
+                }
+                return;
+            }
         };
         let ready = match subject {
             Subject::Result => self.launcher.result_action_ready(&target, action),
             Subject::Slot => self.launcher.quick_slot_action_ready(&target, action),
+            Subject::Item => false,
         };
         if !ready {
             return;
@@ -458,23 +664,22 @@ impl LauncherWindow {
         let opened = panel.opened.as_ref();
         let listed = self.listed(cx);
         let filtering = !panel.query(cx).trim().is_empty();
-        let invoke = crate::settings::shared(cx)
-            .read(cx)
-            .keyboard()
-            .binding(KeyboardAction::InvokeSelectedAction)
-            .clone();
-        let invoke = crate::keyboard::binding_keys(&invoke);
-        let slot_keys = SlotKeys::new(pins_horizontal(cx));
+        let item_without_actions = opened
+            .is_some_and(|opened| opened.subject == Subject::Item && opened.entries.is_empty());
         let surface = compose(
             PanelView {
-                target: opened.map(|opened| (&opened.actions, opened.kind)),
-                icon: opened.map(|opened| row_icon(&opened.actions.target)),
+                title: opened.map(|opened| opened.title.as_str()),
+                icon: opened
+                    .filter(|opened| opened.subject != Subject::Item)
+                    .map(|opened| row_icon(&opened.target)),
                 listed: &listed,
-                group: opened.map_or(PANE_GROUP, |opened| opened.subject.group()),
                 filtering,
                 selected: panel.selected,
-                invoke: &invoke,
-                slot_keys: Some(&slot_keys),
+                empty_note: if item_without_actions {
+                    NO_ACTIONS
+                } else {
+                    NO_MATCH
+                },
                 filter: &panel.filter,
             },
             theme,
@@ -507,7 +712,7 @@ impl LauncherWindow {
             }))
             .role(Role::Dialog)
             .aria_label(match opened {
-                Some(opened) => format!("Actions for {}", opened.actions.title),
+                Some(opened) => format!("Actions for {}", opened.title),
                 None => "Actions".to_owned(),
             });
         Some(anchored(surface, theme).into_any_element())
@@ -516,24 +721,19 @@ impl LauncherWindow {
 
 /// What the panel shows: what [`compose`] draws.
 pub(crate) struct PanelView<'a> {
-    /// The target's actions and kind; `None` with nothing selected.
-    pub(crate) target: Option<(&'a ResultActions, Option<RowKind>)>,
-    /// The target's tile, as its row draws it.
+    /// The target's title; `None` with nothing selected.
+    pub(crate) title: Option<&'a str>,
+    /// The target's tile, as its row draws it; the command glyph without.
     pub(crate) icon: Option<(IconTone, Glyph)>,
     /// What the filter lists now.
-    pub(crate) listed: &'a [ResultActionItem],
-    /// The label over the entries after the primary action: "Pane" over
-    /// a result's, or the quick slot labels over a slot's.
-    pub(crate) group: &'static str,
-    /// Whether the filter holds text, which drops the group's separator
-    /// and label as the reference's does.
+    pub(crate) listed: &'a [PanelEntry],
+    /// Whether the filter holds text, which drops the sections' separators
+    /// and labels as the reference's does.
     pub(crate) filtering: bool,
     /// The selected entry, an index into `listed`.
     pub(crate) selected: usize,
-    /// The invoke binding's keys, the primary entry's.
-    pub(crate) invoke: &'a KeySequence,
-    /// The quick slot entries' keys; `None` draws them without.
-    pub(crate) slot_keys: Option<&'a SlotKeys>,
+    /// What the list says when nothing is listed for a target.
+    pub(crate) empty_note: &'static str,
     /// The search field's text.
     pub(crate) filter: &'a Entity<EditableTextState>,
 }
@@ -548,25 +748,13 @@ pub(crate) fn compose(
     material: Material,
     attach: impl Fn(Stateful<Div>, usize) -> Stateful<Div>,
 ) -> Stateful<Div> {
-    let rows = list_children(
-        view.listed,
-        view.group,
-        view.filtering,
-        view.selected,
-        primary_glyph(view.target.and_then(|(_, kind)| kind)),
-        view.invoke,
-        view.slot_keys,
-        theme,
-        attach,
-    );
-    let empty = match (view.target, view.listed.is_empty()) {
+    let rows = list_children(view.listed, view.filtering, view.selected, theme, attach);
+    let empty = match (view.title, view.listed.is_empty()) {
         (None, _) => Some(NOTHING_SELECTED),
-        (Some(_), true) => Some(NO_MATCH),
+        (Some(_), true) => Some(view.empty_note),
         (Some(_), false) => None,
     };
-    let header = view
-        .target
-        .map(|(actions, _)| header(&actions.title, view.icon, theme));
+    let header = view.title.map(|title| header(title, view.icon, theme));
     popup(
         header,
         rows,
@@ -578,11 +766,7 @@ pub(crate) fn compose(
 }
 
 /// The entry after (or before) `from` in `listed` that can run, if any.
-pub(crate) fn next_available(
-    listed: &[ResultActionItem],
-    from: usize,
-    forward: bool,
-) -> Option<usize> {
+pub(crate) fn next_available(listed: &[PanelEntry], from: usize, forward: bool) -> Option<usize> {
     let available = |index: &usize| listed.get(*index).is_some_and(|item| item.available);
     if forward {
         (from + 1..listed.len()).find(available)
@@ -596,25 +780,32 @@ pub(crate) fn next_available(
 pub(crate) enum PanelChild {
     /// The separator's rule.
     Rule,
-    /// The "Pane" group label.
-    Group,
+    /// The label of the section the listed entry at this index begins.
+    Group(usize),
     /// The listed entry at this index.
     Entry(usize),
 }
 
-/// The list's children for `listed`: the primary action, then — unless
-/// the filter is narrowing them, as the reference drops its separators
-/// then — a rule and the "Pane" label over the command's configuration.
-pub(crate) fn panel_children(listed: &[ResultActionItem], filtering: bool) -> Vec<PanelChild> {
+/// The list's children for `listed`, section by section: a rule between
+/// two sections, and a section's label over its entries when it has one —
+/// unless the filter is narrowing them, as the reference drops its
+/// separators then and lists what matches as one. For a result that is its
+/// primary action, then a rule and the "Pane" label over the command's
+/// configuration.
+pub(crate) fn panel_children(listed: &[PanelEntry], filtering: bool) -> Vec<PanelChild> {
     let mut children = Vec::new();
-    let mut grouped = false;
-    for (index, item) in listed.iter().enumerate() {
-        if item.action != ResultAction::Invoke && !grouped && !filtering {
-            grouped = true;
-            if index > 0 {
+    for (index, entry) in listed.iter().enumerate() {
+        if !filtering {
+            let begins = match index.checked_sub(1) {
+                None => true,
+                Some(previous) => listed[previous].section != entry.section,
+            };
+            if begins && index > 0 {
                 children.push(PanelChild::Rule);
             }
-            children.push(PanelChild::Group);
+            if begins && entry.section.is_some() {
+                children.push(PanelChild::Group(index));
+            }
         }
         children.push(PanelChild::Entry(index));
     }
@@ -661,23 +852,15 @@ fn action_glyph(action: ResultAction, primary: Glyph) -> Glyph {
     }
 }
 
-/// The list's children for `listed`: the primary action, then — unless
-/// the filter is narrowing them, as the reference drops its separators
-/// then — a rule and the "Pane" label over the command's configuration.
-/// `selected` indexes `listed`; `attach` gives each row its handlers (the
-/// launcher's pointer and click). The primary entry
-/// shows the invoke binding in the accent caps, as the footer's button
-/// does; the quick slot entries show `slot_keys` in the regular caps,
-/// when given; the configuration has no keys of its own.
-#[allow(clippy::too_many_arguments)]
+/// The list's children for `listed` (see [`panel_children`]). `selected`
+/// indexes `listed`; `attach` gives each available row its handlers (the
+/// launcher's pointer and click). Each entry shows its keys in their caps'
+/// style: the primary entry the invoke binding in the accent caps, as the
+/// footer's button does.
 pub(crate) fn list_children(
-    listed: &[ResultActionItem],
-    group: &'static str,
+    listed: &[PanelEntry],
     filtering: bool,
     selected: usize,
-    primary: Glyph,
-    invoke: &KeySequence,
-    slot_keys: Option<&SlotKeys>,
     theme: &Theme,
     attach: impl Fn(Stateful<Div>, usize) -> Stateful<Div>,
 ) -> Vec<AnyElement> {
@@ -685,25 +868,23 @@ pub(crate) fn list_children(
         .into_iter()
         .map(|child| match child {
             PanelChild::Rule => rule(theme).into_any_element(),
-            PanelChild::Group => group_label(group, theme).into_any_element(),
+            PanelChild::Group(index) => {
+                let label = listed[index].section.clone().unwrap_or_default();
+                group_label(label, theme).into_any_element()
+            }
             PanelChild::Entry(index) => {
-                let item = &listed[index];
-                let keys = match item.action {
-                    ResultAction::Invoke => Some((invoke, CapStyle::Accent)),
-                    action => slot_keys
-                        .and_then(|keys| keys.of(action))
-                        .map(|keys| (keys, CapStyle::Regular)),
-                };
+                let entry = &listed[index];
                 let row = action_row(
                     index,
-                    action_glyph(item.action, primary),
-                    item.label.clone(),
-                    keys,
+                    entry.glyph,
+                    entry.label.clone(),
+                    entry.keys.as_ref().map(|(keys, style)| (keys, *style)),
                     index == selected,
-                    item.available,
+                    entry.available,
+                    entry.destructive,
                     theme,
                 );
-                let row = if item.available {
+                let row = if entry.available {
                     attach(row, index)
                 } else {
                     row
@@ -717,7 +898,10 @@ pub(crate) fn list_children(
 /// An entry (`.arow`): 36 high, radius 8, 8px either side, its 16px glyph
 /// in the icon gray, its 13px/450 label filling the row, and its keys at
 /// the right in their caps' style; the 11% wash when selected, the 6% one
-/// on hover.
+/// on hover. A destructive entry draws its glyph and label in the
+/// destructive color, and says so to assistive technology; the keys are
+/// also the row's shortcut there.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn action_row(
     index: usize,
     glyph_of: Glyph,
@@ -725,6 +909,7 @@ pub(crate) fn action_row(
     keys: Option<(&KeySequence, CapStyle)>,
     selected: bool,
     available: bool,
+    destructive: bool,
     theme: &Theme,
 ) -> Stateful<Div> {
     let geometry = &theme.geometry.actions;
@@ -743,10 +928,16 @@ pub(crate) fn action_row(
         .rounded(geometry.row_radius)
         .text_size(theme.typography.action_size)
         .font_weight(theme.typography.action_weight)
-        .text_color(theme.action_text)
+        .text_color(if destructive {
+            theme.danger
+        } else {
+            theme.action_text
+        })
         .role(Role::MenuItem)
         .aria_label(label.clone())
         .aria_selected(selected)
+        .when(destructive, |row| row.aria_description(DESTRUCTIVE))
+        .when_some(keys, |row, (keys, _)| row.aria_keyshortcuts(keys.name()))
         .when(selected, |row| row.bg(theme.action_selected))
         .when(!selected && available, |row| {
             row.hover(|row| row.bg(theme.control_hover))
@@ -762,7 +953,18 @@ pub(crate) fn action_row(
             row.active(move |row| row.bg(press))
         })
         .when(!available, |row| row.opacity(0.5).aria_disabled(true))
-        .child(glyph(glyph_of, geometry.glyph_size, theme.action_icon).flex_none())
+        .child(
+            glyph(
+                glyph_of,
+                geometry.glyph_size,
+                if destructive {
+                    theme.danger
+                } else {
+                    theme.action_icon
+                },
+            )
+            .flex_none(),
+        )
         .child(div().flex_1().min_w(px(0.)).truncate().child(label))
         .when_some(keys, |row, (keys, style)| {
             row.child(key_sequence(keys, style, theme))
@@ -783,10 +985,12 @@ pub(crate) fn rule(theme: &Theme) -> Div {
 
 /// A group label (`.alabel`): 26 high, its 11.5px/500 text at the bottom
 /// with 8px either side and 4px below.
-pub(crate) fn group_label(label: &'static str, theme: &Theme) -> Div {
+pub(crate) fn group_label(label: impl Into<SharedString>, theme: &Theme) -> Div {
     let geometry = &theme.geometry.actions;
+    let label: SharedString = label.into();
+    let debug = format!("action-group-{label}");
     div()
-        .debug_selector(move || format!("action-group-{label}"))
+        .debug_selector(move || debug)
         .flex_none()
         .flex()
         .items_end()
@@ -938,4 +1142,19 @@ pub(crate) fn dimmer(theme: &Theme) -> Div {
         .left_0()
         .size_full()
         .bg(theme.actions_dimmer)
+}
+
+/// Whether `screen` is an open command's list, whose items have actions.
+pub(crate) fn commands_list(screen: &Screen) -> bool {
+    matches!(screen, Screen::Command | Screen::CommandSearch { .. })
+}
+
+/// The invoke binding's keys as they are bound now: the primary action's.
+fn invoke_keys(cx: &App) -> KeySequence {
+    let invoke = crate::settings::shared(cx)
+        .read(cx)
+        .keyboard()
+        .binding(KeyboardAction::InvokeSelectedAction)
+        .clone();
+    crate::keyboard::binding_keys(&invoke)
 }

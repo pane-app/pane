@@ -21,13 +21,16 @@ redefining it. Forms (#20) and custom views (#21) keep their own functions,
 Authors never see the JSON or the callback ids. In Rust (`pane-guest`) a
 command implements `pane_guest::Command`, whose `render` returns a
 `pane_guest::List` of `pane_guest::Item`s with closures as actions
-(`Item::new(id, title).on_action(|| async { Ok("Done".into()) })`). In
-JavaScript and TypeScript (`@pane/extension`) the exported `command`'s
-`render` resolves with `{ title, items }`, each item with an `onAction`
-function; the SDK's adapter (`guests/js/adapt.js`) writes the tree. Both
-SDKs name an item's action by the item's id, so the same item has the same
-callback in every drawing, and an instance that has not drawn the list yet
-draws it before it runs a callback it does not know. An id the list does
+(`Item::new(id, title).action(Action::new("Open", || async { Ok("Done".into()) }))`,
+or an untitled `.on_action(..)`). In JavaScript and TypeScript
+(`@pane/extension`) the exported `command`'s `render` resolves with
+`{ title, items }`, each item with `actions` (objects with a `title` and an
+`onAction` function) or an untitled `onAction` function; the SDK's adapter
+(`guests/js/adapt.js`) writes the tree. Both SDKs name an item's first
+action by the item's id and its later ones by the id and their place
+(`<id>#1`, `<id>#2`, ...), so the same action has the same callback in every
+drawing, and an instance that has not drawn the list yet draws it before it
+runs a callback it does not know. An id the list does
 not name goes to the command's `run_search_result` (`runSearchResult`), which
 is how a search result's id ([command search](command-search.md)) is run.
 
@@ -44,7 +47,17 @@ is how a search result's id ([command search](command-search.md)) is run.
         "id": "today",
         "title": "Today",
         "subtitle": "3 notes",
-        "actions": [{ "title": "Open", "onAction": "today" }]
+        "actions": [
+          { "title": "Open", "onAction": "today" },
+          { "title": "Copy", "onAction": "today#1" },
+          { "title": "Copy Link", "onAction": "today#2", "section": "Share",
+            "shortcut": { "modifiers": ["ctrl", "shift"], "key": "c" } },
+          { "title": "Reveal", "onAction": "today#3", "section": "Share",
+            "shortcut": { "windows": { "modifiers": ["ctrl", "shift"], "key": "e" },
+                          "macos": { "modifiers": ["cmd", "shift"], "key": "r" } } },
+          { "title": "Delete", "onAction": "today#4", "section": "Danger",
+            "style": "destructive", "shortcut": { "modifiers": ["ctrl"], "key": "x" } }
+        ]
       },
       {
         "id": "new",
@@ -78,9 +91,34 @@ is how a search result's id ([command search](command-search.md)) is run.
   drawn again, and passes it to `submit-form` and `open-view`), a
   **`title`**, and optionally:
   - **`subtitle`**: a second line;
-  - **`actions`**: what choosing the item does. An action has an
-    **`onAction`** callback id and an optional **`title`**. For now Pane
-    runs the first and ignores the others (#137 brings the rest);
+  - **`actions`**: what the item offers, in order (#137). The first is its
+    **primary action**: Enter and the footer's button run it, and the
+    footer names it. The second is its **secondary action** (Ctrl+Enter),
+    and Ctrl+Shift+Enter runs the third; a missing one does nothing. Ctrl+K
+    opens the Actions panel, which lists them all. An action has an
+    **`onAction`** callback id and optionally:
+    - **`title`**: what the footer and the panel call it ("Run item" when
+      it has none);
+    - **`section`**: the title of its section in the panel; consecutive
+      actions with the same section are one section, and filtering the
+      panel lists what matches as one list;
+    - **`style`**: `default` or `destructive` (drawn in the destructive
+      color); a style Pane does not know is the default;
+    - **`shortcut`**: the keys that run it while the list has focus,
+      without the panel: `{"modifiers": [...], "key": "..."}` for every
+      system, or such an object per system under `windows`, `macos` and
+      `linux` (a system left out binds none). Modifiers are `ctrl`, `alt`,
+      `shift` and `cmd` (Command on macOS, the Windows key, Super); keys
+      are named as Pane's key bindings name them (`c`, `,`, `enter`,
+      `delete`, `f5`). Modifiers match exactly. Pane does not bind a
+      shortcut that is one of its own keys (the Keyboard page's bindings as
+      the user has them, Escape, Ctrl+K, Up and Down, Tab, Enter and the
+      action chords, Ctrl and a digit, the pin keys), one with no Ctrl, Alt
+      or Cmd (it would take a key a search field types or moves with; the
+      function keys are allowed alone), one it cannot read, or one an
+      earlier action of the item already has: the action then stays in the
+      panel without it, and while its package is being developed the
+      status line says which shortcuts were not bound and why;
   - **`form`**: choosing the item opens this form instead (fields of kind
     `text`, with an optional `placeholder`, or `choice`, with `choices`);
   - **`customView`**: choosing the item opens this custom view instead
@@ -88,9 +126,11 @@ is how a search result's id ([command search](command-search.md)) is run.
   - **`platforms`**: the systems (`windows`, `macos`, `linux`) the item's
     action works on; elsewhere the item is listed as unavailable.
 
-  An item with no action, form or custom view does nothing when chosen,
-  and says so. Optional fields may be omitted or `null`. A field whose name
-  starts with `on` holds a callback id.
+  An item with no action, form or custom view cannot be activated: the
+  footer's button says "No actions", and Enter says so in the status line.
+  A held key's repeats and a double click's second click never run an
+  action again. Optional fields may be omitted or `null`. A field whose
+  name starts with `on` holds a callback id.
 
 `handle-event` answers an object. Version 1 knows one field, **`status`**:
 text Pane shows as the action's result in the status line. That text is

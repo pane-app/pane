@@ -312,6 +312,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sample-actions"
+version = "0.1.0"
+dependencies = [
+ "pane-guest",
+]
+
+[[package]]
 name = "sample-dependencies"
 version = "0.1.0"
 dependencies = [

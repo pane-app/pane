@@ -17,8 +17,8 @@
 
 /**
  * One entry in a command's list. Choosing it opens its form, else its
- * custom view, else runs its action; an item with none of them does nothing
- * and says so.
+ * custom view, else runs its primary action (its first); an item with none
+ * of them cannot be activated, and Pane says so.
  */
 export interface Item {
   /**
@@ -31,11 +31,20 @@ export interface Item {
   /** A second line under the title; omitted or `null` for none. */
   subtitle?: string | null;
   /**
-   * Runs when the user chooses the item. The text it resolves with is shown
-   * as the result; throwing shows the error as the failure. Pane then asks
-   * for the list again (`render`). Omitted or `null` for none.
+   * Runs when the user chooses the item: an untitled action before the
+   * item's `actions`, which Pane names "Run item". The text it resolves
+   * with is shown as the result; throwing shows the error as the failure.
+   * Pane then asks for the list again (`render`). Omitted or `null` for
+   * none.
    */
   onAction?: (() => Promise<string>) | null;
+  /**
+   * The item's actions, in order (after `onAction`, if it is given): the
+   * first is its primary action (Enter), the second its secondary action
+   * (Ctrl+Enter), the third runs with Ctrl+Shift+Enter, and the Actions
+   * panel (Ctrl+K) lists them all. Omitted or `null` for none.
+   */
+  actions?: Action[] | null;
   /**
    * When set, choosing the item opens this form instead of running its
    * action, and submitting it calls `submitForm`. Omitted or `null` for
@@ -59,6 +68,53 @@ export interface Item {
 
 /** An operating system Pane runs on. */
 export type Platform = "windows" | "macos" | "linux";
+
+/**
+ * One of an item's actions. Choosing it runs `onAction`; the text it
+ * resolves with is shown as the result, and throwing shows the error as the
+ * failure. Pane then asks for the list again (`render`).
+ */
+export interface Action {
+  /** What the footer and the Actions panel call it. */
+  title: string;
+  onAction: () => Promise<string>;
+  /**
+   * The title of its section in the Actions panel; consecutive actions with
+   * the same section are one section. Omitted or `null` for an untitled one.
+   */
+  section?: string | null;
+  /** `"destructive"` draws it in the destructive style. Omitted or `null` for the default. */
+  style?: "default" | "destructive" | null;
+  /**
+   * The keys that run it from the list without opening the Actions panel.
+   * Pane matches the modifiers exactly, and never binds one of its own keys
+   * (Escape, Ctrl+K, the arrows, Ctrl and a digit, the keys the user gave
+   * Pane's actions): the action then stays in the panel without it. Omitted
+   * or `null` for none.
+   */
+  shortcut?: Shortcut | null;
+}
+
+/**
+ * A modifier held with a shortcut's key: `"cmd"` is Command on macOS, the
+ * Windows key on Windows and Super on Linux.
+ */
+export type Modifier = "ctrl" | "alt" | "shift" | "cmd";
+
+/**
+ * One key with the modifiers held with it. Keys are named as Pane names
+ * them: a letter or digit, a character such as `","`, or `"enter"`,
+ * `"delete"`, `"backspace"`, `"up"`, `"f5"` and the like.
+ */
+export interface ShortcutKeys {
+  modifiers: Modifier[];
+  key: string;
+}
+
+/** One key for every system, or one per system (a system left out binds none). */
+export type Shortcut =
+  | ShortcutKeys
+  | { windows?: ShortcutKeys | null; macos?: ShortcutKeys | null; linux?: ShortcutKeys | null };
 
 /** A command's list view: its title and items, in order. */
 export interface List {

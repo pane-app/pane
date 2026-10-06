@@ -29,6 +29,7 @@ mod files;
 mod helpers;
 mod hotkeys;
 mod installer;
+mod item_actions;
 mod launcher;
 mod list_tree;
 mod memory;
