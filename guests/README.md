@@ -518,9 +518,9 @@ does
 ([extensions that stop responding](../docs/pausing.md#when-an-extension-stops-responding)).
 So keep each call's own computing well under 5 seconds: split long work
 into several calls (an action that does one part and saves where it got
-to), or run it in a [native helper](#native-helpers), which runs for at
-most 30 seconds. The settings samples' **Stop responding** item shows the
-limit in each language.
+to), or run it in a [native helper](#native-helpers), which runs for as long
+as its work takes while other extensions' calls are served. The settings
+samples' **Stop responding** item shows the limit in each language.
 
 ## Actions for some operating systems only
 
@@ -1702,7 +1702,8 @@ Known limits of local packages so far:
   unresponsive, which counts towards pausing its package like a crash
   (#18, [pausing](../docs/pausing.md#when-an-extension-stops-responding)):
   waiting does not count, but awaiting does not reset the count either, so
-  split long work into calls. A native helper runs for at most 30 seconds.
+  split long work into calls. A native helper has no time limit of Pane's
+  own; the command's own timeout (dropping the run) ends it.
 - Background services, timers and hotkeys are not part of the extension
   API yet and come with their own tickets. Disabling does not yet consider
   packages that depend on the disabled one (#43).

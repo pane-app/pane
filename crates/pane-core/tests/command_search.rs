@@ -6,6 +6,9 @@
 //! service is the fixture service, a made-up package registry each test
 //! serves on a free port of 127.0.0.1: nothing here reaches the network
 //! beyond this computer.
+//!
+//! While a command's call waits on the service, Pane serves other calls
+//! (#136): the calculator, another package, answers root search meanwhile.
 
 #[path = "support/service.rs"]
 mod service;
@@ -146,13 +149,35 @@ impl Pane {
     }
 
     fn activate(&self, title: &str) {
+        self.select(title);
+        block_on(self.launcher.activate_selected());
+    }
+
+    fn select(&self, title: &str) {
         let index = self
             .titles()
             .iter()
             .position(|row| row == title)
             .unwrap_or_else(|| panic!("no row {title:?} in {:?}", self.titles()));
         self.launcher.select(index);
-        block_on(self.launcher.activate_selected());
+    }
+
+    /// Activates the row titled `title` on another thread, returning the
+    /// thread, which ends once the activation does.
+    fn activate_in_background(&self, title: &str) -> std::thread::JoinHandle<()> {
+        self.select(title);
+        let activating = self.launcher.activate_selected();
+        std::thread::spawn(move || block_on(activating))
+    }
+
+    /// The identity of the installed package titled `title`.
+    fn identity_of(&self, title: &str) -> PackageIdentity {
+        self.launcher
+            .packages()
+            .into_iter()
+            .find(|package| package.title() == title)
+            .unwrap_or_else(|| panic!("{title} is not installed"))
+            .identity
     }
 
     fn to_root(&self) {
@@ -842,6 +867,88 @@ fn stopped_while_it_waits(fixture: &Fixture, happen: impl FnOnce(&Pane)) -> (Pan
     block_on(slow);
     assert_eq!(pane.view(), after, "{}", fixture.package);
     (pane, service)
+}
+
+/// Activates the details of `stall-details`, whose answer the service
+/// starts and never finishes, and returns the activation's thread once the
+/// command waits on it.
+fn waiting_on_the_service(pane: &Pane, service: &Service) -> std::thread::JoinHandle<()> {
+    pane.use_service(&service.url());
+    pane.search("misbehaving");
+    let waiting = pane.activate_in_background("stall-details");
+    wait_for_request(service, "/packages/stall-details");
+    waiting
+}
+
+/// While a command's call waits on a slow web request, another package's
+/// calls are served: the calculator answers root search. What the waiting
+/// call set up is on its generation's undo list, and disabling the package
+/// runs the list: the request is dropped (the service sees Pane hang up)
+/// and the list is empty.
+#[test]
+fn other_extensions_answer_while_a_call_waits_on_the_network() {
+    for fixture in &ALL {
+        let service = Service::start();
+        let pane = Pane::with(fixture);
+        pane.install("calculator");
+        let identity = pane.identity_of(fixture.title);
+        let waiting = waiting_on_the_service(&pane, &service);
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            pane.launcher.undo_list(&identity),
+            ["extension instance", "web request"],
+            "{}",
+            fixture.package
+        );
+
+        pane.to_root();
+        pane.search("1 + 1");
+
+        assert_eq!(
+            pane.titles().first().map(String::as_str),
+            Some("2"),
+            "{}",
+            fixture.package
+        );
+        assert!(
+            !waiting.is_finished(),
+            "{}: the waiting call ended first",
+            fixture.package
+        );
+        assert!(service.abandoned().is_empty(), "{:?}", service.abandoned());
+        block_on(pane.launcher.set_enabled(&identity, false));
+        assert!(
+            service.wait_for_abandoned(Duration::from_secs(5)),
+            "{}: the request was not dropped",
+            fixture.package
+        );
+        waiting.join().unwrap();
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            pane.launcher.undo_list(&identity),
+            Vec::<&str>::new(),
+            "{}",
+            fixture.package
+        );
+    }
+}
+
+/// Pane quitting while a call waits on the network ends the wait at once:
+/// the request is dropped, and the call answers.
+#[test]
+fn quitting_while_a_call_waits_on_the_network_ends_the_wait() {
+    let service = Service::start();
+    let pane = Pane::with(&RUST);
+    let waiting = waiting_on_the_service(&pane, &service);
+
+    pane.runtime.quit();
+
+    assert!(
+        service.wait_for_abandoned(Duration::from_secs(5)),
+        "the request was not dropped"
+    );
+    waiting.join().unwrap();
+    assert!(block_on(pane.runtime.running()).is_empty());
 }
 
 #[test]
