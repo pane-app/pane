@@ -146,42 +146,39 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   was before `item` gained `platforms` and custom views, with its own copy of
   that WIT; Pane's type check refuses it at install and when it loads.
 - `fixtures/mismatched-api`: negative control whose exports all have the
-  names Pane looks for while `item` lacks one field, so only the type check
-  can refuse it.
+  names Pane looks for while `form-error` lacks one field, so only the type
+  check can refuse it.
+- `fixtures/trees`: test fixture whose list tree and answers are JSON
+  written by hand, not by `pane-guest`, with fields Pane does not know, a
+  newer version, a view Pane cannot show and trees and answers it cannot
+  read ([list-tree.md](../docs/list-tree.md)).
 
 ## Writing a Rust command
 
 The [sample](sample-rust/src/lib.rs) is the complete example. A command is a
-`cdylib` crate depending on `pane-guest` that implements four async
-functions and names its custom view type (see [Forms](#forms) and
-[Custom views](#custom-views) for the last two):
+`cdylib` crate depending on `pane-guest` that implements `pane_guest::Command`:
+`render`, its list, whose items' actions are closures, and two functions
+for forms and custom views (see [Forms](#forms) and
+[Custom views](#custom-views)), and names its custom view type. The SDK hands
+Pane the list as a versioned JSON tree and runs an item's closure when the
+user chooses it, then Pane asks for the list again
+([list-tree.md](../docs/list-tree.md)):
 
 ```rust
 #![no_std]
 
-use pane_guest::alloc::{string::String, vec, vec::Vec};
-use pane_guest::{CustomView, FieldValue, FormError, Guest, Item, NoCustomView, View};
+use pane_guest::alloc::{string::String, vec::Vec};
+use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
 
 struct Hello;
 pane_guest::export!(Hello);
 
-impl Guest for Hello {
+impl Command for Hello {
     type CustomView = NoCustomView;
 
-    async fn get_view() -> Result<View, String> {
-        let item = Item {
-            id: "hi".into(),
-            title: "Say hi".into(),
-            subtitle: None,
-            form: None,
-            platforms: None,
-            custom_view: None,
-        };
-        Ok(View { title: "Hello".into(), items: vec![item] })
-    }
-
-    async fn run_action(_item_id: String) -> Result<String, String> {
-        Ok("hi!".into())
+    async fn render() -> Result<List, String> {
+        Ok(List::new("Hello")
+            .item(Item::new("hi", "Say hi").on_action(|| async { Ok("hi!".into()) })))
     }
 
     async fn submit_form(_item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {
@@ -306,9 +303,13 @@ cache.set("last-greeting", greeting);
 
 The [JavaScript](sample-js/src/index.js) and
 [TypeScript](sample-ts/src/index.ts) samples are complete examples. A command
-is an npm package whose `main` module exports `command` with four async
-functions (see [Forms](#forms) and [Custom views](#custom-views) for the last
-two). Pane's types come from
+is an npm package whose `main` module exports `command` with `render`, its
+list, whose items' actions are functions (`onAction`), and two functions for
+forms and custom views (see [Forms](#forms) and
+[Custom views](#custom-views)). The SDK hands Pane the list as a versioned
+JSON tree and runs an item's `onAction` when the user chooses it, then Pane
+asks for the list again ([list-tree.md](../docs/list-tree.md)). Pane's types
+come from
 `@pane/extension` (a `file:../js` development dependency); they describe plain
 values, not engine objects:
 
@@ -317,13 +318,20 @@ import type { Command } from "@pane/extension";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
 
 export const command: Command = {
-  async getView() {
-    return { title: "Hello", items: [{ id: "hi", title: "Say hi" }] };
-  },
-  async runAction(itemId) {
-    if (itemId !== "hi") throw new Error(`unknown item: ${itemId}`);
-    await waitFor(10_000_000); // 10 ms; the command suspends meanwhile
-    return "hi!";
+  async render() {
+    return {
+      title: "Hello",
+      items: [
+        {
+          id: "hi",
+          title: "Say hi",
+          async onAction() {
+            await waitFor(10_000_000); // 10 ms; the command suspends meanwhile
+            return "hi!";
+          },
+        },
+      ],
+    };
   },
   async submitForm() {
     throw { message: "this command has no forms" };
@@ -336,8 +344,9 @@ export const command: Command = {
 
 Throwing (a rejected promise) shows the error's message, or a thrown string,
 as an error. Returning a value of the wrong type, such as `undefined` from
-`runAction`, traps the guest, which Pane reports and recovers from as for
-Rust. npm dependencies are bundled into the component; the samples use
+an `onAction`, traps the guest, which Pane reports and recovers from as for
+Rust; a list Pane cannot read (a title that is not text, say) is the
+command's failure, not a crash. npm dependencies are bundled into the component; the samples use
 [Zod](https://zod.dev) 4.6.5 (`zod/mini`) and show its validation failure as a
 normal error. Only ECMAScript built-ins are available, not Node.js or browser
 APIs; WASI 0.3 imports declared by [the world](js/wit/world.wit) (currently
@@ -352,7 +361,7 @@ snapshotting the engine, so module top-level code runs at build time, on the
 build machine, and every instance starts from its result. Keep top-level code
 to pure setup such as schemas and constants: secrets, IDs, timestamps, random
 values or anything else meant to differ per instance belong inside
-`getView`/`runAction`. For the same reason, rebuilt components are never
+`render` and the actions. For the same reason, rebuilt components are never
 byte-identical.
 
 Build commands, from the repository root:
@@ -437,9 +446,9 @@ let form = Form {
     ],
     submit_label: "Greet".into(),
 };
-let item = Item { id: "form".into(), title: "Greet someone".into(), subtitle: None, form: Some(form), platforms: None };
+let item = Item::new("form", "Greet someone").form(form);
 
-// In `impl Guest`:
+// In `impl Command`:
 async fn submit_form(item_id: String, values: Vec<FieldValue>) -> Result<String, FormError> {
     let name = values.iter().find(|v| v.id == "name").map_or("", |v| v.value.trim());
     if name.is_empty() {
@@ -783,7 +792,9 @@ due meanwhile. At most one run of a command is asked for at a time; ticks
 that fall due while one runs are coalesced into the next run after it
 answers.
 
-The scheduled run is an ordinary `run-action` call: the guest needs no
+The scheduled run is the item's ordinary action (Pane asks for the
+command's list, then runs the item's action, as choosing it would): the
+guest needs no
 new interface, and everything an action may do — read and save data, call
 helpers, make requests, wait — works the same. See
 [scheduled work](../docs/schedules.md) for the full contract, and the
@@ -977,7 +988,8 @@ A command that searches an online service as the user types sets
 `command`. Pane gives it a search field of its own once the user opens it
 and calls `search(command, query)` with the text typed there (trimmed,
 never empty); the results (`id`, `title`, optional `subtitle`) replace the
-command's list, and activating one calls `run-action` with its id. Root
+command's list, and activating one runs it by its id: the SDKs call the
+command's `run_search_result` (Rust) or `runSearchResult` (JS/TS). Root
 search never calls it, so nothing typed there reaches the command or its
 service. Pane waits 150 ms before it starts a search, and stops one it no
 longer needs (the text changed, the user left) where it waits, dropping the
@@ -1080,8 +1092,9 @@ impl GuestCustomView for Picker {
     }
 }
 
-// The item: `custom_view: Some(CustomViewInfo { title: "Pick".into(), label:
-// "Column".into(), role: CustomViewRole::ColorWell })`. In `impl Guest`:
+// The item: `Item::new("pick", "Pick").custom_view(CustomViewInfo { title:
+// "Pick".into(), label: "Column".into(), role: CustomViewRole::ColorWell })`.
+// In `impl Command`:
 type CustomView = Picker;
 
 async fn open_view(_item_id: String) -> Result<CustomView, String> {
@@ -1409,8 +1422,8 @@ function Pane calls with the types it calls it with, and for a command with
 A component built against an older shape of the same `apiVersion` (the
 pre-release API 0.1 changes between slices) is therefore refused at install,
 naming the first mismatch ("it was built for an older extension API shape:
-rebuild it against Pane's current extension API 0.1 (`get-view`: type
-mismatch for field items: expected record of 6 fields, found 4 fields)");
+rebuild it against Pane's current extension API 0.1 (it has no function
+`render`)");
 rebuild it against the current [`wit/extension.wit`](../wit/extension.wit).
 
 Where the component comes from is up to your build. A standalone Rust crate
@@ -1508,11 +1521,11 @@ two stages, and a failure in each is reported differently:
    instances are stopped (an open command, form or custom view of the
    package closes; root search then selects its command), and the new code
    starts: Pane starts each of the package's commands available on this
-   system and asks it for its view (`get-view`). Success shows "Reloaded
+   system and asks it for its view (`render`). Success shows "Reloaded
    Dev". If a command fails to initialize (it traps, or its component
    cannot load or be instantiated), its instances are stopped again and the
    package is reported as failed to start. An error the command returns
-   from `get-view` itself, such as asking the user to sign in first, is an
+   from `render` itself, such as asking the user to sign in first, is an
    ordinary answer and not a failure to start. On a failure to start: the package's row says "Failed to start", a **Retry
    starting <title>** row appears under its Reload row with the diagnostics
    (for a trap, the guest backtrace), which Pane also writes to its standard

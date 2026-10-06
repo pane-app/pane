@@ -345,11 +345,13 @@ impl Launcher {
         let runtime = self.runtime()?;
         for component in &components {
             let data = self.data_of(component);
-            match runtime.get_view_with(component, data).await {
+            match runtime.render_with(component, data).await {
                 // Only a fatal initialization is a failure to start: an
                 // error the guest answers with, such as "sign in first", is
-                // an ordinary outcome of code that started (#16).
-                Ok(_) | Err(CallError::Disabled | CallError::Guest(_)) => {}
+                // an ordinary outcome of code that started (#16), and so is
+                // a tree Pane cannot read.
+                Ok(_)
+                | Err(CallError::Disabled | CallError::Guest(_) | CallError::Unreadable(_)) => {}
                 Err(error) => {
                     runtime.forget(components.iter().cloned());
                     return Err(error);

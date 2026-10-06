@@ -14,7 +14,8 @@ proposed). The same on every system.
 
 Root search lists the command by its title like any other. Enter opens it:
 the query field stays on screen, empty and focused (placeholder "Search"),
-above the command's own list (its `get-view` items). Typing sends the text,
+above the command's own list (the items of its tree, see
+[list-tree.md](list-tree.md)). Typing sends the text,
 trimmed, to the command; while it answers the status says "Running…" and
 the rows listed stay; its results then replace the rows, the first
 selected. Enter on a result runs the command's action for it, whose answer
@@ -86,7 +87,9 @@ any call.
 In `pane.json`, a command sets `"search": true`; its component then also
 exports `pane:extension/command-search` ([wit/search.wit](../wit/search.wit)):
 `search(command, query) -> result<list<search-result>, string>`, where a
-result has an `id` (passed to `run-action` when activated), a `title` and
+result has an `id` (passed to `handle-event` as the callback id when
+activated, which the SDKs hand to the command's `run_search_result` /
+`runSearchResult`), a `title` and
 an optional `subtitle`, the fields of a root result without its action.
 Installing checks the export, as for the other optional exports. A command
 cannot set both `"search"` and `"rootResults"`: root search never asks a
@@ -163,7 +166,8 @@ No test or smoke reaches beyond 127.0.0.1.
 
 - **Provisional, pending user confirmation:** the manifest key
   `"search": true` and interface name `command-search`; results are plain
-  rows whose action is `run-action` (no forms, custom views, platforms or
+  rows whose action is `handle-event` with the result's id (no forms,
+  custom views, platforms or
   Pane-performed actions such as opening a link); the 150 ms wait, and each
   stop of a started search dropping the instance; rows stay listed while a
   search runs; errors clear the rows; the error text keeps the "The

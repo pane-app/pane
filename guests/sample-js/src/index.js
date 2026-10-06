@@ -163,16 +163,49 @@ class ColorPicker {
   }
 }
 
+/**
+ * Runs the action of the item `itemId`; each item's action is this with its
+ * id.
+ * @param {string} itemId
+ * @returns {Promise<string>}
+ */
+async function act(itemId) {
+  switch (itemId) {
+    case "greet":
+      return "Hello from the JavaScript guest";
+    case "wait":
+      // A native component-model async import; the command suspends here.
+      await waitFor(50_000_000);
+      return "Waited 50 ms inside the JavaScript guest";
+    case "validate": {
+      const parsed = z.safeParse(Settings, { name: "Pane", port: 70000 });
+      if (!parsed.success) {
+        // The thrown error's message is shown to the user as the command's error.
+        throw new Error(`Invalid settings: ${parsed.error.issues[0].message}`);
+      }
+      return `Settings are valid: ${parsed.data.name} on port ${parsed.data.port}`;
+    }
+    case "random":
+      return String(Math.random());
+    case "windows-only":
+      return "Ran the Windows-only action in the JavaScript guest";
+    case "not-windows":
+      return "Ran the macOS and Linux action in the JavaScript guest";
+    default:
+      throw new Error(`unknown item: ${itemId}`);
+  }
+}
+
 /** @type {import("@pane/extension").Command} */
 export const command = {
-  async getView() {
+  async render() {
     return {
       title: "JavaScript sample",
       items: [
-        { id: "greet", title: "Say hello", subtitle: "Answer from the JavaScript guest" },
-        { id: "wait", title: "Wait briefly", subtitle: "Await a WASI 0.3 clock, then answer" },
-        { id: "validate", title: "Validate settings", subtitle: "Reject settings with an out-of-range port" },
-        { id: "random", title: "Roll a number", subtitle: "A random number from this instance" },
+        { id: "greet", title: "Say hello", subtitle: "Answer from the JavaScript guest", onAction: () => act("greet") },
+        { id: "wait", title: "Wait briefly", subtitle: "Await a WASI 0.3 clock, then answer", onAction: () => act("wait") },
+        { id: "validate", title: "Validate settings", subtitle: "Reject settings with an out-of-range port", onAction: () => act("validate") },
+        { id: "random", title: "Roll a number", subtitle: "A random number from this instance", onAction: () => act("random") },
         { id: "form", title: "Greet someone", subtitle: "Fill in a form the guest checks", form: GREETING_FORM },
         {
           id: "color",
@@ -180,39 +213,24 @@ export const command = {
           subtitle: "Pick a color in a view the guest draws",
           customView: { title: "Choose a color", label: "Color", role: "color-well" },
         },
-        // Elsewhere Pane lists these as unavailable, says why, and never calls
-        // runAction for them.
-        { id: "windows-only", title: "Windows-only action", subtitle: "Declared to work on Windows only", platforms: ["windows"] },
-        { id: "not-windows", title: "macOS and Linux action", subtitle: "Declared to work on macOS and Linux only", platforms: ["macos", "linux"] },
+        // Elsewhere Pane lists these as unavailable, says why, and never runs
+        // their actions.
+        {
+          id: "windows-only",
+          title: "Windows-only action",
+          subtitle: "Declared to work on Windows only",
+          platforms: ["windows"],
+          onAction: () => act("windows-only"),
+        },
+        {
+          id: "not-windows",
+          title: "macOS and Linux action",
+          subtitle: "Declared to work on macOS and Linux only",
+          platforms: ["macos", "linux"],
+          onAction: () => act("not-windows"),
+        },
       ],
     };
-  },
-
-  async runAction(itemId) {
-    switch (itemId) {
-      case "greet":
-        return "Hello from the JavaScript guest";
-      case "wait":
-        // A native component-model async import; the command suspends here.
-        await waitFor(50_000_000);
-        return "Waited 50 ms inside the JavaScript guest";
-      case "validate": {
-        const parsed = z.safeParse(Settings, { name: "Pane", port: 70000 });
-        if (!parsed.success) {
-          // The thrown error's message is shown to the user as the command's error.
-          throw new Error(`Invalid settings: ${parsed.error.issues[0].message}`);
-        }
-        return `Settings are valid: ${parsed.data.name} on port ${parsed.data.port}`;
-      }
-      case "random":
-        return String(Math.random());
-      case "windows-only":
-        return "Ran the Windows-only action in the JavaScript guest";
-      case "not-windows":
-        return "Ran the macOS and Linux action in the JavaScript guest";
-      default:
-        throw new Error(`unknown item: ${itemId}`);
-    }
   },
 
   async submitForm(itemId, values) {

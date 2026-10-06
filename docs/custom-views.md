@@ -14,9 +14,10 @@ Defined in [`wit/extension.wit`](../wit/extension.wit), identically for Rust
 ([`pane-guest`](../guests/pane-guest/src/lib.rs)) and JavaScript/TypeScript
 ([`@pane/extension`](../guests/js/pane.d.ts)):
 
-- An `item` may carry `custom-view: custom-view-info` (screen title,
-  accessible label, role). Activating it calls `open-view(item-id)` instead of
-  `run-action` (a `form`, if also set, wins).
+- An item may carry a `customView` (screen title, accessible label, role;
+  the WIT record `custom-view-info`, carried in the list's tree, see
+  [list-tree.md](list-tree.md)). Activating it calls `open-view(item-id)`
+  instead of running the item's action (a `form`, if also set, wins).
 - `open-view` returns a `custom-view`, a WIT **resource** the extension
   implements and in which it keeps the view's state. Each call opens a new
   view with its own state. Pane owns the handle: it drops it when the view

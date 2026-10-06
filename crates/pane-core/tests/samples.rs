@@ -126,9 +126,13 @@ impl Sample {
 
     /// The random item's answer in a runtime of its own.
     fn fresh_random(&self) -> f64 {
-        let answer = block_on(Runtime::start().unwrap().run_action(&self.path(), "random"))
+        let answer = block_on(Runtime::start().unwrap().run_item(&self.path(), "random"))
             .expect("the random item answers");
-        let value: f64 = answer.parse().expect("the answer is a number");
+        let value: f64 = answer
+            .status
+            .expect("the answer has text")
+            .parse()
+            .expect("the answer is a number");
         assert!((0.0..1.0).contains(&value), "{value} is not in [0, 1)");
         value
     }
@@ -184,13 +188,19 @@ fn a_validation_failure_is_shown_as_an_error(sample: &Sample) {
     assert!(matches!(sample.run(&launcher, "greet"), Status::Result(_)));
 }
 
-fn an_unknown_item_is_a_guest_error(sample: &Sample) {
+/// A callback the sample's list does not name is the guest's error, the
+/// same in each SDK; asking to run an item the list lacks is one too.
+fn an_unknown_action_is_a_guest_error(sample: &Sample) {
     let runtime = Runtime::start().unwrap();
 
-    let answer = block_on(runtime.run_action(&sample.path(), "missing"));
+    let answer = block_on(runtime.handle_event(&sample.path(), "missing", "{}"));
 
     assert_eq!(
         answer,
+        Err(CallError::Guest("unknown action: missing".into()))
+    );
+    assert_eq!(
+        block_on(runtime.run_item(&sample.path(), "missing")),
         Err(CallError::Guest("unknown item: missing".into()))
     );
 }
@@ -622,7 +632,7 @@ contract!(
     greeting_shows_the_guests_answer,
     an_async_wasi_wait_shows_running_until_it_answers,
     a_validation_failure_is_shown_as_an_error,
-    an_unknown_item_is_a_guest_error,
+    an_unknown_action_is_a_guest_error,
     separately_started_runtimes_roll_different_numbers,
     one_instance_rolls_a_new_number_each_time,
     the_component_imports_only_wasi_0_3,

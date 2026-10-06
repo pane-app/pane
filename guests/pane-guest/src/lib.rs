@@ -1,6 +1,9 @@
 //! Guest-side bindings for Pane's `pane:extension` contract.
 //!
-//! An extension implements [`Guest`] and calls [`export!`]. It may keep
+//! An extension implements [`Command`] and calls [`export!`]: its screen is
+//! a [`List`] of [`Item`]s whose actions are closures, which the SDK hands
+//! Pane as the versioned JSON tree of ADR 0036's envelope (`render` and
+//! `handle-event`) and runs when the user chooses them. It may keep
 //! values between runs with [`settings`], and its own records, disposable
 //! values and secrets with [`content`], [`cache`] and [`credentials`]. It
 //! may compute results from root search's query with [`root`], take a query
@@ -38,9 +41,12 @@ wit_bindgen::generate!({
 
 pub use exports::pane::extension::command::{
     Choice, CustomView, CustomViewInfo, CustomViewRole, Field, FieldKind, FieldValue, Form,
-    FormError, Frame, Guest, GuestCustomView, Item, Key, Platform, Point, Rect, Shape, Text,
-    TextField, View, ViewEvent,
+    FormError, Frame, GuestCustomView, Key, Platform, Point, Rect, Shape, Text, TextField,
+    ViewEvent,
 };
+pub use list::{Command, Item, List};
+
+mod list;
 pub use pane::extension::{cache, content, credentials, operations, settings};
 
 impl operations::CallErrorKind {
@@ -237,7 +243,9 @@ pub mod indexed {
 /// service. Pane asks it only once the user has opened it, never while they
 /// type in root search. A command whose `pane.json` entry sets
 /// `"search": true` implements [`search::Guest`] too and calls
-/// [`search::export!`](crate::search::export) beside [`export!`]:
+/// [`search::export!`](crate::search::export) beside [`export!`]. Choosing
+/// a result calls [`crate::Command::run_search_result`] with its id, so the id
+/// should say which result it is:
 ///
 /// ```ignore
 /// pane_guest::export!(Packages);
@@ -282,8 +290,8 @@ pub mod service {
 pub mod http;
 
 /// The custom view type of a command that has none: `type CustomView =
-/// NoCustomView;` in its `Guest` implementation, with an `open_view` that
-/// returns `Err`. It has no values, so no view of it can be opened.
+/// NoCustomView;` in its [`Command`] implementation, with an `open_view`
+/// that returns `Err`. It has no values, so no view of it can be opened.
 pub enum NoCustomView {}
 
 impl GuestCustomView for NoCustomView {

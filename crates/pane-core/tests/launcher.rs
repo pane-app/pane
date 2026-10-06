@@ -614,11 +614,12 @@ fn a_crash_in_a_view_closes_it_and_the_command_keeps_working() {
 }
 
 /// The pre-release extension API 0.1 changes shape between slices without a
-/// version bump: `item` gained `platforms` in #19, and the command gained
-/// custom views in #21. A component built against an older shape declares
-/// the same API version; its exports' types are checked when it loads, here
-/// for a command built into Pane (installing checks the same, see
-/// `packages.rs`), and the first mismatch is named.
+/// version bump: `item` gained `platforms` in #19, the command gained custom
+/// views in #21, and its list moved into ADR 0036's envelope (`render` and
+/// `handle-event`) in #135. A component built against an older shape
+/// declares the same API version; its exports' types are checked when it
+/// loads, here for a command built into Pane (installing checks the same,
+/// see `packages.rs`), and the first mismatch is named.
 #[test]
 fn a_component_of_an_older_api_shape_is_refused_when_it_loads() {
     let launcher = launcher(vec![command("old", guest("old_api"))]);
@@ -638,12 +639,7 @@ fn a_component_of_an_older_api_shape_is_refused_when_it_loads() {
         ),
         "{message}"
     );
-    assert!(
-        message.contains(
-            "`get-view`: type mismatch for field items: expected record of 6 fields, found 4 fields"
-        ),
-        "{message}"
-    );
+    assert!(message.contains("it has no function `render`"), "{message}");
 }
 
 #[test]

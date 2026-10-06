@@ -338,8 +338,11 @@ fn the_answer_of_a_scheduled_run_shows_on_the_command_screen(fixture: &Fixture) 
     );
     assert_eq!(started.launcher.view().screen, Screen::Command);
     assert_eq!(pane.runs(&folder), Some(1));
+    // The command's list was asked for again once the run answered, as after
+    // an action the user chose, so it shows what the run did.
+    assert_eq!(started.launcher.view().title, "Ran 1 times");
 
-    // The command's view, asked for again, shows what the runs did.
+    // Opened again, it shows the same.
     open(&started.launcher, fixture.command);
     assert_eq!(started.launcher.view().title, "Ran 1 times");
 }

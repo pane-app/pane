@@ -83,7 +83,7 @@ operating system" for an empty list). The item:
   the reason can be read;
 - shows the reason as a third line of the row, in amber, with a dimmed title;
 - when activated (Enter or a click), shows the reason as the status error and
-  never calls `run-action` or opens the item's form, so nothing looks
+  never runs the item's action (`handle-event`) or opens its form, so nothing looks
   successful while doing nothing.
 
 The command decides nothing about platforms itself: it cannot see which system

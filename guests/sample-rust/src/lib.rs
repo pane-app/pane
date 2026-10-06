@@ -10,9 +10,9 @@ use core::cell::Cell;
 use pane_guest::alloc::{format, string::String, vec, vec::Vec};
 use pane_guest::root::{RootAction, RootResult};
 use pane_guest::{
-    Choice, CustomView, CustomViewInfo, CustomViewRole, Field, FieldKind, FieldValue, Form,
-    FormError, Frame, Guest, GuestCustomView, Item, Key, Platform, Rect, Shape, Text, TextField,
-    View, ViewEvent,
+    Choice, Command, CustomView, CustomViewInfo, CustomViewRole, Field, FieldKind, FieldValue,
+    Form, FormError, Frame, GuestCustomView, Item, Key, List, Platform, Rect, Shape, Text,
+    TextField, ViewEvent,
 };
 
 struct Sample;
@@ -206,105 +206,92 @@ fn invalid(field: &str, message: &str) -> FormError {
     }
 }
 
-impl Guest for Sample {
+/// Runs the action of the item `id`; each item's action is this with its id.
+async fn act(id: &str) -> Result<String, String> {
+    match id {
+        "greet" => Ok("Hello from the Rust guest".into()),
+        "wait" => {
+            // A native component-model async import; the guest suspends here.
+            wasip3::clocks::monotonic_clock::wait_for(50_000_000).await;
+            Ok("Waited 50 ms inside the Rust guest".into())
+        }
+        "validate" => {
+            let settings = Settings {
+                name: "Pane",
+                port: 70000,
+            };
+            settings
+                .validate()
+                .map_err(|problem| format!("Invalid settings: {problem}"))?;
+            Ok(format!(
+                "Settings are valid: {} on port {}",
+                settings.name, settings.port
+            ))
+        }
+        "random" => {
+            // A number in [0, 1) from 53 random bits, like `Math.random()`.
+            let bits = wasip3::random::random::get_random_u64() >> 11;
+            Ok(format!("{}", bits as f64 / (1u64 << 53) as f64))
+        }
+        "windows-only" => Ok("Ran the Windows-only action in the Rust guest".into()),
+        "not-windows" => Ok("Ran the macOS and Linux action in the Rust guest".into()),
+        other => Err(format!("unknown item: {other}")),
+    }
+}
+
+impl Command for Sample {
     type CustomView = ColorPicker;
 
-    async fn get_view() -> Result<View, String> {
-        let item = |id: &str, title: &str, subtitle: &str| Item {
-            id: id.into(),
-            title: title.into(),
-            subtitle: Some(subtitle.into()),
-            form: None,
-            platforms: None,
-            custom_view: None,
+    async fn render() -> Result<List, String> {
+        let item = |id: &'static str, title: &str, subtitle: &str| {
+            Item::new(id, title).subtitle(subtitle)
         };
-        Ok(View {
-            title: "Rust sample".into(),
-            items: vec![
-                item("greet", "Say hello", "Answer from the Rust guest"),
-                item(
-                    "wait",
-                    "Wait briefly",
-                    "Await a WASI 0.3 clock, then answer",
-                ),
-                item(
-                    "validate",
-                    "Validate settings",
-                    "Reject settings with an out-of-range port",
-                ),
-                item(
-                    "random",
-                    "Roll a number",
-                    "A random number from this instance",
-                ),
-                Item {
-                    form: Some(greeting_form()),
-                    ..item("form", "Greet someone", "Fill in a form the guest checks")
-                },
-                Item {
-                    custom_view: Some(CustomViewInfo {
-                        title: "Choose a color".into(),
-                        label: "Color".into(),
-                        role: CustomViewRole::ColorWell,
-                    }),
-                    ..item(
-                        "color",
-                        "Choose a color",
-                        "Pick a color in a view the guest draws",
-                    )
-                },
-                // Elsewhere Pane lists these as unavailable, says why, and
-                // never calls `run_action` for them.
-                Item {
-                    platforms: Some(vec![Platform::Windows]),
-                    ..item(
-                        "windows-only",
-                        "Windows-only action",
-                        "Declared to work on Windows only",
-                    )
-                },
-                Item {
-                    platforms: Some(vec![Platform::Macos, Platform::Linux]),
-                    ..item(
-                        "not-windows",
-                        "macOS and Linux action",
-                        "Declared to work on macOS and Linux only",
-                    )
-                },
-            ],
-        })
-    }
-
-    async fn run_action(item_id: String) -> Result<String, String> {
-        match item_id.as_str() {
-            "greet" => Ok("Hello from the Rust guest".into()),
-            "wait" => {
-                // A native component-model async import; the guest suspends here.
-                wasip3::clocks::monotonic_clock::wait_for(50_000_000).await;
-                Ok("Waited 50 ms inside the Rust guest".into())
-            }
-            "validate" => {
-                let settings = Settings {
-                    name: "Pane",
-                    port: 70000,
-                };
-                settings
-                    .validate()
-                    .map_err(|problem| format!("Invalid settings: {problem}"))?;
-                Ok(format!(
-                    "Settings are valid: {} on port {}",
-                    settings.name, settings.port
-                ))
-            }
-            "random" => {
-                // A number in [0, 1) from 53 random bits, like `Math.random()`.
-                let bits = wasip3::random::random::get_random_u64() >> 11;
-                Ok(format!("{}", bits as f64 / (1u64 << 53) as f64))
-            }
-            "windows-only" => Ok("Ran the Windows-only action in the Rust guest".into()),
-            "not-windows" => Ok("Ran the macOS and Linux action in the Rust guest".into()),
-            other => Err(format!("unknown item: {other}")),
-        }
+        let acting = |id: &'static str, title: &str, subtitle: &str| {
+            item(id, title, subtitle).on_action(move || act(id))
+        };
+        Ok(List::new("Rust sample").items([
+            acting("greet", "Say hello", "Answer from the Rust guest"),
+            acting(
+                "wait",
+                "Wait briefly",
+                "Await a WASI 0.3 clock, then answer",
+            ),
+            acting(
+                "validate",
+                "Validate settings",
+                "Reject settings with an out-of-range port",
+            ),
+            acting(
+                "random",
+                "Roll a number",
+                "A random number from this instance",
+            ),
+            item("form", "Greet someone", "Fill in a form the guest checks").form(greeting_form()),
+            item(
+                "color",
+                "Choose a color",
+                "Pick a color in a view the guest draws",
+            )
+            .custom_view(CustomViewInfo {
+                title: "Choose a color".into(),
+                label: "Color".into(),
+                role: CustomViewRole::ColorWell,
+            }),
+            // Elsewhere Pane lists these as unavailable, says why, and
+            // never runs their actions.
+            acting(
+                "windows-only",
+                "Windows-only action",
+                "Declared to work on Windows only",
+            )
+            .platforms([Platform::Windows]),
+            acting(
+                "not-windows",
+                "macOS and Linux action",
+                "Declared to work on macOS and Linux only",
+            )
+            .platforms([Platform::Macos, Platform::Linux]),
+        ]))
     }
 
     async fn submit_form(item_id: String, values: Vec<FieldValue>) -> Result<String, FormError> {

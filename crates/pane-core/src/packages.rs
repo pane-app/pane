@@ -436,9 +436,9 @@ pub struct ManifestOperation {
 pub struct ManifestSchedule {
     /// How often the item's action runs, in seconds.
     pub every_seconds: u64,
-    /// The item whose action runs, as the command's `run-action` answers
-    /// it; the command's list view usually lists it, so the user can run
-    /// it too.
+    /// The id of the item whose action runs: Pane asks for the command's
+    /// tree and runs that item's action (its callback), as choosing it
+    /// would. The command's list lists it, so the user can run it too.
     pub item: String,
 }
 

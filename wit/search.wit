@@ -22,9 +22,9 @@ package pane:extension@0.1.0;
 interface command-search {
   /// One thing the search found, listed as a row of the command.
   record search-result {
-    /// Passed to the command's `run-action` when the user activates the
-    /// row, so it should say which result it is (the command's instance
-    /// may have been replaced meanwhile).
+    /// Passed to the command's `handle-event` as the callback id when the
+    /// user activates the row, so it should say which result it is (the
+    /// command's instance may have been replaced meanwhile).
     id: string,
     title: string,
     subtitle: option<string>,
@@ -33,8 +33,9 @@ interface command-search {
   /// Searches for `query`, the text in the search field of the command
   /// `command` (its id in `pane.json`, so one component can serve several
   /// commands), trimmed and never empty. The results replace the command's
-  /// list while the text stays; activating one runs `run-action` with its
-  /// id, whose answer is shown as an item's is. An error is shown to the
+  /// list while the text stays; activating one calls `handle-event` with
+  /// its id as the callback, whose answer is shown as an item's action's
+  /// is. An error is shown to the
   /// user in place of results, and does not count against the extension: a
   /// service that is down or unreachable is an expected error, not a
   /// crash.

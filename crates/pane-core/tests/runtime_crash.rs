@@ -448,10 +448,10 @@ fn a_call_whose_answer_was_lost_says_it_was_not_run_again() {
         .join("sample_settings.wasm");
     // Other calls answer as usual (here, that a command built into Pane
     // keeps no settings): the fault is for Count only.
-    let view = block_on(pane.runtime.get_view(&path));
+    let view = block_on(pane.runtime.render(&path));
     assert!(matches!(view, Err(CallError::Guest(_))), "{view:?}");
 
-    let answer = block_on(pane.runtime.run_action(&path, "count"));
+    let answer = block_on(pane.runtime.run_item(&path, "count"));
 
     let Err(CallError::RuntimeUnavailable(reason)) = answer else {
         panic!("expected the runtime unavailable, got {answer:?}");

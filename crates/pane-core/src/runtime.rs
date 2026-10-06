@@ -38,11 +38,11 @@ use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpCtxView, WasiHttpView};
 
 use crate::http;
-use crate::platform::Platform;
 
 pub(crate) mod deadlines;
 mod faults;
 mod supervisor;
+mod tree;
 
 use deadlines::Doing;
 #[doc(hidden)]
@@ -58,6 +58,7 @@ use faults::Faults;
 pub(crate) use supervisor::CRASH_WINDOW;
 use supervisor::{NotSent, Shared};
 pub use supervisor::{RuntimeFailure, RuntimeStatus};
+pub use tree::{Action, Answer, Item, TREE_VERSION, View};
 
 pub(crate) mod bindings {
     wasmtime::component::bindgen!({
@@ -182,7 +183,8 @@ const SERVICE_INTERFACE: &str = "pane:extension/service@0.1.0";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ResultListing {
     /// Identifies the result among the command's results; a search result's
-    /// is passed to the command's `run-action` when its row is activated.
+    /// is the callback id passed to the command's `handle-event` when its
+    /// row is activated.
     pub id: String,
     pub title: String,
     pub subtitle: Option<String>,
@@ -304,23 +306,6 @@ type SharedClipboard = Arc<Mutex<Option<std::sync::Weak<Capture>>>>;
 /// The installed packages as the launcher has them, once it has said, for
 /// resolving operation calls and finding a guest's helpers.
 type SharedDirectory = Arc<Mutex<Option<Directory>>>;
-
-/// One entry in a command's list view, as produced by the guest.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Item {
-    pub id: String,
-    pub title: String,
-    pub subtitle: Option<String>,
-    /// When set, activating the item opens this form instead of running its
-    /// action.
-    pub form: Option<Form>,
-    /// The operating systems the item's action works on; `None` for every
-    /// system.
-    pub platforms: Option<Vec<Platform>>,
-    /// When set (and `form` is not), activating the item opens this custom
-    /// view instead of running its action.
-    pub custom_view: Option<CustomViewInfo>,
-}
 
 /// What Pane shows of an item's custom view besides the view's drawing.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -504,13 +489,6 @@ pub struct FormError {
     pub message: String,
 }
 
-/// A command's list view, as produced by the guest.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct View {
-    pub title: String,
-    pub items: Vec<Item>,
-}
-
 /// What one cycle of a continuing service answers: the status to show on
 /// the command's screen and how long Pane waits before the next cycle
 /// (`pane:extension/service`, which the launcher's services thread runs
@@ -542,6 +520,10 @@ pub enum CallError {
     Guest(String),
     /// The guest did not accept a submitted form.
     Form(FormError),
+    /// The guest answered something Pane cannot read: a tree that is not
+    /// JSON, or lacks a field Pane needs (see `tree`). The command's
+    /// failure, as an error it answered with is, never a crash.
+    Unreadable(String),
     /// The guest trapped or otherwise failed while running.
     Trap(String),
     /// The guest computed for too long without finishing (see
@@ -602,6 +584,12 @@ impl fmt::Display for CallError {
             ),
             CallError::Guest(message) => write!(f, "The extension reported an error: {message}"),
             CallError::Form(error) => f.write_str(&error.message),
+            CallError::Unreadable(reason) => {
+                write!(
+                    f,
+                    "Pane could not read what the extension answered: {reason}"
+                )
+            }
             CallError::Trap(reason) => write!(f, "The extension crashed: {reason}"),
             CallError::Unresponsive(reason) => {
                 write!(f, "The extension stopped responding: {reason}")
@@ -662,16 +650,23 @@ pub(crate) struct Checked {
 }
 
 enum Request {
-    GetView {
+    Render {
         component: PathBuf,
         data: Option<PackageData>,
         reply: oneshot::Sender<Result<View, CallError>>,
     },
-    RunAction {
+    HandleEvent {
+        component: PathBuf,
+        callback: String,
+        details: String,
+        data: Option<PackageData>,
+        reply: oneshot::Sender<Result<Answer, CallError>>,
+    },
+    RunItem {
         component: PathBuf,
         item_id: String,
         data: Option<PackageData>,
-        reply: oneshot::Sender<Result<String, CallError>>,
+        reply: oneshot::Sender<Result<Answer, CallError>>,
     },
     RunCycle {
         component: PathBuf,
@@ -739,7 +734,8 @@ enum Request {
 
 impl Request {
     /// The component this request's call runs in, when it is a call the
-    /// user asked the package for — opening a command, running an item, a
+    /// user asked the package for — opening (or drawing again) a command,
+    /// handling an event of its list, running an item, a
     /// query sent from root, a command's search, a form submission or
     /// opening a custom view. Not the background and ambient ones (a
     /// scheduled run, a service cycle, a root search's ask), which a
@@ -747,8 +743,9 @@ impl Request {
     /// re-asks, nor a view event, whose screen is what the launcher checks.
     fn user_component(&self) -> Option<&Path> {
         match self {
-            Request::GetView { component, .. }
-            | Request::RunAction { component, .. }
+            Request::Render { component, .. }
+            | Request::HandleEvent { component, .. }
+            | Request::RunItem { component, .. }
             | Request::RunQuery { component, .. }
             | Request::Search { component, .. }
             | Request::SubmitForm { component, .. }
@@ -951,28 +948,46 @@ impl Runtime {
         self.shared.set_slow_report(report);
     }
 
-    /// Asks the command in `component` for its list view. The command has
-    /// no extension data.
-    pub async fn get_view(&self, component: &Path) -> Result<View, CallError> {
-        self.get_view_with(component, None).await
+    /// Asks the command in `component` to draw its screen (`render`), and
+    /// reads the list its tree describes. The command has no extension
+    /// data.
+    pub async fn render(&self, component: &Path) -> Result<View, CallError> {
+        self.render_with(component, None).await
     }
 
-    /// Runs the action of `item_id` in the command in `component`. The
-    /// command has no extension data.
-    pub async fn run_action(&self, component: &Path, item_id: &str) -> Result<String, CallError> {
-        self.run_action_with(component, item_id, None).await
+    /// Has the command in `component` handle the user's choice of
+    /// `callback`, a callback id its tree named (or a search result's id),
+    /// with `details`, a JSON object (`handle-event`). The caller asks for
+    /// the tree again afterwards. The command has no extension data.
+    pub async fn handle_event(
+        &self,
+        component: &Path,
+        callback: &str,
+        details: &str,
+    ) -> Result<Answer, CallError> {
+        self.handle_event_with(component, callback, details, None)
+            .await
     }
 
-    /// Like [`Runtime::get_view`]; the command reads and saves `data`.
+    /// Runs the action of the item `item_id` of the command in `component`,
+    /// as choosing it would: asks for the command's tree, then has it handle
+    /// the item's action's callback, in one request, so no other call comes
+    /// between. An item the list does not have, or one without an action,
+    /// is an error. The command has no extension data.
+    pub async fn run_item(&self, component: &Path, item_id: &str) -> Result<Answer, CallError> {
+        self.run_item_with(component, item_id, None).await
+    }
+
+    /// Like [`Runtime::render`]; the command reads and saves `data`.
     /// An instance keeps the data it was started with.
-    pub(crate) async fn get_view_with(
+    pub(crate) async fn render_with(
         &self,
         component: &Path,
         data: Option<PackageData>,
     ) -> Result<View, CallError> {
         let (reply, response) = oneshot::channel();
         self.call(
-            Request::GetView {
+            Request::Render {
                 component: component.to_path_buf(),
                 data,
                 reply,
@@ -982,16 +997,38 @@ impl Runtime {
         .await
     }
 
-    /// Like [`Runtime::run_action`]; the command reads and saves `data`.
-    pub(crate) async fn run_action_with(
+    /// Like [`Runtime::handle_event`]; the command reads and saves `data`.
+    pub(crate) async fn handle_event_with(
+        &self,
+        component: &Path,
+        callback: &str,
+        details: &str,
+        data: Option<PackageData>,
+    ) -> Result<Answer, CallError> {
+        let (reply, response) = oneshot::channel();
+        self.call(
+            Request::HandleEvent {
+                component: component.to_path_buf(),
+                callback: callback.to_owned(),
+                details: details.to_owned(),
+                data,
+                reply,
+            },
+            response,
+        )
+        .await
+    }
+
+    /// Like [`Runtime::run_item`]; the command reads and saves `data`.
+    pub(crate) async fn run_item_with(
         &self,
         component: &Path,
         item_id: &str,
         data: Option<PackageData>,
-    ) -> Result<String, CallError> {
+    ) -> Result<Answer, CallError> {
         let (reply, response) = oneshot::channel();
         self.call(
-            Request::RunAction {
+            Request::RunItem {
                 component: component.to_path_buf(),
                 item_id: item_id.to_owned(),
                 data,
@@ -1134,7 +1171,7 @@ impl Runtime {
     /// The launcher's services thread asks for each cycle while the
     /// package's code may run, taking the generation current when it does:
     /// a disable, reload, update, uninstall or pause that happens while the
-    /// cycle runs stops it (see `Runtime::run_action_with`, whose stopping
+    /// cycle runs stops it (see `Runtime::handle_event_with`, whose stopping
     /// is the same), and its late answer is discarded. An error the service
     /// answers with is an expected error; a trap, or a cycle that computes
     /// without finishing, is a crash of the package like any call's.
@@ -2139,8 +2176,12 @@ impl Code {
             func.typecheck::<P, R>(cx)
                 .map_err(|error| CallError::OlderApiShape(format!("`{name}`: {error:#}")))
         }
-        check::<(), (Result<command::View, String>,)>("get-view", func("get-view")?, &cx)?;
-        check::<(String,), (Result<String, String>,)>("run-action", func("run-action")?, &cx)?;
+        check::<(), (Result<String, String>,)>("render", func("render")?, &cx)?;
+        check::<(String, String), (Result<String, String>,)>(
+            "handle-event",
+            func("handle-event")?,
+            &cx,
+        )?;
         check::<(String, Vec<command::FieldValue>), (Result<String, command::FormError>,)>(
             "submit-form",
             func("submit-form")?,
@@ -2282,23 +2323,36 @@ impl Host {
             let _handling = watch.doing(Doing::Handling);
             self.drop_stopped();
             match request {
-                Request::GetView {
+                Request::Render {
                     component,
                     data,
                     reply,
                 } => {
-                    let result = self.get_view(&component, data).await;
+                    let result = self.render_tree(&component, data).await;
                     let _ = reply.send(result);
                 }
-                Request::RunAction {
+                Request::HandleEvent {
+                    component,
+                    callback,
+                    details,
+                    data,
+                    reply,
+                } => {
+                    let result = self
+                        .handle_event(&component, callback.clone(), details, data)
+                        .await;
+                    // An injected fault may lose this answer, after the
+                    // action ran.
+                    self.faults.before_answer(&callback);
+                    let _ = reply.send(result);
+                }
+                Request::RunItem {
                     component,
                     item_id,
                     data,
                     reply,
                 } => {
-                    let result = self.run_action(&component, item_id.clone(), data).await;
-                    // An injected fault may lose this answer, after the
-                    // action ran.
+                    let result = self.run_item(&component, &item_id, data).await;
                     self.faults.before_answer(&item_id);
                     let _ = reply.send(result);
                 }
@@ -2389,7 +2443,9 @@ impl Host {
         }
     }
 
-    async fn get_view(
+    /// Asks the command in `path` for its tree, and reads it: a tree Pane
+    /// cannot read is [`CallError::Unreadable`], and the instance stays.
+    async fn render_tree(
         &mut self,
         path: &Path,
         data: Option<PackageData>,
@@ -2400,15 +2456,58 @@ impl Host {
                 let command = instance.bindings.pane_extension_command();
                 instance
                     .store
-                    .run_concurrent(async |store| command.call_get_view(store).await)
+                    .run_concurrent(async |store| command.call_render(store).await)
                     .await
             })
             .await?;
-        let view = self.settle(path, result, CallError::Guest)?;
-        Ok(View {
-            title: view.title,
-            items: view.items.into_iter().map(Item::from).collect(),
-        })
+        let tree = self.settle(path, result, CallError::Guest)?;
+        tree::read_view(&tree).map_err(CallError::Unreadable)
+    }
+
+    /// Has the command in `path` handle `callback` with `details`, and reads
+    /// its answer: one Pane cannot read is [`CallError::Unreadable`].
+    async fn handle_event(
+        &mut self,
+        path: &Path,
+        callback: String,
+        details: String,
+        data: Option<PackageData>,
+    ) -> Result<Answer, CallError> {
+        self.instance(path, data).await?;
+        let result = self
+            .run_guest(path, async |instance| {
+                let command = instance.bindings.pane_extension_command();
+                instance
+                    .store
+                    .run_concurrent(async |store| {
+                        command.call_handle_event(store, callback, details).await
+                    })
+                    .await
+            })
+            .await?;
+        let answer = self.settle(path, result, CallError::Guest)?;
+        tree::read_answer(&answer).map_err(CallError::Unreadable)
+    }
+
+    /// Runs the action of the item `item_id` of the command in `path`: its
+    /// tree, then the item's action's callback (see [`Runtime::run_item`]).
+    async fn run_item(
+        &mut self,
+        path: &Path,
+        item_id: &str,
+        data: Option<PackageData>,
+    ) -> Result<Answer, CallError> {
+        let view = self.render_tree(path, data.clone()).await?;
+        let Some(item) = view.items.iter().find(|item| item.id == item_id) else {
+            return Err(CallError::Guest(format!("unknown item: {item_id}")));
+        };
+        let Some(action) = item.action() else {
+            return Err(CallError::Guest(format!(
+                "the item {item_id} has no action"
+            )));
+        };
+        self.handle_event(path, action.callback.clone(), "{}".into(), data)
+            .await
     }
 
     async fn submit_form(
@@ -2779,25 +2878,6 @@ impl Host {
                 },
             })
             .collect())
-    }
-
-    async fn run_action(
-        &mut self,
-        path: &Path,
-        item_id: String,
-        data: Option<PackageData>,
-    ) -> Result<String, CallError> {
-        self.instance(path, data).await?;
-        let result = self
-            .run_guest(path, async |instance| {
-                let command = instance.bindings.pane_extension_command();
-                instance
-                    .store
-                    .run_concurrent(async |store| command.call_run_action(store, item_id).await)
-                    .await
-            })
-            .await?;
-        self.settle(path, result, CallError::Guest)
     }
 
     /// Runs `call` on the live instance of `path`, serving the operation
@@ -3295,37 +3375,6 @@ impl Host {
     }
 }
 
-impl From<command::Item> for Item {
-    fn from(item: command::Item) -> Item {
-        Item {
-            id: item.id,
-            title: item.title,
-            subtitle: item.subtitle,
-            form: item.form.map(Form::from),
-            platforms: item
-                .platforms
-                .map(|platforms| platforms.into_iter().map(Platform::from).collect()),
-            custom_view: item.custom_view.map(|info| CustomViewInfo {
-                title: info.title,
-                label: info.label,
-                role: match info.role {
-                    command::CustomViewRole::ColorWell => CustomViewRole::ColorWell,
-                },
-            }),
-        }
-    }
-}
-
-impl From<command::Platform> for Platform {
-    fn from(platform: command::Platform) -> Platform {
-        match platform {
-            command::Platform::Windows => Platform::Windows,
-            command::Platform::Macos => Platform::Macos,
-            command::Platform::Linux => Platform::Linux,
-        }
-    }
-}
-
 impl From<command::Frame> for Frame {
     fn from(frame: command::Frame) -> Frame {
         let shapes = frame
@@ -3371,38 +3420,6 @@ impl From<ViewEvent> for command::ViewEvent {
             ViewEvent::PointerDown(at) => command::ViewEvent::PointerDown(point(at)),
             ViewEvent::PointerMove(at) => command::ViewEvent::PointerMove(point(at)),
             ViewEvent::PointerUp(at) => command::ViewEvent::PointerUp(point(at)),
-        }
-    }
-}
-
-impl From<command::Form> for Form {
-    fn from(form: command::Form) -> Form {
-        let fields = form
-            .fields
-            .into_iter()
-            .map(|field| Field {
-                id: field.id,
-                label: field.label,
-                kind: match field.kind {
-                    command::FieldKind::Text(text) => FieldKind::Text {
-                        placeholder: text.placeholder,
-                    },
-                    command::FieldKind::Choice(choices) => FieldKind::Choice(
-                        choices
-                            .into_iter()
-                            .map(|choice| Choice {
-                                id: choice.id,
-                                label: choice.label,
-                            })
-                            .collect(),
-                    ),
-                },
-            })
-            .collect();
-        Form {
-            title: form.title,
-            fields,
-            submit_label: form.submit_label,
         }
     }
 }
@@ -3492,11 +3509,11 @@ mod tests {
         let owned = settings.owned_by(&identity);
         let component = settings_sample();
         let runtime = Runtime::start().unwrap();
-        block_on(runtime.get_view_with(&component, Some(owned.clone()))).unwrap();
+        block_on(runtime.render_with(&component, Some(owned.clone()))).unwrap();
 
         settings.set_enabled(&identity, false);
         runtime.forget([component.clone()]);
-        let queued = runtime.get_view_with(&component, Some(owned));
+        let queued = runtime.render_with(&component, Some(owned));
 
         assert_eq!(block_on(queued), Err(CallError::Disabled));
     }
@@ -3527,7 +3544,8 @@ mod tests {
         let holding = {
             let (runtime, component) = (runtime.clone(), component.clone());
             std::thread::spawn(move || {
-                block_on(runtime.run_action_with(&component, "hold", Some(owned)))
+                // Not listed: the fixture runs it as a callback no item names.
+                block_on(runtime.handle_event_with(&component, "hold", "{}", Some(owned)))
             })
         };
         let started = Instant::now();
@@ -3656,14 +3674,14 @@ mod tests {
         packages: &ExtensionData,
         identity: &PackageIdentity,
         item: &str,
-    ) -> std::thread::JoinHandle<Result<String, CallError>> {
+    ) -> std::thread::JoinHandle<Result<Answer, CallError>> {
         let (runtime, owned, item) = (
             runtime.clone(),
             packages.owned_by(identity),
             item.to_owned(),
         );
         std::thread::spawn(move || {
-            block_on(runtime.run_action_with(&settings_sample(), &item, Some(owned)))
+            block_on(runtime.run_item_with(&settings_sample(), &item, Some(owned)))
         })
     }
 
@@ -3681,11 +3699,8 @@ mod tests {
         let other = guest("sample_rust.wasm");
         let (view, _) = block_on(runtime.open_view(&other, "color")).unwrap();
 
-        let busy = block_on(runtime.run_action_with(
-            &component,
-            "busy",
-            Some(packages.owned_by(&identity)),
-        ));
+        let busy =
+            block_on(runtime.run_item_with(&component, "busy", Some(packages.owned_by(&identity))));
 
         let Err(CallError::Unresponsive(reason)) = &busy else {
             panic!("expected it stopped as unresponsive, got {busy:?}");
@@ -3704,7 +3719,7 @@ mod tests {
         // again from a fresh instance.
         assert!(block_on(runtime.view_event(view, ViewEvent::Key(Key::Up))).is_ok());
         assert!(
-            block_on(runtime.get_view_with(&component, Some(packages.owned_by(&identity)))).is_ok()
+            block_on(runtime.render_with(&component, Some(packages.owned_by(&identity)))).is_ok()
         );
         assert_eq!(runtime.status(), RuntimeStatus::Running);
     }
@@ -3751,13 +3766,15 @@ mod tests {
         assert!(slow > short_limits().unresponsive);
 
         runtime.inject(Fault::SlowHostCall(slow));
-        let saved_note = block_on(runtime.run_action_with(
-            &component,
-            "note",
-            Some(packages.owned_by(&identity)),
-        ));
+        let saved_note =
+            block_on(runtime.run_item_with(&component, "note", Some(packages.owned_by(&identity))));
 
-        assert_eq!(saved_note, Ok("Saved a note".into()));
+        assert_eq!(
+            saved_note,
+            Ok(Answer {
+                status: Some("Saved a note".into())
+            })
+        );
         assert!(lock(&reported).is_empty(), "{:?}", lock(&reported));
         assert_eq!(runtime.status(), RuntimeStatus::Running);
         assert_eq!(runtime.abandoned_threads(), 0);
@@ -3779,7 +3796,7 @@ mod tests {
 
         runtime.inject(Fault::SlowHostCall(slow));
         let started = std::time::Instant::now();
-        let view = block_on(runtime.get_view_with(&component, Some(packages.owned_by(&identity))));
+        let view = block_on(runtime.render_with(&component, Some(packages.owned_by(&identity))));
 
         assert_eq!(view.expect("the view is shown").title, "Clipboard History");
         assert!(
@@ -3835,7 +3852,7 @@ mod tests {
         assert!(lock(&reported).is_empty(), "no package is named");
         // A fresh thread serves.
         assert!(
-            block_on(runtime.get_view_with(&component, Some(packages.owned_by(&identity)))).is_ok()
+            block_on(runtime.render_with(&component, Some(packages.owned_by(&identity)))).is_ok()
         );
 
         runtime.inject(Fault::Release);
@@ -3909,7 +3926,7 @@ mod tests {
         ));
         until_given_up(&runtime);
         let current = packages.owned_by(&identity);
-        assert!(block_on(runtime.get_view_with(&component, Some(current.clone()))).is_ok());
+        assert!(block_on(runtime.render_with(&component, Some(current.clone()))).is_ok());
         runtime.inject(Fault::Release);
         until("the stuck thread ended", || {
             runtime.abandoned_threads() == 0
@@ -3917,13 +3934,15 @@ mod tests {
 
         // A call of the obsolete generation starts nothing.
         assert_eq!(
-            block_on(runtime.run_action_with(&component, "slow", Some(obsolete))),
+            block_on(runtime.run_item_with(&component, "slow", Some(obsolete))),
             Err(CallError::Replaced)
         );
         assert_eq!(block_on(runtime.running()), vec![component.clone()]);
         assert_eq!(
-            block_on(runtime.run_action_with(&component, "note", Some(current))),
-            Ok("Saved a note".into())
+            block_on(runtime.run_item_with(&component, "note", Some(current))),
+            Ok(Answer {
+                status: Some("Saved a note".into())
+            })
         );
         assert_eq!(
             saved(&packages, &identity, "slow-save").as_deref(),
@@ -3949,7 +3968,7 @@ mod tests {
         let (view, _) =
             block_on(runtime.open_view_with(&component, "color", Some(current))).unwrap();
 
-        let stale = runtime.get_view_with(&component, Some(old));
+        let stale = runtime.render_with(&component, Some(old));
 
         assert_eq!(block_on(stale), Err(CallError::Disabled));
         assert_eq!(block_on(runtime.view_count()), 1);

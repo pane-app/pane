@@ -2,7 +2,7 @@
 wit_bindgen::generate!({ path: "../../../wit", world: "extension" });
 
 use exports::pane::extension::command::{
-    CustomView, FieldValue, FormError, Frame, Guest, GuestCustomView, Item, View, ViewEvent,
+    CustomView, FieldValue, FormError, Frame, Guest, GuestCustomView, ViewEvent,
 };
 
 struct Mixed;
@@ -24,24 +24,16 @@ impl GuestCustomView for NoView {
 impl Guest for Mixed {
     type CustomView = NoView;
 
-    async fn get_view() -> Result<View, String> {
+    async fn render() -> Result<String, String> {
         let now = std::time::SystemTime::now();
         eprintln!("listing at {now:?}");
-        Ok(View {
-            title: "Mixed".into(),
-            items: vec![Item {
-                id: "x".into(),
-                title: "x".into(),
-                subtitle: None,
-                form: None,
-                platforms: None,
-                custom_view: None,
-            }],
-        })
+        Ok(r#"{"version": 1, "view": {"type": "list", "title": "Mixed", "items": [
+            {"id": "x", "title": "x", "actions": [{"onAction": "x"}]}]}}"#
+            .into())
     }
 
-    async fn run_action(item_id: String) -> Result<String, String> {
-        Ok(item_id)
+    async fn handle_event(callback: String, _details: String) -> Result<String, String> {
+        Ok(format!("{{\"status\": \"{callback}\"}}"))
     }
 
     async fn submit_form(item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {

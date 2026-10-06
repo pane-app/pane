@@ -169,6 +169,7 @@ fn guests() -> Result<(), String> {
                 "mismatched_api",
                 "failing_start",
                 "refusing_view",
+                "tree_fixture",
                 "git_greeter",
             ],
         ),

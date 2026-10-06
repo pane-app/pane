@@ -63,7 +63,7 @@ use crate::packages::{
 use crate::platform;
 use crate::runtime::{
     CallError, CustomViewInfo, CustomViewRole, FieldKind, FieldValue, Form, Frame, Item, Point,
-    ResultListing, RootAction, RootResult as ComputedResult, Runtime, ViewEvent, ViewId,
+    ResultListing, RootAction, RootResult as ComputedResult, Runtime, View, ViewEvent, ViewId,
     WeakRuntime,
 };
 use crate::search::{self, Keys, Query};
@@ -297,17 +297,24 @@ struct CommandList {
 }
 
 impl CommandList {
-    /// The list of a command whose list view has `items`.
+    /// The list of a command whose list view has `items`. Choosing an item
+    /// opens its form, else its custom view, else runs its action (the
+    /// first, by its callback id); an item with none of them does nothing
+    /// and says so.
     fn of(items: Vec<Item>) -> CommandList {
         let (rows, entries) = items
             .into_iter()
             .map(|item| {
                 let unavailable = platform::unavailable(item.platforms.as_deref(), "this action");
-                let entry = match (&unavailable, item.form, item.custom_view) {
-                    (Some(reason), _, _) => Entry::Unavailable(reason.clone()),
-                    (None, Some(form), _) => Entry::Form(item.id.clone(), form),
-                    (None, None, Some(info)) => Entry::CustomView(item.id.clone(), info),
-                    (None, None, None) => Entry::Run(item.id.clone()),
+                let callback = item.action().map(|action| action.callback.clone());
+                let entry = match (&unavailable, item.form, item.custom_view, callback) {
+                    (Some(reason), ..) => Entry::Unavailable(reason.clone()),
+                    (None, Some(form), ..) => Entry::Form(item.id.clone(), form),
+                    (None, None, Some(info), _) => Entry::CustomView(item.id.clone(), info),
+                    (None, None, None, Some(callback)) => Entry::Run(callback),
+                    (None, None, None, None) => {
+                        Entry::Unavailable("This item has no action".into())
+                    }
                 };
                 let row = Row {
                     id: item.id,
@@ -966,7 +973,8 @@ enum Entry {
     /// Check for a Pane application update again, after the check failed
     /// (root).
     CheckUpdate,
-    /// Run the open command's item with this id.
+    /// Have the open command handle this callback: an item's action's, or a
+    /// search result's id (`handle-event`), then list it again.
     Run(String),
     /// Open this form of the open command's item with this id.
     Form(String, Form),
@@ -2085,9 +2093,9 @@ impl Launcher {
                 Pending::OpenApplication { id, name } => {
                     launcher.open_application(epoch, id, name).await
                 }
-                Pending::Run(item_id) => {
+                Pending::Run(callback) => {
                     if let Some(component) = open {
-                        launcher.run_action(epoch, component, item_id, data).await
+                        launcher.run_action(epoch, component, callback, data).await
                     }
                 }
                 Pending::OpenUrl(url) => launcher.open_url(epoch, url).await,
@@ -2304,9 +2312,9 @@ impl Launcher {
                 state.view.status = Status::Running;
                 Pending::Open(opening)
             }
-            Entry::Run(item_id) => {
+            Entry::Run(callback) => {
                 state.view.status = Status::Running;
-                Pending::Run(item_id)
+                Pending::Run(callback)
             }
             Entry::CustomView(item_id, info) => {
                 state.view.status = Status::Running;
@@ -3525,11 +3533,15 @@ impl Launcher {
         };
     }
 
+    /// Has the open command in `component` handle `callback`, which the
+    /// user chose, and shows its answer; once it answered (with an error of
+    /// its own too), asks for its tree again and lists it, keeping the
+    /// selection on the same item (ADR 0036's envelope).
     async fn run_action(
         &self,
         epoch: u64,
         component: PathBuf,
-        item_id: String,
+        callback: String,
         data: Option<PackageData>,
     ) {
         if let Some(problem) = self.updating(&component) {
@@ -3546,20 +3558,108 @@ impl Launcher {
         let result = match self.runtime() {
             Ok(runtime) => {
                 runtime
-                    .run_action_with(&component, &item_id, data.clone())
+                    .handle_event_with(&component, &callback, "{}", data.clone())
                     .await
             }
+            Err(error) => Err(error),
+        };
+        // The command handled the event, whatever it answered: its tree may
+        // have changed. A crash, or a call that was stopped, did not.
+        let handled = matches!(
+            result,
+            Ok(_) | Err(CallError::Guest(_) | CallError::Unreadable(_))
+        );
+        {
+            let Some(mut state) = self.lock_if_current(epoch) else {
+                return;
+            };
+            let ended = stopped(&state, &component, &data);
+            let list_again = handled && ended.is_none();
+            state.view.status = match (ended, result) {
+                // Stopped while it was running: its answer is not shown.
+                (Some(problem), _) => Status::Error(problem),
+                (None, Ok(answer)) => answer.status.map_or(Status::Idle, Status::Result),
+                (None, Err(error)) => Status::Error(error.to_string()),
+            };
+            if !list_again {
+                return;
+            }
+        }
+        self.list_again(epoch, component, data).await;
+    }
+
+    /// Asks the open command in `component` for its tree again, after it
+    /// handled an event, and lists it while its screen is still the one on
+    /// display, keeping the selection on the same item. The status stays the
+    /// event's answer, unless the tree cannot be had, which is then shown
+    /// with the list as it was.
+    async fn list_again(&self, epoch: u64, component: PathBuf, data: Option<PackageData>) {
+        let answer = match self.runtime() {
+            Ok(runtime) => runtime.render_with(&component, data.clone()).await,
             Err(error) => Err(error),
         };
         let Some(mut state) = self.lock_if_current(epoch) else {
             return;
         };
-        state.view.status = match (stopped(&state, &component, &data), result) {
-            // Stopped while it was running: its answer is not shown.
-            (Some(problem), _) => Status::Error(problem),
-            (None, Ok(answer)) => Status::Result(answer),
-            (None, Err(error)) => Status::Error(error.to_string()),
+        let state = &mut *state;
+        if state.open.as_ref() != Some(&component) {
+            return;
+        }
+        if let Some(problem) = stopped(state, &component, &data) {
+            state.view.status = Status::Error(problem);
+            return;
+        }
+        match answer {
+            Ok(view) => self.relist(state, &component, view),
+            Err(error) => state.view.status = Status::Error(error.to_string()),
+        }
+    }
+
+    /// Shows `view`, the open command's tree drawn again, keeping the
+    /// selection on the same item when it is still listed (else at the same
+    /// place). While the command's search field holds text, what it found
+    /// stays listed, and `view` is kept for when the text is cleared.
+    fn relist(&self, state: &mut State, component: &Path, view: View) {
+        let list = self.command_list(state, component, view.items);
+        let searching = match &state.view.screen {
+            Screen::Command => false,
+            Screen::CommandSearch { query } => !query.trim().is_empty(),
+            _ => return,
         };
+        state.view.title = view.title;
+        if searching {
+            if let Some(search) = state.searching.as_mut() {
+                search.list = Some(list);
+            }
+            return;
+        }
+        let shown = state.view.selected;
+        let selected_id = shown
+            .and_then(|index| state.view.rows.get(index))
+            .map(|row| row.id.clone());
+        let selected = selected_id
+            .and_then(|id| list.rows.iter().position(|row| row.id == id))
+            .or_else(|| {
+                let last = list.rows.len().checked_sub(1)?;
+                Some(shown?.min(last))
+            });
+        state.view.rows = list.rows;
+        state.entries = list.entries;
+        state.view.selected = selected;
+    }
+
+    /// The open command's own list for `items`, its tree's: the package's
+    /// folder rows first when it may read a granted folder.
+    fn command_list(&self, state: &State, component: &Path, items: Vec<Item>) -> CommandList {
+        let mut list = CommandList::of(items);
+        if let Some(package) = owner(&state.packages, component)
+            && folder_access(package)
+        {
+            let (pane_rows, pane_entries) = files::folder_rows(state, &package.identity);
+            list.rows.splice(0..0, pane_rows);
+            list.entries.splice(0..0, pane_entries);
+        }
+        list
     }
 
     async fn open_command(&self, epoch: u64, opening: Opening, data: Option<PackageData>) {
@@ -3579,7 +3679,7 @@ impl Launcher {
             return;
         }
         let result = match self.runtime() {
-            Ok(runtime) => runtime.get_view_with(&component, data.clone()).await,
+            Ok(runtime) => runtime.render_with(&component, data.clone()).await,
             Err(error) => Err(error),
         };
         let Some(mut state) = self.lock_if_current(epoch) else {
@@ -3621,17 +3721,8 @@ impl Launcher {
         let state = &mut *state;
         match result {
             Ok(view) => {
-                let CommandList {
-                    mut rows,
-                    mut entries,
-                } = CommandList::of(view.items);
-                if let Some(package) = owner(&state.packages, &component)
-                    && folder_access(package)
-                {
-                    let (pane_rows, pane_entries) = files::folder_rows(state, &package.identity);
-                    rows.splice(0..0, pane_rows);
-                    entries.splice(0..0, pane_entries);
-                }
+                let CommandList { rows, entries } =
+                    self.command_list(state, &component, view.items);
                 let screen = if search {
                     state.searching = Some(command_search::Searching::new(command));
                     Screen::CommandSearch {

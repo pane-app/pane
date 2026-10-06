@@ -3,6 +3,10 @@
 // Types for Pane's extension contract, `pane:extension/command` in
 // wit/extension.wit, as JavaScript and TypeScript commands see it. They
 // describe plain values only; nothing here is specific to the JS engine.
+// A command's list reaches Pane as the versioned JSON tree of ADR 0036's
+// envelope (`render` and `handle-event`, docs/list-tree.md); the SDK's
+// adapter (adapt.js) writes the tree and runs the actions, so a command
+// never sees the JSON or the callback ids.
 /// <reference path="./wasi.d.ts" />
 /// <reference path="./data.d.ts" />
 /// <reference path="./operations.d.ts" />
@@ -11,29 +15,43 @@
 /// <reference path="./files.d.ts" />
 /// <reference path="./clipboard.d.ts" />
 
-/** One entry in a command's list view. */
+/**
+ * One entry in a command's list. Choosing it opens its form, else its
+ * custom view, else runs its action; an item with none of them does nothing
+ * and says so.
+ */
 export interface Item {
-  /** Passed back to `runAction` or `submitForm` when the user uses the item. */
+  /**
+   * Identifies the item among the list's items: Pane keeps the selection on
+   * it when the list is drawn again, and passes it to `submitForm` and
+   * `openView`.
+   */
   id: string;
   title: string;
   /** A second line under the title; omitted or `null` for none. */
   subtitle?: string | null;
   /**
-   * When set, activating the item opens this form instead of running
-   * `runAction`, and submitting it calls `submitForm`. Omitted or `null` for
+   * Runs when the user chooses the item. The text it resolves with is shown
+   * as the result; throwing shows the error as the failure. Pane then asks
+   * for the list again (`render`). Omitted or `null` for none.
+   */
+  onAction?: (() => Promise<string>) | null;
+  /**
+   * When set, choosing the item opens this form instead of running its
+   * action, and submitting it calls `submitForm`. Omitted or `null` for
    * none.
    */
   form?: Form | null;
   /**
    * The operating systems the item's action (or form) works on; omitted or
    * `null` for every system Pane runs on. Elsewhere Pane still lists the
-   * item but shows it as unavailable with the reason, and never calls
-   * `runAction` or opens the form for it.
+   * item but shows it as unavailable with the reason, and never runs its
+   * action or opens the form for it.
    */
   platforms?: Platform[] | null;
   /**
-   * When set, activating the item opens this custom view instead of running
-   * `runAction`: Pane calls `openView` and shows what the view draws. Ignored
+   * When set, choosing the item opens this custom view instead of running
+   * its action: Pane calls `openView` and shows what the view draws. Ignored
    * when `form` is set. Omitted or `null` for none.
    */
   customView?: CustomViewInfo | null;
@@ -42,8 +60,8 @@ export interface Item {
 /** An operating system Pane runs on. */
 export type Platform = "windows" | "macos" | "linux";
 
-/** A command's list view. */
-export interface View {
+/** A command's list view: its title and items, in order. */
+export interface List {
   title: string;
   items: Item[];
 }
@@ -191,27 +209,38 @@ export interface CustomView {
  *
  * ```ts
  * export const command: Command = {
- *   async getView() { ... },
- *   async runAction(id) { ... },
+ *   async render() {
+ *     return { title: "Hello", items: [{ id: "greet", title: "Say hello", onAction: async () => "Hello" }] };
+ *   },
  *   async submitForm(id, values) { ... },
  *   async openView(id) { return new MyView(); },
  * };
  * ```
  *
  * Resolving gives Pane the value. Throwing (rejecting) reports an error to the
- * user, never a crash: from `getView`, `runAction`, `openView` and a view's
- * `handleEvent` an `Error`'s message, or a thrown string as is; from
- * `submitForm` a {@link FormError} object as is, and an `Error` or string as a
- * message about the whole form. Resolving with a value of the wrong type, such
- * as `undefined` instead of a string, is a crash: Pane reports it and starts a
+ * user, never a crash: from `render`, an item's `onAction`,
+ * `runSearchResult`, `openView` and a view's `handleEvent` an `Error`'s
+ * message, or a thrown string as is; from `submitForm` a {@link FormError}
+ * object as is, and an `Error` or string as a message about the whole form.
+ * Resolving with a value of the wrong type, such as an action resolving with
+ * `undefined` instead of a string, is a crash: Pane reports it and starts a
  * fresh instance for the next call, and repeated crashes pause the extension.
  * A crash closes any open custom view, whose state was in the old instance.
+ * A list Pane cannot read, such as one whose title is not a string, is the
+ * command's failure, which Pane reports, not a crash.
  */
 export interface Command {
-  /** Produce the command's list view. */
-  getView(): Promise<View>;
-  /** Run the action of the item with `itemId`; the text is shown as the result. */
-  runAction(itemId: string): Promise<string>;
+  /**
+   * The command's list, as it is now. Pane asks for it when the command
+   * opens and again after each action.
+   */
+  render(): Promise<List>;
+  /**
+   * Runs the search result with id `id` the user chose, for a command that
+   * searches as the user types ({@link CommandSearch}); the text is shown as
+   * the result. Without it, choosing a result is an error.
+   */
+  runSearchResult?(id: string): Promise<string>;
   /**
    * Handle the submitted form of the item with `itemId`. `values` holds every
    * field of the form, in order. The text is shown as the result; a thrown
@@ -306,9 +335,9 @@ export interface QueryCommand {
 /** One thing a command's search found, listed as a row of the command. */
 export interface SearchResult {
   /**
-   * Passed to the command's `runAction` when the user activates the row, so
-   * it should say which result it is (the instance may have been replaced
-   * meanwhile).
+   * Passed to the command's `runSearchResult` when the user activates the
+   * row, so it should say which result it is (the instance may have been
+   * replaced meanwhile).
    */
   id: string;
   title: string;
@@ -340,7 +369,7 @@ export interface CommandSearch {
    * Searches for `query`, the text in the search field of the command with
    * id `command` (its id in `pane.json`), trimmed and never empty. The
    * results replace the command's list while the text stays; activating one
-   * calls `runAction` with its id. Throwing shows the error in place of
+   * calls the command's `runSearchResult` with its id. Throwing shows the error in place of
    * results; it does not count against the extension, so a service that is
    * down or unreachable is an expected error. Pane stops a search it no
    * longer needs (the text changed again, the user left) where it waits,

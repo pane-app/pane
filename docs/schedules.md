@@ -39,7 +39,9 @@ The architecture is recorded in [ADR 0024](adr/0024-the-host-runs-scheduled-exte
   hooks.
 - **The guest needs nothing new.** The scheduled run is the command's
   action of the item the schedule names, exactly as running that item from
-  its list view is (`run-action`): the answer text is the result, an error
+  its list is (Pane asks for the command's tree, then hands the item's
+  action's callback to `handle-event`, see [list-tree.md](list-tree.md)):
+  the answer text is the result, an error
   it answers with is an expected error, and a trap is a crash of the
   package. The item is usually one the command lists, so the user can run
   it too.

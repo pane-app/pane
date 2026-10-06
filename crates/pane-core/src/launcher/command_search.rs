@@ -80,7 +80,7 @@ impl Launcher {
         let launcher = self.clone();
         if blank {
             return Some(Box::pin(async move {
-                let answer = runtime.get_view_with(&component, data.clone()).await;
+                let answer = runtime.render_with(&component, data.clone()).await;
                 launcher.show_listed_again(epoch, search, component, data, answer);
             }));
         }

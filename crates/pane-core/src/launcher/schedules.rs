@@ -26,7 +26,8 @@
 //! enabled.
 //!
 //! Each run is the command's action of the item the schedule names, asked
-//! for as the user asking for it would: through the runtime, with the
+//! for as the user asking for it would: through the runtime (the command's
+//! tree, then the item's action's callback, see `Runtime::run_item`), with the
 //! extension data of the generation current when the scheduler asked, so
 //! an end of that generation stops a run still pending and discards its
 //! late answer (see `generations`), and a run that traps is a crash of the
@@ -34,8 +35,9 @@
 //! is asked for at a time: ticks that fall due while one runs are coalesced
 //! into the next run, which starts at the next tick after it answers. The
 //! answer is shown on the command's screen, as an action's answer is,
-//! while that screen is the one on display; the run happens whether or not
-//! it is.
+//! while that screen is the one on display, and the command's list is then
+//! asked for again, as after an action the user chose; the run happens
+//! whether or not it is.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -45,7 +47,7 @@ use std::time::Duration;
 use super::{Launcher, Screen, Status, WeakLauncher, stopped};
 use crate::clipboard::Clock;
 use crate::extension_data::PackageData;
-use crate::runtime::CallError;
+use crate::runtime::{Answer, CallError};
 
 /// The longest the scheduler waits before it looks again, so that a change
 /// of the system's time, or a computer waking from sleep, delays a run by
@@ -381,7 +383,7 @@ fn run_once(schedules: Weak<Schedules>, launcher: WeakLauncher, key: String, run
     let alive = launcher.upgrade();
     let answer = match &alive {
         Some(launcher) => match launcher.runtime() {
-            Ok(runtime) => Some(futures::executor::block_on(runtime.run_action_with(
+            Ok(runtime) => Some(futures::executor::block_on(runtime.run_item_with(
                 &run.component,
                 &run.item,
                 run.data.clone(),
@@ -394,8 +396,15 @@ fn run_once(schedules: Weak<Schedules>, launcher: WeakLauncher, key: String, run
     };
     // The run's answer is shown, then the schedule may run again: a tick
     // that came due meanwhile is looked at now.
-    if let (Some(launcher), Some(answer)) = (alive, answer) {
-        show(&launcher, &run.component, &run.data, answer);
+    if let (Some(launcher), Some(answer)) = (alive, answer)
+        && let Some(epoch) = show(&launcher, &run.component, &run.data, answer)
+    {
+        futures::executor::block_on(launcher.list_again(
+            epoch,
+            run.component.clone(),
+            run.data.clone(),
+        ));
+        launcher.changed();
     }
     if let Some(schedules) = schedules.upgrade() {
         schedules.run_ended(&key);
@@ -405,32 +414,40 @@ fn run_once(schedules: Weak<Schedules>, launcher: WeakLauncher, key: String, run
 /// Shows `answer`, of the run of the command in `component`, where its
 /// screen is the one on display, as an action's answer is shown; a
 /// generation that ended while it ran means it is not shown, and the
-/// command's screen having been left means it is not either.
+/// command's screen having been left means it is not either. The screen's
+/// epoch, when the command handled the run and its list is to be asked for
+/// again.
 fn show(
     launcher: &Launcher,
     component: &Path,
     data: &Option<PackageData>,
-    answer: Result<String, CallError>,
-) {
-    let shown = {
+    answer: Result<Answer, CallError>,
+) -> Option<u64> {
+    let handled = matches!(
+        answer,
+        Ok(_) | Err(CallError::Guest(_) | CallError::Unreadable(_))
+    );
+    let list_again = {
         let mut state = launcher.lock();
         let shown = state.open.as_ref().is_some_and(|open| open == component)
             && matches!(
                 state.view.screen,
                 Screen::Command | Screen::CommandSearch { .. }
             );
-        if shown {
-            state.view.status = match (stopped(&state, component, data), answer) {
-                (Some(problem), _) => Status::Error(problem),
-                (None, Ok(answer)) => Status::Result(answer),
-                (None, Err(error)) => Status::Error(error.to_string()),
-            };
+        if !shown {
+            return None;
         }
-        shown
+        let ended = stopped(&state, component, data);
+        let list_again = (handled && ended.is_none()).then_some(state.screen_epoch);
+        state.view.status = match (ended, answer) {
+            (Some(problem), _) => Status::Error(problem),
+            (None, Ok(answer)) => answer.status.map_or(Status::Idle, Status::Result),
+            (None, Err(error)) => Status::Error(error.to_string()),
+        };
+        list_again
     };
-    if shown {
-        launcher.changed();
-    }
+    launcher.changed();
+    list_again
 }
 
 /// Wakes a background worker of the launcher's (the scheduler, the
