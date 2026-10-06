@@ -30,6 +30,7 @@ mod helpers;
 mod hotkeys;
 mod installer;
 mod launcher;
+mod memory;
 mod npm;
 mod operations;
 mod packages;

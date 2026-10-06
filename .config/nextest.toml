@@ -1,0 +1,9 @@
+# cargo-nextest's settings for the workspace's tests (`cargo xtask
+# ci-tests`). Only what differs from nextest's defaults is here.
+
+# The tests that print how much memory the samples and default extensions
+# take at most, under the 128 MiB cap on a guest's memory (#120), show
+# their output when they pass too, so a verify run's log carries it.
+[[profile.default.overrides]]
+filter = "test(/memory_peaks|stays_under_the_memory_cap/)"
+success-output = "immediate"

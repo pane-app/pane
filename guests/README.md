@@ -133,7 +133,8 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   guests` puts each one with its built component in
   `target/guests/packages/<name>/`, a ready-to-install package.
 - `fixtures/faulty`: test fixture whose actions, form, custom view and root
-  results return an error or trap.
+  results return an error or trap, and whose actions grow its memory to
+  just under the 128 MiB cap or past it.
 - `fixtures/failing-start`: test fixture that builds and installs but traps
   the first time it is asked for its view (after saving a setting), so a
   reload to it fails to start and Retry then starts it.
@@ -493,6 +494,13 @@ keeping its data ([pausing](../docs/pausing.md)).
 So report expected failures, such as a missing sign-in, as errors, never by
 crashing. The settings samples' **Crash** item shows a crash in each
 language.
+
+Each instance's memory may grow to **128 MiB**. Pane refuses it more: the
+allocation fails, which traps the guest, and the user sees "The extension
+crashed: it ran out of memory: an extension may use at most 128 MiB". It
+counts towards pausing the package as any crash does. A web response's
+body (at most 4 MiB) fits many times over; keep large data in files or
+the cache rather than in memory.
 
 Pane's extension runtime itself can crash too (a fault in Pane, not in any
 extension). Pane then stops every call in progress and never runs one again

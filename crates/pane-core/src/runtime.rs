@@ -44,7 +44,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::packages::paused_reason;
 use wasmtime::component::{Component, Linker, ResourceAny, ResourceTable};
-use wasmtime::{Cache, CacheConfig, Config, Engine, Store, StoreLimits, StoreLimitsBuilder};
+use wasmtime::{Cache, CacheConfig, Config, Engine, Store};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpCtxView, WasiHttpView};
 
@@ -53,6 +53,7 @@ use crate::platform::Platform;
 
 pub(crate) mod deadlines;
 mod faults;
+mod memory;
 mod supervisor;
 
 use deadlines::Doing;
@@ -66,6 +67,10 @@ pub use faults::Fault;
 #[cfg(any(test, debug_assertions))]
 use faults::Fault as InjectedFault;
 use faults::Faults;
+pub use memory::GUEST_MEMORY;
+#[cfg(any(test, debug_assertions))]
+#[doc(hidden)]
+pub use memory::peaks::memory_peak;
 pub(crate) use supervisor::CRASH_WINDOW;
 use supervisor::{NotSent, Shared};
 pub use supervisor::{RuntimeFailure, RuntimeStatus};
@@ -1600,11 +1605,16 @@ fn engine(cache_dir: Option<PathBuf>) -> Result<Engine, CallError> {
     Engine::new(&config).map_err(unavailable)
 }
 
-/// The most one linear memory of a guest instance may grow to. Web
-/// responses are capped well below it ([`http::HttpLimits::body`]); a guest
-/// that grows past it anyway fails to allocate, and so crashes, rather than
-/// taking Pane's memory.
-const GUEST_MEMORY: usize = 512 * 1024 * 1024;
+/// How a call whose guest trapped with `trap` answers: as running out of
+/// memory if the guest was refused memory before (see `memory`), since its
+/// trap then says only where it gave up.
+fn crashed(trap: &wasmtime::Error, out_of_memory: bool) -> CallError {
+    CallError::Trap(if out_of_memory {
+        memory::out_of_memory()
+    } else {
+        format!("{trap:#}")
+    })
+}
 
 /// How a check answers once the checker thread has stopped.
 fn checker_stopped() -> CallError {
@@ -1668,8 +1678,10 @@ pub(crate) struct GuestState {
     http: WasiHttpCtx,
     /// Sends the guest's web requests.
     sender: http::Sender,
-    /// What the guest's memory may grow to ([`GUEST_MEMORY`]).
-    limits: StoreLimits,
+    /// Whether the guest asked for more memory than it may have
+    /// ([`GUEST_MEMORY`]) and was refused: a trap that follows is told as
+    /// running out of memory (see `memory`).
+    out_of_memory: bool,
     /// The granted folders and their listings.
     files: FileAccess,
     /// Keeps clipboard history for the guest's package.
@@ -2899,7 +2911,7 @@ impl Host {
             }
             // The destructor trapped: the instance cannot be re-entered. It
             // is a crash of the package, reported as any other.
-            Ok(Err(trap)) => Health::Crashed(CallError::Trap(format!("{trap:#}"))),
+            Ok(Err(trap)) => Health::Crashed(crashed(&trap, instance.store.data().out_of_memory)),
             // It computed for too long: it is stopped where it yielded.
             Err(reason) => Health::Unresponsive(CallError::Unresponsive(reason)),
         };
@@ -3539,16 +3551,20 @@ impl Host {
         outcome: wasmtime::Result<wasmtime::Result<Result<T, E>>>,
         guest_error: impl FnOnce(E) -> CallError,
     ) -> Result<T, CallError> {
-        let data = self
+        let (data, out_of_memory) = self
             .instances
             .borrow()
             .get(path)
-            .and_then(|instance| instance.store.data().data.clone());
+            .map(|instance| {
+                let state = instance.store.data();
+                (state.data.clone(), state.out_of_memory)
+            })
+            .unwrap_or_default();
         match outcome.and_then(|inner| inner) {
             Ok(result) => result.map_err(guest_error),
             Err(trap) => {
                 self.drop_instance(path);
-                let error = CallError::Trap(format!("{trap:#}"));
+                let error = crashed(&trap, out_of_memory);
                 self.report(path, data.as_ref(), Health::Crashed(error.clone()));
                 Err(error)
             }
@@ -3625,7 +3641,7 @@ impl Host {
                 table: ResourceTable::new(),
                 http: WasiHttpCtx::new(),
                 sender: http::Sender::new(data.clone(), self.network.clone(), watch.clone()),
-                limits: StoreLimitsBuilder::new().memory_size(GUEST_MEMORY).build(),
+                out_of_memory: false,
                 data,
                 component: path.to_path_buf(),
                 calls,
@@ -3639,7 +3655,7 @@ impl Host {
                 watch: self.watch.clone(),
             },
         );
-        store.limiter(|state| &mut state.limits);
+        store.limiter(|state| state);
         // The guest yields to this thread at every epoch tick, however long
         // it computes, which is progress for the watchdog (see `deadlines`);
         // once Pane gave up on this thread, it traps there instead.
@@ -3672,7 +3688,15 @@ impl Host {
                     .poll(cx)
                     .map(|started| started.map_err(load))
             })
-            .await?
+            .await
+        };
+        // One that asked for more memory than it may have while it started
+        // says so, not where it gave up.
+        let instance = match instance {
+            Err(CallError::Load(_)) if store.data().out_of_memory => {
+                return Err(CallError::Load(memory::out_of_memory()));
+            }
+            started => started?,
         };
         let bindings =
             bindings::ExtensionWithClipboard::new(&mut store, &instance).map_err(load)?;
