@@ -585,8 +585,12 @@ fn setup_field(command: Option<&str>, preference: &Preference) -> FormField {
                 .map(|option| choice(&option.value, &option.title))
                 .collect(),
         ),
+        // A password's text is hidden as it is typed: the argument form's
+        // password field (#144).
+        PreferenceKind::Password => FieldKind::Password {
+            placeholder: preference.placeholder.clone(),
+        },
         PreferenceKind::Text
-        | PreferenceKind::Password
         | PreferenceKind::File
         | PreferenceKind::Folder
         | PreferenceKind::Application => FieldKind::Text {
@@ -606,7 +610,7 @@ fn setup_field(command: Option<&str>, preference: &Preference) -> FormField {
             .first()
             .map(|choice| choice.id.clone())
             .unwrap_or_default(),
-        FieldKind::Text { .. } => String::new(),
+        FieldKind::Text { .. } | FieldKind::Password { .. } => String::new(),
     };
     FormField {
         id: preferences::storage_key(command, &preference.name),
@@ -615,7 +619,7 @@ fn setup_field(command: Option<&str>, preference: &Preference) -> FormField {
         value,
         error: None,
         description: preference.description.clone(),
-        secret: preference.kind.is_secret(),
+        required: true,
     }
 }
 

@@ -206,6 +206,18 @@ pub mod commands {
     }
 }
 
+impl LaunchRecord {
+    /// The value of the command's argument `name` (`"arguments"` in its
+    /// `pane.json` entry), if it has one: an optional argument left empty
+    /// is absent.
+    pub fn argument(&self, name: &str) -> Option<&str> {
+        self.arguments
+            .iter()
+            .find(|argument| argument.name == name)
+            .map(|argument| argument.value.as_str())
+    }
+}
+
 impl operations::CallErrorKind {
     /// The kind's WIT name, such as `not-found`, as JavaScript sees it too.
     pub fn name(&self) -> &'static str {

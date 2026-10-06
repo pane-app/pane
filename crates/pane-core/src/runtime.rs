@@ -524,6 +524,10 @@ pub struct Field {
 pub enum FieldKind {
     /// A single-line text field, which starts empty.
     Text { placeholder: Option<String> },
+    /// A single-line text field whose text is concealed while it is typed:
+    /// a password argument in Pane's argument form. An extension's form
+    /// has none yet.
+    Password { placeholder: Option<String> },
     /// Exactly one of these options; the first starts chosen.
     Choice(Vec<Choice>),
 }

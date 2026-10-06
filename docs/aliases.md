@@ -49,6 +49,13 @@ has the same title (copies of a package from other sources), the row's
 subtitle also names its source ("Send “hi” · alias ec · local folder …"),
 and so does a fallback row.
 
+A command **takes a query** when its manifest says `"takesQuery": true`, or
+when its first [argument](../guests/README.md#arguments) is text and every
+other argument is optional (Raycast's rule, #144). The text sent fills its
+first text or password argument unless that already has a value, and is
+its launch record's fallback text as well; when another required argument
+is still empty, Pane's argument form asks for it before the command runs.
+
 ## Making a command a fallback
 
 A command that takes a query also has a row "Fallback: Echo", "Off · Offer

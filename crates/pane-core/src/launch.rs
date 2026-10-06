@@ -48,8 +48,9 @@ pub enum LaunchSource {
 pub struct LaunchRecord {
     pub launch_type: LaunchType,
     pub source: LaunchSource,
-    /// The command's arguments' values, by name. Commands declare no
-    /// arguments yet, so this is empty for now.
+    /// The values of the command's arguments, by name, in the order the
+    /// command declares them (see `arguments`). An argument without a
+    /// value (an optional one left empty) is absent.
     pub arguments: Vec<(String, String)>,
     /// The text sent through the command's alias or as a fallback,
     /// trimmed and never empty.
@@ -95,6 +96,14 @@ impl LaunchRecord {
     /// Whether Pane runs the command without a window.
     pub fn is_background(&self) -> bool {
         self.launch_type == LaunchType::Background
+    }
+
+    /// The value of the argument `name`, if it has one.
+    pub fn argument(&self, name: &str) -> Option<&str> {
+        self.arguments
+            .iter()
+            .find(|(argument, _)| argument == name)
+            .map(|(_, value)| value.as_str())
     }
 }
 

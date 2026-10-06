@@ -17,6 +17,7 @@ use std::path::{Component as PathPart, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::arguments::{self, ManifestArgument};
 use crate::atomic::{Readers, write_atomically};
 use crate::git::{GitOrigin, GitRevision, GitSpec, InstalledGit, Repository};
 use crate::helpers::runner;
@@ -518,6 +519,21 @@ pub struct ManifestCommand {
     /// The preferences the command declares for itself (`"preferences"`),
     /// besides its package's.
     pub preferences: Vec<Preference>,
+    /// The typed values the command asks for before each run
+    /// (`"arguments"`, at most [`MAX_ARGUMENTS`](crate::MAX_ARGUMENTS)), in
+    /// the order its fields show them; see `arguments`.
+    pub arguments: Vec<ManifestArgument>,
+}
+
+impl ManifestCommand {
+    /// Whether text typed into root search can be sent to the command
+    /// through its alias or as a fallback: it takes a query, or its first
+    /// argument is text and every other is optional (Raycast's rule). The
+    /// text arrives as its launch record's fallback text and fills its
+    /// first text or password argument.
+    pub fn accepts_fallback_text(&self) -> bool {
+        self.takes_query || arguments::accept_fallback_text(&self.arguments)
+    }
 }
 
 #[derive(Deserialize)]
@@ -605,6 +621,10 @@ struct CommandJson {
     service: bool,
     #[serde(default)]
     preferences: Vec<serde_json::Value>,
+    /// Checked by `arguments::parse`, which says what is wrong in Pane's
+    /// words.
+    #[serde(default)]
+    arguments: Option<serde_json::Value>,
 }
 
 /// A command's `schedule`, as `pane.json` writes it.
@@ -796,6 +816,10 @@ impl Manifest {
                 .schedule
                 .map(|schedule| parse_schedule(&command.id, mode, schedule))
                 .transpose()?;
+            let arguments = arguments::parse(&command.id, command.arguments).map_err(invalid)?;
+            if schedule.is_some() {
+                arguments::check_scheduled(&command.id, &arguments).map_err(invalid)?;
+            }
             // A command may both be scheduled and run a continuing service;
             // they are separate activation models, and neither runs the
             // other's code.
@@ -825,6 +849,7 @@ impl Manifest {
                 schedule,
                 service,
                 preferences: own,
+                arguments,
             });
         }
         let mut operations: Vec<ManifestOperation> = Vec::new();
@@ -1632,7 +1657,7 @@ impl InstalledPackage {
                         .clone()
                         .or_else(|| Some(manifest.title.clone())),
                     component: self.location.join(&command.component),
-                    takes_query: command.takes_query,
+                    takes_query: command.accepts_fallback_text(),
                     search: command.search,
                 };
                 let unavailable = package.clone().or_else(|| {
@@ -1704,6 +1729,17 @@ impl InstalledPackage {
             .ok()
             .and_then(|manifest| manifest.commands.iter().find(|c| c.id == command))
             .map_or(CommandMode::View, |command| command.mode)
+    }
+
+    /// The arguments this package's command with manifest id `command`
+    /// declares; none for a command it does not have.
+    pub(crate) fn arguments_of(&self, command: &str) -> &[ManifestArgument] {
+        self.manifest
+            .as_ref()
+            .ok()
+            .and_then(|manifest| manifest.commands.iter().find(|c| c.id == command))
+            .map(|command| command.arguments.as_slice())
+            .unwrap_or_default()
     }
 
     /// The commands of this package that run a continuing service and can

@@ -21,6 +21,7 @@ members = [
     "sample-service",
     "sample-actions",
     "sample-preferences",
+    "sample-arguments",
     "sample-helper",
     "fixtures/faulty",
     "fixtures/operations",

@@ -261,7 +261,7 @@ fn opening_the_form_shows_its_fields(sample: &Sample) {
                 value: String::new(),
                 error: None,
                 description: None,
-                secret: false,
+                required: false,
             },
             FormField {
                 id: "greeting".into(),
@@ -274,7 +274,7 @@ fn opening_the_form_shows_its_fields(sample: &Sample) {
                 value: "hello".into(),
                 error: None,
                 description: None,
-                secret: false,
+                required: false,
             },
         ]
     );

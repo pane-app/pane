@@ -31,7 +31,11 @@ declare module "pane:extension/commands@0.1.0" {
   export interface LaunchRecord {
     launchType: LaunchType;
     source: LaunchSource;
-    /** Its arguments' values by name; commands declare none yet, so it is empty. */
+    /**
+     * Its arguments' values by name (`"arguments"` in its `pane.json`
+     * entry), in the order it declares them; an optional argument left
+     * empty is absent.
+     */
     arguments: ArgumentValue[];
     /**
      * The text sent through the command's alias or to it as a fallback,
@@ -56,12 +60,16 @@ declare module "pane:extension/commands@0.1.0" {
 
   /**
    * Launches `target`, passing `context` (JSON text) in its launch record
-   * and asking nothing. `"user-initiated"` opens it as if the user had
-   * invoked it; `"background"` runs a no-view command without a window and
-   * is refused for a view command. Returns once the launch has started, not
-   * when the target has run. A refusal (the target is not installed, has no
-   * such command, is disabled, paused or unavailable here, or the context
-   * is not JSON) throws an object whose `payload` is the reason.
+   * and asking nothing, with `arguments_` the values of its arguments by
+   * name. `"user-initiated"` opens it as if the user had invoked it (Pane's
+   * argument form asks for a required argument left without a value);
+   * `"background"` runs a no-view command without a window and is refused
+   * for a view command or a required argument without a value. Returns
+   * once the launch has started, not when the target has run. A refusal
+   * (the target is not installed, has no such command, is disabled, paused
+   * or unavailable here, an argument is not its own or a dropdown's value
+   * not among its options, or the context is not JSON) throws an object
+   * whose `payload` is the reason.
    */
   export function launch(
     target: CommandRef,

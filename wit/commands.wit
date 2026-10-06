@@ -54,13 +54,16 @@ interface commands {
   record launch-record {
     launch-type: launch-type,
     source: launch-source,
-    /// The values of the command's arguments by name. Commands do not
-    /// declare arguments yet, so this is empty for now.
+    /// The values of the command's arguments (`"arguments"` in its
+    /// `pane.json` entry) by name, in the order it declares them. An
+    /// argument without a value (an optional one left empty) is absent.
     arguments: list<argument-value>,
     /// The text sent through the command's alias ("ec hello" sends
     /// "hello") or to it as a fallback, trimmed and never empty; none
-    /// otherwise. Only a command that takes a query (`"takesQuery": true`)
-    /// is sent text.
+    /// otherwise. Only a command that takes a query (`"takesQuery": true`),
+    /// or whose first argument is text and every other optional, is sent
+    /// text; it also fills the first text or password argument that has no
+    /// value.
     fallback-text: option<string>,
     /// The JSON value another command passed when it launched this one,
     /// as JSON text; none otherwise.
@@ -80,19 +83,25 @@ interface commands {
 
   /// Launches the command `target`, passing it `context` (JSON text, at
   /// most 1 MiB) in its launch record, and asking nothing: extensions are
-  /// trusted. `arguments` are its arguments' values; commands do not
-  /// declare arguments yet, so pass none.
+  /// trusted. `arguments` are values of the target's arguments by name; a
+  /// dropdown's must be one of its options.
+  ///
+  /// A user-initiated launch that leaves a required argument without a
+  /// value shows Pane's argument form, which asks for it first.
   ///
   /// `user-initiated` opens it as if the user had invoked it: a view
   /// command's screen replaces the one shown, and a no-view command runs
   /// and its answer is shown. `background` runs a no-view command without
-  /// a window and shows nothing; it is refused for a view command.
+  /// a window and shows nothing; it is refused for a view command, and for
+  /// a command with a required argument it passes no value for.
   ///
   /// Answers once the launch has started, not when the target has run:
   /// the target runs after the caller's call, or beside it. Refused, with
   /// the reason, when the target is not installed, has no such command, is
-  /// disabled, paused or unavailable on this system, or the context is not
-  /// JSON. A refusal is an answer, never a failure of the caller.
+  /// disabled, paused or unavailable on this system, an argument is not
+  /// the target's (or a dropdown's value not among its options), or the
+  /// context is not JSON. A refusal is an answer, never a failure of the
+  /// caller.
   launch: func(target: command-ref, launch-type: launch-type, arguments: list<argument-value>, context: option<string>) -> result<_, string>;
 
   /// Replaces the subtitle the calling command's row shows in root search

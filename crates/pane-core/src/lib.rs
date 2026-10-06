@@ -4,6 +4,7 @@
 mod application_update;
 pub mod applications;
 mod archive;
+mod arguments;
 mod atomic;
 pub mod autostart;
 pub mod changes;
@@ -41,6 +42,7 @@ mod threads;
 pub mod tray;
 mod zip;
 
+pub use arguments::{ArgumentKind, ArgumentOption, MAX_ARGUMENTS, ManifestArgument};
 pub use defaults::{ArtifactSource, DefaultExtension};
 pub use feedback::{
     ConfirmAnswer, Confirmation, Hud, NextShowing, PopToRoot, ShownToast, Toast, ToastAction,

@@ -23,7 +23,8 @@ use std::time::Duration;
 use futures::executor::block_on;
 use pane_core::clipboard::{Clock, ManualClock, SystemClock};
 use pane_core::{
-    Launcher, PackageIdentity, PreferenceKind, ResultAction, Runtime, SavedData, Screen, Status,
+    FieldKind, Launcher, PackageIdentity, PreferenceKind, ResultAction, Runtime, SavedData, Screen,
+    Status,
 };
 use tempfile::TempDir;
 
@@ -220,7 +221,7 @@ impl Pane {
                     field.id.clone(),
                     field.label.clone(),
                     field.description.clone(),
-                    field.secret,
+                    matches!(field.kind, FieldKind::Password { .. }),
                 )
             })
             .collect()
