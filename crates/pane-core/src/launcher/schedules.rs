@@ -250,6 +250,11 @@ impl Schedules {
                 continue;
             }
             for (command, schedule) in package.scheduled_commands() {
+                // Its required preferences are unset: it does not run, and
+                // says "Needs setup" instead (see `setup`); not a failure.
+                if launcher.needs_setup(package, command.manifest_id()) {
+                    continue;
+                }
                 let manifest_id = command.manifest_id().to_owned();
                 wanted.insert(
                     command.id,
@@ -397,7 +402,10 @@ fn start_run(schedules: &Arc<Schedules>, launcher: &WeakLauncher, key: String, r
 /// shows nothing.
 fn run_once(schedules: Weak<Schedules>, launcher: WeakLauncher, key: String, run: Run) {
     let alive = launcher.upgrade();
-    let scheduled = LaunchRecord::scheduled();
+    let scheduled = LaunchRecord {
+        command: Some(run.command.clone()),
+        ..LaunchRecord::scheduled()
+    };
     let answer = match (&alive, &run.item) {
         (Some(launcher), Some(item)) => match launcher.runtime() {
             Ok(runtime) => Some(futures::executor::block_on(runtime.run_item_launched_with(

@@ -166,6 +166,7 @@ fn memory_peaks_of_the_samples_and_default_extensions() {
         "sample_service",
         "sample_helper",
         "sample_actions",
+        "sample_preferences",
     ]
     .map(String::from)
     .into();

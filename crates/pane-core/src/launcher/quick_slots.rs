@@ -505,7 +505,11 @@ fn change(
     let refused = (SlotChange::Refused, String::new());
     let quick_slot_action = !matches!(
         action,
-        ResultAction::Invoke | ResultAction::Hotkey | ResultAction::Alias
+        ResultAction::Invoke
+            | ResultAction::Hotkey
+            | ResultAction::Alias
+            | ResultAction::ConfigureCommand
+            | ResultAction::ConfigureExtension
     );
     if !quick_slot_action || !matches!(state.view.screen, Screen::Root { .. }) {
         return refused;
@@ -554,7 +558,11 @@ fn change(
                 format!("Moved {title} to place {}", moved_to + 1),
             )
         }
-        ResultAction::Invoke | ResultAction::Hotkey | ResultAction::Alias => refused,
+        ResultAction::Invoke
+        | ResultAction::Hotkey
+        | ResultAction::Alias
+        | ResultAction::ConfigureCommand
+        | ResultAction::ConfigureExtension => refused,
     }
 }
 

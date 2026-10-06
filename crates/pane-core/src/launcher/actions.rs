@@ -5,7 +5,10 @@
 //! action (the footer's, the same definition and dispatch), then, for a
 //! result a quick slot can hold, pinning it (see `quick_slots`: a slot's
 //! own entries remove and move it), then, for an installed command, the
-//! hotkey and alias configuration Manage extensions already offers.
+//! hotkey and alias configuration Manage extensions already offers, and
+//! "Configure Command…" and "Configure Extension…" when the command or its
+//! package declares preferences (the window opens the extension's card in
+//! Settings for them; see `setup`).
 //! Nothing is listed that has no working operation behind it (#100): no
 //! quit, new window or hide. The same items describe a quick slot's own
 //! entries (see `quick_slots`).
@@ -38,6 +41,13 @@ pub enum ResultAction {
     MovePinUp,
     /// Swaps the result's quick slot with the one after it.
     MovePinDown,
+    /// Opens the command's own preferences on its extension's card in
+    /// Settings › Extensions (the window does; see
+    /// [`Launcher::preferences_target`]).
+    ConfigureCommand,
+    /// Opens the extension's preferences on its card in Settings ›
+    /// Extensions (the window does).
+    ConfigureExtension,
 }
 
 impl ResultAction {
@@ -52,6 +62,8 @@ impl ResultAction {
             ResultAction::Unpin => "unpin",
             ResultAction::MovePinUp => "move-pin-up",
             ResultAction::MovePinDown => "move-pin-down",
+            ResultAction::ConfigureCommand => "configure-command",
+            ResultAction::ConfigureExtension => "configure-extension",
         }
     }
 
@@ -64,13 +76,18 @@ impl ResultAction {
             ResultAction::Unpin => Some("Unpin"),
             ResultAction::MovePinUp => Some("Move Up"),
             ResultAction::MovePinDown => Some("Move Down"),
-            ResultAction::Invoke | ResultAction::Hotkey | ResultAction::Alias => None,
+            ResultAction::Invoke
+            | ResultAction::Hotkey
+            | ResultAction::Alias
+            | ResultAction::ConfigureCommand
+            | ResultAction::ConfigureExtension => None,
         }
     }
 
     /// A configuration entry's label, by whether the command already has
     /// that configuration: "Assign Hotkey…" or "Change Hotkey…", "Add
-    /// Alias…" or "Change Alias…". `None` for [`ResultAction::Invoke`],
+    /// Alias…" or "Change Alias…"; "Configure Command…" and "Configure
+    /// Extension…" whatever is set. `None` for [`ResultAction::Invoke`],
     /// which is named by the result's own action, and for the quick slot
     /// entries (see [`ResultAction::quick_slot_label`]).
     pub fn configuration_label(self, configured: bool) -> Option<&'static str> {
@@ -87,6 +104,8 @@ impl ResultAction {
             (ResultAction::Hotkey, true) => Some("Change Hotkey…"),
             (ResultAction::Alias, false) => Some("Add Alias…"),
             (ResultAction::Alias, true) => Some("Change Alias…"),
+            (ResultAction::ConfigureCommand, _) => Some("Configure Command…"),
+            (ResultAction::ConfigureExtension, _) => Some("Configure Extension…"),
         }
     }
 }
@@ -241,6 +260,25 @@ fn result_actions(launcher: &Launcher, state: &State) -> Option<ResultActions> {
         }
         if command.editable {
             items.push(configuration(ResultAction::Alias, command.alias.is_some()));
+        }
+        // Its preferences, and its package's, on the extension's card.
+        let (key, id) = super::choices::split(&row.id);
+        let manifest = state
+            .packages
+            .iter()
+            .find(|package| package.identity.key() == key)
+            .and_then(|package| package.manifest.as_ref().ok());
+        if let Some(manifest) = manifest {
+            let own = manifest
+                .commands
+                .iter()
+                .any(|declared| declared.id == id && !declared.preferences.is_empty());
+            if own {
+                items.push(configuration(ResultAction::ConfigureCommand, false));
+            }
+            if !manifest.preferences.is_empty() {
+                items.push(configuration(ResultAction::ConfigureExtension, false));
+            }
         }
     }
     Some(ResultActions {

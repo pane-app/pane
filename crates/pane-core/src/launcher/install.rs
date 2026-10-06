@@ -421,8 +421,11 @@ impl Launcher {
                 },
                 value: String::new(),
                 error: None,
+                description: None,
+                secret: false,
             }],
             submit_label: "Show package".into(),
+            setup: None,
         };
         let view = LauncherView::new(Screen::Form(form), "Install extension from npm");
         let return_to = std::mem::replace(&mut state.view, view);
@@ -447,8 +450,11 @@ impl Launcher {
                 },
                 value: String::new(),
                 error: None,
+                description: None,
+                secret: false,
             }],
             submit_label: "Show package".into(),
+            setup: None,
         };
         let view = LauncherView::new(Screen::Form(form), "Install extension from Git");
         let return_to = std::mem::replace(&mut state.view, view);

@@ -401,6 +401,37 @@ impl SettingsWindow {
         }
     }
 
+    /// Shows the page titled `page`, scrolled to the control `target`, as
+    /// opening a search result there does (see [`super::open_at`]); the
+    /// sidebar keeps the window's keyboard focus. Nothing changes for a
+    /// page that is not registered.
+    pub(crate) fn show_at(
+        &mut self,
+        page: &str,
+        target: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.pages.iter().position(|shown| shown.title == page) else {
+            return;
+        };
+        self.clear_search(cx);
+        self.selected = index;
+        // As a jump does: the page lands at once, and the reveal scrolls
+        // once the page has painted.
+        self.section_arrival = None;
+        self.drawn_section = None;
+        window.focus(&self.focus, cx);
+        cx.notify();
+        let this = cx.entity();
+        let target = target.to_owned();
+        window.on_next_frame(move |window, _cx| {
+            window.on_next_frame(move |window, cx| {
+                SettingsWindow::reveal_when_settled(&this, &target, window, cx);
+            });
+        });
+    }
+
     /// What the window's watcher does for the search: nothing unless a
     /// query is showing, in which case results that differ from the ones
     /// drawn ask for a redraw — the next frame's refresh shows them, so a

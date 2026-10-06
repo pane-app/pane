@@ -118,7 +118,11 @@ impl SlotKeys {
             ResultAction::Pin | ResultAction::Unpin => Some(&self.toggle_pin),
             ResultAction::MovePinUp => Some(&self.earlier),
             ResultAction::MovePinDown => Some(&self.later),
-            ResultAction::Invoke | ResultAction::Hotkey | ResultAction::Alias => None,
+            ResultAction::Invoke
+            | ResultAction::Hotkey
+            | ResultAction::Alias
+            | ResultAction::ConfigureCommand
+            | ResultAction::ConfigureExtension => None,
         }
     }
 }
@@ -619,6 +623,28 @@ impl LauncherWindow {
                     self.navigate_forward(window, cx);
                 }
             }
+            // The extension's card in Settings › Extensions, at the
+            // command's preferences or the package's (#143).
+            ResultAction::ConfigureCommand | ResultAction::ConfigureExtension => {
+                self.close_actions(window, cx);
+                if let Some((identity, command)) = self.launcher.preferences_target(&target) {
+                    let anchor = match action {
+                        ResultAction::ConfigureCommand => {
+                            crate::features::settings::extensions::command_preferences_anchor(
+                                &identity.key(),
+                                &command,
+                            )
+                        }
+                        _ => identity.key(),
+                    };
+                    crate::features::settings::open_at(
+                        &self.launcher,
+                        crate::features::settings::extensions::TITLE,
+                        &anchor,
+                        cx,
+                    );
+                }
+            }
             ResultAction::Pin
             | ResultAction::Unpin
             | ResultAction::MovePinUp
@@ -849,6 +875,7 @@ fn action_glyph(action: ResultAction, primary: Glyph) -> Glyph {
         | ResultAction::Unpin
         | ResultAction::MovePinUp
         | ResultAction::MovePinDown => Glyph::ActionPin,
+        ResultAction::ConfigureCommand | ResultAction::ConfigureExtension => Glyph::Sliders,
     }
 }
 

@@ -29,7 +29,7 @@
 //! service itself answers with, each cycle a call into the generation
 //! current when the services thread asked for it.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -83,6 +83,7 @@ mod reload;
 mod retained;
 mod schedules;
 mod services;
+mod setup;
 mod shortcuts;
 mod uninstall;
 mod updates;
@@ -107,6 +108,7 @@ pub use presentation::{
 pub use quick_slots::{PinTarget, QuickSlot, SlotChange};
 use schedules::Schedules;
 use services::Services;
+pub use setup::{CommandPreferences, PackagePreferences, PreferenceField, SetupHeader};
 pub use shortcuts::{ShortcutCatalog, ShortcutCommand, ShortcutGroup};
 
 /// The id of the root row that installs a package from a local folder.
@@ -394,6 +396,10 @@ pub struct SelectedAction {
 pub struct FormView {
     pub fields: Vec<FormField>,
     pub submit_label: String,
+    /// What the Setup screen shows above and beside its fields, when the
+    /// form is the Setup screen Pane shows before a command whose required
+    /// preferences are unset (see `setup`); `None` for every other form.
+    pub setup: Option<SetupHeader>,
 }
 
 /// One field of an open form with its current value.
@@ -406,6 +412,12 @@ pub struct FormField {
     pub value: String,
     /// Why the extension rejected this field on the last submission.
     pub error: Option<String>,
+    /// What the value is for, shown under the field: a preference's
+    /// description on the Setup screen; `None` on other forms.
+    pub description: Option<String>,
+    /// Whether the text is a secret, hidden as it is typed: a password
+    /// preference's on the Setup screen.
+    pub secret: bool,
 }
 
 /// An open custom view as the extension last drew it.
@@ -723,6 +735,10 @@ struct State {
     /// The open command's unbound shortcuts as last noted, so a developed
     /// package's report is made again only when they change.
     reported_unbound: Vec<UnboundShortcut>,
+    /// The installed commands, by id, whose required preferences are unset
+    /// as last noted: their rows in root search say "Needs setup" (see
+    /// `setup`).
+    setup_needed: HashSet<String>,
 }
 
 /// What is happening to a package, which stops another change to it
@@ -876,6 +892,9 @@ enum FormPurpose {
     Npm,
     /// Previews the Git repository it names (Pane's own).
     Git,
+    /// Saves the preferences the Setup screen asks for, then launches the
+    /// command it held back (Pane's own; see `setup`).
+    Setup(Box<setup::SetupGate>),
 }
 
 /// What the launcher keeps about the open custom view besides its snapshot.
@@ -1265,6 +1284,7 @@ impl Launcher {
             update_controls,
             pane_keys: PaneKeys::default(),
             reported_unbound: Vec::new(),
+            setup_needed: HashSet::new(),
         };
         if let (Some(installation), Some(files)) = (&installation, &state.files) {
             files.open_record(&installation.dir);
@@ -1748,6 +1768,9 @@ impl Launcher {
                 package
                     .indexed_result_commands()
                     .into_iter()
+                    // One whose required preferences are unset is not
+                    // asked: it says "Needs setup" instead (see `setup`).
+                    .filter(move |command| !self.needs_setup(package, command.manifest_id()))
                     .map(move |command| (command, data.clone()))
             })
             .collect();
@@ -1864,6 +1887,9 @@ impl Launcher {
                 package
                     .root_result_commands()
                     .into_iter()
+                    // One whose required preferences are unset is not
+                    // asked: it says "Needs setup" instead (see `setup`).
+                    .filter(move |command| !self.needs_setup(package, command.manifest_id()))
                     .map(move |command| (command, data.clone()))
             })
             .collect()
@@ -2616,6 +2642,11 @@ impl Launcher {
                     .data
                     .set_enabled(&installed.identity, installed.enabled);
             }
+            // Preference values retained from an earlier copy follow this
+            // one's declarations, as an update's do (see `setup`).
+            if let Ok(manifest) = &installed.manifest {
+                self.carry_preferences(&installed.identity, manifest);
+            }
             state.packages.push(installed);
             self.sync_hotkeys(state);
             return false;
@@ -2630,7 +2661,14 @@ impl Launcher {
         if let Ok(runtime) = self.runtime() {
             runtime.forget(replaced.iter().cloned());
         }
+        // The values of preferences still declared are kept; those
+        // undeclared, or of a type they no longer fit, go (see `setup`).
+        let carried = installed.manifest.as_ref().ok().cloned();
         *package = installed;
+        if let Some(manifest) = carried {
+            let identity = package.identity.clone();
+            self.carry_preferences(&identity, &manifest);
+        }
         // A command the new copy no longer has releases its hotkey.
         self.sync_hotkeys(state);
         // The replaced copy's results are asked for afresh.
@@ -2712,6 +2750,7 @@ impl Launcher {
     /// the installed packages' commands, then the install row. Selects the
     /// command with component `select` if given, else the first row.
     fn show_root(&self, state: &mut State, select: Option<PathBuf>) {
+        self.note_setup_needed(state);
         state.root = self.root_results(state);
         state.sent_from = None;
         state.computed.clear();
@@ -2842,6 +2881,7 @@ impl Launcher {
             .selected
             .and_then(|index| state.view.rows.get(index))
             .map(|row| row.id.clone());
+        self.note_setup_needed(state);
         state.root = self.root_results(state);
         // A command that was disabled, paused or replaced contributes
         // nothing more; one enabled again answers from the next change of the
@@ -3050,6 +3090,9 @@ impl Launcher {
     pub fn submit_form(&self) -> impl Future<Output = ()> + Send + 'static {
         let mut state = self.lock();
         let state = &mut *state;
+        // The Setup screen saves the preferences it asks for, then launches
+        // the command it held back (see `setup`).
+        let setup = self.begin_setup_submit(state);
         let alias_change = match (&state.view.screen, &state.form) {
             (
                 Screen::Form(_),
@@ -3121,6 +3164,9 @@ impl Launcher {
             .and_then(|(component, ..)| self.data_in(state, component));
         let launcher = self.clone();
         async move {
+            if let Some(setup) = setup {
+                launcher.finish_setup(epoch, setup).await;
+            }
             if let Some(change) = alias_change {
                 launcher.finish_choice_change(change).await;
             }
@@ -3723,6 +3769,11 @@ impl Launcher {
             launch,
             ..
         } = opening;
+        // Which command its screen is, for the preferences it reads.
+        let launch = LaunchRecord {
+            command: Some(command.clone()),
+            ..launch
+        };
         if let Some(problem) = self.updating(&component) {
             // Its package's code is being replaced (an update): opening
             // the command now would be stopped by the replacement, so it
@@ -3930,6 +3981,8 @@ fn open_form(state: &mut State, item_id: String, form: Form) {
                 kind: field.kind,
                 value,
                 error: None,
+                description: None,
+                secret: false,
             }
         })
         .collect();
@@ -3937,6 +3990,7 @@ fn open_form(state: &mut State, item_id: String, form: Form) {
         Screen::Form(FormView {
             fields,
             submit_label: form.submit_label,
+            setup: None,
         }),
         form.title,
     );

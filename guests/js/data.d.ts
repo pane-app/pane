@@ -53,3 +53,20 @@ declare module "pane:extension/credentials@0.1.0" {
   export function get(key: string): string | null;
   export function set(key: string, value: string): void;
 }
+
+/**
+ * `pane:extension/preferences@0.1.0` (wit/preferences.wit): the effective
+ * values of the preferences the command's package declares in `pane.json`,
+ * as JSON text. Use `getPreferenceValues` from `@pane/extension/preferences`,
+ * which parses it.
+ */
+declare module "pane:extension/preferences@0.1.0" {
+  /**
+   * The effective preference values of `command` (its id in `pane.json`) of
+   * the caller's own package as a JSON object's text; of the command Pane is
+   * running when `command` is `null` or absent. A refusal (a command the
+   * package does not have, code that is stopped) throws an object whose
+   * `payload` is the reason.
+   */
+  export function values(command?: string | null): string;
+}

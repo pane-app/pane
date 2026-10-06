@@ -73,6 +73,8 @@ const PREBUILT: &[&str] = &[
     "sample_service_ts",
     "sample_actions_js",
     "sample_actions_ts",
+    "sample_preferences_js",
+    "sample_preferences_ts",
 ];
 
 fn main() -> ExitCode {
@@ -168,6 +170,7 @@ fn guests() -> Result<(), String> {
                 "sample_schedule",
                 "sample_service",
                 "sample_actions",
+                "sample_preferences",
                 "sample_helper",
                 "faulty",
                 "operations_fixture",
@@ -220,6 +223,13 @@ fn guests() -> Result<(), String> {
         for (from, to) in copies {
             std::fs::copy(&from, &to)
                 .map_err(|error| format!("copy {} failed: {error}", from.display()))?;
+        }
+        // The help a package ships beside its preferences, which Pane's
+        // Setup screen shows.
+        let help = root.join(format!("guests/packages/{package}/HELP.md"));
+        if help.is_file() {
+            std::fs::copy(&help, dest.join("HELP.md"))
+                .map_err(|error| format!("copy {} failed: {error}", help.display()))?;
         }
     }
     echo_helper(&root, &out)?;
@@ -342,7 +352,7 @@ fn git_sample(root: &Path, out: &Path) -> Result<(), String> {
 /// (package folder in `guests/packages`, component) of each sample package,
 /// and of the default extensions (the calculator, applications and
 /// quicklinks).
-const SAMPLE_PACKAGES: [(&str, &str); 43] = [
+const SAMPLE_PACKAGES: [(&str, &str); 46] = [
     ("sample-rust", "sample_rust"),
     ("sample-settings", "sample_settings"),
     ("sample-js", "sample_js"),
@@ -386,6 +396,9 @@ const SAMPLE_PACKAGES: [(&str, &str); 43] = [
     ("sample-actions", "sample_actions"),
     ("sample-actions-js", "sample_actions_js"),
     ("sample-actions-ts", "sample_actions_ts"),
+    ("sample-preferences", "sample_preferences"),
+    ("sample-preferences-js", "sample_preferences_js"),
+    ("sample-preferences-ts", "sample_preferences_ts"),
 ];
 
 /// Rebuilds `guests/prebuilt/` from the JS/TS sample sources, then refreshes

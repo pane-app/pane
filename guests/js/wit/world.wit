@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
 // The world JS/TS commands are componentized against. It exports exactly
-// Pane's contract and imports launching commands, its extension data,
-// operations and installed applications (wit/extension.wit,
-// wit/commands.wit, wit/data.wit, wit/operations.wit and
-// wit/applications.wit, copied into deps/ by the build), its native helpers
+// Pane's contract and imports launching commands, its extension data, its
+// package's preferences, operations and installed applications
+// (wit/extension.wit, wit/commands.wit, wit/data.wit, wit/preferences.wit,
+// wit/operations.wit and wit/applications.wit, copied into deps/ by the
+// build), its native helpers
 // (wit/helpers.wit), and declares the
 // WASI 0.3 imports JS source may use: a JS module can import only what this
 // world declares. WASI's own WIT (wit/deps: clocks, and `wasi:http` for web

@@ -18,16 +18,24 @@
 //! field a field group — its label over its control, its error under it —
 //! a text field a field's well, a choice field the segmented choice, and
 //! the submit control a button.
+//!
+//! The Setup screen (#143) is this form too: Pane's own, asking for a
+//! command's required, unset preferences before it runs. Over its fields
+//! it shows the extension's tile and title and "Set these up before using
+//! <command>"; each field's description is under it, a password's text is
+//! hidden as it is typed, and the package's `HELP.md` is beside the
+//! fields, as plain paragraphs.
 
 use gpui::{
     AnyElement, App, Context, Div, Entity, FocusHandle, Focusable, KeyBinding, Role, Stateful,
     Subscription, Toggled, Window, actions, div, prelude::*, px,
 };
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
-use pane_core::{FieldKind, FormField, FormView, Screen, Status};
+use pane_core::{FieldKind, FormField, FormView, Screen, SetupHeader, Status};
 
-use crate::app::LauncherWindow;
+use crate::app::{LauncherWindow, row_icon};
 use crate::ui::controls;
+use crate::ui::icon::{TileSize, tile_at};
 use crate::ui::input::TextEditingKeys;
 use crate::ui::theme::Theme;
 
@@ -51,6 +59,10 @@ pub(crate) fn bind_keys(cx: &mut App, _: &TextEditingKeys) {
 /// The focusable controls of the open form, in field order.
 pub(crate) struct FormControls {
     fields: Vec<Control>,
+    /// The ids of the fields the controls were made for: another form
+    /// replacing this one at once (a Setup screen shown over a form) gets
+    /// controls of its own.
+    ids: Vec<String>,
     submit: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -119,6 +131,20 @@ impl LauncherWindow {
                 }
                 self.form = Some(controls);
             }
+            (Some(form), true)
+                if self.form.as_ref().is_some_and(|controls| {
+                    !controls
+                        .ids
+                        .iter()
+                        .eq(form.fields.iter().map(|field| &field.id))
+                }) =>
+            {
+                let controls = self.form_controls(&form, cx);
+                if let Some(first) = controls.fields.first() {
+                    window.focus(&first.focus_handle(cx), cx);
+                }
+                self.form = Some(controls);
+            }
             (Some(form), true) => {
                 let rejected = form.fields.iter().position(|field| field.error.is_some());
                 if let (Some(index), Status::Error(_)) = (rejected, view.status) {
@@ -163,6 +189,7 @@ impl LauncherWindow {
             .collect();
         FormControls {
             fields,
+            ids: form.fields.iter().map(|field| field.id.clone()).collect(),
             submit: cx.focus_handle().tab_stop(true),
             _subscriptions: subscriptions,
         }
@@ -226,7 +253,10 @@ impl LauncherWindow {
                 this.submit_form(window, cx);
             }))
             .on_click(cx.listener(|this, _, window, cx| this.submit_form(window, cx)));
-        compose(title, fields, submit, theme).into_any_element()
+        match &form.setup {
+            Some(setup) => compose_setup(title, setup, fields, submit, theme).into_any_element(),
+            None => compose(title, fields, submit, theme).into_any_element(),
+        }
     }
 
     fn render_field(
@@ -237,6 +267,7 @@ impl LauncherWindow {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let error = field.error.clone();
+        let description = field.description.clone();
         let visuals = crate::settings::launcher_visuals(cx);
         let theme = &visuals.theme;
         let control = match (control, &field.kind) {
@@ -248,6 +279,7 @@ impl LauncherWindow {
                     value: &field.value,
                     placeholder: placeholder.as_deref().unwrap_or_default(),
                     error: error.as_deref(),
+                    secret: field.secret,
                 },
                 input,
                 &input.focus_handle(cx),
@@ -296,8 +328,96 @@ impl LauncherWindow {
             }
             _ => unreachable!("controls are created from the form's fields"),
         };
-        field_group(&field.id, field.label.clone(), control, error, theme).into_any_element()
+        field_group(&field.id, field.label.clone(), control, error, theme)
+            .when_some(description, |group, description| {
+                let selector = format!("field-description-{}", field.id);
+                group.child(
+                    controls::field_description(description, theme.text_muted, theme)
+                        .debug_selector(move || selector),
+                )
+            })
+            .into_any_element()
     }
+}
+
+/// The Setup screen's composition (#143): over the form, the extension's
+/// tile and title and the sentence naming the command; then its fields and
+/// `submit` in a column, with the package's help beside them as plain
+/// paragraphs when it ships one.
+pub(crate) fn compose_setup(
+    title: String,
+    setup: &SetupHeader,
+    fields: Vec<AnyElement>,
+    submit: Stateful<Div>,
+    theme: &Theme,
+) -> Stateful<Div> {
+    let (tone, glyph) = row_icon(&setup.package);
+    let header = div()
+        .flex()
+        .items_center()
+        .gap(theme.geometry.controls.row_gap)
+        .child(tile_at(TileSize::Row, tone, glyph, theme))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .min_w(px(0.))
+                .child(controls::field_label(setup.title.clone(), theme))
+                .child(
+                    controls::field_description(setup.sentence.clone(), theme.text_muted, theme)
+                        .id("setup-sentence")
+                        .debug_selector(|| "setup-sentence".into())
+                        .role(Role::Heading)
+                        .aria_label(setup.sentence.clone()),
+                ),
+        );
+    let column = div()
+        .flex_1()
+        .min_w(px(0.))
+        .flex()
+        .flex_col()
+        .gap(theme.geometry.controls.group_gap)
+        .children(fields)
+        .child(div().flex().child(submit));
+    let help = (!setup.help.is_empty()).then(|| {
+        let paragraphs = setup.help.iter().enumerate().map(|(index, paragraph)| {
+            controls::field_description(paragraph.clone(), theme.text_body, theme)
+                .id(("setup-help", index))
+                .debug_selector(move || format!("setup-help-{index}"))
+        });
+        div()
+            .id("setup-help")
+            .debug_selector(|| "setup-help".into())
+            .role(Role::Note)
+            .aria_label("Help")
+            .flex_1()
+            .min_w(px(0.))
+            .flex()
+            .flex_col()
+            .gap(theme.geometry.controls.field_gap)
+            .children(paragraphs)
+    });
+    div()
+        .id("form")
+        .debug_selector(|| "setup".into())
+        .role(Role::Form)
+        .aria_label(title)
+        .flex_1()
+        .min_h(px(0.))
+        .flex()
+        .flex_col()
+        .gap(theme.geometry.controls.group_gap)
+        .px(theme.geometry.search_padding_x)
+        .py(theme.geometry.screen_padding_y)
+        .overflow_y_scroll()
+        .child(header)
+        .child(
+            div()
+                .flex()
+                .gap(theme.geometry.controls.group_gap)
+                .child(column)
+                .children(help),
+        )
 }
 
 /// A form screen's composition (#99): the form's field groups, 18px apart in a column that
@@ -357,6 +477,9 @@ pub(crate) struct TextControl<'a> {
     pub(crate) value: &'a str,
     pub(crate) placeholder: &'a str,
     pub(crate) error: Option<&'a str>,
+    /// Whether the text is a secret (a password preference's): it is
+    /// hidden as it is typed, on screen and to assistive technology.
+    pub(crate) secret: bool,
 }
 
 /// A text field: GPUI CE's editable text element in a field's well (34px,
@@ -372,23 +495,52 @@ pub(crate) fn text_control(
 ) -> Stateful<Div> {
     let selector = format!("field-{}", field.id);
     let ring = controls::well_shadows(true, theme);
-    controls::well(false, theme)
+    // A secret's text is drawn as dots: the editable element's own glyphs
+    // are transparent under them, so editing, the caret and selection work
+    // as in any field.
+    let shown = if field.secret {
+        "\u{2022}".repeat(field.value.chars().count())
+    } else {
+        field.value.to_owned()
+    };
+    let input = controls::well_input(
+        text_input(("input", field.index)).state(input.downgrade()),
+        field.placeholder.to_owned(),
+        theme,
+    );
+    let well = controls::well(false, theme)
         .id(("field", field.index))
         .debug_selector(move || selector)
         .track_focus(focus)
         .role(Role::TextInput)
         .aria_label(field.label.to_owned())
-        .aria_value(field.value.to_owned())
+        .aria_value(shown.clone())
         .aria_placeholder(field.placeholder.to_owned())
         .when_some(field.error, |node, error| {
             node.aria_description(error.to_owned())
         })
-        .focus(move |node| node.shadow(ring))
-        .child(controls::well_input(
-            text_input(("input", field.index)).state(input.downgrade()),
-            field.placeholder.to_owned(),
-            theme,
-        ))
+        .focus(move |node| node.shadow(ring));
+    if !field.secret {
+        return well.child(input);
+    }
+    let dots = div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .flex()
+        .items_center()
+        .text_size(theme.typography.settings_text_size)
+        .text_color(theme.text_title)
+        .child(shown);
+    well.child(
+        div()
+            .relative()
+            .flex_1()
+            .min_w(px(0.))
+            .child(input.text_color(gpui::transparent_black()))
+            .child(dots),
+    )
 }
 
 /// One choice of a choice field: a segment of its track, a radio button

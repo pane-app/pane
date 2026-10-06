@@ -486,6 +486,12 @@ pub(crate) fn well_shadows(focused: bool, theme: &Theme) -> Vec<BoxShadow> {
     vec![inset_ring(color, px(1.))]
 }
 
+/// A well's ring in the error state: 1px of the danger tone, as a
+/// required preference that is unset is drawn (#143).
+pub(crate) fn error_ring(theme: &Theme) -> Vec<BoxShadow> {
+    vec![inset_ring(theme.danger, px(1.))]
+}
+
 /// The 14px glyph at a well's start (a filter's magnifier).
 pub(crate) fn well_glyph(mark: Glyph, theme: &Theme) -> gpui::Svg {
     glyph(mark, theme.geometry.controls.well_glyph, theme.nav_icon).flex_none()

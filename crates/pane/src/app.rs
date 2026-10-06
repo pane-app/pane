@@ -1131,6 +1131,14 @@ impl LauncherWindow {
             (Some(subtitle), Some(reason)) => Some(format!("{subtitle}. {reason}")),
             (subtitle, reason) => subtitle.clone().or(reason.clone()),
         };
+        // A command whose required preferences are unset says so, in the
+        // kind's place and to assistive technology (#143).
+        let needs_setup = shown.needs_setup;
+        let description = match (description, needs_setup) {
+            (Some(description), true) => Some(format!("{description}. {NEEDS_SETUP}")),
+            (None, true) => Some(NEEDS_SETUP.to_owned()),
+            (description, false) => description,
+        };
         // Root search's rows carry what the launcher knows beyond the
         // title: where the query matched, the alias and the hotkey the
         // user gave the command, and its kind.
@@ -1145,10 +1153,10 @@ impl LauncherWindow {
             // Root search's rows always keep the kind's column, empty
             // where the launcher names no kind, so the alias and keys of
             // every row line up against it, as the reference's do.
-            kind: if root {
-                Some(shown.kind.map_or("", |kind| kind.label()).into())
-            } else {
-                None
+            kind: match (root, needs_setup) {
+                (true, true) => Some(NEEDS_SETUP.into()),
+                (true, false) => Some(shown.kind.map_or("", |kind| kind.label()).into()),
+                (false, _) => None,
             },
             number,
         };
@@ -1889,6 +1897,10 @@ pub(crate) fn section_label(section: &pane_core::Section) -> shell::SectionLabel
         note: section.note.clone().map(SharedString::from),
     }
 }
+
+/// What the row of a command whose required preferences are unset says in
+/// its kind's place: only the user, through the Setup screen, runs it.
+pub(crate) const NEEDS_SETUP: &str = "Needs setup";
 
 /// The icon presentation for a row, chosen by the row's stable id: the
 /// built-in rows and this build's sample commands are known identities,

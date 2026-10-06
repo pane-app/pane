@@ -120,6 +120,19 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   `packages/sample-no-view` and its `-js`/`-ts` copies; held alike by
   `crates/pane-core/tests/no_view.rs`, and the Rust one by
   `crates/pane/tests/no_view.rs`.
+- `sample-preferences`, `sample-preferences-js`, `sample-preferences-ts`:
+  the preferences sample in Rust, JavaScript and TypeScript
+  ([Preferences and the Setup screen](#preferences-and-the-setup-screen)):
+  its package declares an API key (a password, required), units (a
+  dropdown, required, with a default), a greeting (text) and "Verbose" (a
+  checkbox), and ships a `HELP.md`; "Show preferences", a view command,
+  adds a notes folder (required), a notes file and an editor (an
+  application) and lists every value it receives; "Report preferences", a
+  no-view command, adds "Loud" (a checkbox) and answers its values; "Tick"
+  runs every minute once the package is set up, and "Last tick" answers
+  how often. Their packages are `packages/sample-preferences` and its
+  `-js`/`-ts` copies; held alike by `crates/pane-core/tests/preferences.rs`,
+  and the Rust one by `crates/pane/tests/preferences.rs`.
 - `sample-schedule`, `sample-schedule-js`, `sample-schedule-ts`: the
   schedule sample in Rust, JavaScript and TypeScript, whose Counting
   command declares a `schedule`, so Pane runs its "Run now" item every 60
@@ -1039,6 +1052,71 @@ launch has started, not when the target has run. The
 [no-view sample](sample-no-view) does all of this in Rust, and its
 [JavaScript](sample-no-view-js) and [TypeScript](sample-no-view-ts) copies
 answer the same.
+
+## Preferences and the Setup screen
+
+A package that needs something from the user (an API key, a folder) does
+not build a settings screen: it declares **preferences** in `pane.json`,
+for the whole extension under the package's `preferences`, or for one
+command under that command's. Pane draws, stores and checks them, and
+hands each command its values.
+
+```json
+"preferences": [
+  { "name": "apiKey", "type": "password", "title": "API key",
+    "description": "Where to find it: see the help.", "required": true },
+  { "name": "units", "type": "dropdown", "title": "Units", "required": true,
+    "default": "metric",
+    "options": [{ "value": "metric", "title": "Metric" },
+                { "value": "imperial", "title": "Imperial" }] },
+  { "name": "verbose", "type": "checkbox", "title": "Verbose",
+    "label": "Say more", "default": false }
+]
+```
+
+A preference has a `name` (unique among the package's preferences and each
+command's together; no `#`), a `type` (`text`, `password`, `checkbox`,
+`dropdown`, `file`, `folder` or `application`), a `title`, and optionally a
+`description`, a `placeholder`, `required` and a `default`: a value, or one
+per system (`{ "windows": …, "macos": …, "linux": … }`). A checkbox may
+have a `label` and its default is `true` or `false`; a dropdown needs its
+`options`, each a `value` and a `title`, and its default must be one of
+them. A duplicate name, an unknown type or a dropdown default not among its
+options refuses the package at install, with the reason.
+
+A command reads its **effective values**: its package's preferences, then
+its own, each the value the user set or else its default, a checkbox's as
+a boolean and every other kind's as text; one with neither is absent. Rust
+deserializes them into a type of its own with serde
+(`pane_guest::preferences::values::<T>()`); JavaScript and TypeScript call
+`getPreferenceValues()` from `@pane/extension/preferences`, TypeScript
+naming its interface (`getPreferenceValues<Preferences>()`). Underneath is
+`pane:extension/preferences` ([`wit/preferences.wit`](../wit/preferences.wit)),
+which answers the values as JSON.
+
+A **required** preference with no value and no default is unset. Before a
+launch by the user, Pane checks: with any unset, it shows the **Setup
+screen** instead, the extension's title, "Set these up before using
+<command>", only the unset fields with their descriptions, and the
+package's `HELP.md` beside them. Submitting saves the values and launches
+the command as it was launched; Escape launches nothing. A stored value
+that no longer fits counts as unset: a dropdown value no longer among the
+options, a file or folder that no longer exists. Every other way in (a
+background launch, root results, a schedule, a service) does not run a
+command that needs setup; its row in root search says "Needs setup", and
+none of this counts as a failure.
+
+The user changes the values later on the extension's card in Settings ›
+Extensions, saved as they change; "Configure Command…" and "Configure
+Extension…" in root search's Actions panel open it there. Values are the
+package's [extension data](../docs/extension-data.md): a password is a
+local credential, every other value an extension setting, so disabling
+keeps them, an update keeps those whose names are still declared (and
+drops one whose type changed so that it no longer fits), and uninstalling
+keeps the settings when asked while always removing the credentials. The
+[preferences sample](sample-preferences) declares every type, and its
+[JavaScript](sample-preferences-js) and [TypeScript](sample-preferences-ts)
+copies answer the same.
 
 ## A command that takes a query
 

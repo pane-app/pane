@@ -87,10 +87,12 @@ SAMPLES = [
     ("sample_service_ts.wasm", "guests/sample-service-ts"),
     ("sample_actions_js.wasm", "guests/sample-actions-js"),
     ("sample_actions_ts.wasm", "guests/sample-actions-ts"),
+    ("sample_preferences_js.wasm", "guests/sample-preferences-js"),
+    ("sample_preferences_ts.wasm", "guests/sample-preferences-ts"),
 ]
 # Pane's WIT, copied beside the world in guests/js/wit.
-PANE_WIT = ["extension.wit", "commands.wit", "data.wit", "root-results.wit", "operations.wit", "applications.wit",
-            "search.wit", "helpers.wit", "files.wit", "clipboard.wit", "service.wit"]
+PANE_WIT = ["extension.wit", "commands.wit", "data.wit", "preferences.wit", "root-results.wit", "operations.wit",
+            "applications.wit", "search.wit", "helpers.wit", "files.wit", "clipboard.wit", "service.wit"]
 # WASI's WIT (clocks, and `wasi:http` with the packages it names), copied from
 # wit/deps into the world's deps/.
 WASI_WIT = sorted((REPO / "wit" / "deps").glob("*.wit"))

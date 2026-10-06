@@ -21,6 +21,7 @@ mod launcher_settings;
 mod no_view;
 mod npm;
 mod open_pane;
+mod preferences;
 mod repositories;
 mod runtime_crash;
 mod settings;

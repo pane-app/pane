@@ -43,6 +43,10 @@ use crate::packages::{PackageIdentity, SavedData};
 /// The version of every kind's file.
 const DATA_VERSION: u64 = 1;
 
+/// The kinds that hold preference values: a password's are local
+/// credentials, every other's settings.
+const PREFERENCE_KINDS: [DataKind; 2] = [DataKind::Settings, DataKind::LocalCredentials];
+
 /// A kind of data a package keeps through Pane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DataKind {
@@ -147,6 +151,22 @@ struct DataJson {
     version: u64,
     /// Values by package identity key, then by the extension's own key.
     packages: BTreeMap<String, BTreeMap<String, String>>,
+    /// The values the user set for the preferences packages declare (see
+    /// `preferences`), by package identity key, then by the preference's
+    /// storage key: Pane's own, apart from the keys a package's code saves
+    /// under, which it neither reads nor sets through its data interfaces.
+    /// Only settings and local credentials hold any.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    preferences: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+impl DataJson {
+    /// How many values `owner` keeps in this file, its preferences' among
+    /// them.
+    fn count(&self, owner: &str) -> usize {
+        self.packages.get(owner).map_or(0, BTreeMap::len)
+            + self.preferences.get(owner).map_or(0, BTreeMap::len)
+    }
 }
 
 /// One kind's file as Pane last read or wrote it.
@@ -592,6 +612,73 @@ impl ExtensionData {
             .any(|kind| self.count(kind, identity) != Ok(0))
     }
 
+    /// The values the user set for the preferences of the package with
+    /// `identity`, by storage key (see `preferences`): its settings' and its
+    /// local credentials' together. A file that cannot be read holds none.
+    /// Pane's own record, readable whether or not the package runs.
+    pub fn preference_values(&self, identity: &PackageIdentity) -> BTreeMap<String, String> {
+        let owner = identity.key();
+        let mut store = self.lock();
+        let mut values = BTreeMap::new();
+        for kind in PREFERENCE_KINDS {
+            if let Ok(file) = &store.of(kind).file
+                && let Some(kept) = file.preferences.get(&owner)
+            {
+                values.extend(kept.clone());
+            }
+        }
+        values
+    }
+
+    /// Changes the preference values of the package with `identity`:
+    /// `change` gets each by storage key with the kind it is kept as (a
+    /// password's [`DataKind::LocalCredentials`], every other
+    /// [`DataKind::Settings`]) and may set, move or remove them. The changes
+    /// are made at once and written in the background, whether or not the
+    /// returned writes are awaited; [`PreferenceWrites::written`] says
+    /// whether they were. Pane's own record: it changes whether or not the
+    /// package runs, and the package's code never writes it. Nothing
+    /// changes, and the reason is returned, if either file cannot be read.
+    pub fn change_preferences(
+        &self,
+        identity: &PackageIdentity,
+        change: impl FnOnce(&mut BTreeMap<String, (DataKind, String)>),
+    ) -> Result<PreferenceWrites, String> {
+        let owner = identity.key();
+        let mut store = self.lock();
+        let mut values = BTreeMap::new();
+        for kind in PREFERENCE_KINDS {
+            let file = store.of(kind).file.as_ref().map_err(Clone::clone)?;
+            for (key, value) in file.preferences.get(&owner).into_iter().flatten() {
+                values.insert(key.clone(), (kind, value.clone()));
+            }
+        }
+        let before = values.clone();
+        change(&mut values);
+        let of = |values: &BTreeMap<String, (DataKind, String)>, kind: DataKind| {
+            values
+                .iter()
+                .filter(|(_, (held, _))| *held == kind)
+                .map(|(key, (_, value))| (key.clone(), value.clone()))
+                .collect::<BTreeMap<String, String>>()
+        };
+        let mut writes = Vec::new();
+        for kind in PREFERENCE_KINDS {
+            let wanted = of(&values, kind);
+            if wanted == of(&before, kind) {
+                continue;
+            }
+            let mut updated = store.of(kind).file.as_ref().map_err(Clone::clone)?.clone();
+            if wanted.is_empty() {
+                updated.preferences.remove(&owner);
+            } else {
+                updated.preferences.insert(owner.clone(), wanted);
+            }
+            writes.push((kind, store.stage(kind, updated)));
+        }
+        Ok(PreferenceWrites(writes))
+    }
+
     /// What Pane keeps of `kinds`, read from their files now, so that a file
     /// repaired or changed by another Pane since is counted as it is. Each
     /// file is read once, however many identities are then described.
@@ -606,8 +693,9 @@ impl ExtensionData {
                     let path = self.lock().of(kind).path.clone();
                     let counts = read(&path).map(|file| {
                         file.packages
-                            .into_iter()
-                            .map(|(owner, values)| (owner, values.len()))
+                            .keys()
+                            .chain(file.preferences.keys())
+                            .map(|owner| (owner.clone(), file.count(owner)))
                             .collect()
                     });
                     (kind, counts)
@@ -627,7 +715,7 @@ impl ExtensionData {
         }
         let mut store = self.lock();
         let file = store.of(kind).file.as_ref().map_err(Clone::clone)?;
-        Ok(file.packages.get(&identity.key()).map_or(0, BTreeMap::len))
+        Ok(file.count(&identity.key()))
     }
 
     /// Removes every value of `kind` of the package with `identity`, and
@@ -666,11 +754,14 @@ impl ExtensionData {
                 .file
                 .as_ref()
                 .map_err(|reason| Removal::Unreadable(reason.clone()))?;
-            if !file.packages.contains_key(&identity.key()) {
+            if !file.packages.contains_key(&identity.key())
+                && !file.preferences.contains_key(&identity.key())
+            {
                 return Ok(());
             }
             let mut updated = file.clone();
             updated.packages.remove(&identity.key());
+            updated.preferences.remove(&identity.key());
             break (store.stage(kind, updated), path);
         };
         match outcome.blocking_recv() {
@@ -685,6 +776,31 @@ impl ExtensionData {
 
     fn lock(&self) -> std::sync::MutexGuard<'_, DataFile> {
         lock_file(&self.files)
+    }
+}
+
+/// The writes a change of preference values queued (see
+/// [`ExtensionData::change_preferences`]): they happen whether or not they
+/// are awaited.
+pub(crate) struct PreferenceWrites(Vec<(DataKind, tokio::sync::oneshot::Receiver<io::Result<()>>)>);
+
+impl PreferenceWrites {
+    /// Waits until every write is done; why the first that failed did, if
+    /// one did.
+    pub async fn written(self) -> Result<(), String> {
+        for (kind, written) in self.0 {
+            let failed = |error: io::Error| format!("Could not save {}: {error}", kind.value());
+            match written.await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => return Err(failed(error)),
+                Err(_) => {
+                    return Err(failed(io::Error::other(
+                        "Pane's thread writing extension data has stopped",
+                    )));
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -918,6 +1034,7 @@ fn read(path: &Path) -> Result<DataJson, String> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(DataJson {
             version: DATA_VERSION,
             packages: BTreeMap::new(),
+            preferences: BTreeMap::new(),
         }),
         Err(error) => Err(error.to_string()),
     }

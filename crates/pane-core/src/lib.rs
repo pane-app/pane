@@ -32,6 +32,7 @@ mod packages;
 mod peak_memory;
 pub mod placement;
 mod platform;
+mod preferences;
 mod runtime;
 mod search;
 mod threads;
@@ -50,12 +51,13 @@ pub use keyboard::{Binding, Keyboard, KeyboardAction, PaneKeys};
 pub use launch::{LaunchRecord, LaunchSource, LaunchType};
 pub use launcher::clipboard_view;
 pub use launcher::{
-    AliasOutcome, ApplicationUpdate, BuildFailure, CommandRegistration, ComputedAnswer,
-    CustomViewSnapshot, Development, FormField, FormView, HotkeyOutcome, ItemAction, ItemActions,
-    Launcher, LauncherView, PinTarget, Presentation, Question, QuickSlot, ResultAction,
-    ResultActionItem, ResultActions, Row, RowKind, RowPresentation, Screen, Section,
-    SelectedAction, ShortcutCatalog, ShortcutCommand, ShortcutGroup, SlotChange, Status,
-    Unavailable, UnboundShortcut, answer_sections, root_sections,
+    AliasOutcome, ApplicationUpdate, BuildFailure, CommandPreferences, CommandRegistration,
+    ComputedAnswer, CustomViewSnapshot, Development, FormField, FormView, HotkeyOutcome,
+    ItemAction, ItemActions, Launcher, LauncherView, PackagePreferences, PinTarget,
+    PreferenceField, Presentation, Question, QuickSlot, ResultAction, ResultActionItem,
+    ResultActions, Row, RowKind, RowPresentation, Screen, Section, SelectedAction, SetupHeader,
+    ShortcutCatalog, ShortcutCommand, ShortcutGroup, SlotChange, Status, Unavailable,
+    UnboundShortcut, answer_sections, root_sections,
 };
 pub use links::LinkOpener;
 pub use operations::{MAX_CALL_DEPTH, MAX_OPERATION_JSON};
@@ -66,6 +68,7 @@ pub use packages::{
 };
 pub use pane_target::{Arch, Target};
 pub use platform::Platform;
+pub use preferences::{HELP_FILE, Preference, PreferenceKind, PreferenceOption};
 #[cfg(debug_assertions)]
 #[doc(hidden)]
 pub use runtime::Fault;

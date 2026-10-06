@@ -1,0 +1,44 @@
+package pane:extension@0.1.0;
+
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// Preferences: typed values a package's `pane.json` declares under
+// `preferences`, for the whole extension or for one command, and the user
+// sets in Pane: on the Setup screen before the command's first run, and on
+// the extension's card in Settings › Extensions. Pane stores them (a
+// password as a local credential, every other value as an extension
+// setting); a command only reads them. Rust commands read them through
+// pane-guest (`pane_guest::preferences::values`, deserialized with serde),
+// JavaScript and TypeScript ones through `@pane/extension/preferences`
+// (`getPreferenceValues`). The header follows `package`: comments above it
+// would document the package, which extension.wit already does.
+
+/// Reading the command's effective preference values.
+interface preferences {
+  /// The effective preference values of the command `command` (its id in
+  /// `pane.json`) of the caller's own package, as a JSON object: the
+  /// package's preferences, then the command's own, each name to the value
+  /// the user set or else its declared default. A checkbox's value is a
+  /// boolean (`false` while it has none), every other kind's text (a
+  /// dropdown's, the chosen option's `value`; a file's, folder's or
+  /// application's, its path). A preference with no value and no default is
+  /// left out. A stored value that no longer fits (a dropdown option no
+  /// longer declared, a file or folder that no longer exists) counts as
+  /// none.
+  ///
+  /// With `command` none: the command Pane is running in this component
+  /// (the one it opened, ran or asked), or else the only command the
+  /// component serves. A component serving several commands names the
+  /// command in calls Pane makes for no command in particular, such as its
+  /// root results.
+  ///
+  /// Refused, with the reason, for a command built into Pane, a command
+  /// the package does not have, or code that is stopped (its package was
+  /// disabled, reloaded, updated or uninstalled).
+  values: func(command: option<string>) -> result<string, string>;
+}
+
+/// The preferences import alone, for guest bindings.
+world preferences-user {
+  import preferences;
+}
