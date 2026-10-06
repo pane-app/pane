@@ -37,6 +37,9 @@ wit_bindgen::generate!({
     world: "extension-with-data",
     pub_export_macro: true,
     default_bindings_module: "pane_guest",
+    // No function names the form and custom-view records any more: the tree
+    // carries them as JSON. Authors still build them as these types.
+    generate_unused_types: true,
 });
 
 pub use exports::pane::extension::command::{
