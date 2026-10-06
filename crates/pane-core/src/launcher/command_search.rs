@@ -85,8 +85,12 @@ impl Launcher {
         let search = state.search_epoch;
         let launcher = self.clone();
         if blank {
+            // Drawn with the record its screen was opened with.
+            let launch = state.launch.clone();
             return Some(Box::pin(async move {
-                let answer = runtime.render_with(&component, data.clone()).await;
+                let answer = runtime
+                    .render_launched_with(&component, &launch, data.clone())
+                    .await;
                 launcher.show_listed_again(epoch, search, component, data, answer);
             }));
         }

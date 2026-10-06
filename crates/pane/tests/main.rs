@@ -18,6 +18,7 @@ mod install;
 mod item_actions;
 mod keyboard;
 mod launcher_settings;
+mod no_view;
 mod npm;
 mod open_pane;
 mod repositories;

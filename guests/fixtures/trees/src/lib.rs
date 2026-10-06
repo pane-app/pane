@@ -34,7 +34,7 @@ use core::ffi::c_void;
 wit_bindgen::generate!({ path: "../../../wit", world: "extension" });
 
 use exports::pane::extension::command::{
-    CustomView, FieldValue, FormError, Frame, Guest, GuestCustomView, ViewEvent,
+    CustomView, FieldValue, FormError, Frame, Guest, GuestCustomView, LaunchRecord, ViewEvent,
 };
 
 /// What the next drawing answers.
@@ -144,7 +144,7 @@ impl GuestCustomView for NoView {
 impl Guest for Trees {
     type CustomView = NoView;
 
-    async fn render() -> Result<String, String> {
+    async fn render(_launch: LaunchRecord) -> Result<String, String> {
         STATE.drawn.set(STATE.drawn.get() + 1);
         let next = STATE.next.get();
         Ok(match next {
@@ -159,6 +159,10 @@ impl Guest for Trees {
                 "{\"version\":1,\"view\":".into()
             }
         })
+    }
+
+    async fn run(command: String, _launch: LaunchRecord) -> Result<String, String> {
+        Err(format!("`{command}` opens a screen"))
     }
 
     async fn handle_event(callback: String, details: String) -> Result<String, String> {

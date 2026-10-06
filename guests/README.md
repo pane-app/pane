@@ -101,14 +101,25 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   `crates/pane/tests/repositories.rs`, from a repository served on
   127.0.0.1.
 - `sample-query`, `sample-query-js`, `sample-query-ts`: Echo, the smallest
-  command that takes a query, in Rust, JavaScript and TypeScript:
-  it answers the text the user sends it from root search through its alias
-  or as a fallback ([A command that takes a query](#a-command-that-takes-a-query),
+  command that takes a query, in Rust, JavaScript and TypeScript, a no-view
+  command: it answers the text the user sends it from root search through
+  its alias or as a fallback ([A command that takes a query](#a-command-that-takes-a-query),
   [aliases and fallbacks](../docs/aliases.md)); "fail" is refused and
   "crash" crashes on purpose. Their packages are `packages/sample-query`,
   `packages/sample-query-js` and `packages/sample-query-ts`; held alike by
   `crates/pane-core/tests/aliases.rs`, and the Rust one by
   `crates/pane/tests/aliases.rs`.
+- `sample-no-view`, `sample-no-view-js`, `sample-no-view-ts`: the no-view
+  sample in Rust, JavaScript and TypeScript, one component serving five
+  commands ([No-view commands and the launch record](#no-view-commands-and-the-launch-record)):
+  "Report launch" answers its launch record ("fail" answers an error,
+  "crash" crashes), "Tick" runs every minute on its own schedule in the
+  background, "Last launches" answers what those two last ran with,
+  "Launch" launches the command its text names with context, and "Show
+  launch", a view command, lists its launch record. Their packages are
+  `packages/sample-no-view` and its `-js`/`-ts` copies; held alike by
+  `crates/pane-core/tests/no_view.rs`, and the Rust one by
+  `crates/pane/tests/no_view.rs`.
 - `sample-schedule`, `sample-schedule-js`, `sample-schedule-ts`: the
   schedule sample in Rust, JavaScript and TypeScript, whose Counting
   command declares a `schedule`, so Pane runs its "Run now" item every 60
@@ -949,6 +960,86 @@ history.deleteItems(["7"]); // `delete-items`: `delete` is a JavaScript keyword
 [`sample-clipboard-ts`](sample-clipboard-ts) implement the Clipboard History
 command in JavaScript and TypeScript.
 
+## No-view commands and the launch record
+
+A command's entry in `pane.json` declares its **mode** (ADR 0037):
+`"mode": "view"`, the default when it says nothing, opens a screen, its
+list; `"mode": "no-view"` runs and opens none. Any other value is refused
+at install with the reason. Pane reads the mode from the manifest, so it
+knows at Enter what to do without running the command.
+
+A **no-view command** runs each time it is launched: Enter on its row in
+root search, its alias, a fallback, its global hotkey (which runs it
+without showing Pane's window), its quick slot, another command, or its
+own schedule. Root search, or whatever Pane shows, stays as it is; the
+text it answers is shown as the result, an error as the failure. An error
+it answers never counts towards [pausing](../docs/pausing.md); a crash
+does, as any call's. A `schedule` without an `item` makes Pane run the
+command itself every interval, in the background, showing nothing:
+
+```json
+{ "id": "tick", "title": "Tick", "component": "tick.wasm",
+  "mode": "no-view", "schedule": { "everySeconds": 60 } }
+```
+
+Every command receives its **launch record** on every way in: whether the
+user launched it or Pane did in the background, from where (root search,
+an alias, a fallback, a hotkey, a quick slot, another command, a
+schedule), its arguments (none yet), the text sent through its alias or as
+a fallback, and the JSON context another command passed
+([`wit/commands.wit`](../wit/commands.wit)).
+
+Rust: implement `run` in `pane_guest::Command` (one component may serve
+several commands, told apart by their id in `pane.json`); a view command's
+`render` reads its record with `pane_guest::commands::current()`.
+`render`, `submit_form` and `open_view` have defaults, so a no-view command
+needs none of them:
+
+```rust
+use pane_guest::alloc::{format, string::String};
+use pane_guest::{Command, LaunchRecord, NoCustomView};
+
+struct Toggle;
+pane_guest::export!(Toggle);
+
+impl Command for Toggle {
+    type CustomView = NoCustomView;
+
+    async fn run(command: String, launch: LaunchRecord) -> Result<String, String> {
+        Ok(format!("{command} ran from {}", pane_guest::commands::source_name(launch.source)))
+    }
+}
+```
+
+JavaScript or TypeScript: give the exported `command` a `run(id, launch)`;
+a view command's `render(launch)` receives the record too:
+
+```ts
+import type { Command } from "@pane/extension";
+
+export const command: Command = {
+  async run(id, launch) {
+    return `${id} ran from ${launch.source}`;
+  },
+};
+```
+
+A command **launches another** with `pane:extension/commands`'s `launch`
+(`pane_guest::commands::launch` in Rust, an import of
+`pane:extension/commands@0.1.0` in JavaScript and TypeScript): one of its
+own package by its id in `pane.json`, or one of another installed package
+by that package's identity (`local:` and the absolute folder Pane shows,
+`npm:` and its name, `git:` and its repository), passing JSON context and
+asking nothing. `user-initiated` opens it as if the user had invoked it;
+`background` runs a no-view command without a window and is refused for a
+view command. A target that is not installed, has no such command, or is
+disabled, paused or unavailable on this system is refused with the
+reason, which the caller receives as an error. `launch` answers once the
+launch has started, not when the target has run. The
+[no-view sample](sample-no-view) does all of this in Rust, and its
+[JavaScript](sample-no-view-js) and [TypeScript](sample-no-view-ts) copies
+answer the same.
+
 ## A command that takes a query
 
 The user can give any installed command an alias in Manage extensions, and
@@ -956,43 +1047,32 @@ typing it in root search lists the command first; nothing is needed of the
 command for that. A command that **takes a query** can also be sent text
 from root search: the user types its alias, a space and the text ("ec
 hello"), or makes it a fallback, which is listed below the results for any
-text typed, and invokes that row. Pane calls the command only then, never
-while the user types, and shows its answer as the result (an error as the
-failure); root search stays as it was. Set `"takesQuery": true` on the
-command in `pane.json` and export `pane:extension/query-command`
-([`wit/query.wit`](../wit/query.wit)) beside the command; Pane checks it at
-install without running it. Pane passes the command's id in `pane.json`, so
-one component can serve several such commands, and the text, trimmed and
-never empty. A trap counts towards [pausing](../docs/pausing.md) as any
-call's does. See [aliases and fallbacks](../docs/aliases.md).
+text typed, and invokes that row. Pane launches the command only then,
+never while the user types, with the text, trimmed and never empty, as its
+launch record's **fallback text**. Set `"takesQuery": true` on the command
+in `pane.json`. A no-view command runs with the text, its answer shown as
+the result (an error as the failure) while root search stays as it was; a
+view command opens its screen with it. See
+[aliases and fallbacks](../docs/aliases.md).
 
-Rust (`pane_guest::query`; the component then exports both interfaces), as
-[`sample-query`](sample-query) does:
+Rust, as [`sample-query`](sample-query) does, Echo being a no-view command:
 
 ```rust
-use pane_guest::alloc::{format, string::String};
-
-pane_guest::export!(Echo);
-pane_guest::query::export!(Echo);
-
-impl pane_guest::query::Guest for Echo {
-    async fn run_query(command: String, query: String) -> Result<String, String> {
-        Ok(format!("Echo heard “{query}”"))
+async fn run(command: String, launch: LaunchRecord) -> Result<String, String> {
+    match launch.fallback_text {
+        Some(text) => Ok(format!("Echo heard “{text}”")),
+        None => Ok("Echo heard nothing".into()),
     }
 }
 ```
 
-JavaScript or TypeScript: add `"pane": { "takesQuery": true }` to
-`package.json`, so the build exports the interface, and export
-`queryCommand` from the module, as the [JavaScript](sample-query-js) and
+JavaScript or TypeScript, as the [JavaScript](sample-query-js) and
 [TypeScript](sample-query-ts) query samples do:
 
 ```ts
-import type { QueryCommand } from "@pane/extension";
-
-export const queryCommand: QueryCommand = {
-  async runQuery(command, query) {
-    return `Echo heard “${query}”`;
+export const command: Command = {
+  async run(id, launch) {
+    return launch.fallbackText == null ? "Echo heard nothing" : `Echo heard “${launch.fallbackText}”`;
   },
 };
 ```

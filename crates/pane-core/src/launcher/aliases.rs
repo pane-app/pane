@@ -12,7 +12,12 @@
 //!   when the user chooses it.
 //!
 //! Nothing runs while the user types: the text is sent to the command only
-//! when its row is invoked. Both are Pane's own records (see `choices`):
+//! when its row is invoked, as its launch record's fallback text, trimmed
+//! (see `launching`). A no-view command, such as the query samples' Echo,
+//! runs with it and its answer is shown while root search stays as it was;
+//! a view command opens its screen with it.
+//!
+//! Both are Pane's own records (see `choices`):
 //! `aliases.json` beside `installed.json`, by command id, so copies of a
 //! package from other sources, even with the same titles, are distinct, and
 //! a reinstalled or updated package keeps them. A disabled package's
@@ -24,15 +29,15 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::path::PathBuf;
 
 use serde_json::{Map, Value};
 
 use super::choices::{Choices, Record, split};
 use super::{
     CommandRegistration, Entry, FormField, FormPurpose, FormView, Launcher, LauncherView, OpenForm,
-    Row, Screen, State, Status, Unavailable, off_thread,
+    Opening, Row, Screen, State, Status, Unavailable, off_thread,
 };
+use crate::launch::{LaunchRecord, LaunchSource};
 use crate::packages::{PackageIdentity, paused_reason};
 use crate::runtime::FieldKind;
 use crate::search::same_text;
@@ -174,6 +179,9 @@ pub(super) struct Target {
     pub(super) identity: PackageIdentity,
     /// Why it cannot run now: paused, or unavailable on this system.
     pub(super) unavailable: Option<Unavailable>,
+    /// Whether it is a no-view command, which runs with the text sent
+    /// rather than opening a screen.
+    pub(super) no_view: bool,
 }
 
 /// How a row sends the query to its command.
@@ -186,12 +194,11 @@ pub(super) enum Via {
 }
 
 /// A root search row's query, to send to a command that takes one.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(super) struct Sending {
-    pub(super) component: PathBuf,
-    /// The command's id in its manifest.
-    pub(super) command: String,
-    pub(super) query: String,
+    /// The command, launched from its alias or as a fallback with the
+    /// text as its launch record's fallback text.
+    pub(super) opening: Opening,
     pub(super) via: Via,
     /// Why the command cannot run now; invoking the row shows it.
     pub(super) unavailable: Option<String>,
@@ -228,10 +235,14 @@ fn send_row(state: &State, target: &Target, text: &str, via: Via, how: &str) -> 
         subtitle: Some(format!("Send “{text}” · {how}{source}")),
         unavailable: target.unavailable.clone(),
     };
+    let from = match via {
+        Via::Alias => LaunchSource::Alias,
+        Via::Fallback => LaunchSource::Fallback,
+    };
+    let mut opening = Opening::of(registration, target.no_view, from);
+    opening.launch = LaunchRecord::sending(from, text);
     let entry = Entry::Send(Sending {
-        component: registration.component.clone(),
-        command: registration.manifest_id().to_owned(),
-        query: text.to_owned(),
+        opening,
         via,
         unavailable: target.unavailable.as_ref().map(|u| u.reason().to_owned()),
     });

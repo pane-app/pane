@@ -22,6 +22,7 @@ pub mod hotkeys;
 mod http;
 mod integrity;
 pub mod keyboard;
+mod launch;
 mod launcher;
 mod links;
 pub mod npm;
@@ -46,6 +47,7 @@ pub use host_settings::{
 #[doc(hidden)]
 pub use http::HttpLimits;
 pub use keyboard::{Binding, Keyboard, KeyboardAction, PaneKeys};
+pub use launch::{LaunchRecord, LaunchSource, LaunchType};
 pub use launcher::clipboard_view;
 pub use launcher::{
     AliasOutcome, ApplicationUpdate, BuildFailure, CommandRegistration, ComputedAnswer,
@@ -58,9 +60,9 @@ pub use launcher::{
 pub use links::LinkOpener;
 pub use operations::{MAX_CALL_DEPTH, MAX_OPERATION_JSON};
 pub use packages::{
-    EXTENSION_API, InstalledPackage, MANIFEST_FILE, MANIFEST_VERSION, MAX_SCHEDULE_SECONDS,
-    MIN_SCHEDULE_SECONDS, Manifest, ManifestCommand, ManifestHelper, ManifestOperation,
-    ManifestSchedule, PackageError, PackageIdentity, RetainedData, SavedData,
+    CommandMode, EXTENSION_API, InstalledPackage, MANIFEST_FILE, MANIFEST_VERSION,
+    MAX_SCHEDULE_SECONDS, MIN_SCHEDULE_SECONDS, Manifest, ManifestCommand, ManifestHelper,
+    ManifestOperation, ManifestSchedule, PackageError, PackageIdentity, RetainedData, SavedData,
 };
 pub use pane_target::{Arch, Target};
 pub use platform::Platform;

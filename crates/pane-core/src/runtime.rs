@@ -113,15 +113,6 @@ mod indexed_bindings {
     });
 }
 
-/// The `query-command` export of a command that takes a query.
-mod query_bindings {
-    wasmtime::component::bindgen!({
-        path: "../../wit",
-        world: "query-command-provider",
-        exports: { default: async | store },
-    });
-}
-
 /// The `command-search` export of a command that searches as the user types
 /// into its own search field.
 mod search_bindings {
@@ -151,6 +142,7 @@ mod operations_bindings {
 }
 
 use bindings::exports::pane::extension::command;
+use bindings::pane::extension::commands as launching;
 use bindings::pane::extension::{
     applications, cache, clipboard_history, content, credentials, settings,
 };
@@ -164,6 +156,7 @@ use crate::files::{FileAccess, Folders};
 use crate::generation::{End, Fence, Generation, Registration};
 use crate::helpers;
 use crate::helpers::runner::{self, HelperError, HelperErrorKind, Helpers, Running, Spec};
+use crate::launch::{LaunchRecord, LaunchRequest, LaunchSource, LaunchType, Launches};
 use crate::operations::{self, Directory, OperationCall, OperationError, Target};
 use crate::packages::EXTENSION_API;
 
@@ -179,9 +172,6 @@ const ROOT_RESULTS_INTERFACE: &str = "pane:extension/root-results@0.1.0";
 /// The interface a command that supplies root results ahead of the query
 /// also exports.
 const INDEXED_RESULTS_INTERFACE: &str = "pane:extension/indexed-results@0.1.0";
-
-/// The interface a command that takes a query also exports.
-const QUERY_COMMAND_INTERFACE: &str = "pane:extension/query-command@0.1.0";
 
 /// The interface a component serving published operations also exports.
 const OPERATIONS_INTERFACE: &str = "pane:extension/published-operations@0.1.0";
@@ -298,8 +288,6 @@ pub(crate) struct Exports {
     pub root_results: bool,
     /// `indexed-results`: it supplies root results ahead of the query.
     pub indexed_results: bool,
-    /// `query-command`: it takes a query when invoked from root search.
-    pub query_command: bool,
     /// `published-operations`: it serves published operations.
     pub operations: bool,
     /// `command-search`: it searches as the user types into its own search
@@ -322,6 +310,10 @@ type SharedClipboard = Arc<Mutex<Option<std::sync::Weak<Capture>>>>;
 /// The installed packages as the launcher has them, once it has said, for
 /// resolving operation calls and finding a guest's helpers.
 type SharedDirectory = Arc<Mutex<Option<Directory>>>;
+
+/// What starts the commands guests launch (`pane:extension/commands`),
+/// once the launcher has said: the launcher's own.
+type SharedLaunches = Arc<Mutex<Option<Launches>>>;
 
 /// What Pane shows of an item's custom view besides the view's drawing.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -668,6 +660,7 @@ pub(crate) struct Checked {
 enum Request {
     Render {
         component: PathBuf,
+        launch: LaunchRecord,
         data: Option<PackageData>,
         reply: oneshot::Sender<Result<View, CallError>>,
     },
@@ -681,6 +674,14 @@ enum Request {
     RunItem {
         component: PathBuf,
         item_id: String,
+        launch: LaunchRecord,
+        data: Option<PackageData>,
+        reply: oneshot::Sender<Result<Answer, CallError>>,
+    },
+    Run {
+        component: PathBuf,
+        command: String,
+        launch: LaunchRecord,
         data: Option<PackageData>,
         reply: oneshot::Sender<Result<Answer, CallError>>,
     },
@@ -700,13 +701,6 @@ enum Request {
         query: String,
         data: Option<PackageData>,
         reply: oneshot::Sender<Result<Vec<RootResult>, CallError>>,
-    },
-    RunQuery {
-        component: PathBuf,
-        command: String,
-        query: String,
-        data: Option<PackageData>,
-        reply: oneshot::Sender<Result<String, CallError>>,
     },
     Search {
         component: PathBuf,
@@ -757,18 +751,21 @@ enum Request {
 impl Request {
     /// The component this request's call runs in, when it is a call the
     /// user asked the package for — opening (or drawing again) a command,
-    /// handling an event of its list, running an item, a
-    /// query sent from root, a command's search, a form submission or
+    /// handling an event of its list, running an item, running a no-view
+    /// command the user launched, a command's search, a form submission or
     /// opening a custom view. Not the background and ambient ones (a
-    /// scheduled run, a service cycle, a root search's ask), which a
-    /// replacement of the package's code ends and its new code restarts or
-    /// re-asks, nor a view event, whose screen is what the launcher checks.
+    /// scheduled run, a background launch, a service cycle, a root search's
+    /// ask), which a replacement of the package's code ends and its new code
+    /// restarts or re-asks, nor a view event, whose screen is what the
+    /// launcher checks.
     fn user_component(&self) -> Option<&Path> {
         match self {
+            Request::Run {
+                component, launch, ..
+            } if !launch.is_background() => Some(component),
             Request::Render { component, .. }
             | Request::HandleEvent { component, .. }
             | Request::RunItem { component, .. }
-            | Request::RunQuery { component, .. }
             | Request::Search { component, .. }
             | Request::SubmitForm { component, .. }
             | Request::OpenView { component, .. } => Some(component),
@@ -972,9 +969,54 @@ impl Runtime {
 
     /// Asks the command in `component` to draw its screen (`render`), and
     /// reads the list its tree describes. The command has no extension
-    /// data.
+    /// data, and is launched by the user from root search.
     pub async fn render(&self, component: &Path) -> Result<View, CallError> {
         self.render_with(component, None).await
+    }
+
+    /// Like [`Runtime::render`], with the launch record `launch`.
+    pub async fn render_launched(
+        &self,
+        component: &Path,
+        launch: &LaunchRecord,
+    ) -> Result<View, CallError> {
+        self.render_launched_with(component, launch, None).await
+    }
+
+    /// Runs the no-view command with manifest id `command` in `component`
+    /// (`run`), launched as `launch` says, and reads its answer. The
+    /// command has no extension data.
+    pub async fn run_command(
+        &self,
+        component: &Path,
+        command: &str,
+        launch: &LaunchRecord,
+    ) -> Result<Answer, CallError> {
+        self.run_command_with(component, command, launch, None)
+            .await
+    }
+
+    /// Like [`Runtime::run_command`]; the command reads and saves `data`.
+    /// Starts its instance if it has none.
+    pub(crate) async fn run_command_with(
+        &self,
+        component: &Path,
+        command: &str,
+        launch: &LaunchRecord,
+        data: Option<PackageData>,
+    ) -> Result<Answer, CallError> {
+        let (reply, response) = oneshot::channel();
+        self.call(
+            Request::Run {
+                component: component.to_path_buf(),
+                command: command.to_owned(),
+                launch: launch.clone(),
+                data,
+                reply,
+            },
+            response,
+        )
+        .await
     }
 
     /// Has the command in `component` handle the user's choice of
@@ -1007,10 +1049,23 @@ impl Runtime {
         component: &Path,
         data: Option<PackageData>,
     ) -> Result<View, CallError> {
+        self.render_launched_with(component, &LaunchRecord::default(), data)
+            .await
+    }
+
+    /// Like [`Runtime::render_launched`]; the command reads and saves
+    /// `data`.
+    pub(crate) async fn render_launched_with(
+        &self,
+        component: &Path,
+        launch: &LaunchRecord,
+        data: Option<PackageData>,
+    ) -> Result<View, CallError> {
         let (reply, response) = oneshot::channel();
         self.call(
             Request::Render {
                 component: component.to_path_buf(),
+                launch: launch.clone(),
                 data,
                 reply,
             },
@@ -1048,11 +1103,26 @@ impl Runtime {
         item_id: &str,
         data: Option<PackageData>,
     ) -> Result<Answer, CallError> {
+        self.run_item_launched_with(component, item_id, &LaunchRecord::default(), data)
+            .await
+    }
+
+    /// Like [`Runtime::run_item_with`], drawing the list with the launch
+    /// record `launch`: a scheduled item's run draws it with its
+    /// schedule's.
+    pub(crate) async fn run_item_launched_with(
+        &self,
+        component: &Path,
+        item_id: &str,
+        launch: &LaunchRecord,
+        data: Option<PackageData>,
+    ) -> Result<Answer, CallError> {
         let (reply, response) = oneshot::channel();
         self.call(
             Request::RunItem {
                 component: component.to_path_buf(),
                 item_id: item_id.to_owned(),
+                launch: launch.clone(),
                 data,
                 reply,
             },
@@ -1155,30 +1225,6 @@ impl Runtime {
         self.call(
             Request::RootResults {
                 component: component.to_path_buf(),
-                query: query.to_owned(),
-                data,
-                reply,
-            },
-            response,
-        )
-        .await
-    }
-
-    /// Runs the command with manifest id `command` in `component`, which
-    /// takes a query, with `query`; the command reads and saves `data`.
-    /// Starts its instance if it has none.
-    pub(crate) async fn run_query_with(
-        &self,
-        component: &Path,
-        command: &str,
-        query: &str,
-        data: Option<PackageData>,
-    ) -> Result<String, CallError> {
-        let (reply, response) = oneshot::channel();
-        self.call(
-            Request::RunQuery {
-                component: component.to_path_buf(),
-                command: command.to_owned(),
                 query: query.to_owned(),
                 data,
                 reply,
@@ -1457,6 +1503,14 @@ impl Runtime {
         *lock(&self.shared.directory) = Some(directory);
     }
 
+    /// Has `launches` start the commands guests launch
+    /// (`pane:extension/commands.launch`) from now on, also for calls
+    /// already queued and on a restarted runtime thread. Until then a
+    /// launch is refused.
+    pub(crate) fn set_launches(&self, launches: Launches) {
+        *lock(&self.shared.launches) = Some(launches);
+    }
+
     /// Tells `health` of each later failure of a call into an installed
     /// package's code (see [`Health`]). Like [`Runtime::set_directory`], it
     /// applies at once, to calls already queued too, and holds for a
@@ -1725,6 +1779,8 @@ pub(crate) struct GuestState {
     clipboard: SharedClipboard,
     /// The installed packages, for finding the guest's helpers.
     directory: SharedDirectory,
+    /// Starts the commands the guest launches.
+    launches: SharedLaunches,
     /// The runtime's helper processes; those of this instance are ended
     /// with it.
     helpers: Helpers,
@@ -1859,6 +1915,72 @@ data_host!(settings, DataKind::Settings);
 data_host!(content, DataKind::Content);
 data_host!(cache, DataKind::Cache);
 data_host!(credentials, DataKind::LocalCredentials);
+
+impl launching::Host for GuestState {
+    /// Hands the launch to the launcher, which starts it or says why it
+    /// will not, and never waits for the target to run (see
+    /// [`Launches`]).
+    fn launch(
+        &mut self,
+        target: launching::CommandRef,
+        launch_type: launching::LaunchType,
+        arguments: Vec<launching::ArgumentValue>,
+        context: Option<String>,
+    ) -> Result<(), String> {
+        // Stopped code launches nothing: checked once the host call is
+        // marked, as applications' are.
+        let _host = self.host();
+        if let Some(end) = self.stopped() {
+            return Err(stopped_code(end));
+        }
+        let launches = lock(&self.launches)
+            .clone()
+            .ok_or("this Pane does not launch commands for extensions")?;
+        launches(LaunchRequest {
+            caller: self.component.clone(),
+            source: target.source,
+            command: target.command,
+            launch_type: match launch_type {
+                launching::LaunchType::UserInitiated => LaunchType::UserInitiated,
+                launching::LaunchType::Background => LaunchType::Background,
+            },
+            arguments: arguments
+                .into_iter()
+                .map(|argument| (argument.name, argument.value))
+                .collect(),
+            context,
+        })
+    }
+}
+
+/// `launch` as the guest's bindings carry it.
+fn launch_record(launch: &LaunchRecord) -> launching::LaunchRecord {
+    launching::LaunchRecord {
+        launch_type: match launch.launch_type {
+            LaunchType::UserInitiated => launching::LaunchType::UserInitiated,
+            LaunchType::Background => launching::LaunchType::Background,
+        },
+        source: match launch.source {
+            LaunchSource::RootSearch => launching::LaunchSource::RootSearch,
+            LaunchSource::Alias => launching::LaunchSource::Alias,
+            LaunchSource::Fallback => launching::LaunchSource::Fallback,
+            LaunchSource::Hotkey => launching::LaunchSource::Hotkey,
+            LaunchSource::QuickSlot => launching::LaunchSource::QuickSlot,
+            LaunchSource::Command => launching::LaunchSource::Command,
+            LaunchSource::Schedule => launching::LaunchSource::Schedule,
+        },
+        arguments: launch
+            .arguments
+            .iter()
+            .map(|(name, value)| launching::ArgumentValue {
+                name: name.clone(),
+                value: value.clone(),
+            })
+            .collect(),
+        fallback_text: launch.fallback_text.clone(),
+        context: launch.context.clone(),
+    }
+}
 
 impl GuestState {
     fn applications(&self) -> Arc<dyn Applications> {
@@ -2043,8 +2165,6 @@ struct Instance {
     root_results: Option<root_bindings::RootResultsProvider>,
     /// Its indexed results export, if it has one.
     indexed_results: Option<indexed_bindings::IndexedResultsProvider>,
-    /// Its query-taking export, if it has one.
-    query_command: Option<query_bindings::QueryCommandProvider>,
     /// Its published operations export, if it has one.
     operations: Option<operations_bindings::OperationsProvider>,
     /// Its search export, if it searches as the user types.
@@ -2182,6 +2302,8 @@ struct Host {
     /// The installed packages operation calls are resolved against, and
     /// guests' helpers found in.
     directory: SharedDirectory,
+    /// Starts the commands guests launch.
+    launches: SharedLaunches,
     /// The helper processes guests started.
     helpers: Helpers,
     /// Told of each failure of a call into an installed package's code.
@@ -2252,6 +2374,8 @@ impl Code {
             |state| state,
         )
         .expect("registering files in a fresh linker cannot conflict");
+        launching::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)
+            .expect("registering launching commands in a fresh linker cannot conflict");
         Code { engine, linker }
     }
 
@@ -2303,7 +2427,16 @@ impl Code {
             func.typecheck::<P, R>(cx)
                 .map_err(|error| CallError::OlderApiShape(format!("`{name}`: {error:#}")))
         }
-        check::<(), (Result<String, String>,)>("render", func("render")?, &cx)?;
+        check::<(launching::LaunchRecord,), (Result<String, String>,)>(
+            "render",
+            func("render")?,
+            &cx,
+        )?;
+        check::<(String, launching::LaunchRecord), (Result<String, String>,)>(
+            "run",
+            func("run")?,
+            &cx,
+        )?;
         check::<(String, String), (Result<String, String>,)>(
             "handle-event",
             func("handle-event")?,
@@ -2349,14 +2482,6 @@ impl Code {
                 CallError::Interface(format!(
                     "its manifest says it supplies indexed results, but it does not export \
                      {INDEXED_RESULTS_INTERFACE} with the functions Pane calls: {error:#}"
-                ))
-            })?;
-        }
-        if exports.query_command {
-            query_bindings::QueryCommandProviderPre::new(pre.clone()).map_err(|error| {
-                CallError::Interface(format!(
-                    "its manifest says it takes a query, but it does not export \
-                     {QUERY_COMMAND_INTERFACE} with the functions Pane calls: {error:#}"
                 ))
             })?;
         }
@@ -2411,6 +2536,7 @@ impl Host {
             returned: tokio::sync::Notify::new(),
             nudge,
             directory: shared.directory.clone(),
+            launches: shared.launches.clone(),
             helpers: shared.helpers.clone(),
             health: shared.health.clone(),
             faults,
@@ -2473,10 +2599,11 @@ impl Host {
         let task: Task<'a> = match request {
             Request::Render {
                 component,
+                launch,
                 data,
                 reply,
             } => Box::pin(async move {
-                let _ = reply.send(self.render_tree(&component, data).await);
+                let _ = reply.send(self.render_tree(&component, &launch, data).await);
             }),
             Request::HandleEvent {
                 component,
@@ -2496,11 +2623,25 @@ impl Host {
             Request::RunItem {
                 component,
                 item_id,
+                launch,
                 data,
                 reply,
             } => Box::pin(async move {
-                let result = self.run_item(&component, &item_id, data).await;
+                let result = self.run_item(&component, &item_id, &launch, data).await;
                 self.faults.before_answer(&item_id);
+                let _ = reply.send(result);
+            }),
+            Request::Run {
+                component,
+                command,
+                launch,
+                data,
+                reply,
+            } => Box::pin(async move {
+                let result = self.run(&component, command.clone(), &launch, data).await;
+                // An injected fault may lose this answer, after the command
+                // ran.
+                self.faults.before_answer(&command);
                 let _ = reply.send(result);
             }),
             Request::RunCycle {
@@ -2527,15 +2668,7 @@ impl Host {
                 let result = self.root_results(&component, query, data, &mut reply).await;
                 let _ = reply.send(result);
             }),
-            Request::RunQuery {
-                component,
-                command,
-                query,
-                data,
-                reply,
-            } => Box::pin(async move {
-                let _ = reply.send(self.run_query(&component, command, query, data).await);
-            }),
+
             Request::Search {
                 component,
                 command,
@@ -2770,33 +2903,69 @@ impl Host {
         }
     }
 
-    /// Asks the command in `path` for its tree, and reads it: a tree Pane
-    /// cannot read is [`CallError::Unreadable`], and the instance stays.
-    async fn render_tree(&self, path: &Path, data: Option<PackageData>) -> Result<View, CallError> {
+    /// Asks the command in `path`, launched as `launch` says, for its
+    /// tree, and reads it: a tree Pane cannot read is
+    /// [`CallError::Unreadable`], and the instance stays.
+    async fn render_tree(
+        &self,
+        path: &Path,
+        launch: &LaunchRecord,
+        data: Option<PackageData>,
+    ) -> Result<View, CallError> {
         let chain = self.chain();
         let _turn = self.turn_for(path, &chain).await?;
-        self.render_in_turn(path, data, &chain).await
+        self.render_in_turn(path, launch, data, &chain).await
     }
 
     /// [`Host::render_tree`] in `chain`, which holds `path`'s turn.
     async fn render_in_turn(
         &self,
         path: &Path,
+        launch: &LaunchRecord,
         data: Option<PackageData>,
         chain: &Chain,
     ) -> Result<View, CallError> {
         self.instance(path, data).await?;
+        let launch = launch_record(launch);
         let result = self
             .run_guest(path, chain, async |instance| {
                 let command = instance.bindings.pane_extension_command();
                 instance
                     .store
-                    .run_concurrent(async |store| command.call_render(store).await)
+                    .run_concurrent(async |store| command.call_render(store, launch).await)
                     .await
             })
             .await?;
         let tree = self.settle(path, result, CallError::Guest)?;
         tree::read_view(&tree).map_err(CallError::Unreadable)
+    }
+
+    /// Runs the no-view command with manifest id `command` in `path`,
+    /// launched as `launch` says (`run`), and reads its answer: one Pane
+    /// cannot read is [`CallError::Unreadable`]. An error it answers with
+    /// is [`CallError::Guest`], never a failure of the package.
+    async fn run(
+        &self,
+        path: &Path,
+        command: String,
+        launch: &LaunchRecord,
+        data: Option<PackageData>,
+    ) -> Result<Answer, CallError> {
+        let chain = self.chain();
+        let _turn = self.turn_for(path, &chain).await?;
+        self.instance(path, data).await?;
+        let launch = launch_record(launch);
+        let result = self
+            .run_guest(path, &chain, async |instance| {
+                let exported = instance.bindings.pane_extension_command();
+                instance
+                    .store
+                    .run_concurrent(async |store| exported.call_run(store, command, launch).await)
+                    .await
+            })
+            .await?;
+        let answer = self.settle(path, result, CallError::Guest)?;
+        tree::read_answer(&answer).map_err(CallError::Unreadable)
     }
 
     /// Has the command in `path` handle `callback` with `details`, and reads
@@ -2847,11 +3016,14 @@ impl Host {
         &self,
         path: &Path,
         item_id: &str,
+        launch: &LaunchRecord,
         data: Option<PackageData>,
     ) -> Result<Answer, CallError> {
         let chain = self.chain();
         let _turn = self.turn_for(path, &chain).await?;
-        let view = self.render_in_turn(path, data.clone(), &chain).await?;
+        let view = self
+            .render_in_turn(path, launch, data.clone(), &chain)
+            .await?;
         let Some(item) = view.items.iter().find(|item| item.id == item_id) else {
             return Err(CallError::Guest(format!("unknown item: {item_id}")));
         };
@@ -3135,36 +3307,6 @@ impl Host {
                 },
             })
             .collect())
-    }
-
-    async fn run_query(
-        &self,
-        path: &Path,
-        id: String,
-        query: String,
-        data: Option<PackageData>,
-    ) -> Result<String, CallError> {
-        let chain = self.chain();
-        let _turn = self.turn_for(path, &chain).await?;
-        self.instance(path, data).await?;
-        let command = self
-            .instances
-            .borrow()
-            .get(path)
-            .and_then(|instance| instance.query_command.as_ref())
-            .map(|provider| provider.pane_extension_query_command().clone())
-            .ok_or_else(|| {
-                CallError::Interface(format!("it does not export {QUERY_COMMAND_INTERFACE}"))
-            })?;
-        let result = self
-            .run_guest(path, &chain, async |instance| {
-                instance
-                    .store
-                    .run_concurrent(async |store| command.call_run_query(store, id, query).await)
-                    .await
-            })
-            .await?;
-        self.settle(path, result, CallError::Guest)
     }
 
     /// Runs one cycle of the continuing service of the command with
@@ -3757,6 +3899,7 @@ impl Host {
                 files: self.files.clone(),
                 clipboard: self.clipboard.clone(),
                 directory: self.directory.clone(),
+                launches: self.launches.clone(),
                 owner: self.helpers.new_owner(),
                 helpers: self.helpers.clone(),
                 watch: self.watch.clone(),
@@ -3813,8 +3956,7 @@ impl Host {
         // them.
         let indexed_results =
             indexed_bindings::IndexedResultsProvider::new(&mut store, &instance).ok();
-        // Only a command that takes a query exports it.
-        let query_command = query_bindings::QueryCommandProvider::new(&mut store, &instance).ok();
+
         // Only a component serving published operations exports them.
         let operations = operations_bindings::OperationsProvider::new(&mut store, &instance).ok();
         // Only a command that searches as the user types exports it.
@@ -3843,7 +3985,6 @@ impl Host {
                 bindings,
                 root_results,
                 indexed_results,
-                query_command,
                 operations,
                 command_search,
                 service,

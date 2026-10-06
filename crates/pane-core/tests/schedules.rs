@@ -709,7 +709,14 @@ fn an_impossible_schedule_is_refused_before_anything_is_installed(fixture: &Fixt
         (
             serde_json::json!({ "everySeconds": 60, "item": "" }),
             "Invalid pane.json: the schedule of command `counting` names no `item`; name the \
-             item whose action the schedule runs",
+             item whose action the schedule runs, or make the command no-view (\"mode\": \
+             \"no-view\") to have the schedule run the command itself",
+        ),
+        (
+            serde_json::json!({ "everySeconds": 60 }),
+            "Invalid pane.json: the schedule of command `counting` names no `item`; name the \
+             item whose action the schedule runs, or make the command no-view (\"mode\": \
+             \"no-view\") to have the schedule run the command itself",
         ),
         (
             serde_json::json!({ "everySeconds": 60, "item": "count", "at": "9:00" }),

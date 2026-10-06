@@ -247,7 +247,9 @@ impl LauncherWindow {
     /// Redraws whenever the launcher changes in the background, as
     /// `changes` (the other end of the launcher's
     /// [`with_development`](Launcher::with_development)) reports: a package
-    /// being developed is building, failed to build or was reloaded.
+    /// being developed is building, failed to build or was reloaded, or a
+    /// command another command launched opened. The window is shown when
+    /// such a launch asks for it ([`Launcher::take_window_request`]).
     pub fn follow_changes(
         &mut self,
         mut changes: Changes,
@@ -257,6 +259,11 @@ impl LauncherWindow {
         cx.spawn_in(window, async move |this, cx| {
             while changes.next().await.is_some() {
                 let shown = this.update_in(cx, |this, window, cx| {
+                    if this.launcher.take_window_request() {
+                        this.unhide(window, cx);
+                        window.activate_window();
+                        cx.activate(true);
+                    }
                     this.sync_screen(window, cx);
                     cx.notify();
                 });
@@ -565,12 +572,14 @@ impl LauncherWindow {
         .detach();
     }
 
-    /// Opens the command whose global hotkey `shortcut` is, as the system
-    /// reported it pressed while any application had focus: the window
-    /// comes to the front and shows the command. A press that opens nothing
-    /// (a hotkey released meanwhile) leaves the window where it is. The
-    /// Open Pane hotkey is not a command's: its press summons, focuses or
-    /// hides the launcher itself ([`LauncherWindow::open_pane_pressed`]).
+    /// Launches the command whose global hotkey `shortcut` is, as the
+    /// system reported it pressed while any application had focus: the
+    /// window comes to the front and shows a view command. A no-view
+    /// command runs without the window (ADR 0037): a hidden window stays
+    /// hidden, and a shown one stays as it is. A press that launches
+    /// nothing (a hotkey released meanwhile) leaves the window where it is.
+    /// The Open Pane hotkey is not a command's: its press summons, focuses
+    /// or hides the launcher itself ([`LauncherWindow::open_pane_pressed`]).
     pub fn hotkey_pressed(
         &mut self,
         shortcut: &Shortcut,
@@ -581,14 +590,17 @@ impl LauncherWindow {
             self.open_pane_pressed(window, cx);
             return;
         }
+        let shows_window = self.launcher.hotkey_shows_window(shortcut);
         let Some(pending) = self.launcher.press_hotkey(shortcut) else {
             return;
         };
-        self.unhide(window, cx);
-        window.activate_window();
-        cx.activate(true);
-        // A hotkey is a keyboard open: the command's view lands at once.
-        self.motion.land_at_once();
+        if shows_window {
+            self.unhide(window, cx);
+            window.activate_window();
+            cx.activate(true);
+            // A hotkey is a keyboard open: the command's view lands at once.
+            self.motion.land_at_once();
+        }
         self.show_until_done(pending, window, cx);
     }
 

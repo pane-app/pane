@@ -1,0 +1,102 @@
+package pane:extension@0.1.0;
+
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// How a command was launched, and launching another command (ADR 0037).
+// Every command receives one launch record on every way in: a view command
+// through `render`, a no-view command through `run` (wit/extension.wit).
+// Every command may also launch another command, of its own package or of
+// another, with `launch`. Rust commands use them through pane-guest
+// (`pane_guest::launch`), JavaScript and TypeScript ones through the
+// `launch` argument of `render` and `run` and
+// `pane:extension/commands@0.1.0`'s `launch`. The header follows `package`:
+// comments above it would document the package, which extension.wit
+// already does.
+
+/// The launch record, and launching another command.
+interface commands {
+  /// Whether the user launched the command, or Pane did in the background
+  /// (a schedule, or another command's background launch). A background
+  /// launch shows no window.
+  enum launch-type {
+    user-initiated,
+    background,
+  }
+
+  /// Where a launch came from.
+  enum launch-source {
+    /// Enter (or a click) on the command's row in root search.
+    root-search,
+    /// The command's alias typed in root search: alone, or followed by
+    /// text sent as the fallback text.
+    alias,
+    /// The command chosen as a fallback for the text typed in root search,
+    /// sent as the fallback text.
+    fallback,
+    /// The command's global hotkey.
+    hotkey,
+    /// The quick slot the command is pinned to.
+    quick-slot,
+    /// Another command, through `launch`.
+    command,
+    /// The command's own schedule (`"schedule"` without an `item`).
+    schedule,
+  }
+
+  /// The value of one of the command's arguments, by its name.
+  record argument-value {
+    name: string,
+    value: string,
+  }
+
+  /// What a command receives on every way in: how it was launched, and
+  /// with what.
+  record launch-record {
+    launch-type: launch-type,
+    source: launch-source,
+    /// The values of the command's arguments by name. Commands do not
+    /// declare arguments yet, so this is empty for now.
+    arguments: list<argument-value>,
+    /// The text sent through the command's alias ("ec hello" sends
+    /// "hello") or to it as a fallback, trimmed and never empty; none
+    /// otherwise. Only a command that takes a query (`"takesQuery": true`)
+    /// is sent text.
+    fallback-text: option<string>,
+    /// The JSON value another command passed when it launched this one,
+    /// as JSON text; none otherwise.
+    context: option<string>,
+  }
+
+  /// A command to launch by its id in its package's `pane.json`: one of
+  /// the caller's own package (`source` is none), or one of another
+  /// installed package, whose `source` is its package identity as Pane
+  /// shows it (`local:` followed by the absolute folder it was installed
+  /// from, `npm:` followed by its npm package name, or `git:` followed by
+  /// its repository), as an operation call names it.
+  record command-ref {
+    source: option<string>,
+    command: string,
+  }
+
+  /// Launches the command `target`, passing it `context` (JSON text, at
+  /// most 1 MiB) in its launch record, and asking nothing: extensions are
+  /// trusted. `arguments` are its arguments' values; commands do not
+  /// declare arguments yet, so pass none.
+  ///
+  /// `user-initiated` opens it as if the user had invoked it: a view
+  /// command's screen replaces the one shown, and a no-view command runs
+  /// and its answer is shown. `background` runs a no-view command without
+  /// a window and shows nothing; it is refused for a view command.
+  ///
+  /// Answers once the launch has started, not when the target has run:
+  /// the target runs after the caller's call, or beside it. Refused, with
+  /// the reason, when the target is not installed, has no such command, is
+  /// disabled, paused or unavailable on this system, or the context is not
+  /// JSON. A refusal is an answer, never a failure of the caller.
+  launch: func(target: command-ref, launch-type: launch-type, arguments: list<argument-value>, context: option<string>) -> result<_, string>;
+}
+
+/// The commands import alone, for guest bindings.
+world commands-user {
+  import commands;
+}

@@ -306,6 +306,8 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         // action to show.
         (Screen::CustomView(_) | Screen::NetworkDetails { .. }, _) => unusable(""),
         // A row is selected: what activating it does is the action.
+        // A no-view command runs and opens no screen.
+        (_, Some(Entry::Open(opening))) if opening.no_view => acting("Run command"),
         (_, Some(Entry::Open(_))) => acting("Open command"),
         (_, Some(Entry::Send(sending))) => match &sending.unavailable {
             Some(_) => unusable("Unavailable"),

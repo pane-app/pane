@@ -8,12 +8,23 @@
 // adapter (adapt.js) writes the tree and runs the actions, so a command
 // never sees the JSON or the callback ids.
 /// <reference path="./wasi.d.ts" />
+/// <reference path="./commands.d.ts" />
 /// <reference path="./data.d.ts" />
 /// <reference path="./operations.d.ts" />
 /// <reference path="./applications.d.ts" />
 /// <reference path="./helpers.d.ts" />
 /// <reference path="./files.d.ts" />
 /// <reference path="./clipboard.d.ts" />
+
+import type { LaunchRecord } from "pane:extension/commands@0.1.0";
+
+export type {
+  ArgumentValue,
+  CommandRef,
+  LaunchRecord,
+  LaunchSource,
+  LaunchType,
+} from "pane:extension/commands@0.1.0";
 
 /**
  * One entry in a command's list. Choosing it opens its form, else its
@@ -261,11 +272,12 @@ export interface CustomView {
 }
 
 /**
- * An extension command. The module exports it as `command`:
+ * An extension command, or the commands one component serves. The module
+ * exports it as `command`:
  *
  * ```ts
  * export const command: Command = {
- *   async render() {
+ *   async render(launch) {
  *     return { title: "Hello", items: [{ id: "greet", title: "Say hello", onAction: async () => "Hello" }] };
  *   },
  *   async submitForm(id, values) { ... },
@@ -273,8 +285,17 @@ export interface CustomView {
  * };
  * ```
  *
+ * A no-view command (`"mode": "no-view"` in `pane.json`) has `run` instead
+ * of `render`:
+ *
+ * ```ts
+ * export const command: Command = {
+ *   async run(id, launch) { return `Launched from ${launch.source}`; },
+ * };
+ * ```
+ *
  * Resolving gives Pane the value. Throwing (rejecting) reports an error to the
- * user, never a crash: from `render`, an item's `onAction`,
+ * user, never a crash: from `render`, `run`, an item's `onAction`,
  * `runSearchResult`, `openView` and a view's `handleEvent` an `Error`'s
  * message, or a thrown string as is; from `submitForm` a {@link FormError}
  * object as is, and an `Error` or string as a message about the whole form.
@@ -288,9 +309,23 @@ export interface CustomView {
 export interface Command {
   /**
    * The command's list, as it is now. Pane asks for it when the command
-   * opens and again after each action.
+   * opens and again after each action, with `launch`, the launch record the
+   * screen was opened with. Without it, opening the command is an error: a
+   * no-view command has no list.
    */
-  render(): Promise<List>;
+  render?(launch: LaunchRecord): Promise<List>;
+  /**
+   * Runs the no-view command with id `command` (its id in `pane.json`, so
+   * one component can serve several commands), launched as `launch` says:
+   * how (by the user or in the background, and from where), with any text
+   * sent through its alias or as a fallback, and any context another
+   * command passed. The text it resolves with is shown as the result;
+   * throwing shows the error as the failure, which never counts towards
+   * pausing the extension. Pane calls it only for a command whose
+   * `pane.json` entry says `"mode": "no-view"`; without it, that is an
+   * error.
+   */
+  run?(command: string, launch: LaunchRecord): Promise<string>;
   /**
    * Runs the search result with id `id` the user chose, for a command that
    * searches as the user types ({@link CommandSearch}); the text is shown as
@@ -300,14 +335,16 @@ export interface Command {
   /**
    * Handle the submitted form of the item with `itemId`. `values` holds every
    * field of the form, in order. The text is shown as the result; a thrown
-   * {@link FormError} is shown next to its field.
+   * {@link FormError} is shown next to its field. Without it, a submitted
+   * form is refused.
    */
-  submitForm(itemId: string, values: FieldValue[]): Promise<string>;
+  submitForm?(itemId: string, values: FieldValue[]): Promise<string>;
   /**
    * Open the custom view of the item with `itemId`: a new {@link CustomView}
-   * with its own state. Throwing reports an error and opens nothing.
+   * with its own state. Throwing reports an error and opens nothing. Without
+   * it, opening one is an error.
    */
-  openView(itemId: string): Promise<CustomView>;
+  openView?(itemId: string): Promise<CustomView>;
 }
 
 /** What invoking a root result does; Pane performs it. */
@@ -364,29 +401,6 @@ export interface RootResults {
   resultsFor(query: string): Promise<RootResult[]>;
 }
 
-/**
- * A command that takes a query (`pane:extension/query-command` in
- * wit/query.wit): text the user typed into root search, which Pane sends
- * only when the user invokes the command through its alias ("ec hello") or
- * chooses it as a fallback. A command that takes one sets
- * `"takesQuery": true` on its entry in `pane.json`, and
- * `"pane": { "takesQuery": true }` in its `package.json` so that it is built
- * with the interface; its module exports it as `queryCommand`:
- *
- * ```ts
- * export const queryCommand: QueryCommand = {
- *   async runQuery(command, query) { return `Echo heard “${query}”`; },
- * };
- * ```
- */
-export interface QueryCommand {
-  /**
-   * Runs the command with id `command` (its id in `pane.json`) with `query`,
-   * trimmed and never empty. The text it resolves with is shown to the user
-   * as the result; throwing shows the error as the failure.
-   */
-  runQuery(command: string, query: string): Promise<string>;
-}
 
 /** One thing a command's search found, listed as a row of the command. */
 export interface SearchResult {

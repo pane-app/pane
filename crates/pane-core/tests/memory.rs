@@ -160,6 +160,7 @@ fn memory_peaks_of_the_samples_and_default_extensions() {
         "sample_operations",
         "sample_dependencies",
         "sample_query",
+        "sample_no_view",
         "sample_search",
         "sample_schedule",
         "sample_service",

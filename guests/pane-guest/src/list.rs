@@ -18,6 +18,11 @@
 //! or a search Pane stopped) draws it first when it is handed an id it does
 //! not know; an id the list still does not name is a search result's
 //! ([`Command::run_search_result`]).
+//!
+//! A no-view command (`"mode": "no-view"` in `pane.json`) has no list:
+//! Pane calls [`Command::run`] each time it is launched. Both receive the
+//! command's launch record: `run` as its argument, `render` through
+//! [`commands::current`](crate::commands::current).
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
@@ -30,6 +35,7 @@ use core::future::Future;
 use core::pin::Pin;
 
 use crate::exports::pane::extension::command as wit;
+use crate::pane::extension::commands::LaunchRecord;
 use wit::{
     CustomView, CustomViewInfo, CustomViewRole, FieldKind, FieldValue, Form, FormError,
     GuestCustomView, Platform,
@@ -325,7 +331,9 @@ impl Item {
     }
 }
 
-/// An extension command whose screen is a list. Implement it and call
+/// An extension command: one whose screen is a list (a view command), one
+/// that runs without a screen (a no-view command), or a component serving
+/// several commands of either mode. Implement it and call
 /// [`export!`](crate::export):
 ///
 /// ```ignore
@@ -343,6 +351,18 @@ impl Item {
 ///     // submit_form, open_view ...
 /// }
 /// ```
+///
+/// A no-view command implements [`Command::run`] instead of `render`:
+///
+/// ```ignore
+/// impl pane_guest::Command for Toggle {
+///     type CustomView = pane_guest::NoCustomView;
+///
+///     async fn run(command: String, launch: LaunchRecord) -> Result<String, String> {
+///         Ok("Toggled".into())
+///     }
+/// }
+/// ```
 pub trait Command: 'static {
     /// The custom view the command opens ([`NoCustomView`](crate::NoCustomView)
     /// for none).
@@ -350,7 +370,29 @@ pub trait Command: 'static {
 
     /// The command's list, as it is now. Pane asks for it when the command
     /// opens and again after each action. An error is shown to the user.
-    fn render() -> impl Future<Output = Result<List, String>>;
+    /// [`commands::current`](crate::commands::current) is the launch record
+    /// the screen was opened with. Without it, opening the command is an
+    /// error: a no-view command has no list.
+    fn render() -> impl Future<Output = Result<List, String>> {
+        async { Err("this command opens no screen".into()) }
+    }
+
+    /// Runs the no-view command `command` (its id in `pane.json`, so one
+    /// component can serve several commands), launched as `launch` says:
+    /// how (by the user or in the background, and from where), with any
+    /// text sent through its alias or as a fallback, and any context
+    /// another command passed. The text it answers is shown as the result,
+    /// and an error is shown as the failure.
+    /// Pane calls it only for a command whose `pane.json` entry says
+    /// `"mode": "no-view"`; without it, that is an error.
+    fn run(command: String, launch: LaunchRecord) -> impl Future<Output = Result<String, String>> {
+        let _ = launch;
+        async move {
+            Err(format!(
+                "`{command}` opens a screen; it has no run entry point"
+            ))
+        }
+    }
 
     /// Runs the search result with `id` the user chose, for a command that
     /// searches as the user types (`pane_guest::search`): its id is the
@@ -362,23 +404,42 @@ pub trait Command: 'static {
 
     /// Handles the submitted form of the item with `item_id`. `values`
     /// holds every field of the form, in order. The text is shown as the
-    /// result; an error is shown next to its field.
+    /// result; an error is shown next to its field. Without it, a submitted
+    /// form is refused.
     fn submit_form(
         item_id: String,
         values: Vec<FieldValue>,
-    ) -> impl Future<Output = Result<String, FormError>>;
+    ) -> impl Future<Output = Result<String, FormError>> {
+        let _ = (item_id, values);
+        async {
+            Err(FormError {
+                field: None,
+                message: "this command has no forms".into(),
+            })
+        }
+    }
 
     /// Opens the custom view of the item with `item_id`. Each call opens a
-    /// new view with its own state.
-    fn open_view(item_id: String) -> impl Future<Output = Result<CustomView, String>>;
+    /// new view with its own state. Without it, opening one is an error.
+    fn open_view(item_id: String) -> impl Future<Output = Result<CustomView, String>> {
+        let _ = item_id;
+        async { Err("this command has no custom views".into()) }
+    }
 }
 
 impl<T: Command> wit::Guest for T {
     type CustomView = <T as Command>::CustomView;
 
-    async fn render() -> Result<String, String> {
+    async fn render(launch: LaunchRecord) -> Result<String, String> {
+        crate::commands::set_current(launch);
         let list = <T as Command>::render().await?;
         Ok(remember(list))
+    }
+
+    async fn run(command: String, launch: LaunchRecord) -> Result<String, String> {
+        crate::commands::set_current(launch.clone());
+        let status = <T as Command>::run(command, launch).await?;
+        Ok(answer(&status))
     }
 
     async fn handle_event(callback: String, _details: String) -> Result<String, String> {
@@ -394,10 +455,7 @@ impl<T: Command> wit::Guest for T {
             Some(action) => action().await?,
             None => <T as Command>::run_search_result(callback).await?,
         };
-        let mut answer = String::from("{\"status\":");
-        string(&mut answer, &status);
-        answer.push('}');
-        Ok(answer)
+        Ok(answer(&status))
     }
 
     async fn submit_form(item_id: String, values: Vec<FieldValue>) -> Result<String, FormError> {
@@ -407,6 +465,15 @@ impl<T: Command> wit::Guest for T {
     async fn open_view(item_id: String) -> Result<CustomView, String> {
         <T as Command>::open_view(item_id).await
     }
+}
+
+/// The answer object of `handle-event` and `run` for `status`, the text
+/// shown as the result: `{"status": ...}`.
+fn answer(status: &str) -> String {
+    let mut answer = String::from("{\"status\":");
+    string(&mut answer, status);
+    answer.push('}');
+    answer
 }
 
 /// The actions of the list the instance drew last, by callback id.
