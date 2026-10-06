@@ -12,21 +12,18 @@
 //!
 //! Like the rest of this layer it decides nothing: the caller passes the
 //! display values and attaches identity, focus and handlers (a tab and a
-//! row take their id, so they can keep a press). Both the
-//! launcher's Clipboard History adapter
-//! (`crate::features::clipboard_history`) and the visual workbench's
-//! fixture compose the view through [`compose`] and the parts below, so the
-//! fixture measures the production view. The tones and the code, color,
-//! link and image previews draw only the fixture's reference data: Pane
-//! keeps text alone and guesses no kind of it (#100).
+//! row take their id, so they can keep a press). The launcher's
+//! Clipboard History adapter (`crate::features::clipboard_history`)
+//! composes the view through [`compose`] and the parts below. The board's
+//! source tones and its code, color, link and image previews are not
+//! drawn: Pane keeps text alone and guesses no kind of it (#100).
 //!
 //! A window narrower than the reference keeps the view usable: the list
 //! takes at most half the width, the preview the rest, and both scroll.
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, BoxShadow, Div, ElementId, Entity, HighlightStyle, Hsla, SharedString, Stateful,
-    StyledText, div, px, relative, svg,
+    AnyElement, BoxShadow, Div, ElementId, Entity, Hsla, SharedString, Stateful, div, px, relative,
 };
 use gpui_elements::editable_text::{EditableTextState, text_input};
 
@@ -332,33 +329,14 @@ pub(crate) fn list(theme: &Theme) -> Stateful<Div> {
         .overflow_y_scroll()
 }
 
-/// A record's tile tone: the neutral tile, which Pane's text records
-/// take, or one of the reference fixture's source tones.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ClipTone {
-    Plain,
-    Term,
-    Code,
-    Web,
-    Chat,
-    Folder,
-}
-
-/// What leads a record's row: a tile in a tone with a glyph, or (the
-/// fixture's color records) a swatch of the color.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum ClipMark {
-    Tile(ClipTone, Glyph),
-    Swatch(Hsla),
-}
-
 /// What a record's row shows.
 #[derive(Clone, Debug)]
 pub(crate) struct ClipRow {
     pub(crate) title: SharedString,
     pub(crate) time: SharedString,
     pub(crate) selected: bool,
-    pub(crate) mark: ClipMark,
+    /// The glyph on the row's neutral tile.
+    pub(crate) glyph: Glyph,
 }
 
 /// A record's row (the reference's `.row`): 44 high, radius 10, 10px
@@ -398,7 +376,7 @@ pub(crate) fn clip_row(id: impl Into<ElementId>, row: ClipRow, theme: &Theme) ->
                     .inset(),
             ])
         })
-        .child(mark(row.mark, theme))
+        .child(icon::tile(IconTone::Command, row.glyph, theme))
         .child(
             div()
                 .flex_1()
@@ -417,44 +395,6 @@ pub(crate) fn clip_row(id: impl Into<ElementId>, row: ClipRow, theme: &Theme) ->
                 .text_color(theme.text_muted)
                 .child(row.time),
         )
-}
-
-/// A row's leading mark at the row tile's size.
-fn mark(mark: ClipMark, theme: &Theme) -> Div {
-    let tile = theme.geometry.tile;
-    let split = &theme.split;
-    match mark {
-        ClipMark::Tile(tone, glyph) => {
-            let (fill, ink) = match tone {
-                ClipTone::Plain => return icon::tile(IconTone::Command, glyph, theme),
-                ClipTone::Term => split.tone_term,
-                ClipTone::Code => split.tone_code,
-                ClipTone::Web => split.tone_web,
-                ClipTone::Chat => split.tone_chat,
-                ClipTone::Folder => split.tone_folder,
-            };
-            div()
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .size(tile.size)
-                .rounded(tile.radius)
-                .bg(fill)
-                .shadow(tile_edges(theme))
-                .child(icon::glyph(glyph, tile.glyph, ink))
-        }
-        ClipMark::Swatch(color) => div()
-            .flex_none()
-            .size(tile.size)
-            .rounded(tile.radius)
-            .bg(color)
-            .shadow(vec![
-                BoxShadow::new(px(0.), px(0.), split.swatch_edge)
-                    .spread_radius(px(1.))
-                    .inset(),
-            ]),
-    }
 }
 
 /// The note in the list's place when it lists nothing: centered 13px muted
@@ -509,177 +449,6 @@ pub(crate) fn text_preview(text: impl Into<SharedString>, theme: &Theme) -> Div 
         .letter_spacing(split.text_size * split.text_tracking)
         .text_color(theme.text_title)
         .child(text.into())
-}
-
-/// The fixture's code preview (the reference's default state): numbered
-/// lines in Geist Mono, each a run of (text, color) spans. Fixture only:
-/// Pane never classifies a record as code.
-pub(crate) fn code_preview(lines: &[&[(&str, Option<Hsla>)]], theme: &Theme) -> Div {
-    let split = &theme.split;
-    div()
-        .debug_selector(|| "clipboard-preview-code".into())
-        .px(split.code_padding_x)
-        .py(split.code_padding_y)
-        .flex()
-        .flex_col()
-        .font_family(theme.typography.mono_family.clone())
-        .text_size(split.code_size)
-        .line_height(split.code_size * split.code_line_height)
-        .text_color(split.code_text)
-        .children(lines.iter().enumerate().map(|(index, spans)| {
-            let mut text = String::new();
-            let mut highlights = Vec::new();
-            for &(part, color) in spans.iter() {
-                let start = text.len();
-                text.push_str(part);
-                if let Some(color) = color {
-                    highlights.push((
-                        start..text.len(),
-                        HighlightStyle {
-                            color: Some(color),
-                            ..Default::default()
-                        },
-                    ));
-                }
-            }
-            div()
-                .flex()
-                .gap(split.code_gap)
-                .whitespace_nowrap()
-                .child(
-                    div()
-                        .flex_none()
-                        .w(split.code_number_width)
-                        .text_right()
-                        .text_color(split.code_number)
-                        .child((index + 1).to_string()),
-                )
-                .child(StyledText::new(text).with_highlights(highlights))
-        }))
-}
-
-/// The fixture's color preview: the card filled with `fill`, its `hex`
-/// and its `values` (RGB and HSL) at the bottom. Fixture only.
-pub(crate) fn color_preview(fill: Hsla, hex: &str, values: &[&str], theme: &Theme) -> Div {
-    let split = &theme.split;
-    let mono = theme.typography.mono_family.clone();
-    div()
-        .debug_selector(|| "clipboard-preview-color".into())
-        .absolute()
-        .top_0()
-        .left_0()
-        .size_full()
-        .bg(fill)
-        .flex()
-        .flex_col()
-        .justify_end()
-        .gap(split.color_gap)
-        .px(split.color_padding_x)
-        .py(split.color_padding_y)
-        .font_family(mono)
-        .child(
-            div()
-                .text_size(split.color_hex_size)
-                .font_weight(theme.typography.medium)
-                .letter_spacing(split.color_hex_size * split.color_hex_tracking)
-                .text_color(split.color_hex_text)
-                .child(hex.to_owned()),
-        )
-        .children(values.iter().map(|value| {
-            div()
-                .text_size(split.color_value_size)
-                .text_color(split.color_value_text)
-                .child((*value).to_owned())
-        }))
-}
-
-/// The fixture's link preview: the web tile, the domain and the address,
-/// centered. Fixture only: Pane opens and fetches nothing from a record.
-pub(crate) fn link_preview(domain: &str, url: &str, theme: &Theme) -> Div {
-    let split = &theme.split;
-    let (fill, ink) = split.tone_web;
-    div()
-        .debug_selector(|| "clipboard-preview-link".into())
-        .absolute()
-        .top_0()
-        .left_0()
-        .size_full()
-        .flex()
-        .flex_col()
-        .items_center()
-        .justify_center()
-        .gap(split.link_gap)
-        .p(split.link_padding)
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .justify_center()
-                .size(split.link_tile)
-                .rounded(split.link_tile_radius)
-                .bg(fill)
-                .shadow(tile_edges(theme))
-                .child(icon::glyph(Glyph::Globe, split.link_glyph, ink)),
-        )
-        .child(
-            div()
-                .text_size(split.link_domain_size)
-                .font_weight(theme.typography.medium)
-                .text_color(theme.text_title)
-                .child(domain.to_owned()),
-        )
-        .child(
-            div()
-                .font_family(theme.typography.mono_family.clone())
-                .text_size(split.link_url_size)
-                .text_color(split.link_url_text)
-                .child(url.to_owned()),
-        )
-}
-
-/// The fixture's image placeholder: the hatch, the image glyph, `label`
-/// and `dims`, centered. Fixture only: Pane keeps no images.
-pub(crate) fn image_preview(label: &str, dims: &str, theme: &Theme) -> Div {
-    let split = &theme.split;
-    div()
-        .debug_selector(|| "clipboard-preview-image".into())
-        .absolute()
-        .top_0()
-        .left_0()
-        .size_full()
-        .bg(split.hatch_fill)
-        .flex()
-        .flex_col()
-        .items_center()
-        .justify_center()
-        .gap(split.image_gap)
-        .child(
-            svg()
-                .data(include_bytes!("../../assets/icons/hatch.svg"))
-                .absolute()
-                .top_0()
-                .left_0()
-                .size(split.hatch_size)
-                .text_color(split.hatch_stripe),
-        )
-        .child(icon::glyph(
-            Glyph::Image,
-            split.image_glyph,
-            split.image_text,
-        ))
-        .child(
-            div()
-                .text_size(split.image_size)
-                .text_color(split.image_text)
-                .child(label.to_owned()),
-        )
-        .child(
-            div()
-                .font_family(theme.typography.mono_family.clone())
-                .text_size(split.image_dims_size)
-                .text_color(theme.text_muted)
-                .child(dims.to_owned()),
-        )
 }
 
 /// The footer's left side: the clock and `text` — when and where the

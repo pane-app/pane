@@ -31,21 +31,15 @@ mod unreachable;
 
 use npm_registry::{Registry, greeter_files, integrity, pack, pack_raw};
 
+#[path = "support/guests.rs"]
+mod guests;
+#[path = "support/rows.rs"]
+mod rows;
+
+use guests::{guest_file as guest, guests};
+use rows::{select_title, titles};
+
 const GREETER: &str = "@pane-samples/greeter";
-
-fn guests() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests")
-}
-
-fn guest(file: &str) -> PathBuf {
-    let path = guests().join(file);
-    assert!(
-        path.exists(),
-        "{} is missing; run `cargo xtask guests`",
-        path.display()
-    );
-    path
-}
 
 struct Dirs {
     sources: TempDir,
@@ -143,23 +137,6 @@ impl Dirs {
             std::thread::sleep(Duration::from_millis(20));
         }
     }
-}
-
-fn titles(launcher: &Launcher) -> Vec<String> {
-    launcher
-        .view()
-        .rows
-        .into_iter()
-        .map(|row| row.title)
-        .collect()
-}
-
-fn select_title(launcher: &Launcher, title: &str) {
-    let index = titles(launcher)
-        .iter()
-        .position(|row| row == title)
-        .unwrap_or_else(|| panic!("no row {title:?} in {:?}", titles(launcher)));
-    launcher.select(index);
 }
 
 fn details(launcher: &Launcher) -> Vec<String> {

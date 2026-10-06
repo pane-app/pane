@@ -1,27 +1,22 @@
 //! Root search's result layouts beyond the row (#96), as the reference's
 //! empty and calculator boards draw them: the no-results notice heading
-//! the fallbacks, the computed answer's card, and the boards' authored
-//! variants — a calculation-history row, an extension suggestion with its
-//! Install pill, and a section label whose note ends with keys.
+//! the fallbacks, and the computed answer's card. The boards' other
+//! variants — a calculation-history row, an extension suggestion, a
+//! section label whose note ends with keys — are not drawn: no command
+//! supplies a calculation history, unit conversions or extension
+//! suggestions (#100).
 //!
 //! Presentation only, in the result row's shape: each function returns a
 //! plain [`Div`] that the caller gives its identity, accessibility and
-//! behavior — but the suggestion, which takes its id to keep its press
-//! (a pressed wash the board does not author). The launcher draws the notice and the card from what root
+//! behavior. The launcher draws the notice and the card from what root
 //! search's presentation holds (`crate::features::root_search::layouts`).
-//! The history row, the suggestion and the keyed label are drawn only by
-//! the visual workbench's fixture, from the boards' authored data: no
-//! command supplies a calculation history, unit conversions or extension
-//! suggestions (#100), so the launcher never shows them.
 
 use gpui::prelude::*;
-use gpui::{BoxShadow, Div, ElementId, Hsla, Pixels, SharedString, Stateful, div, px};
+use gpui::{BoxShadow, Div, Hsla, Pixels, SharedString, div, px};
 
-use crate::ui::icon::{self, Glyph, IconTone};
-use crate::ui::keycap::{CapStyle, KeySequence, key_sequence};
-use crate::ui::result_row::row_surface;
-use crate::ui::shell::{self, LAUNCHER_CLIENT};
-use crate::ui::theme::{Theme, TileMetrics, TypeLine, pressed};
+use crate::ui::icon::{self, Glyph};
+use crate::ui::shell::LAUNCHER_CLIENT;
+use crate::ui::theme::{Theme, TypeLine};
 
 /// What the no-results notice says: its title, which names the query,
 /// and what the user can do about it.
@@ -246,190 +241,6 @@ fn chip(label: SharedString, theme: &Theme) -> Div {
         .font_family(theme.typography.mono_family.clone())
         .text_color(colors.chip_text)
         .child(label)
-}
-
-/// A calculation-history row, as the calculator board lists its recent
-/// calculations: the row's surface and tile, the expression in Geist Mono
-/// 13.5, and on the right the answer (#A3A4A9) beside the kind.
-#[derive(Clone, Debug)]
-pub(crate) struct HistoryRow {
-    pub(crate) expression: SharedString,
-    pub(crate) answer: SharedString,
-    pub(crate) kind: SharedString,
-    pub(crate) icon: (IconTone, Glyph),
-    pub(crate) selected: bool,
-}
-
-/// The calculator board's history row (`.row` with Geist Mono parts):
-/// the row's surface and tile, the expression, a spacer, then the answer
-/// and the kind at the row's right.
-pub(crate) fn history_row(row: &HistoryRow, theme: &Theme) -> Div {
-    let geometry = &theme.geometry;
-    let types = &theme.typography.results;
-    let (tone, glyph) = row.icon;
-    row_surface(row.selected, theme)
-        .font_family(theme.typography.mono_family.clone())
-        .child(icon::tile(tone, glyph, theme))
-        .child(
-            text(types.history)
-                .flex_initial()
-                .min_w(px(0.))
-                .truncate()
-                .text_color(theme.text_title)
-                .child(row.expression.clone()),
-        )
-        .child(div().flex_1())
-        .child(
-            text(types.history)
-                .flex_none()
-                .text_color(theme.results.history_answer)
-                .child(row.answer.clone()),
-        )
-        .child(
-            div()
-                .flex_none()
-                .min_w(geometry.row_kind_min_width)
-                .text_right()
-                .font_family(theme.typography.family.clone())
-                .text_size(theme.typography.row_kind_size)
-                .text_color(theme.text_muted)
-                .child(row.kind.clone()),
-        )
-}
-
-/// An extension suggestion, as the empty board lists them "From the
-/// Plugin Store": its tile in the extension's own colors, its title over
-/// a line of metadata, and its pill.
-#[derive(Clone, Debug)]
-pub(crate) struct Suggestion {
-    pub(crate) title: SharedString,
-    pub(crate) meta: SharedString,
-    pub(crate) glyph: Glyph,
-    /// The tile's fill and its glyph's color.
-    pub(crate) tile: (Hsla, Hsla),
-    /// The pill's label ("Install").
-    pub(crate) action: SharedString,
-}
-
-/// The empty board's suggestion row (`.prow`): 54 high, 10 either side, 12
-/// between its parts, radius 10, the row's hover wash; a 32px tile (radius
-/// 8, a 17px glyph), the title in 14/500 over the metadata in 12.5, 2
-/// apart; then its pill. The row is `id`, and takes the [`pressed`] wash
-/// of its hover while held, at once.
-pub(crate) fn suggestion_row(
-    id: impl Into<ElementId>,
-    suggestion: &Suggestion,
-    theme: &Theme,
-) -> Stateful<Div> {
-    let geometry = &theme.geometry;
-    let results = &geometry.results;
-    let types = &theme.typography.results;
-    div()
-        .id(id)
-        .flex_none()
-        .w_full()
-        .flex()
-        .items_center()
-        .gap(geometry.row_gap)
-        .h(results.suggestion_height)
-        .px(geometry.row_padding_x)
-        .rounded(geometry.row_radius)
-        .hover(|row| row.bg(theme.row_hover))
-        .active(|row| row.bg(pressed(theme.row_hover)))
-        .child(flat_tile(
-            results.suggestion_tile,
-            suggestion.tile,
-            suggestion.glyph,
-            theme,
-        ))
-        .child(
-            div()
-                .flex_1()
-                .min_w(px(0.))
-                .flex()
-                .flex_col()
-                .gap(results.suggestion_text_gap)
-                .child(
-                    text(types.suggestion_title)
-                        .truncate()
-                        .font_weight(theme.typography.medium)
-                        .text_color(theme.text_title)
-                        .child(suggestion.title.clone()),
-                )
-                .child(
-                    text(types.suggestion_meta)
-                        .truncate()
-                        .text_color(theme.text_muted)
-                        .child(suggestion.meta.clone()),
-                ),
-        )
-        .child(pill(suggestion.action.clone(), theme))
-}
-
-/// A tile in one flat fill, as the empty board tints each suggestion's
-/// (`.tile` with an inline background): the tile's own chrome — a 1px
-/// edge and a top inset — over `colors` (the fill, then the glyph's).
-fn flat_tile(metrics: TileMetrics, colors: (Hsla, Hsla), glyph: Glyph, theme: &Theme) -> Div {
-    let (fill, ink) = colors;
-    div()
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .size(metrics.size)
-        .rounded(metrics.radius)
-        .bg(fill)
-        .shadow(vec![
-            ring(theme.tile_border),
-            BoxShadow::new(px(0.), px(1.), theme.tile_highlight).inset(),
-        ])
-        .child(icon::glyph(glyph, metrics.glyph, ink))
-}
-
-/// The suggestion's pill (`.pill`): 30 high, 12 either side, radius 8,
-/// white 8% under a white 8% ring (white 13% under the pointer), its
-/// label in 12.5/500.
-fn pill(label: SharedString, theme: &Theme) -> Div {
-    let geometry = &theme.geometry.results;
-    let colors = &theme.results;
-    text(theme.typography.results.pill)
-        .flex_none()
-        .flex()
-        .items_center()
-        .h(geometry.pill_height)
-        .px(geometry.pill_padding_x)
-        .rounded(geometry.pill_radius)
-        .bg(colors.pill_fill)
-        .shadow(vec![ring(colors.pill_edge)])
-        .hover(|pill| pill.bg(colors.pill_hover))
-        .font_weight(theme.typography.medium)
-        .text_color(theme.text_title)
-        .child(label)
-}
-
-/// A section label whose note ends with keys, as the empty board labels
-/// its suggestions ("See all" and Ctrl ↵): the shared label, its note in
-/// the regular weight with the key sequence 6 after it.
-pub(crate) fn keyed_section_label(
-    label: SharedString,
-    note: SharedString,
-    keys: &KeySequence,
-    theme: &Theme,
-) -> Div {
-    shell::section_label(label, None, theme).child(
-        div()
-            .flex()
-            .items_center()
-            .gap(theme.geometry.results.label_keys_gap)
-            .font_weight(theme.typography.regular)
-            .child(note)
-            // Its own scope: the key sequence's id is fixed.
-            .child(div().id("label-keys").flex_none().child(key_sequence(
-                keys,
-                CapStyle::Regular,
-                theme,
-            ))),
-    )
 }
 
 /// A box for text in `line`'s size and line box.

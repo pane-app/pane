@@ -18,9 +18,8 @@
 //! platform's file picker; the host settings keep their own copy of it.
 //! The development overrides do not touch the background image, and its
 //! effect waits for a picture. The board's accent swatches,
-//! blur and tint sliders, density, toggles and preview are not Pane's; the
-//! visual workbench's reference fixture draws them to measure the shared
-//! controls against the board.
+//! blur and tint sliders, density, toggles and preview are not Pane's, and
+//! nothing draws them.
 //!
 //! The material's segments carry the *preference*; where the platform
 //! cannot provide glass, the material row says so, and the windows render
@@ -199,8 +198,7 @@ pub(crate) fn override_text(overrides: &[String]) -> String {
 }
 
 /// What the section shows, as plain values: what [`section`] reads from
-/// the host settings, and what the visual workbench's fixture supplies to
-/// draw the same rows.
+/// the host settings.
 pub(crate) struct AppearanceView {
     /// The choices in effect.
     pub(crate) theme: ThemePreference,
@@ -472,23 +470,12 @@ fn choose_picture(cx: &mut App) {
     .detach();
 }
 
-/// The section's composition, which the visual workbench's fixture draws
-/// too: its label over a card of two rows (Theme, then Material, each
-/// with its segments at its end, the material's row saying when glass is
-/// unavailable here), then the override notice and a save's failure, if
-/// any. While an override is in force the rows' labels and choices are
-/// drawn at the disabled opacity.
-pub(crate) fn compose(
-    view: &AppearanceView,
-    segments: (Vec<Stateful<Div>>, Vec<Stateful<Div>>),
-    theme: &Theme,
-) -> Div {
-    compose_with(view, segments, Vec::new(), theme)
-}
-
-/// [`compose`] with `more` rows in the card after the material's: the
-/// background image's, as the General page draws them (the workbench's
-/// fixture draws none).
+/// The section's composition: the theme's and the material's rows, with
+/// their segments at their ends, and `more` rows in the card after the
+/// material's (the background image's, as the General page draws them),
+/// then the override notice and a save's failure, if any. While an
+/// override is in force the rows' labels and choices are drawn at the
+/// disabled opacity.
 fn compose_with(
     view: &AppearanceView,
     segments: (Vec<Stateful<Div>>, Vec<Stateful<Div>>),

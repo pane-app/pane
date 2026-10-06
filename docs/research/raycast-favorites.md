@@ -78,7 +78,7 @@ Checked 2026-10-05 against the current Raycast manual (Mac + Windows, v2 era), t
 
 ## Implications for Pane
 
-Pane today: five positional **quick slots** with holes, numbered Ctrl+1…5 (empty slots unnumbered), followed by rows up to Ctrl+9. The pinned home is a horizontal strip (default) or a vertical list, it is hidden while a query is typed, and compact mode shows only the search field ([CONTEXT.md](../../CONTEXT.md), [root search § pinned home](../root-search.md#the-pinned-home), `crates/pane-core/src/launcher/quick_slots.rs`).
+Pane when this was researched, before [ADR 0027](../adr/0027-quick-slots-are-an-ordered-list.md) replaced it with an ordered list of pins without a limit: five positional **quick slots** with holes, numbered Ctrl+1…5 (empty slots unnumbered), followed by rows up to Ctrl+9. The pinned home is a horizontal strip (default) or a vertical list, it is hidden while a query is typed, and compact mode shows only the search field ([CONTEXT.md](../../CONTEXT.md), [root search § pinned home](../root-search.md#the-pinned-home), `crates/pane-core/src/launcher/quick_slots.rs`).
 
 - **Slots versus an ordered list:** Raycast uses an ordered list with no holes, no fixed positions and no "replace slot" step. Adding appends and Move Up/Down reorders. Holes only make sense if a slot's chord must stay stable when an earlier pin is removed. Pane already numbers holes away, so the holes buy little. An ordered list would remove "Replace a Quick Slot" and the dashed empty tiles.
 - **Cap:** Raycast documents none. Raycast's numbering runs 1–9 over the whole list, so items past the ninth simply get no chord. Pane could do the same: no cap, or a soft cap of 9 so every pin has a chord. A cap of 5 is stricter than Raycast.

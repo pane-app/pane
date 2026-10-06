@@ -21,19 +21,15 @@ use pane_core::develop::{Build, BuildJob, BuildOutcome, Builder};
 use pane_core::{Development, Launcher, PackageIdentity, Runtime, SavedData, Screen, Status};
 use tempfile::TempDir;
 
-const MANAGE_ROW: &str = "Manage extensions…";
+#[path = "support/guests.rs"]
+mod guests;
+#[path = "support/rows.rs"]
+mod rows;
 
-fn guest(name: &str) -> PathBuf {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/guests")
-        .join(format!("{name}.wasm"));
-    assert!(
-        path.exists(),
-        "{} is missing; run `cargo xtask guests`",
-        path.display()
-    );
-    path
-}
+use guests::guest;
+use rows::{select_title, titles};
+
+const MANAGE_ROW: &str = "Manage extensions…";
 
 /// The stand-in build's shared state: which packages it built, how often
 /// it was stopped, and a gate builds wait at.
@@ -290,23 +286,6 @@ fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
         assert!(Instant::now() < deadline, "timed out waiting for {what}");
         std::thread::sleep(Duration::from_millis(20));
     }
-}
-
-fn titles(launcher: &Launcher) -> Vec<String> {
-    launcher
-        .view()
-        .rows
-        .into_iter()
-        .map(|row| row.title)
-        .collect()
-}
-
-fn select_title(launcher: &Launcher, title: &str) {
-    let index = titles(launcher)
-        .iter()
-        .position(|row| row == title)
-        .unwrap_or_else(|| panic!("no row {title:?} in {:?}", titles(launcher)));
-    launcher.select(index);
 }
 
 fn to_root(launcher: &Launcher) {

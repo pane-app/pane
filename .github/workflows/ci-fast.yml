@@ -5,19 +5,30 @@ name: CI (fast)
 # A plain push gets compile feedback only — formatting plus a
 # `cargo check --all-targets` of the workspace, which needs no wasm
 # guest builds, no test-binary linking and no test runs — so a
-# cross-platform compile error comes back in minutes. A push whose head
-# commit message contains "[verify]" runs the full check leg instead
-# (guests, clippy -D warnings, the workspace tests), which the agent
-# asks for once it believes the branch is done; plain iterations never
-# pay for it. The full ci.yml matrix (smokes, renderers, packaging,
+# cross-platform compile error comes back in minutes. The full check
+# leg (guests, clippy -D warnings, the workspace tests) is a manual run
+# of this workflow with `verify` set, which the agent asks for once it
+# believes the branch is done:
+#   gh workflow run ci-fast.yml --ref <branch> -f verify=true
+# It used to be a "[verify]" in the pushed commit's message, which left
+# a trail of empty retry commits on main; a run asks for nothing in the
+# history. Plain iterations never pay for it. The full ci.yml matrix (smokes, renderers, packaging,
 # guests-from-source) ignores these branches; the merger lands them on
 # the milestone's PR branch, whose pushes take the branch tier in
-# ci-branch.yml, and that matrix runs when the pull request is marked
-# ready for review (or on demand).
+# ci-branch.yml; that matrix runs on pushes to main (or on demand), as
+# docs/agents/ci.md describes.
 on:
   push:
     branches:
       - "pi-subagent/**"
+  # The verification tier, asked for by a manual run (above). `inputs`
+  # is empty on a push, so `inputs.verify` is false there.
+  workflow_dispatch:
+    inputs:
+      verify:
+        description: Run the full check leg (guests, clippy, tests) and the macOS check
+        type: boolean
+        default: true
 
 # As in ci.yml: one run per branch, a superseded run cancelled.
 concurrency:
@@ -35,7 +46,7 @@ jobs:
     env:
       # As in ci.yml's check job: the Linux binaries link with mold,
       # host-triple-scoped so the wasm guest builds keep their own
-      # linker (a [verify] run builds them).
+      # linker (a verify run builds them).
       CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ${{ matrix.os == 'ubuntu-24.04' && '-C link-arg=-fuse-ld=mold' || '' }}
     steps:
       - uses: actions/checkout@v4
@@ -61,23 +72,23 @@ jobs:
       # built. It catches the cross-platform compile errors (the
       # cfg-gating class) in minutes.
       - name: Quick compile check
-        if: ${{ !contains(github.event.head_commit.message || '', '[verify]') }}
+        if: ${{ !inputs.verify }}
         run: |
           cargo fmt --all --check
           cargo check --locked --workspace --all-targets
-      # cargo-nextest, which the [verify] tier's `cargo xtask ci` runs
+      # cargo-nextest, which the verify tier's `cargo xtask ci` runs
       # the tests with (a flaky failure is retried, not fatal to the
       # run); installed only when that tier runs, as the quick tier runs
       # no tests. Pinned to an exact version as ci.yml pins cargo-deny.
       - uses: taiki-e/install-action@v2
-        if: ${{ contains(github.event.head_commit.message || '', '[verify]') }}
+        if: ${{ inputs.verify }}
         with:
           tool: cargo-nextest@0.9.146
-      # The verification tier: the agent asks for it by putting
-      # "[verify]" in the pushed commit's message — the full check leg
-      # of ci.yml (guests, clippy -D warnings, the workspace tests).
+      # The verification tier: the agent asks for it with a manual run
+      # (`verify` set) — the full check leg of ci.yml (guests, clippy
+      # -D warnings, the workspace tests).
       - name: Full checks and tests
-        if: ${{ contains(github.event.head_commit.message || '', '[verify]') }}
+        if: ${{ inputs.verify }}
         run: cargo xtask ci
         env:
           # As in ci.yml: the real-clipboard adapter tests opt in where a
@@ -88,21 +99,21 @@ jobs:
       # under Xvfb (the step above runs without a display, so the test
       # skips itself there).
       - name: Run the Linux clipboard adapter test (Xvfb)
-        if: ${{ runner.os == 'Linux' && contains(github.event.head_commit.message || '', '[verify]') }}
+        if: ${{ runner.os == 'Linux' && inputs.verify }}
         run: xvfb-run -a cargo test --locked -p pane-core --test clipboard_adapter_linux
         env:
           PANE_TEST_REAL_CLIPBOARD: "1"
 
   # The quick tier compiles Linux and Windows; the macOS-gated code
   # (the autostart, tray, placement and hotkey adapters) is compiled
-  # only by the branch tier and the release matrix. A [verify] push is
+  # only by the branch tier and the release matrix. A verify run is
   # the ticket's completion signal, so it also pays a compile check on
   # macOS: an uncompiled macOS adapter (wave 4's tray and placement
   # adapters each shipped a real error) is then caught at the ticket,
   # not at the wave gate. Plain iterations never pay for it.
   macos-check:
     name: Check (macos-15, verify only)
-    if: contains(github.event.head_commit.message || '', '[verify]')
+    if: inputs.verify
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4

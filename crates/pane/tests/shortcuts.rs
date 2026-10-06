@@ -36,15 +36,16 @@ mod paint;
 
 use settle::settle;
 
-/// The keystroke that opens Settings on this platform: Cmd+, on macOS,
-/// Ctrl+, on Windows and Linux.
-fn settings_shortcut() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "cmd-,"
-    } else {
-        "ctrl-,"
-    }
-}
+#[path = "support/a11y.rs"]
+mod a11y;
+#[path = "support/setup.rs"]
+mod setup;
+#[path = "support/wait.rs"]
+mod wait;
+
+use a11y::{accessibility, focused_label};
+use setup::settings_shortcut;
+use wait::{frame, settle_frames, until};
 
 /// The keystrokes of the Open Pane default on this platform: Cmd+Space's
 /// Option part on macOS, Ctrl+Alt+Space elsewhere.
@@ -306,33 +307,6 @@ fn settings_context(
     VisualTestContext::from_window(AnyWindowHandle::from(*settings), &cx.cx)
 }
 
-/// The label of the node assistive technology treats as focused in the
-/// window `cx` drives.
-fn focused_label(cx: &mut VisualTestContext) -> Option<String> {
-    let (label, _) = accessibility(cx);
-    label
-}
-
-/// The window's accessibility tree as (focused label, raw JSON), forced on
-/// so the tree is built regardless of platform accessibility.
-fn accessibility(cx: &mut VisualTestContext) -> (Option<String>, String) {
-    cx.update(|window, _| window.set_a11y_forced(true));
-    cx.run_until_parked();
-    let json = cx
-        .update(|window, _| window.debug_a11y_tree_json())
-        .expect("an accessibility tree");
-    let tree: serde_json::Value = serde_json::from_str(&json).unwrap();
-    let nodes = tree["nodes"].as_object().unwrap();
-    let field = |node: &serde_json::Value, key: &str| {
-        node["aria"][key].as_str().unwrap_or_default().to_owned()
-    };
-    let focused = ["active_descendant_focus", "gpui_focus"]
-        .iter()
-        .find_map(|key| tree[key].as_str())
-        .map(|id| field(&nodes[id], "label"));
-    (focused, json)
-}
-
 /// Runs `cx` until the window's accessibility tree contains `text`, so
 /// that work arriving from other threads (an alias being recorded) has
 /// been drawn and captured: the captured tree follows the drawn frame,
@@ -350,26 +324,6 @@ fn until_text(cx: &mut VisualTestContext, text: &str) -> String {
         assert!(
             Instant::now() < deadline,
             "timed out waiting for the window to draw {text}"
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
-
-/// Runs `cx` until `done` returns a value, so that work arriving from
-/// other threads (a record being written) has landed.
-fn until<T>(
-    cx: &mut VisualTestContext,
-    mut done: impl FnMut(&mut VisualTestContext) -> Option<T>,
-) -> T {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        cx.run_until_parked();
-        if let Some(value) = done(cx) {
-            return value;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for the window to draw"
         );
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -393,37 +347,6 @@ fn edit_alias(
         "the editor opened"
     );
     settings_cx
-}
-
-/// Delivers the animation frame the window has asked for, as the native
-/// frame loop would, with `elapsed` passing first on the test platform's
-/// controlled clock. The test platform delivers no frames on its own, so
-/// this is the only thing that advances a running disclosure; one call
-/// draws at most one frame. Returns how many next-frame callbacks ran —
-/// `0` means the window had asked for no frame, so nothing drew.
-fn frame(cx: &mut VisualTestContext, elapsed: Duration) -> usize {
-    cx.executor().advance_clock(elapsed);
-    let ran = cx.update(|window, cx| window.simulate_next_frame(cx));
-    cx.run_until_parked();
-    ran
-}
-
-/// Delivers frames until the window asks for none, so a disclosure in
-/// flight completes (and the section arrival that brought the page, if
-/// one is still running), and returns the frames it delivered. `0` means
-/// the window was already idle: no frame was pending. Bounded, so a
-/// window that never stopped asking for frames fails the test instead of
-/// hanging it.
-fn settle_frames(cx: &mut VisualTestContext) -> usize {
-    let mut delivered = 0;
-    for _ in 0..20 {
-        let ran = frame(cx, Duration::from_millis(25));
-        if ran == 0 {
-            return delivered;
-        }
-        delivered += ran;
-    }
-    panic!("the window never stopped asking for animation frames");
 }
 
 /// The group with `key`'s disclosure as the last frame drew it: its look —

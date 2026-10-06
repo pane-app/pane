@@ -29,8 +29,7 @@
 //!
 //! The caller decides what each slot shows ([`SlotContent`]) and attaches
 //! its identity, accessibility and behavior to the returned elements. The
-//! launcher and the visual workbench's fixture both draw the home through
-//! these functions.
+//! launcher draws the home through these functions.
 
 use gpui::prelude::*;
 use gpui::{AnyElement, BoxShadow, Div, Role, SharedString, Stateful, div, px, relative};
@@ -75,13 +74,6 @@ pub(crate) struct SlotContent {
 /// never when the pins fill their last row, so the hint never adds a row.
 pub(crate) fn shows_pin_hint(pins: usize) -> bool {
     pins == 0 || !pins.is_multiple_of(PINNED_COLUMNS)
-}
-
-/// How many rows the strip takes for `pins` pins, the pin hint's cell
-/// included: at least one.
-pub(crate) fn strip_rows(pins: usize) -> usize {
-    let cells = pins + usize::from(shows_pin_hint(pins));
-    cells.div_ceil(PINNED_COLUMNS).max(1)
 }
 
 /// The "Pinned" label. Carries the debug selector `section-Pinned`, as the

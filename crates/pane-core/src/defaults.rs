@@ -42,7 +42,8 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use crate::downloads::{Download, check_part};
-use crate::http::{Answer, GetError, OwnLimits};
+use crate::http::{Answer, GetError, Origin};
+use crate::integrity::hex;
 use crate::npm;
 
 /// Where Pane's default extensions' payloads are published: the index and
@@ -70,11 +71,8 @@ pub(crate) const RETRY_AFTER: [Duration; 2] = [Duration::from_millis(500), Durat
 /// builds can use a source on this computer ([`ArtifactSource::local`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArtifactSource {
-    /// Its address, ending with `/`.
-    base: String,
-    /// Whether it is on this computer, reached without a proxy and over
-    /// plain HTTP if its address says so.
-    loopback: bool,
+    /// Its address, and whether it is on this computer.
+    origin: Origin,
 }
 
 impl Default for ArtifactSource {
@@ -87,8 +85,7 @@ impl ArtifactSource {
     /// Pane's published downloads, over HTTPS.
     pub fn published() -> ArtifactSource {
         ArtifactSource {
-            base: PUBLISHED.to_owned(),
-            loopback: false,
+            origin: Origin::public(PUBLISHED),
         }
     }
 
@@ -108,11 +105,8 @@ impl ArtifactSource {
                  127.0.0.1 or [::1] can replace it, for tests and development"
             )
         };
-        let base = crate::http::loopback_base(url, refused)?;
-        Ok(ArtifactSource {
-            base,
-            loopback: true,
-        })
+        let origin = Origin::local(url, refused)?;
+        Ok(ArtifactSource { origin })
     }
 
     /// The artifact source named by `PANE_ARTIFACTS`, in development builds
@@ -120,25 +114,24 @@ impl ArtifactSource {
     /// which case this development build installs no default extensions.
     #[cfg(any(test, debug_assertions))]
     pub fn from_dev_env() -> Option<Result<ArtifactSource, String>> {
-        let url = std::env::var("PANE_ARTIFACTS").ok()?;
-        (!url.is_empty()).then(|| ArtifactSource::local(&url))
+        crate::http::dev_env("PANE_ARTIFACTS").map(|url| ArtifactSource::local(&url))
     }
 
     /// Its address, ending with `/`.
     pub fn url(&self) -> &str {
-        &self.base
+        self.origin.url()
     }
 
     /// The address of the index document.
     fn index_url(&self) -> String {
-        format!("{}{INDEX_FILE}", self.base)
+        format!("{}{INDEX_FILE}", self.url())
     }
 
     /// The address of the payload file `file` of an index entry: `file` is
     /// one plain name (checked when the index was read), so the address
     /// stays on this source.
     pub(crate) fn payload_url(&self, file: &str) -> String {
-        format!("{}{file}", self.base)
+        format!("{}{file}", self.url())
     }
 
     /// Asks the source for `url`, with `headers`, a body of at most `most`
@@ -153,20 +146,7 @@ impl ArtifactSource {
         most: u64,
         progress: &(dyn Fn(u64) + Send + Sync),
     ) -> Result<Answer, GetError> {
-        if !self.loopback && !url.starts_with("https://") {
-            return Err(GetError::Failed(format!("`{url}` is not an HTTPS address")));
-        }
-        crate::http::get_blocking_progressing(
-            url,
-            headers,
-            most,
-            OwnLimits {
-                connect: Duration::from_secs(30),
-                between_bytes: Duration::from_secs(60),
-                deadline: Duration::from_secs(300),
-            },
-            progress,
-        )
+        self.origin.get_progressing(url, headers, most, progress)
     }
 }
 
@@ -314,7 +294,7 @@ fn acquire(
     let name = cache_name(&entry.version, &entry.integrity);
     let payload = cache.join(&name);
     let mut bytes = match fs::read(&payload) {
-        Ok(cached) => match npm::check_integrity(&cached, &entry.integrity) {
+        Ok(cached) => match crate::integrity::check_integrity(&cached, &entry.integrity) {
             // Only a payload that still matches its integrity is reused.
             Ok(()) => Some(cached),
             Err(_) => None,
@@ -430,7 +410,7 @@ pub(crate) fn read_index(source: &ArtifactSource) -> Result<Index, Failure> {
     }
     let mut entries = Vec::new();
     for entry in index.defaults {
-        if !npm::has_sha512(&entry.integrity) {
+        if !crate::integrity::has_sha512(&entry.integrity) {
             return Err(failed(format!(
                 "Pane's downloads at {} describe `{}` without a sha512 integrity, which Pane \
                  needs to check its download",
@@ -493,7 +473,7 @@ fn download(
         return Err(answer(read.status, why));
     }
     let bytes = read.body;
-    npm::check_integrity(&bytes, &entry.integrity)
+    crate::integrity::check_integrity(&bytes, &entry.integrity)
         .map_err(|why| failed(format!("the downloaded payload `{file}` {why}")))?;
     write_payload(cache, name, &bytes)
         .map_err(|error| failed(format!("its payload cannot be kept: {error}")))?;
@@ -541,15 +521,11 @@ fn keep_payload(cache: &Path, name: &str) {
 /// hex digits>.tgz`, so that another version, or the same version with
 /// another integrity, is another name.
 fn cache_name(version: &str, integrity: &str) -> String {
-    let digest = npm::sha512_digest(integrity);
+    let digest = crate::integrity::sha512_digest(integrity);
     format!(
         "{version}-{}.tgz",
         hex(digest.as_ref().map(|digest| &digest[..8]).unwrap_or(&[]))
     )
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Removes what a Pane stopped mid-download left in the cache folders
@@ -620,13 +596,9 @@ mod tests {
 
     #[test]
     fn a_source_on_this_computer_is_a_loopback_address_only() {
-        assert_eq!(
-            ArtifactSource::local("http://127.0.0.1:43127/").unwrap(),
-            ArtifactSource {
-                base: "http://127.0.0.1:43127/".into(),
-                loopback: true
-            }
-        );
+        let source = ArtifactSource::local("http://127.0.0.1:43127/").unwrap();
+        assert_eq!(source.url(), "http://127.0.0.1:43127/");
+        assert!(source.origin.is_loopback());
         for url in [
             "http://127.0.0.1:43127",
             "https://127.9.9.9/",
@@ -634,7 +606,7 @@ mod tests {
         ] {
             let source = ArtifactSource::local(url).unwrap();
             assert!(source.url().ends_with('/'), "{}", source.url());
-            assert!(source.loopback);
+            assert!(source.origin.is_loopback());
         }
         for url in [
             "http://localhost:43127/",
@@ -652,14 +624,17 @@ mod tests {
     #[test]
     fn a_payload_is_named_by_its_version_and_integrity() {
         // sha512 of the empty input, in npm's integrity spelling.
-        let empty = format!("sha512-{}", npm::base64(&Sha512::digest(b"")));
+        let empty = format!("sha512-{}", crate::integrity::base64(&Sha512::digest(b"")));
         assert_eq!(
             cache_name("0.1.0", &empty),
             format!("0.1.0-{}.tgz", hex(&Sha512::digest(b"")[..8]))
         );
         // Another integrity, or version, is another name.
         assert_ne!(cache_name("0.1.0", &empty), cache_name("0.1.1", &empty));
-        let other = format!("sha512-{}", npm::base64(&Sha512::digest(b"other")));
+        let other = format!(
+            "sha512-{}",
+            crate::integrity::base64(&Sha512::digest(b"other"))
+        );
         assert_ne!(cache_name("0.1.0", &empty), cache_name("0.1.0", &other));
         // An integrity without a digest names nothing: the name says the
         // version alone.

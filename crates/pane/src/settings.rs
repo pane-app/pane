@@ -369,7 +369,7 @@ impl Settings {
     pub(crate) fn set_theme(&mut self, preference: ThemePreference, cx: &mut Context<Self>) {
         let mut chosen = self.chosen.clone();
         chosen.theme = preference;
-        self.choose(chosen, cx);
+        self.commit(chosen, Taken::Appearance, cx);
     }
 
     /// Chooses `preference` for the material, as [`Settings::set_theme`]
@@ -377,7 +377,7 @@ impl Settings {
     pub(crate) fn set_material(&mut self, preference: MaterialPreference, cx: &mut Context<Self>) {
         let mut chosen = self.chosen.clone();
         chosen.material = preference;
-        self.choose(chosen, cx);
+        self.commit(chosen, Taken::Appearance, cx);
     }
 
     /// The display the launcher opens on: what the Launcher page shows and
@@ -399,7 +399,7 @@ impl Settings {
     ) {
         let mut chosen = self.chosen.clone();
         chosen.opening_monitor = monitor;
-        self.record_choice(chosen, cx);
+        self.commit(chosen, Taken::Recorded, cx);
     }
 
     /// What reopening the launcher shows: the view it was left on, when
@@ -417,7 +417,7 @@ impl Settings {
     ) {
         let mut chosen = self.chosen.clone();
         chosen.reopening = reopening;
-        self.record_choice(chosen, cx);
+        self.commit(chosen, Taken::Recorded, cx);
     }
 
     /// How much of the launcher shows while the query is blank.
@@ -430,7 +430,7 @@ impl Settings {
     pub(crate) fn set_window_mode(&mut self, mode: pane_core::WindowMode, cx: &mut Context<Self>) {
         let mut chosen = self.chosen.clone();
         chosen.window_mode = mode;
-        self.record_choice(chosen, cx);
+        self.commit(chosen, Taken::Recorded, cx);
     }
 
     /// Whether the compact window shows the pins as a row of icons under
@@ -444,7 +444,7 @@ impl Settings {
     pub(crate) fn set_compact_pinned(&mut self, on: bool, cx: &mut Context<Self>) {
         let mut chosen = self.chosen.clone();
         chosen.compact_pinned = on;
-        self.record_choice(chosen, cx);
+        self.commit(chosen, Taken::Recorded, cx);
     }
 
     /// How the pinned home lays out its quick slots.
@@ -460,7 +460,7 @@ impl Settings {
     ) {
         let mut chosen = self.chosen.clone();
         chosen.pinned_layout = layout;
-        self.record_choice(chosen, cx);
+        self.commit(chosen, Taken::Recorded, cx);
     }
 
     /// What the launcher's back key does.
@@ -472,7 +472,7 @@ impl Settings {
     pub(crate) fn set_escape(&mut self, escape: pane_core::EscapeBehavior, cx: &mut Context<Self>) {
         let mut chosen = self.chosen.clone();
         chosen.escape = escape;
-        self.record_choice(chosen, cx);
+        self.commit(chosen, Taken::Recorded, cx);
     }
 
     /// Whether Escape closes the Settings window.
@@ -484,7 +484,7 @@ impl Settings {
     pub(crate) fn set_escape_closes_settings(&mut self, closes: bool, cx: &mut Context<Self>) {
         let mut chosen = self.chosen.clone();
         chosen.escape_closes_settings = closes;
-        self.record_choice(chosen, cx);
+        self.commit(chosen, Taken::Recorded, cx);
     }
 
     /// The extra selection keys.
@@ -522,7 +522,7 @@ impl Settings {
         }
         let mut chosen = self.chosen.clone();
         chosen.navigation = navigation;
-        self.record_choice(chosen, cx);
+        self.commit(chosen, Taken::Recorded, cx);
         Ok(())
     }
 
@@ -567,9 +567,7 @@ impl Settings {
     /// changes nothing. With an unreadable record, or no data folder to
     /// keep the copy in, the choice is refused at once.
     pub(crate) fn choose_background(&mut self, source: PathBuf, cx: &mut Context<Self>) {
-        if let Some(problem) = self.unreadable.clone() {
-            self.save_error = Some(format!("Pane does not replace it: {problem}"));
-            cx.notify();
+        if self.refuse_unreadable(cx) {
             return;
         }
         let Some(dir) = self.dir.clone() else {
@@ -592,7 +590,7 @@ impl Settings {
                     Ok(name) => {
                         let mut chosen = settings.chosen.clone();
                         chosen.background = Some(name);
-                        settings.record_choice(chosen, cx);
+                        settings.commit(chosen, Taken::Recorded, cx);
                     }
                     Err(problem) => settings.import_problem = Some(problem),
                 }
@@ -617,7 +615,7 @@ impl Settings {
         self.import_problem = None;
         let mut chosen = self.chosen.clone();
         chosen.background = None;
-        self.record_choice(chosen, cx);
+        self.commit(chosen, Taken::Recorded, cx);
     }
 
     /// Chooses the texture drawn into the background image; the backdrop
@@ -629,7 +627,7 @@ impl Settings {
     ) {
         let mut chosen = self.chosen.clone();
         chosen.background_effect = effect;
-        self.record_choice(chosen, cx);
+        self.commit(chosen, Taken::Recorded, cx);
     }
 
     /// Asks for the backdrop the launcher window draws at `scale`, its
@@ -689,26 +687,6 @@ impl Settings {
         }
     }
 
-    /// Records one of the Launcher page's choices — the opening display or
-    /// what reopening shows. Neither changes what the windows render, so
-    /// nothing repaints; the record is written off the window's thread, and
-    /// a write that fails is reported with the shown choice rolled back, as
-    /// the appearance choices are. An override in force does not refuse
-    /// these: the development overrides speak for the appearance only.
-    fn record_choice(&mut self, chosen: HostSettings, cx: &mut Context<Self>) {
-        if chosen == self.chosen {
-            return;
-        }
-        if let Some(problem) = self.unreadable.clone() {
-            self.save_error = Some(format!("Pane does not replace it: {problem}"));
-            cx.notify();
-            return;
-        }
-        self.chosen = chosen;
-        cx.notify();
-        self.save(cx);
-    }
-
     /// The Open Pane hotkey the host settings hold: what the General page
     /// shows and what a fresh start registers.
     pub(crate) fn open_pane(&self) -> Shortcut {
@@ -737,10 +715,8 @@ impl Settings {
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         // The record's rule: never replace what cannot be read.
-        if let Some(problem) = &self.unreadable {
-            return Err(format!(
-                "Pane could not read the settings record, so the shortcut is not changed: {problem}"
-            ));
+        if let Some(refusal) = self.unreadable_refusal(Refusal::Change("shortcut")) {
+            return Err(refusal);
         }
         // The extra selection keys are taken too.
         if let Some((previous, next)) = self.chosen.navigation.bindings()
@@ -758,11 +734,8 @@ impl Settings {
             cx.notify();
             return Ok(());
         }
-        self.chosen = chosen;
-        let keyboard = self.chosen.keyboard.clone();
-        crate::keyboard::rebuild(cx, &keyboard, self.chosen.navigation);
-        cx.notify();
-        self.save(cx);
+        crate::keyboard::rebuild(cx, &chosen.keyboard, chosen.navigation);
+        self.commit(chosen, Taken::Recorded, cx);
         Ok(())
     }
 
@@ -809,10 +782,8 @@ impl Settings {
             return Err("Pane has no tray or menu-bar entry to configure".into());
         };
         // The record's rule: never replace what cannot be read.
-        if let Some(problem) = &self.unreadable {
-            return Err(format!(
-                "Pane could not read the settings record, so the entry is not changed: {problem}"
-            ));
+        if let Some(refusal) = self.unreadable_refusal(Refusal::Change("entry")) {
+            return Err(refusal);
         }
         if let Err(error) = tray.set_visible(visible) {
             // A refused change is the page's rejection, reported by the
@@ -823,9 +794,9 @@ impl Settings {
         // The change took: the entry's state matches the choice now.
         self.tray_problem = None;
         if self.chosen.tray_visible != visible {
-            self.chosen.tray_visible = visible;
-            cx.notify();
-            self.save(cx);
+            let mut chosen = self.chosen.clone();
+            chosen.tray_visible = visible;
+            self.commit(chosen, Taken::Recorded, cx);
         } else {
             // The record already holds it: a retry that made it take
             // effect needs no new record.
@@ -863,16 +834,14 @@ impl Settings {
             return Err("Pane has no launcher to register the hotkey with".into());
         };
         // The record's rule: never replace what cannot be read.
-        if let Some(problem) = &self.unreadable {
-            return Err(format!(
-                "Pane could not read the settings record, so the hotkey is not changed: {problem}"
-            ));
+        if let Some(refusal) = self.unreadable_refusal(Refusal::Change("hotkey")) {
+            return Err(refusal);
         }
         launcher.set_open_pane(shortcut.clone())?;
         if self.chosen.open_pane != shortcut {
-            self.chosen.open_pane = shortcut;
-            cx.notify();
-            self.save(cx);
+            let mut chosen = self.chosen.clone();
+            chosen.open_pane = shortcut;
+            self.commit(chosen, Taken::Recorded, cx);
         } else {
             // The record already holds it: a retry that made it register
             // needs no new record.
@@ -916,9 +885,7 @@ impl Settings {
         if enabled == self.chosen.launch_at_login {
             return;
         }
-        if let Some(problem) = self.unreadable.clone() {
-            self.save_error = Some(format!("Pane does not replace it: {problem}"));
-            cx.notify();
+        if self.refuse_unreadable(cx) {
             return;
         }
         let changed = if enabled {
@@ -929,9 +896,9 @@ impl Settings {
         match changed {
             Ok(registration) => {
                 self.login.state = Ok(registration);
-                self.chosen.launch_at_login = enabled;
-                self.changed(cx);
-                self.save(cx);
+                let mut chosen = self.chosen.clone();
+                chosen.launch_at_login = enabled;
+                self.commit(chosen, Taken::Repainted, cx);
             }
             Err(problem) => {
                 // An adapter that cannot manage the registration here
@@ -979,20 +946,51 @@ impl Settings {
         }
     }
 
-    /// Takes `chosen`, repaints, and saves. The single path every choice
-    /// goes through; see the setters for what refuses it.
-    fn choose(&mut self, chosen: HostSettings, cx: &mut Context<Self>) {
-        if chosen == self.chosen || !self.overrides.is_empty() {
+    /// Takes `chosen`, shows it as `taken` says, and saves. The single path
+    /// every choice goes through: what it applies to the system first (a
+    /// registration, the tray entry, the keymap) is the setter's, and a
+    /// write that fails takes those back (see [`Settings::written`]). A
+    /// choice that changes nothing is no choice; an appearance choice under
+    /// a development override is refused silently, since nothing visible
+    /// would change; and an unreadable record refuses every choice, which
+    /// the page reports.
+    fn commit(&mut self, chosen: HostSettings, taken: Taken, cx: &mut Context<Self>) {
+        if chosen == self.chosen || (taken == Taken::Appearance && !self.overrides.is_empty()) {
             return;
         }
-        if let Some(problem) = self.unreadable.clone() {
-            self.save_error = Some(format!("Pane does not replace it: {problem}"));
-            cx.notify();
+        if self.refuse_unreadable(cx) {
             return;
         }
         self.chosen = chosen;
-        self.changed(cx);
+        match taken {
+            Taken::Appearance | Taken::Repainted => self.changed(cx),
+            Taken::Recorded => cx.notify(),
+        }
         self.save(cx);
+    }
+
+    /// Why a change is refused because the record cannot be read, in the
+    /// words `refusal` says it with; `None` while the record is readable.
+    /// The record's rule: never replace what cannot be read.
+    fn unreadable_refusal(&self, refusal: Refusal) -> Option<String> {
+        let problem = self.unreadable.as_ref()?;
+        Some(match refusal {
+            Refusal::Choice => format!("Pane does not replace it: {problem}"),
+            Refusal::Change(what) => format!(
+                "Pane could not read the settings record, so the {what} is not changed: {problem}"
+            ),
+        })
+    }
+
+    /// Refuses a choice because the record cannot be read, as the page's
+    /// status reports it. Whether it was refused.
+    fn refuse_unreadable(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(refusal) = self.unreadable_refusal(Refusal::Choice) else {
+            return false;
+        };
+        self.save_error = Some(refusal);
+        cx.notify();
+        true
     }
 
     /// Records the appearance the system has now, as a window observed it
@@ -1085,63 +1083,22 @@ impl Settings {
             Err(why) => {
                 let mut problem = format!("Pane could not save your choice: {why}");
                 if self.chosen == snapshot {
-                    // The Open Pane registration follows the record back, so
-                    // a choice that could not be saved does not leave the
-                    // launcher bound to what the record does not hold; what
-                    // was last recorded keeps working.
-                    if snapshot.open_pane != self.saved.open_pane
-                        && let Some(launcher) = &self.launcher
-                    {
-                        // The outcome is the binding's own state (the
-                        // problem the page explains), not a value to
-                        // surface here.
-                        let _ = launcher.sync_open_pane(self.saved.open_pane.clone());
-                    }
-                    // The tray entry follows the record back too, by the
-                    // same rule: what the record last held is what the
-                    // native state goes back to, so the preference the page
-                    // shows matches what Pane actually saved.
-                    if snapshot.tray_visible != self.saved.tray_visible
-                        && let Some(tray) = &self.tray
-                    {
-                        self.tray_problem = tray
-                            .set_visible(self.saved.tray_visible)
-                            .err()
-                            .map(|error| error.to_string());
-                    }
+                    // The shown choice goes back to what the record holds,
+                    // and so does every effect the failed choice applied to
+                    // the system, so what works is what the record names.
+                    // The windows repaint with the record's choice before
+                    // the effects that follow the repaint are restored.
+                    let applied: Vec<Effect> = Effect::ALL
+                        .into_iter()
+                        .filter(|effect| effect.differs(&snapshot, &self.saved))
+                        .collect();
                     self.chosen = self.saved.clone();
-                    if snapshot.launch_at_login != self.saved.launch_at_login {
-                        // The registration was changed for a choice that
-                        // could not be kept: undo it, so what Pane
-                        // actually starts at login is what the record
-                        // last held — a failed save never masquerades as a
-                        // successful toggle. An undo that itself fails is
-                        // reported beside the save's problem, not hidden.
-                        let undone = if self.saved.launch_at_login {
-                            self.login.adapter.enable()
-                        } else {
-                            self.login.adapter.disable()
-                        };
-                        match undone {
-                            Ok(registration) => self.login.state = Ok(registration),
-                            Err(undo) => {
-                                problem = format!(
-                                    "{problem}; Pane could not undo the login registration: {undo}"
-                                )
-                            }
-                        }
-                    }
+                    let (before, after): (Vec<Effect>, Vec<Effect>) = applied
+                        .into_iter()
+                        .partition(|effect| !effect.follows_repaint());
+                    self.restore(before, &mut problem, cx);
                     self.changed(cx);
-                    // The in-app navigation bindings follow the record back
-                    // the same way: the keymap is re-made over what the
-                    // record holds, so a binding that could not be saved
-                    // stops working and the recorded one works again.
-                    if snapshot.keyboard != self.saved.keyboard
-                        || snapshot.navigation != self.saved.navigation
-                    {
-                        let keyboard = self.chosen.keyboard.clone();
-                        crate::keyboard::rebuild(cx, &keyboard, self.chosen.navigation);
-                    }
+                    self.restore(after, &mut problem, cx);
                 }
                 self.save_error = Some(problem);
             }
@@ -1151,6 +1108,148 @@ impl Settings {
             self.save(cx);
         }
         cx.notify();
+    }
+
+    /// Takes each of `effects` back to what the record holds, after a
+    /// write that failed (see [`Settings::written`]); the choices are the
+    /// record's already. An undo that itself fails is appended to
+    /// `problem`, reported beside the save's problem rather than hidden.
+    fn restore(
+        &mut self,
+        effects: impl IntoIterator<Item = Effect>,
+        problem: &mut String,
+        cx: &mut Context<Self>,
+    ) {
+        for effect in effects {
+            match effect {
+                // The Open Pane registration follows the record back, so
+                // a choice that could not be saved does not leave the
+                // launcher bound to what the record does not hold; what
+                // was last recorded keeps working.
+                Effect::OpenPane => {
+                    if let Some(launcher) = &self.launcher {
+                        // The outcome is the binding's own state (the
+                        // problem the page explains), not a value to
+                        // surface here.
+                        let _ = launcher.sync_open_pane(self.saved.open_pane.clone());
+                    }
+                }
+                // The tray entry follows the record back too, by the
+                // same rule: what the record last held is what the
+                // native state goes back to, so the preference the page
+                // shows matches what Pane actually saved.
+                Effect::Tray => {
+                    if let Some(tray) = &self.tray {
+                        self.tray_problem = tray
+                            .set_visible(self.saved.tray_visible)
+                            .err()
+                            .map(|error| error.to_string());
+                    }
+                }
+                // The registration was changed for a choice that could not
+                // be kept: undo it, so what Pane actually starts at login
+                // is what the record last held — a failed save never
+                // masquerades as a successful toggle.
+                Effect::Login => {
+                    let undone = if self.saved.launch_at_login {
+                        self.login.adapter.enable()
+                    } else {
+                        self.login.adapter.disable()
+                    };
+                    match undone {
+                        Ok(registration) => self.login.state = Ok(registration),
+                        Err(undo) => {
+                            *problem = format!(
+                                "{problem}; Pane could not undo the login registration: {undo}"
+                            )
+                        }
+                    }
+                }
+                // The in-app navigation bindings follow the record back
+                // the same way: the keymap is re-made over what the
+                // record holds, so a binding that could not be saved
+                // stops working and the recorded one works again.
+                Effect::Keymap => {
+                    let keyboard = self.chosen.keyboard.clone();
+                    crate::keyboard::rebuild(cx, &keyboard, self.chosen.navigation);
+                }
+            }
+        }
+    }
+}
+
+/// How a choice is taken through [`Settings::commit`], beyond keeping it
+/// and writing the record: the one thing the choices differ in there.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Taken {
+    /// An appearance choice, the theme or the material: a development
+    /// override in force refuses it, and both windows repaint with it,
+    /// the native chrome following the theme.
+    Appearance,
+    /// The launch-at-login choice: no override speaks for it, but taking
+    /// it repaints as an appearance choice does.
+    Repainted,
+    /// Every other choice: the windows read it as they next draw, so they
+    /// are only told to redraw. An override in force does not refuse
+    /// these: the development overrides speak for the appearance only.
+    Recorded,
+}
+
+/// The words a change is refused with while the record cannot be read
+/// (see [`Settings::unreadable_refusal`]).
+#[derive(Clone, Copy)]
+enum Refusal {
+    /// A choice the page's status reports the refusal of.
+    Choice,
+    /// A change its setter answers `Err` for, naming what is not changed
+    /// ("shortcut", "entry", "hotkey"), which the page shows beside it.
+    Change(&'static str),
+}
+
+/// A side effect a choice applies to the system before the record is
+/// written — a registration, the tray entry, the keymap — which a write
+/// that fails takes back to what the record holds (see
+/// [`Settings::written`]). A new effect is added here: its variant, which
+/// choices it follows, and how [`Settings::restore`] takes it back.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Effect {
+    /// The Open Pane hotkey's registration with the system.
+    OpenPane,
+    /// The native tray or menu-bar entry's visibility.
+    Tray,
+    /// The platform's launch-at-login registration.
+    Login,
+    /// Every window's key bindings: the in-app bindings and the extra
+    /// navigation keys.
+    Keymap,
+}
+
+impl Effect {
+    /// Every effect, in the order a failed write restores them.
+    const ALL: [Effect; 4] = [
+        Effect::OpenPane,
+        Effect::Tray,
+        Effect::Login,
+        Effect::Keymap,
+    ];
+
+    /// Whether `chosen` applied this effect differently from `saved`, so a
+    /// failed write of `chosen` has it to take back.
+    fn differs(self, chosen: &HostSettings, saved: &HostSettings) -> bool {
+        match self {
+            Effect::OpenPane => chosen.open_pane != saved.open_pane,
+            Effect::Tray => chosen.tray_visible != saved.tray_visible,
+            Effect::Login => chosen.launch_at_login != saved.launch_at_login,
+            Effect::Keymap => {
+                chosen.keyboard != saved.keyboard || chosen.navigation != saved.navigation
+            }
+        }
+    }
+
+    /// Whether it is restored after the windows repaint with the record's
+    /// choices: the keymap is re-made last.
+    fn follows_repaint(self) -> bool {
+        self == Effect::Keymap
     }
 }
 
@@ -1392,7 +1491,7 @@ pub(crate) fn visuals(cx: &App) -> Visuals {
 /// background image's backdrop when one is chosen and ready (ADR 0028) —
 /// the palette then painted over its canvas, with the frosted surfaces
 /// (`Theme::over_backdrop`). Everything the launcher draws reads these;
-/// the Settings window and the visual workbench read [`visuals`]. The
+/// the Settings window reads [`visuals`]. The
 /// launcher asks for the backdrop as it draws, through
 /// [`Settings::request_backdrop`].
 pub(crate) fn launcher_visuals(cx: &App) -> Visuals {

@@ -10,6 +10,32 @@ publish = false
 rust-version = "1.98"
 license = "GPL-3.0-or-later"
 
+# Crates more than one member declares, at one version and with the
+# features every member needs; a member adds its own features on top.
+[workspace.dependencies]
+crc32fast = "1"
+flate2 = "1"
+futures = { version = "0.3", default-features = false, features = ["executor"] }
+objc2 = "0.6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tar = { version = "0.4.44", default-features = false }
+tempfile = "3"
+tokio = "1"
+windows = "0.62"
+x11rb = "0.13"
+
+# Full debug info made every test binary's Windows debug file (.pdb) close to
+# 1 GB, and the target directory over 100 GB. Line tables keep file and line
+# in panics and backtraces; a debugger session that needs local variables can
+# build with CARGO_PROFILE_DEV_DEBUG=full.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 # Extension components are compiled by Cranelift at run time. Unoptimized,
 # Cranelift takes over 10 s for a 4 MB JavaScript component in tests and
 # `cargo run`; optimizing the compiler crates brings that near release speed.

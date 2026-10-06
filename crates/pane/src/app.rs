@@ -8,15 +8,17 @@
 //! [`crate::extension_views`] — whose `impl LauncherWindow` blocks supply
 //! the per-screen sync and render methods this orchestration calls.
 
+mod frame_motion;
+mod presence;
+
 use std::future::Future;
 use std::mem::{Discriminant, discriminant};
 use std::path::Path;
-use std::time::{Duration, Instant};
 
 use gpui::{
     App, ClipboardItem, Context, Div, EntityInputHandler, FocusHandle, Hsla, KeyDownEvent,
-    ModifiersChangedEvent, MouseMoveEvent, ObjectFit, PathPromptOptions, Pixels, Point, Role,
-    ScrollHandle, SharedString, Size, Stateful, Window, div, img, prelude::*, px, relative,
+    MouseMoveEvent, ObjectFit, PathPromptOptions, Pixels, Point, Role, ScrollHandle, SharedString,
+    Size, Stateful, Window, div, img, prelude::*, px, relative,
 };
 use pane_core::changes::Changes;
 use pane_core::hotkeys::Shortcut;
@@ -31,6 +33,7 @@ use crate::features::actions_panel;
 use crate::features::clipboard_history;
 use crate::features::compact_pins;
 use crate::features::footer_menu;
+use crate::features::number_hints::row_number;
 use crate::features::quick_slots;
 use crate::features::root_search;
 use crate::features::settings;
@@ -38,7 +41,7 @@ use crate::ui::footer;
 use crate::ui::icon::{Glyph, IconTone};
 use crate::ui::keycap::CapStyle;
 use crate::ui::material::Material;
-use crate::ui::motion::{self, Direction};
+use crate::ui::motion;
 use crate::ui::result_row::{RowContent, RowMeta, result_row_with};
 use crate::ui::shell;
 use crate::ui::theme::{Theme, pressed};
@@ -47,72 +50,10 @@ use crate::{
     SelectNext, SelectPrevious,
 };
 
+pub(crate) use frame_motion::FrameMotion;
+use presence::{Fit, Presence, Press, WindowSize};
+
 pub(crate) const KEY_CONTEXT: &str = "Launcher";
-
-/// How long after an accepted Open Pane press another press of the same
-/// binding is treated as the repeat of a key still held, not a new press.
-/// The Windows and X11 adapters stop the system's key repeat at its source
-/// (`MOD_NOREPEAT`, detectable auto-repeat); macOS's Carbon hot keys
-/// report a held key again, so the window keeps the guard itself. A
-/// genuine second press after this long toggles again.
-const OPEN_PANE_REPEAT: Duration = Duration::from_millis(600);
-
-/// How long Ctrl must be held alone before the launcher's items show the
-/// numbers Ctrl+1 to Ctrl+9 pick them with.
-const NUMBERS_HOLD: Duration = Duration::from_millis(400);
-
-/// The number hints Ctrl reveals: whether they show, the hold that will
-/// show them, and their slide in or out.
-#[derive(Default)]
-struct Numbers {
-    /// Whether the hints show: Ctrl has been held alone long enough.
-    shown: bool,
-    /// Whether Ctrl is held alone and the hold has not yet shown them.
-    pending: bool,
-    /// Counts holds, so a hold that ended does not show them later.
-    generation: u64,
-    /// Their slide in flight, if any, and what the last frame drew.
-    reveal: Option<motion::Tween>,
-    drawn: bool,
-}
-
-/// What Ctrl and a digit pick: a quick slot, or a row of the list.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Numbered {
-    Slot(usize),
-    Row(usize),
-}
-
-/// What Ctrl and `digit` (1 to 9) pick on the screen `view` shows: while
-/// the pinned home shows, the first numbers are `slots` (the home's
-/// numbered slots, in order; see `LauncherWindow::numbered_slots`) and
-/// the next ones the first rows; otherwise 1 to 9 are the first rows. Only
-/// root search and a command's lists number their items.
-pub(crate) fn numbered(view: &LauncherView, slots: &[usize], digit: usize) -> Option<Numbered> {
-    if !matches!(
-        view.screen,
-        Screen::Root { .. } | Screen::Command | Screen::CommandSearch { .. }
-    ) || !(1..=9).contains(&digit)
-    {
-        return None;
-    }
-    let home = quick_slots::home_shown(view);
-    let slots = if home { slots } else { &[] };
-    let picked = match slots.get(digit - 1) {
-        Some(&slot) => Numbered::Slot(slot),
-        None => Numbered::Row(digit - slots.len() - 1),
-    };
-    match picked {
-        Numbered::Row(row) if row >= view.rows.len() => None,
-        picked => Some(picked),
-    }
-}
-
-/// The number row `index` of `view`'s list is picked with, if it has one
-/// (see [`numbered`]).
-pub(crate) fn row_number(view: &LauncherView, slots: &[usize], index: usize) -> Option<usize> {
-    (1..=9).find(|&digit| numbered(view, slots, digit) == Some(Numbered::Row(index)))
-}
 
 /// The launcher window's root view.
 pub struct LauncherWindow {
@@ -139,26 +80,15 @@ pub struct LauncherWindow {
     /// Root search's pinned home: its slots' focus; see
     /// [`features::quick_slots`].
     pub(crate) home: quick_slots::Home,
-    /// The footer menu popup's entrance or exit in flight, if any: the
-    /// popup's look (0 closed, 1 open) and its fade, presentation only —
-    /// see [`crate::ui::motion`]. One record serves both the open menu and
-    /// the exit after it, so a reopen during the exit reverses from the
-    /// presentation on screen.
-    menu_transition: motion::PopupMotion,
-    /// The menu item the popup's exit still shows, captured when the
-    /// menu closed; the frame that completes the exit clears it, along
-    /// with the popup it was painting. Read by the popup layer the
-    /// footer menu module renders.
-    pub(crate) menu_exit: Option<usize>,
-    /// Whether the last drawn frame drew the menu popup open — the one
-    /// thing that starts or retargets the popup's transition.
-    drawn_menu: bool,
-    /// The footer menu popup's presentation (offset from rest toward the
-    /// strip in px, opacity) as the last frame drew it; `None` when the
-    /// last frame drew the popup settled — at rest while open, absent
-    /// while closed. Test and debug builds only.
-    #[cfg(any(test, debug_assertions))]
-    drawn_menu_popup: Option<(f32, f32)>,
+    /// What moves between frames — the view transition, the footer menu
+    /// popup's entrance and exit, the number hints' slide — and the rule
+    /// of which navigation arrives and which lands at once; see
+    /// [`FrameMotion`].
+    pub(crate) motion: FrameMotion,
+    /// Whether the window is shown, when it was hidden, the Open Pane
+    /// hotkey's repeat guard and the compact window mode's sizes; see
+    /// [`Presence`].
+    presence: Presence,
     /// The list's scroll position.
     scroll: ScrollHandle,
     /// Where the pointer last moved in the window, as the last pointer
@@ -179,51 +109,10 @@ pub struct LauncherWindow {
     /// Whether the next frame scrolls to the selected row again, once the
     /// list changed in this one has been laid out.
     scroll_again: bool,
-    /// The view transition in flight, if any: the arriving screen's
-    /// content is fading in over a tiny directional shift. Presentation
-    /// only — see [`crate::ui::motion`].
-    transition: Option<motion::Tween>,
-    /// Which way the last navigation went, for the next view transition's
-    /// direction: an open the pointer made (a row clicked, an entry from
-    /// the Settings window — a package preview, a root result) arms
-    /// [`Direction::Forward`]; keyboard opens never do. The screen change
-    /// it causes uses it up — that frame sets it back to
-    /// [`Direction::Back`], so a later change nothing opened (a summon that
-    /// pops to root search, a form submitted back to its list, a second
-    /// reply from the same guest) lands at once instead of inheriting it.
-    navigation: Direction,
-    /// The screen *kind* the last frame drew, to tell a real view
-    /// transition (the kind changed) from a query or result update (it
-    /// did not — those never animate).
-    drawn_screen: Option<Discriminant<Screen>>,
-    /// The arriving content's presentation as the last frame drew it
-    /// (see [`LauncherWindow::view_transition`]). Test and debug builds
-    /// only.
-    #[cfg(any(test, debug_assertions))]
-    arriving: Option<(f32, f32)>,
     /// The launcher's view as the last frame drew it, for tests (see
     /// [`LauncherWindow::drawn_view`]). Test and debug builds only.
     #[cfg(any(test, debug_assertions))]
     drawn: Option<LauncherView>,
-    /// When the Open Pane hotkey was last accepted, so the repeats of a
-    /// held key do not toggle again and again (see [`OPEN_PANE_REPEAT`]).
-    open_pane_press: Option<Instant>,
-    /// Whether the launcher window is hidden by the Open Pane hotkey —
-    /// hidden, not closed: Pane keeps running, and the next press shows
-    /// the same window and the same launcher again. Drives the toggle's
-    /// decision together with the window's focus, so what the hotkey does
-    /// is the same whatever the platform reports about a hidden window.
-    /// The test-observable copy is [`LauncherWindow::hidden`].
-    hidden: bool,
-    /// When the launcher was last hidden, for the Launcher page's pop to
-    /// root search choice.
-    hidden_at: Option<Instant>,
-    /// The number hints Ctrl reveals.
-    numbers: Numbers,
-    /// Whether the last frame drew the launcher collapsed to its search
-    /// field (the compact window mode), and the size it had before.
-    collapsed: Option<bool>,
-    expanded_size: Option<Size<Pixels>>,
 }
 
 /// What the list was last scrolled for. When any of it changes, the list
@@ -282,27 +171,13 @@ impl LauncherWindow {
             scrolled_for: None,
             scroll_again: false,
             custom_view: None,
-            transition: None,
-            navigation: Direction::Back,
-            drawn_screen: None,
-            #[cfg(any(test, debug_assertions))]
-            arriving: None,
             menu_button,
             menu: None,
             actions: None,
             clipboard: None,
             home: quick_slots::Home::default(),
-            menu_transition: Default::default(),
-            menu_exit: None,
-            drawn_menu: false,
-            #[cfg(any(test, debug_assertions))]
-            drawn_menu_popup: None,
-            open_pane_press: None,
-            hidden: false,
-            hidden_at: None,
-            numbers: Numbers::default(),
-            collapsed: None,
-            expanded_size: None,
+            motion: FrameMotion::new(),
+            presence: Presence::default(),
             #[cfg(any(test, debug_assertions))]
             drawn: None,
         };
@@ -345,7 +220,7 @@ impl LauncherWindow {
     #[cfg(any(test, debug_assertions))]
     #[doc(hidden)]
     pub fn view_transition(&self) -> Option<(f32, f32)> {
-        self.arriving
+        self.motion.view_transition()
     }
 
     /// Test support: whether the Open Pane hotkey has hidden the window —
@@ -355,7 +230,7 @@ impl LauncherWindow {
     #[cfg(any(test, debug_assertions))]
     #[doc(hidden)]
     pub fn hidden(&self) -> bool {
-        self.hidden
+        self.presence.hidden()
     }
 
     /// Test support: the footer menu popup's presentation as the last
@@ -366,7 +241,7 @@ impl LauncherWindow {
     #[cfg(any(test, debug_assertions))]
     #[doc(hidden)]
     pub fn menu_popup_presentation(&self) -> Option<(f32, f32)> {
-        self.drawn_menu_popup
+        self.motion.menu_popup_presentation()
     }
 
     /// Redraws whenever the launcher changes in the background, as
@@ -446,7 +321,7 @@ impl LauncherWindow {
         // Backing out is the one navigation that leaves a view, and it
         // lands at once: the next frame drops any arrival in flight and
         // starts none.
-        self.navigation = Direction::Back;
+        self.motion.land_at_once();
         self.sync_screen(window, cx);
         cx.notify();
     }
@@ -466,7 +341,7 @@ impl LauncherWindow {
         self.launcher.show_root_search();
         // Leaving however many screens were open lands at once, as
         // backing out does.
-        self.navigation = Direction::Back;
+        self.motion.land_at_once();
         self.sync_screen(window, cx);
         cx.notify();
     }
@@ -520,7 +395,7 @@ impl LauncherWindow {
     /// Shows the package in `folder` with its identity and compatibility,
     /// redrawing when the check finishes.
     pub fn preview_package(&mut self, folder: &Path, window: &mut Window, cx: &mut Context<Self>) {
-        self.navigation = Direction::Forward;
+        self.motion.pointer_open();
         let pending = self.launcher.preview_package(folder);
         self.show_until_done(pending, window, cx);
     }
@@ -528,7 +403,7 @@ impl LauncherWindow {
     /// Downloads and shows the npm package `spec` names, as
     /// [`LauncherWindow::preview_package`] shows a folder.
     pub fn preview_npm(&mut self, spec: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.navigation = Direction::Forward;
+        self.motion.pointer_open();
         let pending = self.launcher.preview_npm(spec);
         self.show_until_done(pending, window, cx);
     }
@@ -536,7 +411,7 @@ impl LauncherWindow {
     /// Fetches and shows the revision of the Git repository `spec` names,
     /// as [`LauncherWindow::preview_package`] shows a folder.
     pub fn preview_git(&mut self, spec: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.navigation = Direction::Forward;
+        self.motion.pointer_open();
         let pending = self.launcher.preview_git(spec);
         self.show_until_done(pending, window, cx);
     }
@@ -558,48 +433,46 @@ impl LauncherWindow {
             self.show_until_done(pending, window, cx);
             return;
         }
-        let chosen = cx.prompt_for_paths(PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some("Choose".into()),
-        });
-        cx.spawn_in(window, async move |this, cx| {
-            let folder = match chosen.await {
-                Ok(Ok(Some(paths))) => paths.into_iter().next(),
-                Ok(Ok(None)) | Err(_) => None,
-                Ok(Err(error)) => {
-                    this.update(cx, |this, cx| {
-                        this.launcher
-                            .show_error(format!("Could not open a folder picker: {error:#}"));
-                        cx.notify();
-                    })
-                    .ok();
-                    None
-                }
-            };
-            if let Some(folder) = folder {
-                this.update_in(cx, |this, window, cx| {
-                    let pending = this.launcher.grant_folder(&identity, &folder);
-                    this.show_until_done(pending, window, cx);
-                })
-                .ok();
-            }
-        })
-        .detach();
+        self.choose_folder(
+            "Choose",
+            move |this, folder, window, cx| {
+                let pending = this.launcher.grant_folder(&identity, folder);
+                this.show_until_done(pending, window, cx);
+            },
+            window,
+            cx,
+        );
     }
 
     /// Asks for a package folder with the platform's folder picker, then
     /// previews it. Cancelling leaves root search as it was.
     fn choose_package_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let chosen = cx.prompt_for_paths(PathPromptOptions {
+        self.choose_folder(
+            "Install",
+            |this, folder, window, cx| this.preview_package(folder, window, cx),
+            window,
+            cx,
+        );
+    }
+
+    /// Asks for a folder with the platform's folder picker, its button
+    /// saying `prompt`, then hands the chosen one to `chosen`. Cancelling
+    /// does nothing; a picker that cannot open is reported.
+    fn choose_folder(
+        &mut self,
+        prompt: &'static str,
+        chosen: impl FnOnce(&mut Self, &Path, &mut Window, &mut Context<Self>) + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let picked = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("Install".into()),
+            prompt: Some(prompt.into()),
         });
         cx.spawn_in(window, async move |this, cx| {
-            let folder = match chosen.await {
+            let folder = match picked.await {
                 Ok(Ok(Some(paths))) => paths.into_iter().next(),
                 Ok(Ok(None)) | Err(_) => None,
                 Ok(Err(error)) => {
@@ -613,10 +486,8 @@ impl LauncherWindow {
                 }
             };
             if let Some(folder) = folder {
-                this.update_in(cx, |this, window, cx| {
-                    this.preview_package(&folder, window, cx)
-                })
-                .ok();
+                this.update_in(cx, |this, window, cx| chosen(this, &folder, window, cx))
+                    .ok();
             }
         })
         .detach();
@@ -645,7 +516,7 @@ impl LauncherWindow {
         window.activate_window();
         cx.activate(true);
         // A hotkey is a keyboard open: the command's view lands at once.
-        self.navigation = Direction::Back;
+        self.motion.land_at_once();
         self.show_until_done(pending, window, cx);
     }
 
@@ -654,17 +525,15 @@ impl LauncherWindow {
     /// entry point that reaches the launcher from Settings — must find a
     /// visible window, opened on the display the placement resolves.
     fn unhide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.hidden {
+        if self.presence.show() {
             window.set_visible(true);
-            self.hidden = false;
             // The pointer is wherever it is now: the next event records it.
             self.pointer = None;
             // A window that just appeared has nothing to arrive from: its
             // first frame draws whatever it shows settled, as the hotkey's
             // show is itself never animated. A view that changes after
             // that frame (a command's reply) still arrives as usual.
-            self.drawn_screen = None;
-            self.transition = None;
+            self.motion.window_shown();
             // The launcher is opening: it is placed on the display the
             // Launcher page's choice resolves to, wherever the window was
             // left. Only this window is moved — the Settings window, which
@@ -681,11 +550,10 @@ impl LauncherWindow {
     /// opening reuses the same live window and launcher.
     fn hide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.set_visible(false);
-        self.hidden = true;
-        self.hidden_at = Some(cx.background_executor().now());
+        self.presence.hide(cx.background_executor().now());
         self.pointer = None;
         // A hidden launcher keeps nothing armed for whatever shows next.
-        self.navigation = Direction::Back;
+        self.motion.land_at_once();
         self.end_numbers(cx);
         cx.notify();
     }
@@ -701,11 +569,10 @@ impl LauncherWindow {
     fn place(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Collapsed to its search field, the launcher is placed as its
         // expanded size would be, so it grows downward from where it is.
-        let size = match (self.collapsed, self.expanded_size) {
-            (Some(true), Some(expanded)) => expanded,
-            _ => window.bounds().size,
-        };
-        self.place_sized(size, window, cx);
+        let size = self
+            .presence
+            .placement_size(window_size(window.bounds().size));
+        self.place_sized(gpui::size(px(size.width), px(size.height)), window, cx);
     }
 
     /// Places the launcher window as [`LauncherWindow::place`] does, for a
@@ -749,19 +616,12 @@ impl LauncherWindow {
     /// open and the next press reuses the same live launcher.
     fn open_pane_pressed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let now = cx.background_executor().now();
-        if self
-            .open_pane_press
-            .is_some_and(|last| now.duration_since(last) < OPEN_PANE_REPEAT)
-        {
+        match self.presence.press(now, window.is_window_active()) {
             // The repeat of a key still held, not a new press.
-            return;
+            Press::Repeat => {}
+            Press::Hide => self.hide(window, cx),
+            Press::Summon => self.summon(window, cx),
         }
-        self.open_pane_press = Some(now);
-        if !self.hidden && window.is_window_active() {
-            self.hide(window, cx);
-            return;
-        }
-        self.summon(window, cx);
     }
 
     /// Shows and focuses the launcher: the hotkey's show path, and the
@@ -772,9 +632,6 @@ impl LauncherWindow {
     /// other hand on the same control; the tray's item says Open Pane
     /// and does only that.
     fn summon(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.unhide(window, cx);
-        window.activate_window();
-        cx.activate(true);
         // What the summoned launcher starts from is the Launcher page's
         // reopening choice. Restoring the view keeps whatever the launcher
         // was left showing — a search, a command's list, a form — when it
@@ -784,18 +641,19 @@ impl LauncherWindow {
         // choice, or a view whose command is gone, starts from root
         // search. Nothing of the window that had focus before reaches in
         // here (the Settings window's focus is not the launcher's), and
-        // nothing is run.
+        // nothing is run. Whether it pops counts the time the launcher was
+        // hidden, so it is asked before the launcher is shown.
         let reopening = crate::settings::shared(cx).read(cx).reopening();
         let now = cx.background_executor().now();
-        let pops = reopening.pops_after().is_some_and(|after| {
-            self.hidden_at
-                .is_none_or(|hidden| now.saturating_duration_since(hidden) >= after)
-        });
+        let pops = self.presence.pops_to_root(reopening.pops_after(), now);
+        self.unhide(window, cx);
+        window.activate_window();
+        cx.activate(true);
         if pops || !self.launcher.restorable_view() {
             self.launcher.show_root_search();
             // Popping to root search leaves the open views, as
             // `return_to_root` does: it lands at once.
-            self.navigation = Direction::Back;
+            self.motion.land_at_once();
             self.sync_screen(window, cx);
         } else if self.launcher.view().search_field().is_some() {
             self.query.focus(window, cx);
@@ -856,7 +714,7 @@ impl LauncherWindow {
         match shortcut {
             Ok(shortcut) => {
                 let pending = self.launcher.record_hotkey(shortcut);
-                self.navigation = Direction::Back;
+                self.motion.land_at_once();
                 self.show_until_done(pending, window, cx);
             }
             Err(problem) => {
@@ -904,8 +762,8 @@ impl LauncherWindow {
     /// click that opened nothing — Settings, an app — changes no screen,
     /// so nothing used its arrival up); a pointer click arms the arrival
     /// again after calling this (see [`crate::ui::motion`]).
-    fn activate_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.navigation = Direction::Back;
+    pub(crate) fn activate_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.motion.land_at_once();
         // The Settings root result opens the Settings window; the launcher
         // itself does nothing (see [`Launcher::selected_opens_settings`]).
         if self.launcher.selected_opens_settings() {
@@ -945,13 +803,26 @@ impl LauncherWindow {
         // A click in the Settings window: the view it opens arrives, as a
         // click on the row would — unless the launcher was hidden, when
         // the window's first frame draws it settled (see `unhide`).
-        let was_shown = !self.hidden;
+        let was_shown = !self.presence.hidden();
         // Root search is reached as Escape reaches it, one screen back at a
         // time, wherever the launcher is (a form, a command, the extension
         // list Settings entered); every `back` moves toward root search,
         // and at root search this stops.
         while !matches!(self.launcher.view().screen, Screen::Root { .. }) {
             self.launcher.back();
+        }
+        // Root search may have been left filtered by a query that hides
+        // the row the page drew (Settings lists every root result): it is
+        // shown unfiltered, as a summoned launcher starts, so the row is
+        // there to find.
+        if self
+            .launcher
+            .view()
+            .query()
+            .is_some_and(|query| !query.is_empty())
+        {
+            self.launcher.show_root_search();
+            self.sync_screen(window, cx);
         }
         self.unhide(window, cx);
         window.activate_window();
@@ -973,7 +844,7 @@ impl LauncherWindow {
         self.launcher.select(index);
         self.activate_selected(window, cx);
         if was_shown {
-            self.navigation = Direction::Forward;
+            self.motion.pointer_open();
         }
     }
 
@@ -1149,7 +1020,7 @@ impl LauncherWindow {
         }
         if self.launcher.selected() == Some(index) {
             self.activate_selected(window, cx);
-            self.navigation = Direction::Forward;
+            self.motion.pointer_open();
         } else {
             self.select_under_pointer(index);
             cx.notify();
@@ -1206,7 +1077,7 @@ impl LauncherWindow {
                 unavailable_reason: reason.map(SharedString::from),
                 selected,
                 unavailable_id: ("unavailable", index).into(),
-                icon: row_icon(&row.id),
+                icon: Some(row_icon(&row.id)),
             },
             meta,
             theme,
@@ -1245,7 +1116,7 @@ impl LauncherWindow {
             } else {
                 this.launcher.select(index);
                 this.activate_selected(window, cx);
-                this.navigation = Direction::Forward;
+                this.motion.pointer_open();
             }
         }))
     }
@@ -1332,25 +1203,17 @@ impl LauncherWindow {
         footer::buttons(primary, actions, theme)
     }
 
-    /// The footer's hint while no status shows: on root search, the
-    /// reference's "↵ opens instantly · Ctrl K for more" in the bindings in
-    /// force, or "Type to filter actions · Esc goes back" while Actions is
-    /// open; nothing elsewhere.
-    fn footer_hint(&self, root: bool, theme: &Theme, cx: &mut Context<Self>) -> Option<Div> {
+    /// The footer's hint while no status shows: on root search with
+    /// Actions open, "Type to filter actions · Esc goes back"; nothing
+    /// elsewhere.
+    fn footer_hint(&self, root: bool, theme: &Theme) -> Option<Div> {
         // At rest the footer's buttons already show the keys; the hint says
         // only how the open Actions panel is used.
         if !root || self.actions.is_none() {
             return None;
         }
-        let keyboard = crate::settings::shared(cx).read(cx).keyboard().clone();
-        let keys = |action| crate::keyboard::binding_keys(keyboard.binding(action));
         Some(footer::hint_line(
-            footer::hint_parts(
-                self.actions.is_some(),
-                keys(pane_core::KeyboardAction::InvokeSelectedAction),
-                keys(pane_core::KeyboardAction::OpenActions),
-                crate::keyboard::escape_keys(),
-            ),
+            footer::actions_hint(crate::keyboard::escape_keys()),
             theme,
         ))
     }
@@ -1359,14 +1222,14 @@ impl LauncherWindow {
     /// that ran it calls this after the activation (which disarms, as every
     /// keyboard open does), and the screen change it causes uses it up.
     pub(crate) fn arm_arrival(&mut self) {
-        self.navigation = Direction::Forward;
+        self.motion.pointer_open();
     }
 
     /// Navigates forward to the screen the launcher now shows, as
     /// activating a row does — landing at once, as a keyboard open does
     /// (a pointer caller arms the arrival after this returns).
     pub(crate) fn navigate_forward(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.navigation = Direction::Back;
+        self.motion.land_at_once();
         self.sync_screen(window, cx);
         cx.notify();
     }
@@ -1387,118 +1250,10 @@ impl LauncherWindow {
         }
     }
 
-    /// Ctrl pressed or released: held alone, it shows the number hints
-    /// once held for [`NUMBERS_HOLD`]; any other modifiers, or none, hide
-    /// them at once.
-    fn modifiers_changed(
-        &mut self,
-        event: &ModifiersChangedEvent,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let modifiers = event.modifiers;
-        let alone = modifiers.control
-            && !modifiers.alt
-            && !modifiers.shift
-            && !modifiers.platform
-            && !modifiers.function;
-        if !alone {
-            self.end_numbers(cx);
-            return;
-        }
-        if self.numbers.pending || self.numbers.shown {
-            return;
-        }
-        self.numbers.generation += 1;
-        self.numbers.pending = true;
-        let generation = self.numbers.generation;
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(NUMBERS_HOLD).await;
-            this.update(cx, |this, cx| {
-                if this.numbers.pending && this.numbers.generation == generation {
-                    this.numbers.pending = false;
-                    this.numbers.shown = true;
-                    cx.notify();
-                }
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// Ends a hold of Ctrl: the hints slide away, and a hold not yet long
-    /// enough shows nothing.
-    pub(crate) fn end_numbers(&mut self, cx: &mut Context<Self>) {
-        self.numbers.generation += 1;
-        self.numbers.pending = false;
-        if std::mem::take(&mut self.numbers.shown) {
-            cx.notify();
-        }
-    }
-
-    /// A key pressed while Ctrl is held, before the hints show: the user is
-    /// pressing a chord, not looking for the numbers.
-    pub(crate) fn chord_pressed(&mut self) {
-        self.numbers.pending = false;
-    }
-
-    /// Advances the number hints' slide to the frame about to be drawn:
-    /// their look, 0 hidden and 1 shown.
-    fn advance_numbers(&mut self, now: Instant, cx: &App) -> f32 {
-        let shown = self.numbers.shown;
-        let changed = self.numbers.drawn != shown;
-        self.numbers.drawn = shown;
-        motion::advance_reveal(
-            &mut self.numbers.reveal,
-            shown,
-            changed,
-            cx.reduce_motion(),
-            now,
-        )
-        .unwrap_or(if shown { 1. } else { 0. })
-    }
-
     /// Whether the last frame drew the launcher collapsed to its search
     /// field (and the pins' row, if shown): its rows are hidden then.
     pub(crate) fn is_collapsed(&self) -> bool {
-        self.collapsed == Some(true)
-    }
-
-    /// What Ctrl and `digit` pick as the launcher is drawn: what
-    /// [`numbered`] names, except a row while the window is collapsed,
-    /// where the rows are hidden and only the pins are picked.
-    pub(crate) fn number_target(&self, digit: usize) -> Option<Numbered> {
-        let picked = numbered(&self.launcher.view(), &self.numbered_slots(), digit);
-        match picked {
-            Some(Numbered::Row(_)) if self.is_collapsed() => None,
-            picked => picked,
-        }
-    }
-
-    /// Picks what Ctrl and `digit` name (see [`Self::number_target`]): a
-    /// quick slot is pressed as its chord always pressed it, a row is
-    /// selected and activated. Whether something was picked.
-    pub(crate) fn pick_number(
-        &mut self,
-        digit: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let Some(picked) = self.number_target(digit) else {
-            return false;
-        };
-        self.end_numbers(cx);
-        match picked {
-            Numbered::Slot(index) => self.press_quick_slot(index, window, cx),
-            Numbered::Row(index) => {
-                if self.actions.is_some() || self.menu.is_some() {
-                    return true;
-                }
-                self.launcher.select(index);
-                self.activate_selected(window, cx);
-            }
-        }
-        true
+        self.presence.is_collapsed()
     }
 
     /// Whether the launcher shows only its search field: the compact
@@ -1524,31 +1279,19 @@ impl LauncherWindow {
     fn fit_window_mode(&mut self, view: &LauncherView, window: &mut Window, cx: &App) -> bool {
         let collapsed = self.collapses(view, cx);
         let bar = crate::settings::visuals(cx).theme.geometry.search_height;
-        let with_pins = bar + px(compact_pins::ROW_HEIGHT);
-        // The collapsed height this frame calls for; the pins are resolved
-        // only while the window collapses.
-        let target = if collapsed && self.shows_compact_pins(cx) {
-            with_pins
-        } else {
-            bar
-        };
-        let size = window.viewport_size();
-        let near = |height: Pixels| (size.height - height).abs() < px(1.);
-        // Either collapsed height: a size never to keep as the expanded one.
-        let is_bar = near(bar) || near(with_pins);
-        if collapsed && !near(target) {
-            if !is_bar {
-                self.expanded_size = Some(size);
-            }
-            window.resize(gpui::size(size.width, target));
-        } else if !collapsed && is_bar && self.collapsed == Some(true) {
-            let (width, height) = shell::LAUNCHER_CLIENT;
-            let expanded = self
-                .expanded_size
-                .unwrap_or_else(|| gpui::size(px(width), px(height)));
-            window.resize(expanded);
+        let (width, height) = shell::LAUNCHER_CLIENT;
+        let resize = self.presence.fit(Fit {
+            collapses: collapsed,
+            // The pins are resolved only while the window collapses.
+            shows_pins: collapsed && self.shows_compact_pins(cx),
+            bar: f32::from(bar),
+            pin_row: compact_pins::ROW_HEIGHT,
+            current: window_size(window.viewport_size()),
+            default_expanded: WindowSize { width, height },
+        });
+        if let Some(size) = resize {
+            window.resize(gpui::size(px(size.width), px(size.height)));
         }
-        self.collapsed = Some(collapsed);
         collapsed
     }
 }
@@ -1568,60 +1311,17 @@ impl Render for LauncherWindow {
         // something is typed.
         let collapsed = self.fit_window_mode(&view, window, cx);
         self.keep_selected_visible(&view, &presentation, window, cx);
-        // A view transition runs when the screen *kind* changed going
-        // forward — root search to a command, a form or custom view
-        // opening — and moves only the content that changed, while the
-        // shell chrome (panel, footer, query field, heading) stays put.
-        // Backing out lands at once, and query and result updates never
-        // animate; the launcher has already navigated, dispatched and focused when the
-        // first frame draws, so nothing waits on the transition. See
+        // What moves this frame — the arriving content, the footer menu
+        // popup's entrance or exit, the number hints' slide — and whether
+        // another frame is needed; see [`FrameMotion`] and
         // `crate::ui::motion` for the whole policy.
-        let now = cx.background_executor().now();
-        // The number hints' look this frame: 0 hidden, 1 shown.
-        let numbers = self.advance_numbers(now, cx);
-        let screen = discriminant(&view.screen);
-        let screen_changed = self.drawn_screen.is_some_and(|last| last != screen);
-        let arriving = motion::advance(
-            &mut self.transition,
-            self.navigation,
-            screen_changed,
+        let frame = self.motion.frame(
+            discriminant(&view.screen),
+            self.menu.is_some(),
             cx.reduce_motion(),
-            now,
+            cx.background_executor().now(),
         );
-        self.drawn_screen = Some(screen);
-        // The open that armed this arrival has had it: whatever changes the
-        // screen next without opening anything lands at once.
-        if screen_changed {
-            self.navigation = Direction::Back;
-        }
-        #[cfg(any(test, debug_assertions))]
-        {
-            self.arriving = arriving;
-        }
-        // The footer menu popup's entrance or exit, on the same tween
-        // machinery: only the menu's own open state flipping starts or
-        // retargets it, so a reopen during the exit reverses from the
-        // presentation on screen, and the closed menu's exit paints
-        // inert (see [`features::footer_menu`]). While the exit runs the
-        // popup snapshot below is what it paints; the frame that settles
-        // the exit clears it.
-        let menu_open = self.menu.is_some();
-        let menu_in_flight = motion::advance_popup(
-            &mut self.menu_transition,
-            menu_open,
-            motion::VIEW_SHIFT,
-            self.drawn_menu != menu_open,
-            cx.reduce_motion(),
-            now,
-        );
-        self.drawn_menu = menu_open;
-        #[cfg(any(test, debug_assertions))]
-        {
-            self.drawn_menu_popup = menu_in_flight;
-        }
-        if menu_open || menu_in_flight.is_none() {
-            self.menu_exit = None;
-        }
+        let (arriving, menu_in_flight, numbers) = (frame.arriving, frame.menu_popup, frame.numbers);
         // The background image's backdrop, baked for this window's scale
         // (ADR 0028); the visuals below are over it once it is ready.
         let scale = window.scale_factor();
@@ -1919,10 +1619,8 @@ impl Render for LauncherWindow {
                                 Some(text) => {
                                     footer::status_message(text, &theme).into_any_element()
                                 }
-                                None => {
-                                    footer::hint_slot(self.footer_hint(root, &theme, cx), &theme)
-                                        .into_any_element()
-                                }
+                                None => footer::hint_slot(self.footer_hint(root, &theme), &theme)
+                                    .into_any_element(),
                             },
                             // While a status shows, the primary action steps
                             // aside — nothing is dispatched again from a frame
@@ -1933,12 +1631,11 @@ impl Render for LauncherWindow {
                         )),
                 )
             });
-        // While the arriving content is still in flight, keep frames
-        // coming; the frame that completes the transition requests none,
-        // so a settled window is idle. The scroll relayout above keeps its
-        // own separate request, for the frame after the rows change, and
-        // so does the footer menu popup's entrance or exit.
-        if arriving.is_some() || menu_in_flight.is_some() || self.numbers.reveal.is_some() {
+        // While anything is still in flight, keep frames coming; the frame
+        // that settles it requests none, so a settled window is idle. The
+        // scroll relayout above keeps its own separate request, for the
+        // frame after the rows change.
+        if frame.animating {
             window.request_animation_frame();
         }
         // The background image (ADR 0028), under the content: the
@@ -2017,14 +1714,13 @@ pub(crate) fn launcher_changed_outside(cx: &mut App) {
     }
 }
 
-/// The footer's primary action button, as the launcher's footer and the
-/// visual workbench's root fixture (#91) both compose it: the reference's
-/// `.fbtn` (see [`footer::footer_button`]), the action's label truncating
-/// beside the effective `invoke` binding's keys in the accent caps — the
-/// primary action's key — so a rebound Ctrl+Enter shows (and announces)
-/// Ctrl and the return key, never a bare Enter. Presentation only: the
-/// caller attaches the click (the launcher's
-/// [`LauncherWindow::press_primary_action`] path).
+/// The footer's primary action button, as the launcher's footer
+/// composes it: the reference's `.fbtn` (see [`footer::footer_button`]),
+/// the action's label truncating beside the effective `invoke` binding's
+/// keys in the accent caps — the primary action's key — so a rebound
+/// Ctrl+Enter shows (and announces) Ctrl and the return key, never a bare
+/// Enter. Presentation only: the caller attaches the click (the
+/// launcher's [`LauncherWindow::press_primary_action`] path).
 ///
 /// A click never dispatches what the definition says cannot run now, so
 /// an unavailable button is dimmed, marked for assistive technology, and
@@ -2055,6 +1751,14 @@ pub(crate) fn action_button(
     })
 }
 
+/// A window size as [`Presence`] reads it, in logical pixels.
+fn window_size(size: Size<Pixels>) -> WindowSize {
+    WindowSize {
+        width: f32::from(size.width),
+        height: f32::from(size.height),
+    }
+}
+
 /// The launcher presentation's section labels, as the shared list draws
 /// them.
 fn section_labels(presentation: &Presentation) -> Vec<shell::SectionLabel> {
@@ -2076,122 +1780,15 @@ pub(crate) fn section_label(section: &pane_core::Section) -> shell::SectionLabel
 /// built-in rows and this build's sample commands are known identities,
 /// each with a reference tone and glyph; everything else is a plain
 /// command. No presentation is inferred from a title's text.
-pub(crate) fn row_icon(id: &str) -> Option<(IconTone, Glyph)> {
+pub(crate) fn row_icon(id: &str) -> (IconTone, Glyph) {
     match id {
-        "rust-sample" => Some((IconTone::Term, Glyph::Prompt)),
-        "javascript-sample" | "typescript-sample" => Some((IconTone::Code, Glyph::Code)),
-        "pane.install-from-folder" => Some((IconTone::Folder, Glyph::Folder)),
-        "pane.install-from-npm" => Some((IconTone::Web, Glyph::Blocks)),
-        "pane.install-from-git" => Some((IconTone::Term, Glyph::Terminal)),
-        "pane.manage-extensions" => Some((IconTone::Command, Glyph::Blocks)),
-        "pane.settings" => Some((IconTone::Command, Glyph::Gear)),
-        _ => Some((IconTone::Command, Glyph::Prompt)),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A view of `screen` listing `count` rows.
-    fn view(screen: Screen, count: usize) -> LauncherView {
-        LauncherView {
-            screen,
-            title: String::new(),
-            rows: (0..count)
-                .map(|index| Row {
-                    id: format!("row-{index}"),
-                    title: format!("Row {index}"),
-                    subtitle: None,
-                    unavailable: None,
-                })
-                .collect(),
-            selected: None,
-            status: Status::Idle,
-        }
-    }
-
-    /// The numbered pins of five or more: the first five, in their places
-    /// (see `LauncherWindow::numbered_slots`).
-    const STRIP: [usize; 5] = [0, 1, 2, 3, 4];
-
-    #[test]
-    fn the_pinned_home_takes_one_to_five_and_the_rows_follow() {
-        // Five pins, or eight: only the first five are numbered, and the
-        // rows take the digits after them.
-        let home = view(
-            Screen::Root {
-                query: String::new(),
-            },
-            3,
-        );
-        assert_eq!(numbered(&home, &STRIP, 1), Some(Numbered::Slot(0)));
-        assert_eq!(numbered(&home, &STRIP, 5), Some(Numbered::Slot(4)));
-        assert_eq!(numbered(&home, &STRIP, 6), Some(Numbered::Row(0)));
-        assert_eq!(numbered(&home, &STRIP, 8), Some(Numbered::Row(2)));
-        // Past the rows, and outside 1 to 9, nothing is picked.
-        assert_eq!(numbered(&home, &STRIP, 9), None);
-        assert_eq!(numbered(&home, &STRIP, 0), None);
-        assert_eq!(row_number(&home, &STRIP, 0), Some(6));
-        assert_eq!(row_number(&home, &STRIP, 2), Some(8));
-    }
-
-    #[test]
-    fn fewer_pins_than_five_leave_their_numbers_to_the_rows() {
-        // Two pins: Ctrl+1 and Ctrl+2 are theirs, and the rows follow from
-        // 3, up to 9.
-        let home = view(
-            Screen::Root {
-                query: String::new(),
-            },
-            12,
-        );
-        let pinned = [0, 1];
-        assert_eq!(numbered(&home, &pinned, 1), Some(Numbered::Slot(0)));
-        assert_eq!(numbered(&home, &pinned, 2), Some(Numbered::Slot(1)));
-        assert_eq!(numbered(&home, &pinned, 3), Some(Numbered::Row(0)));
-        assert_eq!(numbered(&home, &pinned, 9), Some(Numbered::Row(6)));
-        assert_eq!(row_number(&home, &pinned, 0), Some(3));
-        assert_eq!(row_number(&home, &pinned, 6), Some(9));
-        assert_eq!(row_number(&home, &pinned, 7), None);
-        // Nothing pinned: the rows start at 1.
-        assert_eq!(row_number(&home, &[], 0), Some(1));
-    }
-
-    #[test]
-    fn past_the_fifth_pin_the_numbers_go_to_the_rows() {
-        // Eight pins, of which the first five are numbered: Ctrl+6 to
-        // Ctrl+9 are the first four rows, and pins 6 to 8 have none.
-        let home = view(
-            Screen::Root {
-                query: String::new(),
-            },
-            12,
-        );
-        assert_eq!(numbered(&home, &STRIP, 6), Some(Numbered::Row(0)));
-        assert_eq!(numbered(&home, &STRIP, 9), Some(Numbered::Row(3)));
-        assert_eq!(row_number(&home, &STRIP, 3), Some(9));
-        assert_eq!(row_number(&home, &STRIP, 4), None);
-        assert!(
-            (1..=9).all(|digit| numbered(&home, &STRIP, digit) != Some(Numbered::Slot(5))),
-            "the sixth pin has no number"
-        );
-    }
-
-    #[test]
-    fn a_query_or_a_command_numbers_its_rows_from_one() {
-        let search = view(
-            Screen::Root {
-                query: "notes".into(),
-            },
-            12,
-        );
-        assert_eq!(numbered(&search, &STRIP, 1), Some(Numbered::Row(0)));
-        assert_eq!(numbered(&search, &STRIP, 9), Some(Numbered::Row(8)));
-        assert_eq!(row_number(&search, &STRIP, 8), Some(9));
-        assert_eq!(row_number(&search, &STRIP, 9), None);
-        let command = view(Screen::Command, 2);
-        assert_eq!(numbered(&command, &STRIP, 2), Some(Numbered::Row(1)));
-        assert_eq!(numbered(&command, &STRIP, 3), None);
+        "rust-sample" => (IconTone::Term, Glyph::Prompt),
+        "javascript-sample" | "typescript-sample" => (IconTone::Code, Glyph::Code),
+        "pane.install-from-folder" => (IconTone::Folder, Glyph::Folder),
+        "pane.install-from-npm" => (IconTone::Web, Glyph::Blocks),
+        "pane.install-from-git" => (IconTone::Term, Glyph::Terminal),
+        "pane.manage-extensions" => (IconTone::Command, Glyph::Blocks),
+        "pane.settings" => (IconTone::Command, Glyph::Gear),
+        _ => (IconTone::Command, Glyph::Prompt),
     }
 }

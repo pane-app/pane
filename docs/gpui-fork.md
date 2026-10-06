@@ -41,7 +41,7 @@ From Pane, with the repository's Rust toolchain and Windows native prerequisites
 cargo fetch --locked
 cargo build --locked -j1 -p pane
 cargo xtask guests
-cargo test --locked -j1 -p pane --test window --test command_search
+cargo test --locked -j1 -p pane --test integration -- window:: command_search::
 ```
 
 For renderer regression, clone the maintained fork separately and check out the

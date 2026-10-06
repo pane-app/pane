@@ -48,13 +48,12 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::rc::Rc;
-use std::time::Duration;
 
 use sha1_checked::Sha1;
 use sha1_checked::digest::Update;
 
 use crate::downloads::{Download, check_part};
-use crate::http::{Answer, GetError, OwnLimits};
+use crate::http::{Answer, GetError};
 use crate::packages::capitalized;
 
 /// The largest capability advertisement or reference listing Pane reads.
@@ -1170,14 +1169,6 @@ type Listed = (String, String, Option<String>);
 /// The error text of an answer larger than asked for.
 const TOO_LARGE: &str = "its answer is too large";
 
-fn limits() -> OwnLimits {
-    OwnLimits {
-        connect: Duration::from_secs(30),
-        between_bytes: Duration::from_secs(60),
-        deadline: Duration::from_secs(300),
-    }
-}
-
 /// Explains an answer that is not `200`.
 fn answered(repository: &Repository, url: &str, answer: Answer) -> Result<Answer, String> {
     let name = repository.name();
@@ -1211,37 +1202,29 @@ fn unreachable(repository: &Repository, error: GetError) -> String {
     }
 }
 
-fn https_only(repository: &Repository, url: &str) -> Result<(), String> {
-    if repository.loopback || url.starts_with("https://") {
-        Ok(())
-    } else {
-        Err(format!("`{url}` is not an HTTPS address"))
-    }
-}
-
 fn get(
     repository: &Repository,
     url: &str,
     headers: &[(&str, &str)],
     most: u64,
 ) -> Result<Answer, String> {
-    https_only(repository, url)?;
+    crate::http::https_only(repository.loopback, url)?;
     let mut all = vec![("Git-Protocol", "version=2"), ("User-Agent", USER_AGENT)];
     all.extend_from_slice(headers);
-    let answer = crate::http::get_blocking(url, &all, most, limits())
+    let answer = crate::http::get_blocking(url, &all, most, crate::http::OWN_LIMITS)
         .map_err(|error| unreachable(repository, error))?;
     answered(repository, url, answer)
 }
 
 fn post(repository: &Repository, url: &str, body: Vec<u8>, most: u64) -> Result<Answer, String> {
-    https_only(repository, url)?;
+    crate::http::https_only(repository.loopback, url)?;
     let headers = [
         ("Git-Protocol", "version=2"),
         ("User-Agent", USER_AGENT),
         ("Content-Type", "application/x-git-upload-pack-request"),
         ("Accept", "application/x-git-upload-pack-result"),
     ];
-    let answer = crate::http::post_blocking(url, &headers, body, most, limits())
+    let answer = crate::http::post_blocking(url, &headers, body, most, crate::http::OWN_LIMITS)
         .map_err(|error| unreachable(repository, error))?;
     answered(repository, url, answer)
 }
@@ -1270,9 +1253,7 @@ impl Kind {
 type Id = [u8; 20];
 
 #[cfg(test)]
-fn hex(id: &Id) -> String {
-    id.iter().map(|byte| format!("{byte:02x}")).collect()
-}
+use crate::integrity::hex;
 
 fn parse_hex(text: &str) -> Option<Id> {
     if !is_commit_id(text) {

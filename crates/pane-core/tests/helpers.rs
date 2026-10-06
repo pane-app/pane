@@ -24,6 +24,11 @@ use futures::executor::block_on;
 use pane_core::{Launcher, PackageIdentity, Runtime, SavedData, Screen, Status, Target};
 use tempfile::TempDir;
 
+#[path = "support/rows.rs"]
+mod rows;
+
+use rows::select_title;
+
 /// Under the ten seconds "Echo after waiting" has its helper wait: a run
 /// that ends sooner was stopped.
 const STOPPED_WITHIN: Duration = Duration::from_secs(8);
@@ -246,23 +251,6 @@ impl Pending {
         thread::sleep(Duration::from_millis(200));
         assert_eq!(beats(&self.alive), last, "the helper still beats");
     }
-}
-
-fn titles(launcher: &Launcher) -> Vec<String> {
-    launcher
-        .view()
-        .rows
-        .into_iter()
-        .map(|row| row.title)
-        .collect()
-}
-
-fn select_title(launcher: &Launcher, title: &str) {
-    let index = titles(launcher)
-        .iter()
-        .position(|row| row == title)
-        .unwrap_or_else(|| panic!("no row {title:?} in {:?}", titles(launcher)));
-    launcher.select(index);
 }
 
 /// Opens the installed helper sample from root search and selects its item

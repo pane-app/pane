@@ -308,7 +308,7 @@ $process = Start-Pane "stderr-calculator.log" @("--install", "target/guests/pack
 Send "{ENTER}"; Start-Sleep -Seconds 2   # Install
 Send "6*7"; Start-Sleep -Seconds 2
 Capture "27-answer.png"
-Check "27-answer.png" "selected" 3000   # the selected answer row
+Check "27-answer.png" "answer"   # the selected answer card
 Send "{ENTER}"; Start-Sleep -Seconds 1
 Capture "28-copied.png"   # "Copied 42 to the clipboard"
 Send "^a"; Send "42{+}1"; Start-Sleep -Seconds 2
@@ -1826,13 +1826,17 @@ function Not-Kept($text) {
     Start-Sleep -Seconds 2
     if ((Kept-Texts) -contains $text) { throw "$text was kept" }
 }
+# Back to a blank root search from wherever the smoke is, with the return
+# to root key (Shift+Escape): Escape at a blank root search hides the
+# launcher since the redesign (1e61793), so it cannot be pressed blind.
+function To-Root { Send "+{ESC}"; Start-Sleep -Seconds 1 }
 function Open-History {
-    Send "{ESC}"; Start-Sleep -Seconds 1
+    To-Root
     Send "clipboard"; Start-Sleep -Seconds 1
     Send "{ENTER}"; Start-Sleep -Seconds 2
 }
 function Open-Manage {
-    Send "{ESC}"; Start-Sleep -Seconds 1
+    To-Root
     Send "manage"; Start-Sleep -Seconds 1
     Send "{ENTER}"; Start-Sleep -Seconds 1
 }
@@ -2064,7 +2068,7 @@ try {
     Check "500-installed-root.png" "subtitle"   # root search: the default extensions' commands are listed
     Send "6*7"; Start-Sleep -Seconds 2
     Capture "501-calculator-answer.png"
-    Check "501-calculator-answer.png" "selected" 3000   # "42", the calculator's selected answer row
+    Check "501-calculator-answer.png" "answer"   # "42", the calculator's selected answer card
     Send "{ENTER}"; Start-Sleep -Seconds 1
     Capture "502-calculator-copied.png"
     Check "502-calculator-copied.png" "success"   # "Copied 42 to the clipboard"
@@ -2253,7 +2257,7 @@ try {
     if (Test-Path (Join-Path $install "pane.exe.old")) { throw "the old program's file was not removed on the new start" }
     Send "^a"; Send "6*7"; Start-Sleep -Seconds 2
     Capture "604-answer-after-update.png"
-    Check "604-answer-after-update.png" "selected" 3000   # "42", the calculator's answer
+    Check "604-answer-after-update.png" "answer"   # "42", the calculator's selected answer card
     Send "{ENTER}"; Start-Sleep -Seconds 1
     Capture "605-copied-after-update.png"
     Check "605-copied-after-update.png" "success"   # "Copied 42 to the clipboard"

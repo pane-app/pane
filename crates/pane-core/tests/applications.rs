@@ -17,6 +17,11 @@ use pane_core::applications::{Application, Applications};
 use pane_core::{Launcher, PackageIdentity, Runtime, Screen, Status};
 use tempfile::TempDir;
 
+#[path = "support/rows.rs"]
+mod rows;
+
+use rows::titles;
+
 fn built(path: &str) -> PathBuf {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/guests")
@@ -144,15 +149,6 @@ fn install(launcher: &Launcher, folder: &Path) {
         "{:?}",
         launcher.view().status
     );
-}
-
-fn titles(launcher: &Launcher) -> Vec<String> {
-    launcher
-        .view()
-        .rows
-        .into_iter()
-        .map(|row| row.title)
-        .collect()
 }
 
 fn search(launcher: &Launcher, query: &str) {

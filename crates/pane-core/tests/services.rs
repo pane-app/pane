@@ -26,6 +26,11 @@ use pane_core::clipboard::{Clock, ManualClock, SystemClock};
 use pane_core::{Launcher, Limits, PackageIdentity, Runtime, Screen, Status, Unavailable};
 use tempfile::TempDir;
 
+#[path = "support/rows.rs"]
+mod rows;
+
+use rows::{manage, select_title, titles, to_root};
+
 /// One language's Service sample package.
 struct Fixture {
     /// The assembled package under `target/guests/packages`.
@@ -55,7 +60,6 @@ const TYPESCRIPT: Fixture = Fixture {
     title: "TypeScript service sample",
     command: "Watching (TypeScript)",
 };
-const MANAGE_ROW: &str = "Manage extensions…";
 
 /// How long the services thread and a cycle may take: compiling the guest
 /// once is included; a slow, busy machine is not.
@@ -243,23 +247,6 @@ impl Started {
     }
 }
 
-fn titles(launcher: &Launcher) -> Vec<String> {
-    launcher
-        .view()
-        .rows
-        .into_iter()
-        .map(|row| row.title)
-        .collect()
-}
-
-fn select_title(launcher: &Launcher, title: &str) {
-    let index = titles(launcher)
-        .iter()
-        .position(|row| row == title)
-        .unwrap_or_else(|| panic!("no row {title:?} in {:?}", titles(launcher)));
-    launcher.select(index);
-}
-
 fn row(launcher: &Launcher, title: &str) -> pane_core::Row {
     launcher
         .view()
@@ -267,13 +254,6 @@ fn row(launcher: &Launcher, title: &str) -> pane_core::Row {
         .into_iter()
         .find(|row| row.title == title)
         .unwrap_or_else(|| panic!("no row {title:?} in {:?}", titles(launcher)))
-}
-
-fn to_root(launcher: &Launcher) {
-    for _ in 0..3 {
-        launcher.back();
-    }
-    assert!(matches!(launcher.view().screen, Screen::Root { .. }));
 }
 
 /// Opens the sample's command from root search.
@@ -294,14 +274,6 @@ fn run_item(launcher: &Launcher, command: &str, title: &str) {
     open(launcher, command);
     select_title(launcher, title);
     block_on(launcher.activate_selected());
-}
-
-/// Opens the extension manager from root search.
-fn manage(launcher: &Launcher) {
-    to_root(launcher);
-    select_title(launcher, MANAGE_ROW);
-    block_on(launcher.activate_selected());
-    assert!(matches!(launcher.view().screen, Screen::Extensions { .. }));
 }
 
 /// Activates the extension manager's row titled `title`, returning the

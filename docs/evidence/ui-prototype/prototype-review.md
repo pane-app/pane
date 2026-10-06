@@ -23,8 +23,8 @@ The final dark panel responds to external light/dark test patterns with a
 mean RGB difference of 18.086 (previously 0), and visual inspection shows
 softened edges of those sharp patterns. The numeric test proves transparency;
 the softened edges supply the blur evidence. No global Windows setting was
-changed by the agent. See [dark glass](ui-prototype/dark-glass.png) and
-[light glass](ui-prototype/light-glass.png).
+changed by the agent. See [dark glass](captures/dark-glass.png) and
+[light glass](captures/light-glass.png).
 
 ## Implemented structure
 
@@ -47,7 +47,7 @@ crates/pane/src/
 presentation values. Only used components are retained; there are no
 placeholder directories for later features. Core is unchanged. The glass
 follow-up adds a manifest/lockfile patch for `gpui_ce_windows`; see
-[patch provenance](../vendor/gpui_windows/PROVENANCE.md).
+[patch provenance](renderer-provenance.md).
 
 The existing GPUI CE editable input remains responsible for editing, IME
 and focus. Pane owns visual tokens, surfaces and row chrome. The separate
@@ -76,11 +76,11 @@ the last line and upward scrolling back to the first line.
 
 Saved native captures (opaque mode, Windows at 96 DPI):
 
-- [Dark launcher](ui-prototype/dark.png)
-- [Light launcher](ui-prototype/light.png)
-- [Light form after successful submission](ui-prototype/light-form.png)
-- [Narrow window with a wrapped error](ui-prototype/narrow-error.png)
-- [Selected unavailable action and its explanation](ui-prototype/narrow-unavailable.png)
+- [Dark launcher](captures/dark.png)
+- [Light launcher](captures/light.png)
+- [Light form after successful submission](captures/light-form.png)
+- [Narrow window with a wrapped error](captures/narrow-error.png)
+- [Selected unavailable action and its explanation](captures/narrow-unavailable.png)
 
 ## Verification
 

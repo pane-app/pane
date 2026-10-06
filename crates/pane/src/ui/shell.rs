@@ -6,9 +6,7 @@
 //! 404px list and a 50px footer — and paints the panel's inner edge as an
 //! inset ring, so none of the three loses a pixel to a border (see
 //! [`super::material::Material::panel`]). The list here is the one the
-//! launcher's search and list screens and the visual workbench's root
-//! fixture (#91) both lay their rows out in, so a change to its paddings
-//! reaches both.
+//! launcher's search and list screens lay their rows out in.
 
 use gpui::prelude::*;
 use gpui::{AnyElement, Div, Role, SharedString, Stateful, WindowControlArea, div};
@@ -114,8 +112,7 @@ pub(crate) fn section_label(label: SharedString, note: Option<SharedString>, the
 /// 14/500, 20px in from either side and 12px above and below, truncating
 /// rather than eating the screen. It is also the screen's drag region:
 /// with the native title bar hidden, it is the one place outside an
-/// editable field to grab the window by. Shared by the launcher and the
-/// visual workbench's form scenario (#99).
+/// editable field to grab the window by (#99).
 pub(crate) fn screen_heading(title: impl Into<SharedString>, theme: &Theme) -> Div {
     div()
         .flex_none()

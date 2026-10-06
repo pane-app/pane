@@ -20,7 +20,7 @@
 //!   focus, or — one of the first [`NUMBERED_PINS`] — by its chord: Ctrl
 //!   and its place among the pins, local to the root search field and the
 //!   slots, never registered with the system; the next digits pick the
-//!   first rows below them, up to 9 (see [`crate::app::numbered`]), and
+//!   first rows below them, up to 9 (see [`crate::features::number_hints::numbered`]), and
 //!   holding Ctrl shows each numbered item's number. A pin past them has
 //!   no number. A chord acts only on root search, with no overlay (the
 //!   Actions panel, the Pane menu) open and no input-method composition in
@@ -145,7 +145,7 @@ fn pin_hint_description(toggle_pin: &str, open_actions: &str) -> String {
 
 /// The tile `slot` shows: its row's, by its target's identity.
 fn slot_icon(slot: &QuickSlot) -> (IconTone, Glyph) {
-    row_icon(&slot.target.key()).unwrap_or((IconTone::Command, Glyph::Prompt))
+    row_icon(&slot.target.key())
 }
 
 /// `element`, the slot at `index` showing `slot`, as assistive technology
@@ -408,7 +408,7 @@ impl LauncherWindow {
     /// A key pressed in the launcher, before the focused control sees
     /// it: Ctrl and a digit, while the search field, a slot or a command's
     /// list has focus (an overlay's own field never does), picks what that
-    /// number names (see [`crate::app::numbered`]) — once per press: the
+    /// number names (see [`crate::features::number_hints::numbered`]) — once per press: the
     /// system's repeats of a held chord run nothing more.
     fn quick_slot_chord(
         &mut self,

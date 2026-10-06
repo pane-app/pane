@@ -32,15 +32,13 @@ mod paint;
 use paint::paints_fill_at;
 use settle::settle;
 
-/// The keystroke that opens Settings on this platform: Cmd+, on macOS,
-/// Ctrl+, on Windows and Linux.
-fn settings_shortcut() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "cmd-,"
-    } else {
-        "ctrl-,"
-    }
-}
+#[path = "support/a11y.rs"]
+mod a11y;
+#[path = "support/setup.rs"]
+mod setup;
+
+use a11y::{accessibility, focused_label};
+use setup::settings_shortcut;
 
 /// The keystroke that focuses the Settings search: Cmd+F on macOS,
 /// Ctrl+F on Windows and Linux.
@@ -116,33 +114,6 @@ fn settings_context(
     cx: &mut VisualTestContext,
 ) -> VisualTestContext {
     VisualTestContext::from_window(AnyWindowHandle::from(*settings), &cx.cx)
-}
-
-/// The label of the node assistive technology treats as focused in the
-/// window `cx` drives.
-fn focused_label(cx: &mut VisualTestContext) -> Option<String> {
-    let (label, _) = accessibility(cx);
-    label
-}
-
-/// The window's accessibility tree as (focused label, raw JSON), forced on
-/// so the tree is built regardless of platform accessibility.
-fn accessibility(cx: &mut VisualTestContext) -> (Option<String>, String) {
-    cx.update(|window, _| window.set_a11y_forced(true));
-    cx.run_until_parked();
-    let json = cx
-        .update(|window, _| window.debug_a11y_tree_json())
-        .expect("an accessibility tree");
-    let tree: serde_json::Value = serde_json::from_str(&json).unwrap();
-    let nodes = tree["nodes"].as_object().unwrap();
-    let field = |node: &serde_json::Value, key: &str| {
-        node["aria"][key].as_str().unwrap_or_default().to_owned()
-    };
-    let focused = ["active_descendant_focus", "gpui_focus"]
-        .iter()
-        .find_map(|key| tree[key].as_str())
-        .map(|id| field(&nodes[id], "label"));
-    (focused, json)
 }
 
 /// The label of the selected search result, as the window's accessibility

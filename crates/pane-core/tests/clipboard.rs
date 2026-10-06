@@ -35,6 +35,11 @@ use pane_core::{Launcher, Runtime, Screen, Status};
 use serde_json::Value;
 use tempfile::TempDir;
 
+#[path = "support/rows.rs"]
+mod rows;
+
+use rows::{select_title, titles};
+
 const MANAGE_ROW: &str = "Manage extensions…";
 const TURN_ON: &str = "Turn on clipboard history";
 const TURN_OFF: &str = "Turn off clipboard history";
@@ -422,15 +427,6 @@ fn copy_package(fixture: &Fixture, folder: &Path) {
     fs::write(folder.join("pane.json"), manifest.to_string()).unwrap();
 }
 
-fn titles(launcher: &Launcher) -> Vec<String> {
-    launcher
-        .view()
-        .rows
-        .into_iter()
-        .map(|row| row.title)
-        .collect()
-}
-
 fn subtitle(launcher: &Launcher, title: &str) -> String {
     launcher
         .view()
@@ -439,14 +435,6 @@ fn subtitle(launcher: &Launcher, title: &str) -> String {
         .find(|row| row.title == title)
         .and_then(|row| row.subtitle)
         .unwrap_or_else(|| panic!("no row {title:?} in {:?}", titles(launcher)))
-}
-
-fn select_title(launcher: &Launcher, title: &str) {
-    let index = titles(launcher)
-        .iter()
-        .position(|row| row == title)
-        .unwrap_or_else(|| panic!("no row {title:?} in {:?}", titles(launcher)));
-    launcher.select(index);
 }
 
 /// Runs the item titled `title` of the open command.

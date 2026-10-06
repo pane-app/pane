@@ -4388,7 +4388,6 @@ dependencies = [
  "open",
  "pane-core",
  "raw-window-handle",
- "serde",
  "serde_json",
  "sha2",
  "tar",

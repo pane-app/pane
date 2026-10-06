@@ -40,6 +40,8 @@ macOS (`cargo xtask js-guests`) has **not** been run. The Cargo cache
 
 ## Native GUI smoke
 
+The smoke forces the dark theme and the opaque material, so its screenshots do not depend on the desktop ([smoke appearance](smoke-appearance.md)).
+
 ```sh
 cargo build -p pane
 scripts/smoke-macos.sh smoke            # needs Python 3 with Pillow

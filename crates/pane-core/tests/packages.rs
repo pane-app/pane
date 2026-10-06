@@ -17,17 +17,13 @@ use tempfile::TempDir;
 #[path = "support/platforms.rs"]
 mod platforms;
 
-fn guest(name: &str) -> PathBuf {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/guests")
-        .join(format!("{name}.wasm"));
-    assert!(
-        path.exists(),
-        "{} is missing; run `cargo xtask guests`",
-        path.display()
-    );
-    path
-}
+#[path = "support/guests.rs"]
+mod guests;
+#[path = "support/rows.rs"]
+mod rows;
+
+use guests::guest;
+use rows::titles;
 
 /// A package manifest for one command backed by `component`.
 fn manifest(title: &str, version: &str, component: &str) -> String {
@@ -82,15 +78,6 @@ impl Dirs {
             self.data.path().join("extensions"),
         )
     }
-}
-
-fn titles(launcher: &Launcher) -> Vec<String> {
-    launcher
-        .view()
-        .rows
-        .into_iter()
-        .map(|row| row.title)
-        .collect()
 }
 
 const INSTALL_ROW: &str = "Install extension from folder…";

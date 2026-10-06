@@ -3,9 +3,10 @@
 //! a one-file edit.
 //!
 //! Provenance: the dark palette, the geometry and the control chrome are the
-//! authored reference values, read from
-//! `docs/evidence/ui-prototype/reference/REFERENCE.md` and the unchanged
-//! authored `launcher.html` retained beside it.
+//! authored reference values, read from the reference's `REFERENCE.md`
+//! and the unchanged authored `launcher.html` beside it (archived with the
+//! retired comparison, ADR 0029:
+//! <https://github.com/hoangvu12/pane/tree/archive/impl-ui-91-2026-10-06/docs/evidence/ui-prototype/reference>).
 //! The light palette is *derived*, not authored: the reference ships dark
 //! only. Light keeps the reference's geometry and icon gradients and swaps
 //! the neutrals for light-glass counterparts; it is a starting point for
@@ -127,8 +128,8 @@ pub(crate) struct Theme {
     pub(crate) row_selected_border: Hsla,
 
     // -- Root search's result layouts (#96) ----------------------------------
-    /// The no-results notice, the computed answer's card and the authored
-    /// boards' history and suggestion rows.
+    /// The no-results notice, the computed answer's card and the empty
+    /// board's Install pill (which a Settings button takes).
     pub(crate) results: ResultColors,
 
     // -- Focus --------------------------------------------------------------
@@ -210,16 +211,13 @@ pub(crate) struct Theme {
     /// its 1px inset ring (white 6%).
     pub(crate) field_fill: Hsla,
     pub(crate) field_edge: Hsla,
-    /// A Settings page's heading (#FFFFFF).
-    pub(crate) heading_text: Hsla,
     /// A Settings card: the raised block a section's rows sit in (white
     /// 4.7% over the panel in dark), its 1px inset ring and the rule
     /// between its rows. Pane's own: the reference's board has no cards.
     pub(crate) card_fill: Hsla,
     pub(crate) card_edge: Hsla,
     pub(crate) card_rule: Hsla,
-    /// The Settings controls and the Appearance preview (#98): see
-    /// [`ControlColors`].
+    /// The Settings controls (#98): see [`ControlColors`].
     pub(crate) controls: ControlColors,
 
     // -- The footer's buttons and the Actions panel ---------------------------
@@ -337,14 +335,10 @@ pub(crate) struct Typography {
     /// The Settings window's 12px captions: a sidebar item's count. (A
     /// page column's label, "Preview", is [`SettingsType::caption`].)
     pub(crate) settings_caption_size: Pixels,
-    /// A Settings page's heading's weight (600) and tracking (-.01em); its
-    /// 22px and its line are [`SettingsType::heading`].
-    pub(crate) heading_weight: FontWeight,
-    pub(crate) heading_tracking: f32,
     /// Root search's result layouts' type (#96).
     pub(crate) results: ResultType,
-    /// The Settings pages' type lines: the heading block, the controls and
-    /// the Appearance preview (#98).
+    /// The Settings pages' type lines: the heading block and the controls
+    /// (#98).
     pub(crate) settings: SettingsType,
     /// An Actions row's 13px label, its search's 13px and its empty
     /// note's.
@@ -434,11 +428,8 @@ pub(crate) struct Geometry {
     pub(crate) mini_tile: TileMetrics,
     /// The Settings window's shell, sidebar and page composition.
     pub(crate) settings: SettingsGeometry,
-    /// The Settings controls: fields, segments, swatches, sliders and
-    /// toggles (#98).
+    /// The Settings controls: fields, segments and toggles (#98).
     pub(crate) controls: ControlGeometry,
-    /// The Appearance page's live preview (#98).
-    pub(crate) preview: PreviewGeometry,
     /// The footer's height.
     pub(crate) footer_height: Pixels,
     /// The footer's left padding (the reference's 16).
@@ -544,8 +535,8 @@ pub(crate) struct ActionsGeometry {
 
 /// The Settings window's geometry: the reference Settings board's
 /// titlebar, its `nav` sidebar with the search field and the `.nav`
-/// items, and its page — the padding, the heading block and the two
-/// columns (see `crate::ui::settings_shell`).
+/// items, and Pane's own page area, its sections and cards (see
+/// `crate::ui::settings_shell`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SettingsGeometry {
     /// The titlebar's height, its 1px rule included.
@@ -575,24 +566,8 @@ pub(crate) struct SettingsGeometry {
     pub(crate) item_padding_x: Pixels,
     pub(crate) item_gap: Pixels,
     pub(crate) item_glyph: Pixels,
-    /// The page's padding: above, either side and below.
-    pub(crate) page_padding_top: Pixels,
-    pub(crate) page_padding_x: Pixels,
-    pub(crate) page_padding_bottom: Pixels,
-    /// The heading block: the gap between the heading and its subtitle,
-    /// and the space below the block.
-    pub(crate) header_gap: Pixels,
-    pub(crate) header_margin_bottom: Pixels,
-    /// The page's two columns: the gap between them, the controls
-    /// column's width and the aside's (the preview's).
-    pub(crate) column_gap: Pixels,
-    pub(crate) controls_width: Pixels,
-    pub(crate) aside_width: Pixels,
-    /// The gap between an aside's caption and its content.
-    pub(crate) aside_gap: Pixels,
-    /// Pane's own page layout (the board's page above is the workbench's
-    /// fixture's): the content's padding above, either side and below,
-    /// and the widest it grows in a large window.
+    /// Pane's own page layout: the content's padding above, either side
+    /// and below, and the widest it grows in a large window.
     pub(crate) content_padding_top: Pixels,
     pub(crate) content_padding_x: Pixels,
     pub(crate) content_padding_bottom: Pixels,
@@ -691,10 +666,9 @@ pub(crate) struct ResultColors {
     pub(crate) chip_edge: Hsla,
     pub(crate) chip_hover: Hsla,
     pub(crate) chip_text: Hsla,
-    /// A history row's answer (#A3A4A9).
-    pub(crate) history_answer: Hsla,
-    /// A suggestion's Install pill: its fill (white 8%), ring (white 8%)
-    /// and hover fill (white 13%).
+    /// The empty board's Install pill, a Settings button's
+    /// (`crate::ui::controls`): its fill (white 8%), ring (white 8%) and
+    /// hover fill (white 13%).
     pub(crate) pill_fill: Hsla,
     pub(crate) pill_edge: Hsla,
     pub(crate) pill_hover: Hsla,
@@ -717,7 +691,6 @@ impl ResultColors {
             chip_edge: color(0xFFFFFF12),
             chip_hover: color(0xFFFFFF1A),
             chip_text: color(0xD9DADDFF),
-            history_answer: color(0xA3A4A9FF),
             pill_fill: color(0xFFFFFF14),
             pill_edge: color(0xFFFFFF14),
             pill_hover: color(0xFFFFFF21),
@@ -741,7 +714,6 @@ impl ResultColors {
             chip_edge: color(0x00000012),
             chip_hover: color(0x0000001A),
             chip_text: color(0x2A2B31FF),
-            history_answer: color(0x575A63FF),
             pill_fill: color(0x00000014),
             pill_edge: color(0x00000014),
             pill_hover: color(0x00000021),
@@ -779,12 +751,6 @@ pub(crate) struct ResultType {
     pub(crate) answer_caption: TypeLine,
     pub(crate) answer_also: TypeLine,
     pub(crate) chip: TypeLine,
-    /// A history row's expression and answer (Geist Mono 13.5).
-    pub(crate) history: TypeLine,
-    /// A suggestion's title (14/500), its line of metadata (12.5) and its
-    /// pill's label (12.5/500).
-    pub(crate) suggestion_title: TypeLine,
-    pub(crate) suggestion_meta: TypeLine,
     pub(crate) pill: TypeLine,
 }
 
@@ -805,16 +771,14 @@ impl ResultType {
             answer_caption: line(12.5, 17.),
             answer_also: line(12., 16.),
             chip: line(12.5, 17.),
-            history: line(13.5, 18.),
-            suggestion_title: line(14., 18.),
-            suggestion_meta: line(12.5, 17.),
             pill: line(12.5, 17.),
         }
     }
 }
 
 /// The geometry of root search's result layouts (#96): the reference's
-/// empty board's notice and suggestions, and its calculator board's card.
+/// empty board's notice and Install pill, and its calculator board's
+/// card.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ResultGeometry {
     /// The notice: 84 high, padded 8 above, 4 below and 12 either side,
@@ -851,13 +815,6 @@ pub(crate) struct ResultGeometry {
     pub(crate) chip_height: Pixels,
     pub(crate) chip_padding_x: Pixels,
     pub(crate) chip_radius: Pixels,
-    /// A section label's note and its keys, 6 apart.
-    pub(crate) label_keys_gap: Pixels,
-    /// A suggestion row: 54 high, 2 between its title and its metadata,
-    /// its 32px tile (radius 8, a 17px glyph).
-    pub(crate) suggestion_height: Pixels,
-    pub(crate) suggestion_text_gap: Pixels,
-    pub(crate) suggestion_tile: TileMetrics,
     /// The Install pill: 30 high, 12 either side, radius 8.
     pub(crate) pill_height: Pixels,
     pub(crate) pill_padding_x: Pixels,
@@ -891,14 +848,6 @@ impl ResultGeometry {
             chip_height: px(30.),
             chip_padding_x: px(10.),
             chip_radius: px(8.),
-            label_keys_gap: px(6.),
-            suggestion_height: px(54.),
-            suggestion_text_gap: px(2.),
-            suggestion_tile: TileMetrics {
-                size: px(32.),
-                radius: px(8.),
-                glyph: px(17.),
-            },
             pill_height: px(30.),
             pill_padding_x: px(12.),
             pill_radius: px(8.),
@@ -906,11 +855,10 @@ impl ResultGeometry {
     }
 }
 
-/// The colors of the Settings controls and the Appearance preview (#98):
-/// the reference Settings board's `.segwrap`/`.seg`, its swatches, range
-/// inputs and toggles, and its preview stage and miniature launcher. Text
-/// roles the theme already has (a field's label is the title ink, its
-/// description the muted one) are the theme's own.
+/// The colors of the Settings controls (#98): the reference Settings
+/// board's `.segwrap`/`.seg` and toggles. Text roles the theme already
+/// has (a field's label is the title ink, its description the muted one)
+/// are the theme's own.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ControlColors {
     /// A segmented control's track (black 24%) under its 1px inset ring
@@ -930,24 +878,6 @@ pub(crate) struct ControlColors {
     pub(crate) toggle_off: Hsla,
     pub(crate) toggle_knob: Hsla,
     pub(crate) toggle_knob_shadow: Hsla,
-    /// A swatch's 1px inset edge (black 20%), the 2px gap ring around the
-    /// chosen one (#1A1B1E), and the custom swatch's ring (white 22%).
-    pub(crate) swatch_edge: Hsla,
-    pub(crate) swatch_gap: Hsla,
-    pub(crate) swatch_add_edge: Hsla,
-    /// A slider's track beyond its value (white 16%); up to the value, it
-    /// is the accent.
-    pub(crate) slider_track: Hsla,
-    /// The preview stage's 1px inset ring (white 8%).
-    pub(crate) preview_stage_edge: Hsla,
-    /// The miniature launcher's 1px inset ring (white 8%) and its drop
-    /// shadow (black 70%).
-    pub(crate) preview_panel_edge: Hsla,
-    pub(crate) preview_shadow: Hsla,
-    /// The miniature's selected row (white 9%) and its pinned slots
-    /// (white 5%).
-    pub(crate) preview_row_selected: Hsla,
-    pub(crate) preview_pin: Hsla,
 }
 
 impl ControlColors {
@@ -964,15 +894,6 @@ impl ControlColors {
             toggle_off: color(0xFFFFFF29),
             toggle_knob: color(0xFFFFFFFF),
             toggle_knob_shadow: color(0x00000066),
-            swatch_edge: color(0x00000033),
-            swatch_gap: color(0x1A1B1EFF),
-            swatch_add_edge: color(0xFFFFFF38),
-            slider_track: color(0xFFFFFF29),
-            preview_stage_edge: color(0xFFFFFF14),
-            preview_panel_edge: color(0xFFFFFF14),
-            preview_shadow: color(0x000000B3),
-            preview_row_selected: color(0xFFFFFF17),
-            preview_pin: color(0xFFFFFF0D),
         }
     }
 
@@ -991,15 +912,6 @@ impl ControlColors {
             toggle_off: color(0x00000029),
             toggle_knob: color(0xFFFFFFFF),
             toggle_knob_shadow: color(0x00000040),
-            swatch_edge: color(0x00000033),
-            swatch_gap: color(0xF6F6F8FF),
-            swatch_add_edge: color(0x00000038),
-            slider_track: color(0x00000029),
-            preview_stage_edge: color(0x00000014),
-            preview_panel_edge: color(0x00000014),
-            preview_shadow: color(0x00000040),
-            preview_row_selected: color(0x00000016),
-            preview_pin: color(0x0000000B),
         }
     }
 }
@@ -1009,26 +921,14 @@ impl ControlColors {
 /// column of fields stacks to the reference's own heights.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SettingsType {
-    /// The page heading (22/600, its line 28) and its subtitle (13, 17).
-    pub(crate) heading: TypeLine,
-    pub(crate) subtitle: TypeLine,
     /// An aside column's caption ("Preview": 12/500, 16).
     pub(crate) caption: TypeLine,
     /// A field's label (`.flabel`: 13.5/500, 18) and its description
     /// (`.fdesc`: 12.5 at line height 1.45, 18.125).
     pub(crate) field_label: TypeLine,
     pub(crate) field_description: TypeLine,
-    /// A segment's label (12.5/500, 17), and a slider's value (Geist Mono
-    /// 12.5, 17).
+    /// A segment's label (12.5/500, 17).
     pub(crate) segment: TypeLine,
-    pub(crate) value: TypeLine,
-    /// The link under the preview (13/500, 17).
-    pub(crate) link: TypeLine,
-    /// The miniature launcher's query (14, 18), its rows' titles (12.5/500,
-    /// 17), their kinds and the footer's text (11.5, 15).
-    pub(crate) preview_query: TypeLine,
-    pub(crate) preview_title: TypeLine,
-    pub(crate) preview_small: TypeLine,
 }
 
 impl SettingsType {
@@ -1038,23 +938,16 @@ impl SettingsType {
             line_height: px(line_height),
         };
         SettingsType {
-            heading: line(22., 28.),
-            subtitle: line(13., 17.),
             caption: line(12., 16.),
             field_label: line(13.5, 18.),
             field_description: line(12.5, 18.125),
             segment: line(12.5, 17.),
-            value: line(12.5, 17.),
-            link: line(13., 17.),
-            preview_query: line(14., 18.),
-            preview_title: line(12.5, 17.),
-            preview_small: line(11.5, 15.),
         }
     }
 }
 
 /// The Settings controls' geometry (#98): the reference board's field
-/// groups, `.segwrap`/`.seg`, swatches, range inputs and toggles.
+/// groups, `.segwrap`/`.seg` and toggles.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ControlGeometry {
     /// The gap between a page's field groups (18) and inside one, between
@@ -1069,19 +962,6 @@ pub(crate) struct ControlGeometry {
     pub(crate) track_radius: Pixels,
     pub(crate) segment_height: Pixels,
     pub(crate) segment_radius: Pixels,
-    /// A swatch (30, round), the gap between swatches (10), the chosen
-    /// one's gap ring (2) and its outer ring (2 more), and the custom
-    /// swatch's 14px glyph.
-    pub(crate) swatch_size: Pixels,
-    pub(crate) swatch_gap: Pixels,
-    pub(crate) swatch_ring_gap: Pixels,
-    pub(crate) swatch_ring: Pixels,
-    pub(crate) swatch_glyph: Pixels,
-    /// A slider's box (20 high), its track (4) and its thumb (16): Pane's
-    /// drawing of the reference's native range input.
-    pub(crate) slider_height: Pixels,
-    pub(crate) slider_track: Pixels,
-    pub(crate) slider_thumb: Pixels,
     /// A toggle's row (44 with its 1px rule above), the toggle (40×24,
     /// radius 12), its knob (18) and the knob's inset (3; on, it sits at
     /// 19).
@@ -1111,15 +991,13 @@ pub(crate) struct ControlGeometry {
     pub(crate) list_gap: Pixels,
     /// A field's well, the sidebar search's family: 34 high on its own
     /// line, 30 inside a settings row (a button's height), 10 either side,
-    /// radius 8, 8 between its 14px glyph and its text. A recorder's well
-    /// is at least 96 wide, so an empty one is still a target.
+    /// radius 8, 8 between its 14px glyph and its text.
     pub(crate) well_height: Pixels,
     pub(crate) inline_well_height: Pixels,
     pub(crate) well_padding_x: Pixels,
     pub(crate) well_radius: Pixels,
     pub(crate) well_gap: Pixels,
     pub(crate) well_glyph: Pixels,
-    pub(crate) recorder_min_width: Pixels,
     /// A key binding recorder (Discord's keybind field): 220×36, its icon
     /// buttons 4 in from its right edge.
     pub(crate) recorder_width: Pixels,
@@ -1142,63 +1020,6 @@ pub(crate) struct ControlGeometry {
     /// part of the frame a press only focuses) and radius 10.
     pub(crate) frame_padding: Pixels,
     pub(crate) frame_radius: Pixels,
-}
-
-/// The Appearance page's live preview (#98): the reference board's 400×520
-/// stage and the miniature launcher on it — a distinct recipe from the
-/// launcher's own (its rows are 38, not root search's 44).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct PreviewGeometry {
-    /// The stage: 520 high, radius 16, the miniature 56 below its top.
-    pub(crate) stage_height: Pixels,
-    pub(crate) stage_radius: Pixels,
-    pub(crate) stage_padding_top: Pixels,
-    /// The miniature: 340 wide, radius 14, and its drop shadow (down 30,
-    /// blur 70, spread -20).
-    pub(crate) panel_width: Pixels,
-    pub(crate) panel_radius: Pixels,
-    pub(crate) shadow_offset: Pixels,
-    pub(crate) shadow_blur: Pixels,
-    pub(crate) shadow_spread: Pixels,
-    /// The search line: 46 high (its 1px rule included), padded 14 either
-    /// side, 10 between its 15px magnifier and the query; the caret
-    /// (1.5×17) pulled 9 back toward the query.
-    pub(crate) search_height: Pixels,
-    pub(crate) search_padding_x: Pixels,
-    pub(crate) search_gap: Pixels,
-    pub(crate) search_glyph: Pixels,
-    pub(crate) caret_width: Pixels,
-    pub(crate) caret_height: Pixels,
-    pub(crate) caret_pull: Pixels,
-    /// The list: padded 6, its children 2 apart.
-    pub(crate) body_padding: Pixels,
-    pub(crate) body_gap: Pixels,
-    /// The pinned strip: four slots 6 apart, padded 2 above and either
-    /// side and 6 below; a slot 44 high, radius 9, its 24px tile.
-    pub(crate) pins_gap: Pixels,
-    pub(crate) pins_padding_x: Pixels,
-    pub(crate) pins_padding_top: Pixels,
-    pub(crate) pins_padding_bottom: Pixels,
-    pub(crate) pin_height: Pixels,
-    pub(crate) pin_radius: Pixels,
-    pub(crate) pin_tile: TileMetrics,
-    /// A row (`.mrow`): 38 high, radius 8, padded 8 either side, 10
-    /// between its parts, its 22px tile.
-    pub(crate) row_height: Pixels,
-    pub(crate) row_radius: Pixels,
-    pub(crate) row_padding_x: Pixels,
-    pub(crate) row_gap: Pixels,
-    pub(crate) row_tile: TileMetrics,
-    /// The footer: 38 high (its rule included), padded 12 left and 8
-    /// right, its sides 8 apart, "Open" 6 before its cap.
-    pub(crate) footer_height: Pixels,
-    pub(crate) footer_padding_left: Pixels,
-    pub(crate) footer_padding_right: Pixels,
-    pub(crate) footer_gap: Pixels,
-    pub(crate) open_gap: Pixels,
-    /// The link under the stage: 6 between its label and its 14px arrow.
-    pub(crate) link_gap: Pixels,
-    pub(crate) link_glyph: Pixels,
 }
 
 impl Theme {
@@ -1273,7 +1094,6 @@ impl Theme {
             nav_icon: color(0x8E8F94FF),
             field_fill: color(0x0000003D),
             field_edge: color(0xFFFFFF0F),
-            heading_text: color(0xFFFFFFFF),
             card_fill: color(0xFFFFFF0C),
             card_edge: color(0xFFFFFF0F),
             card_rule: color(0xFFFFFF0D),
@@ -1384,7 +1204,6 @@ impl Theme {
             nav_icon: color(0x575A63FF),
             field_fill: color(0x0000000A),
             field_edge: color(0x00000014),
-            heading_text: color(0x111214FF),
             card_fill: color(0xFFFFFFB3),
             card_edge: color(0x00000012),
             card_rule: color(0x0000000F),
@@ -1544,8 +1363,6 @@ impl Typography {
             line_height: 1.3,
             settings_text_size: px(13.),
             settings_caption_size: px(12.),
-            heading_weight: FontWeight::SEMIBOLD,
-            heading_tracking: -0.01,
             results: ResultType::shared(),
             settings: SettingsType::shared(),
             action_size: px(13.),
@@ -1638,15 +1455,6 @@ impl Geometry {
                 item_padding_x: px(10.),
                 item_gap: px(10.),
                 item_glyph: px(16.),
-                page_padding_top: px(26.),
-                page_padding_x: px(32.),
-                page_padding_bottom: px(24.),
-                header_gap: px(4.),
-                header_margin_bottom: px(4.),
-                column_gap: px(36.),
-                controls_width: px(388.),
-                aside_width: px(400.),
-                aside_gap: px(10.),
                 content_padding_top: px(20.),
                 content_padding_x: px(24.),
                 content_padding_bottom: px(24.),
@@ -1669,14 +1477,6 @@ impl Geometry {
                 track_radius: px(10.),
                 segment_height: px(30.),
                 segment_radius: px(7.),
-                swatch_size: px(30.),
-                swatch_gap: px(10.),
-                swatch_ring_gap: px(2.),
-                swatch_ring: px(2.),
-                swatch_glyph: px(14.),
-                slider_height: px(20.),
-                slider_track: px(4.),
-                slider_thumb: px(16.),
                 toggle_row_height: px(44.),
                 toggle_width: px(40.),
                 toggle_height: px(24.),
@@ -1694,7 +1494,6 @@ impl Geometry {
                 well_radius: px(8.),
                 well_gap: px(8.),
                 well_glyph: px(14.),
-                recorder_min_width: px(96.),
                 recorder_width: px(220.),
                 recorder_height: px(36.),
                 recorder_inset: px(4.),
@@ -1707,52 +1506,6 @@ impl Geometry {
                 mark_size: px(6.),
                 frame_padding: px(4.),
                 frame_radius: px(10.),
-            },
-            preview: PreviewGeometry {
-                stage_height: px(520.),
-                stage_radius: px(16.),
-                stage_padding_top: px(56.),
-                panel_width: px(340.),
-                panel_radius: px(14.),
-                shadow_offset: px(30.),
-                shadow_blur: px(70.),
-                shadow_spread: px(-20.),
-                search_height: px(46.),
-                search_padding_x: px(14.),
-                search_gap: px(10.),
-                search_glyph: px(15.),
-                caret_width: px(1.5),
-                caret_height: px(17.),
-                caret_pull: px(9.),
-                body_padding: px(6.),
-                body_gap: px(2.),
-                pins_gap: px(6.),
-                pins_padding_x: px(2.),
-                pins_padding_top: px(2.),
-                pins_padding_bottom: px(6.),
-                pin_height: px(44.),
-                pin_radius: px(9.),
-                pin_tile: TileMetrics {
-                    size: px(24.),
-                    radius: px(6.),
-                    glyph: px(13.),
-                },
-                row_height: px(38.),
-                row_radius: px(8.),
-                row_padding_x: px(8.),
-                row_gap: px(10.),
-                row_tile: TileMetrics {
-                    size: px(22.),
-                    radius: px(6.),
-                    glyph: px(12.),
-                },
-                footer_height: px(38.),
-                footer_padding_left: px(12.),
-                footer_padding_right: px(8.),
-                footer_gap: px(8.),
-                open_gap: px(6.),
-                link_gap: px(6.),
-                link_glyph: px(14.),
             },
             footer_height: px(50.),
             footer_padding_left: px(16.),
@@ -1830,10 +1583,8 @@ impl Geometry {
 /// button; the 46px tab strip; the 360px list of 44px rows beside the
 /// preview card; and the 52px footer. Rows, section labels, keycaps and
 /// footer buttons are the launcher's own families and take their tokens.
-///
-/// The tones and the code, color, link and image previews are the
-/// reference fixture's: Pane keeps text alone and guesses no kind of it,
-/// so only the visual workbench's fixture draws them (#100).
+/// The board's source tones and its code, color, link and image previews
+/// have no tokens: Pane keeps text alone and guesses no kind of it (#100).
 #[derive(Clone, Debug)]
 pub(crate) struct SplitTokens {
     /// The header: its height and its left and right padding (14, 12),
@@ -1899,8 +1650,6 @@ pub(crate) struct SplitTokens {
     /// A row's title (13.5px/500) and its time (Geist Mono 11.5).
     pub(crate) title_size: Pixels,
     pub(crate) time_size: Pixels,
-    /// A color record's swatch ring (white 18%).
-    pub(crate) swatch_edge: Hsla,
     /// The note in place of rows: 40 above and below, 16 either side, 13px.
     pub(crate) empty_padding_y: Pixels,
     pub(crate) empty_padding_x: Pixels,
@@ -1918,75 +1667,19 @@ pub(crate) struct SplitTokens {
     pub(crate) text_size: Pixels,
     pub(crate) text_line_height: f32,
     pub(crate) text_tracking: f32,
-    /// The fixture's code preview: padding 26 by 28, Geist Mono 14.5 at
-    /// line height 1.8 in #D9DADD, line numbers 12 wide in #5F6066, 18
-    /// before the line; the reference's keyword, function, number and
-    /// string colors.
-    pub(crate) code_padding_y: Pixels,
-    pub(crate) code_padding_x: Pixels,
-    pub(crate) code_size: Pixels,
-    pub(crate) code_line_height: f32,
-    pub(crate) code_number_width: Pixels,
-    pub(crate) code_gap: Pixels,
-    pub(crate) code_text: Hsla,
-    pub(crate) code_number: Hsla,
-    pub(crate) code_keyword: Hsla,
-    pub(crate) code_function: Hsla,
-    pub(crate) code_value: Hsla,
-    pub(crate) code_string: Hsla,
-    /// The fixture's color preview: its hex (32px/500 Mono, -.02em) and
-    /// values (13px Mono) in black 80% and 66%, 6 apart, padded 24 by 26.
-    pub(crate) color_hex_size: Pixels,
-    pub(crate) color_hex_tracking: f32,
-    pub(crate) color_value_size: Pixels,
-    pub(crate) color_hex_text: Hsla,
-    pub(crate) color_value_text: Hsla,
-    pub(crate) color_gap: Pixels,
-    pub(crate) color_padding_y: Pixels,
-    pub(crate) color_padding_x: Pixels,
-    /// The fixture's link preview: a 44px tile (radius 11, a 22px glyph),
-    /// the domain at 22px/500 and the address in 13px Mono #A3A4A9, 10
-    /// apart.
-    pub(crate) link_tile: Pixels,
-    pub(crate) link_tile_radius: Pixels,
-    pub(crate) link_glyph: Pixels,
-    pub(crate) link_domain_size: Pixels,
-    pub(crate) link_url_size: Pixels,
-    pub(crate) link_url_text: Hsla,
-    pub(crate) link_gap: Pixels,
-    pub(crate) link_padding: Pixels,
-    /// The fixture's image placeholder: the hatch (white 5% over #15161A),
-    /// a 28px glyph, the label at 13px and the size at 12px Mono, 8 apart.
-    pub(crate) hatch_fill: Hsla,
-    pub(crate) hatch_stripe: Hsla,
-    pub(crate) image_glyph: Pixels,
-    pub(crate) image_text: Hsla,
-    pub(crate) image_size: Pixels,
-    pub(crate) image_dims_size: Pixels,
-    pub(crate) image_gap: Pixels,
-    /// The hatch drawing's side: one stripe pattern, 1:1, clipped by the
-    /// card (the reference's card is 556×414).
-    pub(crate) hatch_size: Pixels,
     /// The footer: 52 high, padded 16 left and 8 right, its two sides 16
     /// apart; the clock glyph (16) 10 before the copied line.
     pub(crate) footer_height: Pixels,
     pub(crate) footer_gap: Pixels,
     pub(crate) footer_lead_gap: Pixels,
     pub(crate) footer_glyph: Pixels,
-    /// The fixture tiles' tones: (fill, glyph) for the reference's
-    /// terminal, code, web, chat and folder sources.
-    pub(crate) tone_term: (Hsla, Hsla),
-    pub(crate) tone_code: (Hsla, Hsla),
-    pub(crate) tone_web: (Hsla, Hsla),
-    pub(crate) tone_chat: (Hsla, Hsla),
-    pub(crate) tone_folder: (Hsla, Hsla),
 }
 
 impl SplitTokens {
     /// The derived light values: the white overlays become black ones and
     /// the reference's light inks dark, as the light palette derives its
-    /// own; the geometry and the fixture tones are the dark ones. A
-    /// proposal, not reference truth.
+    /// own; the geometry is the dark one's. A proposal, not reference
+    /// truth.
     fn light() -> SplitTokens {
         SplitTokens {
             back_fill: color(0x0000000F),
@@ -2000,27 +1693,14 @@ impl SplitTokens {
             tab_on: color(0x00000016),
             tab_on_text: color(0x111214FF),
             tab_on_edge: color(0x0000000F),
-            swatch_edge: color(0x0000002E),
             preview_fill: color(0x0000000A),
             preview_edge: color(0x00000012),
-            code_text: color(0x2A2B31FF),
-            code_number: color(0x8A8C93FF),
-            code_keyword: color(0x6A4FC4FF),
-            code_function: color(0x1D62C8FF),
-            code_value: color(0xA65A12FF),
-            code_string: color(0x1F7A4CFF),
-            color_hex_text: color(0x000000CC),
-            color_value_text: color(0x000000A8),
-            link_url_text: color(0x575A63FF),
-            hatch_fill: color(0xE6E7EBFF),
-            hatch_stripe: color(0x0000000D),
-            image_text: color(0x575A63FF),
             ..SplitTokens::dark()
         }
     }
 
-    /// The reference's dark values, as authored: its geometry, its colors
-    /// and the fixture's tones.
+    /// The reference's dark values, as authored: its geometry and its
+    /// colors.
     fn dark() -> SplitTokens {
         SplitTokens {
             header_height: px(64.),
@@ -2068,7 +1748,6 @@ impl SplitTokens {
             list_padding_bottom: px(10.),
             title_size: px(13.5),
             time_size: px(11.5),
-            swatch_edge: color(0xFFFFFF2E),
             empty_padding_y: px(40.),
             empty_padding_x: px(16.),
             empty_size: px(13.),
@@ -2081,51 +1760,10 @@ impl SplitTokens {
             text_size: px(20.),
             text_line_height: 1.5,
             text_tracking: -0.005,
-            code_padding_y: px(26.),
-            code_padding_x: px(28.),
-            code_size: px(14.5),
-            code_line_height: 1.8,
-            code_number_width: px(12.),
-            code_gap: px(18.),
-            code_text: color(0xD9DADDFF),
-            code_number: color(0x5F6066FF),
-            code_keyword: color(0xC6B0FFFF),
-            code_function: color(0x8FC3FFFF),
-            code_value: color(0xFFC285FF),
-            code_string: color(0x86DEAFFF),
-            color_hex_size: px(32.),
-            color_hex_tracking: -0.02,
-            color_value_size: px(13.),
-            color_hex_text: color(0x000000CC),
-            color_value_text: color(0x000000A8),
-            color_gap: px(6.),
-            color_padding_y: px(24.),
-            color_padding_x: px(26.),
-            link_tile: px(44.),
-            link_tile_radius: px(11.),
-            link_glyph: px(22.),
-            link_domain_size: px(22.),
-            link_url_size: px(13.),
-            link_url_text: color(0xA3A4A9FF),
-            link_gap: px(10.),
-            link_padding: px(20.),
-            hatch_fill: color(0x15161AFF),
-            hatch_stripe: color(0xFFFFFF0D),
-            image_glyph: px(28.),
-            image_text: color(0xA3A4A9FF),
-            image_size: px(13.),
-            image_dims_size: px(12.),
-            image_gap: px(8.),
-            hatch_size: px(600.),
             footer_height: px(52.),
             footer_gap: px(16.),
             footer_lead_gap: px(10.),
             footer_glyph: px(16.),
-            tone_term: (color(0x2A2C30FF), color(0xE6E7EAFF)),
-            tone_code: (color(0x173352FF), color(0x8FC3FFFF)),
-            tone_web: (color(0x4A2E17FF), color(0xFFC285FF)),
-            tone_chat: (color(0x163B3FFF), color(0x86D9E0FF)),
-            tone_folder: (color(0x2B3542FF), color(0xA9C6E8FF)),
         }
     }
 }

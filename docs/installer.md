@@ -10,7 +10,7 @@ five, with the calculator the feature the installer slices proved —
 with progress, retries and a cache, while the core (the window,
 root search, the install rows, Manage extensions) stays usable. This is
 the internet-first setup the specification chose
-([decision 20](../launcher-design-interview.md)); the installer carries no
+([decision 20](launcher-design-interview.md)); the installer carries no
 payloads and installs no runtime, and the user installs no Node, Rust,
 npm, Git or compiler: Pane's extension runtime is part of Pane's own
 process (Wasmtime), so nothing is acquired for it.

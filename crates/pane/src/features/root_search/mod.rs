@@ -46,13 +46,6 @@ pub(crate) const ROOT_PLACEHOLDER: &str = "Search apps and commands…";
 /// The query field's placeholder in an opened command that searches.
 pub(crate) const COMMAND_PLACEHOLDER: &str = "Search";
 
-/// The search area's key context: the query field's ancestor that the
-/// selection keys' field context names (the visual workbench's root
-/// fixture, #91, gives its search area the same context).
-pub(crate) fn search_context() -> &'static str {
-    CONTEXT
-}
-
 /// The context of the query field with focus, as a binding's context is
 /// written: the search field inside the window.
 pub(crate) fn field_context() -> String {
@@ -224,9 +217,8 @@ impl LauncherWindow {
 /// Over a background image (ADR 0028, `Theme::frost`) the same field is a
 /// frosted pill inside the 64px row, with no hairline below it.
 ///
-/// Both the launcher's search screens ([`LauncherWindow::render_search`])
-/// and the visual workbench's root fixture (#91) compose this header, so
-/// the fixture measures the production chrome rather than a copy of it.
+/// The launcher's search screens ([`LauncherWindow::render_search`])
+/// compose this header.
 pub(crate) fn search_header(
     input: &Entity<EditableTextState>,
     placeholder: &'static str,

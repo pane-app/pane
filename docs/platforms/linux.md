@@ -36,6 +36,8 @@ Windows machine or PowerShell was needed. Linux prerequisites are in the
 
 ## Native GUI smoke
 
+The smoke forces the dark theme and the opaque material, so its screenshots do not depend on the desktop ([smoke appearance](smoke-appearance.md)).
+
 ```sh
 cargo build -p pane
 scripts/smoke-linux.sh smoke            # needs Xvfb, xdotool, and ImageMagick or Pillow

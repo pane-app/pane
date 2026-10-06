@@ -8,6 +8,8 @@ Raycast now ships on Windows (v2.6, Windows 10/11, Microsoft Store or WinGet) an
 
 ## 1. Pinned home vs Raycast Favorites (the 5-slot question)
 
+> Decided since: [ADR 0027](../adr/0027-quick-slots-are-an-ordered-list.md) made the quick slots an ordered list of pins with no limit and no "replace a slot" step, numbering the first five. The "Pane quick slots" column below describes Pane before that decision, and the recommendation was not the one taken.
+
 | | Raycast Favorites | Pane quick slots |
 | --- | --- | --- |
 | Count | No limit documented on the search-bar, action-panel, keyboard or settings pages ([search bar][SB], [action panel][AP]) | Exactly 5 (`QUICK_SLOTS`; a record with more is invalid, [ADR 0026](../adr/0026-host-keeps-quick-slots-by-identity.md)) |

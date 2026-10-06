@@ -15,36 +15,16 @@ mod settle;
 
 use settle::settle;
 
+#[path = "support/packages.rs"]
+mod packages;
+
+use packages::package;
+
 const INSTALL_ROW: &str = "Install extension from folder…";
 const NPM_ROW: &str = "Install extension from npm…";
 const GIT_ROW: &str = "Install extension from Git…";
 const MANAGE_ROW: &str = "Manage extensions…";
 const SETTINGS_ROW: &str = "Settings…";
-
-/// Writes a package folder whose one command is the Rust sample.
-fn package(folder: &Path) -> PathBuf {
-    let guest =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/sample_rust.wasm");
-    assert!(
-        guest.exists(),
-        "{} is missing; run `cargo xtask guests`",
-        guest.display()
-    );
-    fs::create_dir_all(folder).unwrap();
-    fs::write(
-        folder.join("pane.json"),
-        r#"{
-  "manifestVersion": 1,
-  "title": "Hello",
-  "version": "1.0.0",
-  "apiVersion": "0.1",
-  "commands": [{ "id": "hello", "title": "Say hello", "component": "hello.wasm" }]
-}"#,
-    )
-    .unwrap();
-    fs::copy(guest, folder.join("hello.wasm")).unwrap();
-    folder.to_path_buf()
-}
 
 fn open<'a>(
     cx: &'a mut TestAppContext,

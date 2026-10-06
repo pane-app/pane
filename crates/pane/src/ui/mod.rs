@@ -1,9 +1,9 @@
 //! Pane's shared visual layer: semantic tokens, frost materials, the
 //! reference's icon treatment, and the shared control chrome — result
 //! rows, keycaps, the Settings window's shell and sidebar items (see
-//! [`settings_shell`]), the Settings controls (see [`controls`]) and the
-//! Appearance page's live preview (see [`preview`]) — plus the motion
-//! policy (see [`motion`]) that the launcher's subtle transitions share.
+//! [`settings_shell`]) and the Settings controls (see [`controls`]) —
+//! plus the motion policy (see [`motion`]) that the launcher's subtle
+//! transitions share.
 //!
 //! This layer owns presentation only. It imports no `pane-core` types, so
 //! the visual system is usable and reviewable without launcher state, and
@@ -43,7 +43,6 @@ pub(crate) mod keycap;
 pub(crate) mod material;
 pub(crate) mod motion;
 pub(crate) mod pinned;
-pub(crate) mod preview;
 pub(crate) mod result_layouts;
 pub(crate) mod result_row;
 pub(crate) mod select;
@@ -82,8 +81,7 @@ pub(crate) fn load_fonts(cx: &App) -> gpui::Result<()> {
     cx.text_system().add_fonts(fonts)
 }
 
-/// The embedded font files, by name (the visual workbench's manifest
-/// records their hashes).
+/// The embedded font files, by name.
 pub(crate) const FONTS: &[(&str, &[u8])] = &[
     (
         "Geist-Regular.ttf",

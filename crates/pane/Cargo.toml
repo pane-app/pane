@@ -5,6 +5,8 @@ edition.workspace = true
 publish.workspace = true
 license.workspace = true
 rust-version.workspace = true
+# The test target is listed at the end.
+autotests = false
 
 [dependencies]
 pane-core = { path = "../pane-core" }
@@ -26,12 +28,6 @@ open = "~5.4.4"
 # The launcher window's own platform handle, for the placement's move and
 # the DWM call; GPUI exports no raw-window-handle types of its own.
 raw-window-handle = "0.6"
-# The visual workbench fixture's manifest (#91): JSON, and the embedded
-# fonts' hashes; both already in the tree (pane-core's serde_json, and
-# sha2 through the test support).
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-sha2 = "0.10"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Read system transparency/high-contrast preferences once at startup, round
@@ -40,18 +36,18 @@ sha2 = "0.10"
 # (the monitors the GDI API lists, the pointer, the foreground window's
 # monitor, and the move itself); already in the tree through pane-core's
 # Windows adapters.
-windows = { version = "0.62", features = ["UI_ViewManagement", "Wdk_System_SystemServices", "Win32_System_SystemInformation", "Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }
+windows = { workspace = true, features = ["UI_ViewManagement", "Wdk_System_SystemServices", "Win32_System_SystemInformation", "Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }
 # The channel the reduced-motion watch reports Windows' preference changes
 # over, from the WinRT event's thread to the app's thread — the same hop
 # pane-core's global-hotkey presses take, so no second mechanism is added.
-tokio = { version = "1", features = ["sync"] }
+tokio = { workspace = true, features = ["sync"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The displays the launcher's placement reads on X11 (the RandR monitors,
 # the pointer, the window manager's active window) and the move it applies
 # (a configure request on the window's own X window); already in the tree
 # through pane-core's X11 adapters.
-x11rb = { version = "0.13", features = ["randr"] }
+x11rb = { workspace = true, features = ["randr"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # The displays the launcher's placement reads on macOS (the CoreGraphics
@@ -61,22 +57,25 @@ core-graphics = "0.24"
 # The move the placement applies: `setFrameTopLeftPoint` on the AppKit
 # window behind the view; already in the tree through pane-core's macOS
 # adapters.
-objc2 = "0.6"
-
-# The visual workbench's native fixture (#91): production components in
-# named states at the reference's client size, for the comparison scripts
-# under scripts/visual-workbench/. Not shipped.
-[[bin]]
-name = "pane-visual-fixture"
-path = "src/bin/visual-fixture.rs"
+objc2.workspace = true
 
 [dev-dependencies]
-futures = { version = "0.3", default-features = false, features = ["executor"] }
-tempfile = "3"
-tar = { version = "0.4.44", default-features = false }
-flate2 = "1"
+futures.workspace = true
+tempfile.workspace = true
+tar.workspace = true
+flate2.workspace = true
 # The zip packer of that same test support, which the Settings tests now
 # reuse for the local artifact source's application packages; already in the
 # tree through `pane-core`'s zip reader.
-crc32fast = "1"
+crc32fast.workspace = true
+# The tests' settings records and accessibility trees, and the npm and
+# artifact test support's integrity hashes.
+serde_json.workspace = true
+sha2.workspace = true
 gpui ={ package = "gpui-ce", git = "https://github.com/hoangvu12/gpui-ce", rev = "bcf3a0acd047c1873293069d0ed42085a38f699b", default-features = false, features = ["test-support"] }
+
+# The integration tests are one binary, whose `tests/main.rs` declares each
+# file: a binary per file meant a link, and a debug file, for each of them.
+[[test]]
+name = "integration"
+path = "tests/main.rs"

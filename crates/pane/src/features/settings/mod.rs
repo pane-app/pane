@@ -70,8 +70,6 @@ use crate::ui::motion;
 use crate::ui::settings_shell::{self, SidebarItem};
 use crate::{FocusNext, FocusPrevious};
 
-// The pages the visual workbench's fixture draws through their own
-// compositions (#98, #99) are visible to it.
 pub(crate) mod about;
 pub(crate) mod appearance;
 pub(crate) mod extensions;
@@ -515,8 +513,7 @@ impl Render for SettingsWindow {
     }
 }
 
-/// The Settings window's composition, which the visual workbench's
-/// fixture draws too: `root` — the window's key context and actions —
+/// The Settings window's composition: `root` — the window's key context and actions —
 /// made the shell's column, with the shared Geist family and base text
 /// color on everything, the custom titlebar (labelled `title`) where the
 /// platform hides its own, then `sidebar` beside `page`, on the Settings

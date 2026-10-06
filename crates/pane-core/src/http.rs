@@ -594,6 +594,97 @@ pub(crate) fn loopback_base(url: &str, refusal: impl Fn() -> String) -> Result<S
     Ok(base)
 }
 
+/// The value of the environment variable `name` naming a source on this
+/// computer, in development builds only; `None` when it is not set or is
+/// empty.
+#[cfg(any(test, debug_assertions))]
+pub(crate) fn dev_env(name: &str) -> Option<String> {
+    let url = std::env::var(name).ok()?;
+    (!url.is_empty()).then_some(url)
+}
+
+/// Refuses `url` unless it is an HTTPS address: Pane sends its own requests
+/// only over HTTPS, unless what it asks is on this computer (`loopback`,
+/// tests and development builds only).
+pub(crate) fn https_only(loopback: bool, url: &str) -> Result<(), String> {
+    if loopback || url.starts_with("https://") {
+        Ok(())
+    } else {
+        Err(format!("`{url}` is not an HTTPS address"))
+    }
+}
+
+/// A source Pane downloads from for itself and that tests and development
+/// builds can replace with one on this computer: the npm registry, Pane's
+/// artifact source. It is reached only over HTTPS unless it is on this
+/// computer, within [`OWN_LIMITS`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Origin {
+    /// Its address, ending with `/`.
+    base: String,
+    /// Whether it is on this computer, reached without a proxy and over
+    /// plain HTTP if its address says so.
+    loopback: bool,
+}
+
+impl Origin {
+    /// The source at `base`, which ends with `/`, reached over HTTPS.
+    pub(crate) fn public(base: &str) -> Origin {
+        Origin {
+            base: base.to_owned(),
+            loopback: false,
+        }
+    }
+
+    /// A source on this computer at `url`, for tests and development builds
+    /// only (see [`loopback_base`]); `refusal` says why another is refused.
+    #[cfg(any(test, debug_assertions))]
+    pub(crate) fn local(url: &str, refusal: impl Fn() -> String) -> Result<Origin, String> {
+        let base = loopback_base(url, refusal)?;
+        Ok(Origin {
+            base,
+            loopback: true,
+        })
+    }
+
+    /// Its address, ending with `/`.
+    pub(crate) fn url(&self) -> &str {
+        &self.base
+    }
+
+    /// Whether it is on this computer.
+    #[cfg(test)]
+    pub(crate) fn is_loopback(&self) -> bool {
+        self.loopback
+    }
+
+    /// Asks for `url`, with `headers`, a body of at most `most` bytes
+    /// ([`get_blocking`]): only over HTTPS unless the source is on this
+    /// computer.
+    pub(crate) fn get(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+        most: u64,
+    ) -> Result<Answer, GetError> {
+        https_only(self.loopback, url).map_err(GetError::Failed)?;
+        get_blocking(url, headers, most, OWN_LIMITS)
+    }
+
+    /// Like [`Origin::get`], telling `progress` of the bytes of the body so
+    /// far ([`get_blocking_progressing`]).
+    pub(crate) fn get_progressing(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+        most: u64,
+        progress: &(dyn Fn(u64) + Send + Sync),
+    ) -> Result<Answer, GetError> {
+        https_only(self.loopback, url).map_err(GetError::Failed)?;
+        get_blocking_progressing(url, headers, most, OWN_LIMITS, progress)
+    }
+}
+
 /// The ceilings of a request Pane sends for itself ([`get_blocking`]).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct OwnLimits {
@@ -605,6 +696,14 @@ pub(crate) struct OwnLimits {
     /// The whole request.
     pub deadline: Duration,
 }
+
+/// The ceilings of every request Pane sends for itself: to the npm
+/// registry, the artifact source and Git hosts alike.
+pub(crate) const OWN_LIMITS: OwnLimits = OwnLimits {
+    connect: Duration::from_secs(30),
+    between_bytes: Duration::from_secs(60),
+    deadline: Duration::from_secs(300),
+};
 
 /// The answer to a request Pane sent for itself.
 pub(crate) struct Answer {

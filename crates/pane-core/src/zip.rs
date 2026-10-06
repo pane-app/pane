@@ -25,7 +25,7 @@ use std::fs;
 use std::io::Read;
 use std::path::Path;
 
-use crate::npm::inside;
+use crate::archive::inside;
 
 /// The largest an application package unpacks to, however it is packed
 /// (a zip, or the gzipped tarball the Linux package is): the package

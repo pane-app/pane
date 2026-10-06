@@ -26,17 +26,16 @@
 //! glyph is derived from the asset once (see [`Glyph::bold_svg_bytes`]).
 //!
 //! Tones are the reference's `appTone` map, exactly — the gradients this
-//! build's known identities and the visual workbench's reference rows use,
-//! with their glyph colors (the map's others return with the rows that
-//! need them) — plus the neutral command tile.
+//! build's known identities use, with their glyph colors (the map's
+//! others return with the rows that need them) — plus the neutral
+//! command tile.
 //! Tones carry *presentation* only — mapping a real row's identity to a
 //! tone is the caller's job, and unknown identities should use
 //! [`IconTone::Command`] rather than inventing app metadata from text.
 //! The generic command glyph is the reference's terminal prompt.
 //!
 //! Tiles come in the reference's sizes ([`TileSize`]): the result row's
-//! 28, a pinned slot's 42, the Actions header's 18, and the Appearance
-//! preview's miniature row (22) and pinned slot (24). (The reference's
+//! 28, a pinned slot's 42 and the Actions header's 18. (The reference's
 //! 34px toast tile has no Pane counterpart: Pane shows no launch toast.)
 
 use std::collections::HashMap;
@@ -65,45 +64,24 @@ pub(crate) enum Glyph {
     Code,
     Folder,
     Blocks,
-    /// A page with a folded corner: a file.
-    File,
-    /// A pen: drawing and design.
-    Pen,
     /// A clipboard: clipboard history.
     Clipboard,
-    /// A window split in two: window layouts.
-    Layout,
-    /// A crescent moon: dark mode.
-    Moon,
-    /// A padlock: locking the screen.
-    Lock,
     /// A magnifier over a minus: the no-results notice (#96).
     SearchNone,
     /// An arrow pointing right: the answer card's, from what was typed to
     /// its answer.
     ArrowRight,
-    /// A calculator: a calculation history row.
-    Calculator,
     /// A clock: a time-zone history row.
     Clock,
-    /// A box: an extension suggestion.
-    Package,
-    /// Concentric circles with cross hairs: an extension suggestion.
-    Target,
 
     /// A cog: the Settings root row and the Settings window's sidebar.
     Gear,
-    /// A globe: the web.
-    Globe,
     /// A keyboard: the Settings window's Keyboard section.
     Keyboard,
     /// A chevron pointing right: a group of rows — rotated to point
     /// down by [`glyph_rotated`] while the group it belongs to is
     /// expanded, on the disclosure's timeline.
     ChevronRight,
-    /// A circle split down the middle: the Appearance page's sidebar entry
-    /// (the two palettes its theme choice stands between).
-    Theme,
     /// A display with its stand: the Settings window's Launcher section
     /// (the window this page's choices place).
     Monitor,
@@ -130,18 +108,6 @@ pub(crate) enum Glyph {
     Shield,
     /// Lines of text: a clipboard history record, which is text.
     Lines,
-    /// Two links of a chain: the fixture's link records.
-    Link,
-    /// A framed landscape: the fixture's image records.
-    Image,
-    /// An envelope: the fixture's mail record.
-    Mail,
-    /// A page with lines: notes (the reference's `notes`, a pinned
-    /// sample's).
-    Notes,
-    /// Two beamed notes: music (the reference's `music`, a pinned
-    /// sample's).
-    Music,
     /// A pushpin: the Actions panel's quick slot entries (`A.pin`).
     ActionPin,
     /// A plus: the pinned home's "+ Pin" hint, and the Appearance board's
@@ -173,23 +139,13 @@ impl Glyph {
         Glyph::Code,
         Glyph::Folder,
         Glyph::Blocks,
-        Glyph::File,
-        Glyph::Pen,
         Glyph::Clipboard,
-        Glyph::Layout,
-        Glyph::Moon,
-        Glyph::Lock,
         Glyph::SearchNone,
         Glyph::ArrowRight,
-        Glyph::Calculator,
         Glyph::Clock,
-        Glyph::Package,
-        Glyph::Target,
         Glyph::Gear,
-        Glyph::Globe,
         Glyph::Keyboard,
         Glyph::ChevronRight,
-        Glyph::Theme,
         Glyph::Monitor,
         Glyph::Sliders,
         Glyph::ActionOpen,
@@ -200,11 +156,6 @@ impl Glyph {
         Glyph::Pause,
         Glyph::Shield,
         Glyph::Lines,
-        Glyph::Link,
-        Glyph::Image,
-        Glyph::Mail,
-        Glyph::Notes,
-        Glyph::Music,
         Glyph::ActionPin,
         Glyph::Plus,
         Glyph::Reset,
@@ -220,23 +171,13 @@ impl Glyph {
             Glyph::Code => glyph_svg!("code"),
             Glyph::Folder => glyph_svg!("folder"),
             Glyph::Blocks => glyph_svg!("blocks"),
-            Glyph::File => glyph_svg!("file"),
-            Glyph::Pen => glyph_svg!("pen"),
             Glyph::Clipboard => glyph_svg!("clipboard"),
-            Glyph::Layout => glyph_svg!("layout"),
-            Glyph::Moon => glyph_svg!("moon"),
-            Glyph::Lock => glyph_svg!("lock"),
             Glyph::SearchNone => glyph_svg!("search-none"),
             Glyph::ArrowRight => glyph_svg!("arrow-right"),
-            Glyph::Calculator => glyph_svg!("calculator"),
             Glyph::Clock => glyph_svg!("clock"),
-            Glyph::Package => glyph_svg!("package"),
-            Glyph::Target => glyph_svg!("target"),
             Glyph::Gear => glyph_svg!("gear"),
-            Glyph::Globe => glyph_svg!("globe"),
             Glyph::Keyboard => glyph_svg!("keyboard"),
             Glyph::ChevronRight => glyph_svg!("chevron-right"),
-            Glyph::Theme => glyph_svg!("theme"),
             Glyph::Monitor => glyph_svg!("monitor"),
             Glyph::Sliders => glyph_svg!("sliders"),
             Glyph::ActionOpen => glyph_svg!("action-open"),
@@ -247,11 +188,6 @@ impl Glyph {
             Glyph::Pause => glyph_svg!("pause"),
             Glyph::Shield => glyph_svg!("shield"),
             Glyph::Lines => glyph_svg!("lines"),
-            Glyph::Link => glyph_svg!("link"),
-            Glyph::Image => glyph_svg!("image"),
-            Glyph::Mail => glyph_svg!("mail"),
-            Glyph::Notes => glyph_svg!("notes"),
-            Glyph::Music => glyph_svg!("music"),
             Glyph::ActionPin => glyph_svg!("action-pin"),
             Glyph::Plus => glyph_svg!("plus"),
             Glyph::Reset => glyph_svg!("reset"),
@@ -324,12 +260,7 @@ pub(crate) enum IconTone {
     Term,
     Code,
     Web,
-    Pen,
     Folder,
-    /// The reference's `note` tone (violet).
-    Note,
-    /// The reference's `music` tone (green).
-    Music,
     Command,
 }
 
@@ -346,10 +277,7 @@ fn app_tone(tone: IconTone) -> Option<(Hsla, Hsla, Hsla)> {
         IconTone::Term => (0x4A4D55FF, 0x1C1E22FF, 0xC8F5B4FF),
         IconTone::Code => (0x45A3F5FF, 0x1D62C8FF, 0xFFFFFFFF),
         IconTone::Web => (0xFFA24DFF, 0xE2530FFF, 0xFFFFFFFF),
-        IconTone::Pen => (0xFF739FFF, 0xCF2D63FF, 0xFFFFFFFF),
         IconTone::Folder => (0x74B6FFFF, 0x2F78DEFF, 0xFFFFFFFF),
-        IconTone::Note => (0xA184FFFF, 0x5B3BD0FF, 0xFFFFFFFF),
-        IconTone::Music => (0x3DDC78FF, 0x129245FF, 0xFFFFFFFF),
         IconTone::Command => return None,
     };
     Some((color(top), color(bottom), color(glyph)))
@@ -415,10 +343,6 @@ pub(crate) enum TileSize {
     Slot,
     /// The Actions panel header's tile.
     Mini,
-    /// A row of the Appearance preview's miniature launcher (22).
-    PreviewRow,
-    /// A pinned slot of the Appearance preview's miniature launcher (24).
-    PreviewPin,
 }
 
 impl TileSize {
@@ -429,8 +353,6 @@ impl TileSize {
             TileSize::Row => geometry.tile,
             TileSize::Slot => geometry.slot_tile,
             TileSize::Mini => geometry.mini_tile,
-            TileSize::PreviewRow => geometry.preview.row_tile,
-            TileSize::PreviewPin => geometry.preview.pin_tile,
         }
     }
 }

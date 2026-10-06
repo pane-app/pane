@@ -16,22 +16,18 @@ use tempfile::TempDir;
 #[path = "support/platforms.rs"]
 mod platforms;
 
+#[path = "support/guests.rs"]
+mod guests;
+#[path = "support/rows.rs"]
+mod rows;
+
+use guests::guest;
+use rows::titles;
+
 const INSTALL_ROW: &str = "Install extension from folder…";
 const NPM_ROW: &str = "Install extension from npm…";
 const GIT_ROW: &str = "Install extension from Git…";
 const MANAGE_ROW: &str = "Manage extensions…";
-
-fn guest(name: &str) -> PathBuf {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/guests")
-        .join(format!("{name}.wasm"));
-    assert!(
-        path.exists(),
-        "{} is missing; run `cargo xtask guests`",
-        path.display()
-    );
-    path
-}
 
 /// A command built into the launcher, backed by the Rust sample.
 fn command(title: &str, subtitle: Option<&str>) -> CommandRegistration {
@@ -49,15 +45,6 @@ fn command(title: &str, subtitle: Option<&str>) -> CommandRegistration {
 fn without_runtime(commands: Vec<CommandRegistration>) -> Launcher {
     let unavailable = Err(CallError::RuntimeUnavailable("no engine".into()));
     Launcher::new(unavailable, commands)
-}
-
-fn titles(launcher: &Launcher) -> Vec<String> {
-    launcher
-        .view()
-        .rows
-        .into_iter()
-        .map(|row| row.title)
-        .collect()
 }
 
 fn selected_title(launcher: &Launcher) -> Option<String> {

@@ -838,7 +838,7 @@ impl Runtime {
     /// Starts the runtime again after its thread crashed and Pane did not
     /// restart it by itself ([`RuntimeStatus::Stopped`]); nothing that was
     /// running before is run again. A runtime that runs is left as it is.
-    pub fn restart(&self) -> Result<(), CallError> {
+    pub(crate) fn restart(&self) -> Result<(), CallError> {
         self.shared.restart()
     }
 
@@ -1313,7 +1313,7 @@ impl Runtime {
     /// not counted: a replacement ends them and the new code restarts or
     /// re-asks them. Nor is a custom view event, whose open screen is what
     /// the launcher waits for instead. In no particular order.
-    pub fn busy(&self) -> Vec<PathBuf> {
+    pub(crate) fn busy(&self) -> Vec<PathBuf> {
         lock(&self.shared.busy)
             .iter()
             .filter(|(_, busy)| busy.calls > 0)

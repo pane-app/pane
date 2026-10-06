@@ -12,6 +12,11 @@ use futures::executor::block_on;
 use pane_core::{Launcher, PackageIdentity, Runtime, Screen, Status};
 use tempfile::TempDir;
 
+#[path = "support/rows.rs"]
+mod rows;
+
+use rows::titles;
+
 const MANAGE_ROW: &str = "Manage extensions…";
 
 struct Fixture {
@@ -107,15 +112,6 @@ fn install_from(launcher: &Launcher, folder: &Path) {
         "{:?}",
         launcher.view().status
     );
-}
-
-fn titles(launcher: &Launcher) -> Vec<String> {
-    launcher
-        .view()
-        .rows
-        .into_iter()
-        .map(|row| row.title)
-        .collect()
 }
 
 fn selected_title(launcher: &Launcher) -> Option<String> {

@@ -16,19 +16,15 @@ use futures::executor::block_on;
 use pane_core::{Launcher, PackageIdentity, Question, Runtime, Screen, Status};
 use tempfile::TempDir;
 
-const MANAGE_ROW: &str = "Manage extensions…";
+#[path = "support/guests.rs"]
+mod guests;
+#[path = "support/rows.rs"]
+mod rows;
 
-fn guest(file: &str) -> PathBuf {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/guests")
-        .join(file);
-    assert!(
-        path.exists(),
-        "{} is missing; run `cargo xtask guests`",
-        path.display()
-    );
-    path
-}
+use guests::guest_file as guest;
+use rows::{select_title, titles};
+
+const MANAGE_ROW: &str = "Manage extensions…";
 
 struct Dirs {
     sources: TempDir,
@@ -145,23 +141,6 @@ fn uses(folder: &str) -> String {
         r#"{{ "id": "{folder}", "source": "local:../{folder}", "optional": true,
              "operations": [{{ "id": "echo", "version": 1 }}] }}"#
     )
-}
-
-fn titles(launcher: &Launcher) -> Vec<String> {
-    launcher
-        .view()
-        .rows
-        .into_iter()
-        .map(|row| row.title)
-        .collect()
-}
-
-fn select_title(launcher: &Launcher, title: &str) {
-    let index = titles(launcher)
-        .iter()
-        .position(|row| row == title)
-        .unwrap_or_else(|| panic!("no row {title:?} in {:?}", titles(launcher)));
-    launcher.select(index);
 }
 
 fn press(launcher: &Launcher, title: &str) -> Status {

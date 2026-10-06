@@ -16,7 +16,6 @@
 //! the system's clipboard is a fake that never touches the real one.
 
 use std::fs;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use futures::executor::block_on;
@@ -36,6 +35,11 @@ use tempfile::TempDir;
 mod artifacts;
 
 use artifacts::Artifacts;
+
+#[path = "support/guests.rs"]
+mod guests;
+
+use guests::guests;
 
 const HOUR: i64 = 3_600_000;
 /// UTC+7, a local time a day ahead of UTC for part of the day.
@@ -312,10 +316,6 @@ impl ClipboardSystem for FakeClipboard {
         self.inner.lock().unwrap().written.push(text.into());
         Ok(())
     }
-}
-
-fn guests() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests")
 }
 
 /// The files of the assembled Clipboard History package, by their path in

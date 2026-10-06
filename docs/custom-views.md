@@ -101,7 +101,7 @@ resource on its thread and hands out only a `ViewId`: `open_view`,
 `view_count` (the launcher never consults it; it keeps its own open view). No
 renderer or engine object crosses into the guest or the SDKs: guests see only
 the WIT records above, and the window turns frames into GPUI CE elements
-([`crates/pane/src/custom_view.rs`](../crates/pane/src/custom_view.rs)).
+([`crates/pane/src/extension_views/custom_view.rs`](../crates/pane/src/extension_views/custom_view.rs)).
 
 | Input | On the custom view screen |
 | --- | --- |

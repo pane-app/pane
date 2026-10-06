@@ -53,15 +53,14 @@ use crate::dependencies;
 use crate::extension_data::{ExtensionData, PackageData};
 use crate::files::FileAccess;
 use crate::generation::End;
-use crate::helpers;
 use crate::hotkeys::{self as system_hotkeys, Hotkeys};
 use crate::links::{self, LinkOpener, NoOpener};
-use crate::operations::{self, Installed};
+use crate::operations::Installed;
 use crate::packages::{
     InstalledPackage, PackageError, PackageIdentity, RetainedData, SavedData, SourcePackage, Store,
     paused_reason,
 };
-use crate::platform::{self, Platform};
+use crate::platform;
 use crate::runtime::{
     CallError, CustomViewInfo, CustomViewRole, FieldKind, FieldValue, Form, Frame, Item, Point,
     ResultListing, RootAction, RootResult as ComputedResult, Runtime, ViewEvent, ViewId,
@@ -71,6 +70,7 @@ use crate::search::{self, Keys, Query};
 
 mod dependents;
 mod developing;
+mod extensions;
 mod files;
 mod install;
 mod pausing;
@@ -84,6 +84,7 @@ mod uninstall;
 mod updates;
 
 use acquire::{Acquisitions, Defaults};
+use actions::selected_action;
 pub use actions::{ResultAction, ResultActionItem, ResultActions};
 use aliases::AliasChoices;
 pub use aliases::AliasOutcome;
@@ -1051,6 +1052,42 @@ enum Entry {
     Cancel,
 }
 
+/// What activating a row leaves to do once the launcher is unlocked, for
+/// [`Launcher::activate_selected`]'s future: at most one piece of work,
+/// begun while the launcher was locked.
+enum Pending {
+    /// Nothing: the row did at once all it does, or there was none.
+    Nothing,
+    Open(Opening),
+    Send(aliases::Sending),
+    OpenApplication {
+        id: String,
+        name: String,
+    },
+    Run(String),
+    CustomView(String, CustomViewInfo),
+    OpenUrl(String),
+    OpenFile {
+        owner: String,
+        id: String,
+        name: String,
+    },
+    ClearCache(PackageIdentity),
+    Develop(PackageIdentity, developing::DevelopStart),
+    Change(Change),
+    Reload(reload::Reload),
+    HotkeyChange(hotkeys::HotkeyChange),
+    ChoiceChange(aliases::ChoiceChange),
+    UpdateToggle(updates::UpdateToggle),
+    Uninstall(uninstall::Uninstall),
+    DeleteRetained(RetainedData),
+    Install(install::Begun),
+    Acquire(String),
+    InstallUpdate,
+    CheckUpdate,
+    StopSharing(PackageIdentity),
+}
+
 /// A command root search can open.
 #[derive(Clone)]
 struct Opening {
@@ -1450,20 +1487,6 @@ impl Launcher {
     /// The installed packages, as read from their managed copies.
     pub fn packages(&self) -> Vec<InstalledPackage> {
         self.lock().packages.clone()
-    }
-
-    /// The extension list, as "Manage extensions…" shows it: its rows and
-    /// its lines of information, read without leaving the screen the
-    /// launcher is on. The rows are the ones [`Launcher::manage_extensions`]
-    /// shows once the list is entered; a second window over the launcher
-    /// (Pane's Settings) lists the installed extensions through this before
-    /// the user opens the flow itself, so it stays a reading of the
-    /// launcher's own records rather than a copy of them.
-    pub fn extension_list(&self) -> LauncherView {
-        let state = self.lock();
-        let (rows, _) = self.extension_rows(&state);
-        let details = extension_details(&state);
-        LauncherView::new(Screen::Extensions { details }, "Extensions").with_rows(rows)
     }
 
     /// Whether this launcher installs packages — whether it was made with
@@ -2035,152 +2058,196 @@ impl Launcher {
             .view
             .selected
             .and_then(|index| state.entries.get(index).cloned());
-        let mut change = None;
-        let mut reload = None;
-        let mut hotkey_change = None;
-        let mut choice_change = None;
-        let mut update_toggle = None;
-        let mut uninstall = None;
-        let mut develop = None;
-        let mut delete_retained = None;
-        let mut install = None;
-        let mut acquire = None;
-        let mut install_update = false;
-        let mut check_update = false;
-        let mut stop_sharing = None;
         // The status line is about this action from now on.
         state.sent_from = None;
-        let entry = match entry {
-            Some(Entry::Send(sending)) => match &sending.unavailable {
+        let pending = match entry {
+            Some(entry) => self.activation(&mut state, entry),
+            None => Pending::Nothing,
+        };
+        let epoch = state.screen_epoch;
+        let open = state.open.clone();
+        // A call into the package belongs to its generation as of now, not
+        // as of when the returned future first runs.
+        let called = match &pending {
+            Pending::Open(Opening { component, .. })
+            | Pending::Send(aliases::Sending { component, .. }) => Some(component),
+            Pending::Run(_) | Pending::CustomView(..) => open.as_ref(),
+            _ => None,
+        };
+        let data = called.and_then(|component| self.data_in(&state, component));
+        drop(state);
+        let launcher = self.clone();
+        async move {
+            match pending {
+                Pending::Nothing => {}
+                Pending::Open(opening) => launcher.open_command(epoch, opening, data).await,
+                Pending::Send(sending) => launcher.run_query(epoch, sending, data).await,
+                Pending::OpenApplication { id, name } => {
+                    launcher.open_application(epoch, id, name).await
+                }
+                Pending::Run(item_id) => {
+                    if let Some(component) = open {
+                        launcher.run_action(epoch, component, item_id, data).await
+                    }
+                }
+                Pending::OpenUrl(url) => launcher.open_url(epoch, url).await,
+                Pending::OpenFile { owner, id, name } => {
+                    launcher.open_file(epoch, owner, id, name).await
+                }
+                Pending::ClearCache(identity) => launcher.clear_cache(epoch, identity).await,
+                Pending::CustomView(item_id, info) => {
+                    if let Some(component) = open {
+                        launcher
+                            .open_custom_view(epoch, component, item_id, info, data)
+                            .await
+                    }
+                }
+                Pending::Develop(identity, start) => {
+                    launcher.finish_developing(identity, start).await
+                }
+                Pending::Change(change) => launcher.finish_change(epoch, change).await,
+                Pending::Reload(reload) => launcher.finish_reload(epoch, reload).await,
+                Pending::HotkeyChange(change) => launcher.finish_hotkey_change(change).await,
+                Pending::ChoiceChange(change) => launcher.finish_choice_change(change).await,
+                Pending::UpdateToggle(toggle) => launcher.finish_update_toggle(toggle).await,
+                Pending::Uninstall(uninstall) => launcher.finish_uninstall(epoch, uninstall).await,
+                Pending::DeleteRetained(retained) => {
+                    launcher.finish_delete_retained(epoch, retained).await
+                }
+                Pending::Install(install) => launcher.finish_install(epoch, install).await,
+                Pending::Acquire(id) => launcher.retry_acquiring(&id).await,
+                Pending::InstallUpdate => launcher.install_application_update().await,
+                Pending::CheckUpdate => launcher.check_application_update_again().await,
+                Pending::StopSharing(identity) => launcher.stop_sharing_folder(identity).await,
+            }
+        }
+    }
+
+    /// Does at once what activating `entry` does while the launcher is
+    /// locked, and returns the work left for [`Launcher::activate_selected`]'s
+    /// future. Every kind of row is named here, so a new one has to say what
+    /// activating it does.
+    fn activation(&self, state: &mut State, entry: Entry) -> Pending {
+        match entry {
+            Entry::Send(sending) => match &sending.unavailable {
                 Some(reason) => {
                     state.view.status = Status::Error(reason.clone());
-                    None
+                    Pending::Nothing
                 }
                 None => {
                     state.sent_from = state.view.query().map(str::to_owned);
                     state.view.status = Status::Running;
-                    Some(Entry::Send(sending))
+                    Pending::Send(sending)
                 }
             },
-            Some(Entry::Broken(problem) | Entry::Unavailable(problem)) => {
+            Entry::Broken(problem) | Entry::Unavailable(problem) => {
                 state.view.status = Status::Error(problem);
-                None
+                Pending::Nothing
             }
-            Some(Entry::Copy(text)) => {
+            Entry::Copy(text) => {
                 state.view.status = Status::Result(format!("Copied {text} to the clipboard"));
-                None
+                Pending::Nothing
             }
-            Some(Entry::Form(item_id, form)) => {
-                open_form(&mut state, item_id, form);
-                None
+            Entry::Form(item_id, form) => {
+                open_form(state, item_id, form);
+                Pending::Nothing
             }
-            Some(Entry::OpenUrl(url)) => match links::refusal(&url) {
+            Entry::OpenUrl(url) => match links::refusal(&url) {
                 Some(reason) => {
                     state.view.status = Status::Error(format!("Could not open {url}: {reason}"));
-                    None
+                    Pending::Nothing
                 }
                 None => {
                     state.view.status = Status::Running;
-                    Some(Entry::OpenUrl(url))
+                    Pending::OpenUrl(url)
                 }
             },
-            Some(Entry::StopSharingFolder(identity)) => {
-                stop_sharing = Some(identity);
-                None
+            Entry::StopSharingFolder(identity) => Pending::StopSharing(identity),
+            Entry::Manage => {
+                self.show_extensions(state);
+                Pending::Nothing
             }
-            Some(Entry::Manage) => {
-                self.show_extensions(&mut state);
-                None
+            Entry::AskClearCache(identity) => {
+                self.show_clear_cache(state, &identity);
+                Pending::Nothing
             }
-            Some(Entry::AskClearCache(identity)) => {
-                self.show_clear_cache(&mut state, &identity);
-                None
+            Entry::NetworkDetails(identity) => {
+                self.show_network_details(state, &identity);
+                Pending::Nothing
             }
-            Some(Entry::NetworkDetails(identity)) => {
-                self.show_network_details(&mut state, &identity);
-                None
+            Entry::PauseDetails(identity) => {
+                self.show_pause_details(state, &identity);
+                Pending::Nothing
             }
-            Some(Entry::PauseDetails(identity)) => {
-                self.show_pause_details(&mut state, &identity);
-                None
+            Entry::RuntimeDetails => {
+                self.show_runtime_details(state);
+                Pending::Nothing
             }
-            Some(Entry::RuntimeDetails) => {
-                self.show_runtime_details(&mut state);
-                None
+            Entry::RestartRuntime => {
+                self.restart_runtime(state);
+                Pending::Nothing
             }
-            Some(Entry::RestartRuntime) => {
-                self.restart_runtime(&mut state);
-                None
+            Entry::Develop(identity) => match self.begin_developing(state, &identity) {
+                Some(start) => Pending::Develop(identity, start),
+                None => Pending::Nothing,
+            },
+            Entry::StopDeveloping(identity) => {
+                self.end_developing(state, &identity);
+                self.refresh(state);
+                Pending::Nothing
             }
-            Some(Entry::Develop(identity)) => {
-                develop = self
-                    .begin_developing(&mut state, &identity)
-                    .map(|start| (identity, start));
-                None
+            Entry::BuildDetails(identity) => {
+                self.show_build_details(state, &identity);
+                Pending::Nothing
             }
-            Some(Entry::StopDeveloping(identity)) => {
-                self.end_developing(&mut state, &identity);
-                self.refresh(&mut state);
-                None
+            Entry::BuildAgain(identity) => {
+                self.build_again(state, &identity);
+                Pending::Nothing
             }
-            Some(Entry::BuildDetails(identity)) => {
-                self.show_build_details(&mut state, &identity);
-                None
-            }
-            Some(Entry::BuildAgain(identity)) => {
-                self.build_again(&mut state, &identity);
-                None
-            }
-            Some(Entry::AskUninstall(identity)) => {
+            Entry::AskUninstall(identity) => {
                 let closure = dependencies::required_dependents(&state.packages, &identity);
                 if closure.is_empty() {
-                    self.show_uninstall(&mut state, &identity);
+                    self.show_uninstall(state, &identity);
                 } else {
-                    self.show_uninstall_dependents(&mut state, &identity, closure);
+                    self.show_uninstall_dependents(state, &identity, closure);
                 }
-                None
+                Pending::Nothing
             }
-            Some(Entry::Uninstall(identity, saved)) => {
-                uninstall = self.begin_uninstall(&mut state, vec![identity], saved);
-                None
+            Entry::Uninstall(identity, saved) => self
+                .begin_uninstall(state, vec![identity], saved)
+                .map_or(Pending::Nothing, Pending::Uninstall),
+            Entry::UninstallAll(identity, shown, saved) => self
+                .begin_uninstall_all(state, identity, &shown, saved)
+                .map_or(Pending::Nothing, Pending::Uninstall),
+            Entry::AskDeleteRetained(identity) => {
+                self.show_delete_retained(state, &identity);
+                Pending::Nothing
             }
-            Some(Entry::UninstallAll(identity, shown, saved)) => {
-                uninstall = self.begin_uninstall_all(&mut state, identity, &shown, saved);
-                None
+            Entry::DeleteRetained(identity) => self
+                .begin_delete_retained(state, identity)
+                .map_or(Pending::Nothing, Pending::DeleteRetained),
+            Entry::Cancel => {
+                self.leave_confirm(state);
+                Pending::Nothing
             }
-            Some(Entry::AskDeleteRetained(identity)) => {
-                self.show_delete_retained(&mut state, &identity);
-                None
+            Entry::AskHotkey(command) => {
+                self.show_hotkey(state, &command);
+                Pending::Nothing
             }
-            Some(Entry::DeleteRetained(identity)) => {
-                delete_retained = self.begin_delete_retained(&mut state, identity);
-                None
+            Entry::RemoveHotkey(command) => self
+                .remove_hotkey(state, &command)
+                .map_or(Pending::Nothing, Pending::HotkeyChange),
+            Entry::AskAlias(command) => {
+                self.show_alias_form(state, &command);
+                Pending::Nothing
             }
-            Some(Entry::Cancel) => {
-                self.leave_confirm(&mut state);
-                None
+            Entry::ToggleFallback(command) => {
+                Pending::ChoiceChange(self.toggle_fallback(state, &command))
             }
-            Some(Entry::AskHotkey(command)) => {
-                self.show_hotkey(&mut state, &command);
-                None
+            Entry::ForgetChoices(command) => {
+                Pending::ChoiceChange(self.forget_choices(state, &command))
             }
-            Some(Entry::RemoveHotkey(command)) => {
-                hotkey_change = self.remove_hotkey(&mut state, &command);
-                None
-            }
-            Some(Entry::AskAlias(command)) => {
-                self.show_alias_form(&mut state, &command);
-                None
-            }
-            Some(Entry::ToggleFallback(command)) => {
-                choice_change = Some(self.toggle_fallback(&mut state, &command));
-                None
-            }
-            Some(Entry::ForgetChoices(command)) => {
-                choice_change = Some(self.forget_choices(&mut state, &command));
-                None
-            }
-            Some(Entry::Toggle(identity)) => {
+            Entry::Toggle(identity) => {
                 // The package's state when the user pressed, not when the
                 // future runs.
                 let enable = state.package(&identity).is_some_and(|p| !p.enabled);
@@ -2189,410 +2256,73 @@ impl Launcher {
                     false => dependencies::required_dependents(&state.packages, &identity),
                 };
                 if closure.iter().any(|dependent| dependent.enabled) {
-                    self.show_disable_dependents(&mut state, &identity, closure);
+                    self.show_disable_dependents(state, &identity, closure);
+                    Pending::Nothing
                 } else {
-                    change = self.begin_change(&mut state, vec![identity], enable);
+                    self.begin_change(state, vec![identity], enable)
+                        .map_or(Pending::Nothing, Pending::Change)
                 }
-                None
             }
-            Some(Entry::ToggleUpdates(which)) => {
-                update_toggle = self.begin_update_toggle(&mut state, which);
-                None
-            }
-            Some(Entry::DisableAll(identity, shown)) => {
-                change = self.begin_disable_all(&mut state, identity, &shown);
-                None
-            }
-            Some(Entry::Reload(identity)) => {
-                reload = self.begin_reload(&mut state, identity, reload::Attempt::Reload);
-                None
-            }
-            Some(Entry::Retry(identity)) => {
-                reload = self.begin_reload(&mut state, identity, reload::Attempt::Retry);
-                None
-            }
-            Some(Entry::Install(request, mode, assumptions)) => {
-                install = self.begin_install(&mut state, request, mode, assumptions);
-                None
-            }
-            Some(Entry::Acquire(id)) => {
-                acquire = Some(id);
+            Entry::ToggleUpdates(which) => self
+                .begin_update_toggle(state, which)
+                .map_or(Pending::Nothing, Pending::UpdateToggle),
+            Entry::DisableAll(identity, shown) => self
+                .begin_disable_all(state, identity, &shown)
+                .map_or(Pending::Nothing, Pending::Change),
+            Entry::Reload(identity) => self
+                .begin_reload(state, identity, reload::Attempt::Reload)
+                .map_or(Pending::Nothing, Pending::Reload),
+            Entry::Retry(identity) => self
+                .begin_reload(state, identity, reload::Attempt::Retry)
+                .map_or(Pending::Nothing, Pending::Reload),
+            Entry::Install(request, mode, assumptions) => self
+                .begin_install(state, request, mode, assumptions)
+                .map_or(Pending::Nothing, Pending::Install),
+            Entry::Acquire(id) => {
                 state.view.status = Status::Running;
-                None
+                Pending::Acquire(id)
             }
-            Some(Entry::InstallUpdate) => {
-                install_update = true;
+            Entry::InstallUpdate => {
                 state.view.status = Status::Running;
-                None
+                Pending::InstallUpdate
             }
-            Some(Entry::CheckUpdate) => {
-                check_update = true;
+            Entry::CheckUpdate => {
                 state.view.status = Status::Running;
-                None
+                Pending::CheckUpdate
             }
-            Some(Entry::AskNpm) => {
-                self.show_npm_form(&mut state);
-                None
+            Entry::AskNpm => {
+                self.show_npm_form(state);
+                Pending::Nothing
             }
-            Some(Entry::AskGit) => {
-                self.show_git_form(&mut state);
-                None
+            Entry::AskGit => {
+                self.show_git_form(state);
+                Pending::Nothing
             }
-            Some(Entry::InstallFromFolder | Entry::ChooseFolder(_) | Entry::Settings) | None => {
-                None
-            }
-            Some(entry) => {
+            // The window acts on these, not the launcher.
+            Entry::InstallFromFolder | Entry::ChooseFolder(_) | Entry::Settings => Pending::Nothing,
+            Entry::Open(opening) => {
                 state.view.status = Status::Running;
-                Some(entry)
+                Pending::Open(opening)
             }
-        };
-        let epoch = state.screen_epoch;
-        let open = state.open.clone();
-        // A call into the package belongs to its generation as of now, not
-        // as of when the returned future first runs.
-        let called = match &entry {
-            Some(
-                Entry::Open(Opening { component, .. })
-                | Entry::Send(aliases::Sending { component, .. }),
-            ) => Some(component),
-            Some(Entry::Run(_) | Entry::CustomView(..)) => open.as_ref(),
-            _ => None,
-        };
-        let data = called.and_then(|component| self.data_in(&state, component));
-        drop(state);
-        let launcher = self.clone();
-        async move {
-            if let Some((identity, start)) = develop {
-                launcher.finish_developing(identity, start).await;
+            Entry::Run(item_id) => {
+                state.view.status = Status::Running;
+                Pending::Run(item_id)
             }
-            if let Some(change) = change {
-                launcher.finish_change(epoch, change).await;
+            Entry::CustomView(item_id, info) => {
+                state.view.status = Status::Running;
+                Pending::CustomView(item_id, info)
             }
-            if let Some(reload) = reload {
-                launcher.finish_reload(epoch, reload).await;
+            Entry::OpenApplication { id, name } => {
+                state.view.status = Status::Running;
+                Pending::OpenApplication { id, name }
             }
-            if let Some(hotkey_change) = hotkey_change {
-                launcher.finish_hotkey_change(hotkey_change).await;
+            Entry::OpenFile { owner, id, name } => {
+                state.view.status = Status::Running;
+                Pending::OpenFile { owner, id, name }
             }
-            if let Some(choice_change) = choice_change {
-                launcher.finish_choice_change(choice_change).await;
-            }
-            if let Some(update_toggle) = update_toggle {
-                launcher.finish_update_toggle(update_toggle).await;
-            }
-            if let Some(uninstall) = uninstall {
-                launcher.finish_uninstall(epoch, uninstall).await;
-            }
-            if let Some(retained) = delete_retained {
-                launcher.finish_delete_retained(epoch, retained).await;
-            }
-            if let Some(install) = install {
-                launcher.finish_install(epoch, install).await;
-            }
-            if let Some(id) = acquire {
-                launcher.retry_acquiring(&id).await;
-            }
-            if install_update {
-                launcher.install_application_update().await;
-            }
-            if check_update {
-                launcher.check_application_update_again().await;
-            }
-            if let Some(identity) = stop_sharing {
-                launcher.stop_sharing_folder(identity).await;
-            }
-            match entry {
-                Some(Entry::Open(opening)) => launcher.open_command(epoch, opening, data).await,
-                Some(Entry::Send(sending)) => launcher.run_query(epoch, sending, data).await,
-                Some(Entry::OpenApplication { id, name }) => {
-                    launcher.open_application(epoch, id, name).await
-                }
-                Some(Entry::Run(item_id)) => {
-                    if let Some(component) = open {
-                        launcher.run_action(epoch, component, item_id, data).await
-                    }
-                }
-                Some(Entry::OpenUrl(url)) => launcher.open_url(epoch, url).await,
-                Some(Entry::OpenFile { owner, id, name }) => {
-                    launcher.open_file(epoch, owner, id, name).await
-                }
-                Some(Entry::ClearCache(identity)) => launcher.clear_cache(epoch, identity).await,
-                Some(Entry::CustomView(item_id, info)) => {
-                    if let Some(component) = open {
-                        launcher
-                            .open_custom_view(epoch, component, item_id, info, data)
-                            .await
-                    }
-                }
-                Some(
-                    Entry::Copy(_)
-                    | Entry::Broken(_)
-                    | Entry::Unavailable(_)
-                    | Entry::InstallFromFolder
-                    | Entry::AskNpm
-                    | Entry::AskGit
-                    | Entry::Acquire(_)
-                    | Entry::InstallUpdate
-                    | Entry::CheckUpdate
-                    | Entry::ChooseFolder(_)
-                    | Entry::StopSharingFolder(_)
-                    | Entry::Install(..)
-                    | Entry::Manage
-                    | Entry::Toggle(_)
-                    | Entry::ToggleUpdates(_)
-                    | Entry::DisableAll(..)
-                    | Entry::Reload(_)
-                    | Entry::Retry(_)
-                    | Entry::PauseDetails(_)
-                    | Entry::NetworkDetails(_)
-                    | Entry::RuntimeDetails
-                    | Entry::RestartRuntime
-                    | Entry::Develop(_)
-                    | Entry::StopDeveloping(_)
-                    | Entry::BuildDetails(_)
-                    | Entry::BuildAgain(_)
-                    | Entry::AskClearCache(_)
-                    | Entry::AskHotkey(_)
-                    | Entry::RemoveHotkey(_)
-                    | Entry::AskAlias(_)
-                    | Entry::ToggleFallback(_)
-                    | Entry::ForgetChoices(_)
-                    | Entry::AskUninstall(_)
-                    | Entry::Uninstall(..)
-                    | Entry::UninstallAll(..)
-                    | Entry::AskDeleteRetained(_)
-                    | Entry::DeleteRetained(_)
-                    | Entry::Cancel
-                    | Entry::Settings
-                    | Entry::Form(..),
-                )
-                | None => {}
-            }
-        }
-    }
-
-    /// Reads the package in `folder` and shows its identity, version,
-    /// commands and compatibility, offering Install, or Update when a
-    /// package with the same identity is installed. No guest code runs. An
-    /// invalid or incompatible package is explained instead.
-    pub fn preview_package(&self, folder: &Path) -> impl Future<Output = ()> + Send + 'static {
-        self.preview(Ok(install::Request::Folder(folder.to_path_buf())))
-    }
-
-    /// Downloads the npm package `spec` names (`name`, `@scope/name`, with
-    /// an optional exact version: `name@1.2.3`) and shows it as
-    /// [`Launcher::preview_package`] shows a folder, with the npm version it
-    /// would install. Without a version it is the latest; with one,
-    /// installing pins the package to it. Nothing in the package runs.
-    pub fn preview_npm(&self, spec: &str) -> impl Future<Output = ()> + Send + 'static {
-        let asked = spec.trim().to_owned();
-        let request = crate::npm::NpmSpec::parse(spec)
-            .map(install::Request::Npm)
-            .map_err(|why| (format!("npm package: {asked}"), asked, why));
-        self.preview(request)
-    }
-
-    /// Fetches the revision of the Git repository `spec` names (an address
-    /// such as `https://github.com/owner/repo`, `github.com/owner/repo` or
-    /// `git@github.com:owner/repo`, with an optional `@<branch, tag or
-    /// commit>`) and shows it as [`Launcher::preview_package`] shows a
-    /// folder, with the revision it would install. Without a reference it is
-    /// the default branch, tracked; a branch is tracked, a tag or a commit
-    /// pinned. For an installed repository named without one, the installed
-    /// reference is kept. Nothing in the repository runs.
-    pub fn preview_git(&self, spec: &str) -> impl Future<Output = ()> + Send + 'static {
-        let asked = spec.trim().to_owned();
-        let request = crate::git::GitSpec::parse(spec)
-            .map(install::Request::Git)
-            .map_err(|why| (format!("Git repository: {asked}"), asked, why));
-        self.preview(request)
-    }
-
-    /// Previews the package `request` names, or explains why the text asked
-    /// for (its detail line, the text and the reason) names none.
-    fn preview(
-        &self,
-        request: Result<install::Request, (String, String, String)>,
-    ) -> impl Future<Output = ()> + Send + 'static {
-        let epoch = self.start_running();
-        let launcher = self.clone();
-        async move {
-            let request = match request {
-                Ok(request) => request,
-                Err((detail, asked, why)) => {
-                    let mut state = launcher.lock();
-                    if state.screen_epoch == epoch {
-                        launcher.leave_command(&mut state);
-                        state.entries = Vec::new();
-                        state.view = LauncherView {
-                            status: Status::Error(why),
-                            ..LauncherView::new(
-                                Screen::Package {
-                                    details: vec![detail],
-                                },
-                                format!("Cannot install {asked}"),
-                            )
-                        };
-                    }
-                    return;
-                }
-            };
-            let request = launcher.keeping_pin(request);
-            let checked = match launcher.read_and_check(request.clone()).await {
-                Ok(package) => Ok(launcher.plan_dependencies(package).await),
-                Err(error) => Err(error),
-            };
-            let mut state = launcher.lock();
-            if state.screen_epoch != epoch {
-                return;
-            }
-            launcher.show_preview(&mut state, &request, checked);
-        }
-    }
-
-    /// `request`, or for an npm package without a version that is installed
-    /// pinned to one, that version: updating it keeps its pin, which only
-    /// naming another version changes. Likewise a Git repository without a
-    /// reference keeps the branch, tag or commit it is installed from.
-    fn keeping_pin(&self, request: install::Request) -> install::Request {
-        match request {
-            install::Request::Npm(spec) if spec.version.is_none() => {
-                let state = self.lock();
-                let pinned = state
-                    .package(&PackageIdentity::npm(&spec.name))
-                    .and_then(|package| package.npm.as_ref())
-                    .filter(|npm| npm.pinned)
-                    .map(|npm| npm.version.clone());
-                install::Request::Npm(crate::npm::NpmSpec {
-                    version: pinned,
-                    ..spec
-                })
-            }
-            // A repository named without a reference keeps the one it is
-            // installed from: its branch, tag or commit.
-            install::Request::Git(spec) if spec.reference.is_none() => {
-                let state = self.lock();
-                let installed = state
-                    .package(&PackageIdentity::git(&spec.repository))
-                    .and_then(|package| package.git.as_ref())
-                    .and_then(|git| git.revision.asked_as());
-                install::Request::Git(crate::git::GitSpec {
-                    reference: installed,
-                    ..spec
-                })
-            }
-            other => other,
-        }
-    }
-
-    /// Shows the package screen for `request`, from its package and plan or
-    /// why it cannot be read.
-    fn show_preview(
-        &self,
-        state: &mut State,
-        request: &install::Request,
-        checked: Result<(SourcePackage, dependencies::Plan), PackageError>,
-    ) {
-        let installed = checked
-            .as_ref()
-            .ok()
-            .and_then(|(package, _)| state.package(&package.identity).cloned());
-        let (view, entries) = preview_view(request, checked, installed);
-        self.leave_command(state);
-        state.view = view;
-        state.entries = entries;
-    }
-
-    /// Shows Pane's own form asking which npm package to install.
-    fn show_npm_form(&self, state: &mut State) {
-        let form = FormView {
-            fields: vec![FormField {
-                id: NPM_PACKAGE_FIELD.into(),
-                label: "npm package: its name, and a version to install that one".into(),
-                kind: FieldKind::Text {
-                    placeholder: Some("such as @scope/name or name@1.2.3".into()),
-                },
-                value: String::new(),
-                error: None,
-            }],
-            submit_label: "Show package".into(),
-        };
-        let view = LauncherView::new(Screen::Form(form), "Install extension from npm");
-        let return_to = std::mem::replace(&mut state.view, view);
-        state.form = Some(OpenForm {
-            purpose: FormPurpose::Npm,
-            return_to,
-            submitting: false,
-        });
-        state.screen_epoch += 1;
-    }
-
-    /// Shows Pane's own form asking which Git repository to install from.
-    fn show_git_form(&self, state: &mut State) {
-        let form = FormView {
-            fields: vec![FormField {
-                id: GIT_REPOSITORY_FIELD.into(),
-                label: "Git repository: its address, and @ a branch, tag or commit to install \
-                        that one"
-                    .into(),
-                kind: FieldKind::Text {
-                    placeholder: Some("such as https://github.com/owner/repo@v1.0.0".into()),
-                },
-                value: String::new(),
-                error: None,
-            }],
-            submit_label: "Show package".into(),
-        };
-        let view = LauncherView::new(Screen::Form(form), "Install extension from Git");
-        let return_to = std::mem::replace(&mut state.view, view);
-        state.form = Some(OpenForm {
-            purpose: FormPurpose::Git,
-            return_to,
-            submitting: false,
-        });
-        state.screen_epoch += 1;
-    }
-
-    /// Installs the package in `folder` as an explicit install request, with
-    /// the required dependencies it is missing, as the preview would show
-    /// them. A package whose identity is already installed is rejected:
-    /// replacing it is an update.
-    pub fn install_package(&self, folder: &Path) -> impl Future<Output = ()> + Send + 'static {
-        self.install_unplanned(Ok(install::Request::Folder(folder.to_path_buf())))
-    }
-
-    /// Installs the npm package `spec` names as an explicit install request,
-    /// as [`Launcher::install_package`] installs a folder: a package whose
-    /// npm name is already installed is rejected, whatever its version.
-    pub fn install_npm(&self, spec: &str) -> impl Future<Output = ()> + Send + 'static {
-        self.install_unplanned(crate::npm::NpmSpec::parse(spec).map(install::Request::Npm))
-    }
-
-    /// Installs the revision of the Git repository `spec` names as an
-    /// explicit install request, as [`Launcher::install_package`] installs a
-    /// folder: a repository already installed, in any of its equivalent
-    /// forms, is rejected, whatever the reference.
-    pub fn install_git(&self, spec: &str) -> impl Future<Output = ()> + Send + 'static {
-        self.install_unplanned(crate::git::GitSpec::parse(spec).map(install::Request::Git))
-    }
-
-    fn install_unplanned(
-        &self,
-        request: Result<install::Request, String>,
-    ) -> impl Future<Output = ()> + Send + 'static {
-        let epoch = self.start_running();
-        let launcher = self.clone();
-        async move {
-            match request {
-                Ok(request) => {
-                    let install = install::Begun::unplanned(request);
-                    launcher.finish_install(epoch, install).await
-                }
-                Err(why) => {
-                    if let Some(mut state) = launcher.lock_if_current(epoch) {
-                        state.view.status = Status::Error(why);
-                    }
-                }
+            Entry::ClearCache(identity) => {
+                state.view.status = Status::Running;
+                Pending::ClearCache(identity)
             }
         }
     }
@@ -3373,62 +3103,6 @@ impl Launcher {
         };
     }
 
-    /// Shows the installed packages, each enabled or disabled.
-    fn show_extensions(&self, state: &mut State) {
-        let (rows, entries) = self.extension_rows(state);
-        self.leave_command(state);
-        state.entries = entries;
-        let details = extension_details(state);
-        state.view =
-            LauncherView::new(Screen::Extensions { details }, "Extensions").with_rows(rows);
-        self.show_kept_development_status(state);
-    }
-
-    /// The extension list's rows: each package's state, reload and cache
-    /// rows, then the hotkey of each command of the enabled packages, then
-    /// one row per identity with retained data, then the global
-    /// automatic-update choice, last of all.
-    fn extension_rows(&self, state: &State) -> (Vec<Row>, Vec<Entry>) {
-        let developed = |identity: &PackageIdentity| self.is_developed(identity);
-        let (mut rows, mut entries): (Vec<Row>, Vec<Entry>) =
-            self.runtime_rows().into_iter().unzip();
-        let (package_rows, package_entries) = extension_rows(
-            &state.packages,
-            &state.paused,
-            developed,
-            &state.update_controls.off,
-        );
-        rows.extend(package_rows);
-        entries.extend(package_entries);
-        for (row, entry) in self.network_rows(state) {
-            rows.push(row);
-            entries.push(entry);
-        }
-        let development = self.development_rows(&state.packages);
-        for (row, entry) in self
-            .hotkey_rows(state)
-            .into_iter()
-            .chain(self.choice_rows(state))
-            .chain(development)
-        {
-            rows.push(row);
-            entries.push(entry);
-        }
-        if let Some(installation) = &self.installation {
-            let (retained_rows, retained_entries) =
-                retained::rows(&state.retained, &installation.data);
-            rows.extend(retained_rows);
-            entries.extend(retained_entries);
-            // The global automatic-update choice comes last, after every
-            // package's rows: the packages are the list, and what governs
-            // them all is found beneath them.
-            let (row, entry) = updates::global_row(state.update_controls.automatic);
-            rows.push(row);
-            entries.push(entry);
-        }
-        (rows, entries)
-    }
-
     /// Shows why Pane paused the installed package with `identity`: how it
     /// failed, its version and the full diagnostics, with a row that retries
     /// it. A package that is not paused (it was retried meanwhile) shows the
@@ -3581,33 +3255,6 @@ impl Launcher {
             state,
             |entry| matches!(entry, Entry::AskClearCache(asked) if asked == identity),
         );
-    }
-
-    /// Shows the extension list with the first row whose entry is `wanted`
-    /// selected, or the first row if there is none.
-    fn show_extensions_at(&self, state: &mut State, wanted: impl Fn(&Entry) -> bool) {
-        self.show_extensions(state);
-        let row = state.entries.iter().position(wanted);
-        if row.is_some() {
-            state.view.selected = row;
-        }
-    }
-
-    /// Updates the installed packages on screen after one changed, keeping
-    /// the selection on the same row.
-    fn refresh_extensions(&self, state: &mut State) {
-        let (rows, entries) = self.extension_rows(state);
-        // The same row stays selected; if it is gone (a Retry row once the
-        // package started), the row before it.
-        let selected = state.view.selected.and_then(|index| {
-            let id = &state.view.rows.get(index)?.id;
-            rows.iter()
-                .position(|row| row.id == *id)
-                .or_else(|| Some(index.saturating_sub(1).min(rows.len().checked_sub(1)?)))
-        });
-        state.entries = entries;
-        state.view.selected = selected.or_else(|| first_index(&rows));
-        state.view.rows = rows;
     }
 
     /// Opens the custom view of `item_id` and shows its first drawing, or
@@ -4110,420 +3757,6 @@ fn disabled(state: &State, component: &Path) -> String {
     }
 }
 
-/// The extension list's lines of information: what each kind of action
-/// there does to an extension's data, and what a pause or retained data
-/// is. Read for the list itself and for
-/// [`Launcher::extension_list`], which shows the same lines without
-/// entering the list.
-fn extension_details(state: &State) -> Vec<String> {
-    let mut details = vec![
-        "A disabled extension adds no commands and runs nothing; it keeps its settings.".into(),
-        "Reloading replaces an extension's code with its source folder's current build; it \
-         keeps its settings."
-            .into(),
-        "Clearing an extension's cache keeps its settings, content and credentials.".into(),
-        "Uninstalling an extension asks whether to keep its settings and content.".into(),
-        "An automatic update replaces an extension's copy with a compatible newer version \
-         of it, from npm, once no command of it is running; a pinned version never moves."
-            .into(),
-        format!(
-            "An extension that cannot start, or crashes or stops responding {}, is paused \
-             until you retry it; it keeps its settings.",
-            pausing::within()
-        ),
-    ];
-    if !state.retained.is_empty() {
-        details.push(
-            "Data kept for an uninstalled extension is listed until you delete it or install \
-             it again from the same source."
-                .into(),
-        );
-    }
-    details
-}
-
-/// One row per installed package, saying whether it is enabled or paused
-/// and which source it is, so copies with the same title can be told apart;
-/// then the rows that reload each enabled package, each followed, if Pane
-/// paused it, by a row that retries it and one that shows why it is paused;
-/// then one row per package to clear its cache, and one to uninstall it, in
-/// the same order.
-fn extension_rows(
-    packages: &[InstalledPackage],
-    paused: &Pauses,
-    developed: impl Fn(&PackageIdentity) -> bool,
-    off: &std::collections::HashSet<String>,
-) -> (Vec<Row>, Vec<Entry>) {
-    let failure = |package: &InstalledPackage| paused.of(&package.identity).cloned();
-    let toggles = packages.iter().map(|package| {
-        let state = match (package.enabled, failure(package).map(|pause| pause.after)) {
-            (false, _) => "Disabled",
-            (true, None) => "Enabled",
-            (true, Some(cause)) => cause.state(),
-        };
-        let developing = if developed(&package.identity) {
-            " · Developing"
-        } else {
-            ""
-        };
-        let row = Row {
-            id: package.identity.key(),
-            title: package.title(),
-            subtitle: Some(format!(
-                "{state}{developing}{network} · {}",
-                package.identity,
-                network = if package.uses_network {
-                    format!(" · {}", network::USES_THE_NETWORK)
-                } else {
-                    String::new()
-                }
-            )),
-            unavailable: None,
-        };
-        (row, Entry::Toggle(package.identity.clone()))
-    });
-    let reloads = packages
-        .iter()
-        .filter(|package| package.enabled)
-        .flat_map(|package| {
-            let title = package.title();
-            let source = match package.identity.local_folder() {
-                Some(folder) => folder.display().to_string(),
-                None => package.identity.to_string(),
-            };
-            let reload = Row {
-                id: format!("reload:{}", package.identity.key()),
-                title: format!("Reload {title}"),
-                subtitle: Some(format!(
-                    "Replace its code with the current build in {source}"
-                )),
-                unavailable: None,
-            };
-            let paused = failure(package).into_iter().flat_map(move |pause| {
-                let retry = Row {
-                    id: format!("retry:{}", package.identity.key()),
-                    title: pause.after.retry_title(&title),
-                    subtitle: Some(format!(
-                        "Paused: {}; start it again",
-                        pause.after.failure("it")
-                    )),
-                    unavailable: None,
-                };
-                let details = Row {
-                    id: format!("paused:{}", package.identity.key()),
-                    title: pausing::details_title(&title),
-                    subtitle: Some("The error and its diagnostics".into()),
-                    unavailable: None,
-                };
-                [
-                    (retry, Entry::Retry(package.identity.clone())),
-                    (details, Entry::PauseDetails(package.identity.clone())),
-                ]
-            });
-            // A package from npm or Git has no source folder to reload from;
-            // to replace its code, install it again (Update).
-            let local = package.identity.local_folder().is_some();
-            std::iter::once((reload, Entry::Reload(package.identity.clone())))
-                .filter(move |_| local)
-                .chain(paused)
-        });
-    // Which packages the user turned updates off for, for their rows.
-    let automatic = updates::package_rows(packages, off);
-    let clear_cache = packages.iter().map(|package| {
-        let row = Row {
-            id: format!("clear-cache:{}", package.identity.key()),
-            title: format!("Clear cache of {}", package.title()),
-            subtitle: Some(format!(
-                "Keeps its settings, content and credentials · {}",
-                package.identity
-            )),
-            unavailable: None,
-        };
-        (row, Entry::AskClearCache(package.identity.clone()))
-    });
-    let uninstall = packages.iter().map(|package| {
-        let row = Row {
-            id: format!("uninstall:{}", package.identity.key()),
-            title: format!("Uninstall {}", package.title()),
-            subtitle: Some(format!(
-                "Remove it and choose whether to keep its saved data · {}",
-                package.identity
-            )),
-            unavailable: None,
-        };
-        (row, Entry::AskUninstall(package.identity.clone()))
-    });
-    toggles
-        .chain(reloads)
-        .chain(automatic)
-        .chain(clear_cache)
-        .chain(uninstall)
-        .unzip()
-}
-
-/// The package screen for `request`: what the package is and whether it
-/// can be installed, or why it cannot.
-fn preview_view(
-    request: &install::Request,
-    checked: Result<(SourcePackage, dependencies::Plan), PackageError>,
-    installed: Option<InstalledPackage>,
-) -> (LauncherView, Vec<Entry>) {
-    let (package, plan) = match checked {
-        Ok(checked) => checked,
-        Err(error) => {
-            let (asked, name) = request.describe();
-            let view = LauncherView {
-                status: Status::Error(error.to_string()),
-                ..LauncherView::new(
-                    Screen::Package {
-                        details: vec![asked],
-                    },
-                    format!("Cannot install {name}"),
-                )
-            };
-            return (view, Vec::new());
-        }
-    };
-    let manifest = &package.manifest;
-    let mut details = vec![format!("Source: {}", package.identity)];
-    if let Some(version) = &manifest.version {
-        details.push(format!("Version: {version}"));
-    }
-    if let Some(npm) = &package.npm {
-        let pinned_to = installed
-            .as_ref()
-            .and_then(|installed| installed.npm.as_ref())
-            .filter(|installed| installed.pinned)
-            .map(|installed| installed.version.as_str());
-        details.extend(npm_lines(npm, pinned_to));
-    }
-    if let Some(git) = &package.git {
-        let installed = installed
-            .as_ref()
-            .and_then(|installed| installed.git.as_ref());
-        details.extend(git_lines(git, installed));
-    }
-    let titles: Vec<&str> = manifest.commands.iter().map(|c| c.title.as_str()).collect();
-    if !titles.is_empty() {
-        details.push(format!("Commands: {}", titles.join(", ")));
-    }
-    if let Some(operations) = operations::describe(&manifest.operations) {
-        details.push(operations);
-    }
-    if let Some(helpers) = helpers::describe(&manifest.helpers) {
-        details.push(helpers);
-    }
-    details.push(format!(
-        "Compatible: needs extension API {}, and its components import only WASI 0.3",
-        manifest.api_version
-    ));
-    if let Some(platforms) = &manifest.platforms {
-        // A package that does not support this system is explained instead.
-        let names: Vec<String> = platforms
-            .iter()
-            .map(|&platform| {
-                if Some(platform) == Platform::current() {
-                    format!("{platform} (this system)")
-                } else {
-                    platform.to_string()
-                }
-            })
-            .collect();
-        details.push(format!("Supported systems: {}", platform::join(&names)));
-    }
-    details.extend(plan.lines());
-    if !plan.problems.is_empty() {
-        // Nothing is offered: a required dependency cannot be installed.
-        let view = LauncherView {
-            status: Status::Error(install::problems(&plan).to_string()),
-            ..LauncherView::new(
-                Screen::Package { details },
-                format!("Cannot install {}", manifest.title),
-            )
-        };
-        return (view, Vec::new());
-    }
-    let with = match plan.installed_with().as_slice() {
-        [] => String::new(),
-        [one] => format!(", and install {one}, which it requires"),
-        titles => format!(", and install the {} extensions it requires", titles.len()),
-    };
-    let (row, entry) = match installed {
-        Some(installed) => {
-            details.push(
-                match (&installed.npm, &installed.git, installed.version()) {
-                    (Some(npm), _, _) => format!(
-                        "Installed: npm version {}{} of this package",
-                        npm.version,
-                        if npm.pinned { ", pinned" } else { "" }
-                    ),
-                    (None, Some(git), _) => format!(
-                        "Installed: {} (commit {}) of this repository",
-                        git.revision.describe(),
-                        git.revision.short_commit()
-                    ),
-                    (None, None, Some(version)) => {
-                        format!("Installed: version {version} from this folder")
-                    }
-                    (None, None, None) => "Installed from this folder".into(),
-                },
-            );
-            if !installed.enabled {
-                details.push("Disabled: enable it in Manage extensions".into());
-            }
-            let replace = match (package.npm.as_ref().map(|npm| &npm.package), &package.git) {
-                (Some(npm), _) if npm.pinned => format!("npm version {}, pinned", npm.version),
-                (Some(npm), _) => format!("npm version {}, the latest", npm.version),
-                (None, Some(git)) => format!(
-                    "{} (commit {}){}",
-                    git.revision.describe(),
-                    git.revision.short_commit(),
-                    if git.revision.pinned() {
-                        ", pinned"
-                    } else {
-                        ", tracked"
-                    }
-                ),
-                (None, None) => "this folder's contents".into(),
-            };
-            let row = Row {
-                id: "update".into(),
-                title: "Update".into(),
-                subtitle: Some(format!("Replace the installed copy with {replace}{with}")),
-                unavailable: None,
-            };
-            let mode = Mode::Update(installed.identity.clone());
-            (
-                row,
-                Entry::Install(request.clone(), mode, plan.assumptions.clone()),
-            )
-        }
-        None => {
-            let row = Row {
-                id: "install".into(),
-                title: "Install".into(),
-                subtitle: Some(format!(
-                    "Copy the package into Pane and add its commands{with}"
-                )),
-                unavailable: None,
-            };
-            (
-                row,
-                Entry::Install(request.clone(), Mode::Install, plan.assumptions.clone()),
-            )
-        }
-    };
-    let view =
-        LauncherView::new(Screen::Package { details }, manifest.title.clone()).with_rows(vec![row]);
-    (view, vec![entry])
-}
-
-/// The preview's lines about where a package from npm was downloaded from,
-/// and what Pane does not do with it; `pinned_to` is the version the
-/// installed copy is pinned to, if it is.
-fn npm_lines(npm: &crate::npm::NpmOrigin, pinned_to: Option<&str>) -> Vec<String> {
-    let version = &npm.package.version;
-    let mut lines = vec![
-        if npm.package.pinned && pinned_to == Some(version) {
-            format!(
-                "npm version: {version}, the version it is pinned to: name another version to \
-                 change it"
-            )
-        } else if npm.package.pinned {
-            format!(
-                "npm version: {}, the version you named: installing pins it to that version",
-                npm.package.version
-            )
-        } else {
-            format!("npm version: {}, the latest", npm.package.version)
-        },
-        format!(
-            "Downloaded: {}, matching its sha512 integrity from the registry",
-            npm.tarball
-        ),
-        "Runs only the WebAssembly components its pane.json names, in Pane: no Node.js, npm \
-         install scripts or npm dependencies"
-            .into(),
-    ];
-    if !npm.scripts.is_empty() || npm.has_npm_dependencies {
-        let mut ignored = Vec::new();
-        if !npm.scripts.is_empty() {
-            let scripts: Vec<String> = npm.scripts.iter().map(|s| format!("`{s}`")).collect();
-            ignored.push(format!("its {} script", platform::join(&scripts)));
-        }
-        if npm.has_npm_dependencies {
-            ignored.push("its npm dependencies".into());
-        }
-        lines.push(format!(
-            "Not used: {}, which its package.json declares; Pane never runs or installs them",
-            platform::join(&ignored)
-        ));
-    }
-    lines
-}
-
-/// The preview's lines about the Git revision a package was fetched from,
-/// whether it is tracked or pinned, and what Pane does not do with it;
-/// `installed` is the installed copy's, if the repository is installed.
-fn git_lines(
-    git: &crate::git::GitOrigin,
-    installed: Option<&crate::git::InstalledGit>,
-) -> Vec<String> {
-    use crate::git::GitRef;
-    let revision = &git.revision;
-    let kept = installed.is_some_and(|installed| {
-        installed.revision.reference == revision.reference && revision.pinned()
-    });
-    let what = match &revision.reference {
-        GitRef::Default { .. } => format!(
-            "Revision: {}, tracked: an update fetches that branch again",
-            revision.describe()
-        ),
-        GitRef::Branch(_) => format!(
-            "Revision: {}, tracked: an update fetches that branch again",
-            revision.describe()
-        ),
-        GitRef::Tag(_) | GitRef::Commit if kept => format!(
-            "Revision: {}, which it is pinned to: name another branch, tag or commit to change it",
-            revision.describe()
-        ),
-        GitRef::Tag(_) | GitRef::Commit => format!(
-            "Revision: {}, which you named: installing pins it to that revision",
-            revision.describe()
-        ),
-    };
-    let subject = match git.subject.as_str() {
-        "" => String::new(),
-        subject => format!(" “{subject}”"),
-    };
-    // Where it was served, not who made it: a commit's id proves its
-    // contents, while a host sharing storage between forks serves a fork's
-    // commits at this address too.
-    let served = match git.repository.written_as_ssh() {
-        true => format!(
-            "SSH address fetched over HTTPS from {}",
-            git.repository.url()
-        ),
-        false => format!("served at {}", git.repository.url()),
-    };
-    let mut lines = vec![
-        what,
-        format!(
-            "Fetched: commit {}{subject}, {served}; each object checked against its id",
-            revision.commit
-        ),
-    ];
-    if let Some(caution) = git.caution() {
-        lines.push(format!("Caution: {caution}"));
-    }
-    // One short line, so that the preview's Git lines fit above Install.
-    // What the package runs, its components and any helpers, is listed as
-    // its Commands, Operations and Helpers: only what Pane itself never
-    // does is said here.
-    lines.push("Pane builds nothing and runs no repository hooks, scripts or submodules".into());
-    lines
-}
-
 /// Replaces the command view with `form`, which belongs to item `item_id`.
 /// The command's row entries stay, for when the form closes.
 fn open_form(state: &mut State, item_id: String, form: Form) {
@@ -4561,140 +3794,6 @@ fn open_form(state: &mut State, item_id: String, form: Form) {
         submitting: false,
     });
     state.next_screen();
-}
-
-/// The selected action (see [`Launcher::selected_action`]) for the
-/// launcher's current state. The label comes from the selected entry's
-/// identity — what activating that row does on that screen — never from a
-/// display title; the availability comes from what can run now. Nothing is
-/// selected, or the row's action cannot run, and the action is the
-/// screen's own, unavailable: the window shows it disabled, and Enter
-/// keeps the behavior it has today (nothing, or an explanation) instead of
-/// an extension call.
-fn selected_action(state: &State) -> SelectedAction {
-    // An action is already running: the status line reports it, and the
-    // definition keeps the button from dispatching another one meanwhile.
-    let busy = matches!(state.view.status, Status::Running);
-    let acting = |label: &str| SelectedAction {
-        label: label.into(),
-        available: !busy,
-    };
-    let unusable = |label: &str| SelectedAction {
-        label: label.into(),
-        available: false,
-    };
-    let entry = state
-        .view
-        .selected
-        .and_then(|index| state.entries.get(index));
-    match (&state.view.screen, entry) {
-        // A form submits: the form's own control keeps the label the
-        // extension gave it, but Enter — and the footer's button with it —
-        // submits the form.
-        (Screen::Form(_), _) => acting("Submit"),
-        // A custom view takes the keys itself, and the network details
-        // screen has only Back: Enter does nothing, so there is no primary
-        // action to show.
-        (Screen::CustomView(_) | Screen::NetworkDetails { .. }, _) => unusable(""),
-        // A row is selected: what activating it does is the action.
-        (_, Some(Entry::Open(_))) => acting("Open command"),
-        (_, Some(Entry::Send(sending))) => match &sending.unavailable {
-            Some(_) => unusable("Unavailable"),
-            None => acting("Send query"),
-        },
-        (_, Some(Entry::Copy(_))) => acting("Copy answer"),
-        (_, Some(Entry::OpenUrl(_))) => acting("Open link"),
-        (_, Some(Entry::OpenFile { .. })) => acting("Open file"),
-        (_, Some(Entry::OpenApplication { .. })) => acting("Open application"),
-        (_, Some(Entry::Broken(_) | Entry::Unavailable(_))) => unusable("Unavailable"),
-        (_, Some(Entry::InstallFromFolder)) => acting("Install from folder"),
-        (_, Some(Entry::AskNpm)) => acting("Install from npm"),
-        (_, Some(Entry::AskGit)) => acting("Install from Git"),
-        (_, Some(Entry::Acquire(_))) => acting("Set up extension"),
-        (_, Some(Entry::InstallUpdate)) => acting("Install update"),
-        (_, Some(Entry::CheckUpdate)) => acting("Check for update"),
-        (_, Some(Entry::Manage)) => acting("Manage extensions"),
-        // Pane's Settings row opens the Settings window, exactly as its
-        // ellipsis menu entry and the local shortcut do (the window, not
-        // the launcher, acts; see [`Launcher::selected_opens_settings`]).
-        (_, Some(Entry::Settings)) => acting("Open settings"),
-        (_, Some(Entry::Run(_))) => acting("Run item"),
-        (_, Some(Entry::Form(..))) => acting("Open form"),
-        (_, Some(Entry::CustomView(..))) => acting("Open view"),
-        (_, Some(Entry::ChooseFolder(_))) => acting("Choose folder"),
-        (_, Some(Entry::StopSharingFolder(_))) => acting("Stop sharing"),
-        (_, Some(Entry::Install(_, Mode::Install, _))) => acting("Install"),
-        (_, Some(Entry::Install(_, Mode::Update(_), _))) => acting("Update"),
-        // A confirmation's rows are its answers; the direction a toggle
-        // turns in comes from the state it acts on, not from a title.
-        (_, Some(Entry::Toggle(identity))) => {
-            let enable = state
-                .package(identity)
-                .is_some_and(|package| !package.enabled);
-            acting(if enable { "Enable" } else { "Disable" })
-        }
-        (_, Some(Entry::ToggleUpdates(None))) => acting(if state.update_controls.automatic {
-            "Turn updates off"
-        } else {
-            "Turn updates on"
-        }),
-        (_, Some(Entry::ToggleUpdates(Some(identity)))) => {
-            let off = state.update_controls.off.contains(&identity.key());
-            acting(if off {
-                "Turn updates on"
-            } else {
-                "Turn updates off"
-            })
-        }
-        (_, Some(Entry::Reload(_))) => acting("Reload"),
-        (_, Some(Entry::Retry(_))) => acting("Retry"),
-        (_, Some(Entry::PauseDetails(_))) => acting("Show details"),
-        (_, Some(Entry::NetworkDetails(_))) => acting("Show network use"),
-        (_, Some(Entry::RuntimeDetails)) => acting("Show details"),
-        (_, Some(Entry::RestartRuntime)) => acting("Restart runtime"),
-        (_, Some(Entry::Develop(_))) => acting("Start developing"),
-        (_, Some(Entry::StopDeveloping(_))) => acting("Stop developing"),
-        (_, Some(Entry::BuildDetails(_))) => acting("Show details"),
-        (_, Some(Entry::BuildAgain(_))) => acting("Build again"),
-        (_, Some(Entry::AskClearCache(_))) => acting("Clear cache"),
-        (_, Some(Entry::AskHotkey(_))) => acting("Set hotkey"),
-        (_, Some(Entry::RemoveHotkey(_))) => acting("Remove hotkey"),
-        (_, Some(Entry::AskAlias(_))) => acting("Set alias"),
-        (_, Some(Entry::ToggleFallback(command))) => {
-            let fallback = state.aliases.chosen.is_fallback(command);
-            acting(if fallback {
-                "Stop offering as fallback"
-            } else {
-                "Offer as fallback"
-            })
-        }
-        (_, Some(Entry::ForgetChoices(_))) => acting("Forget choices"),
-        (_, Some(Entry::AskUninstall(_))) => acting("Uninstall"),
-        (_, Some(Entry::AskDeleteRetained(_))) => acting("Delete retained data"),
-        (_, Some(Entry::Uninstall(_, SavedData::Keep))) => acting("Uninstall"),
-        (_, Some(Entry::Uninstall(_, SavedData::Delete))) => acting("Uninstall and delete data"),
-        (_, Some(Entry::UninstallAll(_, _, SavedData::Keep))) => acting("Uninstall all"),
-        (_, Some(Entry::UninstallAll(_, _, SavedData::Delete))) => {
-            acting("Uninstall all and delete data")
-        }
-        (_, Some(Entry::DeleteRetained(_))) => acting("Delete retained data"),
-        (_, Some(Entry::ClearCache(_))) => acting("Clear cache"),
-        (_, Some(Entry::DisableAll(..))) => acting("Disable all"),
-        (_, Some(Entry::Cancel)) => acting("Cancel"),
-        // Nothing is selected: the screen's own action, which cannot run
-        // without a row to run it on.
-        (Screen::Root { .. }, None) => unusable("Open command"),
-        (Screen::Command | Screen::CommandSearch { .. }, None) => unusable("Run item"),
-        (Screen::Package { .. }, None) => unusable("Install"),
-        (Screen::Extensions { .. }, None) => unusable("Choose"),
-        (Screen::Confirm { .. }, None) => unusable("Choose"),
-        // The hotkey screen without a row to remove has no primary action:
-        // Enter does nothing there; the keys it records are the point.
-        (Screen::Hotkey { .. }, None) => unusable(""),
-        (Screen::PauseDetails { .. }, None) => unusable("Retry"),
-        (Screen::RuntimeDetails { .. }, None) => unusable("Restart"),
-        (Screen::BuildDetails { .. }, None) => unusable("Build again"),
-    }
 }
 
 /// The rows of root search for `query`, and what activating each does: the
@@ -4886,6 +3985,3 @@ async fn off_thread<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static
 fn first_index(rows: &[Row]) -> Option<usize> {
     (!rows.is_empty()).then_some(0)
 }
-
-#[cfg(test)]
-mod git_lines_tests;

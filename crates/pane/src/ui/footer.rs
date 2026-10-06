@@ -3,10 +3,9 @@
 //! right-hand buttons (`.fbtn`) — the selected result's primary action
 //! and, on root search, Actions — with a 1×16 rule between them.
 //!
-//! These are presentation only, composed by both the launcher
-//! ([`crate::app::LauncherWindow`]) and the visual workbench's root
-//! fixture, so the fixture measures the production footer rather than a
-//! copy; the caller attaches clicks, focus and state.
+//! These are presentation only, composed by the launcher
+//! ([`crate::app::LauncherWindow`]); the caller attaches clicks, focus and
+//! state.
 //!
 //! The footer's left side is a Windows/Pane adaptation of the reference's
 //! decorative mark: Pane's app menu (its Settings entry) opens from the
@@ -21,15 +20,16 @@ use crate::ui::theme::{Theme, pressed};
 
 /// One part of the footer's hint line.
 pub(crate) enum HintPart {
-    /// Muted text: "opens instantly ·".
+    /// Muted text: "Type to filter actions ·".
     Text(SharedString),
     /// A key sequence in the regular caps: the binding the hint teaches.
     Keys(KeySequence),
 }
 
-/// The footer's hint line: the reference's "↵ opens instantly · Ctrl K
-/// for more", or "Type to filter actions · Esc goes back" while Actions
-/// is open — muted 12.5px text and regular caps, 6px apart, on one line.
+/// The footer's hint line: "Type to filter actions · Esc goes back" while
+/// Actions is open (at rest the footer's buttons already show the keys,
+/// so it shows none) — muted 12.5px text and regular caps, 6px apart, on
+/// one line.
 pub(crate) fn hint_line(parts: Vec<HintPart>, theme: &Theme) -> Div {
     div()
         .debug_selector(|| "footer-hint".into())
@@ -45,7 +45,7 @@ pub(crate) fn hint_line(parts: Vec<HintPart>, theme: &Theme) -> Div {
             match part {
                 HintPart::Text(text) => div().flex_none().child(text).into_any_element(),
                 // Each sequence in its own scope: a key sequence's id is
-                // fixed, and the hint holds two.
+                // fixed, so two in one hint would clash.
                 HintPart::Keys(keys) => div()
                     .id(("hint-keys", index))
                     .flex_none()
@@ -121,27 +121,13 @@ pub(crate) fn footer_button(
         )
 }
 
-/// The hint's parts: "`invoke` opens instantly · `actions` for more" at
-/// rest, or "Type to filter actions · `escape` goes back" while the
-/// Actions panel is `open`.
-pub(crate) fn hint_parts(
-    open: bool,
-    invoke: KeySequence,
-    actions: KeySequence,
-    escape: KeySequence,
-) -> Vec<HintPart> {
-    if open {
-        return vec![
-            HintPart::Text("Type to filter actions ·".into()),
-            HintPart::Keys(escape),
-            HintPart::Text("goes back".into()),
-        ];
-    }
+/// The hint's parts while the Actions panel is open: "Type to filter
+/// actions · `escape` goes back".
+pub(crate) fn actions_hint(escape: KeySequence) -> Vec<HintPart> {
     vec![
-        HintPart::Keys(invoke),
-        HintPart::Text("opens instantly ·".into()),
-        HintPart::Keys(actions),
-        HintPart::Text("for more".into()),
+        HintPart::Text("Type to filter actions ·".into()),
+        HintPart::Keys(escape),
+        HintPart::Text("goes back".into()),
     ]
 }
 

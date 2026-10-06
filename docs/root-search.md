@@ -217,7 +217,7 @@ the board's 34px, or at 24 or 18 when the longer of the two would not fit
 its column (past that it wraps). The card shows only what the launcher
 holds (`ComputedAnswer`: the query, the text Enter copies, the command):
 the board's units, "Also" conversions and recent calculations have no
-provider and stay in the visual workbench's fixture. It is a row like any
+provider and are not drawn. It is a row like any
 other — selected first, moved to by the keys or the pointer, its primary
 action "Copy answer", named "6*7 = 42" for assistive technology — and its
 accent ring shows while it is selected.

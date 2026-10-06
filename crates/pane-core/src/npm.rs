@@ -26,15 +26,13 @@
 
 use std::fmt;
 use std::fs;
-use std::io::{self, Read};
-use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::path::Path;
 
 use serde::Deserialize;
-use sha2::{Digest, Sha512};
 
-use crate::downloads::{Download, check_part};
-use crate::http::{Answer, GetError, OwnLimits};
+use crate::downloads::Download;
+use crate::http::{Answer, GetError, Origin};
+use crate::integrity::{check_integrity, sha512_values};
 
 /// The public npm registry.
 pub const NPMJS: &str = "https://registry.npmjs.org/";
@@ -45,11 +43,7 @@ pub const MAX_METADATA: u64 = 16 << 20;
 pub const MAX_TARBALL: u64 = 64 << 20;
 /// The most a tarball may unpack to, all files together.
 pub const MAX_UNPACKED: u64 = 256 << 20;
-/// The most entries a tarball may hold: files, folders and the extension
-/// headers (long names, PAX) describing them.
-pub const MAX_ENTRIES: usize = 10_000;
-/// The largest extension header (a GNU long name, a PAX header) Pane reads.
-pub const MAX_EXTENSION: u64 = 64 << 10;
+pub use crate::archive::{MAX_ENTRIES, MAX_EXTENSION};
 
 /// The npm lifecycle scripts npm runs when installing a package, which Pane
 /// never runs.
@@ -66,11 +60,8 @@ const INSTALL_SCRIPTS: &[&str] = &[
 /// The npm registry Pane downloads packages from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Registry {
-    /// Its address, ending with `/`.
-    base: String,
-    /// Whether it is on this computer, reached without a proxy and over
-    /// plain HTTP if its address says so.
-    loopback: bool,
+    /// Its address, and whether it is on this computer.
+    origin: Origin,
 }
 
 impl Default for Registry {
@@ -83,8 +74,7 @@ impl Registry {
     /// The public npm registry, over HTTPS.
     pub fn npmjs() -> Registry {
         Registry {
-            base: NPMJS.to_owned(),
-            loopback: false,
+            origin: Origin::public(NPMJS),
         }
     }
 
@@ -104,30 +94,26 @@ impl Registry {
                  127.0.0.1 or [::1] can replace it, for tests and development"
             )
         };
-        let base = crate::http::loopback_base(url, refused)?;
-        Ok(Registry {
-            base,
-            loopback: true,
-        })
+        let origin = Origin::local(url, refused)?;
+        Ok(Registry { origin })
     }
 
     /// The registry named by `PANE_NPM_REGISTRY`, in development builds
     /// only (see [`Registry::local`]); `None` when it is not set.
     #[cfg(any(test, debug_assertions))]
     pub fn from_dev_env() -> Option<Result<Registry, String>> {
-        let url = std::env::var("PANE_NPM_REGISTRY").ok()?;
-        (!url.is_empty()).then(|| Registry::local(&url))
+        crate::http::dev_env("PANE_NPM_REGISTRY").map(|url| Registry::local(&url))
     }
 
     /// Its address, ending with `/`.
     pub fn url(&self) -> &str {
-        &self.base
+        self.origin.url()
     }
 
     /// The address of the metadata of package `name`: a scoped name's `/`
     /// is written `%2f`, as npm does.
     fn metadata_url(&self, name: &str) -> String {
-        format!("{}{}", self.base, name.replace('/', "%2f"))
+        format!("{}{}", self.url(), name.replace('/', "%2f"))
     }
 
     /// Asks the registry for `url`, with `headers`, a body of at most `most`
@@ -135,32 +121,20 @@ impl Registry {
     /// ([`crate::http::get_blocking`]): only over HTTPS unless the registry is
     /// on this computer.
     fn get(&self, url: &str, headers: &[(&str, &str)], most: u64) -> Result<Answer, GetError> {
-        if !self.loopback && !url.starts_with("https://") {
-            return Err(GetError::Failed(format!("`{url}` is not an HTTPS address")));
-        }
-        crate::http::get_blocking(
-            url,
-            headers,
-            most,
-            OwnLimits {
-                connect: Duration::from_secs(30),
-                between_bytes: Duration::from_secs(60),
-                deadline: Duration::from_secs(300),
-            },
-        )
+        self.origin.get(url, headers, most)
     }
 
     /// Why Pane does not download `url` for this registry, if it does not:
     /// a tarball must come from the registry's own scheme, host and port.
     fn refusal(&self, url: &str) -> Option<String> {
         let (scheme, authority, _) =
-            crate::http::split_url(&self.base).expect("a registry address is a URL");
+            crate::http::split_url(self.url()).expect("a registry address is a URL");
         match crate::http::split_url(url) {
             Some((s, a, _)) if s == scheme && a.eq_ignore_ascii_case(authority) => None,
             _ => Some(format!(
                 "its tarball address {url} is not on the registry {}: Pane downloads a package \
                  only from the registry that describes it{}",
-                self.base,
+                self.url(),
                 if scheme == "https" {
                     ", over HTTPS"
                 } else {
@@ -522,93 +496,6 @@ fn read_package_json(folder: &Path) -> Result<PackageJson, String> {
         .map_err(|error| format!("the tarball's package.json cannot be read: {error}"))
 }
 
-/// The base64 values of the sha512 hashes in the integrity string
-/// `integrity` (space-separated `<algorithm>-<base64>[?options]`).
-pub(crate) fn sha512_values(integrity: &str) -> impl Iterator<Item = &str> {
-    integrity.split_whitespace().filter_map(|hash| {
-        let value = hash.strip_prefix("sha512-")?;
-        Some(value.split('?').next().unwrap_or(value))
-    })
-}
-
-/// Whether `integrity` names a sha512 hash at all (used by the default
-/// extensions' index, which Pane checks before it downloads anything).
-pub(crate) fn has_sha512(integrity: &str) -> bool {
-    sha512_values(integrity).next().is_some()
-}
-
-/// The sha512 digest `integrity` names, decoded, or `None` when it names
-/// none or one that is not the digest's 64 bytes: the first bytes of it
-/// name a downloaded payload in Pane's cache.
-pub(crate) fn sha512_digest(integrity: &str) -> Option<[u8; 64]> {
-    let value = sha512_values(integrity).next()?;
-    let mut digest = [0u8; 64];
-    let mut filled = 0usize;
-    // The six bits each character holds, and how many of them are still
-    // waiting for a character to complete a byte.
-    let (mut bits, mut held) = (0u32, 0u32);
-    for byte in value.bytes() {
-        let digit = match byte {
-            b'A'..=b'Z' => byte - b'A',
-            b'a'..=b'z' => byte - b'a' + 26,
-            b'0'..=b'9' => byte - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            // Padding, which only ends the value.
-            b'=' => break,
-            _ => return None,
-        };
-        bits = (bits << 6) | u32::from(digit);
-        held += 6;
-        if held >= 8 {
-            held -= 8;
-            if filled == 64 {
-                return None;
-            }
-            digest[filled] = (bits >> held) as u8;
-            filled += 1;
-        }
-        bits &= (1 << held) - 1;
-    }
-    (filled == 64).then_some(digest)
-}
-
-/// Checks `bytes` against the sha512 hashes of `integrity`: they match when
-/// one of them does.
-pub(crate) fn check_integrity(bytes: &[u8], integrity: &str) -> Result<(), String> {
-    let actual = base64(&Sha512::digest(bytes));
-    let mut values = sha512_values(integrity).peekable();
-    if values.peek().is_none() {
-        return Err("has no sha512 integrity to be checked against".into());
-    }
-    if values.any(|expected| expected == actual) {
-        Ok(())
-    } else {
-        Err(format!(
-            "does not match the sha512 integrity the registry gives (it is sha512-{actual})"
-        ))
-    }
-}
-
-/// Standard base64 with padding.
-pub(crate) fn base64(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut text = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let n = (u32::from(chunk[0]) << 16)
-            | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
-            | u32::from(*chunk.get(2).unwrap_or(&0));
-        for (i, shift) in [18, 12, 6, 0].into_iter().enumerate() {
-            if i <= chunk.len() {
-                text.push(ALPHABET[(n >> shift) as usize & 63] as char);
-            } else {
-                text.push('=');
-            }
-        }
-    }
-    text
-}
-
 /// Unpacks the gzipped tarball `tgz` into `dest`, which must not exist,
 /// without its top folder (`package/` in npm's tarballs): only regular files
 /// and folders, each inside `dest`, within [`MAX_UNPACKED`] bytes and
@@ -623,260 +510,14 @@ pub(crate) fn base64(bytes: &[u8]) -> String {
 /// and a size a PAX header gives must be the one the entry's own header
 /// gives, so that no two readers can see different files in one tarball.
 pub(crate) fn unpack(tgz: &[u8], dest: &Path) -> Result<(), String> {
-    unpack_within(tgz, dest, MAX_UNPACKED)
-}
-
-/// As [`unpack`], within `max_unpacked` bytes instead of npm's own bound: a
-/// package larger than an npm package's tarball — Pane's own application
-/// package, a whole program — unpacks with the bound its reader gives.
-pub(crate) fn unpack_within(tgz: &[u8], dest: &Path, max_unpacked: u64) -> Result<(), String> {
-    fs::create_dir(dest).map_err(|error| error.to_string())?;
-    // The decompressed stream is limited too, so a small tarball cannot
-    // expand without bound (headers and padding take some of it).
-    let stream = flate2::read::GzDecoder::new(tgz).take(max_unpacked + (max_unpacked >> 2));
-    let mut archive = tar::Archive::new(stream);
-    let mut total: u64 = 0;
-    let mut count = 0;
-    // What the extension headers read so far say of the next entry.
-    let mut next = Described::default();
-    let unreadable = |error: io::Error| format!("its tarball cannot be read: {error}");
-    let entries = archive.entries().map_err(unreadable)?.raw(true);
-    for entry in entries {
-        let mut entry = entry.map_err(unreadable)?;
-        count += 1;
-        if count > MAX_ENTRIES {
-            return Err(format!("its tarball holds more than {MAX_ENTRIES} entries"));
-        }
-        let size = entry.size();
-        let add = |total: &mut u64, size: u64| {
-            *total = total.saturating_add(size);
-            if *total > max_unpacked {
-                return Err(format!(
-                    "it unpacks to more than the {} MiB Pane allows",
-                    max_unpacked >> 20
-                ));
-            }
-            Ok(())
-        };
-        let kind = entry.header().entry_type();
-        if matches!(
-            kind,
-            tar::EntryType::GNULongName
-                | tar::EntryType::GNULongLink
-                | tar::EntryType::XHeader
-                | tar::EntryType::XGlobalHeader
-        ) {
-            if size > MAX_EXTENSION {
-                return Err(format!(
-                    "its tarball has an extension header of {size} bytes; Pane reads at most {} \
-                     KiB of one",
-                    MAX_EXTENSION >> 10
-                ));
-            }
-            add(&mut total, size)?;
-            let mut data = Vec::new();
-            (&mut entry)
-                .take(size)
-                .read_to_end(&mut data)
-                .map_err(unreadable)?;
-            if data.len() as u64 != size {
-                return Err("its tarball ends inside an extension header".into());
-            }
-            next.read(kind, &data)?;
-            continue;
-        }
-        let described = std::mem::take(&mut next);
-        let raw = match described.path {
-            Some(path) => path,
-            None => entry.path_bytes().into_owned(),
-        };
-        let shown = String::from_utf8_lossy(&raw).into_owned();
-        let is_dir = match kind {
-            tar::EntryType::Regular | tar::EntryType::Continuous => false,
-            tar::EntryType::Directory => true,
-            other => {
-                let what = match other {
-                    tar::EntryType::Symlink => "a symbolic link".to_owned(),
-                    tar::EntryType::Link => "a hard link".to_owned(),
-                    tar::EntryType::Char | tar::EntryType::Block => "a device".to_owned(),
-                    tar::EntryType::Fifo => "a named pipe".to_owned(),
-                    other => format!("an entry of type {:?}", other.as_byte() as char),
-                };
-                return Err(format!(
-                    "its tarball contains {what}, `{shown}`; Pane unpacks only files and folders"
-                ));
-            }
-        };
-        if let Some(declared) = described.size
-            && declared != size
-        {
-            return Err(format!(
-                "its tarball gives `{shown}` two sizes, {size} and {declared} bytes; Pane \
-                 unpacks only entries whose size is unambiguous"
-            ));
-        }
-        let Some(relative) = inside(&raw, is_dir).map_err(|why| {
-            format!(
-                "its tarball contains `{shown}`, {why}; Pane unpacks only paths inside the package"
-            )
-        })?
-        else {
-            // The top folder itself.
-            continue;
-        };
-        let path = dest.join(&relative);
-        if is_dir {
-            fs::create_dir_all(&path).map_err(|error| format!("`{shown}`: {error}"))?;
-            continue;
-        }
-        add(&mut total, size)?;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|error| format!("`{shown}`: {error}"))?;
-        }
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(|error| match error.kind() {
-                io::ErrorKind::AlreadyExists => {
-                    format!("its tarball contains `{shown}` twice")
-                }
-                _ => format!("`{shown}`: {error}"),
-            })?;
-        let copied = io::copy(&mut (&mut entry).take(size), &mut file).map_err(unreadable)?;
-        if copied != size {
-            return Err(format!("its tarball ends inside `{shown}`"));
-        }
-    }
-    if next != Described::default() {
-        return Err("its tarball ends with an extension header that describes no entry".into());
-    }
-    Ok(())
-}
-
-/// What the extension headers before an entry say of it.
-#[derive(Default, PartialEq, Eq)]
-struct Described {
-    /// Its path, from a GNU long name or a PAX `path`.
-    path: Option<Vec<u8>>,
-    /// Its size, from a PAX `size`.
-    size: Option<u64>,
-    /// Whether a GNU long name or a PAX header was read for it.
-    long_name: bool,
-    pax: bool,
-}
-
-impl Described {
-    /// Takes in the extension header of `kind` holding `data`.
-    fn read(&mut self, kind: tar::EntryType, data: &[u8]) -> Result<(), String> {
-        let twice = || Err("its tarball has two extension headers of one kind for an entry".into());
-        match kind {
-            tar::EntryType::GNULongName => {
-                if self.long_name {
-                    return twice();
-                }
-                self.long_name = true;
-                let name = data.strip_suffix(&[0]).unwrap_or(data);
-                if self.path.is_none() {
-                    self.path = Some(name.to_vec());
-                }
-                Ok(())
-            }
-            tar::EntryType::GNULongLink => Err(
-                "its tarball contains a long link name; Pane unpacks only files and folders".into(),
-            ),
-            tar::EntryType::XHeader => {
-                if self.pax {
-                    return twice();
-                }
-                self.pax = true;
-                for record in tar::PaxExtensions::new(data) {
-                    let record = record.map_err(|_| "its tarball has a damaged PAX header")?;
-                    match record.key_bytes() {
-                        // A PAX path wins over a GNU long name, as tar does.
-                        b"path" => self.path = Some(record.value_bytes().to_vec()),
-                        b"size" => {
-                            let size = record
-                                .value()
-                                .ok()
-                                .and_then(|value| value.parse().ok())
-                                .ok_or("its tarball has a PAX header with a damaged size")?;
-                            self.size = Some(size);
-                        }
-                        _ => {}
-                    }
-                }
-                Ok(())
-            }
-            // Only one that changes no path or size (such as git's commit
-            // id) is taken, and ignored.
-            _ => {
-                for record in tar::PaxExtensions::new(data) {
-                    let record = record.map_err(|_| "its tarball has a damaged PAX header")?;
-                    if matches!(record.key_bytes(), b"path" | b"size" | b"linkpath") {
-                        return Err(
-                            "its tarball has a global header that changes paths or sizes; Pane \
-                             unpacks only entries described by their own headers"
-                                .into(),
-                        );
-                    }
-                }
-                Ok(())
-            }
-        }
-    }
-}
-
-/// The path of archive entry `raw` inside the package, without the
-/// archive's top folder; `None` for the top folder itself. Refuses, with
-/// why, a path that is absolute, climbs out (`..`), has an empty or `.`
-/// part, or has a part that some system reads differently or cannot write
-/// (see [`check_part`]). Read for npm's tarballs and Pane's application
-/// package's zip alike, so both unpack with the same discipline.
-pub(crate) fn inside(raw: &[u8], is_dir: bool) -> Result<Option<PathBuf>, &'static str> {
-    let text = std::str::from_utf8(raw).map_err(|_| "whose name is not valid UTF-8")?;
-    if text.starts_with('/') {
-        return Err("an absolute path");
-    }
-    let text = match is_dir {
-        true => text.strip_suffix('/').unwrap_or(text),
-        false => text,
-    };
-    let mut parts = text.split('/');
-    let top = parts.next().unwrap_or_default();
-    check_part(top)?;
-    let mut path = PathBuf::new();
-    for part in parts {
-        check_part(part)?;
-        path.push(part);
-    }
-    Ok((!path.as_os_str().is_empty()).then_some(path))
+    crate::archive::unpack_within(tgz, dest, MAX_UNPACKED)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_named_sha512_decodes_to_its_digest() {
-        let digest = Sha512::digest(b"the payload");
-        let named = format!("sha512-{}", base64(&digest));
-        assert_eq!(
-            sha512_digest(&named).as_ref().map(|digest| &digest[..]),
-            Some(&digest[..])
-        );
-        assert!(has_sha512(&named));
-        // Neither another algorithm nor a damaged value names one.
-        assert!(!has_sha512("sha1-abc"));
-        assert_eq!(sha512_digest("sha1-abc"), None);
-        assert_eq!(sha512_digest("sha512-sh?rt"), None);
-        // A second hash is not read; the first is used.
-        let two = format!("{named} sha512-{}", base64(&Sha512::digest(b"other")));
-        assert_eq!(
-            sha512_digest(&two).as_ref().map(|digest| &digest[..]),
-            Some(&digest[..])
-        );
-    }
+    use std::io;
+    use std::time::Duration;
 
     /// A gzipped tarball of `entries`: `(path, kind, contents)`, written
     /// header by header so that paths `tar::Builder` refuses can be made.
@@ -1014,31 +655,6 @@ mod tests {
         ] {
             assert!(npmjs.refusal(url).is_some(), "{url}");
         }
-    }
-
-    #[test]
-    fn integrity_is_checked_against_sha512() {
-        let bytes = b"the tarball";
-        let good = format!("sha512-{}", base64(&Sha512::digest(bytes)));
-        assert_eq!(check_integrity(bytes, &good), Ok(()));
-        // Several hashes: any sha512 one matching is enough.
-        assert_eq!(check_integrity(bytes, &format!("sha1-abc {good}")), Ok(()));
-        let error = check_integrity(b"another tarball", &good).unwrap_err();
-        assert!(
-            error.starts_with("does not match the sha512 integrity"),
-            "{error}"
-        );
-        let error = check_integrity(bytes, "sha1-abc").unwrap_err();
-        assert!(error.contains("no sha512"), "{error}");
-    }
-
-    #[test]
-    fn base64_matches_the_standard_alphabet_and_padding() {
-        assert_eq!(base64(b""), "");
-        assert_eq!(base64(b"f"), "Zg==");
-        assert_eq!(base64(b"fo"), "Zm8=");
-        assert_eq!(base64(b"foo"), "Zm9v");
-        assert_eq!(base64(&[0xfb, 0xff]), "+/8=");
     }
 
     #[test]

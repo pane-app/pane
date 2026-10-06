@@ -13,7 +13,7 @@
 //! recorded natively in `docs/evidence/settings-79/`.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -28,6 +28,20 @@ use tempfile::TempDir;
 mod settle;
 
 use settle::settle;
+
+#[path = "support/a11y.rs"]
+mod a11y;
+#[path = "support/packages.rs"]
+mod packages;
+#[path = "support/setup.rs"]
+mod setup;
+#[path = "support/wait.rs"]
+mod wait;
+
+use a11y::a11y;
+use packages::package;
+use setup::{init_settings, settings_shortcut};
+use wait::until_record_holds;
 
 /// The fake native entry: what Pane showed and hid, in order, and the
 /// failure to inject into the next change (as the real adapters' refusals
@@ -126,27 +140,6 @@ impl Hotkeys for UnavailableHotkeys {
     fn unregister(&self, _shortcut: &Shortcut) {}
 }
 
-/// The keystroke that opens Settings on this platform.
-fn settings_shortcut() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "cmd-,"
-    } else {
-        "ctrl-,"
-    }
-}
-
-/// Initializes the settings record of `data` in `cx`, as the binary does
-/// before its first window opens.
-fn init_settings(data: Option<&Path>, cx: &mut TestAppContext) {
-    cx.update(|cx| {
-        pane::settings::init_with_overrides(
-            data.map(|data| data.to_owned()),
-            pane::settings::Overrides::default(),
-            cx,
-        )
-    });
-}
-
 /// Opens the launcher window over `launcher`, with the settings record of
 /// `data` initialized and `tray` attached, as the binary orders them.
 fn open<'a>(
@@ -214,35 +207,6 @@ fn click(cx: &mut VisualTestContext, selector: &'static str) {
     cx.simulate_click(bounds.center(), gpui::Modifiers::none());
 }
 
-/// The accessibility tree of the window `cx` drives, as raw JSON, forced
-/// on so the tree is built regardless of platform accessibility.
-fn a11y(cx: &mut VisualTestContext) -> String {
-    cx.update(|window, _| window.set_a11y_forced(true));
-    cx.run_until_parked();
-    cx.update(|window, _| window.debug_a11y_tree_json())
-        .expect("an accessibility tree")
-}
-
-/// Runs `cx` until `done` returns a value, so that work arriving from
-/// other threads (a record being written) has landed.
-fn until<T>(
-    cx: &mut VisualTestContext,
-    mut done: impl FnMut(&mut VisualTestContext) -> Option<T>,
-) -> T {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        cx.run_until_parked();
-        if let Some(value) = done(cx) {
-            return value;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for the window to draw"
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
-
 /// Runs `cx` until the window's accessibility tree satisfies `done`,
 /// reporting the tree when it never does.
 fn until_diag(cx: &mut VisualTestContext, mut done: impl FnMut(&str) -> bool) {
@@ -266,45 +230,13 @@ fn until_diag(cx: &mut VisualTestContext, mut done: impl FnMut(&str) -> bool) {
 /// choice's is): the save the page started is written off the window's
 /// thread.
 fn until_record(cx: &mut VisualTestContext, data: &Path, shown: bool) {
-    let record = data.join("settings.json");
     let held = format!("\"trayVisible\": {shown}");
-    until(cx, |_| {
-        fs::read_to_string(&record)
-            .ok()
-            .filter(|text| text.contains(&held))?;
-        Some(())
-    });
+    until_record_holds(cx, data, &held);
 }
 
 /// A fake tray whose changes succeed, whose calls a test reads.
 fn tray() -> Arc<FakeTray> {
     Arc::new(FakeTray::default())
-}
-
-/// Writes a package folder whose one command is the Rust sample, as
-/// `open_pane.rs`' fixture does.
-fn package(folder: &Path) -> PathBuf {
-    let guest =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/sample_rust.wasm");
-    assert!(
-        guest.exists(),
-        "{} is missing; run `cargo xtask guests`",
-        guest.display()
-    );
-    fs::create_dir_all(folder).unwrap();
-    fs::write(
-        folder.join("pane.json"),
-        r#"{
-  "manifestVersion": 1,
-  "title": "Hello",
-  "version": "1.0.0",
-  "apiVersion": "0.1",
-  "commands": [{ "id": "hello", "title": "Say hello", "component": "hello.wasm" }]
-}"#,
-    )
-    .unwrap();
-    fs::copy(guest, folder.join("hello.wasm")).unwrap();
-    folder.to_path_buf()
 }
 
 #[gpui::test]

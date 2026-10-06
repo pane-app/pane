@@ -21,6 +21,11 @@ use wasmtime::{Config, Engine};
 #[path = "support/platforms.rs"]
 mod platforms;
 
+#[path = "support/guests.rs"]
+mod guests;
+
+use guests::guest;
+
 struct Sample {
     component: &'static str,
     language: &'static str,
@@ -50,18 +55,6 @@ const ITEMS: [(&str, &str); 8] = [
     ("windows-only", "Windows-only action"),
     ("not-windows", "macOS and Linux action"),
 ];
-
-fn guest(name: &str) -> PathBuf {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/guests")
-        .join(format!("{name}.wasm"));
-    assert!(
-        path.exists(),
-        "{} is missing; run `cargo xtask guests`",
-        path.display()
-    );
-    path
-}
 
 impl Sample {
     fn path(&self) -> PathBuf {

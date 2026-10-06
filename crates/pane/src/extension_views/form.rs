@@ -300,8 +300,7 @@ impl LauncherWindow {
     }
 }
 
-/// A form screen's composition, which the visual workbench's fixture
-/// draws too (#99): the form's field groups, 18px apart in a column that
+/// A form screen's composition (#99): the form's field groups, 18px apart in a column that
 /// keeps its own edge padding and scrolls when its fields outgrow the
 /// window — so they never meet the panel's edges — then `submit`.
 pub(crate) fn compose(

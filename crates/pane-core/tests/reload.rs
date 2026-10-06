@@ -13,19 +13,15 @@ use futures::executor::block_on;
 use pane_core::{Key, Launcher, PackageIdentity, Runtime, Screen, Status, ViewEvent};
 use tempfile::TempDir;
 
-const MANAGE_ROW: &str = "Manage extensions…";
+#[path = "support/guests.rs"]
+mod guests;
+#[path = "support/rows.rs"]
+mod rows;
 
-fn guest(name: &str) -> PathBuf {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/guests")
-        .join(format!("{name}.wasm"));
-    assert!(
-        path.exists(),
-        "{} is missing; run `cargo xtask guests`",
-        path.display()
-    );
-    path
-}
+use guests::guest;
+use rows::{select_title, titles};
+
+const MANAGE_ROW: &str = "Manage extensions…";
 
 /// Writes a package folder titled `title` with one command, "Open <title>",
 /// whose component `command.wasm` is a copy of the guest `name`.
@@ -87,23 +83,6 @@ impl Dirs {
         let identity = PackageIdentity::local(&folder).unwrap();
         (launcher, folder, identity)
     }
-}
-
-fn titles(launcher: &Launcher) -> Vec<String> {
-    launcher
-        .view()
-        .rows
-        .into_iter()
-        .map(|row| row.title)
-        .collect()
-}
-
-fn select_title(launcher: &Launcher, title: &str) {
-    let index = titles(launcher)
-        .iter()
-        .position(|row| row == title)
-        .unwrap_or_else(|| panic!("no row {title:?} in {:?}", titles(launcher)));
-    launcher.select(index);
 }
 
 /// From root search, opens the command titled `command`, returning the

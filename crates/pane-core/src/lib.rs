@@ -3,6 +3,7 @@
 
 mod application_update;
 pub mod applications;
+mod archive;
 mod atomic;
 pub mod autostart;
 pub mod changes;
@@ -19,6 +20,7 @@ mod helpers;
 mod host_settings;
 pub mod hotkeys;
 mod http;
+mod integrity;
 mod keyboard;
 mod launcher;
 mod links;

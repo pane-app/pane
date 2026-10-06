@@ -165,7 +165,7 @@ impl LauncherWindow {
     /// and the frame that completes it unmounts them.
     pub(crate) fn close_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(menu) = self.menu.take() {
-            self.menu_exit = Some(menu.selected);
+            self.motion.menu_closed(menu.selected);
             if let Some(restore) = menu.restore {
                 window.focus(&restore, cx);
             }
@@ -293,7 +293,12 @@ impl LauncherWindow {
             // frame that settles it unmounts everything.
             None => in_flight.map(|in_flight| {
                 menu_popup(
-                    menu_list(None, self.menu_exit.unwrap_or(0), &visuals.theme, cx),
+                    menu_list(
+                        None,
+                        self.motion.menu_exit().unwrap_or(0),
+                        &visuals.theme,
+                        cx,
+                    ),
                     Some(in_flight),
                     &visuals.theme,
                     visuals.material,

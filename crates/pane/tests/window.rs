@@ -21,6 +21,11 @@ mod artifacts;
 
 use settle::{settle, until};
 
+#[path = "support/wait.rs"]
+mod wait;
+
+use wait::{frame, settle_frames};
+
 /// A sample command: its component and the language it is written in.
 struct Sample {
     component: &'static str,
@@ -1170,13 +1175,10 @@ fn arrow_keys_move_through_the_matches_while_the_query_keeps_focus(cx: &mut Test
 fn the_production_scenario_edits_searches_selects_opens_and_back_navigates(
     cx: &mut TestAppContext,
 ) {
-    // The visual workbench's fixture data (#91) can match the reference by
-    // rendering the production components directly, which says nothing
-    // about the launcher's own wiring. This smoke is that missing half:
-    // the real adapter — the real launcher, its query field, its search,
-    // its selection and its navigation — edits, searches, selects, opens
-    // and back-navigates through the real sample components, so a fixture
-    // that renders beautifully can never hide a broken production path.
+    // The launcher's own wiring, end to end: the real adapter — the real
+    // launcher, its query field, its search, its selection and its
+    // navigation — edits, searches, selects, opens and back-navigates
+    // through the real sample components.
     let (window, cx) = open_with(cx, pane::sample_commands());
     assert!(
         query_has_focus(&window, cx),
@@ -2082,37 +2084,6 @@ fn arriving(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> Opti
     cx.read_entity(window, |window, _| window.view_transition())
 }
 
-/// Delivers the animation frame the window has asked for, as the native
-/// frame loop would, with `elapsed` passing first on the test platform's
-/// controlled clock. The test platform delivers no frames on its own, so
-/// this is the only thing that advances a running transition; one call
-/// draws at most one frame. Returns how many next-frame callbacks ran —
-/// `0` means the window had asked for no frame, so nothing drew.
-fn frame(cx: &mut VisualTestContext, elapsed: Duration) -> usize {
-    cx.executor().advance_clock(elapsed);
-    let ran = cx.update(|window, cx| window.simulate_next_frame(cx));
-    cx.run_until_parked();
-    ran
-}
-
-/// Delivers frames until the window asks for none, so a transition in
-/// flight completes and the functional scroll relayout after a screen
-/// change finishes, and returns the frames it delivered. `0` means the
-/// window was already idle: no cosmetic and no functional frame was
-/// pending. Bounded, so a window that never stopped asking for frames
-/// fails the test instead of hanging it.
-fn settle_frames(cx: &mut VisualTestContext) -> usize {
-    let mut delivered = 0;
-    for _ in 0..20 {
-        let ran = frame(cx, Duration::from_millis(25));
-        if ran == 0 {
-            return delivered;
-        }
-        delivered += ran;
-    }
-    panic!("the window never stopped asking for animation frames");
-}
-
 /// Opening a command with the pointer is a view transition: the content that changes —
 /// the results list — arrives over a brief fade and a tiny shift from
 /// below, while the shell chrome (the footer with #71's action strip)
@@ -2698,6 +2669,14 @@ fn actions_filter_has_focus(window: &Entity<LauncherWindow>, cx: &mut VisualTest
     cx.update(|window, cx| filter.focus_handle(cx).is_focused(window))
 }
 
+/// Open actions' default binding on this system (Ctrl+K deletes to the
+/// end of the line in a macOS field).
+const OPEN_ACTIONS: &str = if cfg!(target_os = "macos") {
+    "cmd-k"
+} else {
+    "ctrl-k"
+};
+
 /// The open binding opens the selected result's actions with focus in
 /// their search; Escape closes only the panel, giving focus back to the
 /// query, and changes neither the query nor the selection.
@@ -2712,7 +2691,7 @@ fn the_open_binding_shows_the_selected_results_actions_and_escape_closes_only_th
     let before = settle(&window, cx);
     let target = before.selected;
 
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes(OPEN_ACTIONS);
     settle(&window, cx);
     assert!(actions_open(&window, cx));
     assert!(actions_filter_has_focus(&window, cx), "typing filters");
@@ -2756,10 +2735,10 @@ fn the_actions_button_and_the_binding_toggle_one_panel(cx: &mut TestAppContext) 
     settle(&window, cx);
     assert!(!actions_open(&window, cx), "a second click closes it");
 
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes(OPEN_ACTIONS);
     settle(&window, cx);
     assert!(actions_open(&window, cx));
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes(OPEN_ACTIONS);
     settle(&window, cx);
     assert!(!actions_open(&window, cx), "the binding toggles it too");
 }
@@ -2771,7 +2750,7 @@ fn the_primary_action_runs_on_the_target_from_the_panel(cx: &mut TestAppContext)
     let (window, cx) = three_rows(cx);
     cx.simulate_keystrokes("down");
     settle(&window, cx);
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes(OPEN_ACTIONS);
     settle(&window, cx);
     cx.simulate_keystrokes("enter");
     let view = settle(&window, cx);
@@ -2788,7 +2767,7 @@ fn the_primary_action_runs_on_the_target_from_the_panel(cx: &mut TestAppContext)
 #[gpui::test]
 fn typing_filters_the_actions_and_nothing_matching_says_so(cx: &mut TestAppContext) {
     let (window, cx) = three_rows(cx);
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes(OPEN_ACTIONS);
     settle(&window, cx);
     cx.simulate_input("zzz");
     let view = settle(&window, cx);
@@ -2805,7 +2784,7 @@ fn typing_filters_the_actions_and_nothing_matching_says_so(cx: &mut TestAppConte
 #[gpui::test]
 fn an_outside_click_closes_the_panel_without_invoking_what_it_covered(cx: &mut TestAppContext) {
     let (window, cx) = three_rows(cx);
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes(OPEN_ACTIONS);
     settle(&window, cx);
     let charlie = center_of(cx, "row-Charlie");
     cx.simulate_click(charlie, Modifiers::none());
@@ -2822,7 +2801,7 @@ fn the_pointer_cannot_change_the_panels_target(cx: &mut TestAppContext) {
     let (window, cx) = three_rows(cx);
     let bravo = center_of(cx, "row-Bravo");
     arrive(cx, bravo - gpui::point(px(1.), px(0.)));
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes(OPEN_ACTIONS);
     settle(&window, cx);
     cx.simulate_mouse_move(bravo, None::<MouseButton>, Modifiers::none());
     assert_eq!(settle(&window, cx).selected, Some(0));
@@ -2836,7 +2815,7 @@ fn a_target_gone_from_behind_the_panel_runs_nothing(cx: &mut TestAppContext) {
     let (window, cx) = three_rows(cx);
     cx.simulate_keystrokes("down");
     settle(&window, cx);
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes(OPEN_ACTIONS);
     settle(&window, cx);
     // Bravo leaves the results behind the open panel.
     let launcher = cx.read_entity(&window, |window, _| window.launcher().clone());
@@ -2863,7 +2842,7 @@ fn with_nothing_selected_the_panel_says_so(cx: &mut TestAppContext) {
     cx.simulate_input("zzzz");
     let view = settle(&window, cx);
     assert_eq!(view.selected, None);
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes(OPEN_ACTIONS);
     settle(&window, cx);
     assert!(cx.debug_bounds("actions-empty").is_some());
     assert!(
@@ -2903,7 +2882,7 @@ fn an_installed_commands_alias_action_opens_its_alias_form(cx: &mut TestAppConte
     cx.simulate_input("say");
     settle(&window, cx);
 
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes(OPEN_ACTIONS);
     settle(&window, cx);
     assert!(cx.debug_bounds("action-Add Alias…").is_some());
     assert!(cx.debug_bounds("action-group-Pane").is_some());
@@ -3423,7 +3402,7 @@ mod clipboard_split {
         let launcher = world.launcher(cx, &["kept"]);
         let (window, cx) = open_history(cx, launcher);
 
-        cx.simulate_keystrokes("ctrl-k");
+        cx.simulate_keystrokes(super::OPEN_ACTIONS);
         settle(&window, cx);
         assert!(!split_shown(&window, cx));
         // The extension's own rows: retention, exclusions, clearing.
@@ -3519,6 +3498,13 @@ const TOGGLE_PIN_NAME: &str = if cfg!(target_os = "macos") {
     "Ctrl+Shift+F"
 };
 
+/// How the slots' Ctrl+digit chords name Ctrl on this system.
+const CTRL: &str = if cfg!(target_os = "macos") {
+    "Control"
+} else {
+    "Ctrl"
+};
+
 /// The move keys on this system: the focused slot one place later, or
 /// earlier.
 const MOVE_PIN_DOWN: &str = if cfg!(target_os = "macos") {
@@ -3591,6 +3577,83 @@ fn a_blank_query_shows_the_pinned_home_and_a_query_hides_it(cx: &mut TestAppCont
     );
 }
 
+/// Chooses the vertical layout of the pinned home in the settings record
+/// of `data`, as the Launcher page writes it, and initializes the host
+/// settings from it before the launcher window is made.
+fn vertical_layout(cx: &mut TestAppContext, data: &std::path::Path) {
+    std::fs::write(
+        data.join("settings.json"),
+        r#"{ "version": 1, "pinnedLayout": "vertical" }"#,
+    )
+    .unwrap();
+    cx.update(|cx| {
+        pane::settings::init_with_overrides(
+            Some(data.to_owned()),
+            pane::settings::Overrides::default(),
+            cx,
+        )
+    });
+}
+
+/// The vertical layout lists the pins as result rows, in order, under the
+/// "Pinned" label and above the results, with no strip of tiles and no
+/// pin hint; a query hides them, and clearing it brings them back.
+#[gpui::test]
+fn the_vertical_layout_lists_the_pins_as_rows_above_the_results(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    vertical_layout(cx, data.path());
+    let (window, cx) = pinned_rows(cx, data.path(), &["sample_ts", "sample_rust"]);
+    let label = cx.debug_bounds("section-Pinned").expect("the home's label");
+    let first = cx.debug_bounds("slot-1").expect("the first pin's row");
+    let second = cx.debug_bounds("slot-2").expect("the second pin's row");
+    let commands = cx
+        .debug_bounds("section-Commands")
+        .expect("the rows' label");
+    assert!(label.bottom() <= first.top(), "{label:?} {first:?}");
+    assert!(first.bottom() <= second.top(), "{first:?} {second:?}");
+    assert!(second.bottom() <= commands.top(), "{second:?} {commands:?}");
+    assert_eq!(first.left(), second.left(), "one column");
+    assert_eq!(first.size, second.size, "rows of one size");
+    assert!(
+        first.size.width > first.size.height * 4.,
+        "a row, not a tile: {first:?}"
+    );
+    assert!(cx.debug_bounds("pinned-strip").is_none(), "no strip");
+    assert!(cx.debug_bounds("pin-hint").is_none(), "no pin hint");
+    // In order, each named as a pin.
+    let nodes = accessible_nodes(cx);
+    node(&nodes, "Button", "Pinned 1: Charlie");
+    node(&nodes, "Button", "Pinned 2: Alpha");
+
+    cx.simulate_input("al");
+    settle(&window, cx);
+    assert!(cx.debug_bounds("slot-1").is_none(), "a query hides them");
+    assert!(cx.debug_bounds("section-Pinned").is_none());
+    cx.simulate_keystrokes("escape");
+    assert_eq!(settle(&window, cx).query(), Some(""));
+    assert!(
+        cx.debug_bounds("slot-1").is_some(),
+        "clearing brings them back"
+    );
+}
+
+/// With nothing pinned, the vertical layout shows nothing of the home: no
+/// label, no rows and no pin hint, only the results.
+#[gpui::test]
+fn the_vertical_layout_shows_nothing_while_nothing_is_pinned(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    vertical_layout(cx, data.path());
+    let (_window, cx) = pinned_rows(cx, data.path(), &[]);
+    assert!(cx.debug_bounds("section-Pinned").is_none(), "no label");
+    assert!(cx.debug_bounds("slot-1").is_none(), "no pin");
+    assert!(cx.debug_bounds("pin-hint").is_none(), "no pin hint");
+    assert!(cx.debug_bounds("pinned-strip").is_none(), "no strip");
+    assert!(
+        cx.debug_bounds("section-Commands").is_some(),
+        "the results show"
+    );
+}
+
 /// The Actions panel pins the selected result after the last pin and
 /// records it; the slot then shows the result with its chord, Ctrl+1,
 /// which opens it — once, one screen deep.
@@ -3600,7 +3663,7 @@ fn pinning_from_the_actions_panel_adds_a_slot_whose_chord_opens_it(cx: &mut Test
     let (window, cx) = pinned_rows(cx, data.path(), &[]);
     cx.simulate_keystrokes("down");
     settle(&window, cx);
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes(OPEN_ACTIONS);
     settle(&window, cx);
     assert!(cx.debug_bounds("action-Pin").is_some());
     cx.simulate_input("pin");
@@ -3614,7 +3677,11 @@ fn pinning_from_the_actions_panel_adds_a_slot_whose_chord_opens_it(cx: &mut Test
     assert!(data.path().join("quick-slots.json").exists());
     let nodes = accessible_nodes(cx);
     let pinned = node(&nodes, "Button", "Pinned 1: Bravo");
-    assert_eq!(pinned["keyboard_shortcut"], "Ctrl+1", "{pinned:#}");
+    assert_eq!(
+        pinned["keyboard_shortcut"],
+        format!("{CTRL}+1"),
+        "{pinned:#}"
+    );
 
     cx.simulate_keystrokes("ctrl-1");
     let view = settle(&window, cx);
@@ -3668,7 +3735,7 @@ fn a_slots_chord_runs_nothing_while_an_overlay_or_a_composition_has_the_keys(
 
     let data = tempfile::tempdir().unwrap();
     let (window, cx) = pinned_rows(cx, data.path(), &["sample_rust"]);
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes(OPEN_ACTIONS);
     settle(&window, cx);
     cx.simulate_keystrokes("ctrl-1");
     let view = settle(&window, cx);
@@ -3745,7 +3812,7 @@ fn pinning_past_five_adds_a_pin_on_a_new_row(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
     let five = ["one", "two", "three", "four", "five"];
     let (window, cx) = pinned_rows(cx, data.path(), &five);
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes(OPEN_ACTIONS);
     settle(&window, cx);
     cx.simulate_input("pin");
     settle(&window, cx);
@@ -3775,7 +3842,7 @@ fn a_pinned_results_actions_unpin_it(cx: &mut TestAppContext) {
     cx.simulate_input("alpha");
     let view = settle(&window, cx);
     assert_eq!(view.rows[view.selected.unwrap()].title, "Alpha");
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes(OPEN_ACTIONS);
     settle(&window, cx);
     assert!(cx.debug_bounds("action-Unpin").is_some());
     assert!(cx.debug_bounds("action-Pin").is_none());
@@ -3853,7 +3920,7 @@ fn a_pin_that_cannot_be_recorded_is_put_back_and_reported(cx: &mut TestAppContex
     let (window, cx) = pinned_rows(cx, data.path(), &[]);
     // Something that is not a file stands where the record goes.
     std::fs::create_dir(data.path().join("quick-slots.json")).unwrap();
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes(OPEN_ACTIONS);
     settle(&window, cx);
     cx.simulate_input("pin");
     settle(&window, cx);
@@ -3903,7 +3970,7 @@ fn with_seven_pins_ctrl_6_picks_the_first_row_and_the_last_pins_have_no_number(
     let (window, cx) = pinned_rows(cx, data.path(), &SEVEN_PINS);
     let nodes = accessible_nodes(cx);
     let fifth = node(&nodes, "Button", "Pinned 5: five");
-    assert_eq!(fifth["keyboard_shortcut"], "Ctrl+5", "{fifth:#}");
+    assert_eq!(fifth["keyboard_shortcut"], format!("{CTRL}+5"), "{fifth:#}");
     for label in ["Pinned 6: six", "Pinned 7: seven"] {
         let pin = node(&nodes, "Button", label);
         assert!(pin.get("keyboard_shortcut").is_none(), "{pin:#}");

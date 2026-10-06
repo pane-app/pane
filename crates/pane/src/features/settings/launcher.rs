@@ -129,9 +129,6 @@ pub(crate) const PINNED_LAYOUTS: [(PinnedLayout, &str, &str); 2] = [
 pub(crate) const COMPACT_PINNED_NAME: &str = "Show pinned in compact window mode";
 pub(crate) const COMPACT_PINNED_DEBUG: &str = "launcher-compact-pinned";
 
-/// The page's title.
-pub(crate) const TITLE: &str = "Launcher";
-
 /// What the page is, in one line: its sidebar entry's description in
 /// the search.
 pub(crate) const ABOUT: &str = "Where the launcher opens and what it shows";
@@ -268,7 +265,7 @@ fn monitor_model(cx: &App) -> Model {
 }
 
 /// The opening-monitor choices the select lists over `layout`, in row
-/// order — which the visual workbench's fixture lists too (#99).
+/// order (#99).
 pub(crate) fn monitor_choices(layout: &DisplayLayout) -> Vec<Choice> {
     MONITORS
         .iter()
@@ -398,8 +395,7 @@ fn focus(
 }
 
 /// What the Launcher page shows, as plain values: what [`render`] reads
-/// from the host settings and the placement, and what the visual
-/// workbench's fixture supplies to draw the same page (#99).
+/// from the host settings and the placement (#99).
 pub(crate) struct LauncherView {
     /// Why the platform cannot choose the launcher's display at all, if it
     /// cannot: the page offers no opening-monitor choice then.
@@ -541,8 +537,7 @@ fn segments<T: Copy + PartialEq>(
         .children(segments)
 }
 
-/// The Launcher page's composition, which the visual workbench's fixture
-/// draws too: a card of the Display row — `selects.0`, the opening
+/// The Launcher page's composition: a card of the Display row — `selects.0`, the opening
 /// monitor's searchable select (see [`crate::ui::select`]), with the
 /// fallback it explains under its name, or where the platform cannot
 /// choose the display at all, why — and the Pop to root search row

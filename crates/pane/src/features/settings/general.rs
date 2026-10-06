@@ -262,8 +262,7 @@ pub(crate) enum GeneralControl {
 }
 
 /// What the General page shows, as plain values: what [`render`] reads
-/// from the host settings and the launcher, and what the visual
-/// workbench's fixture supplies to draw the same page (#99).
+/// from the host settings and the launcher (#99).
 pub(crate) struct GeneralView {
     /// The Open Pane binding's caps, from the launcher's binding adapter
     /// (`crate::keyboard::hotkey_keys`), and the binding as the user names
@@ -439,8 +438,7 @@ fn render(
     .into_any_element()
 }
 
-/// The General page's composition, which the visual workbench's fixture
-/// draws too: a card of the page's own rows (`ui::controls`) — the Open
+/// The General page's composition: a card of the page's own rows (`ui::controls`) — the Open
 /// Pane hotkey's (its recorder's well, with Reset beside it), the
 /// launch-at-login switch's and the tray switch's, each with what it
 /// explains under its name — then `appearance`, the Appearance section,

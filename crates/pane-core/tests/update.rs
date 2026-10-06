@@ -53,22 +53,16 @@ mod unreachable;
 use npm_registry::{Registry, pack};
 use repo_server::{Repo, Server, greeter_files};
 
+#[path = "support/guests.rs"]
+mod guests;
+#[path = "support/rows.rs"]
+mod rows;
+
+use guests::{guest_file as guest, guests};
+use rows::{select_title, titles};
+
 /// The npm name of the package every test here installs.
 const NAME: &str = "@pane-tests/settings";
-
-fn guests() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests")
-}
-
-fn guest(file: &str) -> PathBuf {
-    let path = guests().join(file);
-    assert!(
-        path.exists(),
-        "{} is missing; run `cargo xtask guests`",
-        path.display()
-    );
-    path
-}
 
 /// The tarball of the settings sample at `version`, with the API version
 /// `api` and the dependency declarations `dependencies` (JSON, already
@@ -388,23 +382,6 @@ impl GitGreeter {
         self.repo.git(&["switch", "--quiet", "main"]);
         moved
     }
-}
-
-fn titles(launcher: &Launcher) -> Vec<String> {
-    launcher
-        .view()
-        .rows
-        .into_iter()
-        .map(|row| row.title)
-        .collect()
-}
-
-fn select_title(launcher: &Launcher, title: &str) {
-    let index = titles(launcher)
-        .iter()
-        .position(|row| row == title)
-        .unwrap_or_else(|| panic!("no row {title:?} in {:?}", titles(launcher)));
-    launcher.select(index);
 }
 
 fn activate(launcher: &Launcher, title: &str) {

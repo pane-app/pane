@@ -26,7 +26,11 @@ use futures::executor::block_on;
 use pane_core::{Launcher, Limits, PackageIdentity, Row, Runtime, RuntimeFailure, Screen, Status};
 use tempfile::TempDir;
 
-const MANAGE_ROW: &str = "Manage extensions…";
+#[path = "support/rows.rs"]
+mod rows;
+
+use rows::{manage, select_title, titles, to_root};
+
 const COMMAND: &str = "Greeting";
 const BUSY: &str = "Stop responding";
 
@@ -143,15 +147,6 @@ impl Pane {
     }
 }
 
-fn titles(launcher: &Launcher) -> Vec<String> {
-    launcher
-        .view()
-        .rows
-        .into_iter()
-        .map(|row| row.title)
-        .collect()
-}
-
 fn row(launcher: &Launcher, title: &str) -> Row {
     launcher
         .view()
@@ -159,21 +154,6 @@ fn row(launcher: &Launcher, title: &str) -> Row {
         .into_iter()
         .find(|row| row.title == title)
         .unwrap_or_else(|| panic!("no row {title:?} in {:?}", titles(launcher)))
-}
-
-fn select_title(launcher: &Launcher, title: &str) {
-    let index = titles(launcher)
-        .iter()
-        .position(|row| row == title)
-        .unwrap_or_else(|| panic!("no row {title:?} in {:?}", titles(launcher)));
-    launcher.select(index);
-}
-
-fn to_root(launcher: &Launcher) {
-    for _ in 0..3 {
-        launcher.back();
-    }
-    assert!(matches!(launcher.view().screen, Screen::Root { .. }));
 }
 
 /// Opens the command and selects its item titled `item`.
@@ -195,13 +175,6 @@ fn run(launcher: &Launcher, item: &str) -> Status {
     open_at(launcher, item);
     block_on(launcher.activate_selected());
     launcher.view().status
-}
-
-fn manage(launcher: &Launcher) {
-    to_root(launcher);
-    select_title(launcher, MANAGE_ROW);
-    block_on(launcher.activate_selected());
-    assert!(matches!(launcher.view().screen, Screen::Extensions { .. }));
 }
 
 fn error(status: Status) -> String {

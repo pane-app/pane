@@ -13,7 +13,7 @@
 
 use std::cell::RefCell;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -37,6 +37,20 @@ mod settle;
 mod paint;
 
 use settle::settle;
+
+#[path = "support/a11y.rs"]
+mod a11y;
+#[path = "support/packages.rs"]
+mod packages;
+#[path = "support/setup.rs"]
+mod setup;
+#[path = "support/wait.rs"]
+mod wait;
+
+use a11y::a11y;
+use packages::package;
+use setup::{init_settings, settings_shortcut};
+use wait::{frame, settle_frames, until_record_holds};
 
 /// The fake system for global hotkeys, as the Open Pane tests' one: what
 /// Pane registered, and no shortcut another application has.
@@ -139,25 +153,22 @@ fn display(id: u64, x: f32, y: f32, width: f32, height: f32, inset: f32) -> Disp
     }
 }
 
-/// Initializes the settings record of `data` in `cx`, as the binary does
-/// before its first window opens.
-fn init_settings(data: Option<&Path>, cx: &mut TestAppContext) {
-    cx.update(|cx| {
-        pane::settings::init_with_overrides(
-            data.map(|data| data.to_owned()),
-            pane::settings::Overrides::default(),
-            cx,
-        )
-    });
-}
-
-/// The keystroke that opens Settings on this platform.
-fn settings_shortcut() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "cmd-,"
-    } else {
-        "ctrl-,"
+/// Where the launcher of `cx` opens on the layout's second display. The
+/// layout counts physical pixels on Windows and X11, where the test
+/// window (1920×1080 at a scale of 2) is larger than the usable area and
+/// sits at its top left; on macOS it counts AppKit points, where the
+/// window fits and is centered in it.
+fn second_display_origin(placement: &FakePlacement, cx: &mut VisualTestContext) -> Point {
+    if !cfg!(target_os = "macos") {
+        return Point { x: 1980., y: 60. };
     }
+    let size = cx.update(|window, _| window.bounds().size);
+    placement.layout.borrow().displays[1]
+        .window_bounds(Size {
+            width: size.width.as_f32(),
+            height: size.height.as_f32(),
+        })
+        .origin
 }
 
 /// Opens the Settings window and moves it to the Launcher page by
@@ -278,37 +289,6 @@ fn choose_monitor(cx: &mut VisualTestContext, selector: &'static str) {
     cx.run_until_parked();
 }
 
-/// Delivers the animation frame the window `cx` drives has asked for, as
-/// the native frame loop would, with `elapsed` passing first on the test
-/// platform's controlled clock. The test platform delivers no frames on
-/// its own, so this is the only thing that advances a running
-/// transition; one call draws at most one frame. Returns how many
-/// next-frame callbacks ran — `0` means the window had asked for no
-/// frame, so nothing drew.
-fn frame(cx: &mut VisualTestContext, elapsed: Duration) -> usize {
-    cx.executor().advance_clock(elapsed);
-    let ran = cx.update(|window, cx| window.simulate_next_frame(cx));
-    cx.run_until_parked();
-    ran
-}
-
-/// Delivers frames until the window asks for none, so a transition in
-/// flight completes, and returns the frames it delivered. `0` means the
-/// window was already idle: no cosmetic and no functional frame was
-/// pending. Bounded, so a window that never stopped asking for frames
-/// fails the test instead of hanging it.
-fn settle_frames(cx: &mut VisualTestContext) -> usize {
-    let mut delivered = 0;
-    for _ in 0..20 {
-        let ran = frame(cx, Duration::from_millis(25));
-        if ran == 0 {
-            return delivered;
-        }
-        delivered += ran;
-    }
-    panic!("the window never stopped asking for animation frames");
-}
-
 /// The select popup's presentation as the last frame drew it — the
 /// offset from rest toward the trigger in px (negative: the popup hangs
 /// below the trigger, so toward it is up) and the opacity; `None` when
@@ -321,62 +301,6 @@ fn popup_presentation(
     settings
         .read_with(cx, |window, cx| window.monitor_select_popup(cx))
         .expect("the Settings window is open")
-}
-
-/// The accessibility tree of the window `cx` drives, as raw JSON, forced
-/// on so the tree is built regardless of platform accessibility.
-fn a11y(cx: &mut VisualTestContext) -> String {
-    cx.update(|window, _| window.set_a11y_forced(true));
-    cx.run_until_parked();
-    cx.update(|window, _| window.debug_a11y_tree_json())
-        .expect("an accessibility tree")
-}
-
-/// Runs `cx` until the settings record in `data` holds `text`: the save
-/// the page started is written off the window's thread.
-fn until_record(cx: &mut VisualTestContext, data: &Path, text: &str) {
-    let record = data.join("settings.json");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        cx.run_until_parked();
-        if fs::read_to_string(&record)
-            .ok()
-            .is_some_and(|held| held.contains(text))
-        {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for {text} in the record"
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
-
-/// Writes a package folder whose one command is the Rust sample, as the
-/// hotkey tests' fixture does.
-fn package(folder: &Path) -> PathBuf {
-    let guest =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/sample_rust.wasm");
-    assert!(
-        guest.exists(),
-        "{} is missing; run `cargo xtask guests`",
-        guest.display()
-    );
-    fs::create_dir_all(folder).unwrap();
-    fs::write(
-        folder.join("pane.json"),
-        r#"{
-  "manifestVersion": 1,
-  "title": "Hello",
-  "version": "1.0.0",
-  "apiVersion": "0.1",
-  "commands": [{ "id": "hello", "title": "Say hello", "component": "hello.wasm" }]
-}"#,
-    )
-    .unwrap();
-    fs::copy(guest, folder.join("hello.wasm")).unwrap();
-    folder.to_path_buf()
 }
 
 /// The command id of the package at `folder`: its identity's key and its
@@ -431,9 +355,10 @@ fn the_launcher_opens_on_the_chosen_display_and_never_moves_settings(cx: &mut Te
     // placed on it as it opened, in its usable area, which the first
     // recorded move's origin names.
     let default = Shortcut::open_pane_default();
+    let second = second_display_origin(&placement, cx);
     assert_eq!(
         placement.origin(0),
-        Point { x: 1980., y: 60. },
+        second,
         "the pointer's display's usable area"
     );
 
@@ -446,7 +371,7 @@ fn the_launcher_opens_on_the_chosen_display_and_never_moves_settings(cx: &mut Te
     assert_eq!(placement.moves.borrow().len(), before + 1);
     assert_eq!(
         placement.origin(before),
-        Point { x: 1980., y: 60. },
+        second,
         "the default still opens on the display with the mouse"
     );
 
@@ -455,7 +380,7 @@ fn the_launcher_opens_on_the_chosen_display_and_never_moves_settings(cx: &mut Te
     let (settings, mut settings_cx) = open_launcher_page(cx);
     choose_monitor(&mut settings_cx, "launcher-monitor-Primary");
     settings_cx.run_until_parked();
-    until_record(
+    until_record_holds(
         &mut settings_cx,
         data.path(),
         "\"openingMonitor\": \"primary\"",
@@ -545,7 +470,7 @@ fn a_disconnected_or_unanswered_choice_falls_back_and_says_so(cx: &mut TestAppCo
     let (_settings, mut settings_cx) = open_launcher_page(cx);
     choose_monitor(&mut settings_cx, "launcher-monitor-ActiveWindow");
     settings_cx.run_until_parked();
-    until_record(
+    until_record_holds(
         &mut settings_cx,
         data.path(),
         "\"openingMonitor\": \"active-window\"",
@@ -685,7 +610,7 @@ fn choosing_root_search_starts_the_reopening_from_root_search(cx: &mut TestAppCo
     settings_cx.run_until_parked();
     click(&mut settings_cx, "launcher-reopening-RootSearch");
     settings_cx.run_until_parked();
-    until_record(
+    until_record_holds(
         &mut settings_cx,
         data.path(),
         "\"reopening\": \"root-search\"",
@@ -844,12 +769,12 @@ fn the_recorded_choices_are_applied_by_a_fresh_application(cx: &mut TestAppConte
     settings_cx.run_until_parked();
     click(&mut settings_cx, "launcher-reopening-RootSearch");
     settings_cx.run_until_parked();
-    until_record(
+    until_record_holds(
         &mut settings_cx,
         data.path(),
         "\"openingMonitor\": \"primary\"",
     );
-    until_record(
+    until_record_holds(
         &mut settings_cx,
         data.path(),
         "\"reopening\": \"root-search\"",
@@ -910,7 +835,7 @@ fn a_save_that_fails_is_reported_and_the_shown_choice_stays_what_was_saved(
     let (_settings, mut settings_cx) = open_launcher_page(cx);
     choose_monitor(&mut settings_cx, "launcher-monitor-Primary");
     settings_cx.run_until_parked();
-    until_record(
+    until_record_holds(
         &mut settings_cx,
         data.path(),
         "\"openingMonitor\": \"primary\"",
@@ -1032,6 +957,188 @@ fn escape_at_root_search_with_an_empty_query_hides_the_launcher(cx: &mut TestApp
     assert!(!hidden(&window, cx), "the hidden launcher was shown again");
 }
 
+/// Chooses the reopening whose choice row's debug selector is `selector`
+/// through the page's own select, and waits for the record to hold `held`.
+fn choose_reopening(
+    settings_cx: &mut VisualTestContext,
+    data: &Path,
+    selector: &'static str,
+    held: &str,
+) {
+    click(settings_cx, "launcher-reopening");
+    settings_cx.run_until_parked();
+    click(settings_cx, selector);
+    settings_cx.run_until_parked();
+    until_record_holds(settings_cx, data, held);
+}
+
+/// Checks the delayed reopening of `after` on the executor's simulated
+/// clock: a launcher hidden for less than `after` comes back to the view
+/// it was left on, and one hidden for `after` starts from root search.
+/// Each press moves the clock past the repeat guard first, so the time
+/// hidden is the advance plus that.
+fn pops_to_root_after(
+    window: &gpui::Entity<LauncherWindow>,
+    cx: &mut VisualTestContext,
+    placement: &FakePlacement,
+    after: Duration,
+) {
+    let default = Shortcut::open_pane_default();
+    cx.simulate_input("zz");
+    assert_eq!(settle(window, cx).query(), Some("zz"));
+
+    // Long after it opened, the launcher is still shown without focus, as
+    // the test platform opens it: the hotkey brings it forward, and since
+    // nothing was hidden there is nothing to pop.
+    cx.executor().advance_clock(after);
+    press(window, &default, cx);
+    cx.run_until_parked();
+    assert!(!hidden(window, cx));
+    assert_eq!(
+        settle(window, cx).query(),
+        Some("zz"),
+        "a launcher never hidden keeps its view"
+    );
+
+    // Back a moment before the delay is up: the view is restored, with
+    // its search focused.
+    dismiss(window, &default, cx, placement);
+    cx.executor().advance_clock(after - Duration::from_secs(2));
+    press(window, &default, cx);
+    cx.run_until_parked();
+    assert!(!hidden(window, cx));
+    let view = settle(window, cx);
+    assert_eq!(view.query(), Some("zz"), "a quick return restores the view");
+
+    // Away for the whole delay: the reopening starts from root search
+    // with an empty query.
+    dismiss(window, &default, cx, placement);
+    cx.executor().advance_clock(after);
+    press(window, &default, cx);
+    cx.run_until_parked();
+    assert!(!hidden(window, cx));
+    let view = settle(window, cx);
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "{:?}",
+        view.screen
+    );
+    assert_eq!(
+        view.query(),
+        Some(""),
+        "a late return starts from root search"
+    );
+    cx.simulate_input("q");
+    assert_eq!(
+        settle(window, cx).query(),
+        Some("q"),
+        "root search's query has focus"
+    );
+}
+
+#[gpui::test]
+fn after_90_seconds_restores_a_quick_return_and_pops_a_late_one_to_root(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let placement = Rc::new(FakePlacement::default());
+    placement.layout(None, None);
+    let (window, cx) = open(cx, Some(data.path()), &placement);
+
+    let (_settings, mut settings_cx) = open_launcher_page(cx);
+    choose_reopening(
+        &mut settings_cx,
+        data.path(),
+        "launcher-reopening-After90Seconds",
+        "\"reopening\": \"after-90-seconds\"",
+    );
+    pops_to_root_after(&window, cx, &placement, Duration::from_secs(90));
+}
+
+#[gpui::test]
+fn after_3_minutes_restores_a_quick_return_and_pops_a_late_one_to_root(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let placement = Rc::new(FakePlacement::default());
+    placement.layout(None, None);
+    let (window, cx) = open(cx, Some(data.path()), &placement);
+
+    let (_settings, mut settings_cx) = open_launcher_page(cx);
+    choose_reopening(
+        &mut settings_cx,
+        data.path(),
+        "launcher-reopening-After3Minutes",
+        "\"reopening\": \"after-3-minutes\"",
+    );
+    pops_to_root_after(&window, cx, &placement, Duration::from_secs(180));
+}
+
+#[gpui::test]
+fn the_delayed_reopening_and_the_vertical_layout_are_applied_by_a_fresh_application(
+    cx: &mut TestAppContext,
+) {
+    let data = tempfile::tempdir().unwrap();
+    // Two pins, kept by a Pane that ran before; their commands are not
+    // installed, so they show as unavailable, which is still a pin.
+    fs::write(
+        data.path().join("quick-slots.json"),
+        serde_json::json!({
+            "version": 2,
+            "pins": [{ "command": "one" }, { "command": "two" }],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let placement = Rc::new(FakePlacement::default());
+    placement.layout(None, None);
+    let (_window, cx) = open(cx, Some(data.path()), &placement);
+
+    // Both choices, taken through the page's own controls.
+    let (_settings, mut settings_cx) = open_launcher_page(cx);
+    choose_reopening(
+        &mut settings_cx,
+        data.path(),
+        "launcher-reopening-After90Seconds",
+        "\"reopening\": \"after-90-seconds\"",
+    );
+    click(&mut settings_cx, "launcher-pinned-Vertical");
+    settings_cx.run_until_parked();
+    until_record_holds(
+        &mut settings_cx,
+        data.path(),
+        "\"pinnedLayout\": \"vertical\"",
+    );
+
+    // A fresh application over the same data folder.
+    let mut fresh = cx.cx.new_app();
+    let fresh_placement = Rc::new(FakePlacement::default());
+    fresh_placement.layout(None, None);
+    fresh.update(|cx| pane::placement::init(fresh_placement.clone() as Rc<dyn Placement>, cx));
+    fresh.update(|cx| {
+        pane::settings::init_with_overrides(
+            Some(data.path().to_owned()),
+            pane::settings::Overrides::default(),
+            cx,
+        )
+    });
+    fresh.update(pane::bind_keys);
+    let launcher = Launcher::new(Runtime::start(), Vec::new())
+        .with_hotkeys(Arc::new(FakeSystem::default()))
+        .with_quick_slots(data.path());
+    let (window, fresh_cx) =
+        fresh.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    fresh_cx.run_until_parked();
+    settle(&window, fresh_cx);
+
+    // The pins are result rows, not the strip of tiles.
+    assert!(fresh_cx.debug_bounds("slot-1").is_some(), "the first pin");
+    assert!(fresh_cx.debug_bounds("slot-2").is_some(), "the second pin");
+    assert!(
+        fresh_cx.debug_bounds("pinned-strip").is_none(),
+        "no strip in the vertical layout"
+    );
+
+    // And the reopening waits 90 seconds before starting from root search.
+    pops_to_root_after(&window, fresh_cx, &fresh_placement, Duration::from_secs(90));
+}
+
 #[gpui::test]
 fn the_page_registers_its_settings_in_the_settings_search(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
@@ -1130,7 +1237,7 @@ fn the_compact_pinned_switch_is_in_the_layout_card_and_is_saved(cx: &mut TestApp
     // A click anywhere on the row takes the choice, and the record keeps
     // it under its camelCase name.
     click(&mut sc, "launcher-compact-pinned-row");
-    until_record(&mut sc, data.path(), "\"compactPinned\": true");
+    until_record_holds(&mut sc, data.path(), "\"compactPinned\": true");
     assert!(
         switch_on(&mut sc, "Show pinned in compact window mode"),
         "the switch shows the choice"
@@ -1138,7 +1245,7 @@ fn the_compact_pinned_switch_is_in_the_layout_card_and_is_saved(cx: &mut TestApp
 
     // And again turns it off.
     click(&mut sc, "launcher-compact-pinned-row");
-    until_record(&mut sc, data.path(), "\"compactPinned\": false");
+    until_record_holds(&mut sc, data.path(), "\"compactPinned\": false");
     assert!(
         !switch_on(&mut sc, "Show pinned in compact window mode"),
         "the switch shows the choice"
@@ -1353,7 +1460,7 @@ fn the_select_opens_below_the_trigger_and_commits_the_highlighted_choice(cx: &mu
     // to the trigger, which shows what was kept.
     sc.simulate_keystrokes("enter");
     sc.run_until_parked();
-    until_record(&mut sc, data.path(), "\"openingMonitor\": \"primary\"");
+    until_record_holds(&mut sc, data.path(), "\"openingMonitor\": \"primary\"");
     // The keyboard returned to the trigger the frame the popup closed,
     // while the exit still paints it.
     assert_eq!(
@@ -1679,7 +1786,7 @@ fn composition_filters_as_typed_and_commits_committed_text(cx: &mut TestAppConte
     sc.run_until_parked();
     sc.simulate_keystrokes("enter");
     sc.run_until_parked();
-    until_record(&mut sc, data.path(), "\"openingMonitor\": \"primary\"");
+    until_record_holds(&mut sc, data.path(), "\"openingMonitor\": \"primary\"");
 }
 
 #[gpui::test]
@@ -1898,7 +2005,7 @@ fn a_popup_reopened_during_its_exit_retargets_and_blocks_nothing(cx: &mut TestAp
     );
     click(&mut sc, "launcher-reopening-RootSearch");
     sc.run_until_parked();
-    until_record(&mut sc, data.path(), "\"reopening\": \"root-search\"");
+    until_record_holds(&mut sc, data.path(), "\"reopening\": \"root-search\"");
 }
 
 /// Reduced motion lands the popup at its endpoint with no frame at all:

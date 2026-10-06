@@ -4,9 +4,6 @@
 //! to. The command is Echo, the query sample from `cargo xtask guests`,
 //! which answers the text it is sent.
 
-use std::fs;
-use std::path::{Path, PathBuf};
-
 use futures::executor::block_on;
 use gpui::{Entity, TestAppContext, VisualTestContext, prelude::*};
 use pane::LauncherWindow;
@@ -17,22 +14,10 @@ mod settle;
 
 use settle::settle;
 
-/// Copies the assembled query sample to `folder`.
-fn package(folder: &Path) -> PathBuf {
-    let assembled =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/sample-query");
-    assert!(
-        assembled.exists(),
-        "{} is missing; run `cargo xtask guests`",
-        assembled.display()
-    );
-    fs::create_dir_all(folder).unwrap();
-    for entry in fs::read_dir(&assembled).unwrap() {
-        let entry = entry.unwrap();
-        fs::copy(entry.path(), folder.join(entry.file_name())).unwrap();
-    }
-    folder.to_path_buf()
-}
+#[path = "support/packages.rs"]
+mod packages;
+
+use packages::assembled_package;
 
 fn titles(view: &LauncherView) -> Vec<&str> {
     view.rows.iter().map(|row| row.title.as_str()).collect()
@@ -60,7 +45,7 @@ fn an_alias_and_a_fallback_set_in_the_window_send_the_typed_text_to_the_command(
     cx: &mut TestAppContext,
 ) {
     let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    let folder = package(&sources.path().join("query"));
+    let folder = assembled_package("sample-query", &sources.path().join("query"));
     cx.executor().allow_parking();
     cx.update(pane::bind_keys);
     let runtime = Runtime::start().unwrap();

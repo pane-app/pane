@@ -11,6 +11,11 @@ use futures::executor::block_on;
 use pane_core::{CallError, Launcher, PackageIdentity, Runtime, Screen, Status};
 use tempfile::TempDir;
 
+#[path = "support/rows.rs"]
+mod rows;
+
+use rows::{select_title, titles};
+
 const INSTALL_ROW: &str = "Install extension from folder…";
 const NPM_ROW: &str = "Install extension from npm…";
 const GIT_ROW: &str = "Install extension from Git…";
@@ -93,15 +98,6 @@ impl Dirs {
     }
 }
 
-fn titles(launcher: &Launcher) -> Vec<String> {
-    launcher
-        .view()
-        .rows
-        .into_iter()
-        .map(|row| row.title)
-        .collect()
-}
-
 fn subtitles(launcher: &Launcher) -> Vec<String> {
     launcher
         .view()
@@ -109,14 +105,6 @@ fn subtitles(launcher: &Launcher) -> Vec<String> {
         .into_iter()
         .map(|row| row.subtitle.unwrap_or_default())
         .collect()
-}
-
-fn select_title(launcher: &Launcher, title: &str) {
-    let index = titles(launcher)
-        .iter()
-        .position(|row| row == title)
-        .unwrap_or_else(|| panic!("no row {title:?} in {:?}", titles(launcher)));
-    launcher.select(index);
 }
 
 /// From root search, opens the command titled `command` and runs its item

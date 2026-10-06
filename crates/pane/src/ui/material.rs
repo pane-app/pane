@@ -198,8 +198,7 @@ impl Material {
     /// corner preference, documented at 8px — the reference curves at 18)
     /// and draws its own shadow in place of the reference's two. The
     /// acrylic covers the whole window rectangle, so an 18px curve painted
-    /// here would show it as a plate behind the curve. The visual
-    /// workbench records the corner as an accepted discrepancy (#92).
+    /// here would show it as a plate behind the curve (#92).
     pub(crate) fn panel(&self, theme: &Theme, content: impl IntoElement) -> Div {
         self.tinted_panel(theme, theme.panel_tint, content)
     }
@@ -237,23 +236,6 @@ impl Material {
     /// surface: what the Appearance preview shows is in effect.
     pub(crate) fn is_glass(&self) -> bool {
         self.mode == MaterialMode::Glass
-    }
-
-    /// The Appearance preview's miniature launcher (#98): the L1 panel's
-    /// surface — the launcher's glass tint, or the solid fallback, under
-    /// the sheen fading out over its top 36% — at the miniature's 14px
-    /// radius, under its own 1px ring (the board's white 8%) and the
-    /// panel's top highlight. It is drawn with the material in effect, so
-    /// it shows what the launcher shows: the tint where glass stands, the
-    /// solid surface where it does not. Its drop shadow belongs to a
-    /// wrapper (GPUI paints an outer shadow under the element's own
-    /// translucent fill; see [`Material::popover`]).
-    pub(crate) fn preview_panel(&self, theme: &Theme, content: impl IntoElement) -> Div {
-        let shape = (
-            theme.geometry.preview.panel_radius,
-            theme.controls.preview_panel_edge,
-        );
-        self.l1_surface(theme, theme.panel_tint, shape, None, content)
     }
 
     /// The L1 panel with `tint` as its glass (see [`Material::panel`]).

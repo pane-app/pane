@@ -37,19 +37,13 @@ mod unreachable;
 
 use repo_server::{Mode, Repo, Server, greeter_files};
 
-fn guests() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests")
-}
+#[path = "support/guests.rs"]
+mod guests;
+#[path = "support/rows.rs"]
+mod rows;
 
-fn guest(file: &str) -> PathBuf {
-    let path = guests().join(file);
-    assert!(
-        path.exists(),
-        "{} is missing; run `cargo xtask guests`",
-        path.display()
-    );
-    path
-}
+use guests::{guest_file as guest, guests};
+use rows::{select_title, titles};
 
 /// The controlled repository's commits.
 struct Greeter {
@@ -182,23 +176,6 @@ impl Dirs {
             std::thread::sleep(Duration::from_millis(20));
         }
     }
-}
-
-fn titles(launcher: &Launcher) -> Vec<String> {
-    launcher
-        .view()
-        .rows
-        .into_iter()
-        .map(|row| row.title)
-        .collect()
-}
-
-fn select_title(launcher: &Launcher, title: &str) {
-    let index = titles(launcher)
-        .iter()
-        .position(|row| row == title)
-        .unwrap_or_else(|| panic!("no row {title:?} in {:?}", titles(launcher)));
-    launcher.select(index);
 }
 
 fn details(launcher: &Launcher) -> Vec<String> {

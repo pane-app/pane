@@ -25,7 +25,11 @@ use pane_core::{
 };
 use tempfile::TempDir;
 
-const MANAGE_ROW: &str = "Manage extensions…";
+#[path = "support/rows.rs"]
+mod rows;
+
+use rows::{manage, select_title, titles, to_root};
+
 const WHY_ROW: &str = "Why the extension runtime stopped";
 const RESTART_ROW: &str = "Restart the extension runtime";
 
@@ -195,30 +199,6 @@ impl Pane {
     }
 }
 
-fn titles(launcher: &Launcher) -> Vec<String> {
-    launcher
-        .view()
-        .rows
-        .into_iter()
-        .map(|row| row.title)
-        .collect()
-}
-
-fn select_title(launcher: &Launcher, title: &str) {
-    let index = titles(launcher)
-        .iter()
-        .position(|row| row == title)
-        .unwrap_or_else(|| panic!("no row {title:?} in {:?}", titles(launcher)));
-    launcher.select(index);
-}
-
-fn to_root(launcher: &Launcher) {
-    for _ in 0..3 {
-        launcher.back();
-    }
-    assert!(matches!(launcher.view().screen, Screen::Root { .. }));
-}
-
 /// From root search, opens `command` and selects its item `item`.
 fn open_at(launcher: &Launcher, command: &str, item: &str) {
     to_root(launcher);
@@ -239,13 +219,6 @@ fn run(launcher: &Launcher, command: &str, item: &str) -> Status {
     open_at(launcher, command, item);
     block_on(launcher.activate_selected());
     launcher.view().status
-}
-
-fn manage(launcher: &Launcher) {
-    to_root(launcher);
-    select_title(launcher, MANAGE_ROW);
-    block_on(launcher.activate_selected());
-    assert!(matches!(launcher.view().screen, Screen::Extensions { .. }));
 }
 
 /// Activates the extension manager's row titled `title`, returning the

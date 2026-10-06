@@ -80,9 +80,6 @@ pub(crate) fn bind_keys(cx: &mut App) {
     cx.bind_keys(super::captured_while_recording(RECORDER));
 }
 
-/// The page's title.
-pub(crate) const TITLE: &str = "Keyboard";
-
 /// What the page is, in one line: its sidebar entry's description in
 /// the search.
 pub(crate) const ABOUT: &str = "Keys for moving around Pane";
@@ -284,8 +281,7 @@ pub(crate) struct KeyboardRow {
 }
 
 /// What the Keyboard page shows, as plain values: what [`render`] reads
-/// from the host settings, and what the visual workbench's fixture
-/// supplies to draw the same page (#99).
+/// from the host settings (#99).
 pub(crate) struct KeyboardView {
     pub(crate) rows: Vec<KeyboardRow>,
     /// The action whose recorder is listening, if any.
@@ -446,8 +442,7 @@ fn keyboard_is_default(action: KeyboardAction, cx: &App) -> bool {
         .is_default(action)
 }
 
-/// The Keyboard page's composition, which the visual workbench's fixture
-/// draws too: the Behavior section — the escape behavior's segments, the
+/// The Keyboard page's composition: the Behavior section — the escape behavior's segments, the
 /// Escape-closes-Settings switch and `navigation` (the navigation
 /// bindings' select) — then the Shortcuts section, a card of a settings
 /// row per action with its recorder at its end, with what a save reported

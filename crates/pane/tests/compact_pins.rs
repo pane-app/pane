@@ -163,7 +163,12 @@ fn the_compact_window_shows_the_pins_under_the_search_field(cx: &mut TestAppCont
     // Each pin is a named button with the chord that picks it.
     let nodes = accessible_nodes(cx);
     let alpha = node(&nodes, "Button", "Pinned 1: Alpha");
-    assert_eq!(alpha["keyboard_shortcut"], "Ctrl+1", "{alpha:#}");
+    let chord = if cfg!(target_os = "macos") {
+        "Control+1"
+    } else {
+        "Ctrl+1"
+    };
+    assert_eq!(alpha["keyboard_shortcut"], chord, "{alpha:#}");
     node(&nodes, "Button", "Pinned 2: Bravo");
 
     // A click opens what the pin holds, and the window grows back.

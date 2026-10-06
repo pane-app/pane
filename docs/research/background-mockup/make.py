@@ -7,7 +7,13 @@ Run: python make.py, then open index.html.
 The wallpapers it was built from (wallhaven downloads under src/ and their
 derived imgs/) are not kept in the repository, so the committed index.html
 shows broken pictures until src/ is filled again; the shot-*.png files are
-captures of the judged look."""
+captures of the judged look.
+
+It reads the reference's root board from docs/research/ui-port/reference/,
+which is no longer in the repository (ADR 0029 retired the reference
+comparison); to run it again, restore that folder from the archive tag:
+git checkout archive/impl-ui-91-2026-10-06 -- docs/research/ui-port/reference
+(https://github.com/hoangvu12/pane/tree/archive/impl-ui-91-2026-10-06/docs/research/ui-port/reference)."""
 import colorsys
 import re
 from pathlib import Path

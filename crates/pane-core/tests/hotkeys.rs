@@ -15,6 +15,11 @@ use pane_core::hotkeys::{HotkeyError, Hotkeys, Shortcut};
 use pane_core::{Launcher, PackageIdentity, Runtime, SavedData, Screen, Status, Unavailable};
 use tempfile::TempDir;
 
+#[path = "support/rows.rs"]
+mod rows;
+
+use rows::{select_title, titles};
+
 const MANAGE_ROW: &str = "Manage extensions…";
 
 /// The system as the tests set it up.
@@ -151,15 +156,6 @@ impl Dirs {
     }
 }
 
-fn titles(launcher: &Launcher) -> Vec<String> {
-    launcher
-        .view()
-        .rows
-        .into_iter()
-        .map(|row| row.title)
-        .collect()
-}
-
 fn row_subtitle(launcher: &Launcher, title: &str) -> String {
     let view = launcher.view();
     let row = view
@@ -168,14 +164,6 @@ fn row_subtitle(launcher: &Launcher, title: &str) -> String {
         .find(|row| row.title == title)
         .unwrap_or_else(|| panic!("no row {title:?} in {:?}", titles(launcher)));
     row.subtitle.clone().unwrap_or_default()
-}
-
-fn select_title(launcher: &Launcher, title: &str) {
-    let index = titles(launcher)
-        .iter()
-        .position(|row| row == title)
-        .unwrap_or_else(|| panic!("no row {title:?} in {:?}", titles(launcher)));
-    launcher.select(index);
 }
 
 fn activate(launcher: &Launcher, title: &str) {

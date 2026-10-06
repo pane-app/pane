@@ -2,7 +2,7 @@
 
 A small, extensible desktop launcher for Windows, macOS and Linux, inspired by Raycast and Pi.
 
-Pane is in early development. The current slice is a native GPUI CE window running one sample command implemented three times, as Rust, JavaScript and TypeScript extensions, through a WASI 0.3 component interface, installing local, npm and Git extension packages, and, on Linux, Windows and macOS, one package a clean machine installs whose first setup downloads Pane's default extensions itself ([installer](docs/installer.md)); the artifact source it downloads from is not deployed yet, so no published installer exists. JavaScript and TypeScript run on a pinned, patched componentize-qjs (QuickJS), which remains provisional.
+Pane is in early development. It is a native GPUI CE launcher with root search, a Settings window and a global hotkey, running Rust, JavaScript and TypeScript extensions through a WASI 0.3 component interface, installing local, npm and Git extension packages, and, on Linux, Windows and macOS, one package a clean machine installs whose first setup downloads Pane's default extensions itself ([installer](docs/installer.md)); the artifact source it downloads from is not deployed yet, so no published installer exists. JavaScript and TypeScript run on a pinned, patched componentize-qjs (QuickJS), which remains provisional.
 
 ## Build, run and test
 
@@ -47,7 +47,9 @@ Layout:
 
 - `wit/extension.wit`: the host/guest contract for one extension command: a list view, item actions, [forms](docs/forms.md) and [custom views](docs/custom-views.md).
 - `crates/pane-core`: the launcher model (the public host interface the tests drive), extension packages (manifest, identity, managed copies) and the extension runtime, a Wasmtime 49.0.1 engine registering only WASI 0.3.
-- `crates/pane`: the GPUI CE window, with [root search](docs/root-search.md) as its first screen.
+- `crates/pane`: the GPUI CE window, with [root search](docs/root-search.md) as its first screen, and the Settings window.
+- `crates/pane-target`: the operating-system and processor names shared by the core, `xtask` and native helpers.
+- `xtask/`: the `cargo xtask` build, CI and packaging commands above.
 - `guests/`: extension guests, including [the Rust, JavaScript and TypeScript sample commands](guests/README.md), TypeScript declarations for the contract, the prebuilt JS/TS components and test fixtures.
 - `tools/componentize-js`: the JS/TS toolchain, pinned upstream componentize-qjs plus Pane's patch queue, and its build script.
 - `scripts/smoke-*`: native GUI smoke runs used by CI, which uploads their screenshots.
@@ -58,12 +60,12 @@ Layout:
 - [Implementation tickets](https://github.com/hoangvu12/pane/issues?q=is%3Aissue+label%3Aimplementation)
 - [Cross-platform contributor requirements](https://github.com/hoangvu12/pane/issues/1#cross-platform-contributor-requirement)
 - [Current decisions](docs/current-decisions.md)
-- [Handoff and evidence limits](docs/HANDOFF.md)
+- [Handoff: where the work stands, and evidence limits](docs/HANDOFF.md)
 - [Domain vocabulary](CONTEXT.md)
 
-Contributors on all three operating systems must have working build/run/test workflows early in development. Existing prototype evidence covers Windows only; macOS and Linux support remains to be validated. Research scripts may depend on the temporary toolchains and local paths documented alongside them.
+Contributors on all three operating systems have working build/run/test workflows, and CI builds and tests on all three; per-platform support evidence is in [docs/platforms/](docs/platforms/). Research scripts may depend on the temporary toolchains and local paths documented alongside them.
 
-The 52 implementation issues are published; work starts when each issue's blockers are complete. Research results and prototype source are under `docs/research/`; they are not production support guarantees.
+Work is tracked as specifications and implementation issues; an issue's work starts when its blockers are complete. Research results and prototype source are under `docs/research/`; they are not production support guarantees.
 
 ## Licensing
 

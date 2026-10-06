@@ -5,8 +5,6 @@
 //! Pane registers; the real adapters are checked in pane-core's
 //! `hotkey_adapters.rs` and the GUI smokes.
 
-use std::fs;
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use gpui::TestAppContext;
@@ -19,6 +17,11 @@ use tempfile::TempDir;
 mod settle;
 
 use settle::settle;
+
+#[path = "support/packages.rs"]
+mod packages;
+
+use packages::package;
 
 #[derive(Default)]
 struct FakeSystem {
@@ -41,31 +44,6 @@ impl Hotkeys for FakeSystem {
             .unwrap()
             .retain(|kept| kept != shortcut);
     }
-}
-
-/// Writes a package folder whose one command is the Rust sample.
-fn package(folder: &Path) -> PathBuf {
-    let guest =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/sample_rust.wasm");
-    assert!(
-        guest.exists(),
-        "{} is missing; run `cargo xtask guests`",
-        guest.display()
-    );
-    fs::create_dir_all(folder).unwrap();
-    fs::write(
-        folder.join("pane.json"),
-        r#"{
-  "manifestVersion": 1,
-  "title": "Hello",
-  "version": "1.0.0",
-  "apiVersion": "0.1",
-  "commands": [{ "id": "hello", "title": "Say hello", "component": "hello.wasm" }]
-}"#,
-    )
-    .unwrap();
-    fs::copy(guest, folder.join("hello.wasm")).unwrap();
-    folder.to_path_buf()
 }
 
 #[gpui::test]
@@ -193,7 +171,11 @@ fn a_command_hotkey_cannot_take_the_open_pane_keys(cx: &mut TestAppContext) {
     // default, which the window registered at startup — are refused:
     // the screen explains them and stays for another try, and nothing
     // is registered or recorded over the working binding.
-    cx.simulate_keystrokes("ctrl-alt-space");
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "alt-space"
+    } else {
+        "ctrl-alt-space"
+    });
     let open_pane = Shortcut::open_pane_default();
     let view = settle(&window, cx);
     assert_eq!(

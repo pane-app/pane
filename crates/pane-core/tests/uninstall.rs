@@ -18,6 +18,11 @@ use pane_core::{
 };
 use tempfile::TempDir;
 
+#[path = "support/rows.rs"]
+mod rows;
+
+use rows::{select_title, titles};
+
 const MANAGE_ROW: &str = "Manage extensions…";
 const KEEP_ROW: &str = "Uninstall and keep saved data";
 const DELETE_ROW: &str = "Uninstall and delete saved data";
@@ -139,23 +144,6 @@ impl Dirs {
         .filter(|file| !self.values(file, folder).is_empty())
         .collect()
     }
-}
-
-fn titles(launcher: &Launcher) -> Vec<String> {
-    launcher
-        .view()
-        .rows
-        .into_iter()
-        .map(|row| row.title)
-        .collect()
-}
-
-fn select_title(launcher: &Launcher, title: &str) {
-    let index = titles(launcher)
-        .iter()
-        .position(|row| row == title)
-        .unwrap_or_else(|| panic!("no row {title:?} in {:?}", titles(launcher)));
-    launcher.select(index);
 }
 
 /// From root search, opens the command titled `command` and runs its item

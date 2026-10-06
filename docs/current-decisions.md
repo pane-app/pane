@@ -2,6 +2,8 @@
 
 Reconciled 2026-09-28 against the saved interview, ADRs, policy document, test reports, and user messages available in the current conversation. This is a decision index, not a new spec or implementation authorization. It does not reconstruct a verbatim pre-compaction transcript.
 
+Not reconciled since: the Settings and shortcuts work ([#70](https://github.com/hoangvu12/pane/issues/70)), the launcher UI ([#61](https://github.com/hoangvu12/pane/issues/61)), the Windows UI port ([#90](https://github.com/hoangvu12/pane/issues/90)) and ADRs [0026](adr/0026-host-keeps-quick-slots-by-identity.md)-[0028](adr/0028-the-launcher-draws-a-background-image-the-user-chooses.md). Where those differ from a row below, they win; [HANDOFF](HANDOFF.md#where-the-work-stands) says where the work stands.
+
 Use this file for current status; use the linked records for detail and rationale. Later explicit user instructions take precedence. **Accepted** is a product decision, **provisional** is a direction awaiting detail or validation, **superseded** is historical, and **deferred** is outside the initial scope or postponed. An untested requirement can still be accepted; test success does not turn an assistant recommendation into user approval.
 
 ## Interview coverage

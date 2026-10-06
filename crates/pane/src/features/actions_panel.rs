@@ -54,8 +54,7 @@ actions!(
     [NextAction, PreviousAction, ChooseAction, CloseActions]
 );
 
-/// The panel's key context (the visual workbench's fixture gives its
-/// panel the same one, for the same bindings).
+/// The panel's key context.
 pub(crate) const CONTEXT: &str = "ActionsPanel";
 
 /// The search field's placeholder, the reference's.
@@ -469,7 +468,7 @@ impl LauncherWindow {
         let surface = compose(
             PanelView {
                 target: opened.map(|opened| (&opened.actions, opened.kind)),
-                icon: opened.and_then(|opened| row_icon(&opened.actions.target)),
+                icon: opened.map(|opened| row_icon(&opened.actions.target)),
                 listed: &listed,
                 group: opened.map_or(PANE_GROUP, |opened| opened.subject.group()),
                 filtering,
@@ -533,8 +532,7 @@ pub(crate) struct PanelView<'a> {
     pub(crate) selected: usize,
     /// The invoke binding's keys, the primary entry's.
     pub(crate) invoke: &'a KeySequence,
-    /// The quick slot entries' keys; `None` draws them without (the
-    /// visual workbench's reference panel shows none).
+    /// The quick slot entries' keys; `None` draws them without.
     pub(crate) slot_keys: Option<&'a SlotKeys>,
     /// The search field's text.
     pub(crate) filter: &'a Entity<EditableTextState>,
@@ -543,8 +541,7 @@ pub(crate) struct PanelView<'a> {
 /// The panel as `view` describes it: the header (the target's tile and
 /// title), the entries — or the note saying why there are none — and the
 /// search row, in the L2 popover. `attach` gives each available entry its
-/// handlers. Both the launcher and the visual workbench's fixture draw the
-/// panel through this, so the fixture measures the production panel.
+/// handlers.
 pub(crate) fn compose(
     view: PanelView,
     theme: &Theme,
@@ -608,8 +605,6 @@ pub(crate) enum PanelChild {
 /// The list's children for `listed`: the primary action, then — unless
 /// the filter is narrowing them, as the reference drops its separators
 /// then — a rule and the "Pane" label over the command's configuration.
-/// The launcher's panel and the visual workbench's declared layout both
-/// follow this.
 pub(crate) fn panel_children(listed: &[ResultActionItem], filtering: bool) -> Vec<PanelChild> {
     let mut children = Vec::new();
     let mut grouped = false;
@@ -670,7 +665,7 @@ fn action_glyph(action: ResultAction, primary: Glyph) -> Glyph {
 /// the filter is narrowing them, as the reference drops its separators
 /// then — a rule and the "Pane" label over the command's configuration.
 /// `selected` indexes `listed`; `attach` gives each row its handlers (the
-/// launcher's pointer and click; the fixture's none). The primary entry
+/// launcher's pointer and click). The primary entry
 /// shows the invoke binding in the accent caps, as the footer's button
 /// does; the quick slot entries show `slot_keys` in the regular caps,
 /// when given; the configuration has no keys of its own.

@@ -32,11 +32,14 @@ Usage: python3 scripts/check_screenshot.py <png> <role or hex color> [min pixels
        python3 scripts/check_screenshot.py --absent <png> <role or hex color> [max pixels]
        python3 scripts/check_screenshot.py --locate <png> <hex color>
        python3 scripts/check_screenshot.py <png> selected [min pixels]
+       python3 scripts/check_screenshot.py <png> answer
        python3 scripts/check_screenshot.py <png> progress|subtitle [min pixels]
        python3 scripts/check_screenshot.py --preview <png>
 
 Selected rows must contain a broad connected wash, not just similarly colored
-text or icons. Host color roles are hint, details, success, error and warning;
+text or icons. A computed answer is drawn as a card instead, on its own fill
+without the wash: selected, it is ringed in the accent, whose top and bottom
+edges must span the list. Host color roles are hint, details, success, error and warning;
 progress and subtitle additionally restrict the region being checked.
 Literal hex colors remain available for extension-authored drawings.
 --preview waits for visible metadata below the package heading
@@ -57,9 +60,11 @@ HOST_COLORS = {
     "error": "ff9a92",
     "warning": "d6a36a",
 }
+# The selected answer card's ring (and the caret, and the pin hint).
+ACCENT = "c9ee6a"
 PALETTE = ["16171a", "131416", "222326", "2a2b2e", "353639", "ededef",
            HOST_COLORS["details"], HOST_COLORS["hint"], "f3f3f5", "86878c", "e9e9ec",
-           "c9ee6a", HOST_COLORS["success"], HOST_COLORS["error"], HOST_COLORS["warning"]]
+           ACCENT, HOST_COLORS["success"], HOST_COLORS["error"], HOST_COLORS["warning"]]
 
 
 def panel_surface(pixel) -> bool:
@@ -201,22 +206,29 @@ def locate(path: str, color: str) -> None:
     print(left + (min(xs) + max(xs)) // 2, top + (min(ys) + max(ys)) // 2)
 
 
-def count_near(window: Image.Image, target: tuple[int, int, int]) -> int:
-    """How many pixels of `window` are near `target` and closer to it than to
-    any other color Pane draws (antialiasing blends glyph edges)."""
+def drawn_in(window: Image.Image, target: tuple[int, int, int]) -> list[int]:
+    """The indices of the pixels of `window` near `target` and closer to it
+    than to any other color Pane draws (antialiasing blends glyph edges)."""
     palette = [rgb(c) for c in PALETTE] + [target]
 
     def closest(pixel):
         return min(palette, key=lambda c: sum((x - y) ** 2 for x, y in zip(pixel, c)))
 
-    window_pixels = pixels_of(window)
-    return sum(1 for pixel in window_pixels
-               if near(pixel, target, 40) and closest(pixel) == target)
+    return [i for i, pixel in enumerate(pixels_of(window))
+            if near(pixel, target, 40) and closest(pixel) == target]
+
+
+def count_near(window: Image.Image, target: tuple[int, int, int]) -> int:
+    """How many pixels of `window` are drawn in `target` ([`drawn_in`])."""
+    return len(drawn_in(window, target))
 
 
 def main(path: str, color: str, minimum: int = 20) -> None:
     if color == "selected":
         selected(path, minimum)
+        return
+    if color == "answer":
+        answer(path)
         return
     window = pane_window(path)
     if color in ("progress", "subtitle"):
@@ -256,6 +268,23 @@ def selected(path: str, minimum: int = 3000) -> None:
             or max(ys, default=0) - min(ys, default=0) < 12):
         raise SystemExit(f"{path}: no broad selected row wash (at least {minimum} pixels)")
     print(f"{path}: selected row wash contains {len(region)} pixels")
+
+
+def answer(path: str) -> None:
+    """The selected computed answer's card (#96): no row wash, but a 1px ring
+    in the accent. Its rounded corners split the ring, so what is looked for
+    is two rows of accent at least half the window wide — the card's top and
+    bottom edges, a card's height apart (79 pixels at 1x in CI 37430002287).
+    The caret and the pin hint are accent too, but never that wide."""
+    window = pane_window(path)
+    width = window.width
+    rows = {}
+    for i in drawn_in(window, rgb(ACCENT)):
+        rows[i // width] = rows.get(i // width, 0) + 1
+    edges = sorted(y for y, count in rows.items() if count >= width / 2)
+    if len(edges) < 2 or edges[-1] - edges[0] < 40:
+        raise SystemExit(f"{path}: no selected answer card (an accent ring across the list)")
+    print(f"{path}: selected answer card, its ring's edges {edges[-1] - edges[0]} pixels apart")
 
 
 def preview(path: str) -> None:

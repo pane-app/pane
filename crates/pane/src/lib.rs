@@ -24,10 +24,6 @@ mod ui;
 
 pub mod placement;
 pub mod settings;
-/// The visual workbench's native fixture (#91), for the
-/// `pane-visual-fixture` binary; not part of the launcher.
-#[doc(hidden)]
-pub mod visual_fixture;
 
 pub use app::LauncherWindow;
 pub use features::settings::SettingsWindow;

@@ -1,7 +1,7 @@
 //! Root search's no-results notice and computed answers (#96): what the
 //! launcher's presentation of root search holds, translated into the
-//! shared result layouts (`crate::ui::result_layouts`), for the launcher
-//! and the visual workbench's fixture alike.
+//! shared result layouts (`crate::ui::result_layouts`), for the
+//! launcher.
 //!
 //! Only what the launcher holds is drawn. The notice names the real query
 //! and is shown when nothing but fallbacks is listed for it; the fallbacks

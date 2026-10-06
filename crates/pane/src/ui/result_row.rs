@@ -218,9 +218,8 @@ pub(crate) fn pressed_wash(selected: bool, theme: &Theme) -> Hsla {
 /// A row's surface (`.row`): at least 44 high, radius 10, 10px either side
 /// and 12 between its parts, with the pale hover wash while unselected,
 /// and the selected wash and its 1px inset edge while `selected` (a
-/// selected row keeps them under the pointer). The result row and the
-/// calculator board's history row (`crate::ui::result_layouts`) share it.
-pub(crate) fn row_surface(selected: bool, theme: &Theme) -> Div {
+/// selected row keeps them under the pointer): the result row's.
+fn row_surface(selected: bool, theme: &Theme) -> Div {
     let geometry = &theme.geometry;
     div()
         .flex_none()

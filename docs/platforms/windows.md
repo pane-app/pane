@@ -34,6 +34,8 @@ been run. The Cargo cache was warm (`Swatinem/rust-cache`).
 
 ## Native GUI smoke
 
+The smoke forces the dark theme and the opaque material, so its screenshots do not depend on the desktop ([smoke appearance](smoke-appearance.md)).
+
 ```powershell
 cargo build -p pane
 ./scripts/smoke-windows.ps1 -OutDir smoke   # needs Python 3 with Pillow

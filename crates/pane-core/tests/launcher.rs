@@ -12,17 +12,13 @@ use pane_core::{
 #[path = "support/platforms.rs"]
 mod platforms;
 
-fn guest(name: &str) -> PathBuf {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/guests")
-        .join(format!("{name}.wasm"));
-    assert!(
-        path.exists(),
-        "{} is missing; run `cargo xtask guests`",
-        path.display()
-    );
-    path
-}
+#[path = "support/guests.rs"]
+mod guests;
+#[path = "support/rows.rs"]
+mod rows;
+
+use guests::guest;
+use rows::titles;
 
 fn command(id: &str, component: PathBuf) -> CommandRegistration {
     CommandRegistration {
@@ -37,15 +33,6 @@ fn command(id: &str, component: PathBuf) -> CommandRegistration {
 
 fn launcher(commands: Vec<CommandRegistration>) -> Launcher {
     Launcher::new(Runtime::start(), commands)
-}
-
-fn titles(launcher: &Launcher) -> Vec<String> {
-    launcher
-        .view()
-        .rows
-        .into_iter()
-        .map(|row| row.title)
-        .collect()
 }
 
 fn open_faulty_item(launcher: &Launcher, item: &str) {

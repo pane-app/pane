@@ -20,7 +20,7 @@
 //! - **While Ctrl is held**, the pins Ctrl and a digit pick (the first
 //!   five; see `LauncherWindow::numbered_slots`) show their number in
 //!   their corner, as the pinned home's tiles do. The chords themselves
-//!   are the launcher's (see [`crate::app::numbered`]): they work collapsed
+//!   are the launcher's (see [`crate::features::number_hints::numbered`]): they work collapsed
 //!   as expanded.
 //!
 //! The row's geometry is kept here rather than among the theme's pinned
@@ -30,7 +30,7 @@ use gpui::{App, ClickEvent, Context, Div, Role, Stateful, Window, div, prelude::
 use pane_core::{QuickSlot, Screen};
 
 use crate::app::{LauncherWindow, row_icon};
-use crate::ui::icon::{Glyph, IconTone, TileSize, tile_at};
+use crate::ui::icon::{TileSize, tile_at};
 use crate::ui::keycap::{CapStyle, Key, KeySequence, key_sequence};
 use crate::ui::theme::{Theme, pressed};
 
@@ -150,8 +150,7 @@ impl LauncherWindow {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let place = index + 1;
-        let (tone, glyph) =
-            row_icon(&pin.target.key()).unwrap_or((IconTone::Command, Glyph::Prompt));
+        let (tone, glyph) = row_icon(&pin.target.key());
         let ready = pin.ready();
         let hover = theme.row_hover;
         div()

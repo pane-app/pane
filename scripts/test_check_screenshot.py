@@ -67,6 +67,27 @@ class ScreenshotChecks(unittest.TestCase):
         draw.rectangle((42, 100, 777, 143), fill="#2a2b2e")
         check.selected(self.save(image))
 
+    def test_answer_needs_the_accent_ring_across_the_list(self):
+        image, draw = self.panel()
+        draw.rectangle((52, 100, 767, 178), fill="#242527")  # the card, unselected
+        draw.rectangle((120, 60, 121, 80), fill="#c9ee6a")  # the caret
+        for scale in (1, 2):
+            with self.assertRaises(SystemExit):
+                check.answer(self.save(image, scale=scale))
+        draw.line((52, 100, 767, 100), fill="#c9ee6a")  # one edge alone
+        with self.assertRaises(SystemExit):
+            check.answer(self.save(image))
+        draw.rectangle((52, 100, 767, 178), outline="#c9ee6a")
+        for scale in (1, 2):
+            check.answer(self.save(image, scale=scale))
+        # A selected row's wash is not an answer card, nor the card a row.
+        row, row_draw = self.panel()
+        row_draw.rectangle((42, 100, 777, 143), fill="#2a2b2e")
+        with self.assertRaises(SystemExit):
+            check.answer(self.save(row, "row.png"))
+        with self.assertRaises(SystemExit):
+            check.selected(self.save(image, "card.png"))
+
     def test_same_allows_a_few_pixels_of_rounding_noise(self):
         image, _ = self.panel()
         image.putpixel((330, 300), (178, 92, 46))

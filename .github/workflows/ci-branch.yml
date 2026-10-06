@@ -9,14 +9,14 @@ name: CI (branch)
 # flaky failure instead of failing the run for it) — so a push's wall
 # time on Linux is the slower of the two, not their sum. The other
 # operating systems run the quick compile check (formatting plus
-# `cargo check --all-targets`): one full test run per push is the
+# `cargo clippy --all-targets`): one full test run per push is the
 # verification an iterating branch needs (the single-platform pattern
 # the Cargo book recommends), and the quick legs keep the
 # platform-specific compile errors caught everywhere at a fraction of
 # the cost. The full suite on every operating system still runs: at
-# the [verify] tier of ci-fast.yml on the ticket branches, and in
-# ci.yml's release matrix where a release is at stake (main, a pull
-# request marked ready for review, on demand). pi-subagent/** worktrees
+# the verify tier of ci-fast.yml on the ticket branches, and in
+# ci.yml's release matrix where a release is at stake (pushes to main,
+# and on demand). pi-subagent/** worktrees
 # keep their own two-tier workflow in ci-fast.yml.
 on:
   push:
@@ -108,12 +108,15 @@ jobs:
         run: xvfb-run -a cargo test --locked -p pane-core --test clipboard_adapter_linux
         env:
           PANE_TEST_REAL_CLIPBOARD: "1"
-  # The quick compile check on the other operating systems, the same
-  # commands as ci-fast's quick tier: `cargo check --all-targets`
-  # type-checks the workspace's libraries, binaries, tests and
-  # examples without codegen or linking, so the platform-specific
-  # compile errors (the cfg-gating class) are caught on every
-  # operating system in minutes.
+  # The quick compile check on the other operating systems: `cargo
+  # clippy --all-targets` type-checks the workspace's libraries,
+  # binaries, tests and examples without codegen or linking, so the
+  # platform-specific compile errors (the cfg-gating class) are caught
+  # on every operating system in minutes, and it lints the code only
+  # that system compiles. A plain `cargo check` here let a macOS-only
+  # lint (a collapsible `if` in tray/macos.rs) through every branch run
+  # to fail main's release matrix (run 37182486287); clippy costs about
+  # what check does.
   check:
     name: Check (${{ matrix.os }})
     strategy:
@@ -143,7 +146,7 @@ jobs:
             .
             guests
             guests/fixtures/mixed-p2
-      - name: Quick compile check
+      - name: Quick compile and lint check
         run: |
           cargo fmt --all --check
-          cargo check --locked --workspace --all-targets
+          cargo clippy --locked --workspace --all-targets -- -D warnings

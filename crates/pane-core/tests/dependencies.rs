@@ -19,17 +19,13 @@ use tempfile::TempDir;
 #[path = "support/platforms.rs"]
 mod platforms;
 
-fn guest(file: &str) -> PathBuf {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/guests")
-        .join(file);
-    assert!(
-        path.exists(),
-        "{} is missing; run `cargo xtask guests`",
-        path.display()
-    );
-    path
-}
+#[path = "support/guests.rs"]
+mod guests;
+#[path = "support/rows.rs"]
+mod rows;
+
+use guests::guest_file as guest;
+use rows::{select_title, titles};
 
 const RUST: &str = "sample-operations";
 const TYPESCRIPT: &str = "sample-operations-ts";
@@ -167,23 +163,6 @@ const GREETER: &str = r#"{ "id": "greeter", "source": "local:../sample-operation
 /// The TypeScript operations sample's `greet`, as `helper`, optional.
 const HELPER: &str = r#"{ "id": "helper", "source": "local:../sample-operations-ts",
     "optional": true, "operations": [{ "id": "greet", "version": 1 }] }"#;
-
-fn titles(launcher: &Launcher) -> Vec<String> {
-    launcher
-        .view()
-        .rows
-        .into_iter()
-        .map(|row| row.title)
-        .collect()
-}
-
-fn select_title(launcher: &Launcher, title: &str) {
-    let index = titles(launcher)
-        .iter()
-        .position(|row| row == title)
-        .unwrap_or_else(|| panic!("no row {title:?} in {:?}", titles(launcher)));
-    launcher.select(index);
-}
 
 /// The titles of the installed packages, in the order they were installed.
 fn installed(launcher: &Launcher) -> Vec<String> {

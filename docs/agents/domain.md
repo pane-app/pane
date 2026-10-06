@@ -5,7 +5,7 @@ Pane uses a single-context layout: the glossary is `CONTEXT.md` at the workspace
 ## Before design or code exploration
 
 1. Read `CONTEXT.md` and use its domain vocabulary.
-2. Read `docs/HANDOFF.md` and `docs/current-decisions.md` for the current phase and reconciled decision status. Follow references into `docs/launcher-design-interview.md` for the history and rationale.
+2. Read `docs/HANDOFF.md` for where the work stands, then `docs/current-decisions.md` for the decision status it reconciled on 2026-09-28; later decisions are in the later ADRs and the open specifications. Follow references into `docs/launcher-design-interview.md` for the history and rationale.
 3. Read ADRs relevant to the area being worked on.
 
 The current user task takes precedence over historical phase notes. Later explicit user decisions supersede earlier proposals and runtime choices; preserve the distinction between accepted decisions, provisional directions and experimental evidence.

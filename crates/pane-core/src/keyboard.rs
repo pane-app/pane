@@ -647,16 +647,23 @@ mod tests {
         assert_eq!(binding("escape").to_string(), "Escape");
         assert_eq!(binding("enter").to_string(), "Enter");
         assert_eq!(binding("shift-escape").to_string(), "Shift+Escape");
-        assert_eq!(binding("ctrl-alt-b").to_string(), "Ctrl+Alt+B");
-        assert_eq!(binding("ctrl-,").to_string(), "Ctrl+,");
-        // The platform modifier is named for this system, as Shortcut is.
+        // The modifiers are named for this system, as Shortcut names them.
+        let macos = cfg!(target_os = "macos");
+        assert_eq!(
+            binding("ctrl-alt-b").to_string(),
+            if macos {
+                "Control+Option+B"
+            } else {
+                "Ctrl+Alt+B"
+            }
+        );
+        assert_eq!(
+            binding("ctrl-,").to_string(),
+            if macos { "Control+," } else { "Ctrl+," }
+        );
         assert_eq!(
             binding("cmd-w").to_string(),
-            if cfg!(target_os = "macos") {
-                "Cmd+W"
-            } else {
-                "Win+W"
-            }
+            if macos { "Command+W" } else { "Win+W" }
         );
         assert_eq!(binding("f5").to_string(), "F5");
     }
@@ -842,8 +849,9 @@ mod tests {
         let mut fields = keyboard.recorded();
         fields.insert("next-result".into(), "ctrl-b".into());
         let problem = Keyboard::parse(&fields).unwrap_err();
+        let ctrl_b = binding("ctrl-b").to_string();
         assert!(
-            problem.contains("cannot be used: Ctrl+B already goes back"),
+            problem.contains(&format!("cannot be used: {ctrl_b} already goes back")),
             "{problem}"
         );
     }

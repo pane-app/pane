@@ -102,8 +102,8 @@ existing `text_input`, tokens, and row-like option presentation; popup material
 should use the reference's L2 role only if its exact values are added to Pane's
 material API. The retained reference documents L2 as a 14px-radius popover with
 its own tint, inset edge, and shadow, but says other pages were not yet
-token-mined ([`REFERENCE.md`](../evidence/ui-prototype/reference/REFERENCE.md#L37-L46),
-[`REFERENCE.md`](../evidence/ui-prototype/reference/REFERENCE.md#L81-L87)).
+token-mined ([`REFERENCE.md`](https://github.com/hoangvu12/pane/blob/archive/impl-ui-91-2026-10-06/docs/evidence/ui-prototype/reference/REFERENCE.md#L37-L46),
+[`REFERENCE.md`](https://github.com/hoangvu12/pane/blob/archive/impl-ui-91-2026-10-06/docs/evidence/ui-prototype/reference/REFERENCE.md#L81-L87)).
 
 Do not silently treat the current radio group or root search as this missing
 primitive, and do not claim the fork's popup Combobox is already integrated.

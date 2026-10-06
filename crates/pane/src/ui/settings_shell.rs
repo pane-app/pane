@@ -1,15 +1,11 @@
 //! The Settings window's shell, as the reference's Settings board composes
-//! it (#97): presentation only, shared by the Settings window and the
-//! visual workbench's fixture, so a change here reaches both.
+//! it (#97): presentation only.
 //!
 //! The board is a 1120×720 panel: a 48px titlebar over a 232px sidebar
 //! (12px by 10px of padding, a 2px gap) holding the 34px search field and
-//! the 36px section items, and the page beside it, padded 26px above, 32px
-//! either side and 24px below. A page opens with its heading block — the
-//! 22px/600 heading over its 13px subtitle — and the board's Appearance
-//! page lays its controls and its preview out in two columns, 388px and
-//! 400px with 36px between them, which fill the canonical page exactly.
-//! The workbench's fixture draws that board.
+//! the 36px section items, and the page beside it, opening with a heading
+//! block and laying the Appearance page's controls and preview out in two
+//! columns.
 //!
 //! Pane's own window keeps the board's titlebar and sidebar, and draws its
 //! pages its own way ([`content_viewport`], `ui::controls::page`): no
@@ -54,11 +50,6 @@ use gpui_elements::editable_text::{EditableTextState, text_input};
 
 use crate::ui::icon::{Glyph, glyph};
 use crate::ui::theme::{Theme, pressed};
-
-/// The reference Settings board's 1120×720 panel (48 titlebar + 672
-/// body), in logical pixels: the size the workbench's fixture draws the
-/// board's scenarios at.
-pub(crate) const SETTINGS_CLIENT: (f32, f32) = (1120., 720.);
 
 /// The size Pane's Settings window opens at, in logical pixels: narrower
 /// than the board, as a list of settings rows needs no more.
@@ -334,28 +325,10 @@ pub(crate) fn sidebar_item(
         })
 }
 
-/// The page's viewport: the area beside the sidebar, padded 26px above,
-/// 32px either side and 24px below, its text 13px in the body ink unless a
-/// page sets its own. The caller names it, makes it scroll and adds the
-/// page.
-pub(crate) fn page_viewport(theme: &Theme) -> Div {
-    let settings = &theme.geometry.settings;
-    div()
-        .flex_1()
-        .min_w(px(0.))
-        .h_full()
-        .pt(settings.page_padding_top)
-        .px(settings.page_padding_x)
-        .pb(settings.page_padding_bottom)
-        .text_size(theme.typography.row_subtitle_size)
-        .text_color(theme.text_body)
-}
-
 /// Pane's page area: the area beside the sidebar, padded 20 above, 24
 /// either side and below, its text 13px in the body ink unless a page
 /// sets its own. The caller names it, makes it scroll and adds the page
-/// (see `ui::controls::page`). The board's own page is
-/// [`page_viewport`], which the workbench's fixture draws.
+/// (see `ui::controls::page`).
 pub(crate) fn content_viewport(theme: &Theme) -> Div {
     let settings = &theme.geometry.settings;
     div()
@@ -367,104 +340,6 @@ pub(crate) fn content_viewport(theme: &Theme) -> Div {
         .pb(settings.content_padding_bottom)
         .text_size(theme.typography.row_subtitle_size)
         .text_color(theme.text_body)
-}
-
-/// A page's heading block: the 22px/600 heading (-.01em of tracking) in
-/// the heading color (the dark palette's white), over its 13px muted
-/// subtitle, 4px apart, with 4px below the block. Each line box is the
-/// reference's own (28 and 17: see `theme::SettingsType`), so the fields
-/// below the block start where the board's do.
-pub(crate) fn page_header(
-    title: impl Into<SharedString>,
-    subtitle: Option<SharedString>,
-    theme: &Theme,
-) -> Div {
-    let settings = &theme.geometry.settings;
-    let typography = &theme.typography;
-    let lines = &typography.settings;
-    div()
-        .flex_none()
-        .flex()
-        .flex_col()
-        .gap(settings.header_gap)
-        .mb(settings.header_margin_bottom)
-        .child(
-            div()
-                .text_size(lines.heading.size)
-                .line_height(lines.heading.line_height)
-                .font_weight(typography.heading_weight)
-                .letter_spacing(lines.heading.size * typography.heading_tracking)
-                .text_color(theme.heading_text)
-                .child(title.into()),
-        )
-        .when_some(subtitle, |header, subtitle| {
-            header.child(
-                div()
-                    .text_size(lines.subtitle.size)
-                    .line_height(lines.subtitle.line_height)
-                    .font_weight(typography.regular)
-                    .text_color(theme.text_muted)
-                    .child(subtitle),
-            )
-        })
-}
-
-/// A page's two columns: `controls` in the 388px column and `aside` (see
-/// [`aside`]) in the 400px one, 36px apart — together exactly the
-/// canonical page's width. Narrower, they collapse: the aside wraps below
-/// the controls (36px under them), at most its 400px and never wider than
-/// the page, while the controls take the page's width.
-pub(crate) fn page_columns(
-    controls: impl IntoElement,
-    aside: impl IntoElement,
-    theme: &Theme,
-) -> Div {
-    let settings = &theme.geometry.settings;
-    div()
-        .w_full()
-        .flex()
-        .flex_row()
-        .flex_wrap()
-        .items_start()
-        .gap(settings.column_gap)
-        .child(
-            div()
-                .flex_grow(1.)
-                .flex_shrink(1.)
-                .flex_basis(settings.controls_width)
-                .min_w(px(0.))
-                .flex()
-                .flex_col()
-                .child(controls),
-        )
-        .child(
-            div()
-                .flex_none()
-                .w_full()
-                .max_w(settings.aside_width)
-                .flex()
-                .flex_col()
-                .child(aside),
-        )
-}
-
-/// An aside column's content: its 12px/500 muted caption ("Preview", in
-/// the reference's 16px line), 10px above whatever the caller adds.
-pub(crate) fn aside(caption: impl Into<SharedString>, theme: &Theme) -> Div {
-    let typography = &theme.typography;
-    let caption_line = typography.settings.caption;
-    div()
-        .flex()
-        .flex_col()
-        .gap(theme.geometry.settings.aside_gap)
-        .child(
-            div()
-                .text_size(caption_line.size)
-                .line_height(caption_line.line_height)
-                .font_weight(typography.medium)
-                .text_color(theme.text_muted)
-                .child(caption.into()),
-        )
 }
 
 #[cfg(test)]
@@ -486,19 +361,5 @@ mod tests {
     #[test]
     fn the_window_never_opens_below_its_minimum() {
         assert_eq!(opening_size(Some((500., 300.))), (560., 400.));
-    }
-
-    #[test]
-    fn the_canonical_page_holds_both_columns_exactly() {
-        // The board's page: 1120 less the 232px sidebar and 32px of
-        // padding either side is 824 = 388 + 36 + 400, so the columns sit
-        // side by side at the canonical size and collapse below it.
-        let settings = Theme::dark().geometry.settings;
-        let page = SETTINGS_CLIENT.0
-            - f32::from(settings.sidebar_width)
-            - 2. * f32::from(settings.page_padding_x);
-        let columns = settings.controls_width + settings.column_gap + settings.aside_width;
-        assert_eq!(page, 824.);
-        assert_eq!(f32::from(columns), page);
     }
 }

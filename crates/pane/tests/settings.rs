@@ -41,15 +41,16 @@ use artifacts::Artifacts;
 use paint::paints_fill_at;
 use settle::settle;
 
-/// The keystroke that opens Settings on this platform: Cmd+, on macOS,
-/// Ctrl+, on Windows and Linux.
-fn settings_shortcut() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "cmd-,"
-    } else {
-        "ctrl-,"
-    }
-}
+#[path = "support/a11y.rs"]
+mod a11y;
+#[path = "support/setup.rs"]
+mod setup;
+#[path = "support/wait.rs"]
+mod wait;
+
+use a11y::{accessibility, focused_label};
+use setup::settings_shortcut;
+use wait::{frame, settle_frames, until};
 
 /// The keystroke that focuses the Settings search: Cmd+F on macOS,
 /// Ctrl+F on Windows and Linux.
@@ -369,13 +370,6 @@ fn settings_context(
     VisualTestContext::from_window(AnyWindowHandle::from(*settings), &cx.cx)
 }
 
-/// The label of the node assistive technology treats as focused in the
-/// window `cx` drives.
-fn focused_label(cx: &mut VisualTestContext) -> Option<String> {
-    let (label, _) = accessibility(cx);
-    label
-}
-
 /// Presses Tab until the node labelled `label` has focus, failing if a
 /// dozen stops never reach it; the labels focused on the way, in order.
 fn tab_to(cx: &mut VisualTestContext, label: &str) -> Vec<String> {
@@ -390,46 +384,6 @@ fn tab_to(cx: &mut VisualTestContext, label: &str) -> Vec<String> {
     panic!("Tab never reached {label:?}; it passed {passed:?}");
 }
 
-/// The window's accessibility tree as (focused label, raw JSON), forced on
-/// so the tree is built regardless of platform accessibility.
-fn accessibility(cx: &mut VisualTestContext) -> (Option<String>, String) {
-    cx.update(|window, _| window.set_a11y_forced(true));
-    cx.run_until_parked();
-    let json = cx
-        .update(|window, _| window.debug_a11y_tree_json())
-        .expect("an accessibility tree");
-    let tree: serde_json::Value = serde_json::from_str(&json).unwrap();
-    let nodes = tree["nodes"].as_object().unwrap();
-    let field = |node: &serde_json::Value, key: &str| {
-        node["aria"][key].as_str().unwrap_or_default().to_owned()
-    };
-    let focused = ["active_descendant_focus", "gpui_focus"]
-        .iter()
-        .find_map(|key| tree[key].as_str())
-        .map(|id| field(&nodes[id], "label"));
-    (focused, json)
-}
-
-/// Runs `cx` until `done` returns a value, so that work arriving from
-/// other threads (a link opening) has been drawn.
-fn until<T>(
-    cx: &mut VisualTestContext,
-    mut done: impl FnMut(&mut VisualTestContext) -> Option<T>,
-) -> T {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        cx.run_until_parked();
-        if let Some(value) = done(cx) {
-            return value;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for the window to draw"
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
-
 /// The last drawn frame's section arrival, as the arriving page content's
 /// (offset from rest in px — below rest when the sidebar moved down to
 /// the section, above when it moved up — and opacity); `None` when the
@@ -442,37 +396,6 @@ fn section_arrival(
     settings
         .read_with(cx, |window, _| window.section_arrival())
         .expect("the Settings window is open")
-}
-
-/// Delivers the animation frame the Settings window has asked for, as the
-/// native frame loop would, with `elapsed` passing first on the test
-/// platform's controlled clock. The test platform delivers no frames on
-/// its own, so this is the only thing that advances a running arrival;
-/// one call draws at most one frame. Returns how many next-frame
-/// callbacks ran — `0` means the window had asked for no frame, so
-/// nothing drew.
-fn frame(cx: &mut VisualTestContext, elapsed: Duration) -> usize {
-    cx.executor().advance_clock(elapsed);
-    let ran = cx.update(|window, cx| window.simulate_next_frame(cx));
-    cx.run_until_parked();
-    ran
-}
-
-/// Delivers frames until the window asks for none, so an arrival in
-/// flight completes, and returns the frames it delivered. `0` means the
-/// window was already idle: no frame was pending. Bounded, so a window
-/// that never stopped asking for frames fails the test instead of
-/// hanging it.
-fn settle_frames(cx: &mut VisualTestContext) -> usize {
-    let mut delivered = 0;
-    for _ in 0..20 {
-        let ran = frame(cx, Duration::from_millis(25));
-        if ran == 0 {
-            return delivered;
-        }
-        delivered += ran;
-    }
-    panic!("the window never stopped asking for animation frames");
 }
 
 /// Clicks the sidebar's section whose debug selector is `selector`
@@ -2074,6 +1997,35 @@ fn the_install_rows_from_the_page_open_the_launcher_windows_flows(cx: &mut TestA
     );
     // The Settings window stayed open.
     assert!(settings_cx.debug_bounds("extensions-title").is_some());
+}
+
+#[gpui::test]
+fn an_install_row_from_the_page_opens_past_a_query_that_hides_it(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = settings_package(&sources.path().join("settings"));
+    let (launcher, cx) = open_installed(cx, &data, &folder);
+
+    // Root search was left filtered by a query none of the install rows
+    // match: the row the page shows is not in the launcher's list.
+    cx.simulate_input("zzzz");
+    settle(&launcher, cx);
+    assert!(
+        !titles(&launcher, cx)
+            .iter()
+            .any(|title| title == "Install extension from npm…"),
+        "the query hides the install rows"
+    );
+    let (_settings, mut settings_cx) = open_extensions(cx);
+
+    // The page's install row still opens its flow in the launcher window,
+    // as it does from an empty root search.
+    click_row(&mut settings_cx, "extension-install-npm…");
+    let view = settle(&launcher, cx);
+    assert!(matches!(view.screen, Screen::Form(_)), "{:?}", view.screen);
+    assert!(
+        cx.debug_bounds("field-package").is_some(),
+        "the form is drawn"
+    );
 }
 
 #[gpui::test]

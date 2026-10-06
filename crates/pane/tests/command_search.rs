@@ -8,9 +8,6 @@
 #[path = "../../pane-core/tests/support/service.rs"]
 mod service;
 
-use std::fs;
-use std::path::{Path, PathBuf};
-
 use gpui::{Entity, TestAppContext, VisualTestContext, prelude::*};
 use pane::LauncherWindow;
 use pane_core::{Launcher, LauncherView, Runtime, Screen, Status};
@@ -21,22 +18,10 @@ mod settle;
 
 use settle::settle;
 
-/// Copies the assembled search sample to `folder`.
-fn package(folder: &Path) -> PathBuf {
-    let assembled = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/guests/packages/sample-search");
-    assert!(
-        assembled.exists(),
-        "{} is missing; run `cargo xtask guests`",
-        assembled.display()
-    );
-    fs::create_dir_all(folder).unwrap();
-    for entry in fs::read_dir(&assembled).unwrap() {
-        let entry = entry.unwrap();
-        fs::copy(entry.path(), folder.join(entry.file_name())).unwrap();
-    }
-    folder.to_path_buf()
-}
+#[path = "support/packages.rs"]
+mod packages;
+
+use packages::assembled_package;
 
 fn titles(view: &LauncherView) -> Vec<&str> {
     view.rows.iter().map(|row| row.title.as_str()).collect()
@@ -52,7 +37,7 @@ fn field_text(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> St
 fn the_commands_own_search_field_lists_the_service_results(cx: &mut TestAppContext) {
     let service = Service::start();
     let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    let folder = package(&sources.path().join("search"));
+    let folder = assembled_package("sample-search", &sources.path().join("search"));
     cx.executor().allow_parking();
     cx.update(pane::bind_keys);
     let launcher =

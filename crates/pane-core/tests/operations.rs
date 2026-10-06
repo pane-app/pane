@@ -18,18 +18,13 @@ use tempfile::TempDir;
 #[path = "support/platforms.rs"]
 mod platforms;
 
-/// A guest component `cargo xtask guests` put in `target/guests`.
-fn guest(file: &str) -> PathBuf {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/guests")
-        .join(file);
-    assert!(
-        path.exists(),
-        "{} is missing; run `cargo xtask guests`",
-        path.display()
-    );
-    path
-}
+#[path = "support/guests.rs"]
+mod guests;
+#[path = "support/rows.rs"]
+mod rows;
+
+use guests::guest_file as guest;
+use rows::{select_title, titles};
 
 /// Source folders, Pane's data folder and the runtime the launchers share.
 struct Dirs {
@@ -110,23 +105,6 @@ fn install(launcher: &Launcher, folder: &Path) {
         "installing {}: {status:?}",
         folder.display()
     );
-}
-
-fn titles(launcher: &Launcher) -> Vec<String> {
-    launcher
-        .view()
-        .rows
-        .into_iter()
-        .map(|row| row.title)
-        .collect()
-}
-
-fn select_title(launcher: &Launcher, title: &str) {
-    let index = titles(launcher)
-        .iter()
-        .position(|row| row == title)
-        .unwrap_or_else(|| panic!("no row {title:?} in {:?}", titles(launcher)));
-    launcher.select(index);
 }
 
 /// From root search, opens the command titled `command` and activates its

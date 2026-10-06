@@ -2,7 +2,9 @@
 //! [`Joinable`] is joined within a time limit, or else left to finish on
 //! its own. On Windows, [`windows::MessageThread`] is such a thread with a
 //! message queue, which the clipboard listener and the hotkey adapter use.
-//! Only Windows uses [`Joinable`] so far; its tests run everywhere.
+//! The clipboard listeners on Linux and macOS use [`Joinable`] too; its
+//! tests run everywhere. What only Windows uses is allowed to go unused
+//! elsewhere.
 #![cfg_attr(not(target_os = "windows"), allow(dead_code))]
 
 use std::sync::{Mutex, mpsc};

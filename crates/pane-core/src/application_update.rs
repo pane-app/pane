@@ -28,7 +28,7 @@
 //! package built for this Pane's system — a zip holding `pane.exe` under
 //! `pane/` on Windows, a gzipped tarball holding `pane` under `pane/` on
 //! Linux — each read as strictly as an npm package's tarball is
-//! ([`crate::zip`], [`crate::npm::unpack_within`]).
+//! ([`crate::zip`], [`crate::archive::unpack_within`]).
 
 use std::fs;
 use std::path::PathBuf;
@@ -172,7 +172,7 @@ impl Offer {
             integrity: integrity.to_owned(),
             size,
         };
-        if !crate::npm::has_sha512(&offer.integrity) {
+        if !crate::integrity::has_sha512(&offer.integrity) {
             return Err(
                 "the index's application entry gives no sha512 integrity, which Pane needs to \
                  check its download"
@@ -249,7 +249,7 @@ fn download(
         return Err(answer(read.status, why));
     }
     let package = read.body;
-    crate::npm::check_integrity(&package, &offer.integrity)
+    crate::integrity::check_integrity(&package, &offer.integrity)
         .map_err(|why| failed(format!("the downloaded package `{file}` {why}")))?;
     Ok(package)
 }
@@ -276,7 +276,7 @@ pub(crate) fn swap(package: &[u8], offer: &Offer, program: &Program) -> Result<(
     let unpacked = if offer.file.ends_with(".zip") {
         crate::zip::unpack(package, &staging)
     } else if offer.file.ends_with(".tar.gz") || offer.file.ends_with(".tgz") {
-        crate::npm::unpack_within(package, &staging, crate::zip::MAX_UNPACKED)
+        crate::archive::unpack_within(package, &staging, crate::zip::MAX_UNPACKED)
     } else {
         Err(format!(
             "Pane unpacks a package named `.zip` or `.tar.gz`, not `{}`",
@@ -464,7 +464,7 @@ mod tests {
         };
         let integrity = format!(
             "sha512-{}",
-            crate::npm::base64(&sha2::Sha512::digest(b"the package"))
+            crate::integrity::base64(&sha2::Sha512::digest(b"the package"))
         );
         let none = entry(
             serde_json::Value::Null,

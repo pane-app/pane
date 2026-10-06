@@ -199,8 +199,7 @@ pub(crate) struct PackageCard {
 }
 
 /// What the Extensions page shows, as plain values: what [`render`] reads
-/// from the launcher, and what the visual workbench's fixture supplies to
-/// draw the same page (#99).
+/// from the launcher (#99).
 pub(crate) struct ExtensionsView {
     /// The flow's screen title: shown over a confirmation's or a details
     /// screen's rows, not over the list itself (`listing`), which the
@@ -258,7 +257,7 @@ pub(crate) fn gather(
         .map(|(key, title, enabled)| PackageCard {
             id: key.clone(),
             title: title.clone(),
-            icon: row_icon(key),
+            icon: Some(row_icon(key)),
             enabled: *enabled,
             badges: Vec::new(),
             auto_update: None,
@@ -320,15 +319,14 @@ pub(crate) fn gather(
                 id: row.id.clone(),
                 title: row.title.clone(),
                 reason,
-                icon: row_icon(&row.id),
+                icon: Some(row_icon(&row.id)),
             }),
         }
     }
     (cards, others, global)
 }
 
-/// The Extensions page's composition, which the visual workbench's fixture
-/// draws too: the flow's status above everything; then, on the list, a
+/// The Extensions page's composition: the flow's status above everything; then, on the list, a
 /// card per installed extension — its tile, name and badges with its
 /// on/off switch, its automatic updates' switch where it has one, and its
 /// operations as buttons — the rest of the launcher's rows, the global
@@ -740,7 +738,7 @@ pub(crate) fn install_items() -> Vec<ExtensionItem> {
             id: id.into(),
             title: title.into(),
             reason: None,
-            icon: row_icon(id),
+            icon: Some(row_icon(id)),
         })
         .collect()
 }

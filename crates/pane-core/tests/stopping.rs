@@ -15,6 +15,11 @@ use futures::executor::block_on;
 use pane_core::{Launcher, PackageIdentity, Runtime, SavedData, Screen, Status};
 use tempfile::TempDir;
 
+#[path = "support/rows.rs"]
+mod rows;
+
+use rows::select_title;
+
 /// Under the ten seconds "Save after waiting" waits after saving "started":
 /// a call that is not stopped cannot end sooner after it was asked, so one
 /// that ends within this was stopped. The margin is for stopping it: a
@@ -161,23 +166,6 @@ impl Pending {
         let took = ended - self.started;
         assert!(took < STOPPED_WITHIN, "the call ran for {took:?}");
     }
-}
-
-fn titles(launcher: &Launcher) -> Vec<String> {
-    launcher
-        .view()
-        .rows
-        .into_iter()
-        .map(|row| row.title)
-        .collect()
-}
-
-fn select_title(launcher: &Launcher, title: &str) {
-    let index = titles(launcher)
-        .iter()
-        .position(|row| row == title)
-        .unwrap_or_else(|| panic!("no row {title:?} in {:?}", titles(launcher)));
-    launcher.select(index);
 }
 
 /// Opens the installed Greeting command from root search and selects its

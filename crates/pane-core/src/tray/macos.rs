@@ -218,10 +218,10 @@ impl Drop for MacTray {
     /// Removes the item from the menu bar, if one was made; the bar and
     /// the target go with the adapter.
     fn drop(&mut self) {
-        if let Ok(mut state) = self.state.lock() {
-            if let Some(item) = state.item.take() {
-                state.bar.removeStatusItem(&item);
-            }
+        if let Ok(mut state) = self.state.lock()
+            && let Some(item) = state.item.take()
+        {
+            state.bar.removeStatusItem(&item);
         }
     }
 }

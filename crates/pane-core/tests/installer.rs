@@ -30,6 +30,14 @@ mod artifacts;
 
 use artifacts::Artifacts;
 
+#[path = "support/guests.rs"]
+mod guests;
+#[path = "support/rows.rs"]
+mod rows;
+
+use guests::guests;
+use rows::{select_title, titles};
+
 /// The default extensions Pane's application build acquires, as the tests
 /// take them: the calculator, and the prebuilt-helper sample with it.
 fn defaults() -> Vec<DefaultExtension> {
@@ -43,10 +51,6 @@ fn defaults() -> Vec<DefaultExtension> {
             title: "Helper sample".into(),
         },
     ]
-}
-
-fn guests() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests")
 }
 
 /// The files of the assembled package `package` under
@@ -228,23 +232,6 @@ fn borrowed(files: &[(String, Vec<u8>)]) -> Vec<(&str, Vec<u8>)> {
         .iter()
         .map(|(path, contents)| (path.as_str(), contents.clone()))
         .collect()
-}
-
-fn titles(launcher: &Launcher) -> Vec<String> {
-    launcher
-        .view()
-        .rows
-        .into_iter()
-        .map(|row| row.title)
-        .collect()
-}
-
-fn select_title(launcher: &Launcher, title: &str) {
-    let index = titles(launcher)
-        .iter()
-        .position(|row| row == title)
-        .unwrap_or_else(|| panic!("no row {title:?} in {:?}", titles(launcher)));
-    launcher.select(index);
 }
 
 fn search(launcher: &Launcher, query: &str) {

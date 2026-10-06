@@ -29,6 +29,11 @@ mod artifacts;
 
 use artifacts::Artifacts;
 
+#[path = "support/rows.rs"]
+mod rows;
+
+use rows::{select_title, titles};
+
 /// Pane's install folder, data folder, compiled code cache and artifact
 /// source for one test. The install folder holds the program and, under
 /// `data`, Pane's own data — as `%LOCALAPPDATA%\Pane` does on Windows, so
@@ -164,23 +169,6 @@ fn read_names(folder: &Path, prefix: &str) -> Vec<String> {
     }
     names.sort();
     names
-}
-
-fn titles(launcher: &Launcher) -> Vec<String> {
-    launcher
-        .view()
-        .rows
-        .into_iter()
-        .map(|row| row.title)
-        .collect()
-}
-
-fn select_title(launcher: &Launcher, title: &str) {
-    let index = titles(launcher)
-        .iter()
-        .position(|row| row == title)
-        .unwrap_or_else(|| panic!("no row {title:?} in {:?}", titles(launcher)));
-    launcher.select(index);
 }
 
 /// The error the status line shows, as text.

@@ -53,9 +53,6 @@ const DOCUMENTATION: &str = "https://github.com/hoangvu12/pane";
 /// search jumps to (see [`entries`]).
 const DOCUMENTATION_ROW: &str = "documentation";
 
-/// The page's title.
-pub(crate) const TITLE: &str = "About";
-
 /// What the page is, in one line: its sidebar entry's description in
 /// the search.
 pub(crate) const ABOUT: &str = "Version, updates and documentation";
@@ -294,8 +291,7 @@ fn render(
 }
 
 /// What the About page shows, as plain values: what [`render`] reads from
-/// the launcher and the page's own state, and what the visual workbench's
-/// fixture supplies to draw the same page (#99).
+/// the launcher and the page's own state (#99).
 pub(crate) struct AboutView {
     /// The running version, as `pane --version` prints it.
     pub(crate) version: String,
@@ -324,8 +320,7 @@ pub(crate) enum AboutControl {
     Diagnostics,
 }
 
-/// The About page's composition, which the visual workbench's fixture
-/// draws too: one card of rows (#99) — the version, the updates (the
+/// The About page's composition: one card of rows (#99) — the version, the updates (the
 /// status and the button the state offers), the documentation and the
 /// diagnostics, each action a Settings button at its row's end — with
 /// what each last reported under its name. `attach` adds each button's

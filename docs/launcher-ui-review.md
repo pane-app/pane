@@ -1,5 +1,7 @@
 # Launcher UI review
 
+> Historical: this reviews #61's first slice. The Windows UI port ([#90](https://github.com/hoangvu12/pane/issues/90)) and the redesign that followed it ([ADR 0027](adr/0027-quick-slots-are-an-ordered-list.md), [ADR 0028](adr/0028-the-launcher-draws-a-background-image-the-user-chooses.md)) have since replaced the visuals reviewed here.
+
 Two independent side chats reviewed `748d71e...9c6bfa3` against the repository
 standards and specification #61/tickets #62–65. The user scoped implementation
 and native validation to Windows first, followed by final CI on every OS.

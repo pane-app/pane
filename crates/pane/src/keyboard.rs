@@ -193,16 +193,6 @@ pub(crate) fn move_pin_bindings(earlier: bool) -> [Binding; 2] {
     })
 }
 
-/// The caps the "Pinned" label shows for the chords of all `count` slots:
-/// the modifier's, then the digits' range, "1–5", named "1 to 5".
-pub(crate) fn quick_slots_keys(count: usize) -> KeySequence {
-    let mut keys = quick_slot_keys(1);
-    if let Some(digit) = keys.keys.last_mut() {
-        *digit = Key::new(format!("1–{count}"), format!("1 to {count}"));
-    }
-    keys
-}
-
 /// The keys `binding` is pressed with, as keycaps show them on this
 /// platform: every modifier its own cap, then the key. On Windows (and
 /// Linux) the Windows key leads, as Windows writes its own shortcuts
@@ -282,6 +272,13 @@ fn key_name(key: &str) -> String {
 mod tests {
     use super::*;
 
+    /// Ctrl's cap and name on this platform: macOS writes it out.
+    const CTRL: &str = if cfg!(target_os = "macos") {
+        "Control"
+    } else {
+        "Ctrl"
+    };
+
     fn sequence(binding: &str) -> (Vec<String>, String) {
         let keys = binding_keys(&Binding::parse(binding).expect("the binding parses"));
         let caps = keys.keys.iter().map(|key| key.cap.to_string()).collect();
@@ -301,13 +298,13 @@ mod tests {
         );
         assert_eq!(
             sequence("ctrl-enter"),
-            (vec!["Ctrl".into(), "↵".into()], "Ctrl+Enter".into())
+            (vec![CTRL.into(), "↵".into()], format!("{CTRL}+Enter"))
         );
         assert_eq!(
             sequence("ctrl-shift-p"),
             (
-                vec!["Ctrl".into(), "Shift".into(), "P".into()],
-                "Ctrl+Shift+P".into()
+                vec![CTRL.into(), "Shift".into(), "P".into()],
+                format!("{CTRL}+Shift+P")
             )
         );
     }
@@ -340,13 +337,13 @@ mod tests {
         assert_eq!(sequence("escape"), (vec!["Esc".into()], "Escape".into()));
         assert_eq!(
             sequence("ctrl-k"),
-            (vec!["Ctrl".into(), "K".into()], "Ctrl+K".into())
+            (vec![CTRL.into(), "K".into()], format!("{CTRL}+K"))
         );
         assert_eq!(
             sequence("ctrl-pagedown"),
             (
-                vec!["Ctrl".into(), "Page Down".into()],
-                "Ctrl+Page Down".into()
+                vec![CTRL.into(), "Page Down".into()],
+                format!("{CTRL}+Page Down")
             )
         );
     }

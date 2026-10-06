@@ -52,7 +52,7 @@ use crate::ui::icon::Glyph;
 use crate::ui::input::TextEditingKeys;
 use crate::ui::keycap::{CapStyle, KeySequence};
 use crate::ui::shell::{self, SectionLabel};
-use crate::ui::split_view::{self, ClipMark, ClipRow, ClipTone};
+use crate::ui::split_view::{self, ClipRow};
 use crate::{Back, Confirm, OpenActions, SelectNext, SelectPrevious};
 
 actions!(clipboard_history, [DeleteRecord]);
@@ -539,7 +539,7 @@ impl LauncherWindow {
                     title: title.clone().into(),
                     time: time_label(record.copied_at, now, offset).into(),
                     selected: on,
-                    mark: ClipMark::Tile(ClipTone::Plain, Glyph::Lines),
+                    glyph: Glyph::Lines,
                 },
                 &theme,
             )
