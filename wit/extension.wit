@@ -8,7 +8,8 @@
 // text; and the run entry point of a command that opens no screen (ADR
 // 0037). Both receive the command's launch record (wit/commands.wit), and
 // every command may close the window and show toasts and HUDs
-// (wit/feedback.wit). This
+// (wit/feedback.wit), and use the clipboard, open things, reveal and
+// recycle them (wit/system.wit). This
 // is not the full Pane SDK: the SDKs (`pane-guest`, `@pane/extension`) hide
 // the JSON and the callback ids.
 package pane:extension@0.1.0;
@@ -222,5 +223,6 @@ world extension {
   import commands;
   import window;
   import feedback;
+  import system;
   export command;
 }

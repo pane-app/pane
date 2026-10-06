@@ -10,6 +10,7 @@
 /// <reference path="./wasi.d.ts" />
 /// <reference path="./commands.d.ts" />
 /// <reference path="./feedback-host.d.ts" />
+/// <reference path="./system-host.d.ts" />
 /// <reference path="./data.d.ts" />
 /// <reference path="./operations.d.ts" />
 /// <reference path="./applications.d.ts" />

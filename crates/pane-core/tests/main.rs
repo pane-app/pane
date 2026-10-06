@@ -52,6 +52,7 @@ mod search;
 mod services;
 mod stopping;
 mod submenus;
+mod system;
 mod uninstall;
 mod uninstall_dependents;
 mod unresponsive;

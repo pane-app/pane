@@ -14,15 +14,32 @@
 //! them neither, and it never says a copy may be synced
 //! (`CanUploadToCloudClipboard` 1). Other systems have no adapter yet
 //! (their unavailability is checked in `clipboard.rs`).
+//!
+//! A command's copies through Pane's system functions (#145) are checked
+//! here too: a concealed one carries the markers that keep it out of
+//! Pane's own clipboard history and Windows' (Win+V), a plain one none,
+//! and what was copied, a file included, reads back. The tests replace the
+//! same clipboard, so they run one at a time (`SERIAL`, and a test group
+//! of their own under nextest, `.config/nextest.toml`).
 #![cfg(target_os = "windows")]
 
-use std::sync::{Mutex, mpsc};
+use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use pane_core::clipboard::{
     ClipboardSystem, Content, Markers, Observation, Sink, Skip, Ticket, WindowsClipboard, accept,
     testing,
 };
+use pane_core::system::Clip;
+
+/// Held by each test while it uses the clipboard.
+static SERIAL: Mutex<()> = Mutex::new(());
+
+fn serial() -> MutexGuard<'static, ()> {
+    SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// How long a change may take to be reported.
 const REPORTED: Duration = Duration::from_secs(5);
@@ -66,6 +83,7 @@ fn the_listener_reports_this_tests_changes_with_their_markers_until_dropped() {
         eprintln!("skipped: set PANE_TEST_REAL_CLIPBOARD=1 to let it replace the clipboard");
         return;
     }
+    let _serial = serial();
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -174,4 +192,84 @@ fn the_listener_reports_this_tests_changes_with_their_markers_until_dropped() {
         reports.recv_timeout(Duration::from_secs(1)),
         Err(mpsc::RecvTimeoutError::Disconnected)
     ));
+}
+
+/// Passes on every report, whoever copied: the system functions' copies
+/// are owned by a window that is gone by the time the listener reads them.
+struct Everything(Mutex<mpsc::Sender<Observation>>);
+
+impl Sink for Everything {
+    fn reading(&self) -> Ticket {
+        Ticket::default()
+    }
+
+    fn observed(&self, _: Ticket, observation: Observation) {
+        let _ = self.0.lock().unwrap().send(observation);
+    }
+}
+
+#[test]
+fn a_commands_concealed_copy_is_marked_and_skipped_and_what_it_copied_reads_back() {
+    if std::env::var("PANE_TEST_REAL_CLIPBOARD").as_deref() != Ok("1") {
+        eprintln!("skipped: set PANE_TEST_REAL_CLIPBOARD=1 to let it replace the clipboard");
+        return;
+    }
+    let _serial = serial();
+    let system = pane_core::system::native();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let prefix = format!("pane-system-test-{}-{nanos}-", std::process::id());
+    let (sender, reports) = mpsc::channel::<Observation>();
+    let watch = WindowsClipboard
+        .watch(Arc::new(Everything(Mutex::new(sender))))
+        .expect("Windows can watch the clipboard");
+    let next = |what: &str, wanted: &dyn Fn(&Observation) -> bool| loop {
+        let report = reports
+            .recv_timeout(REPORTED)
+            .unwrap_or_else(|_| panic!("{what} is reported"));
+        if wanted(&report) {
+            return report;
+        }
+    };
+
+    // Concealed: monitors must not look at it, and neither Windows'
+    // clipboard history nor its cloud clipboard keeps it; Pane's history
+    // withholds it, its text never read.
+    let concealed_markers = Markers {
+        exclude_from_monitoring: true,
+        include_in_history: Some(false),
+        upload_to_cloud: Some(false),
+    };
+    let secret = format!("{prefix}secret");
+    system
+        .copy(&Clip::Text(secret.clone()), true)
+        .expect("the concealed copy is made");
+    let concealed = next("the concealed copy", &|report| {
+        report.content == Content::Withheld && report.markers == concealed_markers
+    });
+    assert_eq!(accept(&concealed, &[]), Err(Skip::Marked));
+    // It is on the clipboard all the same, for pasting.
+    assert_eq!(system.read_clipboard(), Ok(Some(Clip::Text(secret))));
+
+    // Plain: no marker, and kept.
+    let plain = format!("{prefix}plain ✓");
+    system
+        .copy(&Clip::Text(plain.clone()), false)
+        .expect("the plain copy is made");
+    let copied = next("the plain copy", &|report| {
+        report.content == Content::Text(plain.clone())
+    });
+    assert_eq!(copied.markers, Markers::default());
+    assert_eq!(accept(&copied, &[]), Ok(plain.as_str()));
+    assert_eq!(system.read_clipboard(), Ok(Some(Clip::Text(plain))));
+
+    // A file, as File Explorer copies one, reads back as the file.
+    let file = std::env::current_exe().unwrap();
+    system
+        .copy(&Clip::File(file.clone()), false)
+        .expect("the file is copied");
+    assert_eq!(system.read_clipboard(), Ok(Some(Clip::File(file))));
+    drop(watch);
 }

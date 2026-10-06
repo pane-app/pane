@@ -1,0 +1,85 @@
+package pane:extension@0.1.0;
+
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// The system's clipboard, opening things, the file manager and the Recycle
+// Bin (ADR 0037): every command imports them, whatever its mode, through
+// the `extension` world (wit/extension.wit). Rust commands use them through
+// pane-guest (`pane_guest::system`, and the standard actions of
+// `pane_guest::actions`), JavaScript and TypeScript ones through
+// `@pane/extension/system` or the module "pane:extension/system@0.1.0"
+// (guests/js/system.d.ts). Each does only what it names: none closes the
+// window or tells the user anything. The SDKs' standard actions (Copy,
+// Open, Open With…, Show in Explorer, Move to Recycle Bin) compose them
+// with `window.close` and a HUD or a toast (wit/feedback.wit). None is a
+// reason to pause an extension: a refusal is an answer, and the time spent
+// in them (a handler starting, the clipboard held by another program) is
+// not the guest's computing. The header follows `package`: comments above
+// it would document the package, which extension.wit already does.
+
+/// The system Pane runs on, as a command reaches it through Pane.
+interface system {
+  /// What is put on the clipboard, or read from it.
+  variant clip {
+    /// Text.
+    text(string),
+    /// A file or folder, by its absolute path, as copying it in the file
+    /// manager puts it there.
+    file(string),
+  }
+
+  /// The system Pane runs on, for naming things as it does ("Show in
+  /// Explorer", "Show in Finder").
+  enum host-system {
+    windows,
+    macos,
+    linux,
+    /// Another system.
+    other,
+  }
+
+  /// A path `trash` did not move, and why.
+  record not-trashed {
+    path: string,
+    reason: string,
+  }
+
+  /// The system Pane runs on.
+  running-on: func() -> host-system;
+
+  /// Puts `content` on the system clipboard, replacing what was there.
+  /// With `concealed`, the copy carries each system's "do not record"
+  /// marker where one exists (on Windows the formats that keep it out of
+  /// clipboard monitors and of Windows' clipboard history, on macOS the
+  /// concealed pasteboard type), so clipboard managers, Pane's own
+  /// clipboard history among them, do not keep it. An error says why the
+  /// system did not take it.
+  copy: func(content: clip, concealed: bool) -> result<_, string>;
+
+  /// What the clipboard holds now: its text, or the file copied in the
+  /// file manager (the first, when several were), or none when it holds
+  /// neither (it is empty, or holds only an image, say). An error says why
+  /// Pane could not read it, such as that it cannot on this system yet.
+  read-clipboard: func() -> result<option<clip>, string>;
+
+  /// Opens `target`, unfiltered, as Raycast does: a URL of any scheme
+  /// (`https:`, `mailto:`, `ms-settings:`, an application's own), any file
+  /// or folder, or an application (programs included), by its path or by
+  /// the id `applications.installed` gives it. It opens with the system's
+  /// handler, or with `application` when one is given, by its path or by
+  /// its installed-application id. The command is handed off to the
+  /// system as the user's own opening would be, and is not waited for. An
+  /// error says why the system did not open it.
+  open: func(target: string, application: option<string>) -> result<_, string>;
+
+  /// Shows the file or folder `path` selected in File Explorer (the
+  /// system's file manager elsewhere). An error says why it could not,
+  /// such as that the path does not exist.
+  reveal: func(path: string) -> result<_, string>;
+
+  /// Moves each of `paths` to the Recycle Bin (the system's trash
+  /// elsewhere), from where the user can put it back. Answers the paths it
+  /// could not move, each with why; a path that does not exist is one of
+  /// them.
+  trash: func(paths: list<string>) -> result<_, list<not-trashed>>;
+}

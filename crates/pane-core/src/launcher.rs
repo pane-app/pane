@@ -60,7 +60,7 @@ use crate::generation::End;
 use crate::hotkeys::{self as system_hotkeys, Hotkeys};
 use crate::keyboard::PaneKeys;
 use crate::launch::{LaunchRecord, LaunchSource};
-use crate::links::{self, LinkOpener, NoOpener};
+use crate::links::{LinkOpener, NoOpener};
 use crate::operations::Installed;
 use crate::packages::{
     InstalledPackage, PackageError, PackageIdentity, RetainedData, SavedData, SourcePackage, Store,
@@ -87,6 +87,7 @@ mod schedules;
 mod services;
 mod shortcuts;
 mod subtitles;
+mod system;
 mod uninstall;
 mod updates;
 
@@ -742,6 +743,8 @@ struct State {
     /// The submenus open in the Actions panel over the selected item (see
     /// `submenus`).
     submenus: submenus::Submenus,
+    /// The system the `system` host functions act on (see `system`).
+    system: Arc<dyn crate::system::System>,
 }
 
 /// What is happening to a package, which stops another change to it
@@ -1297,6 +1300,7 @@ impl Launcher {
             subtitles,
             subtitle_saves: Arc::default(),
             submenus: submenus::Submenus::default(),
+            system: crate::system::none(),
         };
         if let (Some(installation), Some(files)) = (&installation, &state.files) {
             files.open_record(&installation.dir);
@@ -2271,16 +2275,12 @@ impl Launcher {
                 open_form(state, item_id, form);
                 Pending::Nothing
             }
-            Entry::OpenUrl(url) => match links::refusal(&url) {
-                Some(reason) => {
-                    state.view.status = Status::Error(format!("Could not open {url}: {reason}"));
-                    Pending::Nothing
-                }
-                None => {
-                    state.view.status = Status::Running;
-                    Pending::OpenUrl(url)
-                }
-            },
+            // Any scheme, as Raycast opens it (ADR 0037): the extension is
+            // trusted, and a filter here would protect nothing.
+            Entry::OpenUrl(url) => {
+                state.view.status = Status::Running;
+                Pending::OpenUrl(url)
+            }
             Entry::StopSharingFolder(identity) => Pending::StopSharing(identity),
             Entry::Manage => {
                 self.show_extensions(state);

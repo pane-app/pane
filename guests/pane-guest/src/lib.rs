@@ -54,8 +54,10 @@ pub use exports::pane::extension::command::{
 pub use list::{Action, Command, Item, List, Modifier, Shortcut, Submenu};
 pub use pane::extension::commands::{LaunchRecord, LaunchSource, LaunchType};
 
+pub mod actions;
 pub mod feedback;
 mod list;
+pub mod system;
 pub use pane::extension::{cache, content, credentials, operations, settings};
 
 /// Pane's launcher window, as the command that runs in it sees it

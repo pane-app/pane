@@ -314,8 +314,10 @@ pub(crate) struct GivenAction {
 /// What Pane does for the window and feedback host functions a command
 /// calls: the launcher's own (`Launcher::host_functions`). Each is a short
 /// host call on the runtime's thread that never waits for the user; a
-/// refusal is an answer. Later host functions (copying, opening, confirming,
-/// pasting) are added here the same way.
+/// refusal is an answer. Later host functions (confirming, pasting) are
+/// added here the same way; the `system` ones (copying, opening, revealing,
+/// recycling) only take the launcher's [`crate::system::System`] here and
+/// run off the runtime's thread.
 pub(crate) trait HostFunctions: Send + Sync {
     /// `window.close`: whether a window was shown for the call.
     fn close(&self, caller: &Caller, clear_root_search: bool, pop: PopToRoot) -> bool;
@@ -333,6 +335,9 @@ pub(crate) trait HostFunctions: Send + Sync {
     fn show_hud(&self, caller: &Caller, hud: Hud);
     /// `commands.set-subtitle`.
     fn set_subtitle(&self, caller: &Caller, subtitle: Option<String>) -> Result<(), String>;
+    /// The system the `system` host functions act on (`wit/system.wit`):
+    /// the launcher's ([`crate::Launcher::with_system`]).
+    fn system(&self) -> Arc<dyn crate::system::System>;
 }
 
 #[cfg(test)]

@@ -7,3 +7,14 @@
 [[profile.default.overrides]]
 filter = "test(/memory_peaks|stays_under_the_memory_cap/)"
 success-output = "immediate"
+
+# The real-clipboard adapter tests (with PANE_TEST_REAL_CLIPBOARD=1) replace
+# what is on the system's clipboard, so they run one at a time: each test is
+# a process of its own under nextest, which the binary's own lock does not
+# reach.
+[test-groups]
+real-clipboard = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = "binary(clipboard_adapter)"
+test-group = "real-clipboard"

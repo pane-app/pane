@@ -354,8 +354,9 @@ fn a_link_the_system_cannot_open_is_explained() {
 }
 
 #[test]
-fn pane_opens_only_web_addresses() {
-    // The faulty fixture offers a file: link for "file link".
+fn pane_opens_a_link_of_any_scheme() {
+    // The faulty fixture offers a file: link for "file link". Opening is
+    // unfiltered (ADR 0037): the system's handler gets it.
     let pane = Pane::new();
     let launcher = pane.start();
     let folder = pane.data.path().join("faulty");
@@ -375,13 +376,7 @@ fn pane_opens_only_web_addresses() {
     assert_eq!(titles(&launcher), ["A local file"]);
     block_on(launcher.activate_selected());
 
-    assert_eq!(
-        launcher.view().status,
-        Status::Error(
-            "Could not open file:///etc/hosts: Pane opens only http:// and https:// links".into()
-        )
-    );
-    assert!(pane.opener.opened().is_empty());
+    assert_eq!(pane.opener.opened(), ["file:///etc/hosts"]);
 }
 
 #[test]

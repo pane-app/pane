@@ -30,15 +30,31 @@
 //! it was asked ("Asked 1 time"); and "Tag…" fails when it opens ("The tags
 //! could not be loaded"). An entry shows what it did and the item's
 //! ("Open With Notepad: Delta note", "Move to Later: Delta note").
+//!
+//! "System" calls the system host functions (#145) one by one, each doing
+//! only what it names and then saying so in a toast ("Copy Text: done"):
+//! plain and concealed copies of text and of a file, a clipboard read
+//! ("Clipboard: text “…”"), opens of an `https:`, a `mailto:` and an
+//! `ms-settings:` link, a file, a folder and an application, an open with a
+//! named application, a reveal and a trash of two files ("Delete me.txt"
+//! and "Keep me.txt" in a `pane-sample` folder, which do not exist unless
+//! the user makes them, so a real Recycle Bin reports them both). The
+//! paths are this system's (`places`). "Standard actions" has every
+//! standard action of `pane_guest::actions`: Copy (Enter), a concealed
+//! Copy, a Copy that keeps the window open, a Copy of a file, Open, Open
+//! With… (the installed applications), Show in Explorer and Move to
+//! Recycle Bin; each closes the window after it acts.
 //! The JavaScript and TypeScript samples do the same.
 #![no_std]
 
 use core::cell::Cell;
 use core::sync::atomic::{AtomicU32, Ordering};
 
+use pane_guest::actions;
 use pane_guest::alloc::{format, string::String, vec::Vec};
 use pane_guest::commands::{CommandRef, LaunchType, launch, set_subtitle};
 use pane_guest::feedback::{ShownToast, Toast, ToastAction, ToastStyle, show_hud, show_toast};
+use pane_guest::system::{self, Clip, HostSystem};
 use pane_guest::window::{PopToRootType, clear_search, close, pop_to_root};
 use pane_guest::{
     Action, Command, CustomView, FieldValue, FormError, Item, LaunchRecord, List, Modifier,
@@ -182,6 +198,147 @@ fn delta() -> Item {
         ])
 }
 
+/// The text the sample copies.
+const COPIED_TEXT: &str = "Copied by the actions sample";
+
+/// The secret the sample copies concealed.
+const SECRET: &str = "hunter2";
+
+/// Where the sample's opens, copies, reveals and trashes point on this
+/// system: a file, a folder and an application every such system has, and
+/// two files to trash that do not exist unless the user makes them.
+struct Places {
+    file: &'static str,
+    folder: &'static str,
+    application: &'static str,
+    trash: [&'static str; 2],
+}
+
+fn places() -> Places {
+    match system::running_on() {
+        HostSystem::Windows => Places {
+            file: r"C:\Windows\win.ini",
+            folder: r"C:\Windows",
+            application: r"C:\Windows\System32\notepad.exe",
+            trash: [
+                r"C:\pane-sample\Delete me.txt",
+                r"C:\pane-sample\Keep me.txt",
+            ],
+        },
+        HostSystem::Macos => Places {
+            file: "/etc/hosts",
+            folder: "/Applications",
+            application: "/System/Applications/TextEdit.app",
+            trash: [
+                "/tmp/pane-sample/Delete me.txt",
+                "/tmp/pane-sample/Keep me.txt",
+            ],
+        },
+        HostSystem::Linux | HostSystem::Other => Places {
+            file: "/etc/hosts",
+            folder: "/tmp",
+            application: "/usr/bin/xdg-open",
+            trash: [
+                "/tmp/pane-sample/Delete me.txt",
+                "/tmp/pane-sample/Keep me.txt",
+            ],
+        },
+    }
+}
+
+/// The "System" item's action titled `title`, which runs `function` and
+/// then says it is done in a toast.
+fn system_action(title: &'static str, function: fn() -> Result<(), String>) -> Action {
+    Action::new(title, move || async move {
+        function()?;
+        show_toast(Toast::success(format!("{title}: done")));
+        Ok::<(), String>(())
+    })
+}
+
+/// What the clipboard holds, as the "Read Clipboard" toast says it.
+fn read_clipboard() -> Result<(), String> {
+    let said = match system::read_clipboard()? {
+        Some(Clip::Text(text)) => format!("Clipboard: text “{text}”"),
+        Some(Clip::File(path)) => format!("Clipboard: file {path}"),
+        None => "Clipboard: empty".into(),
+    };
+    show_toast(Toast::success(said));
+    Ok(())
+}
+
+/// Moves the sample's two files to the Recycle Bin, saying which were not.
+fn trash_files() -> Result<(), String> {
+    let paths = places().trash.map(String::from);
+    system::trash(&paths)
+        .map_err(|not_trashed| system::describe_not_trashed(&not_trashed, paths.len()))
+}
+
+/// "System": each host function on its own.
+fn system_item() -> Item {
+    Item::new("system", "System")
+        .subtitle("The clipboard, opening, revealing and recycling, one by one")
+        .actions([
+            system_action("Copy Text", || {
+                system::copy(&Clip::Text(COPIED_TEXT.into()), false)
+            }),
+            system_action("Copy Text Concealed", || {
+                system::copy(&Clip::Text(SECRET.into()), true)
+            }),
+            system_action("Copy File", || {
+                system::copy(&Clip::File(places().file.into()), false)
+            }),
+            system_action("Copy File Concealed", || {
+                system::copy(&Clip::File(places().file.into()), true)
+            }),
+            Action::new("Read Clipboard", || async { read_clipboard() }),
+            system_action("Open Website", || system::open("https://example.com", None)),
+            system_action("Open Mail", || {
+                system::open("mailto:someone@example.com", None)
+            }),
+            system_action("Open Settings", || {
+                system::open("ms-settings:display", None)
+            }),
+            system_action("Open File", || system::open(places().file, None)),
+            system_action("Open Folder", || system::open(places().folder, None)),
+            system_action("Open Application", || {
+                system::open(places().application, None)
+            }),
+            system_action("Open File With Application", || {
+                let places = places();
+                system::open(places.file, Some(places.application))
+            }),
+            system_action("Reveal File", || system::reveal(places().file)),
+            system_action("Trash Files", trash_files),
+        ])
+}
+
+/// "Standard actions": every standard action, each closing the window
+/// after it acts but the one that keeps it open.
+fn standard_item() -> Item {
+    let places = places();
+    Item::new("standard", "Standard actions")
+        .subtitle("Copy, Open, Open With…, Show in Explorer, Move to Recycle Bin")
+        .actions([
+            actions::copy(Clip::Text(COPIED_TEXT.into())).into(),
+            actions::copy(Clip::Text(SECRET.into()))
+                .concealed()
+                .title("Copy Password")
+                .into(),
+            actions::copy(Clip::Text(COPIED_TEXT.into()))
+                .keep_window_open()
+                .title("Copy and Keep Open")
+                .into(),
+            actions::copy(Clip::File(places.file.into()))
+                .title("Copy File")
+                .into(),
+            actions::open("https://example.com").into(),
+            actions::open_with(places.file).into(),
+            actions::show_in_file_manager(places.file).into(),
+            actions::move_to_trash([places.trash[0]]).into(),
+        ])
+}
+
 impl Command for Actions {
     type CustomView = NoCustomView;
 
@@ -283,6 +440,8 @@ impl Command for Actions {
                     Action::new("Set Subtitle", || async { set_subtitle(Some("3 unread")) }),
                     Action::new("Clear Subtitle", || async { set_subtitle(None) }),
                 ]),
+            system_item(),
+            standard_item(),
         ]))
     }
 

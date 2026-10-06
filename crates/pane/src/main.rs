@@ -46,6 +46,33 @@ fn package_to_preview() -> Option<ToPreview> {
     None
 }
 
+/// For the native smoke of the system functions: reveals the file
+/// `PANE_TEST_REVEAL` names and moves the one `PANE_TEST_TRASH` names to the
+/// Recycle Bin, as a command's `reveal` and `trash` do, and writes what each
+/// answered to `log` ("reveal: ok", "trash: <why not>").
+#[cfg(debug_assertions)]
+fn smoke_system(log: PathBuf) {
+    let system = pane_core::system::native();
+    let mut answers = String::new();
+    if let Some(path) = std::env::var_os("PANE_TEST_REVEAL") {
+        let answer = system
+            .reveal(std::path::Path::new(&path))
+            .err()
+            .unwrap_or_else(|| "ok".into());
+        answers.push_str(&format!("reveal: {answer}\n"));
+    }
+    if let Some(path) = std::env::var_os("PANE_TEST_TRASH") {
+        let not_moved = system.trash(&[PathBuf::from(path)]);
+        let answer = not_moved
+            .first()
+            .map_or_else(|| "ok".to_owned(), |not| not.reason.clone());
+        answers.push_str(&format!("trash: {answer}\n"));
+    }
+    if let Err(error) = std::fs::write(&log, answers) {
+        eprintln!("PANE_TEST_SYSTEM_LOG: {error}");
+    }
+}
+
 fn main() {
     let preview = package_to_preview();
     gpui_platform::application().run(move |cx: &mut App| {
@@ -95,7 +122,10 @@ fn main() {
             }
             None => Launcher::new(runtime, pane::sample_commands()),
         }
-        .with_link_opener(Arc::new(pane::SystemLinks));
+        .with_link_opener(Arc::new(pane::SystemLinks))
+        // What commands copy, open, reveal and recycle reaches the system's
+        // own clipboard, handlers, file manager and Recycle Bin (#145).
+        .with_system(pane_core::system::native());
         // Development builds can download npm packages from a registry on
         // this computer instead (the tests' and smokes' own); release builds
         // always use registry.npmjs.org.
@@ -242,6 +272,14 @@ fn main() {
                     launcher.show_smoke_hud(title, window, cx)
                 })
                 .ok();
+        }
+        // The opt-in native smoke of revealing and the Recycle Bin
+        // (scripts/smoke-windows-system.ps1) has a development build reveal
+        // one file and recycle another at once, through the system
+        // functions commands use (#145), and write what each answered.
+        #[cfg(debug_assertions)]
+        if let Some(log) = std::env::var_os("PANE_TEST_SYSTEM_LOG") {
+            std::thread::spawn(move || smoke_system(PathBuf::from(log)));
         }
         // Closing the launcher's own window quits Pane, as closing the one
         // window always did: closing the Settings window, which shares

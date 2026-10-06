@@ -157,6 +157,12 @@ impl HostFunctions for Hosted {
             None => Err("Pane is stopping".into()),
         }
     }
+
+    fn system(&self) -> Arc<dyn crate::system::System> {
+        self.0
+            .upgrade()
+            .map_or_else(crate::system::none, |launcher| launcher.system())
+    }
 }
 
 impl Launcher {

@@ -28,6 +28,7 @@ mod settings;
 mod settings_search;
 mod shortcuts;
 mod submenus;
+mod system;
 mod tray;
 mod unresponsive;
 mod update;

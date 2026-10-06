@@ -1149,6 +1149,72 @@ The [actions sample](sample-actions) and its
 use every one of them: its "Window" and "Feedback" items, and its no-view
 commands "Window functions", "Spin" and "Stumble".
 
+### The clipboard, opening, revealing and recycling
+
+Every command also reaches the system through Pane
+([wit/system.wit](../wit/system.wit), ADR 0037), each function doing only
+what it names (none closes the window or says anything):
+
+- **copy** puts text or a file (by its absolute path) on the clipboard. A
+  concealed copy carries the system's "do not record" marker (on Windows
+  `ExcludeClipboardContentFromMonitorProcessing`, with
+  `CanIncludeInClipboardHistory` and `CanUploadToCloudClipboard` 0; on macOS
+  `org.nspasteboard.ConcealedType`), so clipboard managers, Pane's own
+  clipboard history among them, do not keep it. Linux (X11) has no such
+  marker, and copies text only for now.
+- **read-clipboard** answers the clipboard's text, the file copied in the
+  file manager, or nothing (not available on Linux yet).
+- **open** opens anything, unfiltered: a URL of any scheme (`https:`,
+  `mailto:`, `ms-settings:`, an application's own), a file, a folder or an
+  application, with the system's handler or with an application named by
+  its path or its installed-application id.
+- **reveal** shows a path selected in File Explorer (Finder, or the file
+  manager elsewhere); **trash** moves paths to the Recycle Bin (the trash
+  elsewhere) and answers those it could not move, each with why.
+
+A refusal is an answer, never a reason to pause the package. The SDKs'
+**standard actions** compose them as Raycast's built-in actions behave:
+Copy ("Copy to Clipboard", then the window closes and a "Copied to
+Clipboard" HUD shows), Open, Open With… (a submenu of the installed
+applications), Show in Explorer (named for the system) and Move to Recycle
+Bin (destructive, with a HUD). Each closes the window after it acts; asked
+to keep it open, it says what it did in a toast instead.
+
+Rust (`pane_guest::system`, `pane_guest::actions`):
+
+```rust
+use pane_guest::actions;
+use pane_guest::system::{self, Clip};
+
+system::copy(&Clip::Text("hunter2".into()), true)?; // concealed
+system::open("mailto:someone@example.com", None)?;
+Item::new("note", "Note").actions([
+    actions::copy(Clip::Text("Some text".into())).into(),
+    actions::copy(Clip::Text("Some text".into())).keep_window_open().into(),
+    actions::open_with(r"C:\Notes\todo.txt").into(),
+    actions::show_in_file_manager(r"C:\Notes\todo.txt").into(),
+    actions::move_to_trash([r"C:\Notes\todo.txt"]).into(),
+]);
+```
+
+JavaScript or TypeScript (`@pane/extension/system`):
+
+```ts
+import { copy, copyAction, moveToTrashAction, open, openWithAction } from "@pane/extension/system";
+
+copy("hunter2", { concealed: true });
+open("C:\\Notes\\todo.txt", "C:\\Windows\\System32\\notepad.exe");
+const actions = [
+  copyAction("Some text"),
+  copyAction("Some text", { keepWindowOpen: true }),
+  openWithAction("C:\\Notes\\todo.txt"),
+  moveToTrashAction(["C:\\Notes\\todo.txt"]),
+];
+```
+
+The actions sample's "System" item calls each function on its own, and its
+"Standard actions" item has every standard action.
+
 ## A command that takes a query
 
 The user can give any installed command an alias in Manage extensions, and

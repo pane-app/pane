@@ -80,11 +80,12 @@ change of the query.
 
 ## Opening a link
 
-`Launcher::activate_selected` on an open-url result refuses any address
-that is not `http://` or `https://` ("Could not open file:///…: Pane opens
-only http:// and https:// links"), whatever extension offered it. Otherwise
-it shows "Running…" and hands the URL, off the window's thread, to the
-launcher's `LinkOpener` (`Launcher::with_link_opener`). The status then
+`Launcher::activate_selected` on an open-url result opens an address of
+any scheme (`https:`, `mailto:`, `ms-settings:`, `file:`, an application's
+own), as Raycast does (ADR 0037, #145): the extension is trusted and can
+open anything through the `system` host functions anyway. It shows
+"Running…" and hands the URL, off the window's thread, to the launcher's
+`LinkOpener` (`Launcher::with_link_opener`). The status then
 reads "Opened <URL>" or "Could not open <URL>: <reason>"; root search keeps
 its query. A launcher given no opener explains that it has none, which is
 what every test uses unless it passes a recording fake: no test opens a

@@ -30,6 +30,19 @@
 // asked ("Asked 1 time"); and "Tag…" fails when it opens ("The tags could
 // not be loaded"). An entry shows what it did and the item's ("Open With
 // Notepad: Delta note", "Move to Later: Delta note").
+//
+// "System" calls the system host functions (#145) one by one, each doing
+// only what it names and then saying so in a toast ("Copy Text: done"):
+// plain and concealed copies of text and of a file, a clipboard read
+// ("Clipboard: text “…”"), opens of an `https:`, a `mailto:` and an
+// `ms-settings:` link, a file, a folder and an application, an open with a
+// named application, a reveal and a trash of two files ("Delete me.txt" and
+// "Keep me.txt" in a `pane-sample` folder, which do not exist unless the
+// user makes them). The paths are this system's (`places`). "Standard
+// actions" has every standard action of `@pane/extension/system`: Copy
+// (Enter), a concealed Copy, a Copy that keeps the window open, a Copy of a
+// file, Open, Open With… (the installed applications), Show in Explorer and
+// Move to Recycle Bin; each closes the window after it acts.
 
 import {
   clearSearchBar,
@@ -40,6 +53,19 @@ import {
   showToast,
 } from "@pane/extension/feedback";
 import { launch } from "pane:extension/commands@0.1.0";
+import {
+  copy,
+  copyAction,
+  moveToTrashAction,
+  open,
+  openAction,
+  openWithAction,
+  readClipboard,
+  runningOn,
+  showInFileManager,
+  showInFileManagerAction,
+  trash,
+} from "@pane/extension/system";
 
 /**
  * The action titled `title` of the item titled `item`: it shows both.
@@ -135,6 +161,125 @@ function uploaded() {
       },
       shortcut: { modifiers: ["ctrl", "shift"], key: "r" },
     },
+  };
+}
+
+/** The text the sample copies. */
+const COPIED_TEXT = "Copied by the actions sample";
+
+/** The secret the sample copies concealed. */
+const SECRET = "hunter2";
+
+/**
+ * Where the sample's opens, copies, reveals and trashes point on this
+ * system: a file, a folder and an application every such system has, and
+ * two files to trash that do not exist unless the user makes them.
+ * @returns {{ file: string, folder: string, application: string, trash: [string, string] }}
+ */
+function places() {
+  switch (runningOn()) {
+    case "windows":
+      return {
+        file: "C:\\Windows\\win.ini",
+        folder: "C:\\Windows",
+        application: "C:\\Windows\\System32\\notepad.exe",
+        trash: ["C:\\pane-sample\\Delete me.txt", "C:\\pane-sample\\Keep me.txt"],
+      };
+    case "macos":
+      return {
+        file: "/etc/hosts",
+        folder: "/Applications",
+        application: "/System/Applications/TextEdit.app",
+        trash: ["/tmp/pane-sample/Delete me.txt", "/tmp/pane-sample/Keep me.txt"],
+      };
+    default:
+      return {
+        file: "/etc/hosts",
+        folder: "/tmp",
+        application: "/usr/bin/xdg-open",
+        trash: ["/tmp/pane-sample/Delete me.txt", "/tmp/pane-sample/Keep me.txt"],
+      };
+  }
+}
+
+/**
+ * The "System" item's action titled `title`, which runs `run` and then says
+ * it is done in a toast.
+ * @param {string} title
+ * @param {() => void} run
+ * @returns {import("@pane/extension").Action}
+ */
+function systemAction(title, run) {
+  return {
+    title,
+    onAction: async () => {
+      run();
+      showToast({ title: `${title}: done` });
+    },
+  };
+}
+
+/**
+ * "System": each host function on its own.
+ * @returns {import("@pane/extension").Item}
+ */
+function systemItem() {
+  return {
+    id: "system",
+    title: "System",
+    subtitle: "The clipboard, opening, revealing and recycling, one by one",
+    actions: [
+      systemAction("Copy Text", () => copy(COPIED_TEXT)),
+      systemAction("Copy Text Concealed", () => copy(SECRET, { concealed: true })),
+      systemAction("Copy File", () => copy({ file: places().file })),
+      systemAction("Copy File Concealed", () => copy({ file: places().file }, { concealed: true })),
+      {
+        title: "Read Clipboard",
+        onAction: async () => {
+          const clip = readClipboard();
+          const said =
+            clip == null
+              ? "Clipboard: empty"
+              : clip.file != null
+                ? `Clipboard: file ${clip.file}`
+                : `Clipboard: text “${clip.text}”`;
+          showToast({ title: said });
+        },
+      },
+      systemAction("Open Website", () => open("https://example.com")),
+      systemAction("Open Mail", () => open("mailto:someone@example.com")),
+      systemAction("Open Settings", () => open("ms-settings:display")),
+      systemAction("Open File", () => open(places().file)),
+      systemAction("Open Folder", () => open(places().folder)),
+      systemAction("Open Application", () => open(places().application)),
+      systemAction("Open File With Application", () => open(places().file, places().application)),
+      systemAction("Reveal File", () => showInFileManager(places().file)),
+      systemAction("Trash Files", () => trash(places().trash)),
+    ],
+  };
+}
+
+/**
+ * "Standard actions": every standard action, each closing the window after
+ * it acts but the one that keeps it open.
+ * @returns {import("@pane/extension").Item}
+ */
+function standardItem() {
+  const { file, trash: [deleteMe] } = places();
+  return {
+    id: "standard",
+    title: "Standard actions",
+    subtitle: "Copy, Open, Open With…, Show in Explorer, Move to Recycle Bin",
+    actions: [
+      copyAction(COPIED_TEXT),
+      copyAction(SECRET, { concealed: true, title: "Copy Password" }),
+      copyAction(COPIED_TEXT, { keepWindowOpen: true, title: "Copy and Keep Open" }),
+      copyAction({ file }, { title: "Copy File" }),
+      openAction("https://example.com"),
+      openWithAction(file),
+      showInFileManagerAction(file),
+      moveToTrashAction([deleteMe]),
+    ],
   };
 }
 
@@ -346,6 +491,8 @@ export const command = {
             },
           ],
         },
+        systemItem(),
+        standardItem(),
       ],
     };
   },

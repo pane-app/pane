@@ -55,6 +55,7 @@ mod faults;
 mod host_functions;
 mod memory;
 mod supervisor;
+mod system_functions;
 mod tree;
 
 use deadlines::Doing;
@@ -94,6 +95,10 @@ pub(crate) mod bindings {
             "pane:extension/content.set": async,
             "pane:extension/cache.set": async,
             "pane:extension/credentials.set": async,
+            // The system functions wait for the system (a handler
+            // starting, the clipboard held by another program), off the
+            // runtime thread, which awaits them.
+            "pane:extension/system": async,
         },
         exports: { default: async | store },
     });
@@ -151,7 +156,9 @@ use bindings::pane::extension::commands as launching;
 use bindings::pane::extension::{
     applications, cache, clipboard_history, content, credentials, settings,
 };
-use bindings::pane::extension::{feedback as feedback_host, window as window_host};
+use bindings::pane::extension::{
+    feedback as feedback_host, system as system_host, window as window_host,
+};
 use indexed_bindings::exports::pane::extension::indexed_results;
 use root_bindings::exports::pane::extension::root_results;
 
@@ -2468,6 +2475,10 @@ impl Code {
             state
         })
         .expect("registering toasts and HUDs in a fresh linker cannot conflict");
+        system_host::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| {
+            state
+        })
+        .expect("registering the system functions in a fresh linker cannot conflict");
         Code { engine, linker }
     }
 

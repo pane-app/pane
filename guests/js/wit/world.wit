@@ -2,7 +2,8 @@
 //
 // The world JS/TS commands are componentized against. It exports exactly
 // Pane's contract and imports launching commands, the window and feedback
-// functions (wit/feedback.wit), its extension data,
+// functions (wit/feedback.wit), the system functions (wit/system.wit:
+// the clipboard, opening, revealing, recycling), its extension data,
 // operations and installed applications (wit/extension.wit,
 // wit/commands.wit, wit/data.wit, wit/operations.wit and
 // wit/applications.wit, copied into deps/ by the build), its native helpers
