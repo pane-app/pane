@@ -111,19 +111,20 @@ query, trimmed.
 
 Any installed command can be given an alias, in Rust, JavaScript or
 TypeScript alike; nothing is declared. Taking a query needs `"takesQuery":
-true` on the command in `pane.json` and the export
-`pane:extension/query-command` ([`wit/query.wit`](../wit/query.wit)),
-`run-query(command, query) -> result<string, string>` (the command's
-manifest id, so one component can serve several), checked at install
-without running it ("its manifest says it takes a query, but it does not
-export pane:extension/query-command@0.1.0 …"). The [author guide](../guests/README.md#a-command-that-takes-a-query)
-shows it in Rust (`pane_guest::query`) and in JavaScript and TypeScript
-(`"pane": { "takesQuery": true }` and `export const queryCommand`);
-Echo, the query sample, is [`guests/sample-query`](../guests/sample-query),
+true` on the command in `pane.json`. Since #138 the text arrives as the
+**fallback text** of the command's launch record
+([`wit/commands.wit`](../wit/commands.wit)), trimmed, through the entry
+point its mode has: a no-view command (`"mode": "no-view"`) runs (`run`)
+and opens no screen, its answer shown while root search stays as it was,
+which is what users saw of a query-taking command before; a view command
+opens its screen (`render`) with the text in the record. The separate
+`run-query` interface (#31's `pane:extension/query-command`) is retired.
+The [author guide](../guests/README.md#a-command-that-takes-a-query) shows
+it in Rust and in JavaScript and TypeScript; Echo, the query sample, is a
+no-view command in [`guests/sample-query`](../guests/sample-query),
 [`sample-query-js`](../guests/sample-query-js) and
-[`sample-query-ts`](../guests/sample-query-ts). An optional export, so the
-extension API stays 0.1 and no earlier component is refused. A trap in
-`run-query` counts towards [pausing](pausing.md).
+[`sample-query-ts`](../guests/sample-query-ts). An error it answers is
+shown and never counts towards [pausing](pausing.md); a trap does.
 
 ## Checks
 
@@ -153,8 +154,10 @@ extension API stays 0.1 and no earlier component is refused. A trap in
   missing command's choices shown and forgotten; uninstall forgets them,
   exactly its own (a copy from folder `x#y` keeps its alias when `x` is
   uninstalled; the same for hotkeys in `hotkeys.rs`); a write that fails
-  after an uninstall does not bring the alias back; a manifest declaring
-  `takesQuery` for a component without the export refused at install.
+  after an uninstall does not bring the alias back; Echo opened from its
+  row, with no text, runs and opens no screen. The launch record's source
+  (alias or fallback) and a view command opened through its alias with
+  text are checked in [`no_view.rs`](../crates/pane-core/tests/no_view.rs).
 - Window ([`crates/pane/tests/aliases.rs`](../crates/pane/tests/aliases.rs)),
   on GPUI's test platform with real key events: the alias typed in its form
   and saved, the form reopened filled with it, the fallback turned on; "ec

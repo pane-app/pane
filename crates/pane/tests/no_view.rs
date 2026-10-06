@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
-use gpui::{Entity, TestAppContext, VisualTestContext};
+use gpui::{Entity, TestAppContext, VisualTestContext, prelude::*};
 use pane::LauncherWindow;
 use pane_core::hotkeys::{HotkeyError, Hotkeys, Shortcut};
 use pane_core::{Launcher, LauncherView, PackageIdentity, Runtime, Screen, Status};

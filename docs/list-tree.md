@@ -5,11 +5,17 @@ A view command's list reaches Pane through the typed envelope of
 (#135, part of #120). `pane:extension/command` (`wit/extension.wit`) has two
 functions for it:
 
-- **`render() -> result<string, string>`** answers the command's screen as a
-  JSON tree that names its version.
+- **`render(launch) -> result<string, string>`** answers the command's
+  screen as a JSON tree that names its version. `launch` is the command's
+  launch record (`wit/commands.wit`, #138): how its screen was opened, the
+  same each time Pane asks for the screen again while it is open.
 - **`handle-event(callback, details) -> result<string, string>`** takes the
   id of a callback the tree named, and the event's details as a JSON object
   (`{}` for now), and answers a JSON object. Pane then calls `render` again.
+
+A no-view command (`"mode": "no-view"`, #138) has no tree: Pane calls
+**`run(command, launch) -> result<string, string>`** each time it is
+launched, and it answers the same JSON object as `handle-event`.
 
 Adding to the tree needs no WIT change: every later list feature (several
 actions, icons, accessories) is a field here, and the "Extension UI you can
@@ -92,7 +98,7 @@ is how a search result's id ([command search](command-search.md)) is run.
   and says so. Optional fields may be omitted or `null`. A field whose name
   starts with `on` holds a callback id.
 
-`handle-event` answers an object. Version 1 knows one field, **`status`**:
+`handle-event` and `run` answer an object. Version 1 knows one field, **`status`**:
 text Pane shows as the action's result in the status line. That text is
 transitional; the ticket that brings toasts removes it. An answer without
 it shows nothing.
