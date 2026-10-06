@@ -1261,6 +1261,59 @@ mod tests {
         assert_eq!(cleared, Ok((at_close.len(), false)));
     }
 
+    /// Preference values are Pane's: a password's a local credential, the
+    /// others settings, apart from the keys the package's code saves under;
+    /// uninstalling removes the credentials and, unless the saved data is
+    /// kept, the settings too.
+    #[test]
+    fn preference_values_are_kept_by_kind_and_removed_as_their_kind_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = ExtensionData::open(dir.path());
+        let identity = PackageIdentity::local(dir.path()).unwrap();
+        let code = data.owned_by(&identity);
+        block_on(code.set(DataKind::Settings, "apiKey", "the code's own")).unwrap();
+        let writes = data
+            .change_preferences(&identity, |values| {
+                values.insert(
+                    "apiKey".into(),
+                    (DataKind::LocalCredentials, "secret".into()),
+                );
+                values.insert("units".into(), (DataKind::Settings, "metric".into()));
+            })
+            .unwrap();
+        block_on(writes.written()).unwrap();
+        let values = data.preference_values(&identity);
+        assert_eq!(values.get("apiKey").map(String::as_str), Some("secret"));
+        assert_eq!(values.get("units").map(String::as_str), Some("metric"));
+        assert_eq!(
+            code.get(DataKind::Settings, "apiKey"),
+            Ok(Some("the code's own".into())),
+            "apart from the code's own keys"
+        );
+        assert_eq!(data.count(DataKind::LocalCredentials, &identity), Ok(1));
+        assert_eq!(data.count(DataKind::Settings, &identity), Ok(2));
+        // Written to the files, where another Pane reads them.
+        let reopened = ExtensionData::open(dir.path());
+        assert_eq!(reopened.preference_values(&identity), values);
+
+        assert!(
+            data.remove_uninstalled(&identity, SavedData::Keep)
+                .is_empty()
+        );
+        let kept = data.preference_values(&identity);
+        assert_eq!(
+            kept.get("apiKey"),
+            None,
+            "credentials are removed either way"
+        );
+        assert_eq!(kept.get("units").map(String::as_str), Some("metric"));
+        assert!(
+            data.remove_uninstalled(&identity, SavedData::Delete)
+                .is_empty()
+        );
+        assert!(data.preference_values(&identity).is_empty());
+    }
+
     /// Disabling, reloading or updating (a replacement of the code),
     /// uninstalling and pausing a package each end its generation, which
     /// runs what the generation registered to undo, newest first, once,
