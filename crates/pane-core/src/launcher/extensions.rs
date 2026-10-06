@@ -51,6 +51,12 @@ impl Launcher {
         );
         rows.extend(package_rows);
         entries.extend(package_entries);
+        // A package's remembered confirmations, after its other rows: the
+        // card shows "Reset confirmations" among its buttons.
+        for (row, entry) in self.reset_rows(state) {
+            rows.push(row);
+            entries.push(entry);
+        }
         for (row, entry) in self.network_rows(state) {
             rows.push(row);
             entries.push(entry);

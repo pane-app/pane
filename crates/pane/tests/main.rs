@@ -12,6 +12,7 @@
 mod aliases;
 mod command_search;
 mod compact_pins;
+mod confirmations;
 mod develop;
 mod feedback;
 mod hotkeys;

@@ -140,11 +140,17 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   updated from animated to success with Open and Retry actions, a failure,
   and the command's row subtitle, and the no-view commands "Window
   functions", "Spin" and "Stumble"
-  ([what a command does after it acts](#what-a-command-does-after-it-acts)).
+  ([what a command does after it acts](#what-a-command-does-after-it-acts));
+  and (#146) a "Confirm" item asking before it acts (a destructive "Delete"
+  remembered with "Don't ask again", "Ask" with its own buttons, "Close and
+  Ask" while the launcher is hidden, "Ask in the Background") and the
+  no-view "Confirm Run".
   Their packages are `packages/sample-actions` and its `-js`/`-ts`
-  copies; held alike by `crates/pane-core/tests/item_actions.rs` and
-  `crates/pane-core/tests/feedback.rs`, and the Rust one by
-  `crates/pane/tests/item_actions.rs` and `crates/pane/tests/feedback.rs`.
+  copies; held alike by `crates/pane-core/tests/item_actions.rs`,
+  `crates/pane-core/tests/feedback.rs` and
+  `crates/pane-core/tests/confirmations.rs`, and the Rust one by
+  `crates/pane/tests/item_actions.rs`, `crates/pane/tests/feedback.rs` and
+  `crates/pane/tests/confirmations.rs`.
 - `hello-rust`, `hello-js`, `hello-ts`: one "Say hello" command each, a
   package built in its own folder, as an author's would be, for
   [development mode](../docs/development-mode.md): Pane builds and reloads
@@ -1105,6 +1111,20 @@ command has, whatever its mode ([wit/feedback.wit](../wit/feedback.wit), ADR
 - **The row's subtitle**: `set-subtitle` replaces the subtitle the command's
   root search row shows (and matches), such as "3 unread", until set again;
   Pane keeps it across restarts and forgets it on uninstall.
+- **A confirmation** (#146), before something that cannot be undone:
+  `confirm` shows a title, an optional message, the primary button (Enter;
+  drawn destructive when asked) and the dismiss button (Escape; "Cancel"
+  unless named) over the launcher's screen, showing the launcher first if it
+  is hidden, and answers true only for the primary button (Escape, a click
+  outside it or the window losing the focus answer false). Other packages'
+  calls are served while it waits. Given a `remember` key, it offers "Don't
+  ask again" (Space or a click ticks it): the answer given with a button
+  while it is ticked is remembered per package and key, across restarts,
+  disabling and updates, and later confirmations with that key answer at
+  once; "Reset confirmations" on the extension's card in Settings ›
+  Extensions forgets them, as uninstalling does. In a call no window was
+  shown for (a background launch, a schedule, a service) it answers an error
+  saying a confirmation is not available there.
 
 An error an action or a run answers is shown as a failure toast with a "Copy
 Error" action.
@@ -1124,6 +1144,16 @@ shown.update(Toast::success("Uploaded").primary(ToastAction::new("Open", || asyn
 })));
 show_hud("Copied to Clipboard", ToastStyle::Success); // closes the window first
 close(true, PopToRootType::Immediate);
+
+// In an async action or run:
+use pane_guest::feedback::{Confirmation, confirm};
+let asked = Confirmation::new("Delete the note?")
+    .primary("Delete")
+    .destructive()
+    .remember("delete-note");
+if confirm(asked).await? {
+    // ... delete it ...
+}
 ```
 
 JavaScript or TypeScript (`@pane/extension/feedback`):
@@ -1141,12 +1171,20 @@ toast.update({
 showHUD("Copied to Clipboard");
 closeMainWindow({ clearRootSearch: true, popToRootType: "immediate" });
 setSubtitle("3 unread");
+
+// import { confirmAlert } from "@pane/extension/feedback";
+const deleting = await confirmAlert({
+  title: "Delete the note?",
+  primaryAction: { title: "Delete", style: "destructive" },
+  remember: "delete-note",
+});
 ```
 
 The [actions sample](sample-actions) and its
 [JavaScript](sample-actions-js) and [TypeScript](sample-actions-ts) copies
-use every one of them: its "Window" and "Feedback" items, and its no-view
-commands "Window functions", "Spin" and "Stumble".
+use every one of them: its "Window", "Feedback" and "Confirm" items, and
+its no-view commands "Window functions", "Spin", "Stumble" and "Confirm
+Run".
 
 ## A command that takes a query
 

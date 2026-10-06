@@ -41,12 +41,12 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::{Launcher, Screen, State, Status, WeakLauncher, item_actions, stopped};
+use super::{Launcher, Screen, State, Status, WeakLauncher, confirmations, item_actions, stopped};
 use crate::extension_data::PackageData;
 use crate::feedback::{
-    Caller, GivenAction, GivenToast, HostFunctions, Hud, NextShowing, NoWindow, PopToRoot,
-    ShownToast, Toast, ToastAction, ToastDoes, ToastSlot, ToastStyle, WindowControl,
-    WindowPresence,
+    Asking, Caller, GivenAction, GivenConfirmation, GivenToast, HostFunctions, Hud, NextShowing,
+    NoWindow, PopToRoot, ShownToast, Toast, ToastAction, ToastDoes, ToastSlot, ToastStyle,
+    WindowControl, WindowPresence,
 };
 use crate::keyboard::{Binding, PaneKeys};
 use crate::runtime::{CallError, read_shortcut};
@@ -72,6 +72,11 @@ pub(super) struct Feedback {
     pub(super) toast: Option<CurrentToast>,
     /// The last toast id given.
     pub(super) last_toast: u64,
+    /// The confirmation a command waits on, while there is one (see
+    /// `confirmations`).
+    pub(super) confirming: Option<super::confirmations::Confirming>,
+    /// The last confirmation id given.
+    pub(super) last_confirmation: u64,
 }
 
 impl Default for Feedback {
@@ -82,6 +87,8 @@ impl Default for Feedback {
             next_showing: NextShowing::BySetting,
             toast: None,
             last_toast: 0,
+            confirming: None,
+            last_confirmation: 0,
         }
     }
 }
@@ -157,6 +164,13 @@ impl HostFunctions for Hosted {
             None => Err("Pane is stopping".into()),
         }
     }
+
+    fn confirm(&self, caller: &Caller, confirmation: GivenConfirmation) -> Asking {
+        match self.0.upgrade() {
+            Some(launcher) => launcher.ask_to_confirm(caller, confirmation),
+            None => Box::pin(std::future::ready(Err("Pane is stopping".into()))),
+        }
+    }
 }
 
 impl Launcher {
@@ -172,16 +186,32 @@ impl Launcher {
     /// search field, or hidden. The window says so whenever it changes; a
     /// toast shown while it is not shown expanded is shown as a HUD, and
     /// the toast in the footer leaves when it stops being shown.
+    ///
+    /// A confirmation waiting (see `confirmations`) counts as shown once the
+    /// window says it is shown, and is answered as not confirmed when it
+    /// then hides.
     pub fn set_window_presence(&self, presence: WindowPresence) {
-        let mut state = self.lock();
-        if state.feedback.presence == presence {
-            return;
-        }
-        state.feedback.presence = presence;
-        if presence != WindowPresence::Shown
-            && let Some(current) = state.feedback.toast.as_mut()
-        {
-            current.in_footer = false;
+        let left = {
+            let mut state = self.lock();
+            if state.feedback.presence == presence {
+                return;
+            }
+            state.feedback.presence = presence;
+            if presence != WindowPresence::Shown
+                && let Some(current) = state.feedback.toast.as_mut()
+            {
+                current.in_footer = false;
+            }
+            match presence {
+                WindowPresence::Shown | WindowPresence::Compact => {
+                    confirmations::arm_confirmation(&mut state);
+                    false
+                }
+                WindowPresence::Hidden => confirmations::leave_confirmation(&mut state),
+            }
+        };
+        if left {
+            self.changed();
         }
     }
 
@@ -229,10 +259,19 @@ impl Launcher {
     }
 
     /// The window lost the focus: the toast leaves the footer, an animated
-    /// one too. Its command may still update it, which shows it again.
+    /// one too. Its command may still update it, which shows it again. A
+    /// confirmation the window showed is answered as not confirmed, and
+    /// its answer is not remembered.
     pub fn window_deactivated(&self) {
-        if let Some(current) = self.lock().feedback.toast.as_mut() {
-            current.in_footer = false;
+        let left = {
+            let mut state = self.lock();
+            if let Some(current) = state.feedback.toast.as_mut() {
+                current.in_footer = false;
+            }
+            confirmations::leave_confirmation(&mut state)
+        };
+        if left {
+            self.changed();
         }
     }
 
@@ -564,13 +603,15 @@ fn root_query_typed(state: &State) -> bool {
     matches!(&state.view.screen, Screen::Root { query } if !query.is_empty())
 }
 
-/// Has the window hide, and notes it hidden: the toast leaves the footer.
+/// Has the window hide, and notes it hidden: the toast leaves the footer,
+/// and a confirmation it showed is answered as not confirmed.
 fn hide_window(state: &mut State) {
     state.feedback.window.hide();
     state.feedback.presence = WindowPresence::Hidden;
     if let Some(current) = state.feedback.toast.as_mut() {
         current.in_footer = false;
     }
+    confirmations::leave_confirmation(state);
 }
 
 /// Shows the launcher's toast: in the footer while the window is shown
@@ -724,6 +765,10 @@ mod tests {
 
         fn show_hud(&self, hud: &Hud) {
             self.0.lock().unwrap().push(WindowRequest::Hud(hud.clone()));
+        }
+
+        fn confirmation(&self) {
+            self.0.lock().unwrap().push(WindowRequest::Confirmation);
         }
     }
 
@@ -991,6 +1036,101 @@ mod tests {
         launcher.show_given_toast(&call(true), toast(ToastStyle::Success, "Done"));
         launcher.clear_animated_toast(&mut launcher.lock(), Path::new(COMPONENT));
         assert_eq!(shown_title(&launcher).as_deref(), Some("Done"));
+    }
+
+    use crate::feedback::ConfirmAnswer;
+
+    fn confirmation(remember: Option<&str>) -> GivenConfirmation {
+        GivenConfirmation {
+            title: "Delete the note?".into(),
+            message: Some("It cannot be brought back.".into()),
+            primary: "Delete".into(),
+            destructive: true,
+            dismiss: None,
+            remember: remember.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn a_confirmation_in_a_call_without_a_window_is_not_available() {
+        let (launcher, window) = launcher();
+        let answer = block_on(launcher.ask_to_confirm(&call(false), confirmation(None)));
+        assert!(answer.unwrap_err().contains("not available"));
+        assert_eq!(launcher.confirmation(), None);
+        assert_eq!(window.take(), [], "nothing was shown");
+    }
+
+    #[test]
+    fn a_confirmation_shows_and_answers_what_the_user_chose() {
+        let (launcher, window) = launcher();
+        for (answer, confirmed) in [
+            (ConfirmAnswer::Confirmed, true),
+            (ConfirmAnswer::Dismissed, false),
+            (ConfirmAnswer::Left, false),
+        ] {
+            let asking = launcher.ask_to_confirm(&call(true), confirmation(Some("delete")));
+            let shown = launcher.confirmation().expect("the confirmation shows");
+            assert_eq!(
+                (
+                    shown.title.as_str(),
+                    shown.message.as_deref(),
+                    shown.primary.as_str(),
+                    shown.dismiss.as_str(),
+                    shown.destructive
+                ),
+                (
+                    "Delete the note?",
+                    Some("It cannot be brought back."),
+                    "Delete",
+                    "Cancel",
+                    true
+                )
+            );
+            assert!(
+                !shown.rememberable,
+                "a command no package installed remembers nothing"
+            );
+            assert_eq!(window.take(), [WindowRequest::Confirmation]);
+            // Another id answers nothing.
+            launcher.answer_confirmation(shown.id + 1, ConfirmAnswer::Confirmed, false);
+            assert!(launcher.confirmation().is_some());
+            launcher.answer_confirmation(shown.id, answer, true);
+            assert_eq!(block_on(asking), Ok(confirmed), "{answer:?}");
+            assert_eq!(launcher.confirmation(), None);
+        }
+    }
+
+    #[test]
+    fn one_confirmation_at_a_time_and_a_dropped_call_takes_it_away() {
+        let (launcher, window) = launcher();
+        let first = launcher.ask_to_confirm(&call(true), confirmation(None));
+        let second = block_on(launcher.ask_to_confirm(&call(true), confirmation(None)));
+        assert!(second.unwrap_err().contains("already asking"));
+        window.take();
+        drop(first);
+        assert_eq!(launcher.confirmation(), None);
+        assert_eq!(window.take(), [WindowRequest::Confirmation], "redrawn");
+    }
+
+    #[test]
+    fn the_window_losing_the_focus_or_hiding_answers_that_the_user_did_not_confirm() {
+        let (launcher, window) = launcher();
+        let asking = launcher.ask_to_confirm(&call(true), confirmation(None));
+        launcher.window_deactivated();
+        assert_eq!(block_on(asking), Ok(false));
+
+        // Hidden when asked: the window shows itself first, and leaving
+        // the focus before it did answers nothing.
+        launcher.set_window_presence(WindowPresence::Hidden);
+        window.take();
+        let asking = launcher.ask_to_confirm(&call(true), confirmation(None));
+        assert_eq!(window.take(), [WindowRequest::Confirmation]);
+        launcher.window_deactivated();
+        assert!(launcher.confirmation().is_some(), "not shown yet");
+        launcher.set_window_presence(WindowPresence::Shown);
+        launcher.set_window_presence(WindowPresence::Hidden);
+        assert_eq!(block_on(asking), Ok(false));
+        assert_eq!(launcher.confirmation(), None);
     }
 
     #[test]

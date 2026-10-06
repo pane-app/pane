@@ -10,6 +10,12 @@
 //! the toast where the status line was, times it, and opens the HUD's
 //! window, through [`WindowControl`].
 //!
+//! A command also asks the user to **confirm** before it does something it
+//! cannot undo: the launcher keeps the [`Confirmation`] (one at a time) and
+//! its remembered answers, and the window draws it over the current screen,
+//! showing itself first if it is hidden, and answers it
+//! ([`ConfirmAnswer`]).
+//!
 //! The host functions reach the launcher through the runtime (see
 //! [`HostFunctions`]): each knows its [`Caller`], the guest's component
 //! and what Pane knows of the call it is made in (the command it is for,
@@ -218,6 +224,51 @@ pub enum WindowPresence {
     Hidden,
 }
 
+/// The dismiss button's label when the command names none.
+pub const DISMISS: &str = "Cancel";
+
+/// What the box that remembers a confirmation's answer says.
+pub const DONT_ASK_AGAIN: &str = "Don't ask again";
+
+/// A confirmation a command asks for (`feedback.confirm`), as the window
+/// draws it over the launcher's current screen
+/// ([`crate::Launcher::confirmation`]): one at a time.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Confirmation {
+    /// Names this confirmation: the window answers it by its id
+    /// ([`crate::Launcher::answer_confirmation`]).
+    pub id: u64,
+    pub title: String,
+    /// More text under the title.
+    pub message: Option<String>,
+    /// The primary button's label: Enter chooses it.
+    pub primary: String,
+    /// Whether the primary button is drawn in the destructive style.
+    pub destructive: bool,
+    /// The dismiss button's label ([`DISMISS`] unless the command named
+    /// another): Escape chooses it.
+    pub dismiss: String,
+    /// Whether it offers [`DONT_ASK_AGAIN`]: the command gave a key to
+    /// remember the answer by, and its package is installed.
+    pub rememberable: bool,
+}
+
+/// How the user answered a confirmation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConfirmAnswer {
+    /// The primary button, or Enter: the command is told the user
+    /// confirmed.
+    Confirmed,
+    /// The dismiss button, or Escape.
+    Dismissed,
+    /// Neither button: a click outside the confirmation. It answers as
+    /// [`ConfirmAnswer::Dismissed`] does, but is never remembered. (The
+    /// window losing the focus or hiding answers so too, through
+    /// [`crate::Launcher::window_deactivated`] and
+    /// [`crate::Launcher::set_window_presence`].)
+    Left,
+}
+
 /// What the launcher has the window do for the host functions commands
 /// call. Called on the runtime's thread, with the launcher's state locked:
 /// an implementation only hands the request on (the window's own thread
@@ -228,6 +279,10 @@ pub trait WindowControl: Send + Sync {
     /// Shows `hud` in a window of its own, for [`Hud::duration`], replacing
     /// a HUD still shown.
     fn show_hud(&self, hud: &Hud);
+    /// A confirmation was asked for, or went unanswered (its call was
+    /// dropped): the window draws [`crate::Launcher::confirmation`] as it
+    /// is now, showing itself first while one is asked and it is hidden.
+    fn confirmation(&self) {}
 }
 
 /// A launcher with no window: nothing is hidden or shown.
@@ -243,6 +298,8 @@ impl WindowControl for NoWindow {
 pub enum WindowRequest {
     Hide,
     Hud(Hud),
+    /// See [`WindowControl::confirmation`].
+    Confirmation,
 }
 
 /// A [`WindowControl`] that sends its requests to the window, and the
@@ -261,6 +318,10 @@ impl WindowControl for Sender {
 
     fn show_hud(&self, hud: &Hud) {
         let _ = self.0.send(WindowRequest::Hud(hud.clone()));
+    }
+
+    fn confirmation(&self) {
+        let _ = self.0.send(WindowRequest::Confirmation);
     }
 }
 
@@ -311,11 +372,32 @@ pub(crate) struct GivenAction {
     pub shortcut: Option<String>,
 }
 
+/// A confirmation as a command asks for it (`feedback.confirm`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct GivenConfirmation {
+    pub title: String,
+    pub message: Option<String>,
+    pub primary: String,
+    pub destructive: bool,
+    /// The dismiss button's label, if the command named one.
+    pub dismiss: Option<String>,
+    /// The key its answer is remembered by, if the command gave one.
+    pub remember: Option<String>,
+}
+
+/// The answer to a confirmation, once the user gives it: whether they
+/// confirmed, or why Pane asked nothing. The runtime's thread awaits it
+/// without holding other calls; dropping it (the call was dropped) takes
+/// the confirmation off the screen.
+pub(crate) type Asking =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool, String>> + Send>>;
+
 /// What Pane does for the window and feedback host functions a command
 /// calls: the launcher's own (`Launcher::host_functions`). Each is a short
-/// host call on the runtime's thread that never waits for the user; a
-/// refusal is an answer. Later host functions (copying, opening, confirming,
-/// pasting) are added here the same way.
+/// host call on the runtime's thread; a refusal is an answer. The one that
+/// waits for the user, `confirm`, answers at once with what it waits on.
+/// Later host functions (copying, opening, pasting) are added here the same
+/// way.
 pub(crate) trait HostFunctions: Send + Sync {
     /// `window.close`: whether a window was shown for the call.
     fn close(&self, caller: &Caller, clear_root_search: bool, pop: PopToRoot) -> bool;
@@ -333,6 +415,9 @@ pub(crate) trait HostFunctions: Send + Sync {
     fn show_hud(&self, caller: &Caller, hud: Hud);
     /// `commands.set-subtitle`.
     fn set_subtitle(&self, caller: &Caller, subtitle: Option<String>) -> Result<(), String>;
+    /// `feedback.confirm`: shows `confirmation` (or answers from a
+    /// remembered answer, or refuses) at once, and answers what to await.
+    fn confirm(&self, caller: &Caller, confirmation: GivenConfirmation) -> Asking;
 }
 
 #[cfg(test)]
@@ -379,6 +464,7 @@ mod tests {
             title: "Copied".into(),
             style: ToastStyle::Success,
         });
+        control.confirmation();
         drop(control);
         let received = futures::executor::block_on(async {
             let mut all = Vec::new();
@@ -394,7 +480,8 @@ mod tests {
                 WindowRequest::Hud(Hud {
                     title: "Copied".into(),
                     style: ToastStyle::Success
-                })
+                }),
+                WindowRequest::Confirmation,
             ]
         );
     }

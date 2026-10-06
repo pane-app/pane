@@ -73,6 +73,7 @@ pub(crate) fn bind_keys_with(
     features::quick_slots::bind_keys(cx);
     features::footer_menu::bind_keys(cx);
     features::toast::bind_keys(cx);
+    features::confirmation::bind_keys(cx);
     features::actions_panel::bind_keys(cx, &text_editing);
     features::settings::bind_keys(cx);
     ui::select::bind_keys(cx);

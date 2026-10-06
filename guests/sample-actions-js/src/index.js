@@ -23,16 +23,35 @@
 // clears the command's row subtitle ("3 unread"). The no-view commands
 // "Spin" (it leaves an animated toast, which Pane hides when the run ends)
 // and "Stumble" (it fails) show what Pane does at a run's end.
+// "Confirm" asks before it acts (#146): its destructive "Delete" asks
+// "Delete the note?" offering "Don't ask again" (remembered under
+// `delete-note`) and toasts "Deleted" or "Kept"; "Ask" asks "Go on?" with its
+// own buttons and nothing to remember ("Went on" or "Stopped"); "Close and
+// Ask" closes the window, then asks, so Pane shows itself again for it;
+// "Ask in the Background" launches the no-view "Confirm Run" in the
+// background, where it toasts "Not asked" with the reason. Run by the user,
+// "Confirm Run" asks "Run it?" and toasts "Ran" or "Did not run".
 
 import {
   clearSearchBar,
   closeMainWindow,
+  confirmAlert,
   popToRoot,
   setSubtitle,
   showHUD,
   showToast,
 } from "@pane/extension/feedback";
 import { launch } from "pane:extension/commands@0.1.0";
+
+/**
+ * Toasts `yes` or `no`, as the user answered.
+ * @param {boolean} answer
+ * @param {string} yes
+ * @param {string} no
+ */
+function said(answer, yes, no) {
+  showToast({ title: answer ? yes : no });
+}
 
 /**
  * The action titled `title` of the item titled `item`: it shows both.
@@ -260,6 +279,54 @@ export const command = {
             },
           ],
         },
+        {
+          id: "confirm",
+          title: "Confirm",
+          subtitle: "Asks before it acts, remembering the answer or not",
+          actions: [
+            {
+              title: "Delete",
+              style: "destructive",
+              onAction: async () => {
+                const answer = await confirmAlert({
+                  title: "Delete the note?",
+                  message: "It cannot be brought back.",
+                  primaryAction: { title: "Delete", style: "destructive" },
+                  remember: "delete-note",
+                });
+                said(answer, "Deleted", "Kept");
+              },
+            },
+            {
+              title: "Ask",
+              onAction: async () => {
+                const answer = await confirmAlert({
+                  title: "Go on?",
+                  primaryAction: { title: "Go On" },
+                  dismissAction: { title: "Stop" },
+                });
+                said(answer, "Went on", "Stopped");
+              },
+            },
+            {
+              title: "Close and Ask",
+              onAction: async () => {
+                closeMainWindow();
+                const answer = await confirmAlert({
+                  title: "Asked while hidden",
+                  primaryAction: { title: "Yes" },
+                });
+                said(answer, "Confirmed while hidden", "Not confirmed while hidden");
+              },
+            },
+            {
+              title: "Ask in the Background",
+              onAction: async () => {
+                launch({ command: "confirm-run" }, "background", [], null);
+              },
+            },
+          ],
+        },
       ],
     };
   },
@@ -284,6 +351,17 @@ export const command = {
         return;
       case "stumble":
         throw new Error("Stumbled on purpose");
+      // Asks first; in the background, where Pane asks nothing, says why.
+      case "confirm-run": {
+        try {
+          const answer = await confirmAlert({ title: "Run it?", primaryAction: { title: "Run" } });
+          said(answer, "Ran", "Did not run");
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          showToast({ style: "failure", title: "Not asked", message: reason });
+        }
+        return;
+      }
       default:
         throw new Error(`\`${id}\` opens a screen`);
     }

@@ -2461,10 +2461,10 @@ impl Code {
             state
         })
         .expect("registering the window functions in a fresh linker cannot conflict");
-        feedback_host::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| {
-            state
-        })
-        .expect("registering toasts and HUDs in a fresh linker cannot conflict");
+        // Toasts and HUDs answer at once; `confirm` waits for the user with
+        // the store's accessor, as helpers do.
+        feedback_host::add_to_linker::<_, host_functions::Confirms>(&mut linker, |state| state)
+            .expect("registering toasts, HUDs and confirmations in a fresh linker cannot conflict");
         Code { engine, linker }
     }
 

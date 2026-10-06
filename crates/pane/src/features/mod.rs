@@ -3,6 +3,7 @@
 pub(crate) mod actions_panel;
 pub(crate) mod clipboard_history;
 pub(crate) mod compact_pins;
+pub(crate) mod confirmation;
 pub(crate) mod footer_menu;
 pub(crate) mod hud;
 pub(crate) mod number_hints;

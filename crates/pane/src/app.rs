@@ -33,6 +33,7 @@ use crate::extension_views::{custom_view, form};
 use crate::features::actions_panel;
 use crate::features::clipboard_history;
 use crate::features::compact_pins;
+use crate::features::confirmation;
 use crate::features::footer_menu;
 use crate::features::hud;
 use crate::features::number_hints::row_number;
@@ -84,6 +85,9 @@ pub struct LauncherWindow {
     pub(crate) toast: toast::ToastControls,
     /// The HUD's window, while one shows; see [`features::hud`].
     pub(crate) hud: hud::HudWindow,
+    /// The confirmation a command asks for: its focus and "Don't ask
+    /// again"; see [`features::confirmation`].
+    pub(crate) confirmation: confirmation::ConfirmationControls,
     /// Root search's pinned home: its slots' focus; see
     /// [`features::quick_slots`].
     pub(crate) home: quick_slots::Home,
@@ -184,6 +188,7 @@ impl LauncherWindow {
             clipboard: None,
             toast: toast::ToastControls::new(cx),
             hud: hud::HudWindow::default(),
+            confirmation: confirmation::ConfirmationControls::new(cx),
             home: quick_slots::Home::default(),
             motion: FrameMotion::new(),
             presence: Presence::default(),
@@ -192,17 +197,24 @@ impl LauncherWindow {
         };
         // The number hints go when the window loses focus: the Ctrl
         // release would go to another window. So does the toast, an
-        // animated one too (#141).
+        // animated one too (#141), and a confirmation it showed is
+        // answered as not confirmed (#146).
         cx.observe_window_activation(window, |this, window, cx| {
-            if !window.is_window_active() {
+            let active = window.is_window_active();
+            // A window that just showed itself for a confirmation may still
+            // hear of the deactivation its own hiding caused (#146).
+            let counts = this.confirmation_sees_activation(active);
+            if !active && counts {
                 this.end_numbers(cx);
                 this.launcher.window_deactivated();
+                this.sync_confirmation(window, cx);
                 cx.notify();
             }
         })
         .detach();
         // What the launcher asks of the window for the host functions
-        // commands call (#141): hiding it, showing a HUD.
+        // commands call (#141): hiding it, showing a HUD, drawing a
+        // confirmation (#146).
         this.follow_window_requests(window, cx);
         // The launcher opens placed on the display the Launcher page's
         // choice resolves to, before the first frame is drawn.
@@ -311,7 +323,9 @@ impl LauncherWindow {
 
     /// Carries out what the launcher asked of the window for a command's
     /// host function: hides it (a command closed it, or is about to show a
-    /// HUD), or shows a HUD in a window of its own.
+    /// HUD), shows a HUD in a window of its own, or draws the confirmation
+    /// a command asks for (showing the window first if it is hidden) or
+    /// takes away one no longer asked.
     fn window_requested(
         &mut self,
         request: WindowRequest,
@@ -325,9 +339,29 @@ impl LauncherWindow {
                 }
             }
             WindowRequest::Hud(hud) => self.show_hud(hud, window, cx),
+            WindowRequest::Confirmation => self.sync_confirmation(window, cx),
         }
         self.sync_screen(window, cx);
         cx.notify();
+    }
+
+    /// Shows the window, if it is hidden, for a confirmation a command
+    /// asks for (#146): on the screen it was left on, whatever the
+    /// Launcher page's reopening choice says, and focused.
+    /// Whether it was hidden.
+    pub(crate) fn show_for_confirmation(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.presence.hidden() {
+            return false;
+        }
+        self.unhide(window, cx);
+        window.activate_window();
+        cx.activate(true);
+        self.motion.land_at_once();
+        true
     }
 
     /// Development builds only: hides the launcher and shows `title` as a
@@ -720,8 +754,10 @@ impl LauncherWindow {
     fn hide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.set_visible(false);
         self.presence.hide(cx.background_executor().now());
-        // A toast shown from now on is a HUD (#141).
+        // A toast shown from now on is a HUD (#141), and a confirmation
+        // shown is answered as not confirmed (#146).
         self.launcher.set_window_presence(WindowPresence::Hidden);
+        self.sync_confirmation(window, cx);
         self.pointer = None;
         // A hidden launcher keeps nothing armed for whatever shows next.
         self.motion.land_at_once();
@@ -1129,6 +1165,9 @@ impl LauncherWindow {
         // After it: the Clipboard History view focuses its own search.
         self.sync_clipboard_history(window, cx);
         self.sync_home(cx);
+        // Last of all: a confirmation a command waits on keeps the focus
+        // over whatever screen is shown (#146).
+        self.sync_confirmation(window, cx);
         cx.refresh_windows();
     }
 
@@ -1448,6 +1487,8 @@ impl LauncherWindow {
             && matches!(view.status, Status::Idle)
             && self.actions.is_none()
             && self.menu.is_none()
+            // A confirmation needs the expanded window to be drawn in.
+            && self.launcher.confirmation().is_none()
     }
 
     /// Fits the window to the window mode as `view` is drawn: collapsing to
@@ -1495,9 +1536,12 @@ impl Render for LauncherWindow {
         // The toast the footer shows, if any, and its time (#141).
         let toast = self.footer_toast(&view.status);
         self.time_toast(toast.as_ref(), window, cx);
-        // Pane's Clipboard History draws its own split view (#102).
+        // Pane's Clipboard History draws its own split view (#102), with a
+        // confirmation its command asks for over it (#146).
         if let Some(split) = self.render_clipboard_history(&view, cx) {
-            return split;
+            let visuals = crate::settings::launcher_visuals(cx);
+            let asked = self.render_confirmation_layer(&visuals.theme, visuals.material, cx);
+            return split.children(asked);
         }
         // The compact window mode shows only the search field until
         // something is typed.
@@ -1744,6 +1788,10 @@ impl Render for LauncherWindow {
             ),
         };
 
+        // The confirmation a command waits on, over everything (#146),
+        // added to the panel below.
+        let asked = self.render_confirmation_layer(&theme, material, cx);
+
         // The launcher's content: the shared Geist family and base text
         // color on everything, the heading (or the search header, in
         // `body`), the details, the body and the status footer.
@@ -1915,11 +1963,14 @@ impl Render for LauncherWindow {
         });
         // The panel surface: the frost material's L1 glass around the
         // content, with the sheen beneath it — and the background image
-        // between the two, when there is one.
-        match hero {
+        // between the two, when there is one. A confirmation lies over the
+        // content, outside the launcher's key context, so none of the
+        // launcher's keys reach behind it while it has the focus.
+        let panel = match hero {
             Some(hero) => material.panel_over(&theme, hero, content),
             None => material.panel(&theme, content),
-        }
+        };
+        panel.children(asked)
     }
 }
 

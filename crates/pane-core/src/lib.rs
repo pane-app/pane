@@ -41,8 +41,8 @@ mod zip;
 
 pub use defaults::{ArtifactSource, DefaultExtension};
 pub use feedback::{
-    Hud, NextShowing, PopToRoot, ShownToast, Toast, ToastAction, ToastSlot, ToastStyle,
-    WindowControl, WindowPresence,
+    ConfirmAnswer, Confirmation, Hud, NextShowing, PopToRoot, ShownToast, Toast, ToastAction,
+    ToastSlot, ToastStyle, WindowControl, WindowPresence,
 };
 pub use helpers::runner::{MAX_HELPER_INPUT, MAX_HELPER_OUTPUT};
 pub use host_settings::{

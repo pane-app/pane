@@ -372,6 +372,7 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         (_, Some(Entry::BuildDetails(_))) => acting("Show details"),
         (_, Some(Entry::BuildAgain(_))) => acting("Build again"),
         (_, Some(Entry::AskClearCache(_))) => acting("Clear cache"),
+        (_, Some(Entry::ResetConfirmations(_))) => acting("Reset confirmations"),
         (_, Some(Entry::AskHotkey(_))) => acting("Set hotkey"),
         (_, Some(Entry::RemoveHotkey(_))) => acting("Remove hotkey"),
         (_, Some(Entry::AskAlias(_))) => acting("Set alias"),

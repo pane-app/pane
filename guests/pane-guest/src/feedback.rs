@@ -20,6 +20,9 @@
 //! toast's action runs its closure when the user chooses it (with the
 //! pointer, from the keyboard, or with its shortcut while the toast shows),
 //! as an item's action does; it can be chosen again while the toast shows.
+//!
+//! Before something it cannot undo, a command asks the user to
+//! [`confirm`] a [`Confirmation`], which may offer "Don't ask again".
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
@@ -165,6 +168,100 @@ pub fn show_toast(toast: Toast) -> ShownToast {
 /// over other applications: for 1.2 seconds, or 3 for the failure style.
 pub fn show_hud(title: &str, style: ToastStyle) {
     wit::show_hud(title, style);
+}
+
+/// What a command asks the user to confirm with [`confirm`] before it does
+/// something it cannot undo: a title, an optional message, the primary
+/// button ("OK" unless named; Enter chooses it), drawn destructive when
+/// asked, and the dismiss button ("Cancel" unless named; Escape chooses
+/// it).
+pub struct Confirmation {
+    title: String,
+    message: Option<String>,
+    primary: String,
+    destructive: bool,
+    dismiss: Option<String>,
+    remember: Option<String>,
+}
+
+impl Confirmation {
+    /// A confirmation titled `title`, its primary button "OK".
+    pub fn new(title: impl Into<String>) -> Confirmation {
+        Confirmation {
+            title: title.into(),
+            message: None,
+            primary: "OK".into(),
+            destructive: false,
+            dismiss: None,
+            remember: None,
+        }
+    }
+
+    /// This confirmation with `message` under its title.
+    pub fn message(mut self, message: impl Into<String>) -> Confirmation {
+        self.message = Some(message.into());
+        self
+    }
+
+    /// This confirmation with its primary button labelled `label`, such as
+    /// "Delete".
+    pub fn primary(mut self, label: impl Into<String>) -> Confirmation {
+        self.primary = label.into();
+        self
+    }
+
+    /// This confirmation with its primary button drawn in the destructive
+    /// style.
+    pub fn destructive(mut self) -> Confirmation {
+        self.destructive = true;
+        self
+    }
+
+    /// This confirmation with its dismiss button labelled `label`.
+    pub fn dismiss(mut self, label: impl Into<String>) -> Confirmation {
+        self.dismiss = Some(label.into());
+        self
+    }
+
+    /// This confirmation offering "Don't ask again": once the user ticks it
+    /// and answers with a button, Pane remembers the answer under `key` for
+    /// the command's package and answers [`confirm`] with it at once from
+    /// then on, until the user resets the package's confirmations in
+    /// Settings › Extensions.
+    pub fn remember(mut self, key: impl Into<String>) -> Confirmation {
+        self.remember = Some(key.into());
+        self
+    }
+}
+
+/// Shows `confirmation` over the launcher's screen, showing the launcher
+/// first if it is hidden, and answers whether the user chose the primary
+/// button: the dismiss button, Escape, a click outside it or the window
+/// losing the focus answer `false`. In a call no window was shown for (a
+/// background launch, a schedule, a service) it answers an error saying a
+/// confirmation is not available there, and shows nothing.
+///
+/// ```ignore
+/// use pane_guest::feedback::{Confirmation, confirm};
+///
+/// let asked = Confirmation::new("Delete the note?")
+///     .primary("Delete")
+///     .destructive()
+///     .remember("delete-note");
+/// if confirm(asked).await? {
+///     // ... delete it ...
+/// }
+/// ```
+pub async fn confirm(confirmation: Confirmation) -> Result<bool, String> {
+    wit::confirm(wit::Confirmation {
+        title: confirmation.title,
+        message: confirmation.message,
+        primary: confirmation.primary,
+        destructive: confirmation.destructive,
+        dismiss: confirmation.dismiss,
+        remember: confirmation.remember,
+    })
+    .await
 }
 
 /// The actions of the toasts the instance showed, by callback id; only the

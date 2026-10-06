@@ -23,6 +23,18 @@
 //! and sets and clears the command's row subtitle ("3 unread"). The no-view
 //! commands "Spin" (it leaves an animated toast, which Pane hides when the
 //! run ends) and "Stumble" (it fails) show what Pane does at a run's end.
+//!
+//! "Confirm" asks before it acts (#146): its destructive "Delete" asks
+//! "Delete the note?" offering "Don't ask again" (remembered under
+//! `delete-note`) and toasts "Deleted" or "Kept"; "Ask" asks "Go on?" with
+//! its own buttons ("Go On", "Stop") and nothing to remember, toasting
+//! "Went on" or "Stopped"; "Close and Ask" closes the window, then asks,
+//! so Pane shows itself again for it ("Confirmed while hidden" or "Not
+//! confirmed while hidden"); "Ask in the Background" launches the no-view
+//! "Confirm Run" in the background, where no confirmation is available, and
+//! that command toasts "Not asked" with the reason. Run by the user (or its
+//! hotkey, with the launcher hidden), "Confirm Run" asks "Run it?" and
+//! toasts "Ran" or "Did not run".
 //! The JavaScript and TypeScript samples do the same.
 #![no_std]
 
@@ -30,7 +42,9 @@ use core::cell::Cell;
 
 use pane_guest::alloc::{format, string::String, vec::Vec};
 use pane_guest::commands::{CommandRef, LaunchType, launch, set_subtitle};
-use pane_guest::feedback::{ShownToast, Toast, ToastAction, ToastStyle, show_hud, show_toast};
+use pane_guest::feedback::{
+    Confirmation, ShownToast, Toast, ToastAction, ToastStyle, confirm, show_hud, show_toast,
+};
 use pane_guest::window::{PopToRootType, clear_search, close, pop_to_root};
 use pane_guest::{
     Action, Command, CustomView, FieldValue, FormError, Item, LaunchRecord, List, Modifier,
@@ -102,6 +116,41 @@ fn uploaded() -> Toast {
             })
             .shortcut(Shortcut::new([Ctrl, Shift], "r")),
         )
+}
+
+/// Toasts `yes` or `no`, as the user answered.
+fn said(answer: bool, yes: &str, no: &str) {
+    show_toast(Toast::success(if answer { yes } else { no }));
+}
+
+/// "Delete": asks first, destructively, offering "Don't ask again".
+async fn delete_note() -> Result<(), String> {
+    let asked = Confirmation::new("Delete the note?")
+        .message("It cannot be brought back.")
+        .primary("Delete")
+        .destructive()
+        .remember("delete-note");
+    said(confirm(asked).await?, "Deleted", "Kept");
+    Ok(())
+}
+
+/// "Ask": asks with its own buttons, remembering nothing.
+async fn ask() -> Result<(), String> {
+    let asked = Confirmation::new("Go on?").primary("Go On").dismiss("Stop");
+    said(confirm(asked).await?, "Went on", "Stopped");
+    Ok(())
+}
+
+/// "Close and Ask": closes the window first, so Pane shows it again to ask.
+async fn close_and_ask() -> Result<(), String> {
+    close(false, PopToRootType::Default);
+    let asked = Confirmation::new("Asked while hidden").primary("Yes");
+    said(
+        confirm(asked).await?,
+        "Confirmed while hidden",
+        "Not confirmed while hidden",
+    );
+    Ok(())
 }
 
 /// The command `command` of this package, for a launch.
@@ -212,6 +261,16 @@ impl Command for Actions {
                     Action::new("Set Subtitle", || async { set_subtitle(Some("3 unread")) }),
                     Action::new("Clear Subtitle", || async { set_subtitle(None) }),
                 ]),
+            Item::new("confirm", "Confirm")
+                .subtitle("Asks before it acts, remembering the answer or not")
+                .actions([
+                    Action::new("Delete", delete_note).destructive(),
+                    Action::new("Ask", ask),
+                    Action::new("Close and Ask", close_and_ask),
+                    Action::new("Ask in the Background", || async {
+                        launch(&own("confirm-run"), LaunchType::Background, &[], None)
+                    }),
+                ]),
         ]))
     }
 
@@ -236,6 +295,18 @@ impl Command for Actions {
                 Ok(())
             }
             "stumble" => Err("Stumbled on purpose".into()),
+            // Asks first; in the background, where Pane asks nothing, says
+            // why.
+            "confirm-run" => {
+                let asked = Confirmation::new("Run it?").primary("Run");
+                match confirm(asked).await {
+                    Ok(answer) => said(answer, "Ran", "Did not run"),
+                    Err(error) => {
+                        show_toast(Toast::failure("Not asked").message(error));
+                    }
+                }
+                Ok(())
+            }
             other => Err(format!("`{other}` opens a screen")),
         }
     }

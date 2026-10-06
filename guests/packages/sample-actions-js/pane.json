@@ -30,6 +30,13 @@
       "subtitle": "Fails, so Pane shows a failure toast",
       "mode": "no-view",
       "component": "sample_actions_js.wasm"
+    },
+    {
+      "id": "confirm-run",
+      "title": "Confirm Run (JavaScript)",
+      "subtitle": "Asks before it runs; Pane shows itself to ask when a hotkey ran it hidden",
+      "mode": "no-view",
+      "component": "sample_actions_js.wasm"
     }
   ]
 }

@@ -47,7 +47,7 @@ interface window {
 }
 
 /// Telling the user what happened: a toast in the launcher's footer, or a
-/// HUD over other applications.
+/// HUD over other applications; and asking the user to confirm.
 interface feedback {
   /// How a toast or a HUD is drawn.
   enum toast-style {
@@ -111,4 +111,37 @@ interface feedback {
   /// applications, which never takes the focus: for 1.2 seconds, or 3 for
   /// the failure style.
   show-hud: func(title: string, style: toast-style);
+
+  /// What a command asks the user to confirm before it does something it
+  /// cannot undo.
+  record confirmation {
+    title: string,
+    /// More text under the title.
+    message: option<string>,
+    /// The primary button's label, such as "Delete": Enter chooses it.
+    primary: string,
+    /// Draws the primary button in the destructive style.
+    destructive: bool,
+    /// The dismiss button's label: Escape chooses it. "Cancel" when none.
+    dismiss: option<string>,
+    /// Offers "Don't ask again". Once the user ticks it and answers with a
+    /// button, Pane remembers that answer under this key for the command's
+    /// package (its identity), and `confirm` with the same key answers it
+    /// at once from then on, without showing anything: across restarts,
+    /// disabling and updates, until the user resets the package's
+    /// confirmations on its card in Settings › Extensions, or uninstalls
+    /// it. A command built into Pane is offered no "Don't ask again".
+    remember: option<string>,
+  }
+
+  /// Shows `confirmation` over the launcher's current screen, showing the
+  /// launcher first if it is hidden, and answers whether the user chose the
+  /// primary button. The dismiss button, Escape, a click outside it and the
+  /// window losing the focus answer false. While it waits, other packages'
+  /// calls are served. A call no window was shown for (a background
+  /// launch, a schedule, a service, an operation) is answered with an
+  /// error saying a confirmation is not available there, without showing
+  /// anything; so is a confirmation asked while another one is shown. An
+  /// error is an answer, never a reason to pause the extension.
+  confirm: async func(confirmation: confirmation) -> result<bool, string>;
 }

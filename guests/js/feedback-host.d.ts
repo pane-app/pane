@@ -37,4 +37,20 @@ declare module "pane:extension/feedback@0.1.0" {
   export function updateToast(id: bigint, toast: Toast): void;
   export function hideToast(id: bigint): void;
   export function showHud(title: string, style: ToastStyle): void;
+  export interface Confirmation {
+    title: string;
+    message?: string | null;
+    /** The primary button's label: Enter chooses it. */
+    primary: string;
+    destructive: boolean;
+    /** The dismiss button's label ("Cancel" when none): Escape chooses it. */
+    dismiss?: string | null;
+    /** Offers "Don't ask again", remembering the answer under this key. */
+    remember?: string | null;
+  }
+  /**
+   * Whether the user confirmed. Rejects with an object whose `payload` is
+   * why Pane asked nothing.
+   */
+  export function confirm(confirmation: Confirmation): Promise<boolean>;
 }

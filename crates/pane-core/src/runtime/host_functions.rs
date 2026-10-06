@@ -10,11 +10,73 @@
 //! window was shown, a toast or HUD is shown nowhere, and a subtitle is
 //! refused. So does a runtime no launcher drives (tests of the runtime
 //! alone).
+//!
+//! `feedback.confirm` waits for the user (#146): a WIT `async` function
+//! with the store's [`Accessor`], as `helpers::Runs::run` is ([`Confirms`]).
+//! It hands the confirmation to the launcher in a short synchronous part,
+//! then awaits the answer without the store: other calls are served
+//! meanwhile, and the wait is the host's time, never the guest's. A call
+//! dropped meanwhile (its generation ended, the call was cancelled, Pane
+//! quit) drops the wait, which takes the confirmation off the screen.
 
 use std::sync::Arc;
 
+use wasmtime::component::{Accessor, HasData};
+
 use super::{GuestState, feedback_host, lock, stopped_code, window_host};
-use crate::feedback::{Caller, GivenAction, GivenToast, HostFunctions, Hud, PopToRoot, ToastStyle};
+use crate::feedback::{
+    Asking, Caller, GivenAction, GivenConfirmation, GivenToast, HostFunctions, Hud, PopToRoot,
+    ToastStyle,
+};
+
+/// The host side of `feedback.confirm`, the one feedback function that
+/// waits for the user; the others are [`feedback_host::Host`]'s.
+pub(crate) struct Confirms;
+
+impl HasData for Confirms {
+    type Data<'a> = &'a mut GuestState;
+}
+
+impl<T> feedback_host::HostWithStore<T> for Confirms {
+    async fn confirm(
+        accessor: &Accessor<T, Self>,
+        confirmation: feedback_host::Confirmation,
+    ) -> Result<bool, String> {
+        let (asking, watch) = accessor.with(|mut view| {
+            let state = view.get();
+            (state.ask_to_confirm(confirmation), state.watch())
+        });
+        // Waiting for the user is not the guest's computing, nor a hang:
+        // the runtime thread only awaits it.
+        super::deadlines::hosted(watch, asking).await
+    }
+}
+
+impl GuestState {
+    /// Hands `confirmation` to the launcher, which shows it, answers it from
+    /// a remembered answer, or refuses it; what to await for the answer.
+    fn ask_to_confirm(&self, confirmation: feedback_host::Confirmation) -> Asking {
+        let refused = |why: String| -> Asking { Box::pin(std::future::ready(Err(why))) };
+        let _host = self.host();
+        if let Some(end) = self.stopped() {
+            return refused(stopped_code(end));
+        }
+        let Some(host) = lock(&self.host_functions).clone() else {
+            return refused("this Pane asks the user nothing for extensions".into());
+        };
+        host.confirm(
+            &self.caller(),
+            GivenConfirmation {
+                title: confirmation.title,
+                message: confirmation.message,
+                primary: confirmation.primary,
+                destructive: confirmation.destructive,
+                dismiss: confirmation.dismiss,
+                remember: confirmation.remember,
+            },
+        )
+    }
+}
 
 impl GuestState {
     /// Who makes a host call: this instance's component, and what the call
