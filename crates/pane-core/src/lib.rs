@@ -38,7 +38,7 @@ pub mod tray;
 mod zip;
 
 pub use defaults::{ArtifactSource, DefaultExtension};
-pub use helpers::runner::{HELPER_TIME_LIMIT, MAX_HELPER_INPUT, MAX_HELPER_OUTPUT};
+pub use helpers::runner::{MAX_HELPER_INPUT, MAX_HELPER_OUTPUT};
 pub use host_settings::{
     BackgroundEffect, EscapeBehavior, HostSettings, MaterialPreference, NavigationBindings,
     OpeningMonitor, PinnedLayout, Reopening, ThemePreference, WindowMode,
@@ -69,10 +69,13 @@ pub use platform::Platform;
 pub use runtime::Fault;
 #[doc(hidden)]
 pub use runtime::Limits;
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub use runtime::memory_peak;
 pub use runtime::{
     Action, Answer, COMPUTE_LIMIT, CallError, Choice, CustomViewInfo, CustomViewRole, Field,
-    FieldKind, FieldValue, Form, FormError, Frame, Item, Key, MAX_FRAME_SHAPES, MAX_FRAME_SIZE,
-    MAX_TEXT_CHARS, Point, Rgb, Runtime, RuntimeFailure, RuntimeStatus, Shape, TREE_VERSION,
-    UNRESPONSIVE_LIMIT, View, ViewEvent, ViewId, WARN_AFTER,
+    FieldKind, FieldValue, Form, FormError, Frame, GUEST_MEMORY, Item, Key, MAX_FRAME_SHAPES,
+    MAX_FRAME_SIZE, MAX_TEXT_CHARS, Point, Rgb, Runtime, RuntimeFailure, RuntimeStatus, Shape,
+    TREE_VERSION, UNRESPONSIVE_LIMIT, View, ViewEvent, ViewId, WARN_AFTER,
 };
 pub use search::{SettingsEntry, settings_matches, title_matches};

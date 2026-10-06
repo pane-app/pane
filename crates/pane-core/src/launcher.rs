@@ -1497,6 +1497,25 @@ impl Launcher {
         self.lock().packages.clone()
     }
 
+    /// What the current generation of the package `identity` still has set
+    /// up, oldest first: its undo list, which the generation's end runs
+    /// (see `generation`), such as "extension instance", "native helper" or
+    /// "web request". A diagnostic for tests; debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn undo_list(&self, identity: &PackageIdentity) -> Vec<&'static str> {
+        self.installation
+            .as_ref()
+            .map(|installation| {
+                installation
+                    .data
+                    .owned_by(identity)
+                    .generation()
+                    .undo_list()
+            })
+            .unwrap_or_default()
+    }
+
     /// Whether this launcher installs packages — whether it was made with
     /// a packages folder ([`Launcher::with_packages`]). Only such a launcher
     /// offers the install rows in root search and the extension list's

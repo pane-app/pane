@@ -4,9 +4,18 @@
 //! thread. Callers hold a cheap [`Runtime`] handle and await replies, so a slow
 //! or failing guest never blocks the caller's thread.
 //!
-//! Calls are served one at a time. A call into an installed package belongs
-//! to the package's generation (see `generation`): when it ends, a pending
-//! call of it stops where the guest waits, and one queued behind is never
+//! The thread serves many calls at once (#136): while a call waits on
+//! something outside its guest (the user, a system program, a native
+//! helper, a paste, a web request, a clock, another extension's operation),
+//! the thread runs other packages' and other commands' calls. Each
+//! instance's own calls stay one after another: a call waits for its
+//! instance's turn, in the order the calls were asked for, so a guest never
+//! sees two of its calls interleaved. A wait is never charged as the
+//! guest's computing. Every await point is the same: a host import's future
+//! that the guest awaits, so a new kind of wait (a confirmation, a program
+//! run) needs no change here. A call into an installed package belongs to
+//! the package's generation (see `generation`): when it ends, a pending call
+//! of it stops where the guest waits, and one queued behind is never
 //! started. Component checks run on a checker thread of their own, so a
 //! reload's check never waits behind the call it is about to stop.
 //!
@@ -20,20 +29,22 @@
 //! own failure), and a runtime thread that stops responding altogether is
 //! given up on and replaced, as a crashed one is.
 
-use std::collections::{HashMap, VecDeque};
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::task;
+use std::task::{self, Poll};
 
+use futures::stream::{FuturesUnordered, StreamExt};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::packages::paused_reason;
 use wasmtime::component::{Component, Linker, ResourceAny, ResourceTable};
-use wasmtime::{Cache, CacheConfig, Config, Engine, Store, StoreLimits, StoreLimitsBuilder};
+use wasmtime::{Cache, CacheConfig, Config, Engine, Store};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpCtxView, WasiHttpView};
 
@@ -41,6 +52,7 @@ use crate::http;
 
 pub(crate) mod deadlines;
 mod faults;
+mod memory;
 mod supervisor;
 mod tree;
 
@@ -55,6 +67,10 @@ pub use faults::Fault;
 #[cfg(any(test, debug_assertions))]
 use faults::Fault as InjectedFault;
 use faults::Faults;
+pub use memory::GUEST_MEMORY;
+#[cfg(any(test, debug_assertions))]
+#[doc(hidden)]
+pub use memory::peaks::memory_peak;
 pub(crate) use supervisor::CRASH_WINDOW;
 use supervisor::{NotSent, Shared};
 pub use supervisor::{RuntimeFailure, RuntimeStatus};
@@ -145,7 +161,7 @@ use crate::applications::Applications;
 use crate::clipboard::{self, Capture, CaptureState};
 use crate::extension_data::{DataKind, PackageData};
 use crate::files::{FileAccess, Folders};
-use crate::generation::{End, Fence, Generation};
+use crate::generation::{End, Fence, Generation, Registration};
 use crate::helpers;
 use crate::helpers::runner::{self, HelperError, HelperErrorKind, Helpers, Running, Spec};
 use crate::operations::{self, Directory, OperationCall, OperationError, Target};
@@ -232,8 +248,8 @@ type SearchTimer = Arc<
 /// How long the runtime waits before it starts a search: one the user
 /// replaces by typing on within it is stopped before its command is asked
 /// (and before its instance could be dropped for it), so fast typing asks
-/// only for the text the user stops at. The runtime serves nothing else
-/// meanwhile, as it serves one call at a time.
+/// only for the text the user stops at. The runtime serves other calls
+/// meanwhile.
 pub(crate) const SEARCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(150);
 
 /// A way to stop a search, and what the runtime watches for it.
@@ -730,6 +746,12 @@ enum Request {
     Running {
         reply: oneshot::Sender<Result<Vec<PathBuf>, CallError>>,
     },
+    /// Drops the idle instances whose generation ended, as an instance's
+    /// entry on its generation's undo list asks.
+    DropStopped,
+    /// Pane is quitting: the thread stops, dropping every call in progress
+    /// with its instance, which ends what it waits on.
+    Quit,
 }
 
 impl Request {
@@ -1382,6 +1404,16 @@ impl Runtime {
         self.shared.helpers.stop_all();
     }
 
+    /// Pane is quitting: ends every native helper ([`Runtime::stop_helpers`])
+    /// and stops the runtime thread, dropping every call in progress with
+    /// its instance, so whatever a call waits on (a helper, a web request, a
+    /// clock) ends now rather than with the process. Calls asked for
+    /// afterwards answer that the runtime stopped.
+    pub fn quit(&self) {
+        self.shared.helpers.stop_all();
+        let _ = self.send(Request::Quit);
+    }
+
     /// Ends the native helper processes running a file inside `folder`,
     /// waiting (briefly) until each is reaped: before a replaced managed
     /// copy is removed, so no running program keeps it in use.
@@ -1610,11 +1642,16 @@ fn engine(cache_dir: Option<PathBuf>) -> Result<Engine, CallError> {
     Engine::new(&config).map_err(unavailable)
 }
 
-/// The most one linear memory of a guest instance may grow to. Web
-/// responses are capped well below it ([`http::HttpLimits::body`]); a guest
-/// that grows past it anyway fails to allocate, and so crashes, rather than
-/// taking Pane's memory.
-const GUEST_MEMORY: usize = 512 * 1024 * 1024;
+/// How a call whose guest trapped with `trap` answers: as running out of
+/// memory if the guest was refused memory before (see `memory`), since its
+/// trap then says only where it gave up.
+fn crashed(trap: &wasmtime::Error, out_of_memory: bool) -> CallError {
+    CallError::Trap(if out_of_memory {
+        memory::out_of_memory()
+    } else {
+        format!("{trap:#}")
+    })
+}
 
 /// How a check answers once the checker thread has stopped.
 fn checker_stopped() -> CallError {
@@ -1678,8 +1715,10 @@ pub(crate) struct GuestState {
     http: WasiHttpCtx,
     /// Sends the guest's web requests.
     sender: http::Sender,
-    /// What the guest's memory may grow to ([`GUEST_MEMORY`]).
-    limits: StoreLimits,
+    /// Whether the guest asked for more memory than it may have
+    /// ([`GUEST_MEMORY`]) and was refused: a trap that follows is told as
+    /// running out of memory (see `memory`).
+    out_of_memory: bool,
     /// The granted folders and their listings.
     files: FileAccess,
     /// Keeps clipboard history for the guest's package.
@@ -1748,7 +1787,6 @@ impl GuestState {
                         generation,
                         fence: Some(fence),
                         owner,
-                        limit: runner::HELPER_TIME_LIMIT,
                     })
                 })
                 .await
@@ -2013,14 +2051,26 @@ struct Instance {
     command_search: Option<search_bindings::CommandSearchProvider>,
     /// Its continuing-service export, if it runs one.
     service: Option<service_bindings::ServiceProvider>,
+    /// The operation calls its guest makes, which the call it runs serves
+    /// ([`Host::run_guest`]); taken out while it runs one.
+    calls: Option<mpsc::UnboundedReceiver<OperationCall>>,
+    /// Tells this instance apart from a later one of the same component, so
+    /// a view of one is never used with the other's store.
+    serial: u64,
+    /// Its entry on its generation's undo list: the generation's end has the
+    /// runtime thread drop it, even while no call asks for it.
+    _undo: Option<Registration>,
 }
 
 /// A custom view open in a guest instance.
+#[derive(Clone)]
 struct LiveView {
     /// The component whose instance holds the view.
     component: PathBuf,
     /// The guest's `custom-view` resource.
     resource: ResourceAny,
+    /// The instance holding it ([`Instance::serial`]).
+    serial: u64,
 }
 
 /// The engine and the host interfaces guests link against, shared by the
@@ -2030,15 +2080,105 @@ struct Code {
     linker: Linker<GuestState>,
 }
 
+/// One request and the operation calls served inside it: the guest calls
+/// running for it, outermost first. Each package in it is busy until its
+/// call returns.
+#[derive(Clone, Default)]
+struct Chain {
+    /// Tells it apart from the other chains the thread serves meanwhile.
+    id: u64,
+    /// The components running a guest call in the chain, outermost first.
+    components: Vec<PathBuf>,
+    /// The generations of the calls in the chain that have one, outermost
+    /// first: when any ends, the calls from it inward stop.
+    owners: Vec<Generation>,
+}
+
+/// One instance's turn to run calls: one call into an instance at a time,
+/// the others queued in the order they were asked for (see [`Host::turn`]).
+#[derive(Default)]
+struct Lane {
+    /// Held by the call whose turn it is.
+    turn: Arc<tokio::sync::Mutex<()>>,
+    /// The chain holding the turn, if one does.
+    holder: Option<u64>,
+    /// Counts [`Host::forget`]s of the component: an instance taken out for
+    /// a call before one is dropped when the call ends, not put back.
+    forgotten: u64,
+    /// While the instance is out for a call: its generation, and
+    /// `forgotten` as it was when it was taken out.
+    out: Option<(Option<Generation>, u64)>,
+}
+
+/// A call's turn on its instance's [`Lane`]; the next call queued takes it
+/// once this is dropped.
+struct Turn<'a> {
+    host: &'a Host,
+    component: PathBuf,
+    _held: tokio::sync::OwnedMutexGuard<()>,
+}
+
+impl Drop for Turn<'_> {
+    fn drop(&mut self) {
+        // Never panics, even while the thread unwinds from a crash.
+        if let Ok(mut lanes) = self.host.lanes.try_borrow_mut()
+            && let Some(lane) = lanes.get_mut(&self.component)
+        {
+            lane.holder = None;
+        }
+    }
+}
+
+/// Notes, until dropped, which lane a chain waits for (see
+/// [`Host::would_deadlock`]).
+struct Waiting<'a> {
+    host: &'a Host,
+    chain: u64,
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut waiting) = self.host.waiting.try_borrow_mut() {
+            waiting.remove(&self.chain);
+        }
+    }
+}
+
+/// The requests a runtime thread serves at once, each a task polled on the
+/// thread itself, so that a panic in any unwinds the thread (see
+/// `supervisor`).
+type Tasks<'a> = FuturesUnordered<Task<'a>>;
+
+/// One request being served (see [`Tasks`]).
+type Task<'a> = Pin<Box<dyn Future<Output = ()> + 'a>>;
+
 /// Runtime-thread state: compiled components, their live instances and the
-/// custom views open in them.
+/// custom views open in them, shared by the requests the thread serves at
+/// once (see [`Host::serve`]). Only the thread uses it, one task at a time,
+/// and nothing borrowed from it is held across an await.
 struct Host {
     code: Arc<Code>,
-    components: HashMap<PathBuf, Component>,
-    instances: HashMap<PathBuf, Instance>,
-    views: HashMap<ViewId, LiveView>,
+    components: RefCell<HashMap<PathBuf, Component>>,
+    /// The live instances not running a call; one running a call is taken
+    /// out for it (see [`Lane::out`]).
+    instances: RefCell<HashMap<PathBuf, Instance>>,
+    /// Each component's turn, which orders the calls into its instance.
+    lanes: RefCell<HashMap<PathBuf, Lane>>,
+    /// The lane each chain waits for, while it waits.
+    waiting: RefCell<HashMap<u64, PathBuf>>,
+    views: RefCell<HashMap<ViewId, LiveView>>,
     /// The next view id, shared with the threads that replace this one.
     next_view: Arc<AtomicU64>,
+    /// The next chain's id.
+    next_chain: Cell<u64>,
+    /// The next instance's serial.
+    next_serial: Cell<u64>,
+    /// Woken whenever an instance taken out for a call comes back or goes.
+    returned: tokio::sync::Notify,
+    /// Where an instance's undo asks this thread to drop the instances of
+    /// ended generations; weak, so that the thread still stops once every
+    /// runtime handle is gone.
+    nudge: mpsc::WeakUnboundedSender<Request>,
     /// The installed packages operation calls are resolved against, and
     /// guests' helpers found in.
     directory: SharedDirectory,
@@ -2054,19 +2194,6 @@ struct Host {
     limits: Arc<Mutex<Limits>>,
     /// This thread's number among those the runtime started.
     number: u64,
-    /// Handed to every guest, for its operation calls.
-    calls: mpsc::UnboundedSender<OperationCall>,
-    /// Operation calls guests made, served while their callers wait.
-    calls_sent: mpsc::UnboundedReceiver<OperationCall>,
-    /// Calls taken from `calls_sent` whose caller's frame has not served
-    /// them yet (see [`Host::run_guest`]).
-    waiting_calls: VecDeque<OperationCall>,
-    /// The components running a guest call, outermost first: a chain of
-    /// operation calls. Each is busy until its call returns.
-    chain: Vec<PathBuf>,
-    /// The generations of the calls in the chain that have one, outermost
-    /// first: when any ends, the calls from it inward stop.
-    owners: Vec<Generation>,
     /// Finds and opens the system's applications for guests.
     applications: SharedApplications,
     /// Guests' web requests, shared with the threads that replace this one.
@@ -2269,14 +2396,20 @@ impl Host {
         number: u64,
         faults: Arc<Faults>,
         watch: Arc<Watch>,
+        nudge: mpsc::WeakUnboundedSender<Request>,
     ) -> Host {
-        let (calls, calls_sent) = operations::channel();
         Host {
             code,
-            components: HashMap::new(),
-            instances: HashMap::new(),
-            views: HashMap::new(),
+            components: RefCell::default(),
+            instances: RefCell::default(),
+            lanes: RefCell::default(),
+            waiting: RefCell::default(),
+            views: RefCell::default(),
             next_view: shared.next_view.clone(),
+            next_chain: Cell::new(0),
+            next_serial: Cell::new(0),
+            returned: tokio::sync::Notify::new(),
+            nudge,
             directory: shared.directory.clone(),
             helpers: shared.helpers.clone(),
             health: shared.health.clone(),
@@ -2284,11 +2417,6 @@ impl Host {
             watch,
             limits: shared.limits.clone(),
             number,
-            calls,
-            calls_sent,
-            waiting_calls: VecDeque::new(),
-            chain: Vec::new(),
-            owners: Vec::new(),
             applications: shared.applications.clone(),
             network: shared.network.clone(),
             files: shared.files.clone(),
@@ -2298,161 +2426,368 @@ impl Host {
         }
     }
 
-    /// The next request, or `None` once every handle is gone. An injected
-    /// [`Fault::Crash`] panics here while the thread waits.
-    async fn next_request(
-        &self,
-        requests: &mut mpsc::UnboundedReceiver<Request>,
-    ) -> Option<Request> {
+    /// Serves requests until every handle is gone, Pane quits or Pane
+    /// gives up on this thread, each request a task of its own (see
+    /// [`Tasks`]): while one call waits on something outside its guest (the
+    /// user, a program, a helper, the network, a clock), the others run.
+    /// Calls into one instance still run one after another ([`Host::turn`]).
+    /// An injected [`Fault::Crash`] panics here, wherever the thread waits.
+    async fn serve(self, mut requests: mpsc::UnboundedReceiver<Request>) {
+        let host = &self;
+        let mut tasks: Tasks<'_> = FuturesUnordered::new();
         let faults = self.faults.clone();
         let mut waiting = std::pin::pin!(faults.waiting());
-        std::future::poll_fn(|cx| {
-            faults.check(waiting.as_mut(), cx);
-            // Given up on while it was stuck: it serves nothing more.
-            if self.watch.given_up() {
-                return std::task::Poll::Ready(None);
+        loop {
+            let next = std::future::poll_fn(|cx| {
+                // Woken by an injection, it waits for the next one.
+                if waiting.as_mut().poll(cx).is_ready() {
+                    waiting.set(faults.waiting());
+                }
+                faults.check(waiting.as_mut(), cx);
+                // Given up on while it was stuck: it serves nothing more.
+                if host.watch.given_up() {
+                    return Poll::Ready(None);
+                }
+                // The work in progress first, then what is asked next.
+                while let Poll::Ready(Some(())) = tasks.poll_next_unpin(cx) {}
+                requests.poll_recv(cx).map(Some)
+            })
+            .await;
+            match next {
+                // Given up on, every handle gone, or Pane quitting: the work
+                // in progress is dropped with its instances, ending its
+                // waits (helpers, web requests) where they are.
+                None | Some(None) | Some(Some(Request::Quit)) => return,
+                Some(Some(request)) => host.dispatch(request, &mut tasks),
             }
-            requests.poll_recv(cx)
-        })
-        .await
+        }
     }
 
-    async fn serve(mut self, mut requests: mpsc::UnboundedReceiver<Request>) {
-        while let Some(request) = self.next_request(&mut requests).await {
-            let watch = self.watch.clone();
-            let _handling = watch.doing(Doing::Handling);
-            self.drop_stopped();
-            match request {
-                Request::Render {
-                    component,
-                    data,
-                    reply,
-                } => {
-                    let result = self.render_tree(&component, data).await;
-                    let _ = reply.send(result);
-                }
-                Request::HandleEvent {
-                    component,
-                    callback,
-                    details,
-                    data,
-                    reply,
-                } => {
-                    let result = self
-                        .handle_event(&component, callback.clone(), details, data)
-                        .await;
-                    // An injected fault may lose this answer, after the
-                    // action ran.
-                    self.faults.before_answer(&callback);
-                    let _ = reply.send(result);
-                }
-                Request::RunItem {
-                    component,
-                    item_id,
-                    data,
-                    reply,
-                } => {
-                    let result = self.run_item(&component, &item_id, data).await;
-                    self.faults.before_answer(&item_id);
-                    let _ = reply.send(result);
-                }
-                Request::RunCycle {
-                    component,
-                    command,
-                    data,
-                    reply,
-                } => {
-                    let result = self.run_cycle(&component, command, data).await;
-                    let _ = reply.send(result);
-                }
-                Request::IndexedResults {
-                    component,
-                    data,
-                    reply,
-                } => {
-                    let result = self.indexed_results(&component, data).await;
-                    let _ = reply.send(result);
-                }
-                Request::RootResults {
-                    component,
-                    query,
-                    data,
-                    mut reply,
-                } => {
-                    let result = self.root_results(&component, query, data, &mut reply).await;
-                    let _ = reply.send(result);
-                }
-                Request::RunQuery {
-                    component,
-                    command,
-                    query,
-                    data,
-                    reply,
-                } => {
-                    let result = self.run_query(&component, command, query, data).await;
-                    let _ = reply.send(result);
-                }
-                Request::Search {
-                    component,
-                    command,
-                    query,
-                    data,
-                    stopped,
-                    reply,
-                } => {
-                    let result = self.search(&component, command, query, data, stopped).await;
-                    let _ = reply.send(result);
-                }
-                Request::Forget { components } => {
-                    for component in &components {
-                        self.components.remove(component);
-                        self.drop_instance(component);
-                    }
-                }
-                Request::SubmitForm {
-                    component,
-                    item_id,
-                    values,
-                    data,
-                    reply,
-                } => {
-                    let result = self.submit_form(&component, item_id, values, data).await;
-                    let _ = reply.send(result);
-                }
-                Request::OpenView {
-                    component,
-                    item_id,
-                    data,
-                    reply,
-                } => {
-                    let result = self.open_view(&component, item_id, data).await;
-                    let _ = reply.send(result);
-                }
-                Request::ViewEvent { view, event, reply } => {
-                    let result = self.view_event(view, event).await;
-                    let _ = reply.send(result);
-                }
-                Request::CloseView { view } => self.close_view(view).await,
-                Request::ViewCount { reply } => {
-                    let _ = reply.send(Ok(self.views.len()));
-                }
-                Request::Running { reply } => {
-                    let _ = reply.send(Ok(self.instances.keys().cloned().collect()));
-                }
+    /// Starts serving `request`: what it changes at once (forgetting
+    /// components, closing a view) is done here, in the order the requests
+    /// were sent, and its calls become a task in `tasks`.
+    fn dispatch<'a>(&'a self, request: Request, tasks: &mut Tasks<'a>) {
+        let watch = self.watch.clone();
+        let _handling = watch.doing(Doing::Handling);
+        self.drop_stopped();
+        let task: Task<'a> = match request {
+            Request::Render {
+                component,
+                data,
+                reply,
+            } => Box::pin(async move {
+                let _ = reply.send(self.render_tree(&component, data).await);
+            }),
+            Request::HandleEvent {
+                component,
+                callback,
+                details,
+                data,
+                reply,
+            } => Box::pin(async move {
+                let result = self
+                    .handle_event(&component, callback.clone(), details, data)
+                    .await;
+                // An injected fault may lose this answer, after the action
+                // ran.
+                self.faults.before_answer(&callback);
+                let _ = reply.send(result);
+            }),
+            Request::RunItem {
+                component,
+                item_id,
+                data,
+                reply,
+            } => Box::pin(async move {
+                let result = self.run_item(&component, &item_id, data).await;
+                self.faults.before_answer(&item_id);
+                let _ = reply.send(result);
+            }),
+            Request::RunCycle {
+                component,
+                command,
+                data,
+                reply,
+            } => Box::pin(async move {
+                let _ = reply.send(self.run_cycle(&component, command, data).await);
+            }),
+            Request::IndexedResults {
+                component,
+                data,
+                reply,
+            } => Box::pin(async move {
+                let _ = reply.send(self.indexed_results(&component, data).await);
+            }),
+            Request::RootResults {
+                component,
+                query,
+                data,
+                mut reply,
+            } => Box::pin(async move {
+                let result = self.root_results(&component, query, data, &mut reply).await;
+                let _ = reply.send(result);
+            }),
+            Request::RunQuery {
+                component,
+                command,
+                query,
+                data,
+                reply,
+            } => Box::pin(async move {
+                let _ = reply.send(self.run_query(&component, command, query, data).await);
+            }),
+            Request::Search {
+                component,
+                command,
+                query,
+                data,
+                stopped,
+                reply,
+            } => Box::pin(async move {
+                let result = self.search(&component, command, query, data, stopped).await;
+                let _ = reply.send(result);
+            }),
+            Request::Forget { components } => {
+                self.forget(&components);
+                return;
+            }
+            Request::DropStopped | Request::Quit => return,
+            Request::SubmitForm {
+                component,
+                item_id,
+                values,
+                data,
+                reply,
+            } => Box::pin(async move {
+                let result = self.submit_form(&component, item_id, values, data).await;
+                let _ = reply.send(result);
+            }),
+            Request::OpenView {
+                component,
+                item_id,
+                data,
+                reply,
+            } => Box::pin(async move {
+                let _ = reply.send(self.open_view(&component, item_id, data).await);
+            }),
+            Request::ViewEvent { view, event, reply } => {
+                // The view as it is now: an event sent before the view was
+                // closed is still handled, before the view is dropped.
+                let open = self.views.borrow().get(&view).cloned();
+                let Some(open) = open else {
+                    let _ = reply.send(Err(CallError::ViewClosed));
+                    return;
+                };
+                Box::pin(async move {
+                    let _ = reply.send(self.view_event(open, event).await);
+                })
+            }
+            Request::CloseView { view } => {
+                // Closed at once, for the requests sent after this; its
+                // destructor runs in its instance's turn.
+                let open = self.views.borrow_mut().remove(&view);
+                let Some(open) = open else {
+                    return;
+                };
+                Box::pin(self.close_view(open))
+            }
+            Request::ViewCount { reply } => Box::pin(async move {
+                self.settled().await;
+                let count = self.views.borrow().len();
+                let _ = reply.send(Ok(count));
+            }),
+            Request::Running { reply } => Box::pin(async move {
+                self.settled().await;
+                let _ = reply.send(Ok(self.running()));
+            }),
+        };
+        tasks.push(task);
+    }
+
+    /// A new chain, for a request.
+    fn chain(&self) -> Chain {
+        let id = self.next_chain.get();
+        self.next_chain.set(id + 1);
+        Chain {
+            id,
+            ..Chain::default()
+        }
+    }
+
+    /// Waits for `path`'s turn for `chain`: one call into an instance at a
+    /// time, the others in the order they asked. `None` when waiting could
+    /// never end, because the turn's holder waits, through other chains, for
+    /// a turn `chain` holds: a call that would wait on itself is refused
+    /// rather than waited for.
+    async fn turn(&self, path: &Path, chain: u64) -> Option<Turn<'_>> {
+        let turn = self
+            .lanes
+            .borrow_mut()
+            .entry(path.to_path_buf())
+            .or_default()
+            .turn
+            .clone();
+        if self.would_deadlock(path, chain) {
+            return None;
+        }
+        let held = {
+            self.waiting.borrow_mut().insert(chain, path.to_path_buf());
+            let _waiting = Waiting { host: self, chain };
+            turn.lock_owned().await
+        };
+        if let Some(lane) = self.lanes.borrow_mut().get_mut(path) {
+            lane.holder = Some(chain);
+        }
+        Some(Turn {
+            host: self,
+            component: path.to_path_buf(),
+            _held: held,
+        })
+    }
+
+    /// [`Host::turn`] for a request's own call, which holds no turn yet and
+    /// so never waits on itself.
+    async fn turn_for(&self, path: &Path, chain: &Chain) -> Result<Turn<'_>, CallError> {
+        self.turn(path, chain.id)
+            .await
+            .ok_or_else(|| CallError::RuntimeUnavailable("its call would wait on itself".into()))
+    }
+
+    /// Whether `chain` waiting for `path`'s turn would wait for ever: the
+    /// turn's holder waits for a turn whose holder waits ... for one
+    /// `chain` holds.
+    fn would_deadlock(&self, path: &Path, chain: u64) -> bool {
+        let lanes = self.lanes.borrow();
+        let waiting = self.waiting.borrow();
+        let mut lane = path;
+        // Each chain waits for one turn at most: the walk ends.
+        for _ in 0..=lanes.len() {
+            let Some(holder) = lanes.get(lane).and_then(|lane| lane.holder) else {
+                return false;
+            };
+            if holder == chain {
+                return true;
+            }
+            let Some(next) = waiting.get(&holder) else {
+                return false;
+            };
+            lane = next.as_path();
+        }
+        false
+    }
+
+    /// Takes the idle instance of `path` out for a call, noting it as out
+    /// (see [`Lane::out`]); with what to give [`Host::bring_back`].
+    fn take_out(&self, path: &Path) -> Option<(Instance, u64)> {
+        let instance = self.instances.borrow_mut().remove(path)?;
+        let generation = instance.store.data().generation().cloned();
+        let mut lanes = self.lanes.borrow_mut();
+        let lane = lanes.entry(path.to_path_buf()).or_default();
+        lane.out = Some((generation, lane.forgotten));
+        Some((instance, lane.forgotten))
+    }
+
+    /// Puts `instance`, taken out of `path` when its forget count was
+    /// `taken`, back for the next call, unless `path` was forgotten
+    /// meanwhile: then it goes, with its views.
+    fn bring_back(&self, path: &Path, taken: u64, instance: Instance) {
+        let keep = {
+            let mut lanes = self.lanes.borrow_mut();
+            let lane = lanes.entry(path.to_path_buf()).or_default();
+            lane.out = None;
+            lane.forgotten == taken
+        };
+        if keep {
+            self.instances
+                .borrow_mut()
+                .insert(path.to_path_buf(), instance);
+        } else {
+            drop(instance);
+            self.views
+                .borrow_mut()
+                .retain(|_, view| view.component != path);
+        }
+        self.returned.notify_waiters();
+    }
+
+    /// Notes that the instance taken out of `path` went (its call stopped,
+    /// or it crashed), with its views.
+    fn gone(&self, path: &Path) {
+        if let Some(lane) = self.lanes.borrow_mut().get_mut(path) {
+            lane.out = None;
+        }
+        self.views
+            .borrow_mut()
+            .retain(|_, view| view.component != path);
+        self.returned.notify_waiters();
+    }
+
+    /// Waits until no instance out for a call is going: one whose
+    /// generation ended, or that was forgotten, which its call drops as it
+    /// stops. Then what a diagnostic answers counts every request sent
+    /// before it that ends or forgets something.
+    async fn settled(&self) {
+        loop {
+            let notified = self.returned.notified();
+            let mut notified = std::pin::pin!(notified);
+            notified.as_mut().enable();
+            let going = self.lanes.borrow().values().any(|lane| {
+                lane.out.as_ref().is_some_and(|(generation, taken)| {
+                    *taken != lane.forgotten
+                        || generation.as_ref().is_some_and(|g| g.ended().is_some())
+                })
+            });
+            if !going {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    /// The components with a live instance, idle or running a call.
+    fn running(&self) -> Vec<PathBuf> {
+        let mut running: Vec<PathBuf> = self.instances.borrow().keys().cloned().collect();
+        running.extend(
+            self.lanes
+                .borrow()
+                .iter()
+                .filter(|(_, lane)| lane.out.is_some())
+                .map(|(path, _)| path.clone()),
+        );
+        running
+    }
+
+    /// Drops the compiled code and idle instances of `components`; an
+    /// instance running a call finishes it and then goes (see
+    /// [`Runtime::forget`]).
+    fn forget(&self, components: &[PathBuf]) {
+        for component in components {
+            self.components.borrow_mut().remove(component);
+            self.drop_instance(component);
+            if let Some(lane) = self.lanes.borrow_mut().get_mut(component) {
+                lane.forgotten += 1;
             }
         }
     }
 
     /// Asks the command in `path` for its tree, and reads it: a tree Pane
     /// cannot read is [`CallError::Unreadable`], and the instance stays.
-    async fn render_tree(
-        &mut self,
+    async fn render_tree(&self, path: &Path, data: Option<PackageData>) -> Result<View, CallError> {
+        let chain = self.chain();
+        let _turn = self.turn_for(path, &chain).await?;
+        self.render_in_turn(path, data, &chain).await
+    }
+
+    /// [`Host::render_tree`] in `chain`, which holds `path`'s turn.
+    async fn render_in_turn(
+        &self,
         path: &Path,
         data: Option<PackageData>,
+        chain: &Chain,
     ) -> Result<View, CallError> {
         self.instance(path, data).await?;
         let result = self
-            .run_guest(path, async |instance| {
+            .run_guest(path, chain, async |instance| {
                 let command = instance.bindings.pane_extension_command();
                 instance
                     .store
@@ -2467,15 +2802,30 @@ impl Host {
     /// Has the command in `path` handle `callback` with `details`, and reads
     /// its answer: one Pane cannot read is [`CallError::Unreadable`].
     async fn handle_event(
-        &mut self,
+        &self,
         path: &Path,
         callback: String,
         details: String,
         data: Option<PackageData>,
     ) -> Result<Answer, CallError> {
+        let chain = self.chain();
+        let _turn = self.turn_for(path, &chain).await?;
+        self.handle_event_in_turn(path, callback, details, data, &chain)
+            .await
+    }
+
+    /// [`Host::handle_event`] in `chain`, which holds `path`'s turn.
+    async fn handle_event_in_turn(
+        &self,
+        path: &Path,
+        callback: String,
+        details: String,
+        data: Option<PackageData>,
+        chain: &Chain,
+    ) -> Result<Answer, CallError> {
         self.instance(path, data).await?;
         let result = self
-            .run_guest(path, async |instance| {
+            .run_guest(path, chain, async |instance| {
                 let command = instance.bindings.pane_extension_command();
                 instance
                     .store
@@ -2491,13 +2841,17 @@ impl Host {
 
     /// Runs the action of the item `item_id` of the command in `path`: its
     /// tree, then the item's action's callback (see [`Runtime::run_item`]).
+    /// Both calls run in one turn, so no other call into the instance comes
+    /// between them.
     async fn run_item(
-        &mut self,
+        &self,
         path: &Path,
         item_id: &str,
         data: Option<PackageData>,
     ) -> Result<Answer, CallError> {
-        let view = self.render_tree(path, data.clone()).await?;
+        let chain = self.chain();
+        let _turn = self.turn_for(path, &chain).await?;
+        let view = self.render_in_turn(path, data.clone(), &chain).await?;
         let Some(item) = view.items.iter().find(|item| item.id == item_id) else {
             return Err(CallError::Guest(format!("unknown item: {item_id}")));
         };
@@ -2506,24 +2860,26 @@ impl Host {
                 "the item {item_id} has no action"
             )));
         };
-        self.handle_event(path, action.callback.clone(), "{}".into(), data)
+        self.handle_event_in_turn(path, action.callback.clone(), "{}".into(), data, &chain)
             .await
     }
 
     async fn submit_form(
-        &mut self,
+        &self,
         path: &Path,
         item_id: String,
         values: Vec<FieldValue>,
         data: Option<PackageData>,
     ) -> Result<String, CallError> {
+        let chain = self.chain();
+        let _turn = self.turn_for(path, &chain).await?;
         self.instance(path, data).await?;
         let values = values
             .into_iter()
             .map(|FieldValue { id, value }| command::FieldValue { id, value })
             .collect();
         let result = self
-            .run_guest(path, async |instance| {
+            .run_guest(path, &chain, async |instance| {
                 let command = instance.bindings.pane_extension_command();
                 instance
                     .store
@@ -2542,14 +2898,16 @@ impl Host {
     }
 
     async fn open_view(
-        &mut self,
+        &self,
         path: &Path,
         item_id: String,
         data: Option<PackageData>,
     ) -> Result<(ViewId, Frame), CallError> {
+        let chain = self.chain();
+        let _turn = self.turn_for(path, &chain).await?;
         self.instance(path, data).await?;
         let result = self
-            .run_guest(path, async |instance| {
+            .run_guest(path, &chain, async |instance| {
                 let command = instance.bindings.pane_extension_command();
                 instance
                     .store
@@ -2558,31 +2916,39 @@ impl Host {
             })
             .await?;
         let resource = self.settle(path, result, CallError::Guest)?;
+        // Its instance was forgotten while it opened: the view went with it.
+        let serial = self.serial(path).ok_or(CallError::ViewClosed)?;
         let view = ViewId {
             thread: self.number,
             id: self.next_view.fetch_add(1, Ordering::Relaxed),
         };
-        self.views.insert(
-            view,
-            LiveView {
-                component: path.to_path_buf(),
-                resource,
-            },
-        );
-        match self.render(view).await {
+        let open = LiveView {
+            component: path.to_path_buf(),
+            resource,
+            serial,
+        };
+        self.views.borrow_mut().insert(view, open.clone());
+        match self.render(&open, &chain).await {
             Ok(frame) => Ok((view, frame)),
             Err(error) => {
-                self.close_view(view).await;
+                let closed = self.views.borrow_mut().remove(&view);
+                if let Some(open) = closed {
+                    self.drop_view(&open).await;
+                }
                 Err(error)
             }
         }
     }
 
-    async fn view_event(&mut self, view: ViewId, event: ViewEvent) -> Result<Frame, CallError> {
-        let (path, resource) = self.view(view)?;
+    async fn view_event(&self, open: LiveView, event: ViewEvent) -> Result<Frame, CallError> {
+        let chain = self.chain();
+        let path = open.component.clone();
+        let _turn = self.turn_for(&path, &chain).await?;
+        self.live(&open)?;
         let event = command::ViewEvent::from(event);
+        let resource = open.resource;
         let result = self
-            .run_guest(&path, async |instance| {
+            .run_guest(&path, &chain, async |instance| {
                 let custom_view = instance.bindings.pane_extension_command().custom_view();
                 instance
                     .store
@@ -2593,14 +2959,15 @@ impl Host {
             })
             .await?;
         self.settle(&path, result, CallError::Guest)?;
-        self.render(view).await
+        self.render(&open, &chain).await
     }
 
-    /// Asks the guest to draw the open view `view`.
-    async fn render(&mut self, view: ViewId) -> Result<Frame, CallError> {
-        let (path, resource) = self.view(view)?;
+    /// Asks the guest to draw the open view `open`, in its instance's turn.
+    async fn render(&self, open: &LiveView, chain: &Chain) -> Result<Frame, CallError> {
+        self.live(open)?;
+        let (path, resource) = (&open.component, open.resource);
         let result = self
-            .run_guest(&path, async |instance| {
+            .run_guest(path, chain, async |instance| {
                 let custom_view = instance.bindings.pane_extension_command().custom_view();
                 instance
                     .store
@@ -2608,7 +2975,7 @@ impl Host {
                     .await
             })
             .await?;
-        let frame = self.settle(&path, result.map(|frame| frame.map(Ok)), |never| never)?;
+        let frame = self.settle(path, result.map(|frame| frame.map(Ok)), |never| never)?;
         let frame = Frame::from(frame);
         match frame.over_limits() {
             // The view stays open; its next drawing may be within them.
@@ -2617,18 +2984,45 @@ impl Host {
         }
     }
 
-    /// The component and guest resource of the open view `view`.
-    fn view(&self, view: ViewId) -> Result<(PathBuf, ResourceAny), CallError> {
-        let open = self.views.get(&view).ok_or(CallError::ViewClosed)?;
-        Ok((open.component.clone(), open.resource))
+    /// The serial of the idle instance of `path`, if it has one.
+    fn serial(&self, path: &Path) -> Option<u64> {
+        self.instances
+            .borrow()
+            .get(path)
+            .map(|instance| instance.serial)
     }
 
-    /// Drops the guest's view `view`, running its destructor.
-    async fn close_view(&mut self, view: ViewId) {
-        let Some(open) = self.views.remove(&view) else {
+    /// Whether the instance holding `open` still runs, and its code may:
+    /// otherwise the view went with it.
+    fn live(&self, open: &LiveView) -> Result<(), CallError> {
+        let live = self
+            .instances
+            .borrow()
+            .get(&open.component)
+            .is_some_and(|instance| {
+                instance.serial == open.serial && instance.store.data().stopped().is_none()
+            });
+        live.then_some(()).ok_or(CallError::ViewClosed)
+    }
+
+    /// Drops the guest's view `open`, running its destructor, in its
+    /// instance's turn.
+    async fn close_view(&self, open: LiveView) {
+        let chain = self.chain();
+        let Some(_turn) = self.turn(&open.component, chain.id).await else {
             return;
         };
-        let Some(instance) = self.instances.get_mut(&open.component) else {
+        self.drop_view(&open).await;
+    }
+
+    /// Runs the destructor of the view `open`; the caller holds its
+    /// instance's turn.
+    async fn drop_view(&self, open: &LiveView) {
+        if self.live(open).is_err() {
+            return;
+        }
+        let path = &open.component;
+        let Some((mut instance, taken)) = self.take_out(path) else {
             return;
         };
         let data = instance.store.data().data.clone();
@@ -2639,31 +3033,39 @@ impl Host {
         )
         .await;
         let health = match dropped {
-            Ok(Ok(())) => return,
+            Ok(Ok(())) => {
+                self.bring_back(path, taken, instance);
+                return;
+            }
             // The destructor trapped: the instance cannot be re-entered. It
             // is a crash of the package, reported as any other.
-            Ok(Err(trap)) => Health::Crashed(CallError::Trap(format!("{trap:#}"))),
+            Ok(Err(trap)) => Health::Crashed(crashed(&trap, instance.store.data().out_of_memory)),
             // It computed for too long: it is stopped where it yielded.
             Err(reason) => Health::Unresponsive(CallError::Unresponsive(reason)),
         };
-        self.drop_instance(&open.component);
+        drop(instance);
+        self.gone(path);
         if data.as_ref().is_some_and(|data| data.stopped().is_none()) {
-            self.report(&open.component, data.as_ref(), health);
+            self.report(path, data.as_ref(), health);
         }
     }
 
-    /// Drops the live instance of `path` and forgets the views open in it,
+    /// Drops the idle instance of `path` and forgets the views open in it,
     /// which went with it.
-    fn drop_instance(&mut self, path: &Path) {
-        self.instances.remove(path);
-        self.views.retain(|_, view| view.component != path);
+    fn drop_instance(&self, path: &Path) {
+        let dropped = self.instances.borrow_mut().remove(path);
+        drop(dropped);
+        self.views
+            .borrow_mut()
+            .retain(|_, view| view.component != path);
     }
 
-    /// Drops the instances whose generation has ended, with everything
+    /// Drops the idle instances whose generation has ended, with everything
     /// their stores hold.
-    fn drop_stopped(&mut self) {
+    fn drop_stopped(&self) {
         let stopped: Vec<PathBuf> = self
             .instances
+            .borrow()
             .iter()
             .filter(|(_, instance)| instance.store.data().stopped().is_some())
             .map(|(path, _)| path.clone())
@@ -2678,7 +3080,7 @@ impl Host {
     /// first: then the call is not started, or is stopped where the guest
     /// waits, and the instance goes with it (see [`Host::run_guest_until`]).
     async fn root_results(
-        &mut self,
+        &self,
         path: &Path,
         query: String,
         data: Option<PackageData>,
@@ -2688,10 +3090,18 @@ impl Host {
         if reply.is_closed() {
             return Err(CallError::Cancelled);
         }
-        let instance = self.instance(path, data).await?;
-        let provider = instance
-            .root_results
-            .as_ref()
+        let chain = self.chain();
+        let _turn = match unless(self.turn_for(path, &chain), reply.closed()).await {
+            Ok(turn) => turn?,
+            // Replaced or left while it waited for its turn.
+            Err(()) => return Err(CallError::Cancelled),
+        };
+        self.instance(path, data).await?;
+        let provider = self
+            .instances
+            .borrow()
+            .get(path)
+            .and_then(|instance| instance.root_results.as_ref())
             .map(|provider| provider.pane_extension_root_results().clone())
             .ok_or_else(|| {
                 CallError::Interface(format!("it does not export {ROOT_RESULTS_INTERFACE}"))
@@ -2699,6 +3109,7 @@ impl Host {
         let result = self
             .run_guest_until(
                 path,
+                &chain,
                 async |instance| {
                     instance
                         .store
@@ -2727,22 +3138,26 @@ impl Host {
     }
 
     async fn run_query(
-        &mut self,
+        &self,
         path: &Path,
         id: String,
         query: String,
         data: Option<PackageData>,
     ) -> Result<String, CallError> {
-        let instance = self.instance(path, data).await?;
-        let command = instance
-            .query_command
-            .as_ref()
+        let chain = self.chain();
+        let _turn = self.turn_for(path, &chain).await?;
+        self.instance(path, data).await?;
+        let command = self
+            .instances
+            .borrow()
+            .get(path)
+            .and_then(|instance| instance.query_command.as_ref())
             .map(|provider| provider.pane_extension_query_command().clone())
             .ok_or_else(|| {
                 CallError::Interface(format!("it does not export {QUERY_COMMAND_INTERFACE}"))
             })?;
         let result = self
-            .run_guest(path, async |instance| {
+            .run_guest(path, &chain, async |instance| {
                 instance
                     .store
                     .run_concurrent(async |store| command.call_run_query(store, id, query).await)
@@ -2755,21 +3170,25 @@ impl Host {
     /// Runs one cycle of the continuing service of the command with
     /// manifest id `command` in `component` (see `Runtime::run_cycle_with`).
     async fn run_cycle(
-        &mut self,
+        &self,
         path: &Path,
         command: String,
         data: Option<PackageData>,
     ) -> Result<Cycle, CallError> {
-        let instance = self.instance(path, data).await?;
-        let service = instance
-            .service
-            .as_ref()
+        let chain = self.chain();
+        let _turn = self.turn_for(path, &chain).await?;
+        self.instance(path, data).await?;
+        let service = self
+            .instances
+            .borrow()
+            .get(path)
+            .and_then(|instance| instance.service.as_ref())
             .map(|provider| provider.pane_extension_service().clone())
             .ok_or_else(|| {
                 CallError::Interface(format!("it does not export {SERVICE_INTERFACE}"))
             })?;
         let result = self
-            .run_guest(path, async |instance| {
+            .run_guest(path, &chain, async |instance| {
                 instance
                     .store
                     .run_concurrent(async |store| service.call_run_cycle(store, command).await)
@@ -2784,7 +3203,7 @@ impl Host {
     }
 
     async fn search(
-        &mut self,
+        &self,
         path: &Path,
         id: String,
         query: String,
@@ -2803,10 +3222,22 @@ impl Host {
         if stopped.stopped() || stopped.stopped_before(wait).await {
             return Err(CallError::Cancelled);
         }
-        let instance = self.instance(path, data).await?;
-        let search = instance
-            .command_search
-            .as_ref()
+        let chain = self.chain();
+        let waited = unless(self.turn_for(path, &chain), async {
+            let _ = (&mut stopped.0).await;
+        })
+        .await;
+        let _turn = match waited {
+            Ok(turn) => turn?,
+            // Replaced while it waited for its turn.
+            Err(()) => return Err(CallError::Cancelled),
+        };
+        self.instance(path, data).await?;
+        let search = self
+            .instances
+            .borrow()
+            .get(path)
+            .and_then(|instance| instance.command_search.as_ref())
             .map(|provider| provider.pane_extension_command_search().clone())
             .ok_or_else(|| {
                 CallError::Interface(format!("it does not export {COMMAND_SEARCH_INTERFACE}"))
@@ -2814,6 +3245,7 @@ impl Host {
         let result = self
             .run_guest_until(
                 path,
+                &chain,
                 async |instance| {
                     instance
                         .store
@@ -2839,18 +3271,25 @@ impl Host {
     }
 
     async fn indexed_results(
-        &mut self,
+        &self,
         path: &Path,
         data: Option<PackageData>,
     ) -> Result<Vec<IndexedResult>, CallError> {
-        let instance = self.instance(path, data).await?;
-        if instance.indexed_results.is_none() {
+        let chain = self.chain();
+        let _turn = self.turn_for(path, &chain).await?;
+        self.instance(path, data).await?;
+        let exported = self
+            .instances
+            .borrow()
+            .get(path)
+            .is_some_and(|instance| instance.indexed_results.is_some());
+        if !exported {
             return Err(CallError::Interface(format!(
                 "it does not export {INDEXED_RESULTS_INTERFACE}"
             )));
         }
         let result = self
-            .run_guest(path, async |instance| {
+            .run_guest(path, &chain, async |instance| {
                 let provider = instance
                     .indexed_results
                     .as_ref()
@@ -2880,18 +3319,22 @@ impl Host {
             .collect())
     }
 
-    /// Runs `call` on the live instance of `path`, serving the operation
-    /// calls its guest makes while it runs. Without a live instance (a view's
-    /// instance has stopped) it is [`CallError::ViewClosed`].
+    /// Runs `call` on the live instance of `path`, in `chain`, serving the
+    /// operation calls its guest makes while it runs. Without a live
+    /// instance (a view's instance has stopped) it is
+    /// [`CallError::ViewClosed`]. The caller holds the instance's turn.
     ///
     /// The instance is taken out of the host for the call, so the host can
-    /// serve an operation call its guest makes, on this same thread, while
-    /// the guest waits for the answer: the guest's call is not polled until
-    /// the operation's answer is sent, and then resumes. This frame serves
-    /// only its own guest's calls, one after another; a call another guest
-    /// sent meanwhile waits for that guest's frame. The component is on the
-    /// call chain meanwhile, so a call back into its package is refused
-    /// rather than waiting on itself.
+    /// serve an operation call its guest makes while the guest waits for
+    /// the answer: the guest's call is not polled until the operation's
+    /// answer is sent, and then resumes. The component is on the call chain
+    /// meanwhile, so a call back into its package is refused rather than
+    /// waiting on itself.
+    ///
+    /// While the guest waits on anything outside itself (the user, a
+    /// program, a helper, a web request, a clock, another extension's
+    /// operation), this call only awaits, and the thread serves the other
+    /// requests: a wait is never the guest's computing.
     ///
     /// The call stops as soon as the instance's generation, or that of any
     /// call further out in the chain, ends: the guest's call is dropped where
@@ -2906,11 +3349,12 @@ impl Host {
     /// own package, reported as such ([`Health::Unresponsive`]). Time spent
     /// serving its operation calls counts for their targets, not for it.
     async fn run_guest<R>(
-        &mut self,
+        &self,
         path: &Path,
+        chain: &Chain,
         call: impl AsyncFnOnce(&mut Instance) -> R,
     ) -> Result<R, CallError> {
-        self.run_guest_until(path, call, std::future::pending())
+        self.run_guest_until(path, chain, call, std::future::pending())
             .await
     }
 
@@ -2920,13 +3364,12 @@ impl Host {
     /// dropped all the same (Wasmtime would resume the dropped call's task),
     /// and it is not a failure of the package.
     async fn run_guest_until<R>(
-        &mut self,
+        &self,
         path: &Path,
+        chain: &Chain,
         call: impl AsyncFnOnce(&mut Instance) -> R,
         cancelled: impl Future<Output = ()>,
     ) -> Result<R, CallError> {
-        use std::task::Poll;
-
         /// What happened next while the guest's call ran.
         enum Next<R> {
             Returned(R),
@@ -2947,22 +3390,21 @@ impl Host {
             GivenUp,
         }
 
-        let mut instance = self.instances.remove(path).ok_or(CallError::ViewClosed)?;
+        let (mut instance, taken) = self.take_out(path).ok_or(CallError::ViewClosed)?;
         let own = instance.store.data().generation().cloned();
-        if let Some(generation) = &own {
-            self.owners.push(generation.clone());
-        }
-        let mut ends: Vec<std::pin::Pin<Box<dyn Future<Output = End>>>> = self
-            .owners
-            .iter()
-            .map(|owner| Box::pin(owner.wait_end()) as _)
-            .collect();
-        self.chain.push(path.to_path_buf());
+        let mut inner = chain.clone();
+        inner.components.push(path.to_path_buf());
+        inner.owners.extend(own.clone());
+        let mut ends = std::pin::pin!(first_end(&inner.owners));
+        // The guest's operation calls, served by this frame only.
+        let mut calls = instance
+            .calls
+            .take()
+            .unwrap_or_else(|| operations::channel().1);
         instance.store.data_mut().serving = true;
         let mut cancelled = std::pin::pin!(cancelled);
         let faults = self.faults.clone();
         let watch = self.watch.clone();
-        let _running = watch.doing(Doing::Running);
         let limits = self.limits.clone();
         let result = {
             // Only the guest's own computing counts (see `deadlines`).
@@ -2979,31 +3421,24 @@ impl Host {
                     if watch.given_up() {
                         return Poll::Ready(Next::GivenUp);
                     }
-                    for end in &mut ends {
-                        if let Poll::Ready(end) = end.as_mut().poll(cx) {
-                            return Poll::Ready(Next::Stopped(end));
-                        }
+                    if let Poll::Ready(end) = ends.as_mut().poll(cx) {
+                        return Poll::Ready(Next::Stopped(end));
                     }
                     if cancelled.as_mut().poll(cx).is_ready() {
                         return Poll::Ready(Next::Cancelled);
                     }
-                    match running.as_mut().poll(cx) {
-                        Poll::Ready(Ok(result)) => return Poll::Ready(Next::Returned(result)),
-                        Poll::Ready(Err(why)) => return Poll::Ready(Next::Unresponsive(why)),
-                        Poll::Pending => {}
-                    }
-                    while let Poll::Ready(Some(call)) = self.calls_sent.poll_recv(cx) {
-                        self.waiting_calls.push_back(call);
-                    }
-                    match self
-                        .waiting_calls
-                        .iter()
-                        .position(|call| call.caller == path)
                     {
-                        Some(index) => Poll::Ready(Next::Called(
-                            self.waiting_calls.remove(index).expect("found above"),
-                        )),
-                        None => Poll::Pending,
+                        let _running = watch.doing(Doing::Running);
+                        match running.as_mut().poll(cx) {
+                            Poll::Ready(Ok(result)) => return Poll::Ready(Next::Returned(result)),
+                            Poll::Ready(Err(why)) => return Poll::Ready(Next::Unresponsive(why)),
+                            Poll::Pending => {}
+                        }
+                    }
+                    match calls.poll_recv(cx) {
+                        Poll::Ready(Some(call)) => Poll::Ready(Next::Called(call)),
+                        // The instance holds the sender: never closed here.
+                        _ => Poll::Pending,
                     }
                 })
                 .await;
@@ -3017,7 +3452,7 @@ impl Host {
                     Next::Unresponsive(why) => break Err(Halt::Unresponsive(why)),
                     Next::GivenUp => break Err(Halt::GivenUp),
                     Next::Called(operation_call) => {
-                        Box::pin(self.serve_operation(operation_call)).await;
+                        Box::pin(self.serve_operation(operation_call, &inner)).await;
                     }
                 }
             }
@@ -3027,22 +3462,15 @@ impl Host {
         // guest left running when its call ended is ended too.
         let state = instance.store.data();
         state.helpers.stop_owned_by(state.owner);
-        self.chain.pop();
-        if own.is_some() {
-            self.owners.pop();
-        }
         // A call the guest sent but did not wait for before its call ended
         // has no frame to serve it.
-        let (stranded, waiting) = std::mem::take(&mut self.waiting_calls)
-            .into_iter()
-            .partition(|call| call.caller == path);
-        self.waiting_calls = waiting;
-        for call in stranded {
-            let _ = call.reply.send(Err(operations::outside_a_call()));
+        while let Ok(stranded) = calls.try_recv() {
+            let _ = stranded.reply.send(Err(operations::outside_a_call()));
         }
+        instance.calls = Some(calls);
         match result {
             Ok(result) => {
-                self.instances.insert(path.to_path_buf(), instance);
+                self.bring_back(path, taken, instance);
                 Ok(result)
             }
             Err(halt) => {
@@ -3051,7 +3479,7 @@ impl Host {
                 // task, its host tasks (web requests too), streams, futures
                 // and views.
                 drop(instance);
-                self.views.retain(|_, view| view.component != path);
+                self.gone(path);
                 match halt {
                     Halt::Stopped(end) => Err(ended(end)),
                     Halt::Cancelled => Err(CallError::Cancelled),
@@ -3067,36 +3495,40 @@ impl Host {
         }
     }
 
-    /// Serves one operation call a guest made, answering it.
-    async fn serve_operation(&mut self, mut call: OperationCall) {
+    /// Serves one operation call a guest in `chain` made, answering it.
+    async fn serve_operation(&self, mut call: OperationCall, chain: &Chain) {
         // Its caller gave up on it before it started: it is not started.
         if call.reply.is_closed() {
             return;
         }
-        let result = self.operation(&mut call).await;
+        let result = self.operation(&mut call, chain).await;
         let _ = call.reply.send(result);
     }
 
     /// Serves `call`: checks it, resolves its target, runs the operation
     /// (starting the target if it is not running) and checks the answer.
-    async fn operation(&mut self, call: &mut OperationCall) -> Result<String, OperationError> {
-        self.check_call(call)?;
-        let target = self.resolve_target(call)?;
+    async fn operation(
+        &self,
+        call: &mut OperationCall,
+        chain: &Chain,
+    ) -> Result<String, OperationError> {
+        self.check_call(call, chain)?;
+        let target = self.resolve_target(call, chain)?;
         // Disabled or replaced while it was serving the call, it was
         // stopped, and its answer is not passed on.
-        let answer = self.run_operation(&target, call).await?;
+        let answer = self.run_operation(&target, call, chain).await?;
         operations::check_json(&answer, &format!("result of {}", target.title))?;
         Ok(answer)
     }
 
     /// Refuses a call whose input is not JSON within the limit, or that would
     /// make the chain too deep.
-    fn check_call(&self, call: &OperationCall) -> Result<(), OperationError> {
+    fn check_call(&self, call: &OperationCall, chain: &Chain) -> Result<(), OperationError> {
         operations::check_json(&call.input, "input")?;
-        if self.chain.len() >= operations::MAX_CALL_DEPTH {
+        if chain.components.len() >= operations::MAX_CALL_DEPTH {
             return Err(OperationError::refused(format!(
                 "the chain of calls is {} deep; Pane allows at most {}",
-                self.chain.len(),
+                chain.components.len(),
                 operations::MAX_CALL_DEPTH
             )));
         }
@@ -3106,7 +3538,11 @@ impl Host {
     /// The installed package and component serving `call`, unless its
     /// package already serves a call in the chain, through whichever of its
     /// components.
-    fn resolve_target(&self, call: &OperationCall) -> Result<Target, OperationError> {
+    fn resolve_target(
+        &self,
+        call: &OperationCall,
+        chain: &Chain,
+    ) -> Result<Target, OperationError> {
         let directory = lock(&self.directory).clone();
         let installed = match directory {
             Some(directory) => directory(),
@@ -3114,7 +3550,7 @@ impl Host {
         };
         let target =
             installed.resolve(&call.caller, &call.source, &call.operation, call.version)?;
-        let in_chain = self.chain.iter().any(|component| {
+        let in_chain = chain.components.iter().any(|component| {
             *component == target.component
                 || installed.package_of(component) == Some(&target.identity)
         });
@@ -3128,14 +3564,21 @@ impl Host {
         Ok(target)
     }
 
-    /// Runs the operation of `call` in `target`'s component, starting it if
-    /// it is not running, and returns its answer.
+    /// Runs the operation of `call` in `target`'s component, in its turn,
+    /// starting it if it is not running, and returns its answer.
     async fn run_operation(
-        &mut self,
+        &self,
         target: &Target,
         call: &mut OperationCall,
+        chain: &Chain,
     ) -> Result<String, OperationError> {
-        let failed = |error| OperationError::from_call(&target.title, error);
+        let failed = |error| match error {
+            // Only a caller that no longer waits cancels a call.
+            CallError::Cancelled => {
+                OperationError::refused("the caller no longer waits for this call")
+            }
+            error => OperationError::from_call(&target.title, error),
+        };
         // Its caller gave up on it: the check the call was sent with can
         // miss a give-up that lands while the call waits to be served, so
         // the check is made again just before the operation runs, and the
@@ -3143,15 +3586,36 @@ impl Host {
         if call.reply.is_closed() {
             return Err(failed(CallError::Cancelled));
         }
-        let provider = self
-            .instance(&target.component, target.data.clone())
+        // One call into the target's instance at a time: this one waits for
+        // its turn, unless the chain's code stops meanwhile. A turn that
+        // would come only once this chain's own calls return is refused.
+        let _turn = match unless(
+            self.turn(&target.component, chain.id),
+            first_end(&chain.owners),
+        )
+        .await
+        {
+            Ok(Some(turn)) => turn,
+            Ok(None) => {
+                return Err(OperationError::refused(format!(
+                    "{} is serving another call that waits for this one; call it again once \
+                     that call is done",
+                    target.title
+                )));
+            }
+            Err(end) => return Err(failed(ended(end))),
+        };
+        self.instance(&target.component, target.data.clone())
             .await
-            .map_err(failed)?
+            .map_err(failed)?;
+        let provider = self
+            .instances
+            .borrow()
+            .get(&target.component)
+            .and_then(|instance| instance.operations.as_ref())
+            .map(|provider| provider.pane_extension_published_operations().clone())
             // The install check requires the export, so only a component
             // replaced behind Pane's back lacks it.
-            .operations
-            .as_ref()
-            .map(|provider| provider.pane_extension_published_operations().clone())
             .ok_or_else(|| {
                 failed(CallError::Interface(format!(
                     "it does not export {OPERATIONS_INTERFACE}"
@@ -3168,6 +3632,7 @@ impl Host {
         let result = self
             .run_guest_until(
                 &target.component,
+                chain,
                 async |instance| {
                     instance
                         .store
@@ -3188,20 +3653,25 @@ impl Host {
     /// error with `guest_error`. A trapped instance cannot be re-entered, so
     /// it is dropped and the next call starts a fresh one.
     fn settle<T, E>(
-        &mut self,
+        &self,
         path: &Path,
         outcome: wasmtime::Result<wasmtime::Result<Result<T, E>>>,
         guest_error: impl FnOnce(E) -> CallError,
     ) -> Result<T, CallError> {
-        let data = self
+        let (data, out_of_memory) = self
             .instances
+            .borrow()
             .get(path)
-            .and_then(|instance| instance.store.data().data.clone());
+            .map(|instance| {
+                let state = instance.store.data();
+                (state.data.clone(), state.out_of_memory)
+            })
+            .unwrap_or_default();
         match outcome.and_then(|inner| inner) {
             Ok(result) => result.map_err(guest_error),
             Err(trap) => {
                 self.drop_instance(path);
-                let error = CallError::Trap(format!("{trap:#}"));
+                let error = crashed(&trap, out_of_memory);
                 self.report(path, data.as_ref(), Health::Crashed(error.clone()));
                 Err(error)
             }
@@ -3223,19 +3693,17 @@ impl Host {
         }
     }
 
-    /// Returns the live instance for `path` in the generation of `data`,
+    /// Makes sure `path` has a live instance in the generation of `data`,
     /// instantiating it on first use. A call whose generation has ended (its
     /// package was disabled, reloaded or updated since it was asked for) gets
-    /// none and is not started: it cannot bring its instance back.
-    async fn instance(
-        &mut self,
-        path: &Path,
-        data: Option<PackageData>,
-    ) -> Result<&mut Instance, CallError> {
+    /// none and is not started: it cannot bring its instance back. The
+    /// caller holds the component's turn.
+    async fn instance(&self, path: &Path, data: Option<PackageData>) -> Result<(), CallError> {
         // An instance of an ended generation goes; one of the package's
         // current generation stays, even for a stale call, which is refused.
         let stopped = self
             .instances
+            .borrow()
             .get(path)
             .is_some_and(|instance| instance.store.data().stopped().is_some());
         if stopped {
@@ -3244,7 +3712,8 @@ impl Host {
         if let Some(end) = data.as_ref().and_then(PackageData::stopped) {
             return Err(ended(end));
         }
-        if !self.instances.contains_key(path) {
+        let live = self.instances.borrow().contains_key(path);
+        if !live {
             let started = self.start_instance(path, data.clone()).await;
             // One stopped while it started (disabled, say) did not fail.
             let stopped = data.as_ref().and_then(PackageData::stopped).is_some();
@@ -3256,24 +3725,22 @@ impl Host {
             }
             started?;
         }
-        Ok(self.instances.get_mut(path).expect("inserted above"))
+        Ok(())
     }
 
     /// Loads and instantiates `path` as a live instance with `data`.
     async fn start_instance(
-        &mut self,
+        &self,
         path: &Path,
         data: Option<PackageData>,
     ) -> Result<(), CallError> {
-        let component = self.component(path)?.clone();
+        let component = self.component(path)?;
         let watch = self.watch.clone();
-        let _starting = watch.doing(Doing::Starting);
         // Its code is stopped once Pane gives up on this thread.
         let data = data.map(|data| data.fenced(watch.fence().clone()));
-        let end: std::pin::Pin<Box<dyn Future<Output = End>>> = match &data {
-            Some(data) => Box::pin(data.generation().wait_end()),
-            None => Box::pin(std::future::pending()),
-        };
+        let generation = data.as_ref().map(|data| data.generation().clone());
+        let mut end = std::pin::pin!(first_end(generation.as_slice()));
+        let (calls, calls_received) = operations::channel();
         let mut store = Store::new(
             &self.code.engine,
             GuestState {
@@ -3281,10 +3748,10 @@ impl Host {
                 table: ResourceTable::new(),
                 http: WasiHttpCtx::new(),
                 sender: http::Sender::new(data.clone(), self.network.clone(), watch.clone()),
-                limits: StoreLimitsBuilder::new().memory_size(GUEST_MEMORY).build(),
+                out_of_memory: false,
                 data,
                 component: path.to_path_buf(),
-                calls: self.calls.clone(),
+                calls,
                 serving: false,
                 applications: self.applications.clone(),
                 files: self.files.clone(),
@@ -3295,7 +3762,7 @@ impl Host {
                 watch: self.watch.clone(),
             },
         );
-        store.limiter(|state| &mut state.limits);
+        store.limiter(|state| state);
         // The guest yields to this thread at every epoch tick, however long
         // it computes, which is progress for the watchdog (see `deadlines`);
         // once Pane gave up on this thread, it traps there instead.
@@ -3311,24 +3778,32 @@ impl Host {
         let load = |error: wasmtime::Error| CallError::Load(format!("{error:#}"));
         // Starting is not metered: a slow start is not a failure of the
         // package. It stops once its generation ends (it was disabled, say):
-        // one that never finishes holds the runtime thread until then.
+        // one that never finishes holds its component's turn until then.
         let instance = {
-            let mut end = end;
             let mut instantiating =
                 std::pin::pin!(self.code.linker.instantiate_async(&mut store, &component));
             std::future::poll_fn(|cx| {
                 if watch.given_up() {
-                    return std::task::Poll::Ready(Err(given_up()));
+                    return Poll::Ready(Err(given_up()));
                 }
-                if let std::task::Poll::Ready(end) = end.as_mut().poll(cx) {
-                    return std::task::Poll::Ready(Err(ended(end)));
+                if let Poll::Ready(end) = end.as_mut().poll(cx) {
+                    return Poll::Ready(Err(ended(end)));
                 }
+                let _starting = watch.doing(Doing::Starting);
                 instantiating
                     .as_mut()
                     .poll(cx)
                     .map(|started| started.map_err(load))
             })
-            .await?
+            .await
+        };
+        // One that asked for more memory than it may have while it started
+        // says so, not where it gave up.
+        let instance = match instance {
+            Err(CallError::Load(_)) if store.data().out_of_memory => {
+                return Err(CallError::Load(memory::out_of_memory()));
+            }
+            started => started?,
         };
         let bindings =
             bindings::ExtensionWithClipboard::new(&mut store, &instance).map_err(load)?;
@@ -3347,7 +3822,21 @@ impl Host {
             search_bindings::CommandSearchProvider::new(&mut store, &instance).ok();
         // Only a command that runs a continuing service exports it.
         let service = service_bindings::ServiceProvider::new(&mut store, &instance).ok();
-        self.instances.insert(
+        // On its generation's undo list: the generation's end has this
+        // thread drop it at once, as only this thread may, even while no
+        // call asks for it.
+        let undo = generation.map(|generation| {
+            let nudge = self.nudge.clone();
+            generation.on_end("extension instance", move || {
+                if let Some(requests) = nudge.upgrade() {
+                    let _ = requests.send(Request::DropStopped);
+                }
+                Ok(())
+            })
+        });
+        let serial = self.next_serial.get();
+        self.next_serial.set(serial + 1);
+        self.instances.borrow_mut().insert(
             path.to_path_buf(),
             Instance {
                 store,
@@ -3358,21 +3847,60 @@ impl Host {
                 operations,
                 command_search,
                 service,
+                calls: Some(calls_received),
+                serial,
+                _undo: undo,
             },
         );
         Ok(())
     }
 
     /// Compiles `path` once (see [`Code::compile`]).
-    fn component(&mut self, path: &Path) -> Result<&Component, CallError> {
-        if !self.components.contains_key(path) {
-            // Compiling may take long without anything being stuck.
-            let _compiling = self.watch.exempt();
-            let component = self.code.compile(path)?;
-            self.components.insert(path.to_path_buf(), component);
+    fn component(&self, path: &Path) -> Result<Component, CallError> {
+        let compiled = self.components.borrow().get(path).cloned();
+        if let Some(component) = compiled {
+            return Ok(component);
         }
-        Ok(&self.components[path])
+        // Compiling may take long without anything being stuck.
+        let _compiling = self.watch.exempt();
+        let component = self.code.compile(path)?;
+        self.components
+            .borrow_mut()
+            .insert(path.to_path_buf(), component.clone());
+        Ok(component)
     }
+}
+
+/// Resolves once any of `owners` ends, with why; never without any.
+fn first_end(owners: &[Generation]) -> impl Future<Output = End> + use<> {
+    let mut ends: Vec<_> = owners
+        .iter()
+        .map(|owner| Box::pin(owner.wait_end()))
+        .collect();
+    std::future::poll_fn(move |cx| {
+        for end in &mut ends {
+            if let Poll::Ready(end) = end.as_mut().poll(cx) {
+                return Poll::Ready(end);
+            }
+        }
+        Poll::Pending
+    })
+}
+
+/// Awaits `work`, unless `stop` resolves first: then its output, and `work`
+/// is dropped where it waits.
+async fn unless<T, S>(
+    work: impl Future<Output = T>,
+    stop: impl Future<Output = S>,
+) -> Result<T, S> {
+    let (mut work, mut stop) = (std::pin::pin!(work), std::pin::pin!(stop));
+    std::future::poll_fn(|cx| {
+        if let Poll::Ready(stopped) = stop.as_mut().poll(cx) {
+            return Poll::Ready(Err(stopped));
+        }
+        work.as_mut().poll(cx).map(Ok)
+    })
+    .await
 }
 
 impl From<command::Frame> for Frame {
@@ -3468,7 +3996,6 @@ mod tests {
                 input: "hi".into(),
                 generation: None,
                 owner: helpers.new_owner(),
-                limit: runner::HELPER_TIME_LIMIT,
             })
             .unwrap();
         let clone = runtime.clone();
@@ -3493,7 +4020,6 @@ mod tests {
                     input: String::new(),
                     generation: None,
                     owner: 0,
-                    limit: runner::HELPER_TIME_LIMIT,
                 })
                 .is_err()
         );

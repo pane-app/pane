@@ -1,5 +1,6 @@
 //! Test fixture: a guest whose actions and root results fail in each way the
-//! host must report.
+//! host must report, and whose actions grow its memory to either side of
+//! the cap Pane puts on it.
 #![no_std]
 
 use core::cell::Cell;
@@ -13,6 +14,26 @@ use pane_guest::{
 struct Faulty;
 pane_guest::export!(Faulty);
 
+/// A WebAssembly page, the unit memory grows by.
+const PAGE: usize = 64 * 1024;
+
+/// The cap Pane puts on a guest's memory, 128 MiB, in pages: these items
+/// pin it from both sides.
+const CAP_PAGES: usize = 128 * 1024 * 1024 / PAGE;
+
+/// Grows the memory to two pages under the cap, past which Pane refuses
+/// it, and answers its size in bytes. The pages left are the allocator's,
+/// for the answer and the next call's arguments.
+fn grow_to_just_under_the_cap() -> Result<usize, String> {
+    use core::arch::wasm32::{memory_grow, memory_size};
+    let pages = memory_size::<0>();
+    let wanted = CAP_PAGES - 2;
+    if pages < wanted && memory_grow::<0>(wanted - pages) == usize::MAX {
+        return Err(format!("could not grow from {pages} pages to {wanted}"));
+    }
+    Ok(memory_size::<0>() * PAGE)
+}
+
 /// An item titled by its id.
 fn item(id: &str) -> Item {
     Item::new(id, id)
@@ -23,8 +44,10 @@ fn acting(id: &'static str) -> Item {
     item(id).on_action(move || run(id))
 }
 
-/// Runs the action `id`: "error" is refused, "trap" traps, and "hold",
-/// which no item lists (tests run it by its callback id), holds the call.
+/// Runs the action `id`: "error" is refused, "trap" traps, "grow-near-cap"
+/// and "grow-past-cap" grow the memory to either side of the cap, and
+/// "hold", which no item lists (tests run it by its callback id), holds the
+/// call.
 async fn run(id: &str) -> Result<String, String> {
     match id {
         // Holds a stream open to the host (its stdout), with the future of
@@ -43,6 +66,16 @@ async fn run(id: &str) -> Result<String, String> {
         }
         "error" => Err("the guest refused".into()),
         "trap" => panic!("guest trap"),
+        // Ends just under the cap: Pane lets it.
+        "grow-near-cap" => Ok(format!("grew to {} bytes", grow_to_just_under_the_cap()?)),
+        // Then allocates a mebibyte more, which Pane refuses: the
+        // allocation fails, and the guest traps.
+        "grow-past-cap" => {
+            grow_to_just_under_the_cap()?;
+            let block: Vec<u8> = Vec::with_capacity(1024 * 1024);
+            core::hint::black_box(&block);
+            Ok("allocated past the cap".into())
+        }
         _ => Ok("fine".into()),
     }
 }
@@ -128,6 +161,8 @@ impl Command for Faulty {
                 label: "Refused".into(),
                 role: CustomViewRole::ColorWell,
             }),
+            acting("grow-near-cap"),
+            acting("grow-past-cap"),
         ]))
     }
 

@@ -3,7 +3,8 @@
 //! through the launcher's public interface, a native WASI 0.3 async wait,
 //! fresh state per instance, a form the guest validates, a color picker the
 //! guest draws and changes on keys and pointer input, a root result
-//! computed from the query, and WASI 0.3-only imports.
+//! computed from the query, WASI 0.3-only imports, and memory within the
+//! cap Pane puts on each guest.
 //!
 //! Components come from `cargo xtask guests`; the JavaScript and TypeScript
 //! ones are the prebuilt components in `guests/prebuilt/`.
@@ -13,7 +14,8 @@ use std::path::PathBuf;
 use futures::executor::block_on;
 use pane_core::{
     CallError, Choice, CommandRegistration, CustomViewRole, FieldKind, FieldValue, FormError,
-    FormField, Key, Launcher, Point, Rgb, Runtime, Screen, Shape, Status, Unavailable, ViewEvent,
+    FormField, GUEST_MEMORY, Key, Launcher, Point, Rgb, Runtime, Screen, Shape, Status,
+    Unavailable, ViewEvent,
 };
 use wasmtime::component::Component;
 use wasmtime::{Config, Engine};
@@ -612,6 +614,33 @@ fn a_root_result_opens_a_web_link(sample: &Sample) {
     );
 }
 
+/// The commands, forms, views and root results of the sample, one after
+/// another in this process, stay under the cap on a guest's memory; the
+/// largest memory its instances had is printed for a verify run's log
+/// (`.config/nextest.toml` shows it on success).
+fn the_guest_stays_under_the_memory_cap(sample: &Sample) {
+    greeting_shows_the_guests_answer(sample);
+    an_async_wasi_wait_shows_running_until_it_answers(sample);
+    one_instance_rolls_a_new_number_each_time(sample);
+    a_valid_form_shows_the_guests_answer(sample);
+    an_unknown_choice_is_a_field_error_from_the_guest(sample);
+    keys_move_the_chosen_color(sample);
+    pressing_and_dragging_the_pointer_chooses_swatches(sample);
+    views_open_at_once_keep_their_own_state(sample);
+    reverse_typed_into_root_search_lists_the_reversed_text_to_copy(sample);
+    a_root_result_opens_a_web_link(sample);
+
+    let peak =
+        pane_core::memory_peak(&format!("{}.wasm", sample.component)).expect("the sample ran");
+    println!(
+        "memory peak of the {} sample through its contract: {:.1} MiB of {} MiB",
+        sample.language,
+        peak as f64 / (1024.0 * 1024.0),
+        GUEST_MEMORY / (1024 * 1024)
+    );
+    assert!(peak <= GUEST_MEMORY, "{peak} bytes");
+}
+
 /// Declares one test per check for each sample.
 macro_rules! contract {
     ($($check:ident),* $(,)?) => {
@@ -650,6 +679,7 @@ contract!(
     an_unknown_view_is_a_guest_error,
     reverse_typed_into_root_search_lists_the_reversed_text_to_copy,
     a_root_result_opens_a_web_link,
+    the_guest_stays_under_the_memory_cap,
 );
 
 /// The names of the component's imports.

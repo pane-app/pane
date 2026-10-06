@@ -31,6 +31,7 @@ mod hotkeys;
 mod installer;
 mod launcher;
 mod list_tree;
+mod memory;
 mod npm;
 mod operations;
 mod packages;

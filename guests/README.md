@@ -133,7 +133,8 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   guests` puts each one with its built component in
   `target/guests/packages/<name>/`, a ready-to-install package.
 - `fixtures/faulty`: test fixture whose actions, form, custom view and root
-  results return an error or trap.
+  results return an error or trap, and whose actions grow its memory to
+  just under the 128 MiB cap or past it.
 - `fixtures/failing-start`: test fixture that builds and installs but traps
   the first time it is asked for its view (after saving a setting), so a
   reload to it fails to start and Retry then starts it.
@@ -503,6 +504,13 @@ So report expected failures, such as a missing sign-in, as errors, never by
 crashing. The settings samples' **Crash** item shows a crash in each
 language.
 
+Each instance's memory may grow to **128 MiB**. Pane refuses it more: the
+allocation fails, which traps the guest, and the user sees "The extension
+crashed: it ran out of memory: an extension may use at most 128 MiB". It
+counts towards pausing the package as any crash does. A web response's
+body (at most 4 MiB) fits many times over; keep large data in files or
+the cache rather than in memory.
+
 Pane's extension runtime itself can crash too (a fault in Pane, not in any
 extension). Pane then stops every call in progress and never runs one again
 by itself, so an action that did its work (saving, sending a request) may
@@ -527,9 +535,9 @@ does
 ([extensions that stop responding](../docs/pausing.md#when-an-extension-stops-responding)).
 So keep each call's own computing well under 5 seconds: split long work
 into several calls (an action that does one part and saves where it got
-to), or run it in a [native helper](#native-helpers), which runs for at
-most 30 seconds. The settings samples' **Stop responding** item shows the
-limit in each language.
+to), or run it in a [native helper](#native-helpers), which runs for as long
+as its work takes while other extensions' calls are served. The settings
+samples' **Stop responding** item shows the limit in each language.
 
 ## Actions for some operating systems only
 
@@ -1329,9 +1337,12 @@ are a [Rust](sample-helper/src/lib.rs), a
 
    Dropping the future before it resolves cancels the run, and Pane ends
    the process; the sample's "Echo within a second" races it against
-   `wasip3::clocks::monotonic_clock::wait_for`. A helper also ends when the
-   call that started it returns and when the package is disabled, reloaded,
-   updated, paused or uninstalled, and when Pane quits.
+   `wasip3::clocks::monotonic_clock::wait_for`: that is the command's own
+   timeout, as Pane sets none. A helper also ends when the call that
+   started it returns and when the package is disabled, reloaded, updated,
+   paused or uninstalled, and when Pane quits. Otherwise it runs for as
+   long as its work takes (the sample's "Echo after a long wait" runs for
+   40 seconds), and other extensions' calls are served meanwhile.
 
    In JavaScript or TypeScript, import `run` from
    `pane:extension/helpers@0.1.0` (declared in
@@ -1715,7 +1726,8 @@ Known limits of local packages so far:
   unresponsive, which counts towards pausing its package like a crash
   (#18, [pausing](../docs/pausing.md#when-an-extension-stops-responding)):
   waiting does not count, but awaiting does not reset the count either, so
-  split long work into calls. A native helper runs for at most 30 seconds.
+  split long work into calls. A native helper has no time limit of Pane's
+  own; the command's own timeout (dropping the run) ends it.
 - Background services, timers and hotkeys are not part of the extension
   API yet and come with their own tickets. Disabling does not yet consider
   packages that depend on the disabled one (#43).

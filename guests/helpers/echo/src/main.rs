@@ -9,7 +9,9 @@
 //!   cancelling, disabling or reloading) can be seen. While it waits it
 //!   appends a byte to `pane-echo.alive` in its working folder every 20 ms,
 //!   and removes the file when it finishes, so a check can see that a
-//!   stopped helper no longer runs without trusting a process id;
+//!   stopped helper no longer runs without trusting a process id. It stops
+//!   waiting early once a file `pane-echo.release` appears in that folder,
+//!   so a test stands in for the clock instead of waiting the time out;
 //! - `--fail`: writes an explanation to standard error and exits with code 3;
 //! - `--flood`: writes more output than Pane passes back (2 MiB).
 
@@ -23,6 +25,9 @@ use pane_target::Target;
 
 /// Where `--wait` shows that it is still running, in the working folder.
 const ALIVE: &str = "pane-echo.alive";
+
+/// What ends `--wait` early, once it appears in the working folder.
+const RELEASE: &str = "pane-echo.release";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -72,7 +77,8 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Waits for `duration`, beating in [`ALIVE`] meanwhile.
+/// Waits for `duration`, or until [`RELEASE`] appears, beating in [`ALIVE`]
+/// meanwhile.
 fn wait(duration: Duration) {
     let started = Instant::now();
     let mut alive = OpenOptions::new()
@@ -80,7 +86,7 @@ fn wait(duration: Duration) {
         .append(true)
         .open(ALIVE)
         .ok();
-    while started.elapsed() < duration {
+    while started.elapsed() < duration && !std::path::Path::new(RELEASE).exists() {
         if let Some(file) = &mut alive {
             let _ = file.write_all(b".");
         }

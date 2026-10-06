@@ -12,6 +12,12 @@
 //! system may give to another process once the helper is reaped: Pane must
 //! list no running helper, and the file `pane-echo --wait` beats in every
 //! 20 ms while it runs must stop growing.
+//!
+//! While a command's call waits on its helper, Pane serves other calls
+//! (#136): the calculator, another package, answers root search meanwhile,
+//! and a helper may run for as long as its work takes. A test stands in for
+//! the clock of a long wait by writing the helper's release file rather than
+//! waiting it out.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -21,13 +27,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
-use pane_core::{Launcher, PackageIdentity, Runtime, SavedData, Screen, Status, Target};
+use pane_core::{Launcher, Limits, PackageIdentity, Runtime, SavedData, Screen, Status, Target};
 use tempfile::TempDir;
 
 #[path = "support/rows.rs"]
 mod rows;
 
-use rows::select_title;
+use rows::{select_title, titles};
 
 /// Under the ten seconds "Echo after waiting" has its helper wait: a run
 /// that ends sooner was stopped.
@@ -38,6 +44,10 @@ const PROMPTLY: Duration = Duration::from_secs(6);
 
 /// Where `pane-echo --wait` beats while it runs, in its working folder.
 const ALIVE: &str = "pane-echo.alive";
+
+/// What ends `pane-echo --wait` early, in its working folder: the test's
+/// stand-in for the clock.
+const RELEASE: &str = "pane-echo.release";
 
 /// A helper sample in one language.
 struct Sample {
@@ -154,6 +164,16 @@ impl Installed {
     }
 
     fn with_manifest(sample: &Sample, manifest: impl FnOnce(String) -> String) -> Installed {
+        Installed::with_files(sample, manifest, &[])
+    }
+
+    /// Like [`Installed::with_manifest`], with `files` copied into the
+    /// package too.
+    fn with_files(
+        sample: &Sample,
+        manifest: impl FnOnce(String) -> String,
+        files: &[PathBuf],
+    ) -> Installed {
         let sources = tempfile::tempdir().unwrap();
         let data = tempfile::tempdir().unwrap();
         let cache = tempfile::tempdir().unwrap();
@@ -161,6 +181,9 @@ impl Installed {
         let launcher =
             Launcher::with_packages(Ok(runtime.clone()), vec![], data.path().join("extensions"));
         let folder = sample.copy_to(&sources.path().join("helper"), manifest);
+        for file in files {
+            fs::copy(file, folder.join(file.file_name().unwrap())).unwrap();
+        }
         block_on(launcher.install_package(&folder));
         assert_eq!(
             launcher.view().status,
@@ -188,21 +211,73 @@ impl Installed {
     /// What "Echo after waiting" has noted: "started", "finished" or
     /// nothing.
     fn waiting(&self) -> Option<String> {
+        self.noted("helper-wait")
+    }
+
+    /// What the sample noted under `key`: "started", "finished" or nothing.
+    fn noted(&self, key: &str) -> Option<String> {
         let path = self.data.path().join("extensions/settings.json");
         let text = fs::read_to_string(path).unwrap_or_default();
         ["finished", "started"]
             .into_iter()
-            .find(|progress| text.contains(&format!("\"helper-wait\": \"{progress}\"")))
+            .find(|progress| text.contains(&format!("\"{key}\": \"{progress}\"")))
             .map(str::to_owned)
+    }
+
+    /// The installed helper's working folder, where it beats and is
+    /// released.
+    fn helper_folder(&self) -> PathBuf {
+        self.launcher
+            .packages()
+            .into_iter()
+            .find(|package| package.identity == self.identity)
+            .expect("the helper sample is installed")
+            .location
+            .join(Path::new(&helper_file()).parent().unwrap())
+    }
+
+    /// Ends the waits of the helpers running now, as their clock would.
+    fn release(&self) {
+        fs::write(self.helper_folder().join(RELEASE), "").unwrap();
+    }
+
+    /// Installs the calculator, another package, which answers root search
+    /// with its guest.
+    fn install_calculator(&self) {
+        let calculator = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/guests/packages/calculator");
+        block_on(self.launcher.install_package(&calculator));
+        assert!(
+            matches!(self.launcher.view().status, Status::Result(_)),
+            "{:?}",
+            self.launcher.view().status
+        );
+    }
+
+    /// Asks root search for `expression`, which the calculator answers,
+    /// and checks that it did, with `answer`, while the helper of `pending`
+    /// still runs: the call waiting on it held up no other package's.
+    fn calculator_answers_meanwhile(&self, pending: &Pending, expression: &str, answer: &str) {
+        rows::to_root(&self.launcher);
+        block_on(self.launcher.set_query(expression));
+        assert_eq!(
+            titles(&self.launcher).first().map(String::as_str),
+            Some(answer),
+            "{:?}",
+            self.launcher.view()
+        );
+        assert!(
+            !pending.thread.is_finished(),
+            "the call waiting on its helper ended first"
+        );
+        assert_eq!(self.runtime.helper_processes().len(), 1);
+        block_on(self.launcher.set_query(""));
     }
 
     /// Runs `item` on another thread and returns once its helper runs:
     /// Pane lists it, and it beats.
     fn start(&self, item: &str) -> Pending {
-        let alive = self.launcher.packages()[0]
-            .location
-            .join(Path::new(&helper_file()).parent().unwrap())
-            .join(ALIVE);
+        let alive = self.helper_folder().join(ALIVE);
         let before = beats(&alive);
         open_sample_at(&self.launcher, item);
         let running = self.launcher.activate_selected();
@@ -263,6 +338,7 @@ impl Pending {
 fn open_sample_at(launcher: &Launcher, item: &str) {
     launcher.back();
     launcher.back();
+    block_on(launcher.set_query(""));
     select_title(launcher, "Helper sample");
     block_on(launcher.activate_selected());
     assert_eq!(
@@ -535,6 +611,73 @@ fn repeated_stops_leave_no_helper_running(sample: &Sample) {
     assert_eq!(installed.waiting().as_deref(), Some("started"));
 }
 
+/// While the command waits on its helper, the calculator, another package,
+/// answers root search: waiting holds no other extension's calls.
+fn other_extensions_answer_while_the_helper_runs(sample: &Sample) {
+    let installed = Installed::new(sample);
+    installed.install_calculator();
+    let pending = installed.start("Echo after waiting");
+
+    installed.calculator_answers_meanwhile(&pending, "1 + 1", "2");
+
+    block_on(installed.launcher.set_enabled(&installed.identity, false));
+    pending.assert_stopped(&installed.runtime);
+    assert_eq!(installed.waiting().as_deref(), Some("started"));
+}
+
+/// A helper runs for as long as its work takes: longer than every limit
+/// Pane applies to the runtime (here shortened, as the old 30 seconds of a
+/// helper would have been), since waiting is never the guest's computing
+/// and the thread waiting for work is not stuck. The call then answers, and
+/// nothing was stopped, blamed or given up on.
+fn a_helper_outlasting_every_runtime_limit_completes(sample: &Sample) {
+    let installed = Installed::new(sample);
+    installed.install_calculator();
+    // Both instances run before the limits shrink: starting one is not what
+    // is checked.
+    assert_eq!(installed.run("Echo through the helper"), echoed());
+    rows::to_root(&installed.launcher);
+    block_on(installed.launcher.set_query("1 + 1"));
+    assert_eq!(
+        titles(&installed.launcher).first().map(String::as_str),
+        Some("2")
+    );
+    let limits = Limits {
+        compute: Duration::from_millis(500),
+        warn: Duration::from_millis(300),
+        unresponsive: Duration::from_millis(600),
+    };
+    installed.runtime.set_limits(limits);
+    let pending = installed.start("Echo after a long wait");
+
+    // Past every limit, the call still waits on its helper.
+    thread::sleep(Duration::from_secs(1));
+    installed.calculator_answers_meanwhile(&pending, "2 * 3", "6");
+    assert_eq!(installed.noted("helper-long-wait"), None);
+    installed.release();
+
+    pending.thread.join().unwrap();
+    assert_eq!(
+        installed.noted("helper-long-wait").as_deref(),
+        Some("finished")
+    );
+    assert_eq!(
+        installed.runtime.status(),
+        pane_core::RuntimeStatus::Running
+    );
+    assert_eq!(installed.runtime.abandoned_threads(), 0);
+    let package = installed
+        .launcher
+        .packages()
+        .into_iter()
+        .find(|package| package.identity == installed.identity)
+        .unwrap();
+    assert!(package.enabled);
+    // A helper that finished by itself removes its heartbeat file.
+    assert!(!installed.helper_folder().join(ALIVE).exists());
+    assert_eq!(installed.runtime.helper_processes(), Vec::<u32>::new());
+}
+
 /// Runs each check of the contract above for each sample, as a test in the
 /// module of its language.
 macro_rules! contract {
@@ -580,7 +723,124 @@ contract!(
     uninstalling_while_the_helper_runs_ends_its_process_and_keeps_saved_data,
     quitting_while_the_helper_runs_ends_its_process,
     repeated_stops_leave_no_helper_running,
+    other_extensions_answer_while_the_helper_runs,
+    a_helper_outlasting_every_runtime_limit_completes,
 );
+
+/// Two calls into one instance never interleave: the command's next call
+/// waits for the one waiting on its helper, and starts (its own helper
+/// runs) only once that one returned, while another package's calls are
+/// served meanwhile.
+#[test]
+fn two_calls_into_one_instance_run_one_after_another() {
+    let installed = Installed::new(&RUST);
+    installed.install_calculator();
+    let first = installed.start("Echo after a long wait");
+    select_title(&installed.launcher, "Echo through the helper");
+    let second = {
+        let running = installed.launcher.activate_selected();
+        thread::spawn(move || block_on(running))
+    };
+
+    installed.calculator_answers_meanwhile(&first, "1 + 1", "2");
+    thread::sleep(Duration::from_millis(300));
+    assert!(
+        !second.is_finished(),
+        "the second call ran beside the first"
+    );
+    assert_eq!(installed.runtime.helper_processes().len(), 1);
+    installed.release();
+
+    first.thread.join().unwrap();
+    second.join().unwrap();
+    assert_eq!(
+        installed.noted("helper-long-wait").as_deref(),
+        Some("finished")
+    );
+    assert_eq!(installed.runtime.helper_processes(), Vec::<u32>::new());
+}
+
+/// What a package's generation sets up is on its undo list (the instance,
+/// and the helper while it runs), and its end runs the list: the helper's
+/// process ends, the instance goes, and the list is empty.
+#[cfg(debug_assertions)]
+#[test]
+fn a_generation_s_undo_list_holds_what_it_set_up_and_is_empty_after_its_end() {
+    let installed = Installed::new(&RUST);
+    assert_eq!(installed.run("Echo through the helper"), echoed());
+    assert_eq!(
+        installed.launcher.undo_list(&installed.identity),
+        ["extension instance"]
+    );
+    let pending = installed.start("Echo after waiting");
+    assert_eq!(
+        installed.launcher.undo_list(&installed.identity),
+        ["extension instance", "native helper"]
+    );
+
+    block_on(installed.launcher.set_enabled(&installed.identity, false));
+
+    assert_eq!(
+        installed.launcher.undo_list(&installed.identity),
+        Vec::<&str>::new()
+    );
+    pending.assert_stopped(&installed.runtime);
+    assert_eq!(block_on(installed.runtime.running()), Vec::<PathBuf>::new());
+}
+
+/// Pausing the package while a call waits on its helper ends the wait and
+/// the helper's process. The pause comes from another command of the same
+/// package, the settings sample's Greeting, crashing three times: it runs
+/// while the first command waits, since only an instance's own calls wait
+/// for each other.
+#[test]
+fn pausing_while_the_helper_runs_ends_its_process() {
+    let greeting = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/guests/packages/sample-settings/sample_settings.wasm");
+    let installed = Installed::with_files(
+        &RUST,
+        |text| {
+            text.replacen(
+                "\"commands\": [",
+                "\"commands\": [{ \"id\": \"greeting\", \"title\": \"Greeting\", \
+                 \"component\": \"sample_settings.wasm\" },",
+                1,
+            )
+        },
+        &[greeting],
+    );
+    let pending = installed.start("Echo after waiting");
+
+    for crash in 1..=3 {
+        rows::to_root(&installed.launcher);
+        block_on(installed.launcher.set_query(""));
+        select_title(&installed.launcher, "Greeting");
+        block_on(installed.launcher.activate_selected());
+        select_title(&installed.launcher, "Crash");
+        block_on(installed.launcher.activate_selected());
+        if crash < 3 {
+            assert!(!pending.thread.is_finished(), "crash {crash}");
+        }
+    }
+
+    pending.assert_stopped(&installed.runtime);
+    assert_eq!(installed.waiting().as_deref(), Some("started"));
+    assert_eq!(block_on(installed.runtime.running()), Vec::<PathBuf>::new());
+}
+
+/// Pane quitting while a call waits on its helper ends the wait at once:
+/// the helper's process ends, and the call answers.
+#[test]
+fn quitting_while_a_call_waits_on_its_helper_ends_the_wait() {
+    let installed = Installed::new(&RUST);
+    let pending = installed.start("Echo after waiting");
+
+    installed.runtime.quit();
+
+    pending.assert_stopped(&installed.runtime);
+    assert_eq!(installed.waiting().as_deref(), Some("started"));
+    assert_eq!(block_on(installed.runtime.running()), Vec::<PathBuf>::new());
+}
 
 // What Pane checks of a package's helpers, whatever its code's language.
 

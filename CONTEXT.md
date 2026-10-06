@@ -329,7 +329,7 @@ The operation calls waiting on one another at one moment, from the command that 
 _Avoid_: Call stack (of one guest), workflow
 
 **Native helper**:
-A prebuilt program an installed package ships for each target (operating system and processor) it supports, which its commands run through Pane for what a WASI guest cannot do; Pane runs this system's file, never compiles one, and ends its process when the command cancels the run, the call that started it returns, the package's generation ends, it has run for thirty seconds (an error the command handles) or Pane quits. Processes the helper starts itself are its own.
+A prebuilt program an installed package ships for each target (operating system and processor) it supports, which its commands run through Pane for what a WASI guest cannot do; Pane runs this system's file, never compiles one, and ends its process when the command cancels the run (its own timeout), the call that started it returns, the package's generation ends or Pane quits; otherwise it runs for as long as its work takes, since Pane serves other extensions' calls while one waits on it. Processes the helper starts itself are its own.
 _Avoid_: Plugin binary, native extension (the extension's entry point stays a WASI component), sidecar
 
 **Helper target**:

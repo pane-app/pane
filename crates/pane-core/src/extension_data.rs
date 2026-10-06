@@ -37,7 +37,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::atomic::{Readers, write_atomically};
 use crate::clipboard::history::{HistoryStore, PackageHistory};
-use crate::generation::{End, Fence, Generation};
+use crate::generation::{End, Fence, Generation, Undo};
 use crate::packages::{PackageIdentity, SavedData};
 
 /// The version of every kind's file.
@@ -386,12 +386,15 @@ impl ExtensionData {
             .generations
             .entry(identity.key())
             .or_insert_with(Generation::new);
+        let mut undo = None;
         if !enabled {
-            end_as(current, End::Disabled);
+            undo = Some(end_as(current, End::Disabled));
         } else if current.ended().is_some() {
             *current = Generation::new();
         }
         drop(file);
+        // The ended generation's undo list runs once the files are let go.
+        drop(undo);
         self.changed();
     }
 
@@ -399,11 +402,13 @@ impl ExtensionData {
     /// its generation ends, which stops its pending calls, and its code can
     /// no longer read or save values until it is resumed.
     pub fn pause(&self, identity: &PackageIdentity) {
-        self.lock()
+        let undo = self
+            .lock()
             .generations
             .entry(identity.key())
             .or_insert_with(Generation::new)
             .end(End::Paused);
+        drop(undo);
         self.changed();
     }
 
@@ -429,9 +434,10 @@ impl ExtensionData {
         let Some(current) = file.generations.get_mut(&identity.key()) else {
             return;
         };
+        let mut undo = None;
         match current.ended() {
             None => {
-                current.end(End::Replaced);
+                undo = Some(current.end(End::Replaced));
                 *current = Generation::new();
             }
             // Paused code is replaced by code that has not failed.
@@ -439,6 +445,7 @@ impl ExtensionData {
             Some(_) => {}
         }
         drop(file);
+        drop(undo);
         self.changed();
     }
 
@@ -452,8 +459,9 @@ impl ExtensionData {
             .generations
             .entry(identity.key())
             .or_insert_with(Generation::new);
-        end_as(current, End::Uninstalled);
+        let undo = end_as(current, End::Uninstalled);
         drop(file);
+        drop(undo);
         self.changed();
     }
 
@@ -462,7 +470,8 @@ impl ExtensionData {
     pub fn reinstate(&self, identity: &PackageIdentity, enabled: bool) {
         let generation = Generation::new();
         if !enabled {
-            generation.end(End::Disabled);
+            // A new generation has nothing to undo yet.
+            drop(generation.end(End::Disabled));
         }
         self.lock().generations.insert(identity.key(), generation);
         self.changed();
@@ -880,14 +889,15 @@ fn refusal(end: End) -> &'static str {
     }
 }
 
-/// Ends `current` for `why`. A generation Pane paused is replaced by one
+/// Ends `current` for `why`, returning its undo list for the caller to run
+/// once it lets its locks go. A generation Pane paused is replaced by one
 /// ended for `why`, so its calls say what the user did, not that it was
 /// paused.
-fn end_as(current: &mut Generation, why: End) {
+fn end_as(current: &mut Generation, why: End) -> Undo {
     if current.ended() == Some(End::Paused) {
         *current = Generation::new();
     }
-    current.end(why);
+    current.end(why)
 }
 
 /// Reads one kind's file; a missing file holds no values.
@@ -1132,5 +1142,48 @@ mod tests {
         assert_eq!(current.stopped(), None);
         let cleared = current.update_clipboard_history(|history| Ok(history.clear()));
         assert_eq!(cleared, Ok((at_close.len(), false)));
+    }
+
+    /// Disabling, reloading or updating (a replacement of the code),
+    /// uninstalling and pausing a package each end its generation, which
+    /// runs what the generation registered to undo, newest first, once,
+    /// with the files let go (a teardown may use them).
+    #[test]
+    fn every_end_of_a_generation_runs_its_undo_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = ExtensionData::open(dir.path());
+        let identity = PackageIdentity::local(dir.path()).unwrap();
+        type Ending = fn(&ExtensionData, &PackageIdentity);
+        let ends: [(&str, Ending); 4] = [
+            ("disable", |data, identity| {
+                data.set_enabled(identity, false)
+            }),
+            ("replace", ExtensionData::replace_code),
+            ("uninstall", ExtensionData::uninstall),
+            ("pause", ExtensionData::pause),
+        ];
+        for (name, end) in ends {
+            data.reinstate(&identity, true);
+            let generation = data.owned_by(&identity).generation().clone();
+            let ran = Arc::new(Mutex::new(Vec::new()));
+            let note = |what: &'static str| {
+                let (ran, files) = (ran.clone(), data.clone());
+                move || {
+                    // The files are not locked while it runs.
+                    files.running_owners();
+                    ran.lock().unwrap().push(what);
+                    Ok(())
+                }
+            };
+            let _first = generation.on_end("first", note("first"));
+            let _second = generation.on_end("second", note("second"));
+
+            end(&data, &identity);
+
+            assert_eq!(*ran.lock().unwrap(), ["second", "first"], "{name}");
+            assert!(generation.undo_list().is_empty(), "{name}");
+            end(&data, &identity);
+            assert_eq!(ran.lock().unwrap().len(), 2, "{name}: undone once");
+        }
     }
 }

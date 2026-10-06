@@ -70,7 +70,7 @@ fn main() {
             None => Runtime::start(),
         };
         // Quitting ends the native helpers still running, which would
-        // otherwise outlive Pane.
+        // otherwise outlive Pane, and every call still waiting.
         if let Ok(runtime) = &runtime {
             // The native smokes crash the runtime on purpose, to check that
             // Pane recovers (#17); nothing else sets this, and a release
@@ -81,7 +81,7 @@ fn main() {
             }
             let runtime = runtime.clone();
             cx.on_app_quit(move |_| {
-                runtime.stop_helpers();
+                runtime.quit();
                 async {}
             })
             .detach();

@@ -208,9 +208,9 @@ not run yet.
   with "The extension's view is no longer open". Reload does not exist yet.
 - A drag's pointer position is not reported between the last move Pane saw
   and a release it could not see; the release uses the last point.
-- A `render` or `handle-event` that never returns blocks every later
-  extension call, since the runtime handles calls one at a time. One
-  waiting at an `await` is stopped when its package is disabled, reloaded
+- A `render` or `handle-event` that never returns blocks the later calls
+  into its own instance, which runs one call at a time; other extensions'
+  calls are served meanwhile (#136). One waiting at an `await` is stopped when its package is disabled, reloaded
   or updated ([generations](generations.md)); one computing without
   waiting is stopped too, at once then, and after 5 seconds of computing
   otherwise, as unresponsive (#18,

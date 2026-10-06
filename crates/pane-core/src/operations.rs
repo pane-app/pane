@@ -20,6 +20,13 @@
 //! would reach one again is refused, as is a chain deeper than
 //! [`MAX_CALL_DEPTH`]. A call a guest makes while Pane is not running a call
 //! of it has no frame to serve it, and is refused.
+//!
+//! The runtime serves other chains meanwhile (#136), and one instance runs
+//! one call at a time: an operation call whose target is busy with another
+//! chain's call waits for its turn. One that could only get it once its own
+//! chain's calls returned (the chain holding the target waits, perhaps
+//! through others, for a turn this chain holds) is refused instead of
+//! waiting for ever.
 
 use std::fmt;
 use std::path::{Path, PathBuf};

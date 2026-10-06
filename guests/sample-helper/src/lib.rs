@@ -13,7 +13,13 @@
 //!   finishes (the "started" note is kept).
 //! - "Echo within a second" races the same slow helper against a one-second
 //!   timer and drops the run when the timer wins: dropping it cancels it,
-//!   and Pane ends the process.
+//!   and Pane ends the process. This is the command's own timeout: Pane sets
+//!   none on a helper.
+//! - "Echo after a long wait" has the helper wait forty seconds, longer than
+//!   the thirty Pane once allowed, then notes in its settings that it
+//!   finished and answers; other extensions' calls are served meanwhile.
+//!   (Tests end the wait early through the helper's release file instead of
+//!   waiting it out.)
 //! - "Make the helper fail" and "Run an undeclared helper" show how Pane
 //!   explains a failed or missing helper.
 #![no_std]
@@ -30,6 +36,8 @@ use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCusto
 const ECHO: &str = "echo";
 /// The settings key where "Echo after waiting" notes how far it got.
 const WAITING: &str = "helper-wait";
+/// The settings key where "Echo after a long wait" notes that it finished.
+const LONG_WAIT: &str = "helper-long-wait";
 /// How long "Echo within a second" lets the helper run, in nanoseconds.
 const LIMIT: u64 = 1_000_000_000;
 
@@ -91,6 +99,11 @@ async fn act(item_id: &str) -> Result<String, String> {
                 Err(()) => Ok("Stopped the helper after one second".into()),
             }
         }
+        "long" => {
+            let answer = echo(&["--wait", "40"], "after a long wait").await?;
+            settings::set(LONG_WAIT, "finished")?;
+            Ok(answer)
+        }
         "fail" => echo(&["--fail"], "").await,
         "undeclared" => helpers::run("absent".into(), Vec::new(), String::new())
             .await
@@ -123,6 +136,11 @@ impl Command for HelperSample {
                 "limit",
                 "Echo within a second",
                 "Cancels the slow helper after one second",
+            ),
+            item(
+                "long",
+                "Echo after a long wait",
+                "The helper waits 40 seconds; other extensions answer meanwhile",
             ),
             item(
                 "fail",

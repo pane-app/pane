@@ -20,6 +20,8 @@ import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
 const ECHO = "echo";
 /** The settings key where "Echo after waiting" notes how far it got. */
 const WAITING = "helper-wait";
+/** The settings key where "Echo after a long wait" notes that it finished. */
+const LONG_WAIT = "helper-long-wait";
 /** How long "Echo within a second" lets the helper run, in nanoseconds. */
 const LIMIT = 1_000_000_000;
 
@@ -53,6 +55,13 @@ async function act(itemId: string): Promise<string> {
       // Returning ends the call, and with it the helper's process.
       return answer ?? "Stopped the helper after one second";
     }
+    case "long": {
+      // Longer than the thirty seconds Pane once allowed a helper: other
+      // extensions' calls are served while this one waits.
+      const answer = await helperRun(ECHO, ["--wait", "40"], "after a long wait");
+      set(LONG_WAIT, "finished");
+      return answer;
+    }
     case "fail":
       return helperRun(ECHO, ["--fail"], "");
     case "undeclared":
@@ -82,6 +91,11 @@ export const command: Command = {
           "The helper waits 10 seconds; disabling or reloading stops it",
         ),
         item("limit", "Echo within a second", "Cancels the slow helper after one second"),
+        item(
+          "long",
+          "Echo after a long wait",
+          "The helper waits 40 seconds; other extensions answer meanwhile",
+        ),
         item("fail", "Make the helper fail", "The helper exits with an error"),
         item(
           "undeclared",

@@ -172,10 +172,11 @@ No test or smoke reaches beyond 127.0.0.1.
   stop of a started search dropping the instance; rows stay listed while a
   search runs; errors clear the rows; the error text keeps the "The
   extension reported an error:" prefix; the request limits above.
-- The runtime still serves calls one at a time: while one extension's
-  search waits for its service, or its 150 ms, other extensions' calls wait
-  too (#18). Only the outermost call watches the stop: an operation a
-  searching guest waits for runs to its end first.
+- While one extension's search waits for its service, or its 150 ms,
+  other extensions' calls are served (#136); the command's own next calls
+  (its next search, an action) wait for it, one call into an instance at a
+  time. Only the outermost call watches the stop: an operation a searching
+  guest waits for runs to its end first.
 - Network access is not gated: extensions are trusted code (ADR 0002), and
   any extension may use `wasi:http`, from any call, including root-results
   providers. Only this command kind is kept out of root search. The
