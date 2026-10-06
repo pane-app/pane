@@ -1316,9 +1316,12 @@ are a [Rust](sample-helper/src/lib.rs), a
 
    Dropping the future before it resolves cancels the run, and Pane ends
    the process; the sample's "Echo within a second" races it against
-   `wasip3::clocks::monotonic_clock::wait_for`. A helper also ends when the
-   call that started it returns and when the package is disabled, reloaded,
-   updated, paused or uninstalled, and when Pane quits.
+   `wasip3::clocks::monotonic_clock::wait_for`: that is the command's own
+   timeout, as Pane sets none. A helper also ends when the call that
+   started it returns and when the package is disabled, reloaded, updated,
+   paused or uninstalled, and when Pane quits. Otherwise it runs for as
+   long as its work takes (the sample's "Echo after a long wait" runs for
+   40 seconds), and other extensions' calls are served meanwhile.
 
    In JavaScript or TypeScript, import `run` from
    `pane:extension/helpers@0.1.0` (declared in

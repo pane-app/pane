@@ -1153,7 +1153,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let data = ExtensionData::open(dir.path());
         let identity = PackageIdentity::local(dir.path()).unwrap();
-        let ends: [(&str, fn(&ExtensionData, &PackageIdentity)); 4] = [
+        type Ending = fn(&ExtensionData, &PackageIdentity);
+        let ends: [(&str, Ending); 4] = [
             ("disable", |data, identity| {
                 data.set_enabled(identity, false)
             }),

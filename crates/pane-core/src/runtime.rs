@@ -2098,7 +2098,10 @@ impl Drop for Waiting<'_> {
 /// The requests a runtime thread serves at once, each a task polled on the
 /// thread itself, so that a panic in any unwinds the thread (see
 /// `supervisor`).
-type Tasks<'a> = FuturesUnordered<Pin<Box<dyn Future<Output = ()> + 'a>>>;
+type Tasks<'a> = FuturesUnordered<Task<'a>>;
+
+/// One request being served (see [`Tasks`]).
+type Task<'a> = Pin<Box<dyn Future<Output = ()> + 'a>>;
 
 /// Runtime-thread state: compiled components, their live instances and the
 /// custom views open in them, shared by the requests the thread serves at
@@ -2414,7 +2417,7 @@ impl Host {
         let watch = self.watch.clone();
         let _handling = watch.doing(Doing::Handling);
         self.drop_stopped();
-        let task: Pin<Box<dyn Future<Output = ()> + 'a>> = match request {
+        let task: Task<'a> = match request {
             Request::GetView {
                 component,
                 data,
@@ -2520,7 +2523,7 @@ impl Host {
                 let Some(open) = open else {
                     return;
                 };
-                Box::pin(async move { self.close_view(open).await })
+                Box::pin(self.close_view(open))
             }
             Request::ViewCount { reply } => Box::pin(async move {
                 self.settled().await;
@@ -3739,9 +3742,9 @@ impl Host {
 
 /// Resolves once any of `owners` ends, with why; never without any.
 fn first_end(owners: &[Generation]) -> impl Future<Output = End> + use<> {
-    let mut ends: Vec<Pin<Box<dyn Future<Output = End> + Send>>> = owners
+    let mut ends: Vec<_> = owners
         .iter()
-        .map(|owner| Box::pin(owner.wait_end()) as _)
+        .map(|owner| Box::pin(owner.wait_end()))
         .collect();
     std::future::poll_fn(move |cx| {
         for end in &mut ends {
