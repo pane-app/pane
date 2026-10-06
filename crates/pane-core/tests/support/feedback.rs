@@ -1,7 +1,8 @@
 //! What a command tells the user through the launcher (#141): its toast in
 //! the footer, which replaced the status line's answered text, and a
 //! window fake that records what the launcher had the window do (hide, show
-//! a HUD). Shared by the test binaries that drive the launcher.
+//! a HUD, draw a confirmation, #146). Shared by the test binaries that
+//! drive the launcher.
 
 #![allow(dead_code)]
 
@@ -66,9 +67,20 @@ impl RecordingWindow {
             .iter()
             .filter_map(|request| match request {
                 WindowRequest::Hud(hud) => Some(hud.clone()),
-                WindowRequest::Hide => None,
+                WindowRequest::Hide | WindowRequest::Confirmation => None,
             })
             .collect()
+    }
+
+    /// How many times the window was asked to draw a confirmation (showing
+    /// itself first while hidden) so far.
+    pub fn confirmations(&self) -> usize {
+        self.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|request| **request == WindowRequest::Confirmation)
+            .count()
     }
 
     /// How many times the window was asked to hide so far.
@@ -92,5 +104,12 @@ impl WindowControl for RecordingWindow {
             .lock()
             .unwrap()
             .push(WindowRequest::Hud(hud.clone()));
+    }
+
+    fn confirmation(&self) {
+        self.requests
+            .lock()
+            .unwrap()
+            .push(WindowRequest::Confirmation);
     }
 }

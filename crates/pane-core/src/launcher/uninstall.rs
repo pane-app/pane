@@ -322,6 +322,7 @@ impl Launcher {
             let forget_hotkeys = self.forget_hotkeys_of(&mut self.lock(), identity);
             let forget_aliases = self.forget_aliases_of(&mut self.lock(), identity);
             let forget_subtitles = self.forget_subtitles_of(&mut self.lock(), identity);
+            let forget_confirmations = self.forget_confirmations_of(&mut self.lock(), identity);
             let files = self.lock().files.clone();
             let data = installation.data.clone();
             let store = installation.store.clone();
@@ -337,6 +338,11 @@ impl Launcher {
                 }
                 if let Some(Err(error)) = forget_subtitles.map(|forget| forget()) {
                     problems.push(format!("could not forget its subtitles: {error}"));
+                }
+                if let Some(Err(error)) = forget_confirmations.map(|forget| forget()) {
+                    problems.push(format!(
+                        "could not forget its remembered confirmations: {error}"
+                    ));
                 }
                 // The folder it was granted is Pane's record, not its data:
                 // it goes whether or not data is kept, for every package

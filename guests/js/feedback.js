@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
 // What a JS/TS command does after it acts (`@pane/extension/feedback`):
-// tell the user what happened with a toast or a HUD, close Pane's window,
-// pop back to root search, clear the search field, and set its row's
-// subtitle, through `pane:extension/feedback@0.1.0`,
+// tell the user what happened with a toast or a HUD, ask them to confirm
+// first, close Pane's window, pop back to root search, clear the search
+// field, and set its row's subtitle, through `pane:extension/feedback@0.1.0`,
 // `pane:extension/window@0.1.0` and `pane:extension/commands@0.1.0`
 // (wit/feedback.wit, wit/commands.wit). Bundled into the command that
 // imports it, like any npm module.
@@ -15,7 +15,13 @@
 // newest toast's actions through `globalThis`, so it is one table however
 // the bundler places the two modules.
 
-import { hideToast, showHud, showToast as show, updateToast } from "pane:extension/feedback@0.1.0";
+import {
+  confirm,
+  hideToast,
+  showHud,
+  showToast as show,
+  updateToast,
+} from "pane:extension/feedback@0.1.0";
 import { clearSearch, close, popToRoot as pop } from "pane:extension/window@0.1.0";
 import { setSubtitle as set } from "pane:extension/commands@0.1.0";
 
@@ -108,6 +114,29 @@ export function clearSearchBar() {
  */
 export function setSubtitle(subtitle) {
   set(subtitle == null ? null : String(subtitle));
+}
+
+/**
+ * Asks the user to confirm before something that cannot be undone, over
+ * the launcher's screen (shown first if it is hidden), and resolves with
+ * whether they chose the primary button. With `remember`, the confirmation
+ * offers "Don't ask again", and the answer the user gives with it ticked is
+ * given at once from then on. Rejects with an Error saying why Pane asked
+ * nothing (a background launch, a schedule or a service has no window).
+ */
+export async function confirmAlert(options) {
+  try {
+    return await confirm({
+      title: String(options?.title ?? ""),
+      message: options?.message == null ? null : String(options.message),
+      primary: String(options?.primaryAction?.title ?? "OK"),
+      destructive: options?.primaryAction?.style === "destructive",
+      dismiss: options?.dismissAction?.title == null ? null : String(options.dismissAction.title),
+      remember: options?.remember == null ? null : String(options.remember),
+    });
+  } catch (error) {
+    throw new Error(String(error?.payload ?? error));
+  }
 }
 
 /** The action of the newest toast named `callback`, if any (adapt.js). */

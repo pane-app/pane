@@ -42,6 +42,7 @@ mod application_update;
 mod choices;
 pub mod clipboard_view;
 mod command_search;
+mod confirmations;
 mod feedback;
 mod hotkeys;
 mod indexed;
@@ -745,6 +746,11 @@ struct State {
     submenus: submenus::Submenus,
     /// The system the `system` host functions act on (see `system`).
     system: Arc<dyn crate::system::System>,
+    /// The answers the user told Pane to remember for confirmations (see
+    /// `confirmations`).
+    confirmations: Record<confirmations::Confirmations>,
+    /// The writes of the remembered answers' record still going on.
+    confirmation_saves: Arc<launching::InFlight>,
 }
 
 /// What is happening to a package, which stops another change to it
@@ -1078,6 +1084,9 @@ enum Entry {
     BuildAgain(PackageIdentity),
     /// Ask whether to clear this installed package's cache (extension list).
     AskClearCache(PackageIdentity),
+    /// Forget the answers remembered for this installed package's
+    /// confirmations, so its commands ask again (extension list).
+    ResetConfirmations(PackageIdentity),
     /// Clear this installed package's cache (confirmation).
     ClearCache(PackageIdentity),
     /// Ask for the keys of the hotkey of the command with this id
@@ -1255,6 +1264,11 @@ impl Launcher {
             .map_or_else(Record::default, |installation| {
                 Record::open(&installation.dir)
             });
+        let confirmations = installation
+            .as_ref()
+            .map_or_else(Record::default, |installation| {
+                Record::open(&installation.dir)
+            });
         let update_controls = installation
             .as_ref()
             .and_then(|installation| updates::UpdateControls::open(&installation.dir))
@@ -1301,6 +1315,8 @@ impl Launcher {
             subtitle_saves: Arc::default(),
             submenus: submenus::Submenus::default(),
             system: crate::system::none(),
+            confirmations,
+            confirmation_saves: Arc::default(),
         };
         if let (Some(installation), Some(files)) = (&installation, &state.files) {
             files.open_record(&installation.dir);
@@ -2288,6 +2304,10 @@ impl Launcher {
             }
             Entry::AskClearCache(identity) => {
                 self.show_clear_cache(state, &identity);
+                Pending::Nothing
+            }
+            Entry::ResetConfirmations(identity) => {
+                self.reset_confirmations_row(state, &identity);
                 Pending::Nothing
             }
             Entry::NetworkDetails(identity) => {

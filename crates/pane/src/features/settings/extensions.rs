@@ -18,8 +18,9 @@
 //! On the list, the rows are gathered into a card per installed extension
 //! ([`gather`]): its enable/disable row is the card's switch, its
 //! automatic updates' row a second switch, and its other operations
-//! (reload, clear cache, uninstall…) short buttons — no row says more than
-//! its name. A command's alias, hotkey and fallback rows are left to the
+//! (reload, clear cache, uninstall, and "Reset confirmations" while it has
+//! answers remembered for "Don't ask again"…) short buttons — no row says
+//! more than its name. A command's alias, hotkey and fallback rows are left to the
 //! Shortcuts page.
 //!
 //! The launcher's install rows belong to the launcher *window* rather than
@@ -304,6 +305,9 @@ pub(crate) fn gather(
                     "clear-cache" => "Clear cache".to_owned(),
                     "uninstall" => "Uninstall".to_owned(),
                     "network" => "Network".to_owned(),
+                    // Shown while the extension has answers remembered
+                    // for "Don't ask again" (#146).
+                    "reset-confirmations" => "Reset confirmations".to_owned(),
                     // The title without the extension's name.
                     _ => row
                         .title

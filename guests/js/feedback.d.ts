@@ -66,6 +66,39 @@ export function showToast(options: ToastOptions): Toast;
  */
 export function showHUD(title: string, style?: ToastStyle): void;
 
+/** What {@link confirmAlert} asks. */
+export interface ConfirmOptions {
+  title: string;
+  /** More text under the title. */
+  message?: string | null;
+  /**
+   * The primary button: Enter chooses it. Its title is "OK" when omitted;
+   * `"destructive"` draws it in the destructive style.
+   */
+  primaryAction?: { title?: string; style?: "default" | "destructive" } | null;
+  /** The dismiss button: Escape chooses it. Its title is "Cancel" when omitted. */
+  dismissAction?: { title?: string } | null;
+  /**
+   * Offers "Don't ask again": once the user ticks it and answers with a
+   * button, Pane remembers the answer under this key for the command's
+   * package, and later confirmations with the same key resolve with it at
+   * once, showing nothing, until the user resets the package's
+   * confirmations in Settings › Extensions.
+   */
+  remember?: string | null;
+}
+
+/**
+ * Asks the user to confirm before something that cannot be undone: shown
+ * over the launcher's screen, the launcher shown first if it is hidden.
+ * Resolves with whether the user chose the primary button; the dismiss
+ * button, Escape, a click outside it or the window losing the focus
+ * resolve with `false`. Rejects with an Error saying why Pane asked
+ * nothing: a background launch, a schedule or a service has no window to
+ * ask in.
+ */
+export function confirmAlert(options: ConfirmOptions): Promise<boolean>;
+
 /**
  * What the launcher shows the next time it is shown, once
  * {@link closeMainWindow} hid it: `"default"` follows the user's Launcher

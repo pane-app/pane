@@ -20,6 +20,7 @@ mod clear_cache;
 mod clipboard;
 mod clipboard_view;
 mod command_search;
+mod confirmations;
 mod dependencies;
 mod develop;
 mod develop_builds;

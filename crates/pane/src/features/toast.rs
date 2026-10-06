@@ -278,7 +278,8 @@ impl LauncherWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.actions.is_some() || self.menu.is_some() {
+        // A confirmation over the launcher takes the keys first (#146).
+        if self.actions.is_some() || self.menu.is_some() || self.launcher.confirmation().is_some() {
             return;
         }
         let status = self.launcher.view().status;
