@@ -268,7 +268,8 @@ fn item_actions(listed: &Listed, keys: &PaneKeys) -> ItemActions {
                         (
                             None,
                             Some(format!(
-                                "{binding} has no Ctrl, Alt or Cmd, so it would take a key a                                  search field types or moves with"
+                                "{binding} has no Ctrl, Alt or Cmd, so it would take a key a \
+                                 search field types or moves with"
                             )),
                         )
                     } else if let Some((_, first)) = bound.iter().find(|(held, _)| held == binding)
