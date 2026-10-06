@@ -2,10 +2,11 @@
 //
 // The system Pane runs on, for a JS/TS command (`@pane/extension/system`):
 // the clipboard, opening anything, revealing a path in the file manager
-// and moving paths to the Recycle Bin, through
-// `pane:extension/system@0.1.0` (wit/system.wit); and the standard
-// actions built from them, as Raycast's built-in ones behave (Copy, Open,
-// Open With…, Show in Explorer, Move to Recycle Bin), which close the
+// and moving paths to the Recycle Bin, pasting into the application that
+// was in front before Pane, that application and the text selected in it,
+// through `pane:extension/system@0.1.0` (wit/system.wit); and the standard
+// actions built from them, as Raycast's built-in ones behave (Copy, Paste,
+// Open, Open With…, Show in Explorer, Move to Recycle Bin), which close the
 // window after they act. Bundled into the command that imports it, like
 // any npm module.
 //
@@ -17,10 +18,13 @@
 import { installed } from "pane:extension/applications@0.1.0";
 import {
   copy as put,
+  frontApplication as front,
   open as openTarget,
+  paste as pasteInto,
   readClipboard as read,
   reveal,
   runningOn as running,
+  selectedText as selected,
   trash as recycle,
 } from "pane:extension/system@0.1.0";
 import { closeMainWindow, showHUD, showToast } from "./feedback.js";
@@ -94,6 +98,65 @@ export function showInFileManager(path) {
   host(() => reveal(String(path)));
 }
 
+/**
+ * Thrown by {@link paste}, {@link frontApplication} and
+ * {@link selectedText} where Pane cannot do them on this system yet: not a
+ * failure. Its message says what is not available.
+ */
+export class NotAvailableError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "NotAvailableError";
+  }
+}
+
+/**
+ * Runs a host function answering `system-error`: its `not-available` is a
+ * {@link NotAvailableError}, its `failed` an `Error` with the reason.
+ */
+function power(call) {
+  try {
+    return call();
+  } catch (error) {
+    const payload = /** @type {{ payload?: { tag?: string, val?: unknown } }} */ (error)?.payload;
+    if (payload?.tag === "not-available") throw new NotAvailableError(String(payload.val));
+    if (payload?.tag === "failed") throw new Error(String(payload.val));
+    throw error;
+  }
+}
+
+/**
+ * Closes the window and pastes `content` (text, `{ text }` or `{ file }`)
+ * into the application that was in front before Pane, then puts back what
+ * the clipboard held. Throws a {@link NotAvailableError} where Pane cannot
+ * paste yet (leaving the window open), or an `Error` saying why it failed.
+ */
+export function paste(content) {
+  power(() => pasteInto(wire(content)));
+}
+
+/**
+ * The application that was in front before Pane, `{ name, icon }`, or
+ * `null` when there is none. `icon` is a file icon (`{ file }`) of its
+ * program, bundle or desktop entry, ready for an item's icon, or `null`.
+ * Throws a {@link NotAvailableError} where Pane cannot tell yet.
+ */
+export function frontApplication() {
+  const app = power(() => front());
+  if (app == null) return null;
+  return { name: app.name, icon: app.icon == null ? null : { file: app.icon } };
+}
+
+/**
+ * The text selected in the application that was in front before Pane, or
+ * `null` when nothing is selected there (which is not a failure). Throws a
+ * {@link NotAvailableError} where Pane cannot read it yet.
+ */
+export function selectedText() {
+  const text = power(() => selected());
+  return text == null ? null : text;
+}
+
 /** Thrown by {@link trash}: what was not moved, each with why. */
 export class TrashError extends Error {
   constructor(notTrashed, of) {
@@ -148,6 +211,31 @@ export function copyAction(content, options = {}) {
     onAction: async () => {
       copy(content, { concealed: options?.concealed });
       finish(options?.keepWindowOpen, "Copied to Clipboard", true);
+    },
+    ...placed(options),
+  };
+}
+
+/** What Paste says in a HUD when it copied instead, where Pane cannot paste yet. */
+export const PASTE_FALLBACK = "Copied — paste is not available here yet";
+
+/**
+ * Paste: closes the window and pastes `content` into the application that
+ * was in front before Pane. Where Pane cannot paste yet, it copies
+ * `content` instead, closes the window and says so in a HUD
+ * ({@link PASTE_FALLBACK}). It always closes the window.
+ */
+export function pasteAction(content, options = {}) {
+  return {
+    title: options?.title ?? "Paste",
+    onAction: async () => {
+      try {
+        paste(content);
+      } catch (error) {
+        if (!(error instanceof NotAvailableError)) throw error;
+        copy(content);
+        finish(false, PASTE_FALLBACK, true);
+      }
     },
     ...placed(options),
   };

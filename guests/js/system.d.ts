@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
 // Declarations for `@pane/extension/system` (system.js): the clipboard,
-// opening anything, revealing a path in the file manager and moving paths
-// to the Recycle Bin, through `pane:extension/system@0.1.0`
+// opening anything, revealing a path in the file manager, moving paths to
+// the Recycle Bin, pasting into the application that was in front before
+// Pane, that application and its selected text, through
+// `pane:extension/system@0.1.0`
 // (system-host.d.ts, wit/system.wit); and the standard actions built from
 // them, which close the window after they act, as Raycast's built-in ones
 // do.
@@ -56,6 +58,48 @@ export function open(target: string, application?: string | null): void;
 /** Shows `path` selected in the file manager (File Explorer on Windows). */
 export function showInFileManager(path: string): void;
 
+/**
+ * Thrown by {@link paste}, {@link frontApplication} and
+ * {@link selectedText} where Pane cannot do them on this system yet (on
+ * macOS and Linux, and on Windows until Pane's Windows power features
+ * land). Not a failure: the command can do something else, as
+ * {@link pasteAction} copies instead. Its message says what is not
+ * available.
+ */
+export class NotAvailableError extends Error {}
+
+/** The application that was in front before Pane. */
+export interface FrontApplication {
+  /** Its name, as the system shows it ("Notepad"). */
+  name: string;
+  /** Its icon: the system icon of its program, bundle or desktop entry. */
+  icon: { file: string } | null;
+}
+
+/**
+ * Closes the window, brings the application that was in front before Pane
+ * back to the front and pastes `content` into it, then puts back what the
+ * clipboard held unless something else was copied meanwhile. Throws a
+ * {@link NotAvailableError} where Pane cannot paste yet (the window stays
+ * open), or an `Error` saying why it failed.
+ */
+export function paste(content: ClipContent): void;
+
+/**
+ * The application that was in front before Pane, or `null` when there is
+ * none. Throws a {@link NotAvailableError} where Pane cannot tell yet, or
+ * an `Error` saying why it failed.
+ */
+export function frontApplication(): FrontApplication | null;
+
+/**
+ * The text selected in the application that was in front before Pane, or
+ * `null` when nothing is selected there (not a failure). Throws a
+ * {@link NotAvailableError} where Pane cannot read it yet, or an `Error`
+ * saying why it failed.
+ */
+export function selectedText(): string | null;
+
 /** Thrown by {@link trash}: the paths it did not move, each with why. */
 export class TrashError extends Error {
   readonly notTrashed: NotTrashed[];
@@ -88,6 +132,21 @@ export interface StandardActionOptions {
 export function copyAction(
   content: ClipContent,
   options?: StandardActionOptions & { concealed?: boolean },
+): Action;
+
+/** What {@link pasteAction} says in a HUD when it copied instead. */
+export const PASTE_FALLBACK: string;
+
+/**
+ * Paste: closes the window and pastes `content` into the application that
+ * was in front before Pane. Where Pane cannot paste yet, it copies
+ * `content`, closes the window and says so in a HUD ("Copied — paste is not
+ * available here yet"). It always closes the window: `keepWindowOpen` does
+ * not apply.
+ */
+export function pasteAction(
+  content: ClipContent,
+  options?: Omit<StandardActionOptions, "keepWindowOpen">,
 ): Action;
 
 /** Open: opens `target` (with `application` when given), then closes the window. */

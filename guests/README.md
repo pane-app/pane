@@ -1215,6 +1215,71 @@ const actions = [
 The actions sample's "System" item calls each function on its own, and its
 "Standard actions" item has every standard action.
 
+### Paste, the front application and selected text
+
+Three more system functions reach the application that was in front before
+Pane:
+
+- **paste** closes the window, brings that application back to the front,
+  pastes text or a file into it through the clipboard, then puts back what
+  the clipboard held, unless something else was copied meanwhile. The
+  pasted content and what is put back are both copied concealed, so
+  clipboard managers keep neither.
+- **front-application** answers that application's name and icon (the path
+  or `shell:` name whose system icon it is), or none.
+- **selected-text** answers the text selected in it, or none when nothing is
+  selected, which is not a failure.
+
+Each answers either "not available on this system yet" or a failure, and
+the two are different. Until Pane's Windows power features land, and on
+macOS and Linux (X11 included) for now, all three answer "not available".
+That answer is never a reason to pause the package. Where paste is not
+available, the window stays open and the clipboard is left alone. The
+standard **Paste** action then copies the content instead, closes the
+window and shows "Copied — paste is not available here yet" in a HUD.
+
+Rust (`SystemError::NotAvailable` / `SystemError::Failed`):
+
+```rust
+use pane_guest::actions;
+use pane_guest::system::{self, Clip, SystemError};
+
+let title = match system::front_application() {
+    Ok(Some(front)) => format!("Paste to {}", front.name),
+    _ => "Paste to Active App".into(),
+};
+Item::new("snippet", "Snippet").actions([
+    actions::paste(Clip::Text("Kind regards".into())).into(),
+    actions::paste(Clip::Text("Kind regards".into())).title(title).into(),
+]);
+match system::selected_text() {
+    Ok(Some(text)) => { /* use it */ }
+    Ok(None) => { /* nothing is selected */ }
+    Err(SystemError::NotAvailable(why)) => { /* do something else */ }
+    Err(SystemError::Failed(why)) => return Err(why),
+}
+```
+
+JavaScript or TypeScript (a `NotAvailableError`, or an `Error` for a
+failure):
+
+```ts
+import { frontApplication, NotAvailableError, pasteAction, selectedText } from "@pane/extension/system";
+
+const front = frontApplication(); // { name, icon: { file } | null } or null
+const actions = [pasteAction("Kind regards"), pasteAction("Kind regards", { title: `Paste to ${front?.name}` })];
+try {
+  const text = selectedText(); // null when nothing is selected
+} catch (error) {
+  if (!(error instanceof NotAvailableError)) throw error;
+}
+```
+
+The actions sample's "Paste" item has the standard Paste, a "Paste to …"
+titled from the front application, a paste that reports each answer, the
+front application's name and icon, and "Search Selection", which handles
+each answer of selected-text.
+
 ## A command that takes a query
 
 The user can give any installed command an alias in Manage extensions, and
