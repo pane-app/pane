@@ -4,14 +4,19 @@
 //! - A text field is GPUI CE's editable text element (typing, editing keys,
 //!   clipboard, undo and input-method composition) inside a focusable
 //!   `TextInput` node that carries the label, value, placeholder and error.
+//!   A password field (a password argument in Pane's argument form) is the
+//!   same field with its text concealed: drawn as dots, and reported to
+//!   assistive technology as dots too.
 //! - A choice field is a `RadioGroup` of `RadioButton`s. The group holds focus
 //!   and the chosen option is its active descendant; arrow keys change the
 //!   choice, like a native radio group.
 //! - The submit button is a focusable `Button`; Enter or Space presses it.
 //!
 //! Tab and Shift-Tab move through the controls in order. Enter anywhere on
-//! the form submits it and Escape returns to the command. After a rejected
-//! submission, focus moves to the rejected field.
+//! the form submits it and Escape returns to the command. A form opens with
+//! focus on its first required field that is empty (Pane's argument form),
+//! else on its first field. After a rejected submission (a required field
+//! left empty, too), focus moves to the rejected field.
 //!
 //! The controls are drawn with the Settings board's families (#99,
 //! `ui::controls`), the launcher's own copies of their styling gone: each
@@ -21,7 +26,7 @@
 
 use gpui::{
     AnyElement, App, Context, Div, Entity, FocusHandle, Focusable, KeyBinding, Role, Stateful,
-    Subscription, Toggled, Window, actions, div, prelude::*, px,
+    Subscription, Toggled, Window, actions, div, prelude::*, px, transparent_black,
 };
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
 use pane_core::{FieldKind, FormField, FormView, Screen, Status};
@@ -53,6 +58,19 @@ pub(crate) struct FormControls {
     fields: Vec<Control>,
     submit: FocusHandle,
     _subscriptions: Vec<Subscription>,
+    /// The fields they were made for (see [`shape`]): a form that replaced
+    /// another without a screen between them (an argument form a hotkey
+    /// opened over a form) gets controls of its own.
+    shape: Vec<(String, bool)>,
+}
+
+/// What a form's controls depend on: each field's id, and whether it is a
+/// choice (else a text field).
+fn shape(form: &FormView) -> Vec<(String, bool)> {
+    form.fields
+        .iter()
+        .map(|field| (field.id.clone(), matches!(field.kind, FieldKind::Choice(_))))
+        .collect()
 }
 
 enum Control {
@@ -102,29 +120,39 @@ impl LauncherWindow {
     }
 
     /// Creates or drops the form's controls to match the launcher's screen,
-    /// and moves focus accordingly: to the first field of a newly opened
-    /// form, back to the list when the form closes, and to the rejected field
-    /// after a rejected submission.
+    /// and moves focus accordingly: to the first required field that is
+    /// empty of a newly opened form, else its first field; back to the list
+    /// when the form closes; and to the rejected field after a rejected
+    /// submission.
     pub(crate) fn sync_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let view = self.launcher.view();
         let form = match view.screen {
             Screen::Form(form) => Some(form),
             _ => None,
         };
+        let new = match (&form, &self.form) {
+            (Some(form), Some(controls)) => controls.shape != shape(form),
+            (Some(_), None) => true,
+            (None, _) => false,
+        };
         match (form, self.form.is_some()) {
-            (Some(form), false) => {
-                let controls = self.form_controls(&form, cx);
-                if let Some(first) = controls.fields.first() {
-                    window.focus(&first.focus_handle(cx), cx);
-                }
-                self.form = Some(controls);
-            }
-            (Some(form), true) => {
+            (Some(form), true) if !new => {
                 let rejected = form.fields.iter().position(|field| field.error.is_some());
                 if let (Some(index), Status::Error(_)) = (rejected, view.status) {
                     let handle = self.form.as_ref().unwrap().fields[index].focus_handle(cx);
                     window.focus(&handle, cx);
                 }
+            }
+            (Some(form), _) => {
+                let controls = self.form_controls(&form, cx);
+                let empty_required = form
+                    .fields
+                    .iter()
+                    .position(|field| field.required && field.value.trim().is_empty());
+                if let Some(first) = controls.fields.get(empty_required.unwrap_or(0)) {
+                    window.focus(&first.focus_handle(cx), cx);
+                }
+                self.form = Some(controls);
             }
             (None, true) => {
                 self.form = None;
@@ -140,7 +168,7 @@ impl LauncherWindow {
             .fields
             .iter()
             .map(|field| match &field.kind {
-                FieldKind::Text { .. } => {
+                FieldKind::Text { .. } | FieldKind::Password { .. } => {
                     let input = cx.new(|cx| EditableTextState::new(StringStorage::default(), cx));
                     input.focus_handle(cx).tab_stop(true);
                     // An extension's text field starts empty; Pane's own
@@ -165,6 +193,7 @@ impl LauncherWindow {
             fields,
             submit: cx.focus_handle().tab_stop(true),
             _subscriptions: subscriptions,
+            shape: shape(form),
         }
     }
 
@@ -241,6 +270,20 @@ impl LauncherWindow {
         let theme = &visuals.theme;
         let control = match (control, &field.kind) {
             (Control::Text(input), FieldKind::Text { placeholder }) => text_control(
+                TextControl {
+                    index,
+                    id: &field.id,
+                    label: &field.label,
+                    value: &field.value,
+                    placeholder: placeholder.as_deref().unwrap_or_default(),
+                    error: error.as_deref(),
+                },
+                input,
+                &input.focus_handle(cx),
+                theme,
+            )
+            .into_any_element(),
+            (Control::Text(input), FieldKind::Password { placeholder }) => password_control(
                 TextControl {
                     index,
                     id: &field.id,
@@ -389,6 +432,63 @@ pub(crate) fn text_control(
             field.placeholder.to_owned(),
             theme,
         ))
+}
+
+/// The character a password field shows for each character typed.
+const CONCEALED: char = '\u{2022}';
+
+/// A password field: a text field ([`text_control`]) whose text is drawn
+/// transparent, with a dot for each character over it, and whose value
+/// assistive technology reads as those dots. GPUI CE's editable text has
+/// no masking of its own yet (it is on its backlog), so the dots are drawn
+/// over the field and do not follow the caret's glyph widths exactly.
+pub(crate) fn password_control(
+    field: TextControl<'_>,
+    input: &Entity<EditableTextState>,
+    focus: &FocusHandle,
+    theme: &Theme,
+) -> Stateful<Div> {
+    let selector = format!("field-{}", field.id);
+    let ring = controls::well_shadows(true, theme);
+    let dots: String = field.value.chars().map(|_| CONCEALED).collect();
+    controls::well(false, theme)
+        .id(("field", field.index))
+        .debug_selector(move || selector)
+        .track_focus(focus)
+        .role(Role::TextInput)
+        .aria_label(field.label.to_owned())
+        .aria_value(dots.clone())
+        .aria_placeholder(field.placeholder.to_owned())
+        .when_some(field.error, |node, error| {
+            node.aria_description(error.to_owned())
+        })
+        .focus(move |node| node.shadow(ring))
+        .child(
+            div()
+                .relative()
+                .flex_1()
+                .min_w(px(0.))
+                .child(
+                    controls::well_input(
+                        text_input(("input", field.index)).state(input.downgrade()),
+                        field.placeholder.to_owned(),
+                        theme,
+                    )
+                    .text_color(transparent_black()),
+                )
+                .child(
+                    div()
+                        .id(("concealed", field.index))
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .whitespace_nowrap()
+                        .overflow_hidden()
+                        .text_color(theme.text_title)
+                        .aria_hidden()
+                        .child(dots),
+                ),
+        )
 }
 
 /// One choice of a choice field: a segment of its track, a radio button

@@ -20,6 +20,7 @@ members = [
     "sample-schedule",
     "sample-service",
     "sample-actions",
+    "sample-arguments",
     "sample-helper",
     "fixtures/faulty",
     "fixtures/operations",

@@ -39,6 +39,7 @@ mod acquire;
 mod actions;
 mod aliases;
 mod application_update;
+mod argument_form;
 mod choices;
 pub mod clipboard_view;
 mod command_search;
@@ -150,8 +151,9 @@ pub struct CommandRegistration {
     pub title: String,
     pub subtitle: Option<String>,
     pub component: PathBuf,
-    /// Whether the command takes a query (`"takesQuery": true`): text typed
-    /// into root search, sent to it through its alias or as a fallback.
+    /// Whether the command takes a query (`"takesQuery": true`, or a first
+    /// argument that is text with every other optional): text typed into
+    /// root search, sent to it through its alias or as a fallback.
     pub takes_query: bool,
     /// Whether the command searches as the user types into its own search
     /// field once it is open (`"search": true`); root search never asks it.
@@ -406,6 +408,10 @@ pub struct FormField {
     pub value: String,
     /// Why the extension rejected this field on the last submission.
     pub error: Option<String>,
+    /// Whether the form needs a value in it: a required argument in Pane's
+    /// argument form, whose first empty one the window focuses. An
+    /// extension's form and Pane's other forms say `false`.
+    pub required: bool,
 }
 
 /// An open custom view as the extension last drew it.
@@ -688,6 +694,9 @@ struct State {
     open_pane: OpenPane,
     /// The aliases and fallbacks the user gave commands.
     aliases: Record<AliasChoices>,
+    /// The dropdown arguments' values each command was last launched with
+    /// (see `argument_form`).
+    remembered_arguments: Record<argument_form::ArgumentChoices>,
     /// The quick slots the user pinned results to, and their record (see
     /// `quick_slots`).
     quick_slots: quick_slots::Kept,
@@ -876,6 +885,9 @@ enum FormPurpose {
     Npm,
     /// Previews the Git repository it names (Pane's own).
     Git,
+    /// Launches the command waiting for its arguments, with the form's
+    /// values (Pane's own argument form; see `argument_form`).
+    Arguments(Box<argument_form::Asking>),
 }
 
 /// What the launcher keeps about the open custom view besides its snapshot.
@@ -1225,6 +1237,11 @@ impl Launcher {
                 Record::default(),
             ),
         };
+        let remembered_arguments = installation
+            .as_ref()
+            .map_or_else(Record::default, |installation| {
+                Record::open(&installation.dir)
+            });
         let update_controls = installation
             .as_ref()
             .and_then(|installation| updates::UpdateControls::open(&installation.dir))
@@ -1255,6 +1272,7 @@ impl Launcher {
             bindings,
             open_pane: OpenPane::default(),
             aliases,
+            remembered_arguments,
             quick_slots: quick_slots::Kept::default(),
             acquisitions: Acquisitions::default(),
             updates: Updates::default(),
@@ -3046,10 +3064,13 @@ impl Launcher {
     /// reply, submitting again does nothing.
     ///
     /// Pane's own alias form is applied at once instead (see `aliases`);
-    /// the future records it.
+    /// the future records it. Pane's argument form launches its command
+    /// with the values given, or takes focus to a required field left
+    /// empty (see `argument_form`); the future runs the command.
     pub fn submit_form(&self) -> impl Future<Output = ()> + Send + 'static {
         let mut state = self.lock();
         let state = &mut *state;
+        let arguments = self.submit_arguments(state);
         let alias_change = match (&state.view.screen, &state.form) {
             (
                 Screen::Form(_),
@@ -3121,6 +3142,9 @@ impl Launcher {
             .and_then(|(component, ..)| self.data_in(state, component));
         let launcher = self.clone();
         async move {
+            if let Some(submitted) = arguments {
+                launcher.launch_submitted(submitted).await;
+            }
             if let Some(change) = alias_change {
                 launcher.finish_choice_change(change).await;
             }
@@ -3918,7 +3942,7 @@ fn open_form(state: &mut State, item_id: String, form: Form) {
         .into_iter()
         .map(|field| {
             let value = match &field.kind {
-                FieldKind::Text { .. } => String::new(),
+                FieldKind::Text { .. } | FieldKind::Password { .. } => String::new(),
                 FieldKind::Choice(choices) => choices
                     .first()
                     .map(|choice| choice.id.clone())
@@ -3930,6 +3954,7 @@ fn open_form(state: &mut State, item_id: String, form: Form) {
                 kind: field.kind,
                 value,
                 error: None,
+                required: false,
             }
         })
         .collect();

@@ -87,6 +87,8 @@ SAMPLES = [
     ("sample_service_ts.wasm", "guests/sample-service-ts"),
     ("sample_actions_js.wasm", "guests/sample-actions-js"),
     ("sample_actions_ts.wasm", "guests/sample-actions-ts"),
+    ("sample_arguments_js.wasm", "guests/sample-arguments-js"),
+    ("sample_arguments_ts.wasm", "guests/sample-arguments-ts"),
 ]
 # Pane's WIT, copied beside the world in guests/js/wit.
 PANE_WIT = ["extension.wit", "commands.wit", "data.wit", "root-results.wit", "operations.wit", "applications.wit",

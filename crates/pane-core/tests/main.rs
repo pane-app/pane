@@ -15,6 +15,7 @@ mod application_adapters;
 mod application_cache;
 mod application_update;
 mod applications;
+mod arguments;
 mod calculator;
 mod clear_cache;
 mod clipboard;

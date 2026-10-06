@@ -321,6 +321,7 @@ impl Launcher {
         for (identity, title) in identities.iter().zip(&titles) {
             let forget_hotkeys = self.forget_hotkeys_of(&mut self.lock(), identity);
             let forget_aliases = self.forget_aliases_of(&mut self.lock(), identity);
+            let forget_arguments = self.forget_arguments_of(&mut self.lock(), identity);
             let files = self.lock().files.clone();
             let data = installation.data.clone();
             let store = installation.store.clone();
@@ -333,6 +334,11 @@ impl Launcher {
                 }
                 if let Some(Err(error)) = forget_aliases.map(|forget| forget()) {
                     problems.push(format!("could not forget its aliases: {error}"));
+                }
+                if let Some(Err(error)) = forget_arguments.map(|forget| forget()) {
+                    problems.push(format!(
+                        "could not forget its remembered arguments: {error}"
+                    ));
                 }
                 // The folder it was granted is Pane's record, not its data:
                 // it goes whether or not data is kept, for every package

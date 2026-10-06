@@ -421,6 +421,7 @@ impl Launcher {
                 },
                 value: String::new(),
                 error: None,
+                required: false,
             }],
             submit_label: "Show package".into(),
         };
@@ -447,6 +448,7 @@ impl Launcher {
                 },
                 value: String::new(),
                 error: None,
+                required: false,
             }],
             submit_label: "Show package".into(),
         };

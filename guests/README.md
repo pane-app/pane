@@ -138,6 +138,17 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   Their packages are `packages/sample-actions` and its `-js`/`-ts`
   copies; held alike by `crates/pane-core/tests/item_actions.rs`, and the
   Rust one by `crates/pane/tests/item_actions.rs`.
+- `sample-arguments`, `sample-arguments-js`, `sample-arguments-ts`: the
+  arguments sample in Rust, JavaScript and TypeScript (#144), one component
+  serving three no-view commands ([Arguments](#arguments)): "Greet" asks for
+  a required name, an optional secret (a password) and a tone (a dropdown)
+  and answers what it was given (only the secret's length), "Stamp" asks
+  for a required label, for its hotkey and quick slot, and "Relay"
+  launches the command its text names with the arguments it lists
+  (`background stamp label=x`), or answers what "Stamp" last kept
+  (`last`). Their packages are `packages/sample-arguments` and its
+  `-js`/`-ts` copies; held alike by `crates/pane-core/tests/arguments.rs`,
+  and the Rust one by `crates/pane/tests/arguments.rs`.
 - `hello-rust`, `hello-js`, `hello-ts`: one "Say hello" command each, a
   package built in its own folder, as an author's would be, for
   [development mode](../docs/development-mode.md): Pane builds and reloads
@@ -985,7 +996,7 @@ command itself every interval, in the background, showing nothing:
 Every command receives its **launch record** on every way in: whether the
 user launched it or Pane did in the background, from where (root search,
 an alias, a fallback, a hotkey, a quick slot, another command, a
-schedule), its arguments (none yet), the text sent through its alias or as
+schedule), its [arguments](#arguments), the text sent through its alias or as
 a fallback, and the JSON context another command passed
 ([`wit/commands.wit`](../wit/commands.wit)).
 
@@ -1039,6 +1050,50 @@ launch has started, not when the target has run. The
 [no-view sample](sample-no-view) does all of this in Rust, and its
 [JavaScript](sample-no-view-js) and [TypeScript](sample-no-view-ts) copies
 answer the same.
+
+## Arguments
+
+A command may ask for up to three typed values before each run: its
+`pane.json` entry declares `arguments`, each with a `name`, a `type`
+(`text`, `password` or `dropdown`), an optional `placeholder`, `required`
+(false unless it says) and, for a dropdown, its `options` (a value, or a
+`value` with a `title`):
+
+```json
+{ "id": "greet", "title": "Greet", "component": "greet.wasm", "mode": "no-view",
+  "arguments": [
+    { "name": "name", "type": "text", "placeholder": "Name", "required": true },
+    { "name": "secret", "type": "password", "placeholder": "Secret" },
+    { "name": "tone", "type": "dropdown", "placeholder": "Tone",
+      "options": [{ "value": "warm", "title": "Warm" }, "brief"] }
+  ] }
+```
+
+A fourth argument, a repeated name, an unknown type, a dropdown without
+options, and a required argument on a command with a `schedule` are
+refused at install with the reason.
+
+The values reach the command in its launch record's `arguments`, by name,
+in the order it declares them; an optional argument left empty is absent
+(`launch.argument("name")` in Rust, `launch.arguments.find(...)` in
+JavaScript and TypeScript). When a launch the user started leaves a
+required argument without a value, Pane first shows its argument form:
+the command's title and one field per argument, focus on the first empty
+required one; Enter with a required field still empty takes focus to it,
+and Escape launches nothing. This is how a global hotkey, a quick slot or
+another command's launch without values asks; root search's own inline
+fields come later. A background launch with a required argument missing
+is refused.
+
+Text sent through the command's alias or to it as a fallback fills its
+first text or password argument unless that has a value, and stays the
+launch record's fallback text. A command may be a fallback when it takes
+a query, or when its first argument is text and every other is optional.
+Pane remembers the last value of each dropdown per command and chooses it
+next time; it never records a password's value anywhere. The
+[arguments sample](sample-arguments) does all of this in Rust, and its
+[JavaScript](sample-arguments-js) and [TypeScript](sample-arguments-ts)
+copies answer the same.
 
 ## A command that takes a query
 

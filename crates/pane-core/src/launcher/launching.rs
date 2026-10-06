@@ -15,20 +15,30 @@
 //! 0016). An error it answers is the extension's operation error and never
 //! counts towards pausing; a crash still does.
 //!
+//! Every launch passes the argument form's step on its way
+//! ([`Launcher::launch_with_arguments`], see `argument_form`): a launch the
+//! user started that leaves a required argument without a value shows the
+//! form instead, and runs once it is submitted. The setup gate of the
+//! preferences ticket (#143) comes before it, in
+//! [`Launcher::launch_opening`].
+//!
 //! A command launches another with `pane:extension/commands.launch`
 //! ([`Launcher::launch_from_guest`]): one of its own package's by manifest
 //! id, or another installed package's by package identity, passing JSON
 //! context and asking nothing, since extensions are trusted. A
 //! user-initiated launch opens the target as if the user had invoked it; a
 //! background launch runs a no-view command without a window and shows
-//! nothing, and is refused for a view command. The launch starts on a
+//! nothing, and is refused for a view command and for one with a required
+//! argument the launch gives no value. The arguments it passes must be the
+//! target's, a dropdown's among its options. The launch starts on a
 //! thread of its own, so the caller's call never waits for the target (the
 //! target may need the caller's own instance, which the caller holds until
 //! it answers).
 
 use std::sync::{Condvar, Mutex, MutexGuard};
 
-use super::{Launcher, Opening, Screen, State, Status, owner, stopped};
+use super::{Launcher, Opening, Screen, State, Status, argument_form, owner, stopped};
+use crate::arguments;
 use crate::extension_data::PackageData;
 use crate::launch::{LaunchRecord, LaunchRequest, LaunchSource, LaunchType};
 use crate::operations::{MAX_OPERATION_JSON, identity_key};
@@ -72,10 +82,40 @@ impl InFlight {
 }
 
 impl Launcher {
-    /// Launches the command `opening` names, as its launch record says:
-    /// a no-view command runs ([`Launcher::run_no_view`]), a view command
-    /// opens its screen ([`Launcher::open_command`]).
+    /// Launches the command `opening` names, as its launch record says,
+    /// every way in: root search, an alias, a fallback, a hotkey, a quick
+    /// slot or another command. The setup gate (#143) goes here, before
+    /// the argument form's step.
     pub(super) async fn launch_opening(
+        &self,
+        epoch: u64,
+        opening: Opening,
+        data: Option<PackageData>,
+    ) {
+        self.launch_with_arguments(epoch, opening, data).await
+    }
+
+    /// The argument form's step of a launch, then the launch: when a
+    /// required argument is still without a value, the argument form is
+    /// shown and the command runs once it is submitted
+    /// ([`Launcher::ask_for_arguments`]); otherwise it launches now with
+    /// its arguments filled in. What a setup gate lets through continues
+    /// here.
+    pub(super) async fn launch_with_arguments(
+        &self,
+        epoch: u64,
+        opening: Opening,
+        data: Option<PackageData>,
+    ) {
+        if let Some(opening) = self.ask_for_arguments(epoch, opening) {
+            self.launch_ready(epoch, opening, data).await
+        }
+    }
+
+    /// Launches `opening` with nothing more to ask: a no-view command runs
+    /// ([`Launcher::run_no_view`]), a view command opens its screen
+    /// ([`Launcher::open_command`]).
+    pub(super) async fn launch_ready(
         &self,
         epoch: u64,
         opening: Opening,
@@ -155,11 +195,13 @@ impl Launcher {
     }
 
     /// Whether pressing the global hotkey `shortcut` shows Pane's window:
-    /// not for a no-view command, which runs without it (ADR 0037). The
-    /// window asks before [`Launcher::press_hotkey`].
+    /// not for a no-view command, which runs without it (ADR 0037), unless
+    /// it asks for its arguments first (the argument form). The window
+    /// asks before [`Launcher::press_hotkey`].
     pub fn hotkey_shows_window(&self, shortcut: &crate::hotkeys::Shortcut) -> bool {
-        self.hotkey_opening(&self.lock(), shortcut)
-            .is_none_or(|opening| !opening.no_view)
+        let state = self.lock();
+        self.hotkey_opening(&state, shortcut)
+            .is_none_or(|opening| !opening.no_view || argument_form::asks_first(&state, &opening))
     }
 
     /// Whether a command a guest launched asked for Pane's window since
@@ -184,10 +226,13 @@ impl Launcher {
     /// Starts the launch a guest asked for (`pane:extension/commands`), or
     /// says why it will not: the target is not installed, has no such
     /// command, is disabled, paused or unavailable on this system, a
-    /// background launch names a view command, or the context is not JSON
-    /// within Pane's limit. Called on the runtime thread, inside the
-    /// caller's call: it never waits for the target, which runs on a thread
-    /// of its own.
+    /// background launch names a view command or leaves a required
+    /// argument without a value, an argument passed is not the target's (or
+    /// a dropdown's value not among its options), or the context is not
+    /// JSON within Pane's limit. A user-initiated launch that leaves a
+    /// required argument without a value shows the argument form. Called on
+    /// the runtime thread, inside the caller's call: it never waits for the
+    /// target, which runs on a thread of its own.
     pub(super) fn launch_from_guest(&self, request: LaunchRequest) -> Result<(), String> {
         let mut guard = self.lock();
         let state = &mut *guard;
@@ -242,6 +287,18 @@ impl Launcher {
                 "{} of {title} opens a view, so it cannot be launched in the background; \
                  launch it user-initiated",
                 registration.title
+            ));
+        }
+        let declared = package.arguments_of(command);
+        arguments::check_given(declared, &request.arguments)
+            .map_err(|why| format!("{} of {title}: {why}", registration.title))?;
+        if request.launch_type == LaunchType::Background
+            && let Some(missing) = arguments::first_missing(declared, &request.arguments)
+        {
+            return Err(format!(
+                "{} of {title} needs a value for its argument `{}`, which a background launch \
+                 cannot ask for; pass it, or launch it user-initiated",
+                registration.title, missing.name
             ));
         }
         if let Some(context) = &request.context {

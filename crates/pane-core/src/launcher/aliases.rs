@@ -3,13 +3,17 @@
 //!
 //! - An **alias** is one word the user gives a command in Manage extensions.
 //!   Typing it in root search lists the command first, above everything
-//!   else. For a command that takes a query (`"takesQuery": true`), typing
-//!   the alias, a space and more text lists a row that sends that text to
-//!   the command when the user invokes it.
+//!   else. For a command that takes a query (`"takesQuery": true`, or a
+//!   first argument that is text with every other optional; see
+//!   `arguments`), typing the alias, a space and more text lists a row that
+//!   sends that text to the command when the user invokes it.
 //! - A **fallback** is a command that takes a query, which the user chose to
 //!   have offered for any text typed in root search: it is listed below every
 //!   other result and never selected by itself, so the text reaches it only
 //!   when the user chooses it.
+//!
+//! The text sent also fills the command's first text or password argument
+//! when it has one without a value (see `argument_form`).
 //!
 //! Nothing runs while the user types: the text is sent to the command only
 //! when its row is invoked, as its launch record's fallback text, trimmed
@@ -341,7 +345,7 @@ impl Launcher {
                     configured.push(Configured {
                         id: registration.id,
                         title: registration.title,
-                        takes_query: command.takes_query,
+                        takes_query: command.accepts_fallback_text(),
                         identity: &package.identity,
                         inactive: package_inactive.clone().or(unavailable),
                     });
@@ -469,6 +473,7 @@ impl Launcher {
                 },
                 value: current,
                 error: None,
+                required: false,
             }],
             submit_label: "Save alias".into(),
         };
