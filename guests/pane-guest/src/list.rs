@@ -1,12 +1,18 @@
 //! A command's list, as an author writes it: a [`List`] of [`Item`]s whose
-//! action is a closure. The command implements [`Command`] and calls
+//! actions are closures. The command implements [`Command`] and calls
 //! [`export!`](crate::export); the SDK answers Pane's `render` with the
 //! list as the versioned JSON tree of `docs/list-tree.md`, names each
 //! action by a callback id, and runs the closure when Pane hands that id
 //! to `handle-event`. Authors never see the JSON or the ids.
 //!
-//! An item's action is named by the item's id, so the same item has the
-//! same callback in every drawing of the list. Pane draws the list again
+//! An item has any number of [`Action`]s, in order: Enter runs the first
+//! (its primary action), Ctrl+Enter the second, Ctrl+Shift+Enter the third,
+//! and Ctrl+K lists them all in Pane's Actions panel, in their sections, each
+//! with its [`Shortcut`] if Pane binds it.
+//!
+//! An item's first action is named by the item's id and its later ones by
+//! the id and their place (`<id>#1`, `<id>#2`, ...), so the same action has
+//! the same callback in every drawing of the list. Pane draws the list again
 //! after each action, which hands the SDK the closures of the new drawing.
 //! An instance that has not drawn the list yet (a fresh one, after a crash
 //! or a search Pane stopped) draws it first when it is handed an id it does
@@ -36,8 +42,165 @@ const TREE_VERSION: u32 = 1;
 /// error shown as the failure.
 type Answer = Pin<Box<dyn Future<Output = Result<String, String>>>>;
 
-/// An item's action, run once when the user chooses it.
-type Action = Box<dyn FnOnce() -> Answer>;
+/// What an action runs, once, when the user chooses it.
+type Run = Box<dyn FnOnce() -> Answer>;
+
+/// A modifier key held with a [`Shortcut`]'s key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Modifier {
+    /// Ctrl (Control on macOS).
+    Ctrl,
+    /// Alt (Option on macOS).
+    Alt,
+    /// Shift.
+    Shift,
+    /// The system key: Command on macOS, the Windows key on Windows, Super
+    /// on Linux.
+    Cmd,
+}
+
+impl Modifier {
+    fn name(self) -> &'static str {
+        match self {
+            Modifier::Ctrl => "ctrl",
+            Modifier::Alt => "alt",
+            Modifier::Shift => "shift",
+            Modifier::Cmd => "cmd",
+        }
+    }
+}
+
+/// One key with the modifiers held with it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Keys {
+    modifiers: Vec<Modifier>,
+    key: String,
+}
+
+impl Keys {
+    fn new(modifiers: impl IntoIterator<Item = Modifier>, key: impl Into<String>) -> Keys {
+        Keys {
+            modifiers: modifiers.into_iter().collect(),
+            key: key.into(),
+        }
+    }
+}
+
+/// The keys that run an action from the list without opening the Actions
+/// panel: one key with its modifiers on every system, or one per system.
+/// Keys are named as Pane names them: a letter or digit, a character such
+/// as `,`, or `enter`, `delete`, `backspace`, `up`, `f5` and the like.
+///
+/// Pane matches the modifiers exactly, and never binds a shortcut that is
+/// one of its own keys (Escape, Ctrl+K, the arrows, Ctrl and a digit, the
+/// keys the user gave Pane's actions): the action then stays in the panel
+/// without it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Shortcut {
+    every: Option<Keys>,
+    windows: Option<Keys>,
+    macos: Option<Keys>,
+    linux: Option<Keys>,
+}
+
+impl Shortcut {
+    /// `key` with `modifiers` held, on every system.
+    pub fn new(modifiers: impl IntoIterator<Item = Modifier>, key: impl Into<String>) -> Shortcut {
+        Shortcut {
+            every: Some(Keys::new(modifiers, key)),
+            ..Shortcut::default()
+        }
+    }
+
+    /// A shortcut per system, with none yet: add each system's with
+    /// [`Shortcut::windows`], [`Shortcut::macos`] and [`Shortcut::linux`].
+    /// A system it gives none for binds nothing.
+    pub fn per_platform() -> Shortcut {
+        Shortcut::default()
+    }
+
+    /// This shortcut with `key` and `modifiers` on Windows.
+    pub fn windows(
+        mut self,
+        modifiers: impl IntoIterator<Item = Modifier>,
+        key: impl Into<String>,
+    ) -> Shortcut {
+        self.every = None;
+        self.windows = Some(Keys::new(modifiers, key));
+        self
+    }
+
+    /// This shortcut with `key` and `modifiers` on macOS.
+    pub fn macos(
+        mut self,
+        modifiers: impl IntoIterator<Item = Modifier>,
+        key: impl Into<String>,
+    ) -> Shortcut {
+        self.every = None;
+        self.macos = Some(Keys::new(modifiers, key));
+        self
+    }
+
+    /// This shortcut with `key` and `modifiers` on Linux.
+    pub fn linux(
+        mut self,
+        modifiers: impl IntoIterator<Item = Modifier>,
+        key: impl Into<String>,
+    ) -> Shortcut {
+        self.every = None;
+        self.linux = Some(Keys::new(modifiers, key));
+        self
+    }
+}
+
+/// One of an item's actions: what it is called, where the Actions panel
+/// lists it, how it is drawn, its shortcut, and the closure it runs.
+pub struct Action {
+    title: Option<String>,
+    section: Option<String>,
+    destructive: bool,
+    shortcut: Option<Shortcut>,
+    run: Run,
+}
+
+impl Action {
+    /// An action titled `title` that runs `run` when the user chooses it.
+    /// The text it answers is shown as the result; an error is shown as
+    /// the failure. Pane draws the list again afterwards.
+    pub fn new<F, A>(title: impl Into<String>, run: F) -> Action
+    where
+        F: FnOnce() -> A + 'static,
+        A: Future<Output = Result<String, String>> + 'static,
+    {
+        Action {
+            title: Some(title.into()),
+            section: None,
+            destructive: false,
+            shortcut: None,
+            run: Box::new(move || Box::pin(run()) as Answer),
+        }
+    }
+
+    /// This action in the section titled `title` of the Actions panel.
+    /// Consecutive actions with the same section are one section.
+    pub fn section(mut self, title: impl Into<String>) -> Action {
+        self.section = Some(title.into());
+        self
+    }
+
+    /// This action drawn in the destructive style: it deletes or removes
+    /// something.
+    pub fn destructive(mut self) -> Action {
+        self.destructive = true;
+        self
+    }
+
+    /// This action run by `shortcut` from the list.
+    pub fn shortcut(mut self, shortcut: Shortcut) -> Action {
+        self.shortcut = Some(shortcut);
+        self
+    }
+}
 
 /// A command's list view: its title and items, in order.
 pub struct List {
@@ -68,13 +231,13 @@ impl List {
 }
 
 /// One entry in a command's list. Choosing it opens its form, else its
-/// custom view, else runs its action; an item with none of them does
-/// nothing and says so.
+/// custom view, else runs its primary action (its first); an item with none
+/// of them cannot be activated, and Pane says so.
 pub struct Item {
     id: String,
     title: String,
     subtitle: Option<String>,
-    action: Option<Action>,
+    actions: Vec<Action>,
     form: Option<Form>,
     platforms: Option<Vec<Platform>>,
     custom_view: Option<CustomViewInfo>,
@@ -89,7 +252,7 @@ impl Item {
             id: id.into(),
             title: title.into(),
             subtitle: None,
-            action: None,
+            actions: Vec::new(),
             form: None,
             platforms: None,
             custom_view: None,
@@ -102,15 +265,39 @@ impl Item {
         self
     }
 
-    /// This item with `action`, which runs when the user chooses it. The
-    /// text it answers is shown as the result; an error is shown as the
-    /// failure. Pane draws the list again afterwards.
+    /// This item with an untitled action after its actions, which runs
+    /// when the user chooses it: the item's primary action when it is the
+    /// first, which Pane names "Run item". The text it answers is shown as
+    /// the result; an error is shown as the failure. Pane draws the list
+    /// again afterwards. [`Item::action`] gives an action a title, a
+    /// section, a style and a shortcut.
     pub fn on_action<F, A>(mut self, action: F) -> Item
     where
         F: FnOnce() -> A + 'static,
         A: Future<Output = Result<String, String>> + 'static,
     {
-        self.action = Some(Box::new(move || Box::pin(action()) as Answer));
+        self.actions.push(Action {
+            title: None,
+            section: None,
+            destructive: false,
+            shortcut: None,
+            run: Box::new(move || Box::pin(action()) as Answer),
+        });
+        self
+    }
+
+    /// This item with `action` after its actions. The first is the item's
+    /// primary action (Enter), the second its secondary action
+    /// (Ctrl+Enter), the third runs with Ctrl+Shift+Enter, and the Actions
+    /// panel (Ctrl+K) lists them all.
+    pub fn action(mut self, action: Action) -> Item {
+        self.actions.push(action);
+        self
+    }
+
+    /// This item with `actions` after its actions (see [`Item::action`]).
+    pub fn actions(mut self, actions: impl IntoIterator<Item = Action>) -> Item {
+        self.actions.extend(actions);
         self
     }
 
@@ -223,7 +410,7 @@ impl<T: Command> wit::Guest for T {
 }
 
 /// The actions of the list the instance drew last, by callback id.
-struct Actions(RefCell<BTreeMap<String, Action>>);
+struct Actions(RefCell<BTreeMap<String, Run>>);
 
 // SAFETY: a component's code runs on one thread, and no borrow of the map
 // is held across an `await`.
@@ -233,7 +420,7 @@ static ACTIONS: Actions = Actions(RefCell::new(BTreeMap::new()));
 
 /// The action named `callback` in the list drawn last, taken out: Pane
 /// draws the list again after it runs.
-fn take(callback: &str) -> Option<Action> {
+fn take(callback: &str) -> Option<Run> {
     ACTIONS.0.borrow_mut().remove(callback)
 }
 
@@ -257,12 +444,40 @@ fn remember(list: List) -> String {
             tree.push_str(",\"subtitle\":");
             string(&mut tree, subtitle);
         }
-        if let Some(action) = item.action {
-            // The item's id names its action's callback.
-            tree.push_str(",\"actions\":[{\"onAction\":");
-            string(&mut tree, &item.id);
-            tree.push_str("}]");
-            actions.insert(item.id.clone(), action);
+        if !item.actions.is_empty() {
+            tree.push_str(",\"actions\":[");
+            for (index, action) in item.actions.into_iter().enumerate() {
+                if index > 0 {
+                    tree.push(',');
+                }
+                // The item's id names its first action's callback, and the
+                // id and their place its later ones'.
+                let callback = if index == 0 {
+                    item.id.clone()
+                } else {
+                    format!("{}#{index}", item.id)
+                };
+                tree.push_str("{\"onAction\":");
+                string(&mut tree, &callback);
+                if let Some(title) = &action.title {
+                    tree.push_str(",\"title\":");
+                    string(&mut tree, title);
+                }
+                if let Some(section) = &action.section {
+                    tree.push_str(",\"section\":");
+                    string(&mut tree, section);
+                }
+                if action.destructive {
+                    tree.push_str(",\"style\":\"destructive\"");
+                }
+                if let Some(shortcut) = &action.shortcut {
+                    tree.push_str(",\"shortcut\":");
+                    write_shortcut(&mut tree, shortcut);
+                }
+                tree.push('}');
+                actions.insert(callback, action.run);
+            }
+            tree.push(']');
         }
         if let Some(form) = &item.form {
             tree.push_str(",\"form\":");
@@ -303,6 +518,48 @@ fn remember(list: List) -> String {
     }
     tree.push_str("]}}");
     tree
+}
+
+/// Writes `shortcut` as the tree's JSON: `{"modifiers": [...], "key": ...}`
+/// for every system, or such an object per system.
+fn write_shortcut(tree: &mut String, shortcut: &Shortcut) {
+    if let Some(keys) = &shortcut.every {
+        write_keys(tree, keys);
+        return;
+    }
+    tree.push('{');
+    let mut first = true;
+    for (name, keys) in [
+        ("windows", &shortcut.windows),
+        ("macos", &shortcut.macos),
+        ("linux", &shortcut.linux),
+    ] {
+        let Some(keys) = keys else {
+            continue;
+        };
+        if !first {
+            tree.push(',');
+        }
+        first = false;
+        string(tree, name);
+        tree.push(':');
+        write_keys(tree, keys);
+    }
+    tree.push('}');
+}
+
+/// Writes one key with its modifiers as the tree's JSON.
+fn write_keys(tree: &mut String, keys: &Keys) {
+    tree.push_str("{\"modifiers\":[");
+    for (index, modifier) in keys.modifiers.iter().enumerate() {
+        if index > 0 {
+            tree.push(',');
+        }
+        string(tree, modifier.name());
+    }
+    tree.push_str("],\"key\":");
+    string(tree, &keys.key);
+    tree.push('}');
 }
 
 /// Writes `form` as the tree's JSON.

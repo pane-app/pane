@@ -15,6 +15,7 @@ mod compact_pins;
 mod develop;
 mod hotkeys;
 mod install;
+mod item_actions;
 mod keyboard;
 mod launcher_settings;
 mod npm;

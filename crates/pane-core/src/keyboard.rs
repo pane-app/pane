@@ -594,6 +594,132 @@ impl Keyboard {
     }
 }
 
+/// The modifier the launcher's fixed pin keys hold: Command on macOS,
+/// Ctrl elsewhere.
+const PIN_MODIFIER: &str = if cfg!(target_os = "macos") {
+    "cmd"
+} else {
+    "ctrl"
+};
+
+/// The launcher's key that toggles a pin: Ctrl+Shift+F (Command+Shift+F
+/// on macOS). Window-local and fixed, not one of the actions the Keyboard
+/// page rebinds.
+pub fn pin_key() -> Binding {
+    default_binding(&format!("{PIN_MODIFIER}-shift-f"))
+}
+
+/// The launcher's keys that move a focused quick slot one place among the
+/// pins: Ctrl+Alt (Command+Option on macOS) and Up or Left moves it
+/// `earlier`, Down or Right later; Up or Down first. Window-local and
+/// fixed, as [`pin_key`] is.
+pub fn move_pin_keys(earlier: bool) -> [Binding; 2] {
+    let (vertical, horizontal) = if earlier {
+        ("up", "left")
+    } else {
+        ("down", "right")
+    };
+    [vertical, horizontal].map(|arrow| default_binding(&format!("{PIN_MODIFIER}-alt-{arrow}")))
+}
+
+/// The local chord that picks what number `number` (0 to 9) names in the
+/// launcher: Ctrl and the digit. Fixed, as [`pin_key`] is.
+pub fn number_key(number: usize) -> Binding {
+    default_binding(&format!("ctrl-{number}"))
+}
+
+/// The key that runs the action at `index` of the selected item in a
+/// command's list without opening the Actions panel, for the second and
+/// third (#137): Ctrl+Enter and Ctrl+Shift+Enter, the same chords on every
+/// system (macOS names Ctrl "Control"). The first is the invoke binding the
+/// Keyboard page rebinds ([`KeyboardAction::InvokeSelectedAction`]); `None`
+/// for it and for any later action.
+pub fn action_key(index: usize) -> Option<Binding> {
+    match index {
+        1 => Some(default_binding("ctrl-enter")),
+        2 => Some(default_binding("ctrl-shift-enter")),
+        _ => None,
+    }
+}
+
+/// Pane's own effective keys in the launcher: what an extension's action
+/// shortcut may never take (#137). An action whose shortcut is one of them
+/// keeps its place in the Actions panel, without the shortcut.
+///
+/// They are the Keyboard page's bindings as the user has them (rebinds
+/// included) and the navigation bindings it adds, and the launcher's fixed
+/// keys: Escape, Ctrl+K (whatever Open actions is bound to), Up and Down,
+/// Tab, Enter and the action chords ([`action_key`]), Ctrl and a digit,
+/// and root search's pin keys.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaneKeys {
+    keys: Vec<(Binding, String)>,
+}
+
+impl Default for PaneKeys {
+    fn default() -> PaneKeys {
+        PaneKeys::new(
+            &Keyboard::default_for_this_system(),
+            crate::host_settings::NavigationBindings::default(),
+        )
+    }
+}
+
+impl PaneKeys {
+    /// Pane's keys with `keyboard`'s bindings and `navigation`'s extra
+    /// selection keys in force.
+    pub fn new(keyboard: &Keyboard, navigation: crate::host_settings::NavigationBindings) -> Self {
+        let mut keys: Vec<(Binding, String)> = Vec::new();
+        let mut add = |binding: Binding, does: &str| {
+            if !keys.iter().any(|(held, _)| *held == binding) {
+                keys.push((binding, does.to_owned()));
+            }
+        };
+        for action in KeyboardAction::ALL {
+            add(keyboard.binding(action).clone(), action.does());
+        }
+        if let Some((previous, next)) = navigation.bindings() {
+            add(default_binding(previous), "moves to the previous result");
+            add(default_binding(next), "moves to the next result");
+        }
+        add(
+            default_binding("escape"),
+            "closes the Actions panel and goes back",
+        );
+        add(default_binding("ctrl-k"), "opens the Actions panel");
+        add(default_binding("up"), "moves to the previous result");
+        add(default_binding("down"), "moves to the next result");
+        add(default_binding("tab"), "moves the focus");
+        add(default_binding("shift-tab"), "moves the focus");
+        add(default_binding("enter"), "runs the primary action");
+        for (index, does) in [
+            (1, "runs the secondary action"),
+            (2, "runs the third action"),
+        ] {
+            add(action_key(index).expect("an action chord"), does);
+        }
+        for number in 0..=9 {
+            add(number_key(number), "picks a numbered result");
+        }
+        add(pin_key(), "pins the selected result");
+        for earlier in [true, false] {
+            for key in move_pin_keys(earlier) {
+                add(key, "moves a pin");
+            }
+        }
+        PaneKeys { keys }
+    }
+
+    /// What Pane does with `binding`, if it is one of its keys: "opens
+    /// the Actions panel".
+    pub fn taken(&self, binding: &Binding) -> Option<&str> {
+        self.keys
+            .iter()
+            .find(|(held, _)| held == binding)
+            .map(|(_, does)| does.as_str())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -914,5 +1040,54 @@ mod tests {
         let mut fields = BTreeMap::new();
         fields.insert("back".into(), "not a binding".into());
         assert!(Keyboard::parse(&fields).is_err());
+    }
+
+    #[test]
+    fn panes_keys_hold_the_fixed_keys_and_the_bindings_in_force() {
+        use crate::host_settings::NavigationBindings;
+
+        let keys = PaneKeys::default();
+        for fixed in [
+            "escape",
+            "ctrl-k",
+            "up",
+            "down",
+            "enter",
+            "ctrl-enter",
+            "ctrl-shift-enter",
+            "ctrl-1",
+            "ctrl-0",
+        ] {
+            assert!(keys.taken(&binding(fixed)).is_some(), "{fixed}");
+        }
+        assert!(keys.taken(&pin_key()).is_some());
+        assert_eq!(keys.taken(&binding("ctrl-shift-k")), None);
+        assert_eq!(keys.taken(&binding("ctrl-shift-c")), None);
+
+        // A rebound action's new key is Pane's; its old one is free again
+        // unless it is a fixed key.
+        let mut keyboard = Keyboard::default_for_this_system();
+        let dismiss = keyboard.binding(KeyboardAction::DismissLauncher).clone();
+        keyboard
+            .checked_set(KeyboardAction::DismissLauncher, binding("ctrl-shift-y"))
+            .unwrap();
+        let keys = PaneKeys::new(&keyboard, NavigationBindings::None);
+        assert_eq!(
+            keys.taken(&binding("ctrl-shift-y")),
+            Some("dismisses the launcher")
+        );
+        assert_eq!(keys.taken(&dismiss), None);
+
+        // The navigation bindings' extra keys.
+        let keys = PaneKeys::new(&keyboard, NavigationBindings::Emacs);
+        assert!(keys.taken(&binding("ctrl-n")).is_some());
+    }
+
+    #[test]
+    fn the_action_chords_are_ctrl_enter_and_ctrl_shift_enter() {
+        assert_eq!(action_key(0), None);
+        assert_eq!(action_key(1).unwrap().id(), "ctrl-enter");
+        assert_eq!(action_key(2).unwrap().id(), "ctrl-shift-enter");
+        assert_eq!(action_key(3), None);
     }
 }

@@ -15,6 +15,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::{Choice, CustomViewInfo, CustomViewRole, Field, FieldKind, Form};
+use crate::keyboard::Binding;
 use crate::platform::Platform;
 
 /// The version of the tree this Pane knows: a tree names the version of
@@ -38,9 +39,9 @@ pub struct Item {
     pub id: String,
     pub title: String,
     pub subtitle: Option<String>,
-    /// What choosing the item does, first the one Enter runs. The list has
-    /// one action per item for now: Pane runs the first and ignores the
-    /// others.
+    /// What the item offers, in order: the first is its primary action
+    /// (Enter), the second its secondary action (Ctrl+Enter), and the
+    /// Actions panel lists them all (#137).
     pub actions: Vec<Action>,
     /// When set, activating the item opens this form instead of running its
     /// action.
@@ -63,11 +64,33 @@ impl Item {
 /// An action of an item.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Action {
-    /// What the action is called; not shown yet.
+    /// What the action is called, as the footer and the Actions panel name
+    /// it; `None` when the tree gives no title.
     pub title: Option<String>,
     /// The callback id Pane passes to the command's `handle-event` when the
     /// user chooses the action.
     pub callback: String,
+    /// The title of the section the action belongs to in the Actions
+    /// panel; `None` for an untitled one. Consecutive actions with the same
+    /// section are one section.
+    pub section: Option<String>,
+    /// How the action is drawn.
+    pub style: ActionStyle,
+    /// The action's own shortcut on this system, as the tree gives it:
+    /// `None` when it has none here, `Err` with why when the tree's
+    /// shortcut is not one Pane can bind. Whether Pane binds it also
+    /// depends on Pane's own keys (see `crate::keyboard::PaneKeys`).
+    pub shortcut: Option<Result<Binding, String>>,
+}
+
+/// How an action is drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ActionStyle {
+    /// As any other action.
+    #[default]
+    Default,
+    /// In the destructive style: it deletes or removes something.
+    Destructive,
 }
 
 /// What a command's `handle-event` answered.
@@ -154,10 +177,7 @@ impl From<WireItem> for Item {
                 .actions
                 .unwrap_or_default()
                 .into_iter()
-                .map(|action| Action {
-                    title: action.title,
-                    callback: action.on_action,
-                })
+                .map(Action::from)
                 .collect(),
             form: item.form.map(Form::from),
             platforms: item.platforms.map(|names| {
@@ -188,6 +208,98 @@ struct WireAction {
     #[serde(default)]
     title: Option<String>,
     on_action: String,
+    #[serde(default)]
+    section: Option<String>,
+    /// `default` or `destructive`; a style Pane does not know is drawn as
+    /// the default.
+    #[serde(default)]
+    style: Option<String>,
+    /// Read by [`shortcut_here`], so that a shortcut Pane cannot bind
+    /// leaves the action in the panel instead of making the tree
+    /// unreadable.
+    #[serde(default)]
+    shortcut: Option<Value>,
+}
+
+impl From<WireAction> for Action {
+    fn from(action: WireAction) -> Action {
+        Action {
+            title: action.title,
+            callback: action.on_action,
+            section: action.section,
+            style: match action.style.as_deref() {
+                Some("destructive") => ActionStyle::Destructive,
+                _ => ActionStyle::Default,
+            },
+            shortcut: action
+                .shortcut
+                .as_ref()
+                .and_then(|shortcut| shortcut_here(shortcut, Platform::current())),
+        }
+    }
+}
+
+/// The systems a per-system shortcut may name.
+const SHORTCUT_SYSTEMS: [(&str, Platform); 3] = [
+    ("windows", Platform::Windows),
+    ("macos", Platform::Macos),
+    ("linux", Platform::Linux),
+];
+
+/// The binding `shortcut` gives on `here`, the system Pane runs on: a
+/// shortcut is one key with its modifiers for every system (`{"modifiers":
+/// ["ctrl"], "key": "o"}`), or one per system (`{"windows": …, "macos": …,
+/// "linux": …}`, each such a key and modifiers, any of them omitted).
+/// `None` when it gives none for `here`; `Err` with why when it is not one
+/// Pane can bind.
+fn shortcut_here(shortcut: &Value, here: Option<Platform>) -> Option<Result<Binding, String>> {
+    let Value::Object(fields) = shortcut else {
+        return Some(Err("its shortcut is not an object".into()));
+    };
+    if fields.contains_key("key") {
+        return Some(keys(shortcut));
+    }
+    if !SHORTCUT_SYSTEMS
+        .iter()
+        .any(|(name, _)| fields.contains_key(*name))
+    {
+        return Some(Err(
+            "its shortcut names neither a key nor a system's key".into()
+        ));
+    }
+    let (name, _) = SHORTCUT_SYSTEMS
+        .iter()
+        .find(|(_, system)| Some(*system) == here)?;
+    match fields.get(*name) {
+        None | Some(Value::Null) => None,
+        Some(keys_here) => Some(self::keys(keys_here)),
+    }
+}
+
+/// The binding of `{"modifiers": [...], "key": "..."}`. Modifiers are
+/// `ctrl`, `alt`, `shift` and `cmd` (the Command key on macOS, the Windows
+/// key on Windows, Super on Linux), with their synonyms `control`,
+/// `option`, `opt`, `command`, `win`, `super` and `meta`.
+fn keys(value: &Value) -> Result<Binding, String> {
+    #[derive(Deserialize)]
+    struct Keys {
+        #[serde(default)]
+        modifiers: Vec<String>,
+        key: String,
+    }
+    let keys: Keys =
+        serde_json::from_value(value.clone()).map_err(|error| format!("its shortcut: {error}"))?;
+    let (mut control, mut alt, mut shift, mut platform) = (false, false, false, false);
+    for modifier in &keys.modifiers {
+        match modifier.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => control = true,
+            "alt" | "option" | "opt" => alt = true,
+            "shift" => shift = true,
+            "cmd" | "command" | "win" | "super" | "meta" => platform = true,
+            other => return Err(format!("its shortcut names an unknown modifier “{other}”")),
+        }
+    }
+    Binding::new(control, alt, shift, platform, false, &keys.key)
 }
 
 #[derive(Deserialize)]
@@ -359,6 +471,81 @@ mod tests {
         ] {
             let error = read_view(tree).unwrap_err();
             assert!(error.contains(why), "{tree}: {error}");
+        }
+    }
+
+    #[test]
+    fn actions_read_their_sections_styles_and_shortcuts() {
+        let view = read_view(
+            r#"{"version": 1, "view": {"type": "list", "title": "T", "items": [
+                {"id": "a", "title": "A", "actions": [
+                    {"title": "Open", "onAction": "a"},
+                    {"title": "Copy Link", "onAction": "a#1", "section": "Share",
+                     "shortcut": {"modifiers": ["ctrl", "shift"], "key": "C"}},
+                    {"title": "Delete", "onAction": "a#2", "style": "destructive",
+                     "section": null, "shortcut": null},
+                    {"title": "Glow", "onAction": "a#3", "style": "glowing",
+                     "shortcut": {"modifiers": ["hyper"], "key": "g"}}
+                ]}]}}"#,
+        )
+        .unwrap();
+
+        let actions = &view.items[0].actions;
+        assert_eq!(actions[0].section, None);
+        assert_eq!(actions[0].style, ActionStyle::Default);
+        assert_eq!(actions[0].shortcut, None);
+        assert_eq!(actions[1].section.as_deref(), Some("Share"));
+        assert_eq!(
+            actions[1].shortcut,
+            Some(Ok(Binding::parse("ctrl-shift-c").unwrap()))
+        );
+        assert_eq!(actions[2].style, ActionStyle::Destructive);
+        assert_eq!(actions[2].shortcut, None);
+        // An unknown style is the default; a shortcut Pane cannot bind
+        // says why, and the action stays.
+        assert_eq!(actions[3].style, ActionStyle::Default);
+        assert!(matches!(&actions[3].shortcut, Some(Err(why)) if why.contains("hyper")));
+    }
+
+    #[test]
+    fn a_shortcut_per_system_binds_only_on_its_system() {
+        let shortcut = serde_json::json!({
+            "windows": {"modifiers": ["ctrl", "shift"], "key": "e"},
+            "macos": {"modifiers": ["cmd", "shift"], "key": "r"},
+        });
+        let here = |platform| shortcut_here(&shortcut, Some(platform));
+        assert_eq!(
+            here(Platform::Windows),
+            Some(Ok(Binding::parse("ctrl-shift-e").unwrap()))
+        );
+        assert_eq!(
+            here(Platform::Macos),
+            Some(Ok(Binding::parse("cmd-shift-r").unwrap()))
+        );
+        assert_eq!(here(Platform::Linux), None, "none for Linux");
+
+        let everywhere = serde_json::json!({"modifiers": ["ctrl"], "key": "d"});
+        for platform in [Platform::Windows, Platform::Macos, Platform::Linux] {
+            assert_eq!(
+                shortcut_here(&everywhere, Some(platform)),
+                Some(Ok(Binding::parse("ctrl-d").unwrap()))
+            );
+        }
+
+        for (wrong, why) in [
+            (serde_json::json!("ctrl-d"), "not an object"),
+            (serde_json::json!({"keys": "d"}), "neither a key"),
+            (
+                serde_json::json!({"key": "d", "modifiers": "ctrl"}),
+                "invalid type",
+            ),
+            (serde_json::json!({"key": "ctrl"}), "hold one more key"),
+        ] {
+            let read = shortcut_here(&wrong, Some(Platform::Linux));
+            assert!(
+                matches!(&read, Some(Err(error)) if error.contains(why)),
+                "{wrong}: {read:?}"
+            );
         }
     }
 

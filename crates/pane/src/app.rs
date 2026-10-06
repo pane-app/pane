@@ -16,9 +16,9 @@ use std::mem::{Discriminant, discriminant};
 use std::path::Path;
 
 use gpui::{
-    App, ClipboardItem, Context, Div, EntityInputHandler, FocusHandle, Hsla, KeyDownEvent,
-    MouseMoveEvent, ObjectFit, PathPromptOptions, Pixels, Point, Role, ScrollHandle, SharedString,
-    Size, Stateful, Window, div, img, prelude::*, px, relative,
+    App, ClipboardItem, Context, Div, EntityInputHandler, FocusHandle, Focusable, Hsla,
+    KeyDownEvent, MouseMoveEvent, ObjectFit, PathPromptOptions, Pixels, Point, Role, ScrollHandle,
+    SharedString, Size, Stateful, Window, div, img, prelude::*, px, relative,
 };
 use pane_core::changes::Changes;
 use pane_core::hotkeys::Shortcut;
@@ -279,10 +279,82 @@ impl LauncherWindow {
     }
 
     fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
+        // An item of a command's list runs its primary action once per
+        // press: the key is handed on to [`LauncherWindow::item_action_keys`],
+        // which sees whether it is a held key's repeat (an action cannot).
+        if actions_panel::commands_list(&self.launcher.view().screen)
+            && self.launcher.item_actions().is_some()
+        {
+            cx.propagate();
+            return;
+        }
+        self.invoke_selected(window, cx);
+    }
+
+    /// What the invoke binding does with the selected row: submits a form,
+    /// or activates the row.
+    fn invoke_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if matches!(self.launcher.view().screen, Screen::Form(_)) {
             self.submit_form(window, cx);
         } else {
             self.activate_selected(window, cx);
+        }
+    }
+
+    /// A key pressed in the launcher while an open command's list (or its
+    /// search field) has focus and nothing is open over it, before the
+    /// focused control sees it: the invoke binding (which
+    /// [`LauncherWindow::confirm`] hands on), Ctrl+Enter and
+    /// Ctrl+Shift+Enter run the selected item's first, second and third
+    /// action, and an action's own shortcut runs that action, without the
+    /// Actions panel (#137). A missing action runs nothing, and the key goes
+    /// no further. Once per press: the system's repeats of a held key run
+    /// nothing more.
+    fn item_action_keys(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.actions.is_some()
+            || self.menu.is_some()
+            || !actions_panel::commands_list(&self.launcher.view().screen)
+        {
+            return;
+        }
+        let field = self.query_field().focus_handle(cx).is_focused(window);
+        if !field && !self.focus_handle.is_focused(window) {
+            return;
+        }
+        let Ok(pressed) = crate::keyboard::binding_of(&event.keystroke) else {
+            return;
+        };
+        let Some(actions) = self.launcher.item_actions() else {
+            return;
+        };
+        let invoke = crate::settings::keyboard_of(cx)
+            .binding(pane_core::KeyboardAction::InvokeSelectedAction)
+            .clone();
+        let index = if pressed == invoke {
+            Some(0)
+        } else {
+            (1..=2)
+                .find(|index| pane_core::keyboard::action_key(*index).as_ref() == Some(&pressed))
+                .or_else(|| actions.bound_to(&pressed))
+        };
+        let Some(index) = index else {
+            return;
+        };
+        cx.stop_propagation();
+        if event.is_held {
+            return;
+        }
+        if index == 0 {
+            self.activate_selected(window, cx);
+        } else {
+            self.motion.land_at_once();
+            let pending = self.launcher.run_selected_action(index);
+            self.show_until_done(pending, window, cx);
         }
     }
 
@@ -1110,15 +1182,18 @@ impl LauncherWindow {
             row.aria_description(description)
         })
         .when_some(shortcut, |row, shortcut| row.aria_keyshortcuts(shortcut))
-        .on_click(cx.listener(move |this, _, window, cx| {
-            if root {
-                this.click_root_row(index, window, cx);
-            } else {
-                this.launcher.select(index);
-                this.activate_selected(window, cx);
-                this.motion.pointer_open();
-            }
-        }))
+        .on_click(
+            cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                if root {
+                    this.click_root_row(index, window, cx);
+                } else if event.click_count() <= 1 {
+                    // A double click's second click runs nothing more.
+                    this.launcher.select(index);
+                    this.activate_selected(window, cx);
+                    this.motion.pointer_open();
+                }
+            }),
+        )
     }
 
     /// Root search's row `index`, a computed answer, drawn as the answer
@@ -1170,13 +1245,14 @@ impl LauncherWindow {
     /// The footer's right-hand buttons: the selected action's button,
     /// when the screen has a primary action at all (a custom view, the
     /// network details screen and a hotkey screen with nothing to remove
-    /// have none) and no status shows, and on root search the Actions
-    /// button. `action` is the launcher's one selected-action definition
-    /// ([`Launcher::selected_action`]).
+    /// have none) and no status shows, and on root search and a command's
+    /// list the Actions button. `action` is the launcher's one
+    /// selected-action definition ([`Launcher::selected_action`]): on a
+    /// command's list it names the selected item's primary action.
     fn footer_buttons(
         &self,
         action: &SelectedAction,
-        root: bool,
+        with_actions: bool,
         status: bool,
         theme: &Theme,
         cx: &mut Context<Self>,
@@ -1185,12 +1261,15 @@ impl LauncherWindow {
         let primary = (!action.label.is_empty() && !status).then(|| {
             let invoke = keyboard.binding(pane_core::KeyboardAction::InvokeSelectedAction);
             action_button(action, invoke, theme)
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.press_primary_action(window, cx);
+                .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
+                    // A double click's second click runs nothing more.
+                    if event.click_count() <= 1 {
+                        this.press_primary_action(window, cx);
+                    }
                 }))
                 .into_any_element()
         });
-        let actions = root.then(|| {
+        let actions = with_actions.then(|| {
             let open = crate::keyboard::binding_keys(
                 keyboard.binding(pane_core::KeyboardAction::OpenActions),
             );
@@ -1203,13 +1282,13 @@ impl LauncherWindow {
         footer::buttons(primary, actions, theme)
     }
 
-    /// The footer's hint while no status shows: on root search with
-    /// Actions open, "Type to filter actions · Esc goes back"; nothing
-    /// elsewhere.
-    fn footer_hint(&self, root: bool, theme: &Theme) -> Option<Div> {
+    /// The footer's hint while no status shows: on root search or a
+    /// command's list with Actions open, "Type to filter actions · Esc goes
+    /// back"; nothing elsewhere.
+    fn footer_hint(&self, with_actions: bool, theme: &Theme) -> Option<Div> {
         // At rest the footer's buttons already show the keys; the hint says
         // only how the open Actions panel is used.
-        if !root || self.actions.is_none() {
+        if !with_actions || self.actions.is_none() {
             return None;
         }
         Some(footer::hint_line(
@@ -1246,7 +1325,7 @@ impl LauncherWindow {
     /// running).
     pub(crate) fn press_primary_action(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.launcher.selected_action().available {
-            self.confirm(&Confirm, window, cx);
+            self.invoke_selected(window, cx);
         }
     }
 
@@ -1298,6 +1377,12 @@ impl LauncherWindow {
 
 impl Render for LauncherWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Pane's own keys as they are bound now, which no action shortcut
+        // of a command's list may take (#137).
+        self.launcher.set_pane_keys(pane_core::PaneKeys::new(
+            &crate::settings::keyboard_of(cx),
+            crate::settings::navigation_of(cx),
+        ));
         let (view, presentation) = self.launcher.presented_view();
         #[cfg(any(test, debug_assertions))]
         {
@@ -1393,6 +1478,8 @@ impl Render for LauncherWindow {
         // availability — and the dispatch both the button and Enter take.
         let action = self.launcher.selected_action();
         let root = matches!(view.screen, Screen::Root { .. });
+        // Root search and a command's list have the Actions panel.
+        let with_actions = root || actions_panel::commands_list(&view.screen);
         // Root search's notice when nothing but fallbacks is listed for
         // its query (#96).
         let notice = root_search::layouts::nothing_found(&view.screen, &presentation);
@@ -1504,17 +1591,22 @@ impl Render for LauncherWindow {
                 self.render_search(query, root_search::ROOT_PLACEHOLDER, results, cx)
             }
             // The opened command's own search field, the same control.
-            Screen::CommandSearch { query } => self.render_search(
-                query,
-                root_search::COMMAND_PLACEHOLDER,
-                motion::arriving(list, arriving),
-                cx,
-            ),
-            // The list holds keyboard focus; the selected row is its active
-            // descendant, and key actions bubble to the root.
-            _ => {
-                motion::arriving(list.track_focus(&self.focus_handle), arriving).into_any_element()
+            Screen::CommandSearch { query } => {
+                let results = actions_panel::dimmed(
+                    motion::arriving(list, arriving).into_any_element(),
+                    self.actions.is_some(),
+                    &theme,
+                );
+                self.render_search(query, root_search::COMMAND_PLACEHOLDER, results, cx)
             }
+            // The list holds keyboard focus; the selected row is its active
+            // descendant, and key actions bubble to the root. A command's
+            // list is dimmed under its open Actions panel, as root search is.
+            _ => actions_panel::dimmed(
+                motion::arriving(list.track_focus(&self.focus_handle), arriving).into_any_element(),
+                self.actions.is_some(),
+                &theme,
+            ),
         };
 
         // The launcher's content: the shared Geist family and base text
@@ -1531,6 +1623,7 @@ impl Render for LauncherWindow {
             .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(Self::toggle_actions))
             .map(|content| Self::on_quick_slot_keys(content, cx))
+            .capture_key_down(cx.listener(Self::item_action_keys))
             .on_action(cx.listener(Self::focus_next))
             .on_action(cx.listener(Self::focus_previous))
             .on_modifiers_changed(cx.listener(Self::modifiers_changed))
@@ -1619,14 +1712,23 @@ impl Render for LauncherWindow {
                                 Some(text) => {
                                     footer::status_message(text, &theme).into_any_element()
                                 }
-                                None => footer::hint_slot(self.footer_hint(root, &theme), &theme)
-                                    .into_any_element(),
+                                None => footer::hint_slot(
+                                    self.footer_hint(with_actions, &theme),
+                                    &theme,
+                                )
+                                .into_any_element(),
                             },
                             // While a status shows, the primary action steps
                             // aside — nothing is dispatched again from a frame
                             // the status has already overtaken (a double click
                             // on a quick open) — and Actions stays.
-                            self.footer_buttons(&action, root, status.is_some(), &theme, cx),
+                            self.footer_buttons(
+                                &action,
+                                with_actions,
+                                status.is_some(),
+                                &theme,
+                                cx,
+                            ),
                             &theme,
                         )),
                 )

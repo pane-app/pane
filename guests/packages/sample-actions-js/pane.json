@@ -1,0 +1,14 @@
+{
+  "manifestVersion": 1,
+  "title": "JavaScript actions sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "actions",
+      "title": "Actions (JavaScript)",
+      "subtitle": "Items with several actions, in sections, with shortcuts",
+      "component": "sample_actions_js.wasm"
+    }
+  ]
+}

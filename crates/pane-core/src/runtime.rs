@@ -74,7 +74,7 @@ pub use memory::peaks::memory_peak;
 pub(crate) use supervisor::CRASH_WINDOW;
 use supervisor::{NotSent, Shared};
 pub use supervisor::{RuntimeFailure, RuntimeStatus};
-pub use tree::{Action, Answer, Item, TREE_VERSION, View};
+pub use tree::{Action, ActionStyle, Answer, Item, TREE_VERSION, View};
 
 pub(crate) mod bindings {
     wasmtime::component::bindgen!({
