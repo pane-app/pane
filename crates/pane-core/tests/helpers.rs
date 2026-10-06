@@ -47,24 +47,29 @@ struct Sample {
     /// Its package and command title; the copies these tests install are
     /// retitled "Helper sample", so that every language reads the same.
     title: &'static str,
+    /// Its package's version.
+    version: &'static str,
 }
 
 const RUST: Sample = Sample {
     package: "sample-helper",
     component: "sample_helper.wasm",
     title: "Helper sample",
+    version: "0.2.0",
 };
 
 const JAVASCRIPT: Sample = Sample {
     package: "sample-helper-js",
     component: "sample_helper_js.wasm",
     title: "JavaScript helper sample",
+    version: "0.1.0",
 };
 
 const TYPESCRIPT: Sample = Sample {
     package: "sample-helper-ts",
     component: "sample_helper_ts.wasm",
     title: "TypeScript helper sample",
+    version: "0.1.0",
 };
 
 fn this() -> Target {
@@ -471,7 +476,7 @@ fn updating_while_the_helper_runs_ends_its_process(sample: &Sample) {
 
     assert_eq!(
         installed.launcher.view().status,
-        Status::Result("Updated Helper sample to 0.1.0".into())
+        Status::Result(format!("Updated Helper sample to {}", sample.version))
     );
     assert_eq!(installed.waiting().as_deref(), Some("started"));
     assert_eq!(installed.run("Echo through the helper"), echoed());
