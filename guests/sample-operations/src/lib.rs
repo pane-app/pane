@@ -20,8 +20,8 @@
 use pane_guest::alloc::{format, string::String, string::ToString, vec, vec::Vec};
 use pane_guest::operations::call;
 use pane_guest::{
-    Choice, CustomView, Field, FieldKind, FieldValue, Form, FormError, Guest, Item, NoCustomView,
-    TextField, View, publish, settings,
+    Choice, Command, CustomView, Field, FieldKind, FieldValue, Form, FormError, Item, List,
+    NoCustomView, TextField, publish, settings,
 };
 use serde_json::{Value, json};
 
@@ -100,35 +100,18 @@ fn form_error(message: String) -> FormError {
     }
 }
 
-impl Guest for Operations {
+impl Command for Operations {
     type CustomView = NoCustomView;
 
-    async fn get_view() -> Result<View, String> {
-        Ok(View {
-            title: "Call from Rust".into(),
-            items: vec![
-                Item {
-                    id: "greet".into(),
-                    title: "Greet through another extension".into(),
-                    subtitle: Some("Calls its greet operation through Pane".into()),
-                    form: Some(greet_form()),
-                    platforms: None,
-                    custom_view: None,
-                },
-                Item {
-                    id: "wait".into(),
-                    title: "Wait in another extension".into(),
-                    subtitle: Some("Calls its wait operation, which takes ten seconds".into()),
-                    form: Some(wait_form()),
-                    platforms: None,
-                    custom_view: None,
-                },
-            ],
-        })
-    }
-
-    async fn run_action(item_id: String) -> Result<String, String> {
-        Err(format!("unknown item: {item_id}"))
+    async fn render() -> Result<List, String> {
+        Ok(List::new("Call from Rust").items([
+            Item::new("greet", "Greet through another extension")
+                .subtitle("Calls its greet operation through Pane")
+                .form(greet_form()),
+            Item::new("wait", "Wait in another extension")
+                .subtitle("Calls its wait operation, which takes ten seconds")
+                .form(wait_form()),
+        ]))
     }
 
     async fn submit_form(item_id: String, values: Vec<FieldValue>) -> Result<String, FormError> {

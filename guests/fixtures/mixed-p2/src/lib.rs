@@ -27,9 +27,11 @@ impl Guest for Mixed {
     async fn render() -> Result<String, String> {
         let now = std::time::SystemTime::now();
         eprintln!("listing at {now:?}");
-        Ok(r#"{"version": 1, "view": {"type": "list", "title": "Mixed", "items": [
+        Ok(
+            r#"{"version": 1, "view": {"type": "list", "title": "Mixed", "items": [
             {"id": "x", "title": "x", "actions": [{"onAction": "x"}]}]}}"#
-            .into())
+                .into(),
+        )
     }
 
     async fn handle_event(callback: String, _details: String) -> Result<String, String> {

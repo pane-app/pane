@@ -20,9 +20,18 @@ const MAX_RESULTS = 20;
  */
 const lastName = (path) => path.split("/").pop() ?? path;
 
+/**
+ * Runs the action of the item `itemId`: none does anything.
+ * @param {string} itemId
+ * @returns {Promise<string>}
+ */
+async function act(itemId) {
+  throw new Error(`unknown item: ${itemId}`);
+}
+
 /** @type {import("@pane/extension").Command} */
 export const command = {
-  async getView() {
+  async render() {
     const { depth, files } = limits();
     return {
       title: "JavaScript files sample",
@@ -31,13 +40,10 @@ export const command = {
           id: "policy",
           title: "What is searched",
           subtitle: `Files of the granted folder, ${depth} folders deep, at most ${files} (JavaScript)`,
+          onAction: () => act("policy"),
         },
       ],
     };
-  },
-
-  async runAction(itemId) {
-    throw new Error(`unknown item: ${itemId}`);
   },
 
   async submitForm(itemId) {

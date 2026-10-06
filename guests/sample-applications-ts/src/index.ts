@@ -14,7 +14,7 @@ import type {
   FormError,
   IndexedResult,
   IndexedResults,
-  View,
+  List,
 } from "@pane/extension";
 import { installed, open, type Application } from "pane:extension/applications@0.1.0";
 
@@ -37,17 +37,23 @@ function applications(): Application[] {
   );
 }
 
-async function getView(): Promise<View> {
-  return {
-    title: SAMPLE,
-    items: applications().map((app) => ({ id: app.id, title: app.name, subtitle: app.location })),
-  };
-}
-
-async function runAction(itemId: string): Promise<string> {
+/** Opens the application with id `itemId`, the action of its item. */
+async function act(itemId: string): Promise<string> {
   host(() => open(itemId));
   const name = applications().find((app) => app.id === itemId)?.name ?? itemId;
   return `Opened ${name}`;
+}
+
+async function render(): Promise<List> {
+  return {
+    title: SAMPLE,
+    items: applications().map((app) => ({
+      id: app.id,
+      title: app.name,
+      subtitle: app.location,
+      onAction: () => act(app.id),
+    })),
+  };
 }
 
 async function submitForm(_itemId: string, _values: FieldValue[]): Promise<string> {
@@ -58,7 +64,7 @@ async function openView(_itemId: string): Promise<CustomView> {
   throw new Error("this sample has no custom views");
 }
 
-export const command: Command = { getView, runAction, submitForm, openView };
+export const command: Command = { render, submitForm, openView };
 
 export const indexedResults: IndexedResults = {
   async results(): Promise<IndexedResult[]> {

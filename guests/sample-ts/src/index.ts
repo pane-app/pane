@@ -13,10 +13,10 @@ import type {
   FormError,
   Frame,
   Key,
+  List,
   RootResult,
   RootResults,
   Shape,
-  View,
   ViewEvent,
 } from "@pane/extension";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
@@ -173,30 +173,8 @@ class ColorPicker implements CustomView {
   }
 }
 
-async function getView(): Promise<View> {
-  return {
-    title: "TypeScript sample",
-    items: [
-      { id: "greet", title: "Say hello", subtitle: "Answer from the TypeScript guest" },
-      { id: "wait", title: "Wait briefly", subtitle: "Await a WASI 0.3 clock, then answer" },
-      { id: "validate", title: "Validate settings", subtitle: "Reject settings with an out-of-range port" },
-      { id: "random", title: "Roll a number", subtitle: "A random number from this instance" },
-      { id: "form", title: "Greet someone", subtitle: "Fill in a form the guest checks", form: GREETING_FORM },
-      {
-        id: "color",
-        title: "Choose a color",
-        subtitle: "Pick a color in a view the guest draws",
-        customView: { title: "Choose a color", label: "Color", role: "color-well" },
-      },
-      // Elsewhere Pane lists these as unavailable, says why, and never calls
-      // runAction for them.
-      { id: "windows-only", title: "Windows-only action", subtitle: "Declared to work on Windows only", platforms: ["windows"] },
-      { id: "not-windows", title: "macOS and Linux action", subtitle: "Declared to work on macOS and Linux only", platforms: ["macos", "linux"] },
-    ],
-  };
-}
-
-async function runAction(itemId: string): Promise<string> {
+/** Runs the action of the item `itemId`; each item's action is this with its id. */
+async function act(itemId: string): Promise<string> {
   switch (itemId) {
     case "greet":
       return "Hello from the TypeScript guest";
@@ -223,6 +201,41 @@ async function runAction(itemId: string): Promise<string> {
   }
 }
 
+async function render(): Promise<List> {
+  return {
+    title: "TypeScript sample",
+    items: [
+      { id: "greet", title: "Say hello", subtitle: "Answer from the TypeScript guest", onAction: () => act("greet") },
+      { id: "wait", title: "Wait briefly", subtitle: "Await a WASI 0.3 clock, then answer", onAction: () => act("wait") },
+      { id: "validate", title: "Validate settings", subtitle: "Reject settings with an out-of-range port", onAction: () => act("validate") },
+      { id: "random", title: "Roll a number", subtitle: "A random number from this instance", onAction: () => act("random") },
+      { id: "form", title: "Greet someone", subtitle: "Fill in a form the guest checks", form: GREETING_FORM },
+      {
+        id: "color",
+        title: "Choose a color",
+        subtitle: "Pick a color in a view the guest draws",
+        customView: { title: "Choose a color", label: "Color", role: "color-well" },
+      },
+      // Elsewhere Pane lists these as unavailable, says why, and never runs
+      // their actions.
+      {
+        id: "windows-only",
+        title: "Windows-only action",
+        subtitle: "Declared to work on Windows only",
+        platforms: ["windows"],
+        onAction: () => act("windows-only"),
+      },
+      {
+        id: "not-windows",
+        title: "macOS and Linux action",
+        subtitle: "Declared to work on macOS and Linux only",
+        platforms: ["macos", "linux"],
+        onAction: () => act("not-windows"),
+      },
+    ],
+  };
+}
+
 async function submitForm(itemId: string, values: FieldValue[]): Promise<string> {
   if (itemId !== "form") {
     throw { message: `unknown form: ${itemId}` } satisfies FormError;
@@ -245,7 +258,7 @@ async function openView(itemId: string): Promise<CustomView> {
   return new ColorPicker();
 }
 
-export const command: Command = { getView, runAction, submitForm, openView };
+export const command: Command = { render, submitForm, openView };
 
 /**
  * "reverse <text>" typed into root search lists the text reversed, which

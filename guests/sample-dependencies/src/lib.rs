@@ -15,9 +15,9 @@
 //! manifest names for it.
 #![no_std]
 
-use pane_guest::alloc::{format, string::String, string::ToString, vec, vec::Vec};
+use pane_guest::alloc::{format, string::String, string::ToString, vec::Vec};
 use pane_guest::operations::{CallErrorKind, call};
-use pane_guest::{CustomView, FieldValue, FormError, Guest, Item, NoCustomView, View};
+use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
 use serde_json::{Value, json};
 
 struct Dependencies;
@@ -36,54 +36,48 @@ async fn greet(dependency: &str) -> Result<String, pane_guest::operations::CallE
         .into())
 }
 
-fn item(id: &str, title: &str, subtitle: &str) -> Item {
-    Item {
-        id: id.into(),
-        title: title.into(),
-        subtitle: Some(subtitle.into()),
-        form: None,
-        platforms: None,
-        custom_view: None,
+/// Runs the action of the item `item_id`.
+async fn act(item_id: &str) -> Result<String, String> {
+    match item_id {
+        "required" => greet("greeter").await.map_err(|error| error.explain()),
+        "optional" => match greet("rust-greeter").await {
+            Ok(greeting) => Ok(greeting),
+            // An optional dependency may be missing: say how to get it
+            // rather than fail.
+            Err(error) if error.kind == CallErrorKind::NotFound => Ok(
+                "The optional Rust greeter is not installed; install the Rust operations \
+                 sample to use it"
+                    .into(),
+            ),
+            Err(error) => Err(error.explain()),
+        },
+        _ => Err(format!("unknown item: {item_id}")),
     }
 }
 
-impl Guest for Dependencies {
+/// An item whose action is [`act`] with its id.
+fn item(id: &'static str, title: &str, subtitle: &str) -> Item {
+    Item::new(id, title)
+        .subtitle(subtitle)
+        .on_action(move || act(id))
+}
+
+impl Command for Dependencies {
     type CustomView = NoCustomView;
 
-    async fn get_view() -> Result<View, String> {
-        Ok(View {
-            title: "Greet through dependencies".into(),
-            items: vec![
-                item(
-                    "required",
-                    "Greet through the required greeter",
-                    "The JavaScript operations sample, installed with this one",
-                ),
-                item(
-                    "optional",
-                    "Greet through the optional greeter",
-                    "The Rust operations sample, if you installed it",
-                ),
-            ],
-        })
-    }
-
-    async fn run_action(item_id: String) -> Result<String, String> {
-        match item_id.as_str() {
-            "required" => greet("greeter").await.map_err(|error| error.explain()),
-            "optional" => match greet("rust-greeter").await {
-                Ok(greeting) => Ok(greeting),
-                // An optional dependency may be missing: say how to get it
-                // rather than fail.
-                Err(error) if error.kind == CallErrorKind::NotFound => Ok(
-                    "The optional Rust greeter is not installed; install the Rust operations \
-                     sample to use it"
-                        .into(),
-                ),
-                Err(error) => Err(error.explain()),
-            },
-            _ => Err(format!("unknown item: {item_id}")),
-        }
+    async fn render() -> Result<List, String> {
+        Ok(List::new("Greet through dependencies").items([
+            item(
+                "required",
+                "Greet through the required greeter",
+                "The JavaScript operations sample, installed with this one",
+            ),
+            item(
+                "optional",
+                "Greet through the optional greeter",
+                "The Rust operations sample, if you installed it",
+            ),
+        ]))
     }
 
     async fn submit_form(item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {

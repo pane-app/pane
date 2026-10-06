@@ -6,8 +6,8 @@
 //! like any command, it lists how to use it.
 #![no_std]
 
-use pane_guest::alloc::{format, string::String, vec, vec::Vec};
-use pane_guest::{CustomView, FieldValue, FormError, Guest, Item, NoCustomView, View};
+use pane_guest::alloc::{format, string::String, vec::Vec};
+use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
 
 struct Echo;
 pane_guest::export!(Echo);
@@ -19,40 +19,35 @@ const REFUSED: &str = "fail";
 /// The query Echo crashes on, to show how Pane pauses a crashing extension.
 const CRASH: &str = "crash";
 
-impl Guest for Echo {
+/// Runs the action of the item `item_id`.
+async fn act(item_id: &str) -> Result<String, String> {
+    match item_id {
+        "alias" | "fallback" => Ok("Echo answers the text you send it from root search".into()),
+        other => Err(format!("unknown item: {other}")),
+    }
+}
+
+impl Command for Echo {
     type CustomView = NoCustomView;
 
-    async fn get_view() -> Result<View, String> {
-        let item = |id: &str, title: &str, subtitle: &str| Item {
-            id: id.into(),
-            title: title.into(),
-            subtitle: Some(subtitle.into()),
-            form: None,
-            platforms: None,
-            custom_view: None,
+    async fn render() -> Result<List, String> {
+        let item = |id: &'static str, title: &str, subtitle: &str| {
+            Item::new(id, title)
+                .subtitle(subtitle)
+                .on_action(move || act(id))
         };
-        Ok(View {
-            title: "Echo: send it text from root search".into(),
-            items: vec![
-                item(
-                    "alias",
-                    "Give Echo an alias in Manage extensions",
-                    "Then type the alias, a space and your text in root search",
-                ),
-                item(
-                    "fallback",
-                    "Or make Echo a fallback in Manage extensions",
-                    "Then type anything in root search and choose Echo below the results",
-                ),
-            ],
-        })
-    }
-
-    async fn run_action(item_id: String) -> Result<String, String> {
-        match item_id.as_str() {
-            "alias" | "fallback" => Ok("Echo answers the text you send it from root search".into()),
-            other => Err(format!("unknown item: {other}")),
-        }
+        Ok(List::new("Echo: send it text from root search").items([
+            item(
+                "alias",
+                "Give Echo an alias in Manage extensions",
+                "Then type the alias, a space and your text in root search",
+            ),
+            item(
+                "fallback",
+                "Or make Echo a fallback in Manage extensions",
+                "Then type anything in root search and choose Echo below the results",
+            ),
+        ]))
     }
 
     async fn submit_form(_item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {

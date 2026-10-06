@@ -10,36 +10,31 @@
 //! "a name is needed".
 #![no_std]
 
-use pane_guest::alloc::{format, string::String, string::ToString, vec, vec::Vec};
-use pane_guest::{CustomView, FieldValue, FormError, Guest, Item, NoCustomView, View, publish};
+use pane_guest::alloc::{format, string::String, string::ToString, vec::Vec};
+use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, publish};
 use serde_json::{Value, json};
 
 struct Greeter;
 pane_guest::export!(Greeter);
 pane_guest::publish::export!(Greeter);
 
-impl Guest for Greeter {
+/// Runs the action of the item `item_id`.
+async fn act(item_id: &str) -> Result<String, String> {
+    if item_id != "greet" {
+        return Err(format!("unknown item: {item_id}"));
+    }
+    Ok("Hello from the Git repository".into())
+}
+
+impl Command for Greeter {
     type CustomView = NoCustomView;
 
-    async fn get_view() -> Result<View, String> {
-        Ok(View {
-            title: "Greeter from Git".into(),
-            items: vec![Item {
-                id: "greet".into(),
-                title: "Say hello".into(),
-                subtitle: Some("Answer from the Git repository".into()),
-                form: None,
-                platforms: None,
-                custom_view: None,
-            }],
-        })
-    }
-
-    async fn run_action(item_id: String) -> Result<String, String> {
-        if item_id != "greet" {
-            return Err(format!("unknown item: {item_id}"));
-        }
-        Ok("Hello from the Git repository".into())
+    async fn render() -> Result<List, String> {
+        Ok(List::new("Greeter from Git").item(
+            Item::new("greet", "Say hello")
+                .subtitle("Answer from the Git repository")
+                .on_action(|| act("greet")),
+        ))
     }
 
     async fn submit_form(item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {

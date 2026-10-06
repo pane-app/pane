@@ -10,16 +10,29 @@
 // the extension.
 
 /**
+ * Runs the action of the item `itemId`.
+ * @param {string} itemId
+ * @returns {Promise<string>}
+ */
+async function act(itemId) {
+  if (itemId === "alias" || itemId === "fallback") {
+    return "Echo answers the text you send it from root search";
+  }
+  throw new Error(`unknown item: ${itemId}`);
+}
+
+/**
+ * An item whose action is `act` with its id.
  * @param {string} id
  * @param {string} title
  * @param {string} subtitle
  * @returns {import("@pane/extension").Item}
  */
-const item = (id, title, subtitle) => ({ id, title, subtitle });
+const item = (id, title, subtitle) => ({ id, title, subtitle, onAction: () => act(id) });
 
 /** @type {import("@pane/extension").Command} */
 export const command = {
-  async getView() {
+  async render() {
     return {
       title: "Echo: send it text from root search",
       items: [
@@ -35,12 +48,6 @@ export const command = {
         ),
       ],
     };
-  },
-  async runAction(itemId) {
-    if (itemId === "alias" || itemId === "fallback") {
-      return "Echo answers the text you send it from root search";
-    }
-    throw new Error(`unknown item: ${itemId}`);
   },
   async submitForm() {
     throw new Error("Echo has no forms");

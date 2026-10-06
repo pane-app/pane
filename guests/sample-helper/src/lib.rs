@@ -22,9 +22,9 @@ use core::future::Future;
 use core::pin::pin;
 use core::task::Poll;
 
-use pane_guest::alloc::{format, string::String, vec, vec::Vec};
+use pane_guest::alloc::{format, string::String, vec::Vec};
 use pane_guest::helpers::{self, HelperError};
-use pane_guest::{CustomView, FieldValue, FormError, Guest, Item, NoCustomView, View, settings};
+use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, settings};
 
 /// The helper's name in the package's `pane.json`.
 const ECHO: &str = "echo";
@@ -68,77 +68,73 @@ async fn race<A, B>(
     .await
 }
 
-impl Guest for HelperSample {
+/// Runs the action of the item `item_id`; each item's action is this with
+/// its id.
+async fn act(item_id: &str) -> Result<String, String> {
+    match item_id {
+        "echo" => echo(&[], "hello from Pane").await,
+        "wait" => {
+            settings::set(WAITING, "started")?;
+            // If Pane stops the call meanwhile, the helper's process
+            // ends and nothing after this line runs.
+            let answer = echo(&["--wait", "10"], "after waiting").await?;
+            settings::set(WAITING, "finished")?;
+            Ok(answer)
+        }
+        "limit" => {
+            let slow = echo(&["--wait", "10"], "too late");
+            let timer = wasip3::clocks::monotonic_clock::wait_for(LIMIT);
+            match race(slow, timer).await {
+                Ok(answer) => answer,
+                // The run was dropped when the timer won: Pane ended the
+                // helper's process.
+                Err(()) => Ok("Stopped the helper after one second".into()),
+            }
+        }
+        "fail" => echo(&["--fail"], "").await,
+        "undeclared" => helpers::run("absent".into(), Vec::new(), String::new())
+            .await
+            .map_err(explain),
+        other => Err(format!("unknown item: {other}")),
+    }
+}
+
+impl Command for HelperSample {
     type CustomView = NoCustomView;
 
-    async fn get_view() -> Result<View, String> {
-        let item = |id: &str, title: &str, subtitle: &str| Item {
-            id: id.into(),
-            title: title.into(),
-            subtitle: Some(subtitle.into()),
-            form: None,
-            platforms: None,
-            custom_view: None,
+    async fn render() -> Result<List, String> {
+        let item = |id: &'static str, title: &str, subtitle: &str| {
+            Item::new(id, title)
+                .subtitle(subtitle)
+                .on_action(move || act(id))
         };
-        Ok(View {
-            title: "Helper sample".into(),
-            items: vec![
-                item(
-                    "echo",
-                    "Echo through the helper",
-                    "Runs the package's native helper for this system",
-                ),
-                item(
-                    "wait",
-                    "Echo after waiting",
-                    "The helper waits 10 seconds; disabling or reloading stops it",
-                ),
-                item(
-                    "limit",
-                    "Echo within a second",
-                    "Cancels the slow helper after one second",
-                ),
-                item(
-                    "fail",
-                    "Make the helper fail",
-                    "The helper exits with an error",
-                ),
-                item(
-                    "undeclared",
-                    "Run an undeclared helper",
-                    "The package's pane.json declares no helper by that name",
-                ),
-            ],
-        })
-    }
-
-    async fn run_action(item_id: String) -> Result<String, String> {
-        match item_id.as_str() {
-            "echo" => echo(&[], "hello from Pane").await,
-            "wait" => {
-                settings::set(WAITING, "started")?;
-                // If Pane stops the call meanwhile, the helper's process
-                // ends and nothing after this line runs.
-                let answer = echo(&["--wait", "10"], "after waiting").await?;
-                settings::set(WAITING, "finished")?;
-                Ok(answer)
-            }
-            "limit" => {
-                let slow = echo(&["--wait", "10"], "too late");
-                let timer = wasip3::clocks::monotonic_clock::wait_for(LIMIT);
-                match race(slow, timer).await {
-                    Ok(answer) => answer,
-                    // The run was dropped when the timer won: Pane ended the
-                    // helper's process.
-                    Err(()) => Ok("Stopped the helper after one second".into()),
-                }
-            }
-            "fail" => echo(&["--fail"], "").await,
-            "undeclared" => helpers::run("absent".into(), Vec::new(), String::new())
-                .await
-                .map_err(explain),
-            other => Err(format!("unknown item: {other}")),
-        }
+        Ok(List::new("Helper sample").items([
+            item(
+                "echo",
+                "Echo through the helper",
+                "Runs the package's native helper for this system",
+            ),
+            item(
+                "wait",
+                "Echo after waiting",
+                "The helper waits 10 seconds; disabling or reloading stops it",
+            ),
+            item(
+                "limit",
+                "Echo within a second",
+                "Cancels the slow helper after one second",
+            ),
+            item(
+                "fail",
+                "Make the helper fail",
+                "The helper exits with an error",
+            ),
+            item(
+                "undeclared",
+                "Run an undeclared helper",
+                "The package's pane.json declares no helper by that name",
+            ),
+        ]))
     }
 
     async fn submit_form(item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {

@@ -17,9 +17,9 @@
 //! counts that as a crash too.
 #![no_std]
 
-use pane_guest::alloc::{format, string::String, vec, vec::Vec};
+use pane_guest::alloc::{format, string::String, vec::Vec};
 use pane_guest::{
-    CustomView, FieldValue, FormError, Guest, Item, NoCustomView, View, content, settings,
+    Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, content, settings,
 };
 
 /// The content key holding how many runs the command counted.
@@ -47,91 +47,87 @@ fn count() -> Result<u64, String> {
         .map(|count| count.unwrap_or(0))
 }
 
-impl Guest for Counting {
+/// Runs the action of the item `item_id`; each item's action is this with
+/// its id.
+async fn act(item_id: &str) -> Result<String, String> {
+    match item_id {
+        "count" | "slow" => {
+            // One more run: counted before anything else, so a run Pane
+            // stops on the way still counts as having begun.
+            let runs = count()? + 1;
+            content::set(COUNT, &format!("{runs}"))?;
+            if item_id == "slow" {
+                settings::set(SLOW, "started")?;
+                // The guest suspends here; if Pane stops the call meanwhile,
+                // nothing after this line runs.
+                wasip3::clocks::monotonic_clock::wait_for(SLOW_WAIT).await;
+                settings::set(SLOW, "finished")?;
+                return Ok(format!("Ran {runs} times, after waiting 10 seconds"));
+            }
+            Ok(format!("Ran {runs} times"))
+        }
+        "refuse" => Err("The schedule sample refuses, to show how an error looks".into()),
+        // The run is counted, then the panic traps the guest: Pane
+        // reports a crash, not an error the extension answered with.
+        "crash" => {
+            let runs = count()? + 1;
+            content::set(COUNT, &format!("{runs}"))?;
+            panic!("crashed on purpose");
+        }
+        // The run is counted, then it computes without awaiting
+        // anything: the guest never yields to Pane by itself, so Pane
+        // stops it after its computing limit and counts it towards
+        // pausing the package, as a crash.
+        "busy" => {
+            let runs = count()? + 1;
+            content::set(COUNT, &format!("{runs}"))?;
+            let now = wasip3::clocks::monotonic_clock::now;
+            let end = now() + BUSY_FOR;
+            while now() < end {}
+            Ok(format!("Ran {runs} times"))
+        }
+        other => Err(format!("unknown item: {other}")),
+    }
+}
+
+impl Command for Counting {
     type CustomView = NoCustomView;
 
-    async fn get_view() -> Result<View, String> {
+    async fn render() -> Result<List, String> {
         let runs = count()?;
-        let item = |id: &str, title: &str, subtitle: &str| Item {
-            id: id.into(),
-            title: title.into(),
-            subtitle: Some(subtitle.into()),
-            form: None,
-            platforms: None,
-            custom_view: None,
+        let item = |id: &'static str, title: &str, subtitle: &str| {
+            Item::new(id, title)
+                .subtitle(subtitle)
+                .on_action(move || act(id))
         };
-        Ok(View {
-            title: format!("Ran {runs} times"),
-            items: vec![
-                item(
-                    "count",
-                    "Run now",
-                    "What the schedule runs; it adds one to the count and answers it",
-                ),
-                item(
-                    "slow",
-                    "Run slowly",
-                    "Waits 10 seconds, then answers; disabling or reloading stops it",
-                ),
-                item(
-                    "refuse",
-                    "Answer an error",
-                    "An error the extension answers with never pauses it",
-                ),
-                item(
-                    "crash",
-                    "Crash",
-                    "Crashes on purpose; three crashes within five minutes pause the extension",
-                ),
-                item(
-                    "busy",
-                    "Stop responding",
-                    "Computes without waiting for up to a minute; Pane stops it after 5 seconds, \
-                     counted as a crash",
-                ),
-            ],
-        })
-    }
-
-    async fn run_action(item_id: String) -> Result<String, String> {
-        match item_id.as_str() {
-            "count" | "slow" => {
-                // One more run: counted before anything else, so a run Pane
-                // stops on the way still counts as having begun.
-                let runs = count()? + 1;
-                content::set(COUNT, &format!("{runs}"))?;
-                if item_id == "slow" {
-                    settings::set(SLOW, "started")?;
-                    // The guest suspends here; if Pane stops the call meanwhile,
-                    // nothing after this line runs.
-                    wasip3::clocks::monotonic_clock::wait_for(SLOW_WAIT).await;
-                    settings::set(SLOW, "finished")?;
-                    return Ok(format!("Ran {runs} times, after waiting 10 seconds"));
-                }
-                Ok(format!("Ran {runs} times"))
-            }
-            "refuse" => Err("The schedule sample refuses, to show how an error looks".into()),
-            // The run is counted, then the panic traps the guest: Pane
-            // reports a crash, not an error the extension answered with.
-            "crash" => {
-                let runs = count()? + 1;
-                content::set(COUNT, &format!("{runs}"))?;
-                panic!("crashed on purpose");
-            }
-            // The run is counted, then it computes without awaiting
-            // anything: the guest never yields to Pane by itself, so Pane
-            // stops it after its computing limit and counts it towards
-            // pausing the package, as a crash.
-            "busy" => {
-                let runs = count()? + 1;
-                content::set(COUNT, &format!("{runs}"))?;
-                let now = wasip3::clocks::monotonic_clock::now;
-                let end = now() + BUSY_FOR;
-                while now() < end {}
-                Ok(format!("Ran {runs} times"))
-            }
-            other => Err(format!("unknown item: {other}")),
-        }
+        Ok(List::new(format!("Ran {runs} times")).items([
+            item(
+                "count",
+                "Run now",
+                "What the schedule runs; it adds one to the count and answers it",
+            ),
+            item(
+                "slow",
+                "Run slowly",
+                "Waits 10 seconds, then answers; disabling or reloading stops it",
+            ),
+            item(
+                "refuse",
+                "Answer an error",
+                "An error the extension answers with never pauses it",
+            ),
+            item(
+                "crash",
+                "Crash",
+                "Crashes on purpose; three crashes within five minutes pause the extension",
+            ),
+            item(
+                "busy",
+                "Stop responding",
+                "Computes without waiting for up to a minute; Pane stops it after 5 seconds, \
+                 counted as a crash",
+            ),
+        ]))
     }
 
     async fn submit_form(_item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {

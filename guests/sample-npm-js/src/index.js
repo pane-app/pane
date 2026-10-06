@@ -13,18 +13,18 @@
 
 /** @type {import("@pane/extension").Command} */
 export const command = {
-  async getView() {
+  async render() {
     return {
       title: "Greeter from npm",
-      items: [{ id: "greet", title: "Say hello", subtitle: "Answer from the npm package" }],
+      items: [
+        {
+          id: "greet",
+          title: "Say hello",
+          subtitle: "Answer from the npm package",
+          onAction: async () => "Hello from the npm package",
+        },
+      ],
     };
-  },
-
-  async runAction(itemId) {
-    if (itemId !== "greet") {
-      throw new Error(`unknown item: ${itemId}`);
-    }
-    return "Hello from the npm package";
   },
 
   async submitForm(itemId) {

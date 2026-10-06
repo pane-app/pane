@@ -8,11 +8,25 @@
 // and the JavaScript one. "fail" is refused, to show how an error looks;
 // "crash" crashes on purpose, and three crashes within five minutes pause
 // the extension.
-import type { Command, CustomView, Item, QueryCommand, View } from "@pane/extension";
+import type { Command, CustomView, Item, List, QueryCommand } from "@pane/extension";
 
-const item = (id: string, title: string, subtitle: string): Item => ({ id, title, subtitle });
+/** Runs the action of the item `itemId`. */
+async function act(itemId: string): Promise<string> {
+  if (itemId === "alias" || itemId === "fallback") {
+    return "Echo answers the text you send it from root search";
+  }
+  throw new Error(`unknown item: ${itemId}`);
+}
 
-async function getView(): Promise<View> {
+/** An item whose action is `act` with its id. */
+const item = (id: string, title: string, subtitle: string): Item => ({
+  id,
+  title,
+  subtitle,
+  onAction: () => act(id),
+});
+
+async function render(): Promise<List> {
   return {
     title: "Echo: send it text from root search",
     items: [
@@ -30,13 +44,6 @@ async function getView(): Promise<View> {
   };
 }
 
-async function runAction(itemId: string): Promise<string> {
-  if (itemId === "alias" || itemId === "fallback") {
-    return "Echo answers the text you send it from root search";
-  }
-  throw new Error(`unknown item: ${itemId}`);
-}
-
 async function submitForm(_itemId: string): Promise<string> {
   throw new Error("Echo has no forms");
 }
@@ -45,7 +52,7 @@ async function openView(_itemId: string): Promise<CustomView> {
   throw new Error("Echo has no custom views");
 }
 
-export const command: Command = { getView, runAction, submitForm, openView };
+export const command: Command = { render, submitForm, openView };
 
 export const queryCommand: QueryCommand = {
   async runQuery(command, query) {

@@ -27,9 +27,9 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use pane_guest::alloc::{format, string::String, vec, vec::Vec};
+use pane_guest::alloc::{format, string::String, vec::Vec};
 use pane_guest::{
-    CustomView, FieldValue, FormError, Guest, Item, NoCustomView, View, content, settings,
+    Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, content, settings,
 };
 
 /// The content key holding how many cycles the service has run, ever.
@@ -82,23 +82,56 @@ fn counted(key: &str) -> Result<u64, String> {
         .map(|count| count.unwrap_or(0))
 }
 
-impl Guest for Watching {
+/// Runs the action of the item `item_id`; each item's action is this with
+/// its id.
+async fn act(item_id: &str) -> Result<String, String> {
+    match item_id {
+        "add" => {
+            let events = counted(EVENTS)? + 1;
+            content::set(EVENTS, &format!("{events}"))?;
+            Ok(format!("Added event {events}; the next cycle reports it"))
+        }
+        "slow" => {
+            settings::set(MODE, "slow")?;
+            Ok("The next cycle will wait 10 seconds".into())
+        }
+        "fail" => {
+            settings::set(MODE, "fail")?;
+            Ok("The next cycle will answer an error".into())
+        }
+        "crash" => {
+            settings::set(MODE, "crash")?;
+            Ok("The next cycle will crash".into())
+        }
+        "busy" => {
+            settings::set(MODE, "busy")?;
+            Ok("The next cycle will stop responding".into())
+        }
+        "fast" => {
+            settings::set(MODE, "fast")?;
+            Ok("The next cycle will answer 0 seconds".into())
+        }
+        "far" => {
+            settings::set(MODE, "far")?;
+            Ok("The next cycle will answer 31 days".into())
+        }
+        other => Err(format!("unknown item: {other}")),
+    }
+}
+
+impl Command for Watching {
     type CustomView = NoCustomView;
 
-    async fn get_view() -> Result<View, String> {
+    async fn render() -> Result<List, String> {
         let cycles = counted(CYCLES)?;
         let events = counted(EVENTS)?;
-        let item = |id: &str, title: &str, subtitle: &str| Item {
-            id: id.into(),
-            title: title.into(),
-            subtitle: Some(subtitle.into()),
-            form: None,
-            platforms: None,
-            custom_view: None,
+        let item = |id: &'static str, title: &str, subtitle: &str| {
+            Item::new(id, title)
+                .subtitle(subtitle)
+                .on_action(move || act(id))
         };
-        Ok(View {
-            title: format!("Watching: {events} events ({cycles} cycles)"),
-            items: vec![
+        Ok(
+            List::new(format!("Watching: {events} events ({cycles} cycles)")).items([
                 item(
                     "add",
                     "Add an event",
@@ -136,43 +169,8 @@ impl Guest for Watching {
                     "Ask for a 31-day cadence",
                     "The next cycle answers 31 days; Pane clamps it to its 30-day maximum",
                 ),
-            ],
-        })
-    }
-
-    async fn run_action(item_id: String) -> Result<String, String> {
-        match item_id.as_str() {
-            "add" => {
-                let events = counted(EVENTS)? + 1;
-                content::set(EVENTS, &format!("{events}"))?;
-                Ok(format!("Added event {events}; the next cycle reports it"))
-            }
-            "slow" => {
-                settings::set(MODE, "slow")?;
-                Ok("The next cycle will wait 10 seconds".into())
-            }
-            "fail" => {
-                settings::set(MODE, "fail")?;
-                Ok("The next cycle will answer an error".into())
-            }
-            "crash" => {
-                settings::set(MODE, "crash")?;
-                Ok("The next cycle will crash".into())
-            }
-            "busy" => {
-                settings::set(MODE, "busy")?;
-                Ok("The next cycle will stop responding".into())
-            }
-            "fast" => {
-                settings::set(MODE, "fast")?;
-                Ok("The next cycle will answer 0 seconds".into())
-            }
-            "far" => {
-                settings::set(MODE, "far")?;
-                Ok("The next cycle will answer 31 days".into())
-            }
-            other => Err(format!("unknown item: {other}")),
-        }
+            ]),
+        )
     }
 
     async fn submit_form(_item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {

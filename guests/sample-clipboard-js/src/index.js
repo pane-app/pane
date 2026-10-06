@@ -74,6 +74,15 @@ function forForm(call) {
 const item = (id, title, subtitle) => ({ id, title, subtitle });
 
 /**
+ * An item whose action is `act` with its id.
+ * @param {string} id
+ * @param {string} title
+ * @param {string} subtitle
+ * @returns {import("@pane/extension").Item}
+ */
+const action = (id, title, subtitle) => ({ ...item(id, title, subtitle), onAction: () => act(id) });
+
+/**
  * @param {number} count
  * @param {string} one
  * @param {string} many
@@ -133,7 +142,7 @@ function toggle(status) {
             "Resume clipboard history",
             `Paused · ${kept} kept · Nothing you copy is kept until you resume`,
           ];
-  return item(id, title, status.problem ? `${status.problem} · ${subtitle}` : subtitle);
+  return action(id, title, status.problem ? `${status.problem} · ${subtitle}` : subtitle);
 }
 
 /**
@@ -180,14 +189,45 @@ function entryItem(entry) {
   };
 }
 
+/**
+ * Runs the action of the item `itemId`.
+ * @param {string} itemId
+ * @returns {Promise<string>}
+ */
+async function act(itemId) {
+  const wanted = CAPTURES[itemId];
+  if (wanted) {
+    host(() => history.setCapture(wanted[0]));
+    return wanted[1];
+  }
+  if (itemId === "clear") {
+    return `Deleted ${plural(host(history.clear), "kept item", "kept items")}`;
+  }
+  if (itemId === "turn-off-and-clear") {
+    return `Clipboard history is off; deleted ${plural(host(history.turnOffAndClear), "kept item", "kept items")}`;
+  }
+  if (itemId === "empty") return "Nothing is kept yet";
+  if (itemId.startsWith(INCLUDE)) {
+    const program = itemId.slice(INCLUDE.length);
+    const excluded = host(history.status).excluded.filter((excluded) => excluded !== program);
+    host(() => history.setExcluded(excluded));
+    return `Text copied from ${program} is kept again`;
+  }
+  if (itemId.startsWith(ENTRY)) {
+    host(() => history.copy(itemId.slice(ENTRY.length)));
+    return "Copied to the clipboard";
+  }
+  throw new Error(`unknown item: ${itemId}`);
+}
+
 /** @type {import("@pane/extension").Command} */
 export const command = {
-  async getView() {
+  async render() {
     const status = host(history.status);
     const items = [toggle(status)];
     if (status.capture !== "off") {
       items.push(
-        item(
+        action(
           "turn-off",
           "Turn off clipboard history",
           "Stops keeping what you copy; the kept items stay until you clear them",
@@ -229,13 +269,13 @@ export const command = {
     });
     for (const program of status.excluded) {
       items.push(
-        item(`${INCLUDE}${program}`, `Stop excluding ${program}`, `Text copied from ${program} is not kept`),
+        action(`${INCLUDE}${program}`, `Stop excluding ${program}`, `Text copied from ${program} is not kept`),
       );
     }
     const entries = host(history.entries);
     if (entries.length > 0) {
       items.push(
-        item(
+        action(
           "clear",
           "Clear clipboard history",
           `Deletes the ${plural(status.items, "item", "items")} kept; whether history is kept does not change`,
@@ -243,7 +283,7 @@ export const command = {
       );
       if (status.capture !== "off") {
         items.push(
-          item(
+          action(
             "turn-off-and-clear",
             "Turn off and delete clipboard history",
             `Deletes the ${plural(status.items, "item", "items")} kept and keeps nothing you copy from now on`,
@@ -263,35 +303,15 @@ export const command = {
     }
     items.push(...entries.map(entryItem));
     if (entries.length === 0 && status.capture === "on") {
-      items.push(item("empty", "Nothing kept yet", "Text you copy from now on is listed here"));
+      items.push(action("empty", "Nothing kept yet", "Text you copy from now on is listed here"));
     }
     return { title: "Clipboard history (JavaScript)", items };
   },
 
-  async runAction(itemId) {
-    const wanted = CAPTURES[itemId];
-    if (wanted) {
-      host(() => history.setCapture(wanted[0]));
-      return wanted[1];
-    }
-    if (itemId === "clear") {
-      return `Deleted ${plural(host(history.clear), "kept item", "kept items")}`;
-    }
-    if (itemId === "turn-off-and-clear") {
-      return `Clipboard history is off; deleted ${plural(host(history.turnOffAndClear), "kept item", "kept items")}`;
-    }
-    if (itemId === "empty") return "Nothing is kept yet";
-    if (itemId.startsWith(INCLUDE)) {
-      const program = itemId.slice(INCLUDE.length);
-      const excluded = host(history.status).excluded.filter((excluded) => excluded !== program);
-      host(() => history.setExcluded(excluded));
-      return `Text copied from ${program} is kept again`;
-    }
-    if (itemId.startsWith(ENTRY)) {
-      host(() => history.copy(itemId.slice(ENTRY.length)));
-      return "Copied to the clipboard";
-    }
-    throw new Error(`unknown item: ${itemId}`);
+  // A callback no item's action names runs as the action of that id, so a
+  // kept item's id (whose item opens a form) still copies it again.
+  async runSearchResult(id) {
+    return act(id);
   },
 
   async submitForm(itemId, values) {

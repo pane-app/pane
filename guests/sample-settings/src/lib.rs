@@ -20,9 +20,9 @@
 //! crash does.
 #![no_std]
 
-use pane_guest::alloc::{format, string::String, vec, vec::Vec};
+use pane_guest::alloc::{format, string::String, vec::Vec};
 use pane_guest::{
-    CustomView, FieldValue, FormError, Guest, Item, NoCustomView, View, cache, content,
+    Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, cache, content,
     credentials, settings,
 };
 
@@ -49,136 +49,131 @@ const BUSY_FOR: u64 = 60_000_000_000;
 struct Greeting;
 pane_guest::export!(Greeting);
 
-impl Guest for Greeting {
+/// Runs the action of the item `id`; each item's action is this with its id.
+async fn act(id: &str) -> Result<String, String> {
+    match id {
+        "formal" | "casual" => {
+            settings::set(STYLE, id)?;
+            Ok(format!("Saved the {id} greeting"))
+        }
+        "greet" => {
+            let greeting = match settings::get(STYLE)?.as_deref() {
+                Some("formal") => "Good day to you",
+                Some("casual") => "Hi there",
+                _ => return Err("No greeting style is saved yet; choose one first".into()),
+            };
+            cache::set(LAST_GREETING, greeting)?;
+            Ok(greeting.into())
+        }
+        "note" => {
+            content::set(NOTE, "Water the plants")?;
+            Ok("Saved a note".into())
+        }
+        "sign-in" => {
+            credentials::set(TOKEN, "sample-token")?;
+            Ok("Signed in on this computer".into())
+        }
+        "kept" => {
+            let or_none = |value: Option<String>| value.unwrap_or_else(|| "none".into());
+            let signed_in = match credentials::get(TOKEN)? {
+                Some(_) => "yes",
+                None => "no",
+            };
+            Ok(format!(
+                "Style: {} · Note: {} · Signed in: {signed_in} · Cached greeting: {}",
+                or_none(settings::get(STYLE)?),
+                or_none(content::get(NOTE)?),
+                or_none(cache::get(LAST_GREETING)?),
+            ))
+        }
+        "slow" => {
+            settings::set(SLOW_SAVE, "started")?;
+            // The guest suspends here; if Pane stops the call meanwhile,
+            // nothing after this line runs.
+            wasip3::clocks::monotonic_clock::wait_for(SLOW_WAIT).await;
+            settings::set(SLOW_SAVE, "finished")?;
+            Ok("Saved after waiting 10 seconds".into())
+        }
+        "count" => {
+            let count = match content::get(COUNT)? {
+                Some(count) => count
+                    .parse::<u64>()
+                    .map_err(|_| "the count is not a number")?,
+                None => 0,
+            } + 1;
+            content::set(COUNT, &format!("{count}"))?;
+            Ok(format!("Counted {count}"))
+        }
+        "busy" => {
+            settings::set(BUSY, "started")?;
+            // Computes without awaiting anything: the guest never
+            // yields to Pane by itself.
+            let now = wasip3::clocks::monotonic_clock::now;
+            let end = now() + BUSY_FOR;
+            while now() < end {}
+            settings::set(BUSY, "finished")?;
+            Ok("Finished computing after a minute".into())
+        }
+        // A panic traps the guest: Pane reports a crash, not an error
+        // the extension answered with.
+        "crash" => panic!("crashed on purpose"),
+        other => Err(format!("unknown item: {other}")),
+    }
+}
+
+impl Command for Greeting {
     type CustomView = NoCustomView;
 
-    async fn get_view() -> Result<View, String> {
+    async fn render() -> Result<List, String> {
         let title = match settings::get(STYLE)? {
             Some(style) => format!("Greeting: {style}"),
             None => "Greeting".into(),
         };
-        let item = |id: &str, title: &str, subtitle: &str| Item {
-            id: id.into(),
-            title: title.into(),
-            subtitle: Some(subtitle.into()),
-            form: None,
-            platforms: None,
-            custom_view: None,
+        let item = |id: &'static str, title: &str, subtitle: &str| {
+            Item::new(id, title)
+                .subtitle(subtitle)
+                .on_action(move || act(id))
         };
-        Ok(View {
-            title,
-            items: vec![
-                item(
-                    "formal",
-                    "Use a formal greeting",
-                    "Saved in Pane's settings",
-                ),
-                item(
-                    "casual",
-                    "Use a casual greeting",
-                    "Saved in Pane's settings",
-                ),
-                item("greet", "Greet me", "Answer in the saved style"),
-                item(
-                    "note",
-                    "Save a note",
-                    "Kept in Pane as the extension's content",
-                ),
-                item("sign-in", "Sign in", "Keeps a token as a local credential"),
-                item(
-                    "kept",
-                    "Show what Pane keeps",
-                    "Settings, content, cache and credential",
-                ),
-                item(
-                    "slow",
-                    "Save after waiting",
-                    "Waits 10 seconds, then saves; disabling or reloading stops it",
-                ),
-                item(
-                    "crash",
-                    "Crash",
-                    "Crashes on purpose; three crashes within five minutes pause the extension",
-                ),
-                item("count", "Count", "Adds one to a count kept in its content"),
-                item(
-                    "busy",
-                    "Stop responding",
-                    "Computes without waiting for up to a minute; Pane stops it after 5 seconds",
-                ),
-            ],
-        })
-    }
-
-    async fn run_action(item_id: String) -> Result<String, String> {
-        match item_id.as_str() {
-            "formal" | "casual" => {
-                settings::set(STYLE, &item_id)?;
-                Ok(format!("Saved the {item_id} greeting"))
-            }
-            "greet" => {
-                let greeting = match settings::get(STYLE)?.as_deref() {
-                    Some("formal") => "Good day to you",
-                    Some("casual") => "Hi there",
-                    _ => return Err("No greeting style is saved yet; choose one first".into()),
-                };
-                cache::set(LAST_GREETING, greeting)?;
-                Ok(greeting.into())
-            }
-            "note" => {
-                content::set(NOTE, "Water the plants")?;
-                Ok("Saved a note".into())
-            }
-            "sign-in" => {
-                credentials::set(TOKEN, "sample-token")?;
-                Ok("Signed in on this computer".into())
-            }
-            "kept" => {
-                let or_none = |value: Option<String>| value.unwrap_or_else(|| "none".into());
-                let signed_in = match credentials::get(TOKEN)? {
-                    Some(_) => "yes",
-                    None => "no",
-                };
-                Ok(format!(
-                    "Style: {} · Note: {} · Signed in: {signed_in} · Cached greeting: {}",
-                    or_none(settings::get(STYLE)?),
-                    or_none(content::get(NOTE)?),
-                    or_none(cache::get(LAST_GREETING)?),
-                ))
-            }
-            "slow" => {
-                settings::set(SLOW_SAVE, "started")?;
-                // The guest suspends here; if Pane stops the call meanwhile,
-                // nothing after this line runs.
-                wasip3::clocks::monotonic_clock::wait_for(SLOW_WAIT).await;
-                settings::set(SLOW_SAVE, "finished")?;
-                Ok("Saved after waiting 10 seconds".into())
-            }
-            "count" => {
-                let count = match content::get(COUNT)? {
-                    Some(count) => count
-                        .parse::<u64>()
-                        .map_err(|_| "the count is not a number")?,
-                    None => 0,
-                } + 1;
-                content::set(COUNT, &format!("{count}"))?;
-                Ok(format!("Counted {count}"))
-            }
-            "busy" => {
-                settings::set(BUSY, "started")?;
-                // Computes without awaiting anything: the guest never
-                // yields to Pane by itself.
-                let now = wasip3::clocks::monotonic_clock::now;
-                let end = now() + BUSY_FOR;
-                while now() < end {}
-                settings::set(BUSY, "finished")?;
-                Ok("Finished computing after a minute".into())
-            }
-            // A panic traps the guest: Pane reports a crash, not an error
-            // the extension answered with.
-            "crash" => panic!("crashed on purpose"),
-            other => Err(format!("unknown item: {other}")),
-        }
+        Ok(List::new(title).items([
+            item(
+                "formal",
+                "Use a formal greeting",
+                "Saved in Pane's settings",
+            ),
+            item(
+                "casual",
+                "Use a casual greeting",
+                "Saved in Pane's settings",
+            ),
+            item("greet", "Greet me", "Answer in the saved style"),
+            item(
+                "note",
+                "Save a note",
+                "Kept in Pane as the extension's content",
+            ),
+            item("sign-in", "Sign in", "Keeps a token as a local credential"),
+            item(
+                "kept",
+                "Show what Pane keeps",
+                "Settings, content, cache and credential",
+            ),
+            item(
+                "slow",
+                "Save after waiting",
+                "Waits 10 seconds, then saves; disabling or reloading stops it",
+            ),
+            item(
+                "crash",
+                "Crash",
+                "Crashes on purpose; three crashes within five minutes pause the extension",
+            ),
+            item("count", "Count", "Adds one to a count kept in its content"),
+            item(
+                "busy",
+                "Stop responding",
+                "Computes without waiting for up to a minute; Pane stops it after 5 seconds",
+            ),
+        ]))
     }
 
     async fn submit_form(item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {

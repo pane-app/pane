@@ -11,8 +11,8 @@ mod links;
 use pane_guest::alloc::{format, string::String, vec, vec::Vec};
 use pane_guest::root::{RootAction, RootResult};
 use pane_guest::{
-    Choice, CustomView, Field, FieldKind, FieldValue, Form, FormError, Guest, Item, NoCustomView,
-    TextField, View,
+    Choice, Command, CustomView, Field, FieldKind, FieldValue, Form, FormError, Item, List,
+    NoCustomView, TextField,
 };
 
 use links::Quicklink;
@@ -118,34 +118,20 @@ fn check(
     Ok(())
 }
 
-impl Guest for Quicklinks {
+impl Command for Quicklinks {
     type CustomView = NoCustomView;
 
-    async fn get_view() -> Result<View, String> {
-        let mut items = vec![Item {
-            id: CREATE.into(),
-            title: "Create quicklink".into(),
-            subtitle: Some("Name a web address to open from root search".into()),
-            form: Some(create_form()),
-            platforms: None,
-            custom_view: None,
-        }];
-        items.extend(links::load()?.iter().map(|link| Item {
-            id: format!("{EDIT}{}", link.name),
-            title: link.name.clone(),
-            subtitle: Some(format!("{} · Enter edits or removes it", link.url)),
-            form: Some(edit_form(link)),
-            platforms: None,
-            custom_view: None,
-        }));
-        Ok(View {
-            title: "Quicklinks".into(),
-            items,
-        })
-    }
-
-    async fn run_action(item_id: String) -> Result<String, String> {
-        Err(format!("unknown item: {item_id}"))
+    async fn render() -> Result<List, String> {
+        let create = Item::new(CREATE, "Create quicklink")
+            .subtitle("Name a web address to open from root search")
+            .form(create_form());
+        let saved = links::load()?;
+        let edits = saved.iter().map(|link| {
+            Item::new(format!("{EDIT}{}", link.name), link.name.clone())
+                .subtitle(format!("{} · Enter edits or removes it", link.url))
+                .form(edit_form(link))
+        });
+        Ok(List::new("Quicklinks").item(create).items(edits))
     }
 
     async fn submit_form(item_id: String, values: Vec<FieldValue>) -> Result<String, FormError> {

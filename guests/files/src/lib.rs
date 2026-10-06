@@ -11,10 +11,10 @@
 
 mod matching;
 
-use pane_guest::alloc::{format, string::String, vec, vec::Vec};
+use pane_guest::alloc::{format, string::String, vec::Vec};
 use pane_guest::files::{self, FolderState};
 use pane_guest::root::{RootAction, RootResult};
-use pane_guest::{CustomView, FieldValue, FormError, Guest, Item, NoCustomView, View};
+use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
 
 struct Files;
 pane_guest::export!(Files);
@@ -30,28 +30,23 @@ fn policy() -> String {
     )
 }
 
-impl Guest for Files {
+/// Runs the action of the item `item_id`.
+async fn act(item_id: &str) -> Result<String, String> {
+    match item_id {
+        "policy" => Ok(policy()),
+        _ => Err(format!("unknown item: {item_id}")),
+    }
+}
+
+impl Command for Files {
     type CustomView = NoCustomView;
 
-    async fn get_view() -> Result<View, String> {
-        Ok(View {
-            title: "Files".into(),
-            items: vec![Item {
-                id: "policy".into(),
-                title: "What is searched".into(),
-                subtitle: Some(policy()),
-                form: None,
-                platforms: None,
-                custom_view: None,
-            }],
-        })
-    }
-
-    async fn run_action(item_id: String) -> Result<String, String> {
-        match item_id.as_str() {
-            "policy" => Ok(policy()),
-            _ => Err(format!("unknown item: {item_id}")),
-        }
+    async fn render() -> Result<List, String> {
+        Ok(List::new("Files").item(
+            Item::new("policy", "What is searched")
+                .subtitle(policy())
+                .on_action(|| act("policy")),
+        ))
     }
 
     async fn submit_form(item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {

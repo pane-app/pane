@@ -243,9 +243,8 @@ impl Command for Sample {
     type CustomView = ColorPicker;
 
     async fn render() -> Result<List, String> {
-        let item = |id: &'static str, title: &str, subtitle: &str| {
-            Item::new(id, title).subtitle(subtitle)
-        };
+        let item =
+            |id: &'static str, title: &str, subtitle: &str| Item::new(id, title).subtitle(subtitle);
         let acting = |id: &'static str, title: &str, subtitle: &str| {
             item(id, title, subtitle).on_action(move || act(id))
         };

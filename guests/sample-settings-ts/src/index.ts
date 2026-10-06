@@ -14,7 +14,7 @@
 // finished: Pane stops a call that computes for 5 seconds without waiting,
 // so it never finishes, and it counts towards pausing the package as a
 // crash does.
-import type { Command, CustomView, Item, View } from "@pane/extension";
+import type { Command, CustomView, Item, List } from "@pane/extension";
 import { get, set } from "pane:extension/settings@0.1.0";
 import * as cache from "pane:extension/cache@0.1.0";
 import * as content from "pane:extension/content@0.1.0";
@@ -38,7 +38,13 @@ const BUSY = "busy";
 /** How long "Stop responding" computes at most, in milliseconds: bounded, so that even without Pane stopping it, it ends. */
 const BUSY_FOR = 60_000;
 
-const item = (id: string, title: string, subtitle: string): Item => ({ id, title, subtitle });
+/** An item whose action is `act` with its id. */
+const item = (id: string, title: string, subtitle: string): Item => ({
+  id,
+  title,
+  subtitle,
+  onAction: () => act(id),
+});
 
 /** The greeting in the saved `style`; throws if no style is saved. */
 function greetingIn(style: string | null): string {
@@ -52,7 +58,7 @@ function greetingIn(style: string | null): string {
   }
 }
 
-async function getView(): Promise<View> {
+async function render(): Promise<List> {
   // A settings error (get throws) is shown to the user as the command's error.
   const style = get(STYLE);
   return {
@@ -71,7 +77,8 @@ async function getView(): Promise<View> {
   };
 }
 
-async function runAction(itemId: string): Promise<string> {
+/** Runs the action of the item `itemId`. */
+async function act(itemId: string): Promise<string> {
   switch (itemId) {
     case "formal":
     case "casual":
@@ -131,4 +138,4 @@ async function openView(itemId: string): Promise<CustomView> {
   throw new Error(`unknown view: ${itemId}`);
 }
 
-export const command: Command = { getView, runAction, submitForm, openView };
+export const command: Command = { render, submitForm, openView };

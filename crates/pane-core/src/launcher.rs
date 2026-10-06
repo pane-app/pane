@@ -3629,7 +3629,7 @@ impl Launcher {
         state.view.title = view.title;
         if searching {
             if let Some(search) = state.searching.as_mut() {
-                search.list = Some(list);
+                search.keep(list);
             }
             return;
         }

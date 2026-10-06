@@ -12,7 +12,7 @@
 // and Enter on an item copies it again or deletes it.
 import * as history from "pane:extension/clipboard-history@0.1.0";
 import type { Capture, Entry, HistoryStatus } from "pane:extension/clipboard-history@0.1.0";
-import type { Command, CustomView, FieldValue, Form, Item, View } from "@pane/extension";
+import type { Command, CustomView, FieldValue, Form, Item, List } from "@pane/extension";
 
 /** The longest title of a kept item, in characters. */
 const TITLE_CHARS = 80;
@@ -49,6 +49,12 @@ function host<T>(call: () => T): T {
 }
 
 const item = (id: string, title: string, subtitle: string): Item => ({ id, title, subtitle });
+
+/** An item whose action is `act` with its id. */
+const action = (id: string, title: string, subtitle: string): Item => ({
+  ...item(id, title, subtitle),
+  onAction: () => act(id),
+});
 
 const plural = (count: number, one: string, many: string): string =>
   count === 1 ? `1 ${one}` : `${count} ${many}`;
@@ -92,7 +98,7 @@ function toggle(status: HistoryStatus): Item {
             "Resume clipboard history",
             `Paused · ${kept} kept · Nothing you copy is kept until you resume`,
           ];
-  return item(id, title, status.problem ? `${status.problem} · ${subtitle}` : subtitle);
+  return action(id, title, status.problem ? `${status.problem} · ${subtitle}` : subtitle);
 }
 
 /** The first line of `text` with content, trimmed and at most `TITLE_CHARS` long. */
@@ -133,12 +139,12 @@ function entryItem(entry: Entry): Item {
   };
 }
 
-async function getView(): Promise<View> {
+async function render(): Promise<List> {
   const status = host(history.status);
   const items: Item[] = [toggle(status)];
   if (status.capture !== "off") {
     items.push(
-      item(
+      action(
         "turn-off",
         "Turn off clipboard history",
         "Stops keeping what you copy; the kept items stay until you clear them",
@@ -180,13 +186,13 @@ async function getView(): Promise<View> {
   });
   for (const program of status.excluded) {
     items.push(
-      item(`${INCLUDE}${program}`, `Stop excluding ${program}`, `Text copied from ${program} is not kept`),
+      action(`${INCLUDE}${program}`, `Stop excluding ${program}`, `Text copied from ${program} is not kept`),
     );
   }
   const entries = host(history.entries);
   if (entries.length > 0) {
     items.push(
-      item(
+      action(
         "clear",
         "Clear clipboard history",
         `Deletes the ${plural(status.items, "item", "items")} kept; whether history is kept does not change`,
@@ -194,7 +200,7 @@ async function getView(): Promise<View> {
     );
     if (status.capture !== "off") {
       items.push(
-        item(
+        action(
           "turn-off-and-clear",
           "Turn off and delete clipboard history",
           `Deletes the ${plural(status.items, "item", "items")} kept and keeps nothing you copy from now on`,
@@ -214,12 +220,13 @@ async function getView(): Promise<View> {
   }
   items.push(...entries.map(entryItem));
   if (entries.length === 0 && status.capture === "on") {
-    items.push(item("empty", "Nothing kept yet", "Text you copy from now on is listed here"));
+    items.push(action("empty", "Nothing kept yet", "Text you copy from now on is listed here"));
   }
   return { title: "Clipboard history (TypeScript)", items };
 }
 
-async function runAction(itemId: string): Promise<string> {
+/** Runs the action of the item `itemId`. */
+async function act(itemId: string): Promise<string> {
   const wanted = CAPTURES[itemId];
   if (wanted) {
     host(() => history.setCapture(wanted[0]));
@@ -295,4 +302,12 @@ async function openView(itemId: string): Promise<CustomView> {
   throw new Error(`unknown view: ${itemId}`);
 }
 
-export const command: Command = { getView, runAction, submitForm, openView };
+/**
+ * A callback no item's action names runs as the action of that id, so a
+ * kept item's id (whose item opens a form) still copies it again.
+ */
+async function runSearchResult(id: string): Promise<string> {
+  return act(id);
+}
+
+export const command: Command = { render, runSearchResult, submitForm, openView };

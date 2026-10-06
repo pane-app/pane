@@ -25,7 +25,7 @@ use futures::FutureExt;
 use pane_guest::alloc::{format, string::String, string::ToString, vec::Vec};
 use pane_guest::operations::call;
 use pane_guest::{
-    CustomView, FieldValue, FormError, Guest, Item, NoCustomView, View, publish, settings,
+    Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, publish, settings,
 };
 use serde_json::{Value, json};
 
@@ -134,80 +134,71 @@ async fn call_as_text(
         .map_err(|error| error.explain())
 }
 
-impl Guest for Fixture {
+/// Runs the action of the item `item_id`; each item's action is this with
+/// its id, its title.
+async fn act(item_id: &str) -> Result<String, String> {
+    let Some(&(title, target, operation, version, input)) =
+        ITEMS.iter().find(|(title, ..)| *title == item_id)
+    else {
+        return Err(format!("unknown item: {item_id}"));
+    };
+    let sources = sources()?;
+    let target = source(&sources, target);
+    let input = match title {
+        "Call b, which calls me back" => {
+            json!({ "to": source(&sources, "a"), "operation": "echo", "input": {} }).to_string()
+        }
+        // p1 forwards to p2, and so on to p9.
+        "Call a chain of nine" => chain(&sources, 1).to_string(),
+        _ => input.into(),
+    };
+    match title {
+        "Spin, then save and call b's remember" => {
+            spin()?;
+            let saved = settings::set("spin", "finished");
+            let called = call_as_text(&target, operation, version, input).await;
+            return Ok(format!("spun: saved {saved:?}, called {called:?}"));
+        }
+        "Spin, then fail" => {
+            spin()?;
+            return Err("failed after spinning".into());
+        }
+        "Call b twice at once, which calls c" => {
+            // b forwards each to c's echo, so it is still waiting on c
+            // when Pane takes the second call.
+            let forward = |word: &str| {
+                json!({ "to": source(&sources, "c"), "operation": "echo", "input": word })
+                    .to_string()
+            };
+            let (first, second) = futures::join!(
+                call_as_text(&target, operation, version, forward("first")),
+                call_as_text(&target, operation, version, forward("second")),
+            );
+            return Ok(format!("answered: {} and {}", first?, second?));
+        }
+        "Call b's remember and give up at once" => {
+            // Polled once, so the call is sent, then dropped.
+            let dropped = call_as_text(&target, operation, version, input).now_or_never();
+            return Ok(format!("gave up: {}", dropped.is_none()));
+        }
+        _ => {}
+    }
+    let answer = call_as_text(&target, operation, version, input).await?;
+    if operation == "remember" {
+        let mine = settings::get("last")?;
+        return Ok(format!("answered: {answer}; mine: {mine:?}"));
+    }
+    Ok(format!("answered: {answer}"))
+}
+
+impl Command for Fixture {
     type CustomView = NoCustomView;
 
-    async fn get_view() -> Result<View, String> {
+    async fn render() -> Result<List, String> {
         let items = ITEMS
-            .iter()
-            .map(|(title, ..)| Item {
-                id: (*title).into(),
-                title: (*title).into(),
-                subtitle: None,
-                form: None,
-                platforms: None,
-                custom_view: None,
-            })
-            .collect();
-        Ok(View {
-            title: "Operations fixture".into(),
-            items,
-        })
-    }
-
-    async fn run_action(item_id: String) -> Result<String, String> {
-        let Some(&(title, target, operation, version, input)) =
-            ITEMS.iter().find(|(title, ..)| *title == item_id)
-        else {
-            return Err(format!("unknown item: {item_id}"));
-        };
-        let sources = sources()?;
-        let target = source(&sources, target);
-        let input = match title {
-            "Call b, which calls me back" => {
-                json!({ "to": source(&sources, "a"), "operation": "echo", "input": {} }).to_string()
-            }
-            // p1 forwards to p2, and so on to p9.
-            "Call a chain of nine" => chain(&sources, 1).to_string(),
-            _ => input.into(),
-        };
-        match title {
-            "Spin, then save and call b's remember" => {
-                spin()?;
-                let saved = settings::set("spin", "finished");
-                let called = call_as_text(&target, operation, version, input).await;
-                return Ok(format!("spun: saved {saved:?}, called {called:?}"));
-            }
-            "Spin, then fail" => {
-                spin()?;
-                return Err("failed after spinning".into());
-            }
-            "Call b twice at once, which calls c" => {
-                // b forwards each to c's echo, so it is still waiting on c
-                // when Pane takes the second call.
-                let forward = |word: &str| {
-                    json!({ "to": source(&sources, "c"), "operation": "echo", "input": word })
-                        .to_string()
-                };
-                let (first, second) = futures::join!(
-                    call_as_text(&target, operation, version, forward("first")),
-                    call_as_text(&target, operation, version, forward("second")),
-                );
-                return Ok(format!("answered: {} and {}", first?, second?));
-            }
-            "Call b's remember and give up at once" => {
-                // Polled once, so the call is sent, then dropped.
-                let dropped = call_as_text(&target, operation, version, input).now_or_never();
-                return Ok(format!("gave up: {}", dropped.is_none()));
-            }
-            _ => {}
-        }
-        let answer = call_as_text(&target, operation, version, input).await?;
-        if operation == "remember" {
-            let mine = settings::get("last")?;
-            return Ok(format!("answered: {answer}; mine: {mine:?}"));
-        }
-        Ok(format!("answered: {answer}"))
+            .into_iter()
+            .map(|(title, ..)| Item::new(title, title).on_action(move || act(title)));
+        Ok(List::new("Operations fixture").items(items))
     }
 
     async fn submit_form(item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {

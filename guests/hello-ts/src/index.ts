@@ -12,12 +12,8 @@ import type { Command } from "@pane/extension";
 const GREETING: string = "Hello from TypeScript";
 
 export const command: Command = {
-  async getView() {
-    return { title: "Hello", items: [{ id: "hello", title: "Say hello" }] };
-  },
-  async runAction(itemId) {
-    if (itemId !== "hello") throw new Error(`unknown item: ${itemId}`);
-    return GREETING;
+  async render() {
+    return { title: "Hello", items: [{ id: "hello", title: "Say hello", onAction: async () => GREETING }] };
   },
   async submitForm() {
     throw { message: "this command has no forms" };

@@ -9,7 +9,7 @@
 // for each file whose name contains every word typed. Pane shows the file's
 // own name and opens it once it has checked it again.
 import { type FolderState, limits, listFolder } from "pane:extension/files@0.1.0";
-import type { Command, CustomView, RootResult, RootResults, View } from "@pane/extension";
+import type { Command, CustomView, List, RootResult, RootResults } from "@pane/extension";
 
 /** The most files one query lists. */
 const MAX_RESULTS = 20;
@@ -17,7 +17,12 @@ const MAX_RESULTS = 20;
 /** The last name of `path`, with `/` between names. */
 const lastName = (path: string): string => path.split("/").pop() ?? path;
 
-async function getView(): Promise<View> {
+/** Runs the action of the item `itemId`: none does anything. */
+async function act(itemId: string): Promise<string> {
+  throw new Error(`unknown item: ${itemId}`);
+}
+
+async function render(): Promise<List> {
   const { depth, files } = limits();
   return {
     title: "TypeScript files sample",
@@ -26,13 +31,10 @@ async function getView(): Promise<View> {
         id: "policy",
         title: "What is searched",
         subtitle: `Files of the granted folder, ${depth} folders deep, at most ${files} (TypeScript)`,
+        onAction: () => act("policy"),
       },
     ],
   };
-}
-
-async function runAction(itemId: string): Promise<string> {
-  throw new Error(`unknown item: ${itemId}`);
 }
 
 async function submitForm(itemId: string): Promise<string> {
@@ -43,7 +45,7 @@ async function openView(itemId: string): Promise<CustomView> {
   throw new Error(`unknown view: ${itemId}`);
 }
 
-export const command: Command = { getView, runAction, submitForm, openView };
+export const command: Command = { render, submitForm, openView };
 
 export const rootResults: RootResults = {
   async resultsFor(query: string): Promise<RootResult[]> {

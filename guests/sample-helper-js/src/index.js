@@ -42,16 +42,50 @@ async function helperRun(helper, args, input) {
 }
 
 /**
+ * Runs the action of the item `itemId`.
+ * @param {string} itemId
+ * @returns {Promise<string>}
+ */
+async function act(itemId) {
+  switch (itemId) {
+    case "echo":
+      return helperRun(ECHO, [], "hello from Pane");
+    case "wait": {
+      set(WAITING, "started");
+      // If Pane stops the call meanwhile, the helper's process ends and
+      // nothing after this line runs.
+      const answer = await helperRun(ECHO, ["--wait", "10"], "after waiting");
+      set(WAITING, "finished");
+      return answer;
+    }
+    case "limit": {
+      const slow = helperRun(ECHO, ["--wait", "10"], "too late");
+      const timer = waitFor(LIMIT).then(() => null);
+      const answer = await Promise.race([slow, timer]);
+      // Returning ends the call, and with it the helper's process.
+      return answer ?? "Stopped the helper after one second";
+    }
+    case "fail":
+      return helperRun(ECHO, ["--fail"], "");
+    case "undeclared":
+      return helperRun("absent", [], "");
+    default:
+      throw new Error(`unknown item: ${itemId}`);
+  }
+}
+
+/**
+ * An item whose action is `act` with its id.
  * @param {string} id
  * @param {string} title
  * @param {string} subtitle
  * @returns {import("@pane/extension").Item}
  */
-const item = (id, title, subtitle) => ({ id, title, subtitle });
+const item = (id, title, subtitle) => ({ id, title, subtitle, onAction: () => act(id) });
 
 /** @type {import("@pane/extension").Command} */
 export const command = {
-  async getView() {
+  async render() {
     return {
       title: "JavaScript helper sample",
       items: [
@@ -70,34 +104,6 @@ export const command = {
         ),
       ],
     };
-  },
-
-  async runAction(itemId) {
-    switch (itemId) {
-      case "echo":
-        return helperRun(ECHO, [], "hello from Pane");
-      case "wait": {
-        set(WAITING, "started");
-        // If Pane stops the call meanwhile, the helper's process ends and
-        // nothing after this line runs.
-        const answer = await helperRun(ECHO, ["--wait", "10"], "after waiting");
-        set(WAITING, "finished");
-        return answer;
-      }
-      case "limit": {
-        const slow = helperRun(ECHO, ["--wait", "10"], "too late");
-        const timer = waitFor(LIMIT).then(() => null);
-        const answer = await Promise.race([slow, timer]);
-        // Returning ends the call, and with it the helper's process.
-        return answer ?? "Stopped the helper after one second";
-      }
-      case "fail":
-        return helperRun(ECHO, ["--fail"], "");
-      case "undeclared":
-        return helperRun("absent", [], "");
-      default:
-        throw new Error(`unknown item: ${itemId}`);
-    }
   },
 
   async submitForm(itemId) {

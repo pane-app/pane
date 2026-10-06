@@ -1,10 +1,10 @@
 //! Test fixture: a command that builds and installs, but whose first start
-//! fails. Asked for its view the first time, it saves a setting and traps;
+//! fails. Asked for its list the first time, it saves a setting and traps;
 //! every later start, such as a Retry, finds the setting and starts.
 #![no_std]
 
-use pane_guest::alloc::{format, string::String, vec, vec::Vec};
-use pane_guest::{CustomView, FieldValue, FormError, Guest, Item, NoCustomView, View, settings};
+use pane_guest::alloc::{format, string::String, vec::Vec};
+use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, settings};
 
 /// The settings key recording that a start was attempted.
 const ATTEMPTED: &str = "start-attempted";
@@ -12,29 +12,26 @@ const ATTEMPTED: &str = "start-attempted";
 struct FailingStart;
 pane_guest::export!(FailingStart);
 
-impl Guest for FailingStart {
+/// Runs the action `id`: answers that it ran.
+async fn act(id: &str) -> Result<String, String> {
+    Ok(format!("ran {id}"))
+}
+
+impl Command for FailingStart {
     type CustomView = NoCustomView;
 
-    async fn get_view() -> Result<View, String> {
+    async fn render() -> Result<List, String> {
         if settings::get(ATTEMPTED)?.is_none() {
             settings::set(ATTEMPTED, "yes")?;
             panic!("the first start fails");
         }
-        Ok(View {
-            title: "Started".into(),
-            items: vec![Item {
-                id: "started".into(),
-                title: "Started on a later attempt".into(),
-                subtitle: None,
-                form: None,
-                platforms: None,
-                custom_view: None,
-            }],
-        })
+        Ok(List::new("Started")
+            .item(Item::new("started", "Started on a later attempt").on_action(|| act("started"))))
     }
 
-    async fn run_action(item_id: String) -> Result<String, String> {
-        Ok(format!("ran {item_id}"))
+    /// A callback no item names runs as an action of that id too.
+    async fn run_search_result(id: String) -> Result<String, String> {
+        act(&id).await
     }
 
     async fn submit_form(item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {

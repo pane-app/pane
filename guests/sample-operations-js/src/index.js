@@ -86,7 +86,7 @@ const waitForm = {
 
 /** @type {import("@pane/extension").Command} */
 export const command = {
-  async getView() {
+  async render() {
     return {
       title: "Call from JavaScript",
       items: [
@@ -104,10 +104,6 @@ export const command = {
         },
       ],
     };
-  },
-
-  async runAction(itemId) {
-    throw new Error(`unknown item: ${itemId}`);
   },
 
   async submitForm(itemId, values) {

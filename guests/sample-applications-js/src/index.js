@@ -38,19 +38,29 @@ function applications() {
   );
 }
 
+/**
+ * Opens the application with id `itemId`, the action of its item.
+ * @param {string} itemId
+ * @returns {Promise<string>}
+ */
+async function act(itemId) {
+  host(() => open(itemId));
+  const name = applications().find((app) => app.id === itemId)?.name ?? itemId;
+  return `Opened ${name}`;
+}
+
 /** @type {import("@pane/extension").Command} */
 export const command = {
-  async getView() {
+  async render() {
     return {
       title: SAMPLE,
-      items: applications().map((app) => ({ id: app.id, title: app.name, subtitle: app.location })),
+      items: applications().map((app) => ({
+        id: app.id,
+        title: app.name,
+        subtitle: app.location,
+        onAction: () => act(app.id),
+      })),
     };
-  },
-
-  async runAction(itemId) {
-    host(() => open(itemId));
-    const name = applications().find((app) => app.id === itemId)?.name ?? itemId;
-    return `Opened ${name}`;
   },
 
   async submitForm() {

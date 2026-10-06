@@ -5,8 +5,8 @@
 //! hello" then answers with the new text. See guests/README.md.
 #![no_std]
 
-use pane_guest::alloc::{format, string::String, vec, vec::Vec};
-use pane_guest::{CustomView, FieldValue, FormError, Guest, Item, NoCustomView, View};
+use pane_guest::alloc::{format, string::String, vec::Vec};
+use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
 
 /// What "Say hello" answers.
 const GREETING: &str = "Hello from Rust";
@@ -14,29 +14,19 @@ const GREETING: &str = "Hello from Rust";
 struct Hello;
 pane_guest::export!(Hello);
 
-impl Guest for Hello {
+/// Runs the action of the item `id`.
+async fn act(id: &str) -> Result<String, String> {
+    match id {
+        "hello" => Ok(GREETING.into()),
+        other => Err(format!("unknown item: {other}")),
+    }
+}
+
+impl Command for Hello {
     type CustomView = NoCustomView;
 
-    async fn get_view() -> Result<View, String> {
-        let item = Item {
-            id: "hello".into(),
-            title: "Say hello".into(),
-            subtitle: None,
-            form: None,
-            platforms: None,
-            custom_view: None,
-        };
-        Ok(View {
-            title: "Hello".into(),
-            items: vec![item],
-        })
-    }
-
-    async fn run_action(item_id: String) -> Result<String, String> {
-        match item_id.as_str() {
-            "hello" => Ok(GREETING.into()),
-            other => Err(format!("unknown item: {other}")),
-        }
+    async fn render() -> Result<List, String> {
+        Ok(List::new("Hello").item(Item::new("hello", "Say hello").on_action(|| act("hello"))))
     }
 
     async fn submit_form(_item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {

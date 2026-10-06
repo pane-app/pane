@@ -8,7 +8,7 @@ mod expression;
 
 use pane_guest::alloc::{format, string::String, vec, vec::Vec};
 use pane_guest::root::{RootAction, RootResult};
-use pane_guest::{CustomView, FieldValue, FormError, Guest, Item, NoCustomView, View};
+use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
 
 use expression::Outcome;
 
@@ -31,36 +31,28 @@ const EXAMPLES: [(&str, &str, &str); 3] = [
     ),
 ];
 
-impl Guest for Calculator {
+/// Runs the action of the item `item_id`: the answer to its example.
+async fn act(item_id: &str) -> Result<String, String> {
+    let (_, _, example) = EXAMPLES
+        .iter()
+        .find(|(id, _, _)| *id == item_id)
+        .ok_or_else(|| format!("unknown item: {item_id}"))?;
+    match expression::evaluate(example) {
+        Outcome::Answer(value) => Ok(format!("{example} = {}", expression::format(value))),
+        other => Err(format!("{example} has no answer: {other:?}")),
+    }
+}
+
+impl Command for Calculator {
     type CustomView = NoCustomView;
 
-    async fn get_view() -> Result<View, String> {
-        let items = EXAMPLES
-            .iter()
-            .map(|&(id, title, example)| Item {
-                id: id.into(),
-                title: title.into(),
-                subtitle: Some(format!("For example {example}")),
-                form: None,
-                platforms: None,
-                custom_view: None,
-            })
-            .collect();
-        Ok(View {
-            title: "Calculator: type an expression in root search".into(),
-            items,
-        })
-    }
-
-    async fn run_action(item_id: String) -> Result<String, String> {
-        let (_, _, example) = EXAMPLES
-            .iter()
-            .find(|(id, _, _)| *id == item_id)
-            .ok_or_else(|| format!("unknown item: {item_id}"))?;
-        match expression::evaluate(example) {
-            Outcome::Answer(value) => Ok(format!("{example} = {}", expression::format(value))),
-            other => Err(format!("{example} has no answer: {other:?}")),
-        }
+    async fn render() -> Result<List, String> {
+        let items = EXAMPLES.into_iter().map(|(id, title, example)| {
+            Item::new(id, title)
+                .subtitle(format!("For example {example}"))
+                .on_action(move || act(id))
+        });
+        Ok(List::new("Calculator: type an expression in root search").items(items))
     }
 
     async fn submit_form(_item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {

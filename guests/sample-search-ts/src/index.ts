@@ -79,8 +79,24 @@ const SERVICE_FORM: Form = {
   submitLabel: "Save",
 };
 
+/**
+ * Runs the action `itemId`: the "about" item's, or a search result's
+ * ("package:<name>"), which fetches that package's details.
+ */
+async function act(itemId: string): Promise<string> {
+  if (itemId === "about") {
+    return "Type in the search field to search the package registry";
+  }
+  if (!itemId.startsWith("package:")) {
+    throw new Error(`unknown item: ${itemId}`);
+  }
+  const name = itemId.slice("package:".length);
+  const details = await fetchJson<Details>(`/packages/${encodeURIComponent(name)}`);
+  return `${details.name} ${details.version} (${details.license}): ${details.summary}`;
+}
+
 export const command: Command = {
-  async getView() {
+  async render() {
     return {
       title: "Package search",
       items: [
@@ -88,21 +104,15 @@ export const command: Command = {
           id: "about",
           title: "Type to search the package registry",
           subtitle: "Results come from the service as you type; Enter shows a package's details",
+          onAction: () => act("about"),
         },
         { id: "service", title: "Service address", subtitle: service(), form: SERVICE_FORM },
       ],
     };
   },
-  async runAction(itemId: string) {
-    if (itemId === "about") {
-      return "Type in the search field to search the package registry";
-    }
-    if (!itemId.startsWith("package:")) {
-      throw new Error(`unknown item: ${itemId}`);
-    }
-    const name = itemId.slice("package:".length);
-    const details = await fetchJson<Details>(`/packages/${encodeURIComponent(name)}`);
-    return `${details.name} ${details.version} (${details.license}): ${details.summary}`;
+  // A search result's id ("package:<name>") names the package to show.
+  async runSearchResult(id: string) {
+    return act(id);
   },
   async submitForm(itemId: string, values: FieldValue[]) {
     if (itemId !== "service") {

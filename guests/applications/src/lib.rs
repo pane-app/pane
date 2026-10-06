@@ -9,7 +9,7 @@
 use pane_guest::alloc::{format, string::String, vec::Vec};
 use pane_guest::applications::{self, Application};
 use pane_guest::indexed::{IndexedAction, IndexedResult};
-use pane_guest::{CustomView, FieldValue, FormError, Guest, Item, NoCustomView, View};
+use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
 
 struct Applications;
 pane_guest::export!(Applications);
@@ -22,34 +22,27 @@ fn installed() -> Result<Vec<Application>, String> {
     Ok(found)
 }
 
-impl Guest for Applications {
+/// Opens the application `item_id`: the action of its item.
+async fn act(item_id: String) -> Result<String, String> {
+    applications::open(&item_id)?;
+    let name = installed()?
+        .into_iter()
+        .find(|application| application.id == item_id)
+        .map_or(item_id, |application| application.name);
+    Ok(format!("Opened {name}"))
+}
+
+impl Command for Applications {
     type CustomView = NoCustomView;
 
-    async fn get_view() -> Result<View, String> {
-        let items = installed()?
-            .into_iter()
-            .map(|application| Item {
-                id: application.id,
-                title: application.name,
-                subtitle: Some(application.location),
-                form: None,
-                platforms: None,
-                custom_view: None,
-            })
-            .collect();
-        Ok(View {
-            title: "Applications: type a name in root search".into(),
-            items,
-        })
-    }
-
-    async fn run_action(item_id: String) -> Result<String, String> {
-        applications::open(&item_id)?;
-        let name = installed()?
-            .into_iter()
-            .find(|application| application.id == item_id)
-            .map_or(item_id, |application| application.name);
-        Ok(format!("Opened {name}"))
+    async fn render() -> Result<List, String> {
+        let items = installed()?.into_iter().map(|application| {
+            let id = application.id;
+            Item::new(id.clone(), application.name)
+                .subtitle(application.location)
+                .on_action(move || act(id))
+        });
+        Ok(List::new("Applications: type a name in root search").items(items))
     }
 
     async fn submit_form(_item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {

@@ -41,16 +41,66 @@ function count() {
 }
 
 /**
+ * Runs the action of the item `itemId`.
+ * @param {string} itemId
+ * @returns {Promise<string>}
+ */
+async function act(itemId) {
+  switch (itemId) {
+    case "count":
+    case "slow": {
+      // One more run: counted before anything else, so a run Pane stops
+      // on the way still counts as having begun.
+      const runs = count() + 1;
+      content.set(COUNT, String(runs));
+      if (itemId === "slow") {
+        set(SLOW, "started");
+        // The command suspends here; if Pane stops the call meanwhile,
+        // nothing after this line runs.
+        await waitFor(SLOW_WAIT);
+        set(SLOW, "finished");
+        return `Ran ${runs} times, after waiting 10 seconds`;
+      }
+      return `Ran ${runs} times`;
+    }
+    case "refuse":
+      // Throwing is an error the extension answers with, never a crash.
+      throw new Error("The schedule sample refuses, to show how an error looks");
+    case "crash":
+      // Resolving with something other than a string is a crash, unlike
+      // throwing. The run is counted, as the Rust sample's is.
+      content.set(COUNT, String(count() + 1));
+      return /** @type {string} */ (/** @type {unknown} */ (undefined));
+    case "busy": {
+      // The run is counted, then it computes without awaiting anything:
+      // the guest never yields to Pane by itself, so Pane stops it after
+      // its computing limit and counts it towards pausing the package,
+      // as a crash.
+      const runs = count() + 1;
+      content.set(COUNT, String(runs));
+      const end = Date.now() + BUSY_FOR;
+      while (Date.now() < end) {
+        // busy
+      }
+      return `Ran ${runs} times`;
+    }
+    default:
+      throw new Error(`unknown item: ${itemId}`);
+  }
+}
+
+/**
+ * An item whose action is `act` with its id.
  * @param {string} id
  * @param {string} title
  * @param {string} subtitle
  * @returns {import("@pane/extension").Item}
  */
-const item = (id, title, subtitle) => ({ id, title, subtitle });
+const item = (id, title, subtitle) => ({ id, title, subtitle, onAction: () => act(id) });
 
 /** @type {import("@pane/extension").Command} */
 export const command = {
-  async getView() {
+  async render() {
     return {
       title: `Ran ${count()} times`,
       items: [
@@ -61,50 +111,6 @@ export const command = {
         item("busy", "Stop responding", "Computes without waiting for up to a minute; Pane stops it after 5 seconds, counted as a crash"),
       ],
     };
-  },
-
-  async runAction(itemId) {
-    switch (itemId) {
-      case "count":
-      case "slow": {
-        // One more run: counted before anything else, so a run Pane stops
-        // on the way still counts as having begun.
-        const runs = count() + 1;
-        content.set(COUNT, String(runs));
-        if (itemId === "slow") {
-          set(SLOW, "started");
-          // The command suspends here; if Pane stops the call meanwhile,
-          // nothing after this line runs.
-          await waitFor(SLOW_WAIT);
-          set(SLOW, "finished");
-          return `Ran ${runs} times, after waiting 10 seconds`;
-        }
-        return `Ran ${runs} times`;
-      }
-      case "refuse":
-        // Throwing is an error the extension answers with, never a crash.
-        throw new Error("The schedule sample refuses, to show how an error looks");
-      case "crash":
-        // Resolving with something other than a string is a crash, unlike
-        // throwing. The run is counted, as the Rust sample's is.
-        content.set(COUNT, String(count() + 1));
-        return /** @type {string} */ (/** @type {unknown} */ (undefined));
-      case "busy": {
-        // The run is counted, then it computes without awaiting anything:
-        // the guest never yields to Pane by itself, so Pane stops it after
-        // its computing limit and counts it towards pausing the package,
-        // as a crash.
-        const runs = count() + 1;
-        content.set(COUNT, String(runs));
-        const end = Date.now() + BUSY_FOR;
-        while (Date.now() < end) {
-          // busy
-        }
-        return `Ran ${runs} times`;
-      }
-      default:
-        throw new Error(`unknown item: ${itemId}`);
-    }
   },
 
   async submitForm(itemId) {
