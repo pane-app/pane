@@ -76,7 +76,10 @@ pub(crate) use supervisor::CRASH_WINDOW;
 use supervisor::{NotSent, Shared};
 pub use supervisor::{RuntimeFailure, RuntimeStatus};
 pub(crate) use tree::read_shortcut;
-pub use tree::{Action, ActionStyle, Answer, Item, TREE_VERSION, View};
+pub use tree::{
+    Action, ActionKind, ActionStyle, ActionSubmenu, Answer, Item, SubmenuEntries, TREE_VERSION,
+    View,
+};
 
 pub(crate) mod bindings {
     wasmtime::component::bindgen!({
@@ -3146,15 +3149,14 @@ impl Host {
                 "the item {item_id} has no action"
             )));
         };
-        self.handle_event_in_turn(
-            path,
-            call,
-            action.callback.clone(),
-            "{}".into(),
-            data,
-            &chain,
-        )
-        .await
+        let Some(callback) = action.callback() else {
+            return Err(CallError::Guest(format!(
+                "the item {item_id}'s first action opens a submenu, which only the Actions \
+                 panel shows"
+            )));
+        };
+        self.handle_event_in_turn(path, call, callback.to_owned(), "{}".into(), data, &chain)
+            .await
     }
 
     async fn submit_form(

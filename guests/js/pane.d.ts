@@ -83,15 +83,47 @@ export interface Item {
 export type Platform = "windows" | "macos" | "linux";
 
 /**
- * One of an item's actions. Choosing it runs `onAction`, which tells the
- * user what happened itself, with a toast or a HUD
- * (`@pane/extension/feedback`); throwing shows the error as a failure
- * toast. Pane then asks for the list again (`render`).
+ * One of an item's actions, or an entry of a submenu. Choosing it runs
+ * `onAction`, which tells the user what happened itself, with a toast or a
+ * HUD (`@pane/extension/feedback`); throwing shows the error as a failure
+ * toast. Pane then asks for the list again (`render`). An action with a
+ * `submenu` instead opens that submenu in the Actions panel.
  */
-export interface Action {
+export type Action = CallbackAction | SubmenuAction;
+
+/** An action that runs `onAction` when the user chooses it. */
+export interface CallbackAction extends ActionBase {
+  onAction: () => Promise<void>;
+  submenu?: never;
+}
+
+/**
+ * An action that opens `submenu` in place in the Actions panel ("Open
+ * With…"). As one of an item's actions, Enter, its chord or its shortcut
+ * open the panel at it.
+ */
+export interface SubmenuAction extends ActionBase {
+  submenu: Submenu;
+  onAction?: never;
+}
+
+/**
+ * Further choices an action opens in the Actions panel: a title, which the
+ * panel shows while it is open, and its entries, each an action of its own.
+ * The entries are given with the list (`entries`), or `onOpen` resolves with
+ * them each time the user opens the submenu: Pane shows it loading until
+ * then, and what `onOpen` throws as its one entry. The panel filters the
+ * entries as the user types, and an entry's shortcut works while its
+ * submenu is shown.
+ */
+export type Submenu =
+  | { title: string; entries: Action[]; onOpen?: never }
+  | { title: string; onOpen: () => Promise<Action[]>; entries?: never };
+
+/** What every action has, whatever choosing it does. */
+export interface ActionBase {
   /** What the footer and the Actions panel call it. */
   title: string;
-  onAction: () => Promise<void>;
   /**
    * The title of its section in the Actions panel; consecutive actions with
    * the same section are one section. Omitted or `null` for an untitled one.

@@ -27,6 +27,7 @@ mod runtime_crash;
 mod settings;
 mod settings_search;
 mod shortcuts;
+mod submenus;
 mod tray;
 mod unresponsive;
 mod update;

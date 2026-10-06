@@ -50,6 +50,7 @@ mod launching;
 mod network;
 mod presentation;
 mod quick_slots;
+mod submenus;
 
 use crate::clipboard::{Capture, ClipboardSystem};
 use crate::dependencies;
@@ -110,6 +111,7 @@ pub use quick_slots::{PinTarget, QuickSlot, SlotChange};
 use schedules::Schedules;
 use services::Services;
 pub use shortcuts::{ShortcutCatalog, ShortcutCommand, ShortcutGroup};
+pub use submenus::{OpenSubmenu, SubmenuState};
 
 /// The id of the root row that installs a package from a local folder.
 const INSTALL_FROM_FOLDER: &str = "pane.install-from-folder";
@@ -737,6 +739,9 @@ struct State {
     subtitles: Record<subtitles::Subtitles>,
     /// The writes of the subtitles' record still going on.
     subtitle_saves: Arc<launching::InFlight>,
+    /// The submenus open in the Actions panel over the selected item (see
+    /// `submenus`).
+    submenus: submenus::Submenus,
 }
 
 /// What is happening to a package, which stops another change to it
@@ -853,6 +858,9 @@ impl State {
     fn next_screen(&mut self) {
         self.screen_epoch += 1;
         self.search_alive = None;
+        // A submenu belongs to the screen it opened on; an answer still on
+        // its way finds it gone.
+        self.submenus.close_all();
         // A granted folder is listed again on the next visit, and a
         // listing being made for this one stops.
         if let Some(files) = &self.files {
@@ -1288,6 +1296,7 @@ impl Launcher {
             feedback: feedback::Feedback::default(),
             subtitles,
             subtitle_saves: Arc::default(),
+            submenus: submenus::Submenus::default(),
         };
         if let (Some(installation), Some(files)) = (&installation, &state.files) {
             files.open_record(&installation.dir);
@@ -2422,10 +2431,15 @@ impl Launcher {
                 state.view.status = Status::Running;
                 Pending::Run(callback)
             }
-            Entry::Actions(listed) => {
-                state.view.status = Status::Running;
-                Pending::Run(listed.actions[0].callback.clone())
-            }
+            Entry::Actions(listed) => match listed.actions[0].callback() {
+                Some(callback) => {
+                    state.view.status = Status::Running;
+                    Pending::Run(callback.to_owned())
+                }
+                // A primary action that opens a submenu (#140): the window
+                // opens the Actions panel at it ([`Launcher::open_submenu`]).
+                None => Pending::Nothing,
+            },
             Entry::NoActions => {
                 state.view.status = Status::Error(item_actions::NO_ACTIONS.into());
                 Pending::Nothing

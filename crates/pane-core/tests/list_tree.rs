@@ -283,7 +283,7 @@ fn the_runtime_reads_the_tree_and_runs_an_item_by_its_callback() {
     assert_eq!(view.title, "Drawn 1 times");
     let first = &view.items[0];
     assert_eq!(
-        first.action().map(|action| action.callback.as_str()),
+        first.action().and_then(|action| action.callback()),
         Some("cb-first")
     );
     assert_eq!(

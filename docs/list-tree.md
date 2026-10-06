@@ -40,6 +40,15 @@ runs a callback it does not know. An id the list does
 not name goes to the command's `run_search_result` (`runSearchResult`), which
 is how a search result's id ([command search](command-search.md)) is run.
 
+An action may open a submenu instead (#140): in Rust
+`Action::submenu("Open With…", Submenu::new("Open With").entries([..]))`, or
+`Submenu::lazy("Move to List", || async { Ok(vec![..]) })` for entries given
+when it opens; in JavaScript and TypeScript an action with
+`submenu: { title, entries }` or `submenu: { title, onOpen }` (`onOpen`
+resolving with the entries). Both SDKs name a submenu's entries after the
+action that opens it and their place (`<callback>/0`, `<callback>/1`, ...),
+and a lazy submenu's `onOpen` as the action itself would be named.
+
 ## Version 1
 
 ```json
@@ -62,7 +71,14 @@ is how a search result's id ([command search](command-search.md)) is run.
             "shortcut": { "windows": { "modifiers": ["ctrl", "shift"], "key": "e" },
                           "macos": { "modifiers": ["cmd", "shift"], "key": "r" } } },
           { "title": "Delete", "onAction": "today#4", "section": "Danger",
-            "style": "destructive", "shortcut": { "modifiers": ["ctrl"], "key": "x" } }
+            "style": "destructive", "shortcut": { "modifiers": ["ctrl"], "key": "x" } },
+          { "title": "Open With…", "submenu": { "title": "Open With", "entries": [
+              { "title": "Notepad", "onAction": "today#5/0", "section": "Editors" },
+              { "title": "Browser", "onAction": "today#5/1",
+                "shortcut": { "modifiers": ["ctrl", "shift"], "key": "b" } }
+          ] } },
+          { "title": "Move to List…", "section": "Organize",
+            "submenu": { "title": "Move to List", "onOpen": "today#6" } }
         ]
       },
       {
@@ -101,8 +117,8 @@ is how a search result's id ([command search](command-search.md)) is run.
     **primary action**: Enter and the footer's button run it, and the
     footer names it. The second is its **secondary action** (Ctrl+Enter),
     and Ctrl+Shift+Enter runs the third; a missing one does nothing. Ctrl+K
-    opens the Actions panel, which lists them all. An action has an
-    **`onAction`** callback id and optionally:
+    opens the Actions panel, which lists them all. An action has either an
+    **`onAction`** callback id or a **`submenu`** (below), and optionally:
     - **`title`**: what the footer and the panel call it ("Run item" when
       it has none);
     - **`section`**: the title of its section in the panel; consecutive
@@ -125,6 +141,26 @@ is how a search result's id ([command search](command-search.md)) is run.
       earlier action of the item already has: the action then stays in the
       panel without it, and while its package is being developed the
       status line says which shortcuts were not bound and why;
+    - **`submenu`** (#140), instead of `onAction`: further choices the
+      Actions panel opens in place when the action is chosen ("Open With…"),
+      drawn with a chevron. It has a **`title`**, which the panel's header
+      shows while it is open, and either **`entries`**, actions given with
+      the tree (each with its own `onAction` or `submenu`, `title`,
+      `section`, `style` and `shortcut`), or **`onOpen`**, a callback id Pane
+      hands to `handle-event` each time the submenu opens, once per opening:
+      the answer's `entries` are the submenu's. Until it answers the
+      submenu shows a loading entry; an error (the command's own, a crash,
+      an answer without `entries` or one Pane cannot read) shows as the
+      submenu's one entry, and the panel stays open. An answer that arrives
+      after the submenu closed (Escape, the panel closed) or after another
+      item was selected is discarded. Asking for entries draws nothing
+      again. Typing filters the level shown, flattening its sections;
+      Escape steps back one level, and from the item's actions closes the
+      panel. An entry's shortcut is bound by the rules above within its own
+      submenu, and works only while that submenu is shown. Choosing an
+      entry calls the command back with its `onAction` and draws the list
+      again, as any action does. Enter, an action chord or the shortcut of
+      an item's action that opens a submenu open the panel at it;
   - **`form`**: choosing the item opens this form instead (fields of kind
     `text`, with an optional `placeholder`, or `choice`, with `choices`);
   - **`customView`**: choosing the item opens this custom view instead
@@ -138,12 +174,15 @@ is how a search result's id ([command search](command-search.md)) is run.
   action again. Optional fields may be omitted or `null`. A field whose
   name starts with `on` holds a callback id.
 
-`handle-event` and `run` answer an object, `{}` for now. Pane shows nothing
-of it (#141): an action, a no-view run or a search result says what happened
+`handle-event` and `run` answer an object. Pane shows nothing of it as
+text (#141): an action, a no-view run or a search result says what happened
 through the host functions every command has (`wit/feedback.wit`), with a
 toast in the footer or a HUD, or by closing the window. The **`status`** text
 the first version of the tree carried is ignored. An error a command answers
-with is shown as a failure toast with a "Copy Error" action.
+with is shown as a failure toast with a "Copy Error" action. The one field
+Pane reads is **`entries`**, the entries of a submenu whose `onOpen` Pane
+handed over, written as a submenu's `entries` are
+(`{"entries": [{"title": "Inbox", "onAction": "today#6/0"}]}`).
 
 A toast's action is a callback id too: choosing it calls the command's
 `handle-event` with it, as an item's action does. The SDKs name a toast's
@@ -159,7 +198,9 @@ toasts the instance showed, and run the newest toast's.
   failure.
 - A tree or answer that is not JSON, lacks a field Pane needs (`version`,
   `view`, a list's `title` and `items`, an item's `id` and `title`, an
-  action's `onAction`) or gives a field of the wrong type is the command's
+  action's `onAction` or `submenu`, a submenu's `title` and its `entries`
+  or `onOpen`), gives both of such a pair, or gives a field of the wrong
+  type is the command's
   failure, shown as "Pane could not read what the extension answered: …" as a
   failed view is: never a crash, so it does not count towards pausing the
   package.

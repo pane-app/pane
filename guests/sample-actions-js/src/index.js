@@ -23,6 +23,13 @@
 // clears the command's row subtitle ("3 unread"). The no-view commands
 // "Spin" (it leaves an animated toast, which Pane hides when the run ends)
 // and "Stumble" (it fails) show what Pane does at a run's end.
+//
+// "Delta note" shows submenus (#140): "Open With…" gives its entries at once,
+// in sections, two with shortcuts and a destructive one; "Move to List…"
+// gives them when it opens, in a section that counts how many times it was
+// asked ("Asked 1 time"); and "Tag…" fails when it opens ("The tags could
+// not be loaded"). An entry shows what it did and the item's ("Open With
+// Notepad: Delta note", "Move to Later: Delta note").
 
 import {
   clearSearchBar,
@@ -42,10 +49,23 @@ import { launch } from "pane:extension/commands@0.1.0";
  * @returns {import("@pane/extension").Action}
  */
 function action(title, item, more = {}) {
+  return answering(title, title, item, more);
+}
+
+/**
+ * The action titled `title` of the item titled `item` that shows `said` and
+ * the item's title.
+ * @param {string} title
+ * @param {string} said
+ * @param {string} item
+ * @param {{ section?: string, style?: "destructive", shortcut?: import("@pane/extension").Shortcut }} [more]
+ * @returns {import("@pane/extension").Action}
+ */
+function answering(title, said, item, more = {}) {
   return {
     title,
     onAction: async () => {
-      showToast({ title: `${title}: ${item}` });
+      showToast({ title: `${said}: ${item}` });
     },
     ...more,
   };
@@ -120,6 +140,71 @@ function uploaded() {
 
 const ALPHA = "Alpha note";
 const BETA = "Beta note";
+const DELTA = "Delta note";
+
+/** How many times this instance was asked for "Move to List…"'s entries. */
+let listsAsked = 0;
+
+/**
+ * "Delta note": its submenus.
+ * @returns {import("@pane/extension").Item}
+ */
+function delta() {
+  return {
+    id: "delta",
+    title: DELTA,
+    subtitle: "Submenus, given at once or asked for when opened",
+    actions: [
+      action("Open", DELTA),
+      {
+        title: "Open With…",
+        submenu: {
+          title: "Open With",
+          entries: [
+            answering("Notepad", "Open With Notepad", DELTA, {
+              section: "Editors",
+              shortcut: { modifiers: ["ctrl", "shift"], key: "n" },
+            }),
+            answering("WordPad", "Open With WordPad", DELTA, { section: "Editors" }),
+            answering("Browser", "Open With Browser", DELTA, {
+              section: "Other",
+              shortcut: { modifiers: ["ctrl", "shift"], key: "b" },
+            }),
+            action("Forget Applications", DELTA, {
+              section: "Danger",
+              style: "destructive",
+              shortcut: { modifiers: ["ctrl", "shift"], key: "d" },
+            }),
+          ],
+        },
+      },
+      {
+        title: "Move to List…",
+        section: "Organize",
+        submenu: {
+          title: "Move to List",
+          async onOpen() {
+            listsAsked += 1;
+            const section = `Asked ${listsAsked} ${listsAsked === 1 ? "time" : "times"}`;
+            return ["Inbox", "Later", "Someday"].map((list) =>
+              answering(list, `Move to ${list}`, DELTA, { section }),
+            );
+          },
+        },
+      },
+      {
+        title: "Tag…",
+        section: "Organize",
+        submenu: {
+          title: "Tags",
+          async onOpen() {
+            throw new Error("The tags could not be loaded");
+          },
+        },
+      },
+    ],
+  };
+}
 
 /** @type {import("@pane/extension").Command} */
 export const command = {
@@ -171,6 +256,7 @@ export const command = {
         },
         { id: "beta", title: BETA, subtitle: "One action", actions: [action("Open", BETA)] },
         { id: "gamma", title: "Gamma note", subtitle: "No actions" },
+        delta(),
         {
           id: "window",
           title: "Window",

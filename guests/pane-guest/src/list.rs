@@ -10,6 +10,16 @@
 //! and Ctrl+K lists them all in Pane's Actions panel, in their sections, each
 //! with its [`Shortcut`] if Pane binds it.
 //!
+//! An action may open a [`Submenu`] instead of running a closure
+//! ([`Action::submenu`]): further choices the panel lists in place, each an
+//! action of its own. Its entries are given with the list
+//! ([`Submenu::new`]), or by a closure Pane calls each time the submenu
+//! opens ([`Submenu::lazy`]). A submenu's entries are named after the action
+//! that opens it and their place (`<callback>/0`, `<callback>/1`, ...); the
+//! closure of a lazy submenu is named as an action would be, and Pane hands
+//! that name to `handle-event` to ask for the entries, which the SDK answers
+//! as `{"entries": [...]}`.
+//!
 //! An item's first action is named by the item's id and its later ones by
 //! the id and their place (`<id>#1`, `<id>#2`, ...), so the same action has
 //! the same callback in every drawing of the list. Pane draws the list again
@@ -54,6 +64,20 @@ pub(crate) type Answer = Pin<Box<dyn Future<Output = Result<(), String>>>>;
 
 /// What an action runs, once, when the user chooses it.
 type Run = Box<dyn FnOnce() -> Answer>;
+
+/// What a lazy submenu's closure answers: its entries, or an error Pane
+/// shows as the submenu's one entry.
+type Entries = Pin<Box<dyn Future<Output = Result<Vec<Action>, String>>>>;
+
+/// What a lazy submenu runs, once, when it opens.
+type Load = Box<dyn FnOnce() -> Entries>;
+
+/// A callback of the list drawn last, by its id: an action's closure, or a
+/// lazy submenu's.
+enum Callback {
+    Run(Run),
+    Open(Load),
+}
 
 /// A modifier key held with a [`Shortcut`]'s key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -163,14 +187,79 @@ impl Shortcut {
     }
 }
 
-/// One of an item's actions: what it is called, where the Actions panel
-/// lists it, how it is drawn, its shortcut, and the closure it runs.
+/// One of an item's actions, or an entry of a [`Submenu`]: what it is
+/// called, where the Actions panel lists it, how it is drawn, its shortcut,
+/// and the closure it runs or the submenu it opens.
 pub struct Action {
     title: Option<String>,
     section: Option<String>,
     destructive: bool,
     shortcut: Option<Shortcut>,
-    run: Run,
+    does: Does,
+}
+
+/// What choosing an action does.
+enum Does {
+    Run(Run),
+    Open(Submenu),
+}
+
+/// Further choices an action opens in place in the Actions panel, such as
+/// "Open With…" or "Move to List…": a title, which the panel shows while it
+/// is open, and entries, each an [`Action`] of its own (a closure, or a
+/// further submenu). The panel filters them as the user types, and an
+/// entry's shortcut works while its submenu is shown.
+pub struct Submenu {
+    title: String,
+    entries: SubmenuEntries,
+}
+
+/// Where a submenu's entries come from.
+enum SubmenuEntries {
+    Given(Vec<Action>),
+    Asked(Load),
+}
+
+impl Submenu {
+    /// A submenu titled `title` whose entries are given with the list: add
+    /// them with [`Submenu::entry`] and [`Submenu::entries`].
+    pub fn new(title: impl Into<String>) -> Submenu {
+        Submenu {
+            title: title.into(),
+            entries: SubmenuEntries::Given(Vec::new()),
+        }
+    }
+
+    /// A submenu titled `title` whose entries `load` gives when the user
+    /// opens it, each time: Pane shows it loading until `load` answers, and
+    /// an error as its one entry.
+    pub fn lazy<F, A>(title: impl Into<String>, load: F) -> Submenu
+    where
+        F: FnOnce() -> A + 'static,
+        A: Future<Output = Result<Vec<Action>, String>> + 'static,
+    {
+        Submenu {
+            title: title.into(),
+            entries: SubmenuEntries::Asked(Box::new(move || Box::pin(load()) as Entries)),
+        }
+    }
+
+    /// This submenu with `entry` after its entries (a lazy one becomes one
+    /// whose entries are given).
+    pub fn entry(mut self, entry: Action) -> Submenu {
+        if let SubmenuEntries::Given(entries) = &mut self.entries {
+            entries.push(entry);
+        } else {
+            self.entries = SubmenuEntries::Given(alloc::vec![entry]);
+        }
+        self
+    }
+
+    /// This submenu with `entries` after its entries (see
+    /// [`Submenu::entry`]).
+    pub fn entries(self, entries: impl IntoIterator<Item = Action>) -> Submenu {
+        entries.into_iter().fold(self, Submenu::entry)
+    }
 }
 
 impl Action {
@@ -188,7 +277,21 @@ impl Action {
             section: None,
             destructive: false,
             shortcut: None,
-            run: Box::new(move || Box::pin(run()) as Answer),
+            does: Does::Run(Box::new(move || Box::pin(run()) as Answer)),
+        }
+    }
+
+    /// An action titled `title` that opens `submenu` in the Actions panel
+    /// when the user chooses it ("Open With…"), instead of running a
+    /// closure. Enter, a chord or its shortcut open the panel at it when it
+    /// is one of an item's actions.
+    pub fn submenu(title: impl Into<String>, submenu: Submenu) -> Action {
+        Action {
+            title: Some(title.into()),
+            section: None,
+            destructive: false,
+            shortcut: None,
+            does: Does::Open(submenu),
         }
     }
 
@@ -293,7 +396,7 @@ impl Item {
             section: None,
             destructive: false,
             shortcut: None,
-            run: Box::new(move || Box::pin(action()) as Answer),
+            does: Does::Run(Box::new(move || Box::pin(action()) as Answer)),
         });
         self
     }
@@ -459,19 +562,29 @@ impl<T: Command> wit::Guest for T {
             action().await?;
             return Ok(ANSWER.into());
         }
-        let action = match take(&callback) {
-            Some(action) => Some(action),
+        let found = match take(&callback) {
+            Some(found) => Some(found),
             None => {
-                // A fresh instance: the list names its actions once drawn.
+                // A fresh instance, or a lazy submenu opened again: the list
+                // names its callbacks once drawn.
                 remember(<T as Command>::render().await?);
                 take(&callback)
             }
         };
-        match action {
-            Some(action) => action().await?,
-            None => <T as Command>::run_search_result(callback).await?,
+        match found {
+            Some(Callback::Run(action)) => {
+                action().await?;
+                Ok(ANSWER.into())
+            }
+            Some(Callback::Open(load)) => {
+                let entries = load().await?;
+                Ok(entries_answer(&callback, entries))
+            }
+            None => {
+                <T as Command>::run_search_result(callback).await?;
+                Ok(ANSWER.into())
+            }
         }
-        Ok(ANSWER.into())
     }
 
     async fn submit_form(item_id: String, values: Vec<FieldValue>) -> Result<String, FormError> {
@@ -487,8 +600,25 @@ impl<T: Command> wit::Guest for T {
 /// nothing of an answer.
 const ANSWER: &str = "{}";
 
-/// The actions of the list the instance drew last, by callback id.
-struct Actions(RefCell<BTreeMap<String, Run>>);
+/// The answer of `handle-event` for the lazy submenu `callback` opened:
+/// `{"entries": [...]}`, its entries named `<callback>/<n>` and kept beside
+/// the list's callbacks until the list is drawn again.
+fn entries_answer(callback: &str, entries: Vec<Action>) -> String {
+    let mut callbacks = ACTIONS.0.borrow_mut();
+    let mut answer = String::from("{\"entries\":");
+    write_actions(
+        &mut answer,
+        entries,
+        &|index| format!("{callback}/{index}"),
+        &mut callbacks,
+    );
+    answer.push('}');
+    answer
+}
+
+/// The callbacks of the list the instance drew last (and of the lazy
+/// submenus opened since), by callback id.
+struct Actions(RefCell<BTreeMap<String, Callback>>);
 
 // SAFETY: a component's code runs on one thread, and no borrow of the map
 // is held across an `await`.
@@ -496,9 +626,10 @@ unsafe impl Sync for Actions {}
 
 static ACTIONS: Actions = Actions(RefCell::new(BTreeMap::new()));
 
-/// The action named `callback` in the list drawn last, taken out: Pane
-/// draws the list again after it runs.
-fn take(callback: &str) -> Option<Run> {
+/// The callback named `callback` in the list drawn last, taken out: Pane
+/// draws the list again after an action runs, and a lazy submenu opened
+/// again draws it first to find its closure.
+fn take(callback: &str) -> Option<Callback> {
     ACTIONS.0.borrow_mut().remove(callback)
 }
 
@@ -523,39 +654,22 @@ fn remember(list: List) -> String {
             string(&mut tree, subtitle);
         }
         if !item.actions.is_empty() {
-            tree.push_str(",\"actions\":[");
-            for (index, action) in item.actions.into_iter().enumerate() {
-                if index > 0 {
-                    tree.push(',');
-                }
-                // The item's id names its first action's callback, and the
-                // id and their place its later ones'.
-                let callback = if index == 0 {
-                    item.id.clone()
-                } else {
-                    format!("{}#{index}", item.id)
-                };
-                tree.push_str("{\"onAction\":");
-                string(&mut tree, &callback);
-                if let Some(title) = &action.title {
-                    tree.push_str(",\"title\":");
-                    string(&mut tree, title);
-                }
-                if let Some(section) = &action.section {
-                    tree.push_str(",\"section\":");
-                    string(&mut tree, section);
-                }
-                if action.destructive {
-                    tree.push_str(",\"style\":\"destructive\"");
-                }
-                if let Some(shortcut) = &action.shortcut {
-                    tree.push_str(",\"shortcut\":");
-                    write_shortcut(&mut tree, shortcut);
-                }
-                tree.push('}');
-                actions.insert(callback, action.run);
-            }
-            tree.push(']');
+            tree.push_str(",\"actions\":");
+            // The item's id names its first action's callback, and the id
+            // and their place its later ones'.
+            let id = item.id.clone();
+            write_actions(
+                &mut tree,
+                item.actions,
+                &|index| {
+                    if index == 0 {
+                        id.clone()
+                    } else {
+                        format!("{id}#{index}")
+                    }
+                },
+                &mut actions,
+            );
         }
         if let Some(form) = &item.form {
             tree.push_str(",\"form\":");
@@ -596,6 +710,79 @@ fn remember(list: List) -> String {
     }
     tree.push_str("]}}");
     tree
+}
+
+/// Writes `actions` as the tree's JSON array, naming each one's callback
+/// `name(place)` and keeping its closure (or its lazy submenu's) in
+/// `callbacks` by that name. A submenu given with the list names its
+/// entries after the action that opens it: `<name>/0`, `<name>/1`, ...
+fn write_actions(
+    tree: &mut String,
+    actions: Vec<Action>,
+    name: &dyn Fn(usize) -> String,
+    callbacks: &mut BTreeMap<String, Callback>,
+) {
+    tree.push('[');
+    for (index, action) in actions.into_iter().enumerate() {
+        if index > 0 {
+            tree.push(',');
+        }
+        let callback = name(index);
+        let Action {
+            title,
+            section,
+            destructive,
+            shortcut,
+            does,
+        } = action;
+        tree.push('{');
+        match does {
+            Does::Run(run) => {
+                tree.push_str("\"onAction\":");
+                string(tree, &callback);
+                callbacks.insert(callback.clone(), Callback::Run(run));
+            }
+            Does::Open(submenu) => {
+                tree.push_str("\"submenu\":{\"title\":");
+                string(tree, &submenu.title);
+                match submenu.entries {
+                    SubmenuEntries::Given(entries) => {
+                        tree.push_str(",\"entries\":");
+                        let opener = callback.clone();
+                        write_actions(
+                            tree,
+                            entries,
+                            &|place| format!("{opener}/{place}"),
+                            callbacks,
+                        );
+                    }
+                    SubmenuEntries::Asked(load) => {
+                        tree.push_str(",\"onOpen\":");
+                        string(tree, &callback);
+                        callbacks.insert(callback.clone(), Callback::Open(load));
+                    }
+                }
+                tree.push('}');
+            }
+        }
+        if let Some(title) = &title {
+            tree.push_str(",\"title\":");
+            string(tree, title);
+        }
+        if let Some(section) = &section {
+            tree.push_str(",\"section\":");
+            string(tree, section);
+        }
+        if destructive {
+            tree.push_str(",\"style\":\"destructive\"");
+        }
+        if let Some(shortcut) = &shortcut {
+            tree.push_str(",\"shortcut\":");
+            write_shortcut(tree, shortcut);
+        }
+        tree.push('}');
+    }
+    tree.push(']');
 }
 
 /// Writes `shortcut` as the tree's JSON: `{"modifiers": [...], "key": ...}`
