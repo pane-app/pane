@@ -13,6 +13,10 @@ gpui = { package = "gpui-ce", git = "https://github.com/hoangvu12/gpui-ce", rev 
 gpui_elements = { package = "gpui_ce_elements", git = "https://github.com/hoangvu12/gpui-ce", rev = "bcf3a0acd047c1873293069d0ed42085a38f699b" }
 # font-kit is the macOS text system; without it no text renders on macOS.
 gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/hoangvu12/gpui-ce", rev = "bcf3a0acd047c1873293069d0ed42085a38f699b", features = ["font-kit"] }
+# The launcher's background image (ADR 0028): decoding the picture the user
+# chooses, keeping Pane's own copy of it, and baking the launcher's backdrop
+# into the frame GPUI draws; already in the tree through GPUI.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }
 # Opens web links (quicklinks) and files (file search) with the system's
 # handler. On Windows 5.4.4 passes the target to its PowerShell opener through
 # an environment variable, not the command line, and opens an existing path

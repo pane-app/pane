@@ -1,0 +1,45 @@
+Settings
+General
+Appearance
+Hotkeys & Aliases
+Plugins
+7
+Window Manager
+Clipboard
+Privacy
+About
+Appearance
+
+Changes apply instantly. Themes from the Plugin Store show up here too.
+
+Material
+Glass
+Frost
+Solid
+Dark, blurred glass that picks up your wallpaper.
+Accent
+Blur
+44 px
+Tint
+70%
+Tint never drops below 55% so text stays readable on bright wallpapers.
+Density
+Compact
+Default
+Roomy
+Show pinned slots
+Show tips in the footer
+Preview
+fig
+Figma
+Application
+Configure Pane
+Command
+figma-tokens.json
+File
+Recent Figma Files
+Command
+Tab searches inside a plugin
+Open
+↵
+Find themes in the Plugin Store

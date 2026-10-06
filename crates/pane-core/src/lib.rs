@@ -38,7 +38,8 @@ mod zip;
 pub use defaults::{ArtifactSource, DefaultExtension};
 pub use helpers::runner::{HELPER_TIME_LIMIT, MAX_HELPER_INPUT, MAX_HELPER_OUTPUT};
 pub use host_settings::{
-    HostSettings, MaterialPreference, OpeningMonitor, Reopening, ThemePreference,
+    BackgroundEffect, EscapeBehavior, HostSettings, MaterialPreference, NavigationBindings,
+    OpeningMonitor, PinnedLayout, Reopening, ThemePreference, WindowMode,
 };
 #[doc(hidden)]
 pub use http::HttpLimits;
@@ -47,8 +48,8 @@ pub use launcher::clipboard_view;
 pub use launcher::{
     AliasOutcome, ApplicationUpdate, BuildFailure, CommandRegistration, ComputedAnswer,
     CustomViewSnapshot, Development, FormField, FormView, HotkeyOutcome, Launcher, LauncherView,
-    PinTarget, Presentation, QUICK_SLOTS, Question, QuickSlot, ResultAction, ResultActionItem,
-    ResultActions, Row, RowKind, RowPresentation, Screen, Section, SelectedAction, ShortcutCatalog,
+    PinTarget, Presentation, Question, QuickSlot, ResultAction, ResultActionItem, ResultActions,
+    Row, RowKind, RowPresentation, Screen, Section, SelectedAction, ShortcutCatalog,
     ShortcutCommand, ShortcutGroup, SlotChange, Status, Unavailable, answer_sections,
     root_sections,
 };

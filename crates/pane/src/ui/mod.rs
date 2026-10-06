@@ -27,8 +27,9 @@
 //! Fonts: `crates/pane/assets/fonts/` (Geist-Regular/Medium/SemiBold,
 //! GeistMono-Regular/Medium, `OFL.txt` — Vercel's official release v1.7.2,
 //! <https://github.com/vercel/geist-font>, SIL Open Font License 1.1).
-//! Icons: `crates/pane/assets/icons/*.svg`, embedded the same way (see
-//! [`icon`]).
+//! Icons: `crates/pane/assets/icons/<set>/*.svg` (reicon 1.2.5,
+//! <https://reicon.dev>, MIT, or Pane's own set), embedded the same way
+//! (see [`icon`]).
 
 use std::borrow::Cow;
 
@@ -63,6 +64,10 @@ pub(crate) struct Visuals {
     pub(crate) theme: Theme,
     /// The surface treatment every frame paints on.
     pub(crate) material: Material,
+    /// The launcher's background image, baked, when one is chosen and
+    /// ready (ADR 0028): only the launcher's visuals carry it, and their
+    /// theme is then the palette over it (`Theme::over_backdrop`).
+    pub(crate) backdrop: Option<crate::background::Backdrop>,
 }
 
 /// Embeds the Geist and Geist Mono families into the text system. Call

@@ -1,0 +1,74 @@
+<div style="width: 1440px; height: 900px; position: relative; overflow: hidden; display: flex; justify-content: center; align-items: flex-start; padding-top: 150px; box-sizing: border-box">
+<div class="wp wp-{{wp}}"><div class="bands"></div></div>
+<svg class="grain" aria-hidden="true"><filter id="grain"><feTurbulence type="fractalNoise" sc-camel-base-frequency="0.85" sc-camel-num-octaves="2" sc-camel-stitch-tiles="stitch"></feTurbulence><feColorMatrix type="saturate" values="0"></feColorMatrix></filter><rect width="100%" height="100%" filter="url(#grain)"></rect></svg>
+
+<section class="glass" aria-label="Pane launcher" style="position: relative; z-index: 1; width: 760px; height: 518px; display: flex; flex-direction: column; overflow: hidden">
+<div style="height: 64px; display: flex; align-items: center; gap: 14px; padding: 0 20px; border-bottom: 1px solid rgba(255,255,255,0.06); flex: none">
+<svg class="ic" sc-camel-view-box="0 0 24 24" width="20" height="20" aria-hidden="true" style="color: #8e8f94; flex: none"><path d="M4 11a7 7 0 1 0 14 0a7 7 0 1 0 -14 0 M16.2 16.2L20 20"></path></svg>
+<input class="q" type="text" aria-label="Search apps, commands and plugins" placeholder="Search apps, commands, plugins…" value="{{query}}" sc-camel-on-change="{{onQuery}}" style="flex-grow: 1; caret-color: {{accent}}">
+</div>
+
+<div style="flex-grow: 1; padding: 4px 10px 10px; display: flex; flex-direction: column; gap: 2px; overflow: hidden">
+<div style="display: flex; align-items: center; gap: 16px; height: 84px; padding: 8px 12px 4px; flex: none">
+<span style="width: 44px; height: 44px; border-radius: 22px; display: grid; place-items: center; background: rgba(255,255,255,0.06); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08); color: #a3a4a9; flex: none"><svg class="ic" sc-camel-view-box="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M4 11a7 7 0 1 0 14 0a7 7 0 1 0 -14 0 M16.2 16.2L20 20 M8.5 11h5"></path></svg></span>
+<div style="display: flex; flex-direction: column; gap: 4px">
+<span style="font-size: 15px; font-weight: 500; color: #ededef">Nothing on this computer matches “kubectx”</span>
+<span style="font-size: 13px; color: #8e8f94">Pick a fallback below, or add a plugin that knows about it.</span>
+</div>
+</div>
+
+<div class="label"><span>Fallbacks</span><span style="font-weight: 400">Reorder in Settings</span></div>
+<button type="button" class="row sel">
+<span class="tile" style="background: rgba(255,255,255,0.08); color: #e9e9ec"><svg class="ic" sc-camel-view-box="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M3.5 12a8.5 8.5 0 1 0 17 0a8.5 8.5 0 1 0 -17 0 M3.5 12h17 M12 3.5c2.3 2.4 3.4 5.2 3.4 8.5s-1.1 6.1-3.4 8.5 M12 3.5C9.7 5.9 8.6 8.7 8.6 12s1.1 6.1 3.4 8.5"></path></svg></span>
+<span class="row-t">Search the web for “kubectx”</span>
+<span class="row-s">Default browser</span>
+<span style="flex-grow: 1"></span>
+<span class="row-kind">Fallback</span>
+</button>
+<button type="button" class="row">
+<span class="tile" style="background: rgba(255,255,255,0.08); color: #e9e9ec"><svg class="ic" sc-camel-view-box="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M5.5 3.5h8.5l4.5 4.5v12.5h-13z M14 3.5V8h4.5"></path></svg></span>
+<span class="row-t">Search files for “kubectx”</span>
+<span class="row-s">Files</span>
+<span style="flex-grow: 1"></span>
+<span class="row-kind">Fallback</span>
+</button>
+<button type="button" class="row">
+<span class="tile" style="background: rgba(255,255,255,0.08); color: #e9e9ec"><svg class="ic" sc-camel-view-box="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 5.5h16v13H4z M8 10l2.5 2L8 14 M12.5 14.5H16"></path></svg></span>
+<span class="row-t">Create Script Command “kubectx”</span>
+<span class="row-s">Scripts</span>
+<span style="flex-grow: 1"></span>
+<span class="row-kind">Fallback</span>
+</button>
+
+<div class="label"><span>From the Plugin Store</span><span style="display: flex; align-items: center; gap: 6px; font-weight: 400"><span>See all</span><span class="keys"><span class="kbd">{{k.mod}}</span><span class="kbd">↵</span></span></span></div>
+<div class="prow">
+<span class="tile" style="width: 32px; height: 32px; border-radius: 8px; background: #173352; color: #8fc3ff"><svg class="ic" sc-camel-view-box="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M12 3.5l7.5 4.3v8.4L12 20.5l-7.5-4.3V7.8z M12 12l7.5-4.2 M12 12L4.5 7.8 M12 12v8.5"></path></svg></span>
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0; flex-grow: 1">
+<span style="font-size: 14px; font-weight: 500; color: #ededef">Kube Context</span>
+<span style="font-size: 12.5px; color: #8e8f94">@tamsin · 31 KB · Reads your kubeconfig</span>
+</div>
+<button type="button" class="pill">Install</button>
+</div>
+<div class="prow">
+<span class="tile" style="width: 32px; height: 32px; border-radius: 8px; background: #163b3f; color: #86d9e0"><svg class="ic" sc-camel-view-box="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M12 3.5a8.5 8.5 0 1 0 0 17a8.5 8.5 0 1 0 0-17z M12 8.5a3.5 3.5 0 1 0 0 7a3.5 3.5 0 1 0 0-7z M12 3.5v5 M12 15.5v5 M3.5 12h5 M15.5 12h5"></path></svg></span>
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0; flex-grow: 1">
+<span style="font-size: 14px; font-weight: 500; color: #ededef">Kubernetes Clusters</span>
+<span style="font-size: 12.5px; color: #8e8f94">@okoro · 58 KB · Runs kubectl locally</span>
+</div>
+<button type="button" class="pill">Install</button>
+</div>
+</div>
+
+<div style="height: 50px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 8px 0 16px; border-top: 1px solid rgba(255,255,255,0.06); background: rgba(0,0,0,0.14); flex: none">
+<div style="display: flex; align-items: center; gap: 12px; min-width: 0">
+<svg sc-camel-view-box="0 0 24 24" width="18" height="18" aria-hidden="true" style="flex: none"><rect class="ic" x="3" y="7" width="13" height="13" rx="3.5" style="color: #8e8f94"></rect><rect x="8" y="3.5" width="13" height="13" rx="3.5" fill="#ededef" opacity="0.92"></rect></svg>
+<span style="font-size: 12.5px; color: #8e8f94; white-space: nowrap">Installing adds its commands here — no restart</span>
+</div>
+<div style="display: flex; align-items: center; gap: 4px">
+<button class="fbtn" type="button"><span>Search Web</span><span class="kbd" style="background: {{accent}}; color: #111210; box-shadow: none">↵</span></button>
+<span style="width: 1px; height: 16px; background: rgba(255,255,255,0.1)"></span>
+<button class="fbtn" type="button"><span>Actions</span><span class="keys"><span class="kbd">{{k.mod}}</span><span class="kbd">K</span></span></button>
+</div>
+</div>
+</section>
+</div>

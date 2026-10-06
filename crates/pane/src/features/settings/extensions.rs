@@ -15,12 +15,17 @@
 //! screens, so they show here unchanged, and every operation runs through
 //! the same code with the same records.
 //!
-//! Two kinds of rows belong to the launcher *window* rather than the shared
-//! screen: a package's commands (an extension's settings are a command it
-//! owns, opened in the launcher — no form is invented here) and the
-//! launcher's install rows, whose folder picker and forms live in that
-//! window. Clicking those summons and focuses the launcher window at that
-//! row, through [`crate::app::LauncherWindow::activate_root_result`].
+//! On the list, the rows are gathered into a card per installed extension
+//! ([`gather`]): its enable/disable row is the card's switch, its
+//! automatic updates' row a second switch, and its other operations
+//! (reload, clear cache, uninstall…) short buttons — no row says more than
+//! its name. A command's alias, hotkey and fallback rows are left to the
+//! Shortcuts page.
+//!
+//! The launcher's install rows belong to the launcher *window* rather than
+//! the shared screen: their folder picker and forms live in that window.
+//! Clicking one summons and focuses the launcher window at that row,
+//! through [`crate::app::LauncherWindow::activate_root_result`].
 //!
 //! Synchronization is by reading, not copying: every frame re-reads the
 //! launcher, and wherever the launcher changes — an operation's reply, a
@@ -30,8 +35,8 @@
 //! including a failed one, the page shows what the launcher holds.
 
 use gpui::{
-    AnyElement, App, Context, Div, ElementId, Hsla, Role, ScrollAnchor, SharedString, Stateful,
-    Window, div, prelude::*,
+    AnyElement, App, Context, Div, ElementId, Hsla, Role, SharedString, Stateful, Toggled, Window,
+    div, prelude::*, px,
 };
 use pane_core::{Launcher, Screen, Status};
 
@@ -39,12 +44,11 @@ use super::{Page, SettingsWindow, search};
 use crate::app::{LauncherWindow, launcher_changed_outside, row_icon};
 use crate::ui::controls;
 use crate::ui::icon::{Glyph, IconTone, TileSize, tile_at};
-use crate::ui::settings_shell;
-use crate::ui::theme::Theme;
+use crate::ui::theme::{Theme, pressed};
 
 /// What the page is, in one line: its sidebar entry's description in
-/// the search, and its heading's subtitle.
-pub(crate) const ABOUT: &str = "Install, enable, disable, update and remove extensions";
+/// the search.
+pub(crate) const ABOUT: &str = "Install and manage extensions";
 
 /// The page's title: its sidebar entry, and its own heading.
 const TITLE: &str = "Extensions";
@@ -95,11 +99,11 @@ fn entries(launcher: &Launcher, _cx: &App) -> Vec<search::Entry> {
         entries.extend(
             INSTALL_ROWS
                 .into_iter()
-                .map(|(id, title, _)| search::Entry {
+                .map(|(id, _, title)| search::Entry {
                     control: Some(id.into()),
                     title: title.into(),
                     // The page's own section label, which the rows sit under.
-                    group: Some("Install".into()),
+                    group: Some(INSTALL.into()),
                     unavailable: None,
                 }),
         );
@@ -114,27 +118,24 @@ fn focus(_: &mut SettingsWindow, _: &str, _: &mut Window, _: &mut Context<Settin
     false
 }
 
-/// The launcher's install rows, as root search lists them: their ids,
-/// titles and subtitles, the same values root search builds its
-/// `pane.install-*` rows with. The page dispatches to those rows through
-/// the launcher window, which owns their pickers and forms.
+/// The launcher's install rows: their ids, as root search builds its
+/// `pane.install-*` rows, the page's titles for them under its Install
+/// label, and the titles the sidebar's search finds them by. The page
+/// dispatches to those rows through the launcher window, which owns their
+/// pickers and forms.
 const INSTALL_ROWS: [(&str, &str, &str); 3] = [
     (
         "pane.install-from-folder",
-        "Install extension from folder…",
-        "Choose a local extension package to install",
+        "Folder…",
+        "Install from a folder",
     ),
-    (
-        "pane.install-from-npm",
-        "Install extension from npm…",
-        "Download an extension package published to npm",
-    ),
-    (
-        "pane.install-from-git",
-        "Install extension from Git…",
-        "Fetch an extension package from a Git repository",
-    ),
+    ("pane.install-from-npm", "npm…", "Install from npm"),
+    ("pane.install-from-git", "Git…", "Install from Git"),
 ];
+
+/// The page's section labels.
+const INSTALLED: &str = "Installed";
+const INSTALL: &str = "Install";
 
 /// Whether the launcher's screen is held by the extension-management
 /// flow: the list itself, or one of the screens its rows open — a
@@ -169,26 +170,43 @@ fn details_screen(screen: &Screen) -> bool {
 }
 
 /// One entry of the page's lists, as plain values: the launcher's row (a
-/// package, a management operation, a confirmation's answer), a package's
-/// command, or an install source.
+/// management operation, a confirmation's answer) or an install source.
 pub(crate) struct ExtensionItem {
     /// The launcher's own row id, where the entry is one of its rows.
     pub(crate) id: String,
     pub(crate) title: String,
-    pub(crate) subtitle: Option<String>,
     /// Why the entry cannot be used here, if it cannot.
     pub(crate) reason: Option<String>,
     pub(crate) icon: Option<(IconTone, Glyph)>,
+}
+
+/// One installed extension's card, as plain values: its rows of the
+/// launcher's list gathered under it.
+pub(crate) struct PackageCard {
+    /// The launcher's enable/disable row for it: its identity's key.
+    pub(crate) id: String,
+    pub(crate) title: String,
+    pub(crate) icon: Option<(IconTone, Glyph)>,
+    pub(crate) enabled: bool,
+    /// What needs saying about it, in a word or two: paused, developing.
+    pub(crate) badges: Vec<String>,
+    /// Its automatic-updates row, and whether they are on, where it has one.
+    pub(crate) auto_update: Option<(String, bool)>,
+    /// Its other operations, as buttons: the row's id, the button's label,
+    /// the row's own title (its accessible name and test selector) and why
+    /// it cannot be used here, if it cannot.
+    pub(crate) actions: Vec<(String, String, String, Option<String>)>,
 }
 
 /// What the Extensions page shows, as plain values: what [`render`] reads
 /// from the launcher, and what the visual workbench's fixture supplies to
 /// draw the same page (#99).
 pub(crate) struct ExtensionsView {
-    /// The list's own heading and the page's subtitle under it (a flow's
-    /// other screens, such as a confirmation, take none).
+    /// The flow's screen title: shown over a confirmation's or a details
+    /// screen's rows, not over the list itself (`listing`), which the
+    /// titlebar already names.
     pub(crate) title: String,
-    pub(crate) subtitle: Option<SharedString>,
+    pub(crate) listing: bool,
     /// The flow's status — an operation's progress or outcome, an error —
     /// in its tone.
     pub(crate) status: Option<(SharedString, Hsla)>,
@@ -199,29 +217,393 @@ pub(crate) struct ExtensionsView {
     pub(crate) empty: bool,
     /// Whether a details screen's way back is offered.
     pub(crate) back: bool,
+    /// The installed extensions, on the list.
+    pub(crate) packages: Vec<PackageCard>,
+    /// The launcher's rows that belong to no extension's card: the
+    /// runtime's, retained data's, a confirmation's answers.
     pub(crate) rows: Vec<ExtensionItem>,
-    pub(crate) commands: Vec<ExtensionItem>,
+    /// The global automatic-updates row, and whether it is on.
+    pub(crate) auto_update: Option<(String, bool)>,
     pub(crate) installs: Vec<ExtensionItem>,
 }
 
 /// Which of the Extensions page's controls an element is, for the caller
 /// of [`compose`] that attaches its behavior.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ExtensionsControl {
-    /// The launcher's row at this index.
-    Row(usize),
-    /// The package command at this index.
-    Command(usize),
-    /// The install source at this index.
-    Install(usize),
+    /// The launcher's row with this id: activated as its Enter would.
+    Row(String),
+    /// The install source with this row id: opened in the launcher.
+    Install(String),
     /// A details screen's way back.
     Back,
 }
 
+/// The launcher's rows gathered into cards: each installed extension's
+/// rows (its enable/disable row, its operations), and the rest. `rows` are
+/// the list's rows, `packages` the installed extensions (their key, title
+/// and whether they are enabled). Rows that set a command's alias, hotkey
+/// or fallback are left out: the Shortcuts page manages those.
+pub(crate) fn gather(
+    rows: &[pane_core::Row],
+    packages: &[(String, String, bool)],
+) -> (Vec<PackageCard>, Vec<ExtensionItem>, Option<(String, bool)>) {
+    let on = |row: &pane_core::Row| {
+        row.subtitle
+            .as_deref()
+            .is_some_and(|subtitle| subtitle.starts_with("On"))
+    };
+    let mut cards: Vec<PackageCard> = packages
+        .iter()
+        .map(|(key, title, enabled)| PackageCard {
+            id: key.clone(),
+            title: title.clone(),
+            icon: row_icon(key),
+            enabled: *enabled,
+            badges: Vec::new(),
+            auto_update: None,
+            actions: Vec::new(),
+        })
+        .collect();
+    let mut others = Vec::new();
+    let mut global = None;
+    for row in rows {
+        if row.id == "updates" {
+            global = Some((row.id.clone(), on(row)));
+            continue;
+        }
+        if let Some(card) = cards.iter_mut().find(|card| card.id == row.id) {
+            // The extension's own row: its state, in a word or two.
+            card.badges = row
+                .subtitle
+                .iter()
+                .flat_map(|subtitle| subtitle.split(" · "))
+                .filter(|part| {
+                    part.starts_with("Paused")
+                        || part.starts_with("Failed")
+                        || *part == "Developing"
+                })
+                .map(str::to_owned)
+                .collect();
+            continue;
+        }
+        let (kind, key) = row.id.split_once(':').unwrap_or((row.id.as_str(), ""));
+        if matches!(
+            kind,
+            "hotkey" | "alias-setting" | "fallback-setting" | "unlisted-setting"
+        ) {
+            continue;
+        }
+        let reason = row.unavailable.as_ref().map(|why| why.reason().to_owned());
+        match cards.iter_mut().find(|card| card.id == key) {
+            Some(card) if kind == "updates" => card.auto_update = Some((row.id.clone(), on(row))),
+            Some(card) => {
+                let label = match kind {
+                    "reload" => "Reload".to_owned(),
+                    "retry" => "Retry".to_owned(),
+                    "paused" => "Why paused".to_owned(),
+                    "clear-cache" => "Clear cache".to_owned(),
+                    "uninstall" => "Uninstall".to_owned(),
+                    "network" => "Network".to_owned(),
+                    // The title without the extension's name.
+                    _ => row
+                        .title
+                        .replace(&card.title, "")
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                };
+                card.actions
+                    .push((row.id.clone(), label, row.title.clone(), reason));
+            }
+            None => others.push(ExtensionItem {
+                id: row.id.clone(),
+                title: row.title.clone(),
+                reason,
+                icon: row_icon(&row.id),
+            }),
+        }
+    }
+    (cards, others, global)
+}
+
+/// The Extensions page's composition, which the visual workbench's fixture
+/// draws too: the flow's status above everything; then, on the list, a
+/// card per installed extension — its tile, name and badges with its
+/// on/off switch, its automatic updates' switch where it has one, and its
+/// operations as buttons — the rest of the launcher's rows, the global
+/// automatic updates and the install sources as buttons. On the flow's
+/// other screens, its title over its lines of information, its answers
+/// and a details screen's way back. `attach` adds each control's
+/// behavior; the composition gives each its identity, its accessibility
+/// and its look.
+pub(crate) fn compose(
+    view: &ExtensionsView,
+    theme: &Theme,
+    attach: impl Fn(ExtensionsControl, Stateful<Div>) -> Stateful<Div>,
+) -> Stateful<Div> {
+    let inset = theme.geometry.settings.section_label_inset;
+    let status = view.status.as_ref().map(|(text, color)| {
+        controls::field_description(text.clone(), *color, theme)
+            .px(inset)
+            .id("extensions-status")
+            .debug_selector(|| "extensions-status".into())
+            .role(Role::Status)
+            .aria_label(text.clone())
+    });
+    let empty = view.empty.then(|| {
+        controls::field_description("No extensions installed yet.", theme.text_muted, theme)
+            .px(inset)
+            .id("extension-empty")
+            .debug_selector(|| "extension-empty".into())
+    });
+    let packages = view
+        .packages
+        .iter()
+        .enumerate()
+        .map(|(index, card)| package_card(index, card, theme, &attach).into_any_element())
+        .collect::<Vec<_>>();
+    let packages = (!packages.is_empty()).then(|| {
+        controls::section(
+            Some(INSTALLED.into()),
+            div()
+                .flex()
+                .flex_col()
+                .gap(theme.geometry.settings.section_label_gap)
+                .children(packages),
+            theme,
+        )
+    });
+    let rows: Vec<AnyElement> = view
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let item = item(row, ("extension-row", index).into(), theme)
+                .debug_selector(|| format!("extension-row-{}", row.title))
+                // An unavailable row stays listed and clickable; activating
+                // it shows the reason, as the launcher's does.
+                .when(row.reason.is_some(), |item| item.aria_disabled(true));
+            attach(ExtensionsControl::Row(row.id.clone()), item).into_any_element()
+        })
+        .collect();
+    let details = view
+        .details
+        .iter()
+        .enumerate()
+        .map(|(index, line)| {
+            controls::field_description(line.clone(), theme.text_body, theme)
+                .px(inset)
+                .id(("extension-detail", index))
+                .debug_selector(move || format!("extension-detail-{line}"))
+                .into_any_element()
+        })
+        .collect::<Vec<_>>();
+    let back = view.back.then(|| {
+        let back = controls::button("extension-back", "Back", true, theme)
+            .debug_selector(|| "extension-back".into())
+            .role(Role::Button)
+            .aria_label("Back");
+        div().flex().child(attach(ExtensionsControl::Back, back))
+    });
+    // The launcher's other rows: under the flow's title on its other
+    // screens, unlabelled under the cards on the list.
+    let list = (!rows.is_empty() || !details.is_empty() || view.back).then(|| {
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap(theme.geometry.settings.section_label_gap)
+            .children(details)
+            .children((!rows.is_empty()).then(|| controls::list_card(rows, theme)))
+            .children(back);
+        let label = (!view.listing).then(|| SharedString::from(view.title.clone()));
+        let section = controls::section(label, body, theme);
+        if view.listing {
+            section
+        } else {
+            section.debug_selector(|| "extensions-title".into())
+        }
+    });
+    let updates = view.auto_update.as_ref().map(|(id, on)| {
+        let switch = super::general::switch_row(
+            super::general::SwitchRow {
+                id: "extension-updates",
+                selector: "extension-row-Update extensions automatically",
+                title: "Update extensions automatically",
+                on: *on,
+                offered: true,
+                lines: Vec::new(),
+            },
+            theme,
+            |switch| attach(ExtensionsControl::Row(id.clone()), switch),
+        );
+        controls::section(
+            None,
+            controls::card([switch.into_any_element()], theme),
+            theme,
+        )
+    });
+    let installs = (!view.installs.is_empty()).then(|| {
+        let buttons = view.installs.iter().map(|install| {
+            let id = SharedString::from(format!("extension-install-{}", install.id));
+            let button = controls::button(id, install.title.clone(), true, theme)
+                .debug_selector(|| format!("extension-install-{}", install.title))
+                .role(Role::Button)
+                .aria_label(install.title.clone());
+            attach(ExtensionsControl::Install(install.id.clone()), button)
+        });
+        let row = controls::setting_row("Install from", Vec::new(), theme).child(
+            div()
+                .flex_none()
+                .flex()
+                .gap(theme.geometry.controls.button_gap)
+                .children(buttons),
+        );
+        controls::section(None, controls::card([row.into_any_element()], theme), theme)
+            .debug_selector(|| format!("extension-section-{INSTALL}"))
+    });
+    let page = controls::page(theme)
+        .when(view.listing, |page| {
+            page.debug_selector(|| "extensions-title".into())
+        })
+        .children(status)
+        .children(empty)
+        .children(packages)
+        .children(list)
+        .children(updates)
+        .children(installs);
+    div()
+        .id("extensions")
+        .debug_selector(|| "extensions".into())
+        .child(page)
+}
+
+/// One installed extension's card: its tile, name and badges at the left
+/// with its on/off switch at the right; its automatic updates' switch
+/// where it has one; and its operations as buttons.
+fn package_card(
+    index: usize,
+    card: &PackageCard,
+    theme: &Theme,
+    attach: &impl Fn(ExtensionsControl, Stateful<Div>) -> Stateful<Div>,
+) -> Div {
+    let controls_geometry = &theme.geometry.controls;
+    let badges = card.badges.iter().map(|badge| {
+        let tone = if badge == "Developing" {
+            theme.accent_text
+        } else {
+            theme.warning
+        };
+        controls::field_description(badge.clone(), tone, theme).flex_none()
+    });
+    let label = div()
+        .flex()
+        .items_center()
+        .gap(controls_geometry.button_gap)
+        .child(controls::field_label(card.title.clone(), theme))
+        .children(badges);
+    let toggle = controls::toggle(card.enabled, theme)
+        .debug_selector(move || format!("extension-toggle-{index}"));
+    let settings = &theme.geometry.settings;
+    let head = div()
+        .w_full()
+        .flex()
+        .items_center()
+        .gap(controls_geometry.row_gap)
+        .min_h(settings.card_row_height)
+        .px(settings.card_padding_x)
+        .py(settings.card_row_padding_y)
+        .children(
+            card.icon
+                .map(|(tone, glyph)| tile_at(TileSize::Row, tone, glyph, theme)),
+        )
+        .child(label.flex_1().min_w(px(0.)))
+        .child(toggle)
+        .id(("extension-row", index))
+        .debug_selector(|| format!("extension-row-{}", card.title))
+        .rounded_t(settings.card_radius)
+        .hover(|row| row.bg(theme.nav_hover))
+        .active(|row| row.bg(pressed(theme.nav_hover)))
+        .role(Role::Switch)
+        .aria_label(card.title.clone())
+        .aria_toggled(if card.enabled {
+            Toggled::True
+        } else {
+            Toggled::False
+        })
+        .cursor_pointer();
+    let head = attach(ExtensionsControl::Row(card.id.clone()), head);
+    let mut rows = vec![head.into_any_element()];
+    if let Some((id, on)) = &card.auto_update {
+        let switch = super::general::switch_row(
+            super::general::SwitchRow {
+                id: "extension-auto-update",
+                selector: "extension-auto-update",
+                title: "Update automatically",
+                on: *on,
+                offered: true,
+                lines: Vec::new(),
+            },
+            theme,
+            |switch| attach(ExtensionsControl::Row(id.clone()), switch),
+        );
+        rows.push(switch.into_any_element());
+    }
+    if !card.actions.is_empty() {
+        let buttons = card.actions.iter().map(|(id, label, title, reason)| {
+            let button_id = SharedString::from(format!("extension-action-{id}"));
+            let button = controls::ghost_button(button_id, label.clone(), reason.is_none(), theme)
+                .debug_selector(|| format!("extension-row-{title}"))
+                .role(Role::Button)
+                .aria_label(title.clone())
+                .when_some(reason.clone(), |button, reason| {
+                    // An unavailable operation stays clickable: activating
+                    // it shows why, as the launcher's row does.
+                    button.aria_description(reason).cursor_pointer()
+                });
+            attach(ExtensionsControl::Row(id.clone()), button)
+        });
+        rows.push(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap(controls_geometry.button_gap)
+                .px(theme.geometry.settings.card_padding_x)
+                .py(theme.geometry.settings.card_row_padding_y)
+                .children(buttons)
+                .into_any_element(),
+        );
+    }
+    controls::card(rows, theme)
+}
+
+/// One entry as a Settings list item named `id`: its tile and its title,
+/// and, when it cannot be used here, the reason in the warning tone, which
+/// its accessible description carries too.
+fn item(entry: &ExtensionItem, id: ElementId, theme: &Theme) -> Stateful<Div> {
+    let lines = entry
+        .reason
+        .iter()
+        .map(|reason| {
+            controls::field_description(reason.clone(), theme.warning, theme).into_any_element()
+        })
+        .collect();
+    let tile = entry
+        .icon
+        .map(|(tone, glyph)| tile_at(TileSize::Row, tone, glyph, theme));
+    controls::list_item(id, tile, entry.title.clone(), lines, theme)
+        .role(Role::Button)
+        .aria_label(entry.title.clone())
+        .when_some(entry.reason.clone(), |item, reason| {
+            item.aria_description(reason)
+        })
+}
+
 /// Draws the Extensions page: the extension list — read where the launcher
-/// has not entered the flow, live where it has — with the flow's title,
-/// status and lines of information, then the packages' commands and the
-/// launcher's install rows, which open in the launcher window.
+/// has not entered the flow, live where it has — gathered into a card per
+/// installed extension, with the flow's title, status and lines of
+/// information on its other screens, then the launcher's install sources,
+/// which open in the launcher window.
 fn render(
     this: &mut SettingsWindow,
     _window: &mut Window,
@@ -238,8 +620,8 @@ fn render(
     } else {
         this.launcher.extension_list()
     };
-    // The page's subtitle under the list's own heading; a flow's other
-    // screens (a confirmation names what it asks about) take none.
+    // Whether the list itself shows, or one of the flow's other screens (a
+    // confirmation names what it asks about).
     let listing = matches!(list.screen, Screen::Extensions { .. });
     // The flow's status — an operation's progress or outcome, an error —
     // shows on the page; read mode has none (the launcher's status belongs
@@ -254,94 +636,88 @@ fn render(
     } else {
         None
     };
-    // The commands of the enabled packages, each opening in the launcher
-    // window: an extension's settings are a command it owns (the settings
-    // sample's "Greeting" is one), not a form Pane would invent here. A
-    // disabled package's commands run nowhere, so none is offered.
-    let commands: Vec<ExtensionItem> = this
-        .launcher
-        .packages()
-        .into_iter()
-        .filter(|package| package.enabled)
-        .flat_map(|package| {
-            let package_title = package.title();
-            package.commands().into_iter().map(move |command| {
-                let subtitle = command.subtitle.unwrap_or_else(|| package_title.clone());
-                ExtensionItem {
-                    icon: row_icon(&command.id),
-                    id: command.id,
-                    title: command.title,
-                    subtitle: Some(format!("{subtitle} · Opens in Pane's launcher")),
-                    reason: None,
-                }
+    let packages: Vec<(String, String, bool)> = if listing {
+        this.launcher
+            .packages()
+            .iter()
+            .map(|package| (package.identity.key(), package.title(), package.enabled))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let (packages, rows, auto_update) = if listing {
+        gather(&list.rows, &packages)
+    } else {
+        // A confirmation's answers, or a details screen's rows, as they
+        // are.
+        let rows = list
+            .rows
+            .iter()
+            .map(|row| ExtensionItem {
+                id: row.id.clone(),
+                title: row.title.clone(),
+                reason: row.unavailable.as_ref().map(|why| why.reason().to_owned()),
+                icon: None,
             })
-        })
-        .collect();
-    let rows: Vec<ExtensionItem> = list
-        .rows
-        .iter()
-        .map(|row| ExtensionItem {
-            id: row.id.clone(),
-            title: row.title.clone(),
-            subtitle: row.subtitle.clone(),
-            reason: row.unavailable.as_ref().map(|why| why.reason().to_owned()),
-            icon: row_icon(&row.id),
-        })
-        .collect();
-    let installs = if this.launcher.installs_packages() {
+            .collect();
+        (Vec::new(), rows, None)
+    };
+    let installs = if listing && this.launcher.installs_packages() {
         install_items()
     } else {
         Vec::new()
     };
     let view = ExtensionsView {
         title: list.title.clone(),
-        subtitle: listing.then(|| ABOUT.into()),
+        listing,
         status,
-        details: list.details().to_vec(),
-        empty: rows.is_empty() && commands.is_empty(),
+        // The list's explanatory lines stay in the launcher: the cards say
+        // enough. A confirmation's or a details screen's lines are what
+        // that screen is for.
+        details: if listing {
+            Vec::new()
+        } else {
+            list.details().to_vec()
+        },
+        empty: listing && packages.is_empty() && rows.is_empty(),
         back: details_screen(&list.screen),
+        packages,
         rows,
-        commands,
+        auto_update,
         installs,
     };
-    // Each launcher row and install row carries the scroll anchor the
-    // search's reveal scrolls to, keyed by the row's own id.
-    let row_anchors: Vec<ScrollAnchor> = view
-        .rows
+    // Each row's scroll anchor, keyed by the row's own id, which the
+    // search's reveal scrolls to.
+    let ids = view
+        .packages
         .iter()
-        .map(|row| this.search_anchor(&row.id))
+        .flat_map(|card| {
+            std::iter::once(card.id.clone())
+                .chain(card.auto_update.iter().map(|(id, _)| id.clone()))
+                .chain(card.actions.iter().map(|(id, ..)| id.clone()))
+        })
+        .chain(view.rows.iter().map(|row| row.id.clone()))
+        .chain(view.auto_update.iter().map(|(id, _)| id.clone()))
+        .chain(view.installs.iter().map(|row| row.id.clone()));
+    let anchors: std::collections::HashMap<String, gpui::ScrollAnchor> = ids
+        .map(|id| {
+            let anchor = this.search_anchor(&id);
+            (id, anchor)
+        })
         .collect();
-    let install_anchors: Vec<ScrollAnchor> = view
-        .installs
-        .iter()
-        .map(|row| this.search_anchor(&row.id))
-        .collect();
-    let row_ids: Vec<String> = view.rows.iter().map(|row| row.id.clone()).collect();
-    let command_ids: Vec<String> = view.commands.iter().map(|row| row.id.clone()).collect();
-    let install_ids: Vec<String> = view.installs.iter().map(|row| row.id.clone()).collect();
     compose(&view, &theme, |control, element| match control {
-        ExtensionsControl::Row(index) => {
-            let id = row_ids[index].clone();
+        ExtensionsControl::Row(id) => {
             element
-                .anchor_scroll(row_anchors.get(index).cloned())
+                .anchor_scroll(anchors.get(&id).cloned())
                 .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
                     activate(this, &id, cx);
                 }))
         }
-        ExtensionsControl::Command(index) => {
-            let id = command_ids[index].clone();
-            element.on_click(cx.listener(move |_, _: &gpui::ClickEvent, _, cx| {
+        ExtensionsControl::Install(id) => element
+            .anchor_scroll(anchors.get(&id).cloned())
+            .on_click(cx.listener(move |_, _: &gpui::ClickEvent, _, cx| {
                 open_in_launcher(&id, cx);
-            }))
-        }
-        ExtensionsControl::Install(index) => {
-            let id = install_ids[index].clone();
-            element
-                .anchor_scroll(install_anchors.get(index).cloned())
-                .on_click(cx.listener(move |_, _: &gpui::ClickEvent, _, cx| {
-                    open_in_launcher(&id, cx);
-                }))
-        }
+            })),
         // The way out of a details screen the page entered, as the
         // launcher window's Escape is there: [`pane_core::Launcher::back`].
         ExtensionsControl::Back => {
@@ -360,155 +736,13 @@ fn render(
 pub(crate) fn install_items() -> Vec<ExtensionItem> {
     INSTALL_ROWS
         .into_iter()
-        .map(|(id, title, subtitle)| ExtensionItem {
+        .map(|(id, title, _)| ExtensionItem {
             id: id.into(),
             title: title.into(),
-            subtitle: Some(subtitle.into()),
             reason: None,
             icon: row_icon(id),
         })
         .collect()
-}
-
-/// The Extensions page's composition, which the visual workbench's fixture
-/// draws too: the heading block — the list's own title — then, in the
-/// page's column, the flow's status and lines of information, a details
-/// screen's way back, the launcher's rows as Settings list items (#99),
-/// and the packages' commands and the install sources in field groups of
-/// their own. `attach` adds each entry's behavior; the composition gives
-/// each its identity, its accessibility and its look.
-pub(crate) fn compose(
-    view: &ExtensionsView,
-    theme: &Theme,
-    attach: impl Fn(ExtensionsControl, Stateful<Div>) -> Stateful<Div>,
-) -> Stateful<Div> {
-    let rows = view.rows.iter().enumerate().map(|(index, row)| {
-        let item = item(row, ("extension-row", index).into(), theme)
-            .debug_selector(|| format!("extension-row-{}", row.title))
-            // An unavailable row stays listed and clickable; activating it
-            // shows the reason, as the launcher's does.
-            .when(row.reason.is_some(), |item| item.aria_disabled(true));
-        attach(ExtensionsControl::Row(index), item)
-    });
-    let commands = view.commands.iter().enumerate().map(|(index, command)| {
-        let item = item(command, ("extension-command", index).into(), theme)
-            .debug_selector(|| format!("extension-command-{}", command.title));
-        attach(ExtensionsControl::Command(index), item)
-    });
-    let installs = view.installs.iter().enumerate().map(|(index, install)| {
-        let item = item(install, ("extension-install", index).into(), theme)
-            .debug_selector(|| format!("extension-install-{}", install.title));
-        attach(ExtensionsControl::Install(index), item)
-    });
-    let status = view.status.as_ref().map(|(text, color)| {
-        controls::field_description(text.clone(), *color, theme)
-            .id("extensions-status")
-            .debug_selector(|| "extensions-status".into())
-            .role(Role::Status)
-            .aria_label(text.clone())
-    });
-    let details = (!view.details.is_empty()).then(|| {
-        div()
-            .flex()
-            .flex_col()
-            .gap(theme.geometry.controls.list_gap)
-            .children(view.details.iter().enumerate().map(|(index, line)| {
-                controls::field_description(line.clone(), theme.text_body, theme)
-                    .id(("extension-detail", index))
-                    .debug_selector(move || format!("extension-detail-{line}"))
-            }))
-    });
-    let empty = view.empty.then(|| {
-        controls::field_description("No extensions are installed.", theme.text_muted, theme)
-            .id("extension-empty")
-            .debug_selector(|| "extension-empty".into())
-    });
-    let back = view.back.then(|| {
-        let back = controls::button("Back", true, theme)
-            .id("extension-back")
-            .debug_selector(|| "extension-back".into())
-            .role(Role::Button)
-            .aria_label("Back")
-            .aria_description("Return to the extension list");
-        div().flex().child(attach(ExtensionsControl::Back, back))
-    });
-    let list = (!view.rows.is_empty()).then(|| {
-        div()
-            .flex()
-            .flex_col()
-            .gap(theme.geometry.controls.list_gap)
-            .children(rows)
-    });
-    let commands = (!view.commands.is_empty()).then(|| section("Commands", commands, theme));
-    let installs = (!view.installs.is_empty()).then(|| section("Install", installs, theme));
-    let column = controls::column(theme)
-        .child(
-            settings_shell::page_header(view.title.clone(), view.subtitle.clone(), theme)
-                .id("extensions-title")
-                .debug_selector(|| "extensions-title".into()),
-        )
-        .children(status)
-        .children(details)
-        .children(empty)
-        .children(back)
-        .children(list)
-        .children(commands)
-        .children(installs);
-    div()
-        .id("extensions")
-        .debug_selector(|| "extensions".into())
-        .child(column)
-}
-
-/// One entry as a Settings list item named `id`: its tile, its title over
-/// its subtitle and, when it cannot be used here, the reason in the
-/// warning tone — all of which its accessible description carries too.
-fn item(entry: &ExtensionItem, id: ElementId, theme: &Theme) -> Stateful<Div> {
-    let mut lines = Vec::new();
-    if let Some(subtitle) = &entry.subtitle {
-        lines.push(
-            controls::field_description(subtitle.clone(), theme.text_muted, theme)
-                .truncate()
-                .into_any_element(),
-        );
-    }
-    if let Some(reason) = &entry.reason {
-        lines.push(
-            controls::field_description(reason.clone(), theme.warning, theme).into_any_element(),
-        );
-    }
-    let tile = entry
-        .icon
-        .map(|(tone, glyph)| tile_at(TileSize::Row, tone, glyph, theme));
-    // The entry's accessible description: its subtitle and, when it cannot
-    // run, the reason, together.
-    let description = match (&entry.subtitle, &entry.reason) {
-        (Some(subtitle), Some(reason)) => Some(format!("{subtitle}. {reason}")),
-        (subtitle, reason) => subtitle.clone().or_else(|| reason.clone()),
-    };
-    controls::list_item(tile, entry.title.clone(), lines, theme)
-        .id(id)
-        .role(Role::Button)
-        .aria_label(entry.title.clone())
-        .when_some(description, |item, description| {
-            item.aria_description(description)
-        })
-}
-
-/// One of the page's own groups of entries: its field label over them.
-fn section(label: &'static str, items: impl Iterator<Item = Stateful<Div>>, theme: &Theme) -> Div {
-    controls::field(theme)
-        .child(
-            controls::field_label(label, theme)
-                .debug_selector(move || format!("extension-section-{label}")),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(theme.geometry.controls.list_gap)
-                .children(items),
-        )
 }
 
 /// Activates the extension-list row with `id` through the launcher's own

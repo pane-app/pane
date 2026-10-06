@@ -1,0 +1,29 @@
+Nothing on this computer matches “kubectx”
+Pick a fallback below, or add a plugin that knows about it.
+Fallbacks
+Reorder in Settings
+Search the web for “kubectx”
+Default browser
+Fallback
+Search files for “kubectx”
+Files
+Fallback
+Create Script Command “kubectx”
+Scripts
+Fallback
+From the Plugin Store
+See all
+⌘
+↵
+Kube Context
+@tamsin · 31 KB · Reads your kubeconfig
+Install
+Kubernetes Clusters
+@okoro · 58 KB · Runs kubectl locally
+Install
+Installing adds its commands here — no restart
+Search Web
+↵
+Actions
+⌘
+K

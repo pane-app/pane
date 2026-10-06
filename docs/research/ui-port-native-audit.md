@@ -1,0 +1,127 @@
+# Native UI audit for a reference-faithful Windows port
+
+Research date: 2026-10-04. Application source inspected: `b7f1b881cc19b15e0c3c0febaf21565a79bf8271`. Research only: no product code changes, builds, CI, or platform runs. This report is a source audit; it does not claim a fresh native visual inspection. The companion reference/browser investigation owns measured reference screenshots and the complete nine-board inventory.
+
+## Finding
+
+Pane already has shared tokens, fonts, icons, materials and a few shared controls. The problem is not absence of a component folder. Its components implement only part of the reference, some components use the wrong reference family, and some behavior is explicitly different. Reusing the current row everywhere has carried root-result dimensions into Settings and popup menus. Earlier evidence checked usability, text rendering and backdrop response rather than fidelity to the authored page.
+
+The most consequential concrete example is hover. The reference root assigns selection on **mouse movement**, so moving over a row normally gives it the selected `.085` wash and inset edge. Pane only paints a `.035` hover wash on an unselected row while the old selected row remains selected. Pane also fades that wash for 150 ms; reference row CSS has no corresponding transition. Copying the `.row:hover` color alone therefore cannot reproduce the reference. Sources: [reference row callback](../../.scratch/ui-reference/extracted/launcher-root-dc.js) lines 189–190 and [template](../../.scratch/ui-reference/extracted/launcher-root-template.html) line 328; [native row](../../crates/pane/src/ui/result_row.rs) lines 61–86, [native attachment](../../crates/pane/src/app.rs) lines 853–909, [motion policy](../../crates/pane/src/ui/motion.rs) lines 90–108.
+
+## Source authority and scope
+
+Read `docs/agents/domain.md`, `CONTEXT.md`, `docs/HANDOFF.md`, `docs/current-decisions.md`, `docs/ui-rework-interview.md` and ADR 0003 before the audit. GPUI CE remains the accepted renderer. The accepted feature-folder/shared-UI organization remains suitable. The current user explicitly asks for research and self-contained UI tickets, on Windows only; historical all-OS validation gates are not this task's acceptance criteria. Sources: [renderer ADR](../adr/0003-gpui-ce-and-extensible-views.md), [organization decision](../ui-rework-interview.md), [presentation ownership](../launcher-presentation.md).
+
+Use `.scratch/ui-reference/launcher.html` as truth and the retained reference copy under `docs/evidence/ui-prototype/reference/` for durable provenance after comparing hashes. Extracted CSS and templates are useful evidence, but the old `REFERENCE.md` is incomplete: it says fixed panel height was not found even though the extracted root template explicitly fixes the list to 404 px. It also says several boards were not token-mined. Do not make that summary the acceptance oracle. Source: [old reference summary](../../.scratch/ui-reference/REFERENCE.md), [root template](../../.scratch/ui-reference/extracted/launcher-root-template.html) lines 306–312.
+
+## Existing ownership map
+
+| Source | Current ownership | Port implication |
+| --- | --- | --- |
+| `crates/pane/src/main.rs:195` | Creates launcher at 760×460 logical pixels | Canonical reference root is 760×518: 64 header + 404 list + 50 footer. Account for native nonclient/client conversion separately. |
+| `crates/pane/src/app.rs:853,918,949,1044` | Row adaptation, primary footer action, shared frame, details, screen selection and list rendering | Preserve command dispatch/state; move reusable footer/layout paint into named components. Root-specific group/card rendering belongs in `features/root_search/`. |
+| `crates/pane/src/features/root_search/mod.rs:38, render_search` | Editable query entity synchronization and 64 px header | Preserve existing text/IME entity and focus. Add visual slots/content without replacing editing behavior. |
+| `crates/pane/src/ui/theme.rs` | Dark/light colors and a small typography/geometry inventory | Extend by reference control family. Current row dimensions cannot represent sidebar, action row, pinned tile and setting row. |
+| `crates/pane/src/ui/result_row.rs:42,61` | Title/subtitle/unavailable reason/icon/selection | Missing kind, alias, key group, query-highlight spans and trailing content; do not put launcher logic in the component. |
+| `crates/pane/src/ui/keycap.rs:69,89` | Converts core `Binding`, paints generic cap | Reference requires mono text, key groups, compact and accent variants. Conversion of core bindings belongs outside shared paint. |
+| `crates/pane/src/ui/material.rs:191,243,280` | L1 panel, footer, L2 popup | Separate structural box model from painted inset edge; document and measure Windows compositor differences. |
+| `crates/pane/src/features/footer_menu.rs:232,320,429` | Global ellipsis menu and overlay dismissal | This is not the reference selected-result Actions panel. Keep the responsibilities distinct. |
+| `crates/pane/src/features/settings/mod.rs:283,387,444,638` | Sidebar/page window, titlebar, 740×530 initial size | Introduce a real sidebar item visual and settings layout tokens. Retain page registration, search, focus and callbacks. |
+| `crates/pane/src/features/settings/appearance.rs:135,299,321` | Theme/material radio rows, explanation, 170 px preview | Structurally different from authored Appearance board; reuse saved settings operations under the new composition. |
+| `crates/pane/src/ui/select.rs:655,837,1001` | Stateful searchable select with keyboard behavior and popup paint | Preserve behavior entity; split trigger/menu-row visual families rather than introducing a second select mechanism. |
+| `crates/pane/src/extension_views/form.rs:193,256` | Extension form editing, validation and focus | Host-authored control chrome can share settings controls; extension event and validation contract stays intact. |
+| `crates/pane/src/extension_views/custom_view.rs` | Extension-owned drawing/input adapter | Do not recolor extension-authored shapes to force host parity. |
+
+Paths above are relative to the repository root; each names an inspected primary source and entry symbol/line. `docs/launcher-presentation.md` documents the intended dependency boundary.
+
+## Exact mismatch register
+
+All reference rows below cite [root CSS](../../.scratch/ui-reference/extracted/launcher-root.css) and [root template](../../.scratch/ui-reference/extracted/launcher-root-template.html). Values are authored CSS pixels, not native physical screenshot pixels.
+
+| Area | Authored target | Native source and difference | Required verification |
+| --- | --- | --- | --- |
+| Panel height | Template 306–312: 760 wide; 64 header, 404 list, 50 footer = 518 high | `main.rs:200` creates 760×460; list flexes to remaining height in `app.rs:1175` | Compare client rects at 100% DPI. Do not change only width or crop screenshots to conceal height. |
+| Box model | `.glass` CSS 258 uses inset shadow, no layout border | `material.rs:215–221` uses a real `border_1`; reduces interior by 1 px on each side | Measure input origin, list edges, footer origin; convert painted inset to layout-neutral treatment if necessary. |
+| Windows corners | CSS 258 radius 18 | `theme.rs:363` returns radius 0 on Windows; `lib.rs:231` requests `DWMWCP_ROUND`, which does not specify 18 px | Capture exact corner contour and shadow, record remaining native limitation rather than claiming equality. |
+| Search text | CSS 260: 19 px, letter spacing −.005 em; template 309 placeholder “Search apps, commands, plugins…” | `root_search/mod.rs:38` “Search commands”; renderer sets size/family/color but no authored tracking | Choose domain-correct product wording explicitly, then record it as content adaptation; implement tracking/line metrics if renderer permits. |
+| Pinned strip | Template 313–324: label then 5 equal slots, 8 px grid gap, 100 px slot height, 42 px icons | No pinned strip render path in `app.rs` root body or `root_search/mod.rs` | Full visual scope needs this region; static fixture is research proof only, not working pin persistence. |
+| Section labels | CSS 262: 30 px high, 8 px top/10 px horizontal inset, 12 px/500, .01 em tracking | `app.rs:1163–1200` maps all rows directly to a flat list | Add presentation sections from real metadata, preserving core ranking. No inferred headings from title strings. |
+| Title/subtitle spacing | `.row` gap 12 applies between icon, title, subtitle and trailing slots | `result_row.rs:102–125` puts title/subtitle in a group with 6 px gap | At equal fixture text, title/subtitle x positions must match; preserve long-title truncation policy separately. |
+| Result metadata | CSS 271: kind min-width 88/right aligned; 272: alias 11 px Geist Mono; template 331–335: match accent, alias, key group, kind | `RowContent` has none of these fields; `pane_core::Row` only id/title/subtitle/unavailable (`launcher.rs:243`) | Small read-only presentation projection may be needed; do not fabricate kind/alias/hotkey from strings or change result ranking. |
+| Hover selection | Template 328 `onMouseMove`; script 190 sets selected index; `.row.sel` .085 dominates hover .035 | `result_row.rs:77` paint-only hover, `app.rs:890` fade, selection only on click/keyboard | Move pointer from selected row to another and verify selection, footer action and Enter target together. Also test keyboard selection while pointer remains still. |
+| Click | Script 189: selected row launches; unselected row first selects | `app.rs:906` selects and immediately activates any clicked row | Explicitly retain or adopt reference interaction in ticket. Mouse movement normally selects first, but touch/click without movement exposes difference. |
+| Pointer timing | Reference CSS 264/281 has no transition for row/footer wash | `motion.rs` pointer policy 150 ms; `app.rs:892`, footer menu and Settings attach it | Reference-specific pointer timing must replace existing tests that assert fades if exact interaction is chosen. Do not assume every motion from past ticket #70 is reference-authored. |
+| Keycap | CSS 273: min-width 20, height20, pad5, radius5, bg .07, edge .08, **bottom** inset black .35, Geist Mono11/500, #c9cace, line-height1 | `keycap.rs:89` no min-width; tile bg .08, **top** highlight white .1; 14 px inherited Geist, tile foreground #e9e9ec | Compare cap measured bounds, glyph baseline, shadow side, modifier groups and long rebinding. |
+| Keycap variants | CSS 279 compact 17×17/10 px; template footer accent cap lime/#111210/no shadow; `.keys` gap3 | Only plain Enter SVG/whole-binding text in existing `Key`/`binding_keycap` | Separate semantic key sequence from cap rendering; preserve actual binding display including modifiers. |
+| Footer composition | Template 376–390: logo/hints left; primary action, divider and Actions right; pad left16/right8; gap16 | `app.rs:1310–1382` ellipsis left, primary action right or status; `Material::footer` pad16 both sides | Port composition while preserving status visibility and access to Settings. No silent removal of existing recovery/menu operations. |
+| Footer button | CSS 280–281: h34, radius8, pad8, gap6, #d9dadd, transparent rest/.06 hover | `theme.rs:387–390`: h28/radius7/pad10/gap8; `app.rs:983`: .085 rest, no hover change, .035 pressed | Capture rest, hover, press, keyboard focus, unavailable and Actions-open states. |
+| Actions panel | Template 343–371: width320, right10/bottom58, dim layer top64/bottom50, selected-result header/18 px tile, 36 px action rows, bottom44 search | `footer_menu.rs:330` min-width200; uses h44/radius10 root-row tokens; global menu only | Create selected-result action model and panel visual; do not rename global menu and claim parity. Only offer operations actually supported. |
+| Action row washes | CSS 282–286: font13/#e4e4e7, hover .06, selected .11, radius8, gap10 | Current menu uses root title14/.035/.085/radius10 | Distinct action-row tokens/component needed. |
+| Empty state | Reference has a dedicated no-results board and reference fallbacks | `app.rs:1167` only plain “No results for …” appended at list origin; existing fallbacks remain rows | Use dedicated empty-state layout with real existing fallback actions; do not add fake search providers. |
+| Calculator | Reference has dedicated inline calculator board | Computed results are flattened into normal `Row`s (`launcher.rs:4722`, `app.rs:1163`) | Needs a typed presentation projection/card; retain existing computation/copy behavior and extension contract. |
+| Icon metadata | Reference app tones/glyphs reflect fixture identity, including large/mini variants | `app.rs:1425` maps a handful of known sample/builtin IDs; unknown real rows are generic; `icon.rs` has only Term/Code/Web/Folder/Command tones | Design actual metadata supply separately from visual tile implementation. Do not identify apps by localized display names. |
+
+Two misleading comments should be corrected during the port: `theme.rs:172–178` says the reference authors no footer button or keycap, contradicted by `.fbtn`/`.kbd`; `ui/mod.rs:6` and `docs/launcher-presentation.md` say shared UI imports no core types, contradicted by `ui/keycap.rs:22` importing `pane_core::Binding`. These are maintainability drift, not a reason to replace the existing renderer.
+
+One key-hint correctness case also belongs in the keycap extraction acceptance: `binding_keycap` destructures Shift as `_shift` and excludes it from the `plain_enter` predicate (`ui/keycap.rs:79–80`). A binding whose only modifier is Shift therefore takes the plain Enter glyph/name path. Verify Shift+Enter and multi-modifier combinations when moving binding formatting to the feature adapter; the visible hint and accessible name must describe the effective binding, not a simplified different action.
+
+## Settings and existing screens
+
+`SettingsWindow::new` registers General, Launcher, Appearance, Shortcuts, Keyboard, Extensions and About (`features/settings/mod.rs:209`). Only Appearance is directly pictured as a complete Settings page in the reference. Other functional pages must be brought into the same visual language without pretending the reference supplied exact absent layouts.
+
+The present sidebar uses `result_row` with a 28 px tile, 44 px floor and radius10 (`mod.rs:299`); its 200 px sidebar contains padding8 and gap2 (`mod.rs:337`). The main page viewport has padding28 horizontally and20 vertically (`mod.rs:435`), and Windows adds a 44 px custom titlebar (`mod.rs:501`) above the full horizontal split. Initial Settings window is 740×530 with minimum560×400 (`mod.rs:638`). These are all independent of the root shell and must be measured against the authored Appearance board, not “fixed” by globally changing root tokens.
+
+Appearance currently consists of theme and material choice groups, vertically stacked title/subtitle radio rows using Unicode circle marks, then a live 170 px preview. The same selected-row wash used for root results marks the chosen setting. A full Appearance layout port must retain `settings.set_theme`, `settings.set_material`, live update of both windows and saved values; otherwise it becomes an attractive disconnected mock. Sources: [Appearance](../../crates/pane/src/features/settings/appearance.rs) lines135–264,299–401; [settings controller](../../crates/pane/src/settings.rs).
+
+General and Launcher already have real controls, Shortcuts owns aliases/hotkey recording/group filtering, Keyboard owns remapping, Extensions dispatches management operations through the launcher, and About exposes update/documentation/diagnostic actions. These are current production functionality; preserve them even though the reference only illustrates Appearance. Sources: `features/settings/{general,launcher,shortcuts,keyboard,extensions,about}.rs`, especially `shortcuts.rs:730,832,881,931,1159`, `extensions.rs:158,443,472`, `about.rs:125`.
+
+Root shell also renders command list/search, package preview, confirmation, form, custom view, extensions management, network details, hotkey entry, pause/runtime/build details (`app.rs:1099–1120,1240–1260`). Port tickets need a coverage table for these inherited consumers. A root result row API change can affect every one, even if their content has no authored screenshot.
+
+Clipboard reference is a richer split-pane feature with text/link/image/color tabs, grouped rows, source metadata and preview. Current core vocabulary and extension behavior are explicitly **text** clipboard history. The reference's image/color/pinning affordances are not evidence that production supports those operations. Preserve a clear boundary between rendering existing clipboard content with new components and adding new storage/capture behavior. Sources: [reference clipboard template](../../.scratch/ui-reference/extracted/clipboard-history-template.html), [domain glossary](../../CONTEXT.md), [clipboard extension](../../guests/clipboard-history/src/lib.rs).
+
+The reference also contains a Store and snap HUD; neither appears as a current native feature folder or screen variant. Listing their visual components in the inventory is correct. Claiming the UI port implements their backend behavior is not. Their visual-only preview or explicit deferred status must appear in the parent spec.
+
+## Proposed extraction boundaries
+
+Keep the accepted tree. A separate UI crate or toolkit migration is unnecessary to reproduce this reference.
+
+1. **Theme**: color roles per control family, typography including mono sizes/weights/tracking/line height, geometry per root row/action row/sidebar item/setting row/keycap/pinned slot, elevation and material recipes. Keep derived light values visibly distinguished from authored dark ones. Do not map every hover to `row_hover`.
+2. **Pure paint components** in `ui/`: root result row with explicit leading/body/trailing slots; `Keycap` and `KeySequence` (regular/compact/accent); action row; sidebar item; section label/divider; footer button; choice/toggle/segmented controls where actual consumers require them; icon tile with explicit size/tone; empty-state and metadata treatment. Avoid a single universal row with dozens of unrelated booleans.
+3. **Layout surfaces**: L1 panel and L2 popup own tint, inset edge, clipping and radius; a separate popup-position/elevation wrapper owns shadow and placement. Footer layout owns dimensions and slot placement; application owns status/action contents. No surface changes input behavior.
+4. **Feature adapters**: `features/root_search/` resolves core data into sections, optional pinned area, computed card and result presentation; `features/actions/` if implemented resolves the selected result into supported actions; Settings owns page layouts and control callbacks; clipboard gets a feature adapter only when its supported data can be represented honestly.
+5. **Stateful controls**: retain `ui/select.rs` state/focus/filter/commit mechanism and `EditableTextState`. Extract shared visual recipes below them, not another text editor or popup state machine. Move core-binding formatting out of `keycap` into an adapter so the documented boundary becomes true.
+6. **Stable data**: a narrowly scoped, read-only presentation DTO may expose kind, match ranges, alias, effective shortcuts, computed-result type and group identity. Keep GPUI types out of `pane-core`; retain original result order, opaque identity and activation mapping. Current `Row` does not expose enough information for reference-faithful rich rows.
+
+## Windows material limits that need an explicit answer
+
+The reference's CSS `blur(44px) saturate(160%)` is not what Pane currently requests from Windows. `MaterialMode::window_appearance` asks for `WindowBackgroundAppearance::Blurred`; Windows chooses the compositor blur. The panel keeps reference tint/sheen, but uses native outer shadow and corners. L2 uses GPUI `backdrop_blur(30)` and explicitly omits saturation (`material.rs:259–276`). Consequently exact geometry/type/control-state parity and exact CSS compositor parity are distinct claims.
+
+The existing implementation deliberately removed full-panel outer shadows because they darkened the panel's translucent interior. Simply pasting CSS shadow numbers back into GPUI is likely to recreate that failure. A Windows-only rendering investigation should establish whether layout-neutral inset painting, exact-radius transparent corners, correct externally painted shadows and saturation can be achieved. Capture the native result on the same external wallpaper fixture as the reference; do not paint a fake desktop behind production controls. Source: [material implementation](../../crates/pane/src/ui/material.rs), [recorded material validation](../launcher-ui-validation.md), [corner request](../../crates/pane/src/lib.rs) lines222–259.
+
+Existing suppression (transparency off/high contrast/unsupported or unreadable OS state) selects opaque mode (`material.rs:87–130`). Preserve this behavior. Do not change global Windows settings as part of screenshot setup. Work on this machine can report unsupported native capabilities as precise limitations, but should not silently loosen acceptance to “looks close.”
+
+## Why earlier checks missed this
+
+- `scripts/check_screenshot.py:1–42` explicitly describes color-presence, distinct/same image and text visibility checks; it is not a reference comparison. A wrong layout with the right text colors passes.
+- `crates/pane/tests/window.rs:2141` asserts a fading pointer wash. It confirms the current policy works, not that it matches reference mouse-move selection. Existing tests can therefore lock in the wrong experience for this new scope.
+- `docs/launcher-ui-review.md` reviewed specification #61 within its first-slice scope. That review cannot establish a full reference port: pinned slots/actions/settings were explicitly deferred in `docs/ui-rework-interview.md`.
+- `docs/launcher-ui-validation.md` records 96-DPI captures, blur evidence, narrow layouts, form submission and text readability. It does not provide a matched reference/native atlas, geometry diffs, state-by-state hover comparison or exact typography proof. Its older revision is not the current source revision inspected here.
+
+## Local acceptance plan for the tickets
+
+Every visual ticket should name reference board, selector/state, expected numeric values, native files/symbols, real callback/data owner and exact evidence to save. Each needs its own Windows native before/after crop, not just a build pass or an unreviewed test screenshot.
+
+Canonical comparisons: authored dark theme, 100% Windows DPI, normalized client crop with identical fixture text/data, pointer outside before rest capture, then pointer-enter/move/leave, selected+hover, pressed, focus, unavailable, empty, long text and overflow states. Capture 125%/150% locally only if supported without changing the user's global configuration; otherwise mark those configurations not run. Compare 760×518 root and the measured Settings reference dimensions, then a supported narrow viewport for adaptation. Record application commit, binary hash, reference hash, exact logical/physical bounds, OS/build, DPI, font identities and material preference/effective material.
+
+Use deterministic opaque fixture captures for strict geometry/type/control-color diffs, and a separate matched external-backdrop glass comparison for compositor behavior. A single whole-image similarity percentage is insufficient: inspect component crops and numeric bounding boxes, and keep border/text baseline tolerances separate from Windows font rasterization and desktop-compositor variation. Never accept a large masked region containing the actual control under test.
+
+Keep existing functional regressions appropriate to the touched surfaces: query edit/IME plumbing, keyboard navigation, Enter, Escape, pointer selection/activation, scroll-to-selected, focus restoration, configured shortcuts, form validation, live saved Settings and popup dismissal. Update tests whose old visual policy intentionally changes. Tests for token literals alone do not demonstrate parity. Run the scoped Windows build and affected test suites locally; no cross-OS CI or release matrix belongs to this UI milestone.
+
+## Ticket hazards to call out explicitly
+
+- A 1:1 **visual** port does not make the mock Store, pin management, rich clipboard or snap engine functional. Represent absent backend work honestly; do not bury it in a CSS-style ticket.
+- Reference labels such as “plugins” and macOS modifier glyphs require explicit Pane-domain/Windows adaptations; preserve proportions while recording these content differences.
+- Hover must be specified as an input-to-state transition, not only a color swatch. Define whether it updates selected result, footer target and keyboard invocation, and behavior while an Actions panel is open.
+- Native client border and window frame sizes must be measured before assigning every 1 px mismatch to row padding.
+- The current docs' “one-file restyling” claim is not true for the many hardcoded settings/page/popup dimensions. Extraction acceptance must search consumers for duplicated visual values and verify real consumer migration, not merely add unused tokens.
+- A shared component change requires examples from root, command list, Settings and extension forms so fidelity improvements do not remove existing unavailable reasons, error tails or editable controls.

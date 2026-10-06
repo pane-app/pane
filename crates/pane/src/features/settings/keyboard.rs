@@ -8,95 +8,112 @@
 //! its rules). Their bindings live in the host settings, so a change
 //! takes effect in every window at once and survives a restart.
 //!
-//! The recorder is the General page's, per action: a row whose click (or
-//! Enter, while it is not listening) starts listening, and whose keys,
-//! while it listens, are the binding being recorded — captured without
-//! acting, so neither the sidebar's navigation nor the window's
-//! traversal moves, and never the action being rebound. Escape cancels;
-//! Enter and Space cannot be part of a binding, being the recorder's own
-//! activation, so they are the defaults' privilege and a reset's to
-//! restore. A captured combination is checked — protected for a focused
-//! field, and against the other actions of the set, whose contexts
-//! overlap in the launcher's window — applied through the host settings
-//! (which re-make the keymap before saving), and then saved; a refusal
-//! is explained beside the row and keeps the recorder listening.
+//! The recorder is the General page's, per action ([`controls::recorder`],
+//! after Discord's keybind field): a click (or Enter) starts listening —
+//! the field ringed red — and the keys pressed then are the binding being
+//! recorded, captured without acting, so neither the sidebar's navigation
+//! nor the window's traversal moves, and never the action being rebound.
+//! Escape, Tab, a click outside, another click on the field or the window
+//! losing focus cancels; Enter and Space cannot be part of a binding,
+//! being the recorder's own activation, so they are the defaults'
+//! privilege and a reset's to restore. A captured combination is checked
+//! — protected for a focused field, and against the other actions of the
+//! set, whose contexts overlap in the launcher's window — applied through
+//! the host settings (which re-make the keymap before saving), and then
+//! saved; a refusal is explained under the row's name and keeps the
+//! recorder listening.
 //!
-//! Per action, a reset row appears whenever its binding is not the
-//! default: pointer-only, like the General page's, so recovery from a
-//! binding that does not suit the keyboard in front of the user never
-//! needs the very keys being rebound. A reset goes through the same
-//! checks as a recording, so it cannot land on another action's keys.
+//! Each recorder's reset button is enabled while its binding is not the
+//! default: pointer-only, so recovery from a binding that does not suit
+//! the keyboard in front of the user never needs the very keys being
+//! rebound. A reset goes through the same checks as a recording, so it
+//! cannot land on another action's keys.
+//!
+//! Above the actions, the Behavior section (Raycast's keyboard settings):
+//! what the back key does in the launcher, whether Escape closes Settings,
+//! and extra Emacs or Vim keys for moving the selection.
 
 use std::collections::BTreeMap;
 
 use gpui::{
-    AnyElement, App, Context, Div, FocusHandle, KeyBinding, KeyDownEvent, MouseDownEvent, Role,
-    ScrollAnchor, SharedString, Stateful, Window, actions, div, prelude::*,
+    AnyElement, App, Context, Div, Entity, FocusHandle, KeyBinding, KeyDownEvent, MouseDownEvent,
+    Role, ScrollAnchor, SharedString, Stateful, Toggled, Window, actions, div, prelude::*,
 };
-use pane_core::{Binding, Keyboard, KeyboardAction, Launcher};
+use pane_core::{Binding, EscapeBehavior, Keyboard, KeyboardAction, Launcher, NavigationBindings};
 
 use super::{Page, SettingsWindow, search};
 use crate::ui::controls::{self, status_note as note};
 use crate::ui::icon::Glyph;
-use crate::ui::keycap::{CapStyle, KeySequence, key_sequence};
-use crate::ui::settings_shell;
+use crate::ui::keycap::KeySequence;
+use crate::ui::select::{Choice, Select};
 use crate::ui::theme::Theme;
 
-/// The recorder rows' key context: while a recorder holds focus, its keys
-/// are the binding being recorded, not the window's navigation.
+/// A recording recorder's key context: while it listens, its keys are the
+/// binding being recorded, not the window's navigation.
 const RECORDER: &str = "KeyboardRecorder";
+
+/// A recorder's key context while it rests: a button.
+const RECORDER_IDLE: &str = "KeyboardRecorderIdle";
 
 actions!(keyboard, [ActivateRecorder, CancelRecording]);
 
-/// Registers the recorder rows' key bindings, in the recorder's own
-/// context — deeper in the focus stack than the sidebar's and the
-/// window's keys, so while a recorder holds focus they never fall
-/// through. The navigation and traversal keys are bound to
-/// [`gpui::NoAction`] there: the sidebar stays put while keys are
+/// Registers the recorders' key bindings, in their own contexts — deeper
+/// in the focus stack than the sidebar's and the window's keys, so while a
+/// recorder listens they never fall through. The navigation keys are bound
+/// to [`gpui::NoAction`] there: the sidebar stays put while keys are
 /// captured, and everything else reaches the recorder's own key handler
 /// as the combination being recorded.
 pub(crate) fn bind_keys(cx: &mut App) {
     cx.bind_keys([
-        // The rows are buttons: Enter and Space activate them, as a click
-        // does — and while one listens, they do nothing: the keys stay
-        // captured, and Enter and Space cannot be part of a binding.
+        // The recorders are buttons: Enter and Space activate them, as a
+        // click does — and while one listens, they do nothing: the keys
+        // stay captured, and Enter and Space cannot be part of a binding.
+        KeyBinding::new("enter", ActivateRecorder, Some(RECORDER_IDLE)),
+        KeyBinding::new("space", ActivateRecorder, Some(RECORDER_IDLE)),
         KeyBinding::new("enter", ActivateRecorder, Some(RECORDER)),
         KeyBinding::new("space", ActivateRecorder, Some(RECORDER)),
-        // Escape cancels recording.
+        // Escape and Tab leave recording, changing nothing.
         KeyBinding::new("escape", CancelRecording, Some(RECORDER)),
-        // Swallowed while a recorder holds focus (and harmless when none
-        // does): the sidebar's navigation and Tab's traversal stay put,
-        // so captured keys never move the page.
-        KeyBinding::new("down", gpui::NoAction, Some(RECORDER)),
-        KeyBinding::new("up", gpui::NoAction, Some(RECORDER)),
-        KeyBinding::new("tab", gpui::NoAction, Some(RECORDER)),
-        KeyBinding::new("shift-tab", gpui::NoAction, Some(RECORDER)),
-        // The window's close shortcut is swallowed there too: recording
-        // captures keys without executing them, so pressing the dismiss
-        // binding's own default (Cmd+W / Ctrl+W) records it instead of
-        // closing the window the recorder lives in.
-        KeyBinding::new(
-            if cfg!(target_os = "macos") {
-                "cmd-w"
-            } else {
-                "ctrl-w"
-            },
-            gpui::NoAction,
-            Some(RECORDER),
-        ),
+        KeyBinding::new("tab", CancelRecording, Some(RECORDER)),
+        KeyBinding::new("shift-tab", CancelRecording, Some(RECORDER)),
     ]);
+    cx.bind_keys(super::captured_while_recording(RECORDER));
 }
 
-/// The page's heading.
+/// The page's title.
 pub(crate) const TITLE: &str = "Keyboard";
 
 /// What the page is, in one line: its sidebar entry's description in
-/// the search, and its heading's subtitle.
-pub(crate) const ABOUT: &str = "The in-app navigation bindings of Pane's own windows";
+/// the search.
+pub(crate) const ABOUT: &str = "Keys for moving around Pane";
 
-/// The note under the page's actions.
-pub(crate) const NOTE: &str = "These keys move through Pane's own windows. Text editing and \
-                                composition stay owned by the field you type in.";
+/// The labels of the page's sections.
+pub(crate) const BEHAVIOR: &str = "Behavior";
+pub(crate) const SECTION: &str = "Shortcuts";
+
+/// The Behavior section's rows.
+pub(crate) const ESCAPE_NAME: &str = "Escape key behavior";
+pub(crate) const ESCAPE_CLOSES_NAME: &str = "Escape key closes Settings";
+pub(crate) const NAVIGATION_NAME: &str = "Navigation bindings";
+
+/// The escape behaviors the page offers, in segment order: the
+/// preference, the segment's name and its test selector.
+pub(crate) const ESCAPES: [(EscapeBehavior, &str, &str); 2] = [
+    (
+        EscapeBehavior::BackOrHide,
+        "Go back",
+        "keyboard-escape-back",
+    ),
+    (EscapeBehavior::Hide, "Hide Pane", "keyboard-escape-hide"),
+];
+
+/// The navigation bindings the page offers: the preference, the choice's
+/// id and its label.
+const NAVIGATIONS: [(NavigationBindings, &str, &str); 3] = [
+    (NavigationBindings::None, "none", "None"),
+    (NavigationBindings::Emacs, "emacs", "Emacs (Ctrl+P, Ctrl+N)"),
+    (NavigationBindings::Vim, "vim", "Vim (Ctrl+K, Ctrl+J)"),
+];
 
 /// The Keyboard page, registered after Shortcuts in the window's page
 /// list, as the reference's sections order it.
@@ -112,30 +129,39 @@ pub(crate) fn page() -> Page {
     }
 }
 
-/// The settings the page offers the sidebar's search: each navigation
-/// action of the bounded set, named as the page's row names it, in the
-/// group it sits in. A binding that differs from the default is still
-/// just the setting it is — the entry says the action, and the row shows
-/// what it is bound to now. Read live, so a change is in the next
-/// catalog as it lands.
+/// The settings the page offers the sidebar's search: the Behavior
+/// section's rows, then each navigation action of the bounded set, named
+/// as the page's row names it, in the group it sits in. Read live, so a
+/// change is in the next catalog as it lands.
 fn entries(_launcher: &Launcher, _cx: &App) -> Vec<search::Entry> {
-    KeyboardAction::ALL
-        .into_iter()
-        .map(|action| search::Entry {
-            control: Some(action.id().into()),
-            title: action.title().into(),
-            group: Some("In-app navigation".into()),
-            // A binding set to something the keyboard cannot use is the
-            // page's own refusal to explain; the setting itself is never
-            // unavailable here.
-            unavailable: None,
-        })
-        .collect()
+    let behavior = [
+        ("keyboard-escape", ESCAPE_NAME),
+        ("keyboard-escape-closes", ESCAPE_CLOSES_NAME),
+        ("keyboard-navigation", NAVIGATION_NAME),
+    ]
+    .into_iter()
+    .map(|(control, title)| search::Entry {
+        control: Some(control.into()),
+        title: title.into(),
+        group: Some(BEHAVIOR.into()),
+        unavailable: None,
+    });
+    let actions = KeyboardAction::ALL.into_iter().map(|action| search::Entry {
+        control: Some(action.id().into()),
+        title: action.title().into(),
+        group: Some(SECTION.into()),
+        // A binding set to something the keyboard cannot use is the
+        // page's own refusal to explain; the setting itself is never
+        // unavailable here.
+        unavailable: None,
+    });
+    behavior.chain(actions).collect()
 }
 
-/// Each action's recorder row takes keyboard focus — the rows are tab
+/// Each action's recorder takes keyboard focus — the recorders are tab
 /// stops, and Enter on one starts recording — so a jump to an action
-/// focuses its row, ready to rebind. Anything else is not this page's:
+/// focuses its recorder, ready to rebind; a jump to the navigation
+/// bindings focuses their select. Anything else is not focusable here:
 /// `false` falls back to the sidebar.
 fn focus(
     this: &mut SettingsWindow,
@@ -143,6 +169,11 @@ fn focus(
     window: &mut Window,
     cx: &mut Context<SettingsWindow>,
 ) -> bool {
+    if target == "keyboard-navigation" {
+        let trigger = this.keyboard.navigation.read(cx).trigger_focus();
+        window.focus(&trigger, cx);
+        return true;
+    }
     let Some(action) = KeyboardAction::of(target) else {
         return false;
     };
@@ -154,23 +185,25 @@ fn focus(
 }
 
 /// The Keyboard page's state, held by the window as a field: the
-/// recorder.
+/// recorder and the navigation bindings' select.
 pub(crate) struct State {
     /// The action whose binding is being recorded, if any.
-    recording: Option<KeyboardAction>,
-    /// Why the last attempt was refused, if it was: a protected key, a
-    /// collision, or what a save reported. Shown as the page's status; the
-    /// recorder keeps listening for another try.
-    rejection: Option<String>,
-    /// Each action's recorder row focus: a tab stop, so the keyboard
-    /// reaches every row; the recording action's holds focus while it
+    pub(crate) recording: Option<KeyboardAction>,
+    /// The action whose last attempt was refused, and why: a protected
+    /// key, a collision, or what a save reported. Shown under that
+    /// action's row; a recorder keeps listening for another try.
+    pub(crate) rejection: Option<(KeyboardAction, String)>,
+    /// Each action's recorder focus: a tab stop, so the keyboard reaches
+    /// every recorder; the recording action's holds focus while it
     /// listens.
     focuses: BTreeMap<KeyboardAction, FocusHandle>,
+    /// The navigation bindings' select.
+    navigation: Entity<Select>,
 }
 
 impl State {
     /// The page's state, over the window's `cx` (its focus handles).
-    pub(crate) fn new(cx: &mut Context<SettingsWindow>) -> State {
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<SettingsWindow>) -> State {
         let focuses = KeyboardAction::ALL
             .into_iter()
             .map(|action| {
@@ -178,12 +211,48 @@ impl State {
                 (action, focus)
             })
             .collect();
+        let navigation = super::choice_select(
+            NAVIGATION_NAME,
+            "keyboard-navigation",
+            navigation_choices,
+            |cx| {
+                let chosen = crate::settings::shared(cx).read(cx).navigation();
+                NAVIGATIONS
+                    .iter()
+                    .find(|&&(navigation, ..)| navigation == chosen)
+                    .map_or("none", |&(_, id, _)| id)
+            },
+            |id, cx| {
+                if let Some(&(navigation, ..)) = NAVIGATIONS.iter().find(|&&(_, of, _)| of == id) {
+                    // A conflicting choice is listed unavailable, so the
+                    // select never commits one.
+                    let _ = crate::settings::shared(cx)
+                        .update(cx, |settings, cx| settings.set_navigation(navigation, cx));
+                }
+            },
+            window,
+            cx,
+        );
         State {
             recording: None,
             rejection: None,
             focuses,
+            navigation,
         }
     }
+}
+
+/// The navigation bindings' choices, a set whose keys an action already
+/// has listed with the reason.
+fn navigation_choices(cx: &App) -> Vec<Choice> {
+    let settings = crate::settings::shared(cx);
+    let settings = settings.read(cx);
+    NAVIGATIONS
+        .iter()
+        .map(|&(navigation, id, label)| {
+            super::choice(id, label, settings.navigation_conflict(navigation))
+        })
+        .collect()
 }
 
 /// Which of the Keyboard page's controls an element is, for the caller of
@@ -192,9 +261,13 @@ impl State {
 pub(crate) enum KeyboardControl {
     /// The action's recorder.
     Recorder(KeyboardAction),
-    /// The action's Reset button, shown while its binding is not the
+    /// The action's reset button, enabled while its binding is not the
     /// default.
     Reset(KeyboardAction),
+    /// An escape behavior's segment.
+    Escape(EscapeBehavior),
+    /// The Escape-closes-Settings switch.
+    EscapeCloses,
 }
 
 /// One action of the page, as plain values.
@@ -217,9 +290,13 @@ pub(crate) struct KeyboardView {
     pub(crate) rows: Vec<KeyboardRow>,
     /// The action whose recorder is listening, if any.
     pub(crate) recording: Option<KeyboardAction>,
-    /// What the last attempt was refused with, and what a save reported.
-    pub(crate) rejection: Option<String>,
+    /// The action whose last attempt was refused, and what it was refused
+    /// with.
+    pub(crate) rejection: Option<(KeyboardAction, String)>,
     pub(crate) status: Option<String>,
+    /// The Behavior section's choices.
+    pub(crate) escape: EscapeBehavior,
+    pub(crate) escape_closes: bool,
 }
 
 /// The rows of the bounded set of actions, in the set's order, as
@@ -241,25 +318,32 @@ pub(crate) fn rows(keyboard: &Keyboard) -> Vec<KeyboardRow> {
         .collect()
 }
 
-/// Draws the Keyboard page: the navigation actions, each with its
-/// binding, and what the last attempt or save reported.
+/// Draws the Keyboard page: the Behavior section, then the navigation
+/// actions, each with its recorder.
 fn render(
     this: &mut SettingsWindow,
-    window: &mut Window,
+    _window: &mut Window,
     cx: &mut Context<SettingsWindow>,
 ) -> AnyElement {
     let theme = crate::settings::visuals(cx).theme;
     // Everything the page shows about the bindings comes from the host
     // settings: the choices, and what a save reported.
-    let (keyboard, status) = {
+    let (keyboard, status, escape, escape_closes) = {
         let settings = crate::settings::shared(cx).read(cx);
-        (settings.keyboard(), settings.status())
+        (
+            settings.keyboard(),
+            settings.status(),
+            settings.escape(),
+            settings.escape_closes_settings(),
+        )
     };
     let view = KeyboardView {
         rows: rows(&keyboard),
         recording: this.keyboard.recording,
         rejection: this.keyboard.rejection.clone(),
         status,
+        escape,
+        escape_closes,
     };
     // Each row's scroll anchor, which the search's reveal scrolls to (see
     // the window's render), and each recorder's focus.
@@ -267,189 +351,249 @@ fn render(
         .into_iter()
         .map(|action| (action, this.search_anchor(action.id())))
         .collect();
+    let escape_anchor = this.search_anchor("keyboard-escape");
+    let closes_anchor = this.search_anchor("keyboard-escape-closes");
+    let navigation = div()
+        .id("keyboard-navigation")
+        .flex_none()
+        .anchor_scroll(Some(this.search_anchor("keyboard-navigation")))
+        .child(this.keyboard.navigation.clone());
     let focuses = this.keyboard.focuses.clone();
-    let focused = focuses
-        .iter()
-        .find(|(_, focus)| focus.is_focused(window))
-        .map(|(&action, _)| action);
+    let recording = this.keyboard.recording;
     let defaults = Keyboard::default_for_this_system();
-    compose(&view, focused, &theme, |control, element| match control {
-        KeyboardControl::Recorder(action) => {
-            let focus = focuses
-                .get(&action)
-                .expect("every action has a row focus")
-                .clone();
-            element
-                .anchor_scroll(anchors.get(&action).cloned())
-                .key_context(RECORDER)
-                .track_focus(&focus)
-                .on_action(cx.listener(move |this, _: &ActivateRecorder, window, cx| {
-                    this.keyboard_activate_recorder(action, window, cx);
-                }))
-                .on_action(cx.listener(move |this, _: &CancelRecording, window, cx| {
-                    this.keyboard_cancel_recording(window, cx);
-                }))
-                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-                    this.keyboard_key_down(event, window, cx);
-                }))
-                // A mouse-down anywhere outside the recorder while it
-                // listens cancels the recording and is consumed, as the
-                // footer menu's popup does: the click underneath does not
-                // act, and the recorder gives up the keys.
-                .on_mouse_down_out(cx.listener(move |this, _: &MouseDownEvent, window, cx| {
-                    if this.keyboard.recording.is_some() {
+    compose(
+        &view,
+        Some(navigation),
+        &theme,
+        |control, element| match control {
+            KeyboardControl::Recorder(action) => {
+                let focus = focuses
+                    .get(&action)
+                    .expect("every action has a recorder focus")
+                    .clone();
+                element
+                    .anchor_scroll(anchors.get(&action).cloned())
+                    .key_context(if recording == Some(action) {
+                        RECORDER
+                    } else {
+                        RECORDER_IDLE
+                    })
+                    .track_focus(&focus)
+                    .on_action(cx.listener(move |this, _: &ActivateRecorder, window, cx| {
+                        this.keyboard_activate_recorder(action, window, cx);
+                    }))
+                    .on_action(cx.listener(move |this, _: &CancelRecording, window, cx| {
                         this.keyboard_cancel_recording(window, cx);
-                        cx.stop_propagation();
+                    }))
+                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                        this.keyboard_key_down(event, window, cx);
+                    }))
+                    // A mouse-down anywhere outside the recorder while it
+                    // listens cancels the recording and is consumed, as the
+                    // footer menu's popup does: the click underneath does not
+                    // act, and the recorder gives up the keys.
+                    .on_mouse_down_out(cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                        if this.keyboard.recording == Some(action) {
+                            this.keyboard_cancel_recording(window, cx);
+                            cx.stop_propagation();
+                        }
+                    }))
+                    // A click starts recording, or stops it again.
+                    .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
+                        if this.keyboard.recording == Some(action) {
+                            this.keyboard_cancel_recording(window, cx);
+                        } else {
+                            this.keyboard_activate_recorder(action, window, cx);
+                        }
+                    }))
+            }
+            KeyboardControl::Reset(action) => {
+                let default = defaults.binding(action).clone();
+                element.on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
+                    // The reset sits inside the recorder: its click is its own.
+                    cx.stop_propagation();
+                    if !keyboard_is_default(action, cx) {
+                        this.keyboard_apply(action, default.clone(), window, cx);
                     }
                 }))
-                .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
-                    this.keyboard_activate_recorder(action, window, cx);
-                }))
-        }
-        KeyboardControl::Reset(action) => {
-            let default = defaults.binding(action).clone();
-            element.on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
-                this.keyboard_apply(action, default.clone(), window, cx);
-            }))
-        }
-    })
+            }
+            KeyboardControl::Escape(escape) => element
+                .anchor_scroll(Some(escape_anchor.clone()))
+                .on_click(cx.listener(move |_, _: &gpui::ClickEvent, _, cx| {
+                    crate::settings::shared(cx).update(cx, |settings, cx| {
+                        settings.set_escape(escape, cx);
+                    });
+                })),
+            KeyboardControl::EscapeCloses => element
+                .anchor_scroll(Some(closes_anchor.clone()))
+                .on_click(cx.listener(|_, _: &gpui::ClickEvent, _, cx| {
+                    let settings = crate::settings::shared(cx);
+                    let closes = settings.read(cx).escape_closes_settings();
+                    settings.update(cx, |settings, cx| {
+                        settings.set_escape_closes_settings(!closes, cx);
+                    });
+                })),
+        },
+    )
     .into_any_element()
 }
 
-/// What an action's row says under its name: that the keys are captured
-/// while its recorder listens; what the action does otherwise, and, at its
-/// default, that it is.
-pub(crate) fn row_description(row: &KeyboardRow, listening: bool) -> String {
-    if listening {
-        controls::RECORDING_HINT.into()
-    } else if row.default.is_none() {
-        format!("{} — the default", row.action.does())
-    } else {
-        row.action.does().to_owned()
-    }
+/// Whether `action`'s binding is the default now.
+fn keyboard_is_default(action: KeyboardAction, cx: &App) -> bool {
+    crate::settings::shared(cx)
+        .read(cx)
+        .keyboard()
+        .is_default(action)
 }
 
 /// The Keyboard page's composition, which the visual workbench's fixture
-/// draws too: the heading block, then the "In-app navigation" field group
-/// — a settings row per action, its recorder's well (and, away from the
-/// default, Reset beside it) at its end — with the note under it, and what
-/// the last attempt or save reported. `focused` is the action whose
-/// recorder has the keyboard (its well's ring). `attach` adds each
-/// control's behavior; the composition gives each its identity, its
-/// accessibility and its look.
+/// draws too: the Behavior section — the escape behavior's segments, the
+/// Escape-closes-Settings switch and `navigation` (the navigation
+/// bindings' select) — then the Shortcuts section, a card of a settings
+/// row per action with its recorder at its end, with what a save reported
+/// under the card. `attach` adds each control's behavior; the composition
+/// gives each its identity, its accessibility and its look.
 pub(crate) fn compose(
     view: &KeyboardView,
-    focused: Option<KeyboardAction>,
+    navigation: Option<Stateful<Div>>,
     theme: &Theme,
     attach: impl Fn(KeyboardControl, Stateful<Div>) -> Stateful<Div>,
 ) -> Stateful<Div> {
+    let segments = ESCAPES.iter().map(|&(escape, name, selector)| {
+        let chosen = escape == view.escape;
+        let segment = controls::segment(name, chosen, true, theme)
+            .id(selector)
+            .debug_selector(move || selector.into())
+            .role(Role::RadioButton)
+            .aria_label(name)
+            .aria_toggled(if chosen {
+                Toggled::True
+            } else {
+                Toggled::False
+            });
+        attach(KeyboardControl::Escape(escape), segment)
+    });
+    let escape = controls::setting_row(ESCAPE_NAME, Vec::new(), theme)
+        .debug_selector(|| "keyboard-escape-field".into())
+        .child(
+            controls::row_segment_track(theme)
+                .id("keyboard-escape")
+                .role(Role::RadioGroup)
+                .aria_label(ESCAPE_NAME)
+                .children(segments),
+        );
+    let closes = super::general::switch_row(
+        super::general::SwitchRow {
+            id: "keyboard-escape-closes",
+            selector: "keyboard-escape-closes",
+            title: ESCAPE_CLOSES_NAME,
+            on: view.escape_closes,
+            offered: true,
+            lines: Vec::new(),
+        },
+        theme,
+        |switch| attach(KeyboardControl::EscapeCloses, switch),
+    );
+    let navigation = controls::setting_row(NAVIGATION_NAME, Vec::new(), theme)
+        .debug_selector(|| "keyboard-navigation-field".into())
+        .children(navigation);
+    let behavior = controls::card(
+        [
+            escape.into_any_element(),
+            closes.into_any_element(),
+            navigation.into_any_element(),
+        ],
+        theme,
+    );
     let rows = view.rows.iter().map(|row| {
         let listening = view.recording == Some(row.action);
-        recorder_row(row, listening, focused == Some(row.action), theme, &attach)
+        let rejection = view
+            .rejection
+            .as_ref()
+            .filter(|(action, _)| *action == row.action)
+            .map(|(_, why)| why);
+        recorder_row(row, listening, rejection, theme, &attach).into_any_element()
     });
-    let field = controls::field(theme)
-        .debug_selector(|| "keyboard-field".into())
-        .child(controls::field_label("In-app navigation", theme))
-        .child(controls::setting_list().children(rows))
+    let inset = theme.geometry.settings.section_label_inset;
+    let shortcuts =
+        div()
+            .flex()
+            .flex_col()
+            .gap(theme.geometry.settings.section_label_gap)
+            .child(controls::card(rows, theme))
+            // What a save reported, if it failed.
+            .children(view.status.as_ref().map(|status| {
+                note("keyboard-status", status.clone(), theme.danger, theme).px(inset)
+            }));
+    let page = controls::page(theme)
+        .child(controls::section(Some(BEHAVIOR.into()), behavior, theme))
         .child(
-            controls::field_description(NOTE, theme.text_muted, theme)
-                .id("keyboard-note")
-                .debug_selector(|| "keyboard-note".into()),
-        )
-        // What the last attempt was refused with, if anything.
-        .children(
-            view.rejection
-                .as_ref()
-                .map(|rejection| note("keyboard-refusal", rejection.clone(), theme.danger, theme)),
-        );
-    let column = controls::column(theme)
-        .child(
-            settings_shell::page_header(TITLE, Some(ABOUT.into()), theme)
-                .id("keyboard-title")
-                .debug_selector(|| "keyboard-title".into()),
-        )
-        .child(field)
-        // What a save reported, if it failed — the same status the other
-        // pages show for their own choices.
-        .children(
-            view.status
-                .as_ref()
-                .map(|status| note("keyboard-status", status.clone(), theme.danger, theme)),
+            controls::section(Some(SECTION.into()), shortcuts, theme)
+                .debug_selector(|| "keyboard-field".into()),
         );
     div()
         .id("keyboard")
         .debug_selector(|| "keyboard".into())
-        .child(column)
+        .child(page)
 }
 
-/// An action's settings row: its title and what it does at the left, and
-/// at its right end its recorder — a well showing the binding in effect as
-/// its caps or, while it listens, the listening mark — with Reset beside
-/// it while the binding is not the default. The recorder is a button:
-/// clicked or pressed with Enter it listens for the keys of the next
-/// binding, holding focus, and takes the keys pressed as the binding being
-/// recorded (Escape cancels); a combination that is refused keeps it
-/// listening for another try. Reset is pointer-only, back through the same
-/// checks a recording takes, so a reset that would land on another
-/// action's binding is refused with the same explanation.
+/// An action's settings row: its title at the left, with why its last
+/// recording or reset was refused under it, and its recorder at
+/// its right end — the binding written out, the record mark and the reset
+/// button (enabled while the binding is not the default). The recorder is
+/// a button: clicked or pressed with Enter it listens for the keys of the
+/// next binding, holding focus and ringed red, and takes the keys pressed
+/// as the binding being recorded (Escape, Tab, a click outside or another
+/// click on it cancels); a combination that is refused keeps it listening
+/// for another try. Reset goes back through the same checks a recording
+/// takes, so a reset that would land on another action's binding is
+/// refused with the same explanation.
 fn recorder_row(
     row: &KeyboardRow,
     listening: bool,
-    focused: bool,
+    rejection: Option<&String>,
     theme: &Theme,
     attach: &impl Fn(KeyboardControl, Stateful<Div>) -> Stateful<Div>,
 ) -> Div {
     let action = row.action;
-    let subtitle = row_description(row, listening);
     let label = format!(
         "{}{} with {}",
         if listening { "Recording; " } else { "" },
         action.title(),
         row.binding
     );
-    let shown = if listening {
-        controls::listening_mark(theme).into_any_element()
-    } else {
-        key_sequence(&row.keys, CapStyle::Regular, theme).into_any_element()
-    };
-    let recorder = controls::recorder_well(
-        div()
-            .id("keyboard-binding")
-            .debug_selector(move || format!("keyboard-binding-{}", action.id()))
-            .flex()
-            .child(shown),
-        focused,
+    let reset_id = SharedString::from(format!("keyboard-reset-{}", action.id()));
+    let reset = controls::icon_button(reset_id, Glyph::Reset, row.default.is_some(), theme)
+        .debug_selector(move || format!("keyboard-reset-{}", action.id()))
+        .role(Role::Button)
+        .when_some(row.default.as_ref(), |reset, default| {
+            reset.aria_label(format!("Reset {} to {default}", action.title()))
+        })
+        .when(row.default.is_none(), |reset| {
+            reset
+                .aria_label(format!("Reset {}", action.title()))
+                .aria_disabled(true)
+        });
+    let reset = attach(KeyboardControl::Reset(action), reset);
+    let recorder = controls::recorder(
+        controls::binding_text(&row.keys),
+        listening,
+        Some(reset.into_any_element()),
         theme,
     )
     .id(action.id())
     .debug_selector(move || format!("keyboard-{}", action.id()))
     .role(Role::Button)
-    .aria_label(label)
-    .aria_description(subtitle.clone());
-    let reset = row.default.as_ref().map(|default| {
-        let reset = controls::ghost_button("Reset", true, theme)
-            .id(SharedString::from(format!(
-                "keyboard-reset-{}",
-                action.id()
-            )))
-            .debug_selector(move || format!("keyboard-reset-{}", action.id()))
-            .role(Role::Button)
-            .aria_label(format!("Reset {} to {default}", action.title()))
-            .aria_description(format!("Back to {default}, the default"));
-        attach(KeyboardControl::Reset(action), reset)
-    });
-    let description = controls::field_description(subtitle, theme.text_muted, theme);
-    controls::setting_row(action.title(), vec![description.into_any_element()], theme)
+    .aria_label(label);
+    let lines = rejection
+        .map(|rejection| {
+            note("keyboard-refusal", rejection.clone(), theme.danger, theme).into_any_element()
+        })
+        .into_iter()
+        .collect();
+    controls::setting_row(action.title(), lines, theme)
         .debug_selector(move || format!("keyboard-row-{}", action.id()))
-        .child(
-            div()
-                .flex_none()
-                .flex()
-                .items_center()
-                .gap(theme.geometry.controls.button_gap)
-                .children(reset)
-                .child(attach(KeyboardControl::Recorder(action), recorder)),
-        )
+        .child(attach(KeyboardControl::Recorder(action), recorder))
 }
 
 impl SettingsWindow {
@@ -509,7 +653,7 @@ impl SettingsWindow {
         match crate::keyboard::binding_of(&event.keystroke) {
             Ok(binding) => self.keyboard_apply(action, binding, window, cx),
             Err(problem) => {
-                self.keyboard.rejection = Some(format!("{problem}."));
+                self.keyboard.rejection = Some((action, format!("{problem}.")));
                 cx.notify();
             }
         }
@@ -541,7 +685,7 @@ impl SettingsWindow {
                 cx.notify();
             }
             Err(reason) => {
-                self.keyboard.rejection = Some(reason);
+                self.keyboard.rejection = Some((action, reason));
                 cx.notify();
             }
         }

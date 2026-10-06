@@ -436,7 +436,7 @@ impl LauncherWindow {
             return None;
         }
         let history = self.launcher.clipboard_history()?;
-        let visuals = crate::settings::visuals(cx);
+        let visuals = crate::settings::launcher_visuals(cx);
         let theme = visuals.theme;
         let now = history.now;
         let offset = local_offset_ms(now);
@@ -505,11 +505,8 @@ impl LauncherWindow {
             .into_iter()
             .map(|choice| {
                 let on = choice == filter;
-                split_view::tab(choice.label(), on, &theme)
-                    .id(SharedString::from(format!(
-                        "clipboard-tab-{}",
-                        choice.label()
-                    )))
+                let tab_id = SharedString::from(format!("clipboard-tab-{}", choice.label()));
+                split_view::tab(tab_id, choice.label(), on, &theme)
                     .debug_selector(move || format!("clipboard-tab-{}", choice.label()))
                     .role(Role::Tab)
                     .aria_selected(on)
@@ -537,6 +534,7 @@ impl LauncherWindow {
             let id = record.id.clone();
             let title = record.title().to_owned();
             split_view::clip_row(
+                ("clip", index),
                 ClipRow {
                     title: title.clone().into(),
                     time: time_label(record.copied_at, now, offset).into(),
@@ -545,7 +543,6 @@ impl LauncherWindow {
                 },
                 &theme,
             )
-            .id(("clip", index))
             .debug_selector(move || format!("clip-{title}"))
             .role(Role::ListBoxOption)
             .aria_label(record.title().to_owned())

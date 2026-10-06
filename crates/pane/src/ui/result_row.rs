@@ -14,7 +14,7 @@
 //!
 //! - `.id(("row", index))` — the stable id (making the row stateful for
 //!   scrolling and hit-testing) and `.debug_selector(...)` for the smokes,
-//! - any pressed feedback a screen keeps, attached after the id, because a
+//! - the pressed wash ([`pressed_wash`]), attached after the id, because a
 //!   press state needs the named (stateful) row,
 //! - the accessibility contract — `.role(Role::ListBoxOption)`,
 //!   `.aria_selected`, `.aria_active_descendant` when selected,
@@ -34,11 +34,11 @@
 use std::ops::Range;
 
 use gpui::prelude::*;
-use gpui::{BoxShadow, Div, ElementId, HighlightStyle, SharedString, StyledText, div, px};
+use gpui::{BoxShadow, Div, ElementId, HighlightStyle, Hsla, SharedString, StyledText, div, px};
 
 use crate::ui::icon::{self, Glyph, IconTone};
 use crate::ui::keycap::{self, CapStyle, KeySequence};
-use crate::ui::theme::Theme;
+use crate::ui::theme::{Theme, pressed};
 
 /// What a result row shows — plain presentation values, already resolved
 /// by the caller from whatever the launcher holds. Nothing here derives
@@ -74,6 +74,9 @@ pub(crate) struct RowMeta {
     pub(crate) keys: Option<KeySequence>,
     /// The right-aligned kind (`.row-kind`).
     pub(crate) kind: Option<SharedString>,
+    /// The row's number and its hint's look (0 hidden, 1 shown) while Ctrl
+    /// is held: the cap slides in over the row's right end.
+    pub(crate) number: Option<(usize, f32)>,
 }
 
 /// A result row showing `content` with `meta`'s parts. See the module docs
@@ -178,6 +181,38 @@ pub(crate) fn result_row_with(content: RowContent, meta: RowMeta, theme: &Theme)
                     .child(kind),
             )
         })
+        .when_some(meta.number, |row, (number, look)| {
+            with_number_hint(row, number, look, theme)
+        })
+}
+
+/// `row` with `number`'s hint over its right end at `look` (see
+/// [`keycap::row_number_hint`]): the row positions and clips it, and the
+/// hint keeps the row's rounded right corners.
+pub(crate) fn with_number_hint<E: ParentElement + Styled>(
+    row: E,
+    number: usize,
+    look: f32,
+    theme: &Theme,
+) -> E {
+    let radius = theme.geometry.row_radius;
+    row.relative().overflow_hidden().child(
+        keycap::row_number_hint(number, look, theme)
+            .rounded_tr(radius)
+            .rounded_br(radius),
+    )
+}
+
+/// The wash a row takes while pressed: the [`pressed`] wash of its hover,
+/// or of its selected wash while `selected`. The app attaches it after the
+/// row's id (see the module docs) — an adaptation: the reference authors
+/// no press for its rows.
+pub(crate) fn pressed_wash(selected: bool, theme: &Theme) -> Hsla {
+    pressed(if selected {
+        theme.row_selected
+    } else {
+        theme.row_hover
+    })
 }
 
 /// A row's surface (`.row`): at least 44 high, radius 10, 10px either side
@@ -200,13 +235,16 @@ pub(crate) fn row_surface(selected: bool, theme: &Theme) -> Div {
         // A row under the pointer (unselected only: selection stays
         // visible while hovering) takes the pale hover wash.
         .when(!selected, |row| row.hover(|row| row.bg(theme.row_hover)))
-        // The selected row: its wash and its 1px inset edge.
+        // The selected row: its wash and its 1px inset edge — frosted over
+        // a background image (ADR 0028).
         .when(selected, |row| {
-            row.bg(theme.row_selected).shadow(vec![
-                BoxShadow::new(px(0.), px(0.), theme.row_selected_border)
-                    .spread_radius(px(1.))
-                    .inset(),
-            ])
+            row.when_some(theme.frost, |row, frost| row.backdrop_blur(frost.blur))
+                .bg(theme.row_selected)
+                .shadow(vec![
+                    BoxShadow::new(px(0.), px(0.), theme.row_selected_border)
+                        .spread_radius(px(1.))
+                        .inset(),
+                ])
         })
 }
 

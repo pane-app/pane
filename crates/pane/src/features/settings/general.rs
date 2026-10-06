@@ -1,6 +1,7 @@
-//! The General page: the choices that govern Pane as a whole — today,
-//! the Open Pane hotkey, whether Pane starts at login, and whether Pane
-//! shows its tray or menu-bar entry.
+//! The General page: the choices that govern Pane as a whole — the Open
+//! Pane hotkey, whether Pane starts at login, whether Pane shows its tray
+//! or menu-bar entry, and, in its Appearance section, the theme and the
+//! material (see [`super::appearance`]).
 //!
 //! The Open Pane hotkey is the application-owned global binding that
 //! summons the launcher from any application, recorded here and applied
@@ -70,11 +71,10 @@ use pane_core::Launcher;
 use pane_core::autostart::Registration;
 use pane_core::hotkeys::Shortcut;
 
-use super::{Page, SettingsWindow, search};
+use super::{Page, SettingsWindow, appearance, search};
 use crate::ui::controls::{self, status_note as note};
 use crate::ui::icon::Glyph;
-use crate::ui::keycap::{CapStyle, KeySequence, key_sequence};
-use crate::ui::settings_shell;
+use crate::ui::keycap::KeySequence;
 use crate::ui::theme::Theme;
 
 /// The tray row's title, in the platform's own terms for the entry: the
@@ -82,34 +82,27 @@ use crate::ui::theme::Theme;
 /// elsewhere.
 pub(crate) fn tray_row_title() -> &'static str {
     if cfg!(target_os = "macos") {
-        "Show in Menu Bar"
+        "Show in menu bar"
     } else {
         "Show in tray"
     }
 }
 
-/// The tray group's label, in the same terms.
+/// The group the tray row sits in, as the search names it.
 pub(crate) fn tray_group_title() -> &'static str {
     if cfg!(target_os = "macos") {
-        "Menu Bar"
+        "Menu bar"
     } else {
         "System tray"
     }
 }
 
-/// The tray row's subtitle, in the same terms: what the entry is and
-/// what its menu holds.
-pub(crate) fn tray_row_subtitle() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "Pane's menu-bar item, with Open Pane, Settings and Quit Pane"
-    } else {
-        "Pane's item in the notification area, with Open Pane, Settings and Exit"
-    }
-}
-
-/// The recorder row's key context: while the recorder holds focus, its
-/// keys are the binding being recorded, not the window's navigation.
+/// The recorder's key context while it listens: its keys are the binding
+/// being recorded, not the window's navigation.
 const RECORDER: &str = "OpenPaneRecorder";
+
+/// The recorder's key context while it rests: a button.
+const RECORDER_IDLE: &str = "OpenPaneRecorderIdle";
 
 actions!(general, [ActivateRecorder, CancelRecording]);
 
@@ -122,38 +115,35 @@ actions!(general, [ActivateRecorder, CancelRecording]);
 /// recorded.
 pub(crate) fn bind_keys(cx: &mut App) {
     cx.bind_keys([
-        // The row is a button: Enter and Space activate it, as a click does.
+        // The recorder is a button: Enter and Space activate it, as a
+        // click does.
+        KeyBinding::new("enter", ActivateRecorder, Some(RECORDER_IDLE)),
+        KeyBinding::new("space", ActivateRecorder, Some(RECORDER_IDLE)),
         KeyBinding::new("enter", ActivateRecorder, Some(RECORDER)),
         KeyBinding::new("space", ActivateRecorder, Some(RECORDER)),
-        // Escape cancels recording.
+        // Escape and Tab leave recording, changing nothing.
         KeyBinding::new("escape", CancelRecording, Some(RECORDER)),
-        // Swallowed while the recorder holds focus (and harmless when it
-        // does not): the sidebar's navigation and Tab's traversal stay
-        // put, so captured keys never act.
-        KeyBinding::new("down", gpui::NoAction, Some(RECORDER)),
-        KeyBinding::new("up", gpui::NoAction, Some(RECORDER)),
-        KeyBinding::new("tab", gpui::NoAction, Some(RECORDER)),
-        KeyBinding::new("shift-tab", gpui::NoAction, Some(RECORDER)),
+        KeyBinding::new("tab", CancelRecording, Some(RECORDER)),
+        KeyBinding::new("shift-tab", CancelRecording, Some(RECORDER)),
     ]);
+    cx.bind_keys(super::captured_while_recording(RECORDER));
 }
 
-/// The page's heading.
+/// The page's title.
 pub(crate) const TITLE: &str = "General";
 
 /// What the page is, in one line: its sidebar entry's description in
-/// the search, and its heading's subtitle.
-pub(crate) const ABOUT: &str = "The Open Pane hotkey and the launch-at-login choice";
+/// the search.
+pub(crate) const ABOUT: &str = "Hotkey, startup, tray and appearance";
 
-/// What the recorder's row says under its name: at rest, and while it
-/// listens.
-pub(crate) const RECORDER_HINT: &str =
-    "Shows the launcher from any application, and hides it when it has focus";
+/// What the recorder's row says under its name while it rests.
+pub(crate) const RECORDER_HINT: &str = "Shows or hides the launcher from any app";
 
 /// The General page, registered first in the window's page list: the
 /// page of Pane as a whole, the one the window opens on.
 pub(crate) fn page() -> Page {
     Page {
-        title: "General",
+        title: TITLE,
         about: ABOUT,
         icon: Glyph::Sliders,
         count: None,
@@ -167,11 +157,11 @@ pub(crate) fn page() -> Page {
 /// and the tray toggle's last refusal.
 pub(crate) struct State {
     /// Whether the recorder is listening for a new binding.
-    recording: bool,
+    pub(crate) recording: bool,
     /// Why the last attempt was refused, if it was: a validation, a
     /// collision or the system's refusal. Shown as the page's status; the
     /// recorder keeps listening for another try.
-    rejection: Option<String>,
+    pub(crate) rejection: Option<String>,
     /// Why the last tray or menu-bar toggle was refused, if it was: the
     /// system's refusal, or the platform's lack of an entry. Shown as the
     /// page's status; the entry's own state is explained beside the
@@ -209,7 +199,7 @@ fn entries(launcher: &Launcher, cx: &App) -> Vec<search::Entry> {
         let state = crate::settings::shared(cx).read(cx);
         (state.login_unavailable(), state.tray_unavailable())
     };
-    vec![
+    let mut entries = vec![
         search::Entry {
             control: Some("open-pane-recorder".into()),
             title: "Open Pane hotkey".into(),
@@ -234,7 +224,9 @@ fn entries(launcher: &Launcher, cx: &App) -> Vec<search::Entry> {
             group: Some(tray_group_title().into()),
             unavailable: tray_unavailable,
         },
-    ]
+    ];
+    entries.extend(appearance::entries(launcher, cx));
+    entries
 }
 
 /// The recorder row takes keyboard focus — it is a tab stop, and Enter
@@ -367,270 +359,244 @@ fn render(
     let tray_anchor = this.search_anchor("tray-visibility");
     let focus = this.general.focus.clone();
     let focused = focus.is_focused(window);
+    let recording = this.general.recording;
     let (resettable, login_offered, tray_offered) =
         (view.resettable, view.login_offered, view.tray_offered);
-    compose(&view, focused, &theme, |control, element| match control {
-        GeneralControl::Recorder => element
-            .anchor_scroll(Some(recorder_anchor.clone()))
-            .key_context(RECORDER)
-            .track_focus(&focus)
-            .on_action(cx.listener(SettingsWindow::activate_recorder))
-            .on_action(cx.listener(SettingsWindow::cancel_recording))
-            .on_key_down(cx.listener(SettingsWindow::recorder_key_down))
-            // A mouse-down anywhere outside the recorder while it listens
-            // cancels the recording and is consumed, as the footer menu's
-            // popup does: the click underneath does not act, and the
-            // recorder gives up the keys.
-            .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                if this.general.recording {
-                    this.stop_recording(window, cx);
-                    cx.stop_propagation();
-                }
-            }))
-            .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
-                if !this.general.recording {
-                    this.general.recording = true;
-                    this.general.rejection = None;
-                    window.focus(&this.general.focus, cx);
-                    cx.notify();
-                }
-            })),
-        GeneralControl::Reset => {
-            element
-                .anchor_scroll(Some(reset_anchor.clone()))
-                .when(resettable, |reset| {
-                    reset.on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
-                        this.apply_open_pane(Shortcut::open_pane_default(), window, cx);
+    let appearance = appearance::section(this, cx);
+    compose(
+        &view,
+        focused,
+        Some(appearance),
+        &theme,
+        |control, element| match control {
+            GeneralControl::Recorder => element
+                .anchor_scroll(Some(recorder_anchor.clone()))
+                .key_context(if recording { RECORDER } else { RECORDER_IDLE })
+                .track_focus(&focus)
+                .on_action(cx.listener(SettingsWindow::activate_recorder))
+                .on_action(cx.listener(SettingsWindow::cancel_recording))
+                .on_key_down(cx.listener(SettingsWindow::recorder_key_down))
+                // A mouse-down anywhere outside the recorder while it listens
+                // cancels the recording and is consumed, as the footer menu's
+                // popup does: the click underneath does not act, and the
+                // recorder gives up the keys.
+                .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    if this.general.recording {
+                        this.stop_recording(window, cx);
+                        cx.stop_propagation();
+                    }
+                }))
+                // A click starts recording, or stops it again.
+                .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
+                    if this.general.recording {
+                        this.stop_recording(window, cx);
+                    } else {
+                        this.start_recorder(window, cx);
+                    }
+                })),
+            GeneralControl::Reset => {
+                element
+                    .anchor_scroll(Some(reset_anchor.clone()))
+                    // The reset sits inside the recorder: its click is its own.
+                    .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
+                        cx.stop_propagation();
+                        if resettable {
+                            this.apply_open_pane(Shortcut::open_pane_default(), window, cx);
+                        }
                     }))
-                })
-        }
-        GeneralControl::Login => {
-            element
-                .anchor_scroll(Some(login_anchor.clone()))
-                .when(login_offered, |switch| {
-                    // The click reports the choice to the host settings: the
-                    // registration is changed, the record written, and the
-                    // switch redrawn with what was actually kept.
-                    switch.on_click(cx.listener(move |_, _: &gpui::ClickEvent, _, cx| {
-                        crate::settings::shared(cx).update(cx, |settings, cx| {
-                            settings.set_launch_at_login(!preference, cx);
-                        });
-                    }))
-                })
-        }
-        GeneralControl::Tray => {
-            element
-                .anchor_scroll(Some(tray_anchor.clone()))
-                .when(tray_offered, |switch| {
-                    // The click reports the choice to the host settings: the
-                    // native entry is shown or hidden, the record written, and
-                    // the switch redrawn with what was actually kept — the
-                    // preference read as it is now, not as the frame that drew
-                    // the row holds it.
-                    switch.on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-                        let visible = crate::settings::shared(cx).read(cx).tray_visible();
-                        this.apply_tray_visible(!visible, cx);
-                    }))
-                })
-        }
-    })
+            }
+            GeneralControl::Login => {
+                element
+                    .anchor_scroll(Some(login_anchor.clone()))
+                    .when(login_offered, |switch| {
+                        // The click reports the choice to the host settings: the
+                        // registration is changed, the record written, and the
+                        // switch redrawn with what was actually kept.
+                        switch.on_click(cx.listener(move |_, _: &gpui::ClickEvent, _, cx| {
+                            crate::settings::shared(cx).update(cx, |settings, cx| {
+                                settings.set_launch_at_login(!preference, cx);
+                            });
+                        }))
+                    })
+            }
+            GeneralControl::Tray => {
+                element
+                    .anchor_scroll(Some(tray_anchor.clone()))
+                    .when(tray_offered, |switch| {
+                        // The click reports the choice to the host settings: the
+                        // native entry is shown or hidden, the record written, and
+                        // the switch redrawn with what was actually kept — the
+                        // preference read as it is now, not as the frame that drew
+                        // the row holds it.
+                        switch.on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                            let visible = crate::settings::shared(cx).read(cx).tray_visible();
+                            this.apply_tray_visible(!visible, cx);
+                        }))
+                    })
+            }
+        },
+    )
     .into_any_element()
 }
 
 /// The General page's composition, which the visual workbench's fixture
-/// draws too: the heading block, then a field group per setting in the
-/// page's column (`ui::controls`) — the Open Pane hotkey's settings row
-/// (its recorder's well, with Reset beside it) and what it explains, the
-/// launch-at-login switch's row and note, the tray switch's row and notes
-/// — and a failed save's status. `focused` is whether the recorder has the
-/// keyboard (its well's ring). `attach` adds each control's behavior
-/// (focus, keys, clicks, scroll anchors); the composition gives each its
-/// identity, its accessibility and its look.
+/// draws too: a card of the page's own rows (`ui::controls`) — the Open
+/// Pane hotkey's (its recorder's well, with Reset beside it), the
+/// launch-at-login switch's and the tray switch's, each with what it
+/// explains under its name — then `appearance`, the Appearance section,
+/// and a failed save's status above them all. `focused` is whether the
+/// recorder has the keyboard (its well's ring). `attach` adds each
+/// control's behavior (focus, keys, clicks, scroll anchors); the
+/// composition gives each its identity, its accessibility and its look.
 pub(crate) fn compose(
     view: &GeneralView,
     focused: bool,
+    appearance: Option<Div>,
     theme: &Theme,
     attach: impl Fn(GeneralControl, Stateful<Div>) -> Stateful<Div>,
 ) -> Stateful<Div> {
-    let open_pane = controls::field(theme)
-        .debug_selector(|| "general-open-pane-field".into())
-        .child(controls::field_label("Open Pane", theme))
-        .child(controls::setting_list().child(recorder_row(view, focused, theme, &attach)))
-        // The binding's state: why the chosen one is not registered — a
-        // registration the system refused, or a system where global
-        // hotkeys cannot be used at all, with the adapter's own
-        // explanation (Wayland's limitation and the desktop-shortcut
-        // guidance it carries).
-        .children(view.problem.as_ref().map(|problem| {
-            note(
-                "open-pane-note",
-                format!("Not active: {problem}"),
-                theme.warning,
-                theme,
-            )
-        }))
-        // What the last attempt to record a binding was refused with.
-        .children(
-            view.rejection
-                .as_ref()
-                .map(|rejection| note("general-refusal", rejection.clone(), theme.danger, theme)),
-        );
+    let recorder = recorder_row(view, focused, theme, &attach);
     let login = switch_row(
         SwitchRow {
             id: "launch-at-login",
             selector: "general-launch-at-login",
             title: "Launch Pane at login",
-            subtitle: "Pane is ready when you log in",
             on: view.login,
             offered: view.login_offered,
+            // What the platform holds, when that needs saying.
+            lines: view
+                .login_note
+                .as_ref()
+                .map(|(text, color)| {
+                    note("general-login-note", text.clone(), *color, theme).into_any_element()
+                })
+                .into_iter()
+                .collect(),
         },
         theme,
         |switch| attach(GeneralControl::Login, switch),
     );
-    let startup = controls::field(theme)
-        .debug_selector(|| "general-startup-field".into())
-        .child(controls::field_label("Startup", theme))
-        .child(controls::setting_list().child(login))
-        .children(
-            view.login_note
+    // The entry's state: why the native entry is not what the preference
+    // names (a system with no tray or menu-bar entry at all, or a show or
+    // hide the system refused), and what the last toggle was refused with.
+    let tray_lines = view
+        .tray_status
+        .as_ref()
+        .map(|status| note("tray-note", status.clone(), theme.warning, theme))
+        .into_iter()
+        .chain(
+            view.tray_refusal
                 .as_ref()
-                .map(|(text, color)| note("general-login-note", text.clone(), *color, theme)),
-        );
+                .map(|refusal| note("tray-refusal", refusal.clone(), theme.danger, theme)),
+        )
+        .map(IntoElement::into_any_element)
+        .collect();
     let tray = switch_row(
         SwitchRow {
             id: "tray-visibility",
             selector: "tray-visibility",
             title: tray_row_title(),
-            subtitle: tray_row_subtitle(),
             on: view.tray,
             offered: view.tray_offered,
+            lines: tray_lines,
         },
         theme,
         |switch| attach(GeneralControl::Tray, switch),
     );
-    let tray = controls::field(theme)
-        .debug_selector(|| "general-tray-field".into())
-        .child(controls::field_label(tray_group_title(), theme))
-        .child(controls::setting_list().child(tray))
-        // The entry's state: why the native entry is not what the
-        // preference names — a system with no tray or menu-bar entry at
-        // all (Linux today, with the adapter's own guidance), or a show or
-        // hide the system refused — and what the last toggle was refused
-        // with. An unavailable entry is explained rather than represented
-        // as a successful toggle.
-        .children(
-            view.tray_status
-                .as_ref()
-                .map(|status| note("tray-note", status.clone(), theme.warning, theme)),
-        )
-        .children(
-            view.tray_refusal
-                .as_ref()
-                .map(|refusal| note("tray-refusal", refusal.clone(), theme.danger, theme)),
-        );
-    let column = controls::column(theme)
-        .child(
-            settings_shell::page_header(TITLE, Some(ABOUT.into()), theme)
-                .id("general-title")
-                .debug_selector(|| "general-title".into()),
-        )
-        .child(open_pane)
-        .child(startup)
-        .child(tray)
-        // What a save reported, if it failed — the same status the
-        // Appearance page shows for its own choices.
-        .children(
-            view.status
-                .as_ref()
-                .map(|status| note("general-status", status.clone(), theme.danger, theme)),
-        );
+    let card = controls::card(
+        [
+            recorder.into_any_element(),
+            login.into_any_element(),
+            tray.into_any_element(),
+        ],
+        theme,
+    );
+    let page = controls::page(theme)
+        // What a save reported, if it failed.
+        .children(view.status.as_ref().map(|status| {
+            note("general-status", status.clone(), theme.danger, theme)
+                .px(theme.geometry.settings.section_label_inset)
+        }))
+        .child(controls::section(None, card, theme).debug_selector(|| "general-card".into()))
+        .children(appearance);
     div()
         .id("general")
         .debug_selector(|| "general".into())
-        .child(column)
+        .child(page)
 }
 
-/// The Open Pane hotkey's settings row: its name and what it does (or,
-/// while the recorder listens, that the keys are captured) at the left,
-/// and at its right end Reset beside the recorder — a well showing the
-/// binding in effect as its caps, or, while it listens, the listening
-/// mark. The recorder is a button: clicked or pressed with Enter it listens
-/// for the keys of the next binding, holding focus, and takes the keys
-/// pressed as the binding being recorded (Escape cancels); a refused
-/// combination keeps it listening for another try. Reset goes back to the
-/// provisional default, through the same checks as recording; it is drawn
-/// disabled while the default is the choice.
+/// The Open Pane hotkey's settings row: its name at the left, with why the
+/// binding is not active and why the last recording was refused under it,
+/// and its recorder at its right end ([`controls::recorder`]): the binding
+/// written out, the record mark and the reset button, enabled while the
+/// binding is not the default. Clicked or pressed with Enter the recorder
+/// listens for the keys of the next binding, holding focus and ringed red,
+/// and takes the keys pressed as the binding being recorded (Escape, Tab,
+/// a click outside or another click on it cancels); a refused combination
+/// keeps it listening for another try. Reset goes back to the default,
+/// through the same checks as recording.
 fn recorder_row(
     view: &GeneralView,
-    focused: bool,
+    _focused: bool,
     theme: &Theme,
     attach: &impl Fn(GeneralControl, Stateful<Div>) -> Stateful<Div>,
 ) -> Div {
-    let subtitle = if view.recording {
-        controls::RECORDING_HINT
-    } else {
-        RECORDER_HINT
-    };
     let label = format!(
         "{}Open Pane with {}",
         if view.recording { "Recording; " } else { "" },
         view.binding
     );
-    let shown = if view.recording {
-        controls::listening_mark(theme).into_any_element()
-    } else {
-        key_sequence(&view.keys, CapStyle::Regular, theme).into_any_element()
-    };
-    let recorder = controls::recorder_well(
-        div()
-            .id("open-pane-binding")
-            .debug_selector(|| "open-pane-binding".into())
-            .flex()
-            .child(shown),
-        focused,
+    let reset = controls::icon_button("open-pane-reset", Glyph::Reset, view.resettable, theme)
+        .debug_selector(|| "open-pane-reset".into())
+        .role(Role::Button)
+        .aria_label(format!("Reset the Open Pane hotkey to {}", view.default))
+        .when(!view.resettable, |reset| reset.aria_disabled(true));
+    let recorder = controls::recorder(
+        controls::binding_text(&view.keys),
+        view.recording,
+        Some(attach(GeneralControl::Reset, reset).into_any_element()),
         theme,
     )
     .id("open-pane-recorder")
     .debug_selector(|| "open-pane-recorder".into())
     .role(Role::Button)
     .aria_label(label)
-    .aria_description(subtitle);
-    let reset = controls::ghost_button("Reset", view.resettable, theme)
-        .id("open-pane-reset")
-        .debug_selector(|| "open-pane-reset".into())
-        .role(Role::Button)
-        .aria_label(format!("Reset the Open Pane hotkey to {}", view.default))
-        .aria_description(format!("Back to {}, the provisional default", view.default))
-        .when(!view.resettable, |reset| reset.aria_disabled(true));
-    let description = controls::field_description(subtitle, theme.text_muted, theme);
-    controls::setting_row(
-        "Open Pane hotkey",
-        vec![description.into_any_element()],
-        theme,
-    )
-    .debug_selector(|| "general-open-pane-row".into())
-    .child(
-        div()
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap(theme.geometry.controls.button_gap)
-            .child(attach(GeneralControl::Reset, reset))
-            .child(attach(GeneralControl::Recorder, recorder)),
-    )
+    .aria_description(RECORDER_HINT);
+    let mut lines = Vec::new();
+    // The binding's state: why the chosen one is not registered (a
+    // registration the system refused, or a system where global hotkeys
+    // cannot be used at all, in the adapter's own words).
+    lines.extend(view.problem.as_ref().map(|problem| {
+        note(
+            "open-pane-note",
+            format!("Not active: {problem}"),
+            theme.warning,
+            theme,
+        )
+        .into_any_element()
+    }));
+    // What the last attempt to record a binding was refused with.
+    lines.extend(view.rejection.as_ref().map(|rejection| {
+        note("general-refusal", rejection.clone(), theme.danger, theme).into_any_element()
+    }));
+    controls::setting_row("Open Pane hotkey", lines, theme)
+        .debug_selector(|| "general-open-pane-row".into())
+        .child(attach(GeneralControl::Recorder, recorder))
 }
 
-/// One boolean choice of the page, as [`switch_row`] draws it.
-struct SwitchRow {
-    id: &'static str,
-    selector: &'static str,
-    title: &'static str,
-    subtitle: &'static str,
+/// One boolean choice of a page, as [`switch_row`] draws it.
+pub(crate) struct SwitchRow {
+    pub(crate) id: &'static str,
+    pub(crate) selector: &'static str,
+    pub(crate) title: &'static str,
     /// The saved preference the switch carries.
-    on: bool,
+    pub(crate) on: bool,
     /// Whether choosing it does anything: nothing is offered where the
     /// platform cannot manage what the choice asks.
-    offered: bool,
+    pub(crate) offered: bool,
+    /// What the row says under its name: what the platform holds, why it
+    /// is not offered, a refusal.
+    pub(crate) lines: Vec<AnyElement>,
 }
 
 /// One switch row, as the General page's boolean choices are drawn: the
@@ -643,7 +609,7 @@ struct SwitchRow {
 /// presentation for every boolean the page offers, so what a switch says,
 /// whether it can be taken and what taking it does cannot diverge between
 /// the choices.
-fn switch_row(
+pub(crate) fn switch_row(
     row: SwitchRow,
     theme: &Theme,
     attach: impl FnOnce(Stateful<Div>) -> Stateful<Div>,
@@ -652,25 +618,30 @@ fn switch_row(
         id,
         selector,
         title,
-        subtitle,
         on,
         offered,
+        lines,
     } = row;
-    let toggle = controls::toggle(on, theme).debug_selector(move || selector.into());
-    let description = controls::field_description(subtitle, theme.text_muted, theme);
-    let row = controls::setting_row(title, vec![description.into_any_element()], theme)
+    // A choice not offered dims its name and its switch; what the row
+    // says under its name stays legible, since it says why.
+    let opacity = if offered {
+        1.
+    } else {
+        theme.geometry.controls.disabled_opacity
+    };
+    let toggle = controls::toggle(on, theme)
+        .debug_selector(move || selector.into())
+        .opacity(opacity);
+    let label = controls::field_label(title, theme).opacity(opacity);
+    let row = controls::setting_row_with(label, lines, theme)
         .child(toggle)
         .id(id)
         .debug_selector(move || format!("{selector}-row"))
         .role(Role::Switch)
         .aria_label(title)
-        .aria_description(subtitle)
         .aria_toggled(if on { Toggled::True } else { Toggled::False })
         .when(offered, |row| row.cursor_pointer())
-        .when(!offered, |row| {
-            row.opacity(theme.geometry.controls.disabled_opacity)
-                .aria_disabled(true)
-        });
+        .when(!offered, |row| row.aria_disabled(true));
     attach(row)
 }
 
@@ -696,17 +667,12 @@ fn login_note(
         Some((problem, theme.warning))
     } else if registration == Ok(Registration::NeedsApproval) {
         Some((
-            "Pane is registered, but macOS asks for your approval: open System Settings, \
-             under General → Login Items, and allow Pane."
-                .into(),
+            "Allow Pane in System Settings, under General > Login Items.".into(),
             theme.text_muted,
         ))
     } else if cfg!(target_os = "linux") && preference {
         Some((
-            "The registration is an autostart entry in the freedesktop convention: the major \
-             desktop environments start these, but not every desktop does, and Pane cannot see \
-             whether it was started."
-                .into(),
+            "Added as an autostart entry. Most desktops run these.".into(),
             theme.text_muted,
         ))
     } else {

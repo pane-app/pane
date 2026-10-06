@@ -98,7 +98,7 @@ use pausing::{Pauses, Recorder};
 pub use presentation::{
     ComputedAnswer, Presentation, RowKind, RowPresentation, Section, answer_sections, root_sections,
 };
-pub use quick_slots::{PinTarget, QUICK_SLOTS, QuickSlot, SlotChange};
+pub use quick_slots::{PinTarget, QuickSlot, SlotChange};
 use schedules::Schedules;
 use services::Services;
 pub use shortcuts::{ShortcutCatalog, ShortcutCommand, ShortcutGroup};

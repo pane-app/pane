@@ -185,7 +185,7 @@ fn open_launcher_page(
     click(&mut settings_cx, "section-Launcher");
     settings_cx.run_until_parked();
     assert!(
-        settings_cx.debug_bounds("launcher-title").is_some(),
+        settings_cx.debug_bounds("launcher").is_some(),
         "the Launcher page is drawn"
     );
     // The page arrives over the section transition's span, shifted from
@@ -242,8 +242,8 @@ fn dismiss(
 /// Clicks the element whose debug selector is `selector` in `cx`. The
 /// pointer moves to the element first, as a real one does: the move is
 /// what tells an element it is hovered, and a click's landing alone does
-/// not — without the move the pointer-feedback fade would see a hover in
-/// the paint's style pass and not in the layout's, and never settle.
+/// not — without the move the paint's style pass would see a hover the
+/// layout's did not.
 fn click(cx: &mut VisualTestContext, selector: &'static str) {
     let bounds = cx
         .debug_bounds(selector)
@@ -426,18 +426,19 @@ fn the_launcher_opens_on_the_chosen_display_and_never_moves_settings(cx: &mut Te
     placement.layout(Some(Point { x: 2500., y: 700. }), Some(DisplayId(2)));
     let (window, cx) = open(cx, Some(data.path()), &placement);
 
-    // The record holds nothing yet: the provisional default is the primary
-    // display, and the window was placed on it as it opened — centered in
-    // its usable area, which the first recorded move's origin names.
+    // The record holds nothing yet: the default is the display with the
+    // mouse — the second one, where the pointer is — and the window was
+    // placed on it as it opened, in its usable area, which the first
+    // recorded move's origin names.
     let default = Shortcut::open_pane_default();
     assert_eq!(
         placement.origin(0),
-        Point { x: 40., y: 40. },
-        "the primary display's usable area"
+        Point { x: 1980., y: 60. },
+        "the pointer's display's usable area"
     );
 
-    // Reopening the launcher, with the pointer on the second display,
-    // keeps the primary placement until the choice says otherwise.
+    // Reopening the launcher, with the pointer still on the second
+    // display, keeps that placement until the choice says otherwise.
     let before = dismiss(&window, &default, cx, &placement);
     press(&window, &default, cx);
     cx.run_until_parked();
@@ -445,23 +446,24 @@ fn the_launcher_opens_on_the_chosen_display_and_never_moves_settings(cx: &mut Te
     assert_eq!(placement.moves.borrow().len(), before + 1);
     assert_eq!(
         placement.origin(before),
-        Point { x: 40., y: 40. },
-        "the default still opens on the primary display"
+        Point { x: 1980., y: 60. },
+        "the default still opens on the display with the mouse"
     );
 
     // The choice, taken through the Launcher page's own control: the
-    // pointer's display.
+    // primary display.
     let (settings, mut settings_cx) = open_launcher_page(cx);
-    choose_monitor(&mut settings_cx, "launcher-monitor-Pointer");
+    choose_monitor(&mut settings_cx, "launcher-monitor-Primary");
     settings_cx.run_until_parked();
     until_record(
         &mut settings_cx,
         data.path(),
-        "\"openingMonitor\": \"pointer\"",
+        "\"openingMonitor\": \"primary\"",
     );
+    let tree = a11y(&mut settings_cx);
     assert!(
-        a11y(&mut settings_cx).contains("Pointer's display"),
-        "the select's trigger shows the committed choice"
+        tree.contains("\"value\": \"Primary display\""),
+        "the select's trigger shows the committed choice, {tree}"
     );
 
     // The Settings window sits where it was opened; the launcher's next
@@ -477,8 +479,8 @@ fn the_launcher_opens_on_the_chosen_display_and_never_moves_settings(cx: &mut Te
     );
     assert_eq!(
         placement.origin(before),
-        Point { x: 1980., y: 60. },
-        "the pointer's display's usable area"
+        Point { x: 40., y: 40. },
+        "the primary display's usable area, the pointer on the second"
     );
     // The Settings window is exactly where it was: the launcher's
     // placement never moves it.
@@ -504,21 +506,25 @@ fn choices_the_system_does_not_answer_are_explained_not_offered(cx: &mut TestApp
     // The two choices the system cannot answer are shown with their
     // reason, not offered.
     assert!(
-        tree.contains("This system does not tell Pane where the pointer is"),
+        tree.contains("This system doesn't report where the mouse is"),
         "the pointer's display is explained, {tree}"
     );
     assert!(
-        tree.contains("This system does not tell Pane which window is active"),
+        tree.contains("This system doesn't report the active window"),
         "the active window's display is explained, {tree}"
     );
-    // The primary display is always offered, and the default named as
-    // provisional.
-    assert!(tree.contains("Primary display"));
-    assert!(tree.contains("provisional default"));
+    // The primary display is always offered; the default — the display
+    // with the mouse, which this system cannot answer — falls back to
+    // it, and the page says so.
+    assert!(tree.contains("\"label\": \"Primary display\""));
+    assert!(
+        tree.contains("Pane can't find the display with the mouse"),
+        "the default's fallback is explained, {tree}"
+    );
     // Choosing a choice that cannot be answered does nothing: the row
     // is not clickable, and nothing is saved. The popup is still open
     // from the reading above — the click lands on the row itself.
-    click(&mut settings_cx, "launcher-monitor-Pointer");
+    click(&mut settings_cx, "launcher-monitor-ActiveWindow");
     settings_cx.run_until_parked();
     assert!(
         !data.path().join("settings.json").exists(),
@@ -555,15 +561,15 @@ fn a_disconnected_or_unanswered_choice_falls_back_and_says_so(cx: &mut TestAppCo
     settings_cx.run_until_parked();
     let tree = a11y(&mut settings_cx);
     assert!(
-        tree.contains("This system does not tell Pane which window is active"),
+        tree.contains("This system doesn't report the active window"),
         "the choice is explained, {tree}"
     );
     assert!(
-        tree.contains("cannot open on the display of the window you are working in"),
+        tree.contains("Pane can't find the display with the active window"),
         "the fallback is explained, {tree}"
     );
     assert!(
-        tree.contains("opens on the primary display instead"),
+        tree.contains("the launcher opens on the primary display instead"),
         "the fallback names what happens, {tree}"
     );
 
@@ -581,7 +587,8 @@ fn a_disconnected_or_unanswered_choice_falls_back_and_says_so(cx: &mut TestAppCo
     );
 
     // A display that is gone: the choice falls back the same way, because
-    // the layout no longer lists it.
+    // the layout no longer lists it, and says so in the same words — Pane
+    // can't find it.
     *placement.layout.borrow_mut() = DisplayLayout {
         displays: vec![display(2, 0., 0., 2560., 1440., 60.)],
         primary: Some(DisplayId(2)),
@@ -589,9 +596,10 @@ fn a_disconnected_or_unanswered_choice_falls_back_and_says_so(cx: &mut TestAppCo
         active: Some(DisplayId(1)),
     };
     let (_settings, mut settings_cx) = open_launcher_page(cx);
+    let tree = a11y(&mut settings_cx);
     assert!(
-        a11y(&mut settings_cx).contains("it is not connected"),
-        "the disconnected display is explained"
+        tree.contains("Pane can't find the display with the active window"),
+        "the disconnected display is explained, {tree}"
     );
 }
 
@@ -616,7 +624,7 @@ fn a_platform_that_cannot_choose_the_display_explains_and_offers_nothing(cx: &mu
     );
     // The reopening choice is unaffected: it is no platform integration.
     assert!(
-        tree.contains("Restore the current view"),
+        tree.contains("\"label\": \"Pop to root search\""),
         "reopening is offered, {tree}"
     );
     // The launcher still opens: nothing is placed, and nothing fails.
@@ -672,6 +680,9 @@ fn choosing_root_search_starts_the_reopening_from_root_search(cx: &mut TestAppCo
 
     // The root-search choice, taken through the page's own control.
     let (_settings, mut settings_cx) = open_launcher_page(cx);
+    // Pop to root search, Immediately: the select's choice.
+    click(&mut settings_cx, "launcher-reopening");
+    settings_cx.run_until_parked();
     click(&mut settings_cx, "launcher-reopening-RootSearch");
     settings_cx.run_until_parked();
     until_record(
@@ -822,16 +833,21 @@ fn the_recorded_choices_are_applied_by_a_fresh_application(cx: &mut TestAppConte
     placement.layout(Some(Point { x: 2500., y: 700. }), None);
     let (_window, cx) = open(cx, Some(data.path()), &placement);
 
-    // Both choices, taken through the page's own controls.
+    // Both choices, taken through the page's own controls: the primary
+    // display — not the default, which follows the pointer to the second
+    // display — and root search.
     let (_settings, mut settings_cx) = open_launcher_page(cx);
-    choose_monitor(&mut settings_cx, "launcher-monitor-Pointer");
+    choose_monitor(&mut settings_cx, "launcher-monitor-Primary");
+    settings_cx.run_until_parked();
+    // Pop to root search, Immediately: the select's choice.
+    click(&mut settings_cx, "launcher-reopening");
     settings_cx.run_until_parked();
     click(&mut settings_cx, "launcher-reopening-RootSearch");
     settings_cx.run_until_parked();
     until_record(
         &mut settings_cx,
         data.path(),
-        "\"openingMonitor\": \"pointer\"",
+        "\"openingMonitor\": \"primary\"",
     );
     until_record(
         &mut settings_cx,
@@ -859,10 +875,11 @@ fn the_recorded_choices_are_applied_by_a_fresh_application(cx: &mut TestAppConte
         fresh.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
     fresh_cx.run_until_parked();
 
-    // The fresh window opened on the display the record names.
+    // The fresh window opened on the display the record names, not the
+    // one the pointer is on.
     assert_eq!(
         fresh_placement.origin(0),
-        Point { x: 1980., y: 60. },
+        Point { x: 40., y: 40. },
         "the recorded choice placed the fresh launcher"
     );
     // And the recorded reopening starts from root search.
@@ -888,14 +905,15 @@ fn a_save_that_fails_is_reported_and_the_shown_choice_stays_what_was_saved(
 
     let default = Shortcut::open_pane_default();
 
-    // A change that lands and is saved: the pointer's display.
+    // A change that lands and is saved: the primary display, away from
+    // the default's display with the mouse.
     let (_settings, mut settings_cx) = open_launcher_page(cx);
-    choose_monitor(&mut settings_cx, "launcher-monitor-Pointer");
+    choose_monitor(&mut settings_cx, "launcher-monitor-Primary");
     settings_cx.run_until_parked();
     until_record(
         &mut settings_cx,
         data.path(),
-        "\"openingMonitor\": \"pointer\"",
+        "\"openingMonitor\": \"primary\"",
     );
 
     // Break the record's replacement: a folder where the record belongs,
@@ -904,6 +922,9 @@ fn a_save_that_fails_is_reported_and_the_shown_choice_stays_what_was_saved(
     fs::create_dir(data.path().join("settings.json")).unwrap();
 
     // Another change: it cannot be saved, and the failure is reported.
+    // Pop to root search, Immediately: the select's choice.
+    click(&mut settings_cx, "launcher-reopening");
+    settings_cx.run_until_parked();
     click(&mut settings_cx, "launcher-reopening-RootSearch");
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -922,7 +943,7 @@ fn a_save_that_fails_is_reported_and_the_shown_choice_stays_what_was_saved(
     // rolled the reopening choice back to the default.
     let tree = a11y(&mut settings_cx);
     assert!(
-        tree.contains("Restore the current view"),
+        tree.contains("\"value\": \"Never\""),
         "the shown choice is the one that was saved, {tree}"
     );
 
@@ -934,7 +955,7 @@ fn a_save_that_fails_is_reported_and_the_shown_choice_stays_what_was_saved(
     assert_eq!(placement.moves.borrow().len(), before + 1);
     assert_eq!(
         placement.origin(before),
-        Point { x: 1980., y: 60. },
+        Point { x: 40., y: 40. },
         "the saved choice is the one that works"
     );
 }
@@ -1024,28 +1045,32 @@ fn the_page_registers_its_settings_in_the_settings_search(cx: &mut TestAppContex
     let (settings, _settings_cx) = open_launcher_page(cx);
     let mut search_cx = VisualTestContext::from_window(AnyWindowHandle::from(settings), &cx.cx);
     search_cx.simulate_keystrokes(find_shortcut());
-    search_cx.simulate_input("monitor");
+    search_cx.simulate_input("display");
     search_cx.run_until_parked();
-    assert!(
-        search_cx
-            .debug_bounds("settings-search-result-Primary display")
-            .is_some(),
-        "the opening monitor's choices are found"
-    );
+    for result in [
+        "settings-search-result-Display with the mouse",
+        "settings-search-result-Primary display",
+        "settings-search-result-Display with the active window",
+    ] {
+        assert!(
+            search_cx.debug_bounds(result).is_some(),
+            "the opening display's choices are found: {result}"
+        );
+    }
     let tree = a11y(&mut search_cx);
     assert!(
-        tree.contains("Launcher \u{b7} Opening monitor"),
+        tree.contains("Launcher \u{b7} Display"),
         "the result names the page and the group, {tree}"
     );
     // Escape clears the query, and the reopening choices are found by
     // their own words.
     search_cx.simulate_keystrokes("escape");
     search_cx.run_until_parked();
-    search_cx.simulate_input("reopening");
+    search_cx.simulate_input("pop to root");
     search_cx.run_until_parked();
     assert!(
         search_cx
-            .debug_bounds("settings-search-result-Start at root search")
+            .debug_bounds("settings-search-result-Immediately")
             .is_some(),
         "the reopening choices are found"
     );
@@ -1057,6 +1082,83 @@ fn the_page_registers_its_settings_in_the_settings_search(cx: &mut TestAppContex
     assert!(
         search_cx.debug_bounds("section-Launcher").is_some(),
         "the sections are back"
+    );
+    let _ = window;
+}
+
+/// Whether the accessibility tree of the window `cx` drives has the switch
+/// named `title`, on.
+fn switch_on(cx: &mut VisualTestContext, title: &str) -> bool {
+    aria_nodes(cx)
+        .iter()
+        .any(|aria| aria["role"] == "Switch" && aria["label"] == title && aria["toggled"] == "True")
+}
+
+#[gpui::test]
+fn the_compact_pinned_switch_is_in_the_layout_card_and_is_saved(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let placement = Rc::new(FakePlacement::default());
+    placement.layout(Some(Point { x: 100., y: 100. }), Some(DisplayId(1)));
+    let (window, cx) = open(cx, Some(data.path()), &placement);
+    let (settings, mut sc) = open_launcher_page(cx);
+
+    // The switch is the Layout card's, right under the window mode it
+    // qualifies and above the pinned items' layout.
+    let mode = sc
+        .debug_bounds("launcher-window-mode-field")
+        .expect("the window mode's row");
+    let row = sc
+        .debug_bounds("launcher-compact-pinned-row")
+        .expect("the switch's row");
+    let pinned = sc
+        .debug_bounds("launcher-pinned-field")
+        .expect("the pinned items' row");
+    assert!(
+        mode.bottom() <= row.top() && row.bottom() <= pinned.top(),
+        "between the window mode and the pinned items: {mode:?} {row:?} {pinned:?}"
+    );
+    assert!(
+        sc.debug_bounds("launcher-compact-pinned").is_some(),
+        "the switch is drawn"
+    );
+    // Off by default.
+    assert!(
+        !switch_on(&mut sc, "Show pinned in compact window mode"),
+        "off by default"
+    );
+
+    // A click anywhere on the row takes the choice, and the record keeps
+    // it under its camelCase name.
+    click(&mut sc, "launcher-compact-pinned-row");
+    until_record(&mut sc, data.path(), "\"compactPinned\": true");
+    assert!(
+        switch_on(&mut sc, "Show pinned in compact window mode"),
+        "the switch shows the choice"
+    );
+
+    // And again turns it off.
+    click(&mut sc, "launcher-compact-pinned-row");
+    until_record(&mut sc, data.path(), "\"compactPinned\": false");
+    assert!(
+        !switch_on(&mut sc, "Show pinned in compact window mode"),
+        "the switch shows the choice"
+    );
+
+    // The settings search finds it in the Layout group.
+    let mut search_cx = VisualTestContext::from_window(AnyWindowHandle::from(settings), &cx.cx);
+    search_cx.simulate_keystrokes(find_shortcut());
+    search_cx.simulate_input("compact mode");
+    search_cx.run_until_parked();
+    assert!(
+        search_cx
+            .debug_bounds("settings-search-result-Show pinned in compact window mode")
+            .is_some(),
+        "the switch is found"
+    );
+    let tree = a11y(&mut search_cx);
+    assert!(
+        tree.contains("Launcher \u{b7} Layout"),
+        "the result names the page and the group, {tree}"
     );
     let _ = window;
 }
@@ -1173,17 +1275,14 @@ fn the_select_opens_below_the_trigger_and_commits_the_highlighted_choice(cx: &mu
         .expect("the popup is drawn");
     assert_eq!(popup.left(), trigger.left(), "the popup is left-aligned");
     assert!(
-        (popup.top() - trigger.bottom()).abs() <= px(1.),
-        "the popup settles below the trigger: {popup:?} under {trigger:?}"
+        (popup.top() - (trigger.bottom() + px(4.))).abs() <= px(1.),
+        "the popup settles 4px below the trigger: {popup:?} under {trigger:?}"
     );
-    // The popup is as wide as its contents ask (the field, the rows),
-    // bounded by the trigger's width — content-width dropdowns, as
-    // Raycast's are, with the trigger's as the ceiling. On the canonical
-    // page the trigger spans the page's 824px column (#97), wider than
-    // the contents ask.
-    assert!(
-        popup.size.width <= trigger.size.width,
-        "the popup stays within the trigger's width: {popup:?} vs {trigger:?}"
+    // The popup is the trigger's width — a row's choice, at the row's
+    // end — so the list reads as the trigger opened.
+    assert_eq!(
+        popup.size.width, trigger.size.width,
+        "the popup is the trigger's width: {popup:?} vs {trigger:?}"
     );
     assert_eq!(
         moving.origin.y - popup.origin.y,
@@ -1195,7 +1294,7 @@ fn the_select_opens_below_the_trigger_and_commits_the_highlighted_choice(cx: &mu
     // ancestor) is the committed choice the highlight starts on.
     assert_eq!(
         focused_label(&mut sc).as_deref(),
-        Some("Primary display"),
+        Some("Display with the mouse"),
         "the popup's field takes the focus, the highlight on the committed choice"
     );
 
@@ -1206,7 +1305,10 @@ fn the_select_opens_below_the_trigger_and_commits_the_highlighted_choice(cx: &mu
         .into_iter()
         .find(|aria| aria["role"] == "ComboBox" && aria["label"] == "Display")
         .expect("the trigger is a named combo box");
-    assert_eq!(trigger_aria["value"].as_str(), Some("Primary display"));
+    assert_eq!(
+        trigger_aria["value"].as_str(),
+        Some("Display with the mouse")
+    );
     assert!(trigger_aria["expanded"].as_bool().unwrap());
     // The choices are a list box's options — among the window's other
     // options, the sidebar's sections — so they are found by their
@@ -1215,9 +1317,9 @@ fn the_select_opens_below_the_trigger_and_commits_the_highlighted_choice(cx: &mu
         .into_iter()
         .filter(|aria| {
             [
+                "Display with the mouse",
                 "Primary display",
-                "Pointer's display",
-                "Active window's display",
+                "Display with the active window",
             ]
             .iter()
             .any(|label| aria["label"].as_str() == Some(*label))
@@ -1234,15 +1336,15 @@ fn the_select_opens_below_the_trigger_and_commits_the_highlighted_choice(cx: &mu
     );
 
     // Typing filters locally, over the labels and the declared keywords
-    // alike: "mouse" is the pointer's choice's keyword, not its label.
-    sc.simulate_input("mouse");
+    // alike: "main" is the primary display's keyword, not its label.
+    sc.simulate_input("main");
     sc.run_until_parked();
     assert!(
-        sc.debug_bounds("launcher-monitor-Pointer").is_some(),
-        "the keyword finds the pointer's choice"
+        sc.debug_bounds("launcher-monitor-Primary").is_some(),
+        "the keyword finds the primary display's choice"
     );
     assert!(
-        sc.debug_bounds("launcher-monitor-Primary").is_none(),
+        sc.debug_bounds("launcher-monitor-Pointer").is_none(),
         "the other choices are filtered out"
     );
 
@@ -1251,7 +1353,7 @@ fn the_select_opens_below_the_trigger_and_commits_the_highlighted_choice(cx: &mu
     // to the trigger, which shows what was kept.
     sc.simulate_keystrokes("enter");
     sc.run_until_parked();
-    until_record(&mut sc, data.path(), "\"openingMonitor\": \"pointer\"");
+    until_record(&mut sc, data.path(), "\"openingMonitor\": \"primary\"");
     // The keyboard returned to the trigger the frame the popup closed,
     // while the exit still paints it.
     assert_eq!(
@@ -1270,7 +1372,7 @@ fn the_select_opens_below_the_trigger_and_commits_the_highlighted_choice(cx: &mu
         .expect("the trigger");
     assert_eq!(
         trigger_aria["value"].as_str(),
-        Some("Pointer's display"),
+        Some("Primary display"),
         "the trigger shows the committed choice"
     );
     assert!(!trigger_aria["expanded"].as_bool().unwrap());
@@ -1283,11 +1385,11 @@ fn escape_cancels_the_draft_and_the_saved_choice_stands(cx: &mut TestAppContext)
     // A draft: a query that narrows the list and a highlight that moved.
     click(&mut sc, "launcher-monitor");
     sc.run_until_parked();
-    sc.simulate_input("pointer");
+    sc.simulate_input("active");
     sc.run_until_parked();
     assert_eq!(
         focused_label(&mut sc).as_deref(),
-        Some("Pointer's display"),
+        Some("Display with the active window"),
         "the highlight is on the query's match"
     );
 
@@ -1323,7 +1425,7 @@ fn escape_cancels_the_draft_and_the_saved_choice_stands(cx: &mut TestAppContext)
     );
     assert_eq!(
         focused_label(&mut sc).as_deref(),
-        Some("Primary display"),
+        Some("Display with the mouse"),
         "the highlight starts on the committed choice, the query empty"
     );
     assert!(
@@ -1336,10 +1438,11 @@ fn escape_cancels_the_draft_and_the_saved_choice_stands(cx: &mut TestAppContext)
 fn tab_and_shift_tab_leave_without_committing(cx: &mut TestAppContext) {
     let (_window, _settings, mut sc, data) = open_select(cx);
 
-    // A query that names a choice, so a commit would be identifiable.
+    // A query that names a choice other than the committed one, so a
+    // commit would be identifiable.
     click(&mut sc, "launcher-monitor");
     sc.run_until_parked();
-    sc.simulate_input("pointer");
+    sc.simulate_input("active");
     sc.run_until_parked();
 
     // Tab closes the popup and continues traversal forward from the
@@ -1406,14 +1509,14 @@ fn the_trigger_toggles_and_an_outside_click_respects_its_target(cx: &mut TestApp
     // committed underneath.
     click(&mut sc, "launcher-monitor");
     sc.run_until_parked();
-    sc.simulate_input("pointer");
+    sc.simulate_input("active");
     sc.run_until_parked();
     let field = sc
         .debug_bounds("settings-search-field")
         .expect("the sidebar's search field");
     // The pointer travels there first, as a real one does (see [`click`]):
     // a click's landing alone leaves the trigger it left believing it is
-    // still hovered, and its pointer fade would never settle.
+    // still hovered.
     sc.simulate_mouse_move(field.center(), None::<MouseButton>, Modifiers::none());
     sc.simulate_click(field.center(), Modifiers::none());
     sc.run_until_parked();
@@ -1442,41 +1545,44 @@ fn arrows_home_and_end_move_the_highlight_without_saving(cx: &mut TestAppContext
     // The highlight starts on the committed choice, and the arrows move
     // it among the choices that can be used, clamped at the ends — the
     // field keeps the focus, so the query stays editable throughout.
-    assert_eq!(focused_label(&mut sc).as_deref(), Some("Primary display"));
+    assert_eq!(
+        focused_label(&mut sc).as_deref(),
+        Some("Display with the mouse")
+    );
     sc.simulate_keystrokes("down");
     sc.run_until_parked();
     assert_eq!(
         focused_label(&mut sc).as_deref(),
-        Some("Pointer's display"),
+        Some("Primary display"),
         "Down moved the highlight"
     );
     sc.simulate_keystrokes("down");
     assert_eq!(
         focused_label(&mut sc).as_deref(),
-        Some("Active window's display")
+        Some("Display with the active window")
     );
     sc.simulate_keystrokes("down");
     assert_eq!(
         focused_label(&mut sc).as_deref(),
-        Some("Active window's display"),
+        Some("Display with the active window"),
         "Down at the end stays at the last choice"
     );
     sc.simulate_keystrokes("home");
     assert_eq!(
         focused_label(&mut sc).as_deref(),
-        Some("Primary display"),
+        Some("Display with the mouse"),
         "Home is the first choice"
     );
     sc.simulate_keystrokes("end");
     assert_eq!(
         focused_label(&mut sc).as_deref(),
-        Some("Active window's display"),
+        Some("Display with the active window"),
         "End is the last choice"
     );
     sc.simulate_keystrokes("up");
     assert_eq!(
         focused_label(&mut sc).as_deref(),
-        Some("Pointer's display"),
+        Some("Primary display"),
         "Up moved the highlight back"
     );
     assert!(
@@ -1554,25 +1660,26 @@ fn composition_filters_as_typed_and_commits_committed_text(cx: &mut TestAppConte
     // it with the committed text and commit the highlighted choice.
     sc.update(|window, cx| {
         input.update(cx, |input, cx| {
-            input.replace_and_mark_text_in_range(None, "poi", None, window, cx);
+            input.replace_and_mark_text_in_range(None, "pri", None, window, cx);
         })
     });
     sc.run_until_parked();
     assert!(
-        sc.debug_bounds("launcher-monitor-Pointer").is_some(),
+        sc.debug_bounds("launcher-monitor-Primary").is_some()
+            && sc.debug_bounds("launcher-monitor-Pointer").is_none(),
         "composing text filters the list as it is typed"
     );
     sc.update(|window, cx| {
         input.update(cx, |input, cx| {
             assert_eq!(input.marked_text_range(window, cx), Some(0..3));
-            input.replace_text_in_range(None, "pointer", window, cx);
+            input.replace_text_in_range(None, "primary", window, cx);
             assert_eq!(input.marked_text_range(window, cx), None);
         })
     });
     sc.run_until_parked();
     sc.simulate_keystrokes("enter");
     sc.run_until_parked();
-    until_record(&mut sc, data.path(), "\"openingMonitor\": \"pointer\"");
+    until_record(&mut sc, data.path(), "\"openingMonitor\": \"primary\"");
 }
 
 #[gpui::test]
@@ -1580,25 +1687,32 @@ fn the_popup_stays_inside_the_window_when_the_room_is_short(cx: &mut TestAppCont
     let (_window, settings, mut sc, _data) = open_select(cx);
 
     // A short window — shorter than the floor the app asks the system
-    // for, which the layout still handles — so the popup, opened below
-    // the trigger, would reach past the window's bottom edge and must
-    // be constrained inside it.
+    // for (560×400), which the layout still handles — so the popup,
+    // opened below the trigger near the page's top, would reach past the
+    // window's bottom edge and must be constrained inside it.
     sc.cx
-        .simulate_window_resize(AnyWindowHandle::from(settings), size(px(560.), px(300.)));
+        .simulate_window_resize(AnyWindowHandle::from(settings), size(px(560.), px(220.)));
     sc.run_until_parked();
     click(&mut sc, "launcher-monitor");
     sc.run_until_parked();
-    let window = sc.update(|window, _| window.bounds());
+    // The window's own drawable area, in the coordinates the popup is
+    // measured in (the window's bounds are the screen's).
+    let viewport = sc.update(|window, _| window.viewport_size());
+    let trigger = sc.debug_bounds("launcher-monitor").expect("the trigger");
     let popup = sc
         .debug_bounds("launcher-monitor-popup")
         .expect("the popup opens");
     assert!(
-        popup.bottom() <= window.bottom(),
-        "the popup stays inside the window: {popup:?} in {window:?}"
+        trigger.bottom() + px(4.) + popup.size.height > viewport.height,
+        "the room below the trigger is short: {popup:?} under {trigger:?} in {viewport:?}"
+    );
+    assert!(
+        popup.bottom() <= viewport.height,
+        "the popup stays inside the window: {popup:?} in {viewport:?}"
     );
     assert!(popup.top() >= px(0.), "the popup is on screen");
-    // Every choice is reachable in the constrained popup: the list
-    // scrolls, the popup does not grow past the window for them.
+    // Every choice is reachable in the constrained popup: it moves up
+    // to fit rather than growing past the window for them.
     for selector in [
         "launcher-monitor-Primary",
         "launcher-monitor-Pointer",
@@ -1624,10 +1738,11 @@ fn the_popup_exits_toward_the_trigger_inert_and_unmounts(cx: &mut TestAppContext
     // popup's own — none of the pointer's.
     pointer_leaves(&mut sc);
     settle_frames(&mut sc);
-    sc.simulate_input("poi");
+    sc.simulate_input("act");
     sc.run_until_parked();
     assert!(
-        sc.debug_bounds("launcher-monitor-Pointer").is_some(),
+        sc.debug_bounds("launcher-monitor-ActiveWindow").is_some()
+            && sc.debug_bounds("launcher-monitor-Pointer").is_none(),
         "the draft narrowed the list"
     );
 
@@ -1644,7 +1759,8 @@ fn the_popup_exits_toward_the_trigger_inert_and_unmounts(cx: &mut TestAppContext
     );
     let exiting = popup_presentation(&settings, &mut sc).expect("the exit is painting");
     assert!(
-        sc.debug_bounds("launcher-monitor-Pointer").is_some(),
+        sc.debug_bounds("launcher-monitor-ActiveWindow").is_some()
+            && sc.debug_bounds("launcher-monitor-Pointer").is_none(),
         "the exit paints the draft the user saw"
     );
     // Frames pass and the exit recedes: the offset moves toward the
@@ -1666,7 +1782,7 @@ fn the_popup_exits_toward_the_trigger_inert_and_unmounts(cx: &mut TestAppContext
     // The exit's visuals are inert: a click on the row that would commit
     // lands on the fading overlay and does nothing — the draft is not
     // saved by the popup's own afterimage.
-    click(&mut sc, "launcher-monitor-Pointer");
+    click(&mut sc, "launcher-monitor-ActiveWindow");
     sc.run_until_parked();
     assert!(
         !data.path().join("settings.json").exists(),
@@ -1711,14 +1827,13 @@ fn a_popup_reopened_during_its_exit_retargets_and_blocks_nothing(cx: &mut TestAp
     assert!(frame(&mut sc, Duration::from_millis(25)) >= 1);
     let mid_exit = popup_presentation(&settings, &mut sc).expect("the exit is painting");
 
-    // The choice the popup covers while it exits: a click on the part of
+    // The control the popup covers while it exits — the Pop to root
+    // search select's trigger, in the row below: a click on the part of
     // it under the popup must not reach it — the overlay, open or
-    // exiting, takes the clicks that land on it. (The popup is as wide as
-    // its contents, so it covers the reopening track's second segment
-    // only at that segment's start.)
+    // exiting, takes the clicks that land on it.
     let segment = sc
-        .debug_bounds("launcher-reopening-RootSearch")
-        .expect("a segment under the popup");
+        .debug_bounds("launcher-reopening")
+        .expect("a control under the popup");
     let popup = sc
         .debug_bounds("launcher-monitor-popup")
         .expect("the exiting popup");
@@ -1747,10 +1862,13 @@ fn a_popup_reopened_during_its_exit_retargets_and_blocks_nothing(cx: &mut TestAp
         reversing.0,
         mid_exit.0
     );
+    // The fade turns around where the exit left it too: no jump up to
+    // the entrance's floor, which a fresh open starts from.
     assert!(
-        reversing.1 > 0.4,
-        "the reopen did not reset to the entrance's floor: {}",
-        reversing.1
+        reversing.1 > 0. && reversing.1 <= mid_exit.1 + 0.05,
+        "the reopen's fade jumped instead of continuing from the exit's: {} from {}",
+        reversing.1,
+        mid_exit.1
     );
     // The reopened popup is the interactive one: typing filters it.
     sc.simulate_input("poi");
@@ -1773,6 +1891,12 @@ fn a_popup_reopened_during_its_exit_retargets_and_blocks_nothing(cx: &mut TestAp
     assert!(sc.debug_bounds("launcher-monitor-popup").is_none());
     assert_eq!(settle_frames(&mut sc), 0, "nothing of the popup is left");
     sc.simulate_click(covered.center(), Modifiers::none());
+    sc.run_until_parked();
+    assert!(
+        sc.debug_bounds("launcher-reopening-popup").is_some(),
+        "the click opened the select underneath"
+    );
+    click(&mut sc, "launcher-reopening-RootSearch");
     sc.run_until_parked();
     until_record(&mut sc, data.path(), "\"reopening\": \"root-search\"");
 }
@@ -1847,8 +1971,9 @@ fn filtering_never_animates_the_popup_contents(cx: &mut TestAppContext) {
     settle_frames(&mut sc);
     // Typing narrows the list to the choices the query matches: the rows
     // change at once, and the window asks for no cosmetic frame for them.
-    // ("poi" matches only the pointer's display; a plain "p" would match
-    // every label, whose names all carry the word "display".)
+    // ("poi" matches only the display with the mouse, by its "pointer"
+    // keyword; a plain "p" would match every label, whose names all
+    // carry the word "display".)
     sc.simulate_input("poi");
     sc.run_until_parked();
     assert!(
@@ -1880,7 +2005,7 @@ fn filtering_never_animates_the_popup_contents(cx: &mut TestAppContext) {
     sc.run_until_parked();
     assert_eq!(
         focused_label(&mut sc).as_deref(),
-        Some("Pointer's display"),
+        Some("Primary display"),
         "the highlight moved with the keyboard"
     );
     assert_eq!(
@@ -1890,12 +2015,13 @@ fn filtering_never_animates_the_popup_contents(cx: &mut TestAppContext) {
     );
 }
 
-/// The select is a Settings field (#99): its label over the trigger, a
-/// 34px well (black 24% under its ring) showing the committed choice, its
-/// description under it. Nothing about it fades: the pointer over the
-/// trigger asks for no frame (the Settings board's controls change at
-/// once). Its list's rows are the Actions panel's entry family: at least
-/// 36 high, the highlighted one on the white 11% wash, never a root row's.
+/// The select is a Settings row's control (#99): the row names the
+/// setting at its left, and the trigger at its right end is a 30px inline
+/// well (black 24% under its ring) showing the committed choice. Nothing
+/// about it fades: the pointer over the trigger asks for no frame (the
+/// Settings board's controls change at once). Its list's rows are the
+/// Actions panel's entry family: at least 36 high, the highlighted one on
+/// the white 11% wash, never a root row's.
 #[gpui::test]
 fn the_select_is_a_settings_field_whose_washes_change_at_once(cx: &mut TestAppContext) {
     let (_window, _settings, mut sc, _data) = open_select(cx);
@@ -1903,14 +2029,18 @@ fn the_select_is_a_settings_field_whose_washes_change_at_once(cx: &mut TestAppCo
     settle_frames(&mut sc);
 
     let trigger = sc.debug_bounds("launcher-monitor").expect("the trigger");
-    let label = sc
-        .debug_bounds("launcher-monitor-label")
-        .expect("the field's label");
-    assert_eq!(trigger.size.height, px(34.), "a field's well");
-    assert_eq!(
-        trigger.top(),
-        label.bottom() + px(8.),
-        "the label 8px over it"
+    let row = sc
+        .debug_bounds("launcher-monitor-field")
+        .expect("the Display row");
+    assert_eq!(trigger.size.height, px(30.), "an inline well");
+    // At the row's end, inside its 14px padding, and centered on it.
+    assert!(
+        (trigger.right() - (row.right() - px(14.))).abs() <= px(1.),
+        "the well ends the row: {trigger:?} in {row:?}"
+    );
+    assert!(
+        (trigger.center().y - row.center().y).abs() <= px(1.),
+        "the well is centered in the row: {trigger:?} in {row:?}"
     );
     assert!(
         paint::paints_fill_at(&mut sc, trigger, 0x0000003D),
@@ -1932,7 +2062,7 @@ fn the_select_is_a_settings_field_whose_washes_change_at_once(cx: &mut TestAppCo
     sc.run_until_parked();
     settle_frames(&mut sc);
     let row = sc
-        .debug_bounds("launcher-monitor-Primary")
+        .debug_bounds("launcher-monitor-Pointer")
         .expect("the committed choice's row");
     assert!(row.size.height >= px(36.), "an entry's floor: {row:?}");
     assert!(
@@ -1941,22 +2071,22 @@ fn the_select_is_a_settings_field_whose_washes_change_at_once(cx: &mut TestAppCo
     );
     assert!(!paint::paints_fill_at(&mut sc, row, 0xFFFFFF16));
 
-    // The reopening choice is a segmented choice: two 30px segments, the
+    // The window mode is a segmented choice: two 30px segments, the
     // chosen one on white 12%.
     sc.simulate_keystrokes("escape");
     sc.run_until_parked();
     pointer_leaves(&mut sc);
     settle_frames(&mut sc);
-    let restore = sc
-        .debug_bounds("launcher-reopening-RestoreView")
+    let expanded = sc
+        .debug_bounds("launcher-window-Expanded")
         .expect("the default's segment");
-    let root = sc
-        .debug_bounds("launcher-reopening-RootSearch")
+    let compact = sc
+        .debug_bounds("launcher-window-Compact")
         .expect("the other segment");
-    assert_eq!(restore.size.height, px(30.));
-    assert_eq!(restore.size.width, root.size.width, "equal shares");
-    assert!(paint::paints_fill_at(&mut sc, restore, 0xFFFFFF1F));
-    assert!(!paint::paints_fill_at(&mut sc, root, 0xFFFFFF1F));
+    assert_eq!(expanded.size.height, px(30.));
+    assert_eq!(expanded.size.width, compact.size.width, "equal shares");
+    assert!(paint::paints_fill_at(&mut sc, expanded, 0xFFFFFF1F));
+    assert!(!paint::paints_fill_at(&mut sc, compact, 0xFFFFFF1F));
 }
 
 #[gpui::test]
@@ -1967,20 +2097,20 @@ fn a_jump_from_the_settings_search_focuses_the_select(cx: &mut TestAppContext) {
     click(&mut sc, "section-General");
     sc.run_until_parked();
     sc.simulate_keystrokes(find_shortcut());
-    sc.simulate_input("pointer");
+    sc.simulate_input("mouse");
     sc.run_until_parked();
     assert!(
-        sc.debug_bounds("settings-search-result-Pointer's display")
+        sc.debug_bounds("settings-search-result-Display with the mouse")
             .is_some(),
         "the choice is a search result"
     );
     sc.simulate_keystrokes("enter");
     sc.run_until_parked();
 
-    // The jump opens the Launcher page and focuses the select's trigger
-    // — the one keyboard control the page has — without opening it.
+    // The jump opens the Launcher page and focuses the trigger of the
+    // select that offers the choice, without opening it.
     assert!(
-        sc.debug_bounds("launcher-title").is_some(),
+        sc.debug_bounds("launcher").is_some(),
         "the Launcher page opened"
     );
     assert_eq!(

@@ -336,17 +336,18 @@ pub(crate) struct FixturePin {
 }
 
 /// A pin of `title` with the reference's `tone` and `glyph`.
-const fn sample_pin(title: &'static str, tone: IconTone, glyph: Glyph) -> Option<FixturePin> {
-    Some(FixturePin {
+const fn sample_pin(title: &'static str, tone: IconTone, glyph: Glyph) -> FixturePin {
+    FixturePin {
         title,
         icon: (tone, glyph),
         unavailable: None,
-    })
+    }
 }
 
 /// The reference root board's five pins, in its order: Terminal, Visual
 /// Studio Code, Firefox, Obsidian and Spotify, with its tones and glyphs.
-pub(crate) const ROOT_PINS: &[Option<FixturePin>] = &[
+/// They fill the strip's one row, so no pin hint follows them.
+pub(crate) const ROOT_PINS: &[FixturePin] = &[
     sample_pin("Terminal", IconTone::Term, Glyph::Prompt),
     sample_pin("Visual Studio Code", IconTone::Code, Glyph::Code),
     sample_pin("Firefox", IconTone::Web, Glyph::Globe),
@@ -354,18 +355,17 @@ pub(crate) const ROOT_PINS: &[Option<FixturePin>] = &[
     sample_pin("Spotify", IconTone::Music, Glyph::Music),
 ];
 
-/// A partly filled home, which the reference never authors: two pins, one
-/// of them unavailable with its reason, and three empty slots.
-pub(crate) const PARTIAL_PINS: &[Option<FixturePin>] = &[
+/// A partly filled home, which the reference never authors: three pins,
+/// the last unavailable with its reason, and the pin hint in the cell
+/// after them.
+pub(crate) const PARTIAL_PINS: &[FixturePin] = &[
     sample_pin("Terminal", IconTone::Term, Glyph::Prompt),
-    None,
-    Some(FixturePin {
+    sample_pin("Firefox", IconTone::Web, Glyph::Globe),
+    FixturePin {
         title: "Obsidian",
         icon: (IconTone::Note, Glyph::Notes),
         unavailable: Some("Notes is disabled"),
-    }),
-    None,
-    None,
+    },
 ];
 
 /// The launcher's kind of a fixture row's kind label: an application's
@@ -846,10 +846,10 @@ pub(crate) struct Scenario {
     pub(crate) frame: bool,
     #[serde(skip)]
     pub(crate) rows: &'static [FixtureRow],
-    /// The pinned home's slots over a blank query, in order (`None` for an
-    /// empty slot); none at all for a scenario that shows no home.
+    /// The pinned home's pins over a blank query, in order; none at all
+    /// for a scenario that shows no home.
     #[serde(skip)]
-    pub(crate) pins: &'static [Option<FixturePin>],
+    pub(crate) pins: &'static [FixturePin],
     /// What the capture helpers do, in order, from the scenario's rest.
     pub(crate) steps: &'static [Step],
 }
@@ -1563,7 +1563,7 @@ const SCENARIOS: &[Scenario] = {
         },
         Scenario {
             name: "pinned-partial",
-            description: "A partly filled home: two pins, one whose target cannot run with its reason, and three empty slots (no reference counterpart)",
+            description: "A partly filled home: three pins, one whose target cannot run with its reason, and the pin hint in the cell after them (no reference counterpart)",
             family: Family::Root,
             client: ROOT_CLIENT,
             reference: false,
@@ -1874,10 +1874,10 @@ impl ProductionAppearance {
             theme: state.theme_preference(),
             material: state.material_preference(),
             overrides: state.override_descriptions(),
-            preview: appearance::preview_content(
-                crate::keyboard::binding_keys(invoke),
-                &crate::keyboard::binding_keys(open_actions).name(),
-            ),
+            preview: {
+                let _ = (invoke, open_actions);
+                board_preview(&keyboard)
+            },
             surface: settings::visuals(cx).material,
         }
     }
@@ -1897,7 +1897,7 @@ fn render_appearance_production(
     let offered = !overridden;
     let themes = appearance::THEMES
         .iter()
-        .map(|&(preference, name, _, selector)| {
+        .map(|&(preference, name, selector)| {
             controls::segment(name, preference == page.theme, offered, theme).id(selector)
         })
         .collect();
@@ -1907,15 +1907,19 @@ fn render_appearance_production(
             controls::segment(name, preference == page.material, offered, theme).id(selector)
         })
         .collect();
-    let fields = appearance::fields(
-        (themes, materials),
-        (page.theme, page.material),
-        offered,
-        theme,
-    );
-    let notice = overridden.then(|| appearance::override_notice(&page.overrides, theme));
-    let stage = appearance::preview_stage(&page.preview, page.surface, page.theme, theme);
-    appearance::compose(notice, fields, None, stage, theme)
+    let view = appearance::AppearanceView {
+        theme: page.theme,
+        material: page.material,
+        overrides: if overridden {
+            page.overrides
+        } else {
+            Vec::new()
+        },
+        status: None,
+    };
+    div()
+        .id("appearance")
+        .child(appearance::compose(&view, (themes, materials), theme))
 }
 
 /// A deliberate fault the workbench injects to prove its comparison is
@@ -2147,8 +2151,8 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
 #[derive(Clone, Debug)]
 struct FixtureState {
     all: &'static [FixtureRow],
-    /// The pinned home's slots, shown over a blank query.
-    pins: &'static [Option<FixturePin>],
+    /// The pinned home's pins, shown over a blank query.
+    pins: &'static [FixturePin],
     query: String,
     rows: Vec<&'static FixtureRow>,
     /// The selected row's index; past the last row while none is: a list
@@ -2169,7 +2173,7 @@ struct PanelState {
 }
 
 impl FixtureState {
-    fn new(all: &'static [FixtureRow], pins: &'static [Option<FixturePin>]) -> FixtureState {
+    fn new(all: &'static [FixtureRow], pins: &'static [FixturePin]) -> FixtureState {
         FixtureState {
             all,
             pins,
@@ -2496,8 +2500,8 @@ pub(crate) struct DeclaredSection {
 }
 
 /// The pinned home as a capture declares it: the "Pinned" label, the
-/// strip and its slots, laid out from the theme's tokens as
-/// `crate::ui::pinned` draws them.
+/// strip, its slots and the pin hint after them, laid out from the theme's
+/// tokens as `crate::ui::pinned` draws them.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DeclaredPinned {
@@ -2508,6 +2512,10 @@ pub(crate) struct DeclaredPinned {
     label_keys: Option<KeyGroupRecord>,
     strip: Rect,
     slots: Vec<DeclaredSlot>,
+    /// The pin hint's cell, after the last slot, while it shows (see
+    /// `crate::ui::pinned::shows_pin_hint`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hint: Option<Rect>,
 }
 
 /// One quick slot as a capture declares it.
@@ -2516,19 +2524,18 @@ pub(crate) struct DeclaredPinned {
 pub(crate) struct DeclaredSlot {
     /// Its place, counting from 1.
     number: usize,
-    /// What it holds; `None` for an empty slot.
-    title: Option<&'static str>,
+    /// What it holds.
+    title: &'static str,
     /// "app" for a gradient tile, "command" for the neutral one.
-    tone: Option<&'static str>,
+    tone: &'static str,
     unavailable: Option<&'static str>,
     rect: Rect,
     /// Its 42px tile, centered across the slot.
-    tile: Option<Rect>,
+    tile: Rect,
     /// Its title's line, inside the slot's side padding; the text is
     /// centered in it.
-    title_rect: Option<Rect>,
-    /// Whether the pointer is over it (an occupied slot takes the hover
-    /// wash).
+    title_rect: Rect,
+    /// Whether the pointer is over it (it takes the hover wash).
     hovered: bool,
     /// Its compact chord in its top right corner, filled in from shaped
     /// text when the manifest is written.
@@ -2541,16 +2548,31 @@ pub(crate) struct DeclaredSlot {
     truncated: Option<bool>,
 }
 
-/// The height the pinned home takes above the rows, the list's gap after
-/// it included: the label, the gap, the strip with its paddings, the gap.
-fn home_height(theme: &Theme) -> f32 {
-    let geometry = &theme.geometry;
-    let pinned = &geometry.pinned;
-    f32::from(geometry.section_height)
-        + f32::from(pinned.strip_padding_top)
-        + f32::from(pinned.slot_height)
+/// The height of the strip of `pins` pins, its paddings included: its
+/// rows of slots ([`pinned::strip_rows`]), the columns' gap between them.
+fn strip_height(theme: &Theme, pins: usize) -> f32 {
+    let pinned = &theme.geometry.pinned;
+    let rows = pinned::strip_rows(pins) as f32;
+    f32::from(pinned.strip_padding_top)
+        + rows * f32::from(pinned.slot_height)
+        + (rows - 1.) * f32::from(pinned.columns_gap)
         + f32::from(pinned.strip_padding_bottom)
+}
+
+/// The height the pinned home of `pins` pins takes above the rows, the
+/// list's gap after it included: the label, the gap, the strip with its
+/// paddings, the gap.
+fn home_height(theme: &Theme, pins: usize) -> f32 {
+    let geometry = &theme.geometry;
+    f32::from(geometry.section_height)
+        + strip_height(theme, pins)
         + 2. * f32::from(geometry.row_list_gap)
+}
+
+/// How many of `pins` pins Ctrl and a digit number, as the launcher's
+/// home numbers them (`features::quick_slots::NUMBERED_PINS`).
+fn numbered_pins(pins: usize) -> usize {
+    pins.min(crate::features::quick_slots::NUMBERED_PINS)
 }
 
 /// "app" for a gradient tone, "command" for the neutral tile.
@@ -2592,13 +2614,21 @@ fn declared_home(
         x,
         y: top + f(geometry.section_height) + f(geometry.row_list_gap),
         width,
-        height: f(pinned.strip_padding_top)
-            + f(pinned.slot_height)
-            + f(pinned.strip_padding_bottom),
+        height: strip_height(theme, state.pins.len()),
     };
-    let count = state.pins.len() as f32;
+    // The strip's equal columns, its cells filling them row by row, the
+    // columns' gap between the rows too.
+    let columns = pinned::PINNED_COLUMNS as f32;
     let gap = f(pinned.columns_gap);
-    let column = (width - gap * (count - 1.)) / count;
+    let column = (width - gap * (columns - 1.)) / columns;
+    let cell = |index: usize| Rect {
+        x: x + (index % pinned::PINNED_COLUMNS) as f32 * (column + gap),
+        y: strip.y
+            + f(pinned.strip_padding_top)
+            + (index / pinned::PINNED_COLUMNS) as f32 * (f(pinned.slot_height) + gap),
+        width: column,
+        height: f(pinned.slot_height),
+    };
     let tile = f(geometry.slot_tile.size);
     let line = f(typography.slot_title_size) * typography.line_height;
     let reason_line = f(typography.slot_reason_size) * typography.line_height;
@@ -2608,16 +2638,11 @@ fn declared_home(
         .iter()
         .enumerate()
         .map(|(index, pin)| {
-            let rect = Rect {
-                x: x + index as f32 * (column + gap),
-                y: strip.y + f(pinned.strip_padding_top),
-                width: column,
-                height: f(pinned.slot_height),
-            };
+            let rect = cell(index);
             // The tile and the title, centered down the slot inside its
             // paddings, the slot's gap between them; an unavailable slot's
             // reason right under its title, the tile closer to them.
-            let reason = pin.as_ref().and_then(|pin| pin.unavailable);
+            let reason = pin.unavailable;
             let text_gap = f(if reason.is_some() {
                 pinned.unavailable_gap
             } else {
@@ -2627,33 +2652,35 @@ fn declared_home(
             let tile_y = rect.y + f(pinned.slot_padding_top) + (inner - content) / 2.;
             DeclaredSlot {
                 number: index + 1,
-                title: pin.as_ref().map(|pin| pin.title),
-                tone: pin.as_ref().map(|pin| tone_name(pin.icon.0)),
+                title: pin.title,
+                tone: tone_name(pin.icon.0),
                 unavailable: reason,
                 rect,
-                tile: pin.as_ref().map(|_| Rect {
+                tile: Rect {
                     x: rect.x + (column - tile) / 2.,
                     y: tile_y,
                     width: tile,
                     height: tile,
-                }),
-                title_rect: pin.as_ref().map(|_| Rect {
+                },
+                title_rect: Rect {
                     x: rect.x + f(pinned.slot_padding_x),
                     y: tile_y + tile + text_gap,
                     width: column - 2. * f(pinned.slot_padding_x),
                     height: line,
-                }),
-                hovered: pin.is_some() && pointer.is_some_and(|point| rect.contains(point)),
+                },
+                hovered: pointer.is_some_and(|point| rect.contains(point)),
                 key_group: None,
                 truncated: None,
             }
         })
         .collect();
+    let hint = pinned::shows_pin_hint(state.pins.len()).then(|| cell(state.pins.len()));
     Some(DeclaredPinned {
         label,
         label_keys: None,
         strip,
         slots,
+        hint,
     })
 }
 
@@ -2696,13 +2723,13 @@ fn declared_list(
     // its note the caps of its chord as the reference's DOM reads them
     // ("Ctrl1–5").
     if let Some(home) = declared_home(state, theme, frame, offset, None) {
-        let keys = crate::keyboard::quick_slots_keys(state.pins.len());
+        let keys = crate::keyboard::quick_slots_keys(numbered_pins(state.pins.len()));
         labels.push(DeclaredSection {
             label: pinned::PINNED_LABEL.to_owned(),
             note: Some(keys.keys.iter().map(|key| key.cap.as_ref()).collect()),
             rect: home.label,
         });
-        y += home_height(theme);
+        y += home_height(theme, state.pins.len());
     }
     let rows = state
         .rows
@@ -3519,6 +3546,7 @@ impl FixtureWindow {
             .enumerate()
             .map(|(index, section)| {
                 settings_shell::sidebar_item(
+                    ("section", index),
                     SidebarItem {
                         label: section.label.into(),
                         glyph: section.glyph,
@@ -3529,7 +3557,6 @@ impl FixtureWindow {
                     },
                     theme,
                 )
-                .id(("section", index))
             });
         let search =
             settings_shell::search_field(&self.query, settings_shell::SEARCH_PLACEHOLDER, theme);
@@ -3555,7 +3582,7 @@ impl FixtureWindow {
                 page.child(settings_shell::page_columns(header, aside, theme))
             }
         };
-        crate::features::settings::compose(div(), sidebar, page, theme, material)
+        crate::features::settings::compose(div(), "Settings", sidebar, page, theme, material)
     }
 
     /// The Appearance board's page (#98): its fixture content — the
@@ -3678,8 +3705,9 @@ impl FixtureWindow {
             &keys,
             theme,
         );
-        let rows = suggestions.items.iter().map(|item| {
-            result_layouts::suggestion_row(&item.suggestion(), theme).into_any_element()
+        let rows = suggestions.items.iter().enumerate().map(|(index, item)| {
+            result_layouts::suggestion_row(("suggestion", index), &item.suggestion(), theme)
+                .into_any_element()
         });
         std::iter::once(label.into_any_element())
             .chain(rows)
@@ -3692,9 +3720,11 @@ impl FixtureWindow {
             // A result board's card and history rows (#96), through the
             // shared result layouts.
             if let Some(answer) = self.state.answer_at(index) {
+                let press = crate::ui::theme::pressed(theme.results.card_fill);
                 return answer
                     .draw(selected, theme)
                     .id(("row", index))
+                    .active(move |card| card.bg(press))
                     .role(Role::ListBoxOption)
                     .aria_label(answer.label(row.title))
                     .aria_selected(selected)
@@ -3708,8 +3738,10 @@ impl FixtureWindow {
                     icon: row.icon,
                     selected,
                 };
+                let press = crate::ui::result_row::pressed_wash(selected, theme);
                 return result_layouts::history_row(&history, theme)
                     .id(("row", index))
+                    .active(move |row| row.bg(press))
                     .role(Role::ListBoxOption)
                     .aria_label(row.title)
                     .aria_selected(selected)
@@ -3731,10 +3763,15 @@ impl FixtureWindow {
                         .keys
                         .map(|binding| crate::keyboard::binding_keys(&parse_binding(binding))),
                     kind: Some(row.kind.into()),
+                    number: None,
                 },
                 theme,
             )
             .id(("row", index))
+            .active({
+                let press = crate::ui::result_row::pressed_wash(selected, theme);
+                move |row| row.bg(press)
+            })
             .role(Role::ListBoxOption)
             .aria_label(row.title)
             .aria_selected(selected)
@@ -3752,36 +3789,28 @@ impl FixtureWindow {
             .into_any_element()
         });
         // The pinned home over a blank query, through the launcher's own
-        // composition (`ui::pinned`): the fixture's authored pins, each
-        // occupied slot with its production chord.
+        // composition (`ui::pinned`): the fixture's authored pins, then the
+        // pin hint while its cell is in the strip's last row.
         let home = self.state.home_shown().then(|| {
-            let slots = self
-                .state
-                .pins
+            let pins = self.state.pins;
+            let mut tiles: Vec<gpui::AnyElement> = pins
                 .iter()
                 .enumerate()
                 .map(|(index, pin)| {
-                    let content = match pin {
-                        Some(pin) => SlotContent {
-                            index,
-                            title: Some(pin.title.into()),
-                            icon: pin.icon,
-                            keys: Some(crate::keyboard::quick_slot_keys(index + 1)),
-                            unavailable: pin.unavailable.map(Into::into),
-                        },
-                        None => SlotContent {
-                            index,
-                            title: None,
-                            icon: (IconTone::Command, Glyph::Prompt),
-                            keys: None,
-                            unavailable: None,
-                        },
+                    let content = SlotContent {
+                        index,
+                        title: pin.title.into(),
+                        icon: pin.icon,
+                        number: None,
+                        unavailable: pin.unavailable.map(Into::into),
                     };
                     pinned::pinned_slot(content, theme).into_any_element()
                 })
                 .collect();
-            let keys = crate::keyboard::quick_slots_keys(self.state.pins.len());
-            pinned::home(&keys, slots, theme)
+            if pinned::shows_pin_hint(pins.len()) {
+                tiles.push(pinned::pin_hint(theme).into_any_element());
+            }
+            pinned::home(tiles, theme)
         });
         // A result board's notice for its query (#96), as root search
         // composes it.
@@ -3883,6 +3912,8 @@ impl FixtureWindow {
                     filtering: !panel.query.trim().is_empty(),
                     selected: panel.selected,
                     invoke: &invoke_keys,
+                    // The reference's panel shows no keys on its pin entry.
+                    slot_keys: None,
                     filter: &self.filter,
                 },
                 theme,
@@ -4675,7 +4706,7 @@ fn declare_home_keys(window: &Window, theme: &Theme, home: &mut DeclaredPinned) 
     let height = f32::from(geometry.keycap_height);
     let content = f32::from(geometry.section_height) - f32::from(geometry.section_padding_top);
     let y = home.label.y + f32::from(geometry.section_padding_top) + (content - height) / 2.;
-    let keys = crate::keyboard::quick_slots_keys(home.slots.len());
+    let keys = crate::keyboard::quick_slots_keys(numbered_pins(home.slots.len()));
     // The caps sit in the section label, whose tracking their labels
     // inherit, as the reference's `.kbd` inherits `.label`'s.
     let tracking = theme.typography.section_size * theme.typography.section_tracking;
@@ -4694,18 +4725,17 @@ fn declare_home_keys(window: &Window, theme: &Theme, home: &mut DeclaredPinned) 
     home.label_keys = Some(label);
     let inset = f32::from(geometry.pinned.keys_inset);
     for slot in &mut home.slots {
-        if let (Some(title), Some(line)) = (slot.title, slot.title_rect) {
-            let width = shaped_width(
-                window,
-                theme,
-                title,
-                theme.typography.slot_title_size,
-                theme.typography.medium,
-            );
-            slot.truncated = Some(width > line.width);
-        }
+        let width = shaped_width(
+            window,
+            theme,
+            slot.title,
+            theme.typography.slot_title_size,
+            theme.typography.medium,
+        );
+        slot.truncated = Some(width > slot.title_rect.width);
+        // Only the numbered pins have a chord.
         let index = slot.number - 1;
-        if slot.title.is_none() || index >= SLOT_CHORDS.len() {
+        if index >= SLOT_CHORDS.len() {
             continue;
         }
         let keys = crate::keyboard::quick_slot_keys(slot.number);
@@ -5793,7 +5823,7 @@ fn declared_appearance(
     // margin, then the column's gap.
     let subtitle = match page {
         AppearancePage::Board => SETTINGS_SUBTITLE,
-        AppearancePage::Production { .. } => appearance::ABOUT,
+        AppearancePage::Production { .. } => "",
     };
     let subtitle_style = (lines.subtitle.size, theme.typography.regular);
     let subtitle_lines = wrapped_lines(window, theme, subtitle, subtitle_style, column.width);
@@ -5864,15 +5894,13 @@ fn declared_appearance(
                 column.description(&notice, theme.warning, 1., false);
                 column.next_group();
             }
-            let themes = appearance::THEMES.map(|(_, name, _, _)| name);
+            let themes = appearance::THEMES.map(|(_, name, _)| name);
             let chosen = appearance::THEMES
                 .iter()
                 .position(|&(preference, ..)| preference == production.theme)
                 .unwrap_or_default();
             column.label("Theme", opacity);
             column.track("theme", &themes, (chosen, None), opacity);
-            let note = appearance::theme_note(production.theme);
-            column.description(note, theme.text_muted, 1., true);
             column.next_group();
             let materials = appearance::MATERIALS.map(|(_, name, _)| name);
             let chosen = appearance::MATERIALS
@@ -5881,8 +5909,9 @@ fn declared_appearance(
                 .unwrap_or_default();
             column.label("Material", opacity);
             column.track("material", &materials, (chosen, None), opacity);
-            let (note, color) = appearance::material_note(production.material, theme);
-            column.description(&note, color, 1., true);
+            if let Some((note, color)) = appearance::material_note(production.material, theme) {
+                column.description(&note, color, 1., true);
+            }
             let glass = production.surface.is_glass();
             (production.preview, glass, None)
         }
@@ -6589,7 +6618,7 @@ pub fn run(options: FixtureOptions) -> Result<(), String> {
         root_search::bind_keys(cx, &text_editing, &keyboard);
         clipboard_history::bind_keys(cx, &text_editing, &keyboard);
         actions_panel::bind_keys(cx, &text_editing);
-        crate::keyboard::bind_keys(cx, &keyboard);
+        crate::keyboard::bind_keys(cx, &keyboard, pane_core::NavigationBindings::None);
 
         let (width, height) = scenario.client;
         let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
@@ -7741,15 +7770,19 @@ impl FixtureWindow {
             .into_iter()
             .map(|label| {
                 let target = format!("clip-tab-{}", label.to_lowercase());
-                split_view::tab(label, label == clip.tab, theme)
-                    .id(SharedString::from(target.clone()))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(clip) = this.clip.as_mut() {
-                            clip.click(&target);
-                            cx.notify();
-                        }
-                    }))
-                    .into_any_element()
+                split_view::tab(
+                    SharedString::from(target.clone()),
+                    label,
+                    label == clip.tab,
+                    theme,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(clip) = this.clip.as_mut() {
+                        clip.click(&target);
+                        cx.notify();
+                    }
+                }))
+                .into_any_element()
             })
             .collect();
         let tabs = split_view::tabs(
@@ -7763,6 +7796,7 @@ impl FixtureWindow {
             .map(|(index, record)| {
                 let target = format!("clip-{}", record.id);
                 split_view::clip_row(
+                    ("clip", index),
                     ClipRow {
                         title: record.title.into(),
                         time: record.time.into(),
@@ -7776,7 +7810,6 @@ impl FixtureWindow {
                     },
                     theme,
                 )
-                .id(("clip", index))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if let Some(clip) = this.clip.as_mut() {
                         clip.click(&target);
@@ -8297,8 +8330,8 @@ mod tests {
         let rows = &capture(&captures, "rest").rows;
         assert_eq!(rows.len(), ROOT_ROWS.len());
         // The pinned home above them: the label (30), the list's gap, the
-        // strip (2 + 100 + 6) and the gap again.
-        let home = 30. + 2. + 108. + 2.;
+        // strip (2 + 80 + 6) and the gap again.
+        let home = 30. + 2. + 88. + 2.;
         for (index, row) in rows.iter().enumerate() {
             // Row i below the header, the list's top padding, the home and
             // the "Commands" label (30 and the list's gap), then one row
@@ -8332,7 +8365,7 @@ mod tests {
         let home = rest.pinned.as_ref().expect("a blank query shows the home");
         assert_eq!(home.label.y, 64. + 4.);
         assert_eq!(home.strip.y, 64. + 4. + 30. + 2.);
-        assert_eq!(home.strip.height, 2. + 100. + 6.);
+        assert_eq!(home.strip.height, 2. + 80. + 6.);
         // Five equal columns across the list's 740px, 8px apart.
         let column = (740. - 4. * 8.) / 5.;
         assert_eq!(home.slots.len(), 5);
@@ -8343,25 +8376,26 @@ mod tests {
                     x: 10. + index as f32 * (column + 8.),
                     y: home.strip.y + 2.,
                     width: column,
-                    height: 100.
+                    height: 80.
                 }
             );
         }
         let last = home.slots[4].rect;
         assert!((last.x + last.width - 750.).abs() < 0.01, "{last:?}");
-        // The 42px tile and the 12.5px title (a 16.25px line) centered
-        // down the slot's 76px inside its paddings, 9px apart.
+        // The 30px tile and the 12.5px title (a 16.25px line) centered
+        // down the slot's 64px inside its paddings, 7px apart: Pane's
+        // compact strip.
         let first = &home.slots[0];
-        let tile = first.tile.expect("an occupied slot has a tile");
-        let top = first.rect.y + 14. + (76. - (42. + 9. + 12.5 * 1.3)) / 2.;
+        let tile = first.tile;
+        let top = first.rect.y + 8. + (64. - (30. + 7. + 12.5 * 1.3)) / 2.;
         assert_eq!(
             (tile.x, tile.width),
-            (first.rect.x + (column - 42.) / 2., 42.)
+            (first.rect.x + (column - 30.) / 2., 30.)
         );
         assert!((tile.y - top).abs() < 0.01, "{tile:?}");
-        assert_eq!(first.title, Some("Terminal"));
-        assert_eq!(first.tone, Some("app"));
-        let titles: Vec<_> = home.slots.iter().filter_map(|slot| slot.title).collect();
+        assert_eq!(first.title, "Terminal");
+        assert_eq!(first.tone, "app");
+        let titles: Vec<_> = home.slots.iter().map(|slot| slot.title).collect();
         assert_eq!(
             titles,
             [
@@ -8372,6 +8406,8 @@ mod tests {
                 "Spotify"
             ]
         );
+        // Five pins fill the strip's row: no pin hint follows them.
+        assert!(home.hint.is_none());
     }
 
     #[test]
@@ -8407,28 +8443,38 @@ mod tests {
     }
 
     #[test]
-    fn a_partial_home_declares_its_empty_slots_and_its_unavailable_one() {
+    fn a_partial_home_declares_its_pins_its_unavailable_one_and_the_pin_hint() {
         let captures = declared_captures(scenario("pinned-partial"), &theme());
         let home = capture(&captures, "partial")
             .pinned
             .as_ref()
             .expect("the home shows");
-        let empty: Vec<_> = home.slots.iter().map(|slot| slot.title.is_none()).collect();
-        assert_eq!(empty, [false, true, false, true, true]);
-        assert!(home.slots[1].tile.is_none());
+        let titles: Vec<_> = home.slots.iter().map(|slot| slot.title).collect();
+        assert_eq!(titles, ["Terminal", "Firefox", "Obsidian"]);
+        // The pin hint takes the fourth column of the strip's one row, a
+        // slot's size: three pins leave room in that row.
+        let hint = home.hint.expect("the pin hint follows the pins");
+        let third = home.slots[2].rect;
+        assert_eq!(hint.y, third.y);
+        assert_eq!((hint.width, hint.height), (third.width, third.height));
+        assert!(
+            (hint.x - (third.x + third.width + 8.)).abs() < 0.01,
+            "{hint:?}"
+        );
+        assert_eq!(home.strip.height, 2. + 80. + 6.);
         let unavailable = &home.slots[2];
         assert_eq!(unavailable.unavailable, Some("Notes is disabled"));
         // The reason's line below the title moves the content up, and the
         // tile, the title and the reason still fit inside the slot's
         // paddings, so nothing shrinks or clips.
-        let tile = unavailable.tile.expect("its tile");
-        let available = home.slots[0].tile.expect("its tile");
+        let tile = unavailable.tile;
+        let available = home.slots[0].tile;
         assert!(tile.y < available.y);
         let theme = theme();
         let pinned = &theme.geometry.pinned;
         let reason_line =
             f32::from(theme.typography.slot_reason_size) * theme.typography.line_height;
-        let title = unavailable.title_rect.expect("its title's line");
+        let title = unavailable.title_rect;
         let slot = unavailable.rect;
         assert!(tile.y >= slot.y + f32::from(pinned.slot_padding_top) - 0.01);
         assert!(
@@ -8516,12 +8562,7 @@ mod tests {
         // "Pane" label.
         assert_eq!(
             labels(&captures[1]),
-            [
-                "Run Command",
-                "Pin to Quick Slot",
-                "Change Hotkey…",
-                "Change Alias…"
-            ]
+            ["Run Command", "Pin", "Change Hotkey…", "Change Alias…"]
         );
         let open = captures[1].actions.as_ref().expect("the panel is open");
         assert_eq!((open.groups.len(), open.rules.len()), (1, 1));

@@ -6,7 +6,8 @@
 //!
 //! Presentation only, in the result row's shape: each function returns a
 //! plain [`Div`] that the caller gives its identity, accessibility and
-//! behavior. The launcher draws the notice and the card from what root
+//! behavior — but the suggestion, which takes its id to keep its press
+//! (a pressed wash the board does not author). The launcher draws the notice and the card from what root
 //! search's presentation holds (`crate::features::root_search::layouts`).
 //! The history row, the suggestion and the keyed label are drawn only by
 //! the visual workbench's fixture, from the boards' authored data: no
@@ -14,13 +15,13 @@
 //! suggestions (#100), so the launcher never shows them.
 
 use gpui::prelude::*;
-use gpui::{BoxShadow, Div, Hsla, Pixels, SharedString, div, px};
+use gpui::{BoxShadow, Div, ElementId, Hsla, Pixels, SharedString, Stateful, div, px};
 
 use crate::ui::icon::{self, Glyph, IconTone};
 use crate::ui::keycap::{CapStyle, KeySequence, key_sequence};
 use crate::ui::result_row::row_surface;
 use crate::ui::shell::{self, LAUNCHER_CLIENT};
-use crate::ui::theme::{Theme, TileMetrics, TypeLine};
+use crate::ui::theme::{Theme, TileMetrics, TypeLine, pressed};
 
 /// What the no-results notice says: its title, which names the query,
 /// and what the user can do about it.
@@ -313,12 +314,18 @@ pub(crate) struct Suggestion {
 /// The empty board's suggestion row (`.prow`): 54 high, 10 either side, 12
 /// between its parts, radius 10, the row's hover wash; a 32px tile (radius
 /// 8, a 17px glyph), the title in 14/500 over the metadata in 12.5, 2
-/// apart; then its pill.
-pub(crate) fn suggestion_row(suggestion: &Suggestion, theme: &Theme) -> Div {
+/// apart; then its pill. The row is `id`, and takes the [`pressed`] wash
+/// of its hover while held, at once.
+pub(crate) fn suggestion_row(
+    id: impl Into<ElementId>,
+    suggestion: &Suggestion,
+    theme: &Theme,
+) -> Stateful<Div> {
     let geometry = &theme.geometry;
     let results = &geometry.results;
     let types = &theme.typography.results;
     div()
+        .id(id)
         .flex_none()
         .w_full()
         .flex()
@@ -328,6 +335,7 @@ pub(crate) fn suggestion_row(suggestion: &Suggestion, theme: &Theme) -> Div {
         .px(geometry.row_padding_x)
         .rounded(geometry.row_radius)
         .hover(|row| row.bg(theme.row_hover))
+        .active(|row| row.bg(pressed(theme.row_hover)))
         .child(flat_tile(
             results.suggestion_tile,
             suggestion.tile,

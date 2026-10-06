@@ -340,7 +340,10 @@ mod tests {
         assert!(titles("dark material").is_empty());
     }
 
+    // The arrays are the expected runs, one range each, not ranges to
+    // collect.
     #[test]
+    #[allow(clippy::single_range_in_vec_init)]
     fn the_whole_query_highlights_as_one_run_where_the_title_holds_it() {
         assert_eq!(title_matches("Clipboard History", "clip"), [0..4]);
         assert_eq!(title_matches("Clipboard History", "CLIP"), [0..4]);
@@ -349,6 +352,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::single_range_in_vec_init)]
     fn each_word_highlights_where_it_starts_a_word_of_the_title() {
         // "is" appears in "History" before it starts a word of the title.
         assert_eq!(
@@ -362,6 +366,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::single_range_in_vec_init)]
     fn ranges_are_bytes_of_the_title_as_written() {
         // Ä is two bytes, lowercased to ä of two bytes.
         assert_eq!(title_matches("Ärger übersetzen", "är"), [0..3]);

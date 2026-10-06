@@ -376,7 +376,7 @@ fn the_settings_windows_focus_does_not_count_and_it_stays_open(cx: &mut TestAppC
     );
     settings_cx.run_until_parked();
     assert!(
-        settings_cx.debug_bounds("general-title").is_some(),
+        settings_cx.debug_bounds("general").is_some(),
         "Settings still answers on its own page"
     );
 
@@ -399,7 +399,7 @@ fn recording_a_new_hotkey_swaps_the_registration_and_persists_it(cx: &mut TestAp
     let (_settings, mut settings_cx) = open_settings(cx);
     settings_cx.run_until_parked();
     assert!(
-        settings_cx.debug_bounds("general-title").is_some(),
+        settings_cx.debug_bounds("general").is_some(),
         "the window opens on the General page"
     );
 
@@ -695,18 +695,17 @@ fn escape_cancels_the_recorder_and_captured_keys_do_not_act(cx: &mut TestAppCont
 
     // Recording: the keys pressed while the recorder listens are
     // captured, not acted on. The sidebar's navigation keys move nothing
-    // (the page stays the General one), and Tab's traversal moves nothing
-    // either.
+    // (the page stays the General one).
     click(&mut settings_cx, "open-pane-recorder");
     settings_cx.run_until_parked();
-    settings_cx.simulate_keystrokes("down up tab");
+    settings_cx.simulate_keystrokes("down up");
     settings_cx.run_until_parked();
     assert!(
-        settings_cx.debug_bounds("general-title").is_some(),
+        settings_cx.debug_bounds("general").is_some(),
         "the sidebar did not move to another page"
     );
     assert!(
-        settings_cx.debug_bounds("appearance").is_none(),
+        settings_cx.debug_bounds("keyboard").is_none(),
         "no other page is showing"
     );
     let tree = a11y(&mut settings_cx);
@@ -725,6 +724,26 @@ fn escape_cancels_the_recorder_and_captured_keys_do_not_act(cx: &mut TestAppCont
         !tree.contains("Recording;"),
         "the recorder is no longer listening, {tree}"
     );
+
+    // Tab leaves recording too, changing nothing; so does a second click.
+    click(&mut settings_cx, "open-pane-recorder");
+    settings_cx.run_until_parked();
+    settings_cx.simulate_keystrokes("tab");
+    settings_cx.run_until_parked();
+    assert!(
+        !a11y(&mut settings_cx).contains("Recording;"),
+        "Tab cancels"
+    );
+    click(&mut settings_cx, "open-pane-recorder");
+    settings_cx.run_until_parked();
+    assert!(a11y(&mut settings_cx).contains("Recording;"));
+    click(&mut settings_cx, "open-pane-recorder");
+    settings_cx.run_until_parked();
+    assert!(
+        !a11y(&mut settings_cx).contains("Recording;"),
+        "a second click cancels"
+    );
+    assert_eq!(registered(&system), vec![default.clone()]);
 
     // A key the recorder cannot use, pressed while it listens, is
     // explained and keeps it listening (a hotkey needs a modifier, so it

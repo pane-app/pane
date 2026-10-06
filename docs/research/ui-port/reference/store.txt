@@ -1,0 +1,83 @@
+Plugin Store
+Build a plugin
+Discover
+Installed
+7
+Updates
+2
+Categories
+Developer
+Productivity
+Design
+Media
+System
+AI
+Themes
+Staff picks
+Reviewed by the Pane team
+JSON Tools
+@mira
+Format, validate and query JSON straight from your clipboard.
+24 KB
+Open
+Git Pulls
+@jonas
+Review, filter and check out pull requests from the keyboard.
+61 KB
+Install
+World Clock
+@aiko
+Compare cities at a glance — type “3pm Lagos in Oslo”.
+18 KB
+Install
+Color Picker
+@femi
+Pick any pixel on screen and copy it as HEX, RGB or OKLCH.
+40 KB
+Update
+Docker
+@rhea
+Start, stop and tail logs of your local containers.
+52 KB
+Install
+Kill Process
+@tomasz
+Find what is eating your CPU and end it.
+12 KB
+Open
+Translate
+@lin
+Translate selected text with the provider you choose.
+29 KB
+Install
+Git Pulls
+@jonas · v1.4.0 · Open source
+Install
+↵
+View source
+
+Review, filter and check out pull requests without leaving the keyboard. Open a PR, copy its branch, or jump straight into a diff in your editor.
+
+Adds 3 commands
+My Pull Requests
+pr
+Review Requests
+rr
+Search Pull Requests
+prs
+Asks for
+Network — one host
+api.github.com
+Secure storage
+Keeps your token in the system keychain
+Never sees
+Clipboard, files, screen, other plugins
+61 KB
+Loads on first use
+No background process
+Every plugin runs sandboxed and only loads when you use it
+Install Git Pulls
+↵
+Actions
+⌘
+K

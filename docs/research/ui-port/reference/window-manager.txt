@@ -1,0 +1,48 @@
+Pane Docs — Firefox
+launcher.ts — pane
+Left Two-Thirds
+960 × 900
+Visual Studio Code
+launcher.ts — pane
+Edit layouts
+Display 1
+Display 2
+Left Half
+Right Half
+Top Half
+Bottom Half
+Maximize
+Left Third
+Center Third
+Right Third
+Left Two-Thirds
+Center
+Left Two-Thirds
+⌃
+⌥
+E
+960 × 900 px
+Workspaces
+Code + Docs
+⌃
+⌥
+1
+Writing
+⌃
+⌥
+2
+Review
+⌃
+⌥
+3
+Save current
+←
+→
+↑
+↓
+Choose
+↵
+Apply
+Esc
+Cancel
+Or drag any window to a screen edge

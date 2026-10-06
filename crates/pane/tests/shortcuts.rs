@@ -1196,10 +1196,10 @@ fn a_hotkey_recorded_inline_swaps_the_registration_and_opens_the_command(cx: &mu
     );
 
     // Clicking the hotkey cell starts the recorder, which holds the focus:
-    // the keys pressed next are captured — the sidebar's navigation and
-    // Tab's traversal do not act, and the page stays.
+    // the keys pressed next are captured — the sidebar's navigation does
+    // not act, and the page stays.
     let mut settings_cx = record_hotkey(&settings, cx, &hello_id);
-    settings_cx.simulate_keystrokes("down up tab");
+    settings_cx.simulate_keystrokes("down up");
     settings_cx.run_until_parked();
     assert!(
         settings_cx.debug_bounds("shortcuts-title").is_some(),
@@ -2063,16 +2063,16 @@ fn returning_to_the_shortcuts_page_keeps_its_state(cx: &mut TestAppContext) {
     );
     settle_frames(&mut settings_cx);
 
-    // Switch away to Appearance, then back to Shortcuts.
-    let appearance = settings_cx
-        .debug_bounds("section-Appearance")
-        .expect("the Appearance section");
-    settings_cx.simulate_mouse_move(appearance.center(), None::<MouseButton>, Modifiers::none());
-    settings_cx.simulate_click(appearance.center(), Modifiers::none());
+    // Switch away to General, then back to Shortcuts.
+    let general = settings_cx
+        .debug_bounds("section-General")
+        .expect("the General section");
+    settings_cx.simulate_mouse_move(general.center(), None::<MouseButton>, Modifiers::none());
+    settings_cx.simulate_click(general.center(), Modifiers::none());
     settings_cx.run_until_parked();
     assert!(
         settings_cx.debug_bounds("appearance").is_some(),
-        "the Appearance page is drawn"
+        "the General page's Appearance section is drawn"
     );
     let shortcuts = settings_cx
         .debug_bounds("section-Shortcuts")

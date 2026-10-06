@@ -36,7 +36,7 @@
 
 use gpui::{App, KeyBinding, Keystroke};
 use pane_core::hotkeys::Shortcut;
-use pane_core::{Binding, Keyboard, KeyboardAction};
+use pane_core::{Binding, Keyboard, KeyboardAction, NavigationBindings};
 
 use crate::app::KEY_CONTEXT;
 use crate::features::root_search;
@@ -50,9 +50,20 @@ use crate::{
 /// [`Keyboard`], in the contexts above. Call after the shared text
 /// editing keys, so the search field's selection keys take precedence
 /// over the field's own.
-pub(crate) fn bind_keys(cx: &mut App, keyboard: &Keyboard) {
+pub(crate) fn bind_keys(cx: &mut App, keyboard: &Keyboard, navigation: NavigationBindings) {
     let field = root_search::field_context();
     let mut bindings = Vec::new();
+    // The extra selection keys the Keyboard page's navigation bindings
+    // choose, first, so the set's own bindings registered after them win.
+    if let Some((previous, next)) = navigation.bindings() {
+        for (id, action) in [
+            (previous, KeyboardAction::PreviousResult),
+            (next, KeyboardAction::NextResult),
+        ] {
+            bindings.push(launcher_binding(id, action));
+            bindings.push(field_binding(id, action, &field));
+        }
+    }
     for action in KeyboardAction::ALL {
         let id = keyboard.binding(action).id();
         // The record's grammar is the keymap's own restricted to a single
@@ -107,9 +118,9 @@ fn field_binding(id: &str, action: KeyboardAction, context: &str) -> KeyBinding 
 /// own update is in flight. Safe wherever the settings change, including
 /// mid-session: the keymap is data, and the windows redraw off the
 /// effect the re-registration pushes.
-pub(crate) fn rebuild(cx: &mut App, keyboard: &Keyboard) {
+pub(crate) fn rebuild(cx: &mut App, keyboard: &Keyboard, navigation: NavigationBindings) {
     cx.clear_key_bindings();
-    crate::bind_keys_with(cx, keyboard);
+    crate::bind_keys_with(cx, keyboard, navigation);
 }
 
 /// The binding the keystroke of a key pressed names, for the Keyboard
@@ -134,11 +145,12 @@ pub(crate) fn escape_keys() -> KeySequence {
     binding_keys(&Binding::parse("escape").expect("escape is a binding"))
 }
 
-/// The local chord that invokes quick slot `number` (1 to 5) while root
-/// search has focus: Ctrl and the digit, the approved Windows chord. A
-/// window-local binding of the root search field, never registered with
-/// the system, and fixed — not one of the actions the Keyboard page
-/// rebinds — so the hints the slots show are always the chords that work.
+/// The local chord that invokes quick slot `number` (1 to 5, the numbered
+/// pins) while root search has focus: Ctrl and the digit, the approved
+/// Windows chord. A window-local binding of the root search field, never
+/// registered with the system, and fixed — not one of the actions the
+/// Keyboard page rebinds — so the hints the slots show are always the
+/// chords that work.
 pub(crate) fn quick_slot_binding(number: usize) -> Binding {
     Binding::parse(&format!("ctrl-{number}")).expect("a digit chord is a binding")
 }
@@ -146,6 +158,39 @@ pub(crate) fn quick_slot_binding(number: usize) -> Binding {
 /// The caps of quick slot `number`'s chord ([`quick_slot_binding`]).
 pub(crate) fn quick_slot_keys(number: usize) -> KeySequence {
     binding_keys(&quick_slot_binding(number))
+}
+
+/// The modifier the pin keys hold: Command on macOS, Ctrl elsewhere.
+const PIN_MODIFIER: &str = if cfg!(target_os = "macos") {
+    "cmd"
+} else {
+    "ctrl"
+};
+
+/// The launcher's key that toggles a pin: Ctrl+Shift+F (Command+Shift+F
+/// on macOS) pins root search's selected result, or unpins it once it is
+/// pinned, and unpins a quick slot that has focus. Window-local, never
+/// registered with the system, and fixed — not one of the actions the
+/// Keyboard page rebinds — so the Actions panel's caps and the pin hint
+/// always name a key that works.
+pub(crate) fn toggle_pin_binding() -> Binding {
+    Binding::parse(&format!("{PIN_MODIFIER}-shift-f")).expect("the pin key is a binding")
+}
+
+/// The launcher's keys that move a focused quick slot one place among the
+/// pins: Ctrl+Alt (Command+Option on macOS) and Up or Left moves it
+/// `earlier`, Down or Right later. Window-local and fixed, as the pin key
+/// is ([`toggle_pin_binding`]). Up or Down comes first, the vertical
+/// layout's direction; Left or Right second, the strip's.
+pub(crate) fn move_pin_bindings(earlier: bool) -> [Binding; 2] {
+    let (vertical, horizontal) = if earlier {
+        ("up", "left")
+    } else {
+        ("down", "right")
+    };
+    [vertical, horizontal].map(|arrow| {
+        Binding::parse(&format!("{PIN_MODIFIER}-alt-{arrow}")).expect("a move key is a binding")
+    })
 }
 
 /// The caps the "Pinned" label shows for the chords of all `count` slots:
@@ -187,7 +232,8 @@ pub(crate) fn binding_keys(binding: &Binding) -> KeySequence {
     };
     let mut keys: Vec<Key> = modifiers
         .into_iter()
-        .filter_map(|(held, name)| held.then(|| Key::new(name, name)))
+        .filter(|(held, _)| *held)
+        .map(|(_, name)| Key::new(name, name))
         .collect();
     let name = key_name(binding.key());
     let cap = match binding.key() {

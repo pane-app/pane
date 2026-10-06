@@ -1,0 +1,65 @@
+[
+  {
+    "step": "initial",
+    "state": {
+      "selected": "Figma\nApplication",
+      "background": "rgba(255, 255, 255, 0.086)",
+      "transition": "all",
+      "menu": false
+    }
+  },
+  {
+    "step": "real pointer moved to Clipboard History",
+    "state": {
+      "selected": "Clipboard History\nClipboard\ncb\n⌘\n⇧\nV\nCommand",
+      "background": "rgba(255, 255, 255, 0.086)",
+      "transition": "all",
+      "menu": false
+    }
+  },
+  {
+    "step": "Down with pointer stationary",
+    "state": {
+      "selected": "Left Half\nWindow Manager\n⌃\n⌥\n←\nCommand",
+      "background": "rgba(255, 255, 255, 0.086)",
+      "transition": "all",
+      "menu": false
+    }
+  },
+  {
+    "step": "pointer moved 1px inside Clipboard row",
+    "state": {
+      "selected": "Clipboard History\nClipboard\ncb\n⌘\n⇧\nV\nCommand",
+      "background": "rgba(255, 255, 255, 0.086)",
+      "transition": "all",
+      "menu": false
+    }
+  },
+  {
+    "step": "Ctrl+K Actions open",
+    "state": {
+      "selected": "Clipboard History\nClipboard\ncb\n⌘\n⇧\nV\nCommand",
+      "background": "rgba(255, 255, 255, 0.086)",
+      "transition": "all",
+      "menu": true
+    }
+  },
+  {
+    "step": "pointer moved over Figma while Actions open",
+    "state": {
+      "selected": "Clipboard History\nClipboard\ncb\n⌘\n⇧\nV\nCommand",
+      "background": "rgba(255, 255, 255, 0.086)",
+      "transition": "all",
+      "menu": true
+    }
+  },
+  {
+    "step": "Escape closes Actions",
+    "state": {
+      "selected": "Clipboard History\nClipboard\ncb\n⌘\n⇧\nV\nCommand",
+      "background": "rgba(255, 255, 255, 0.086)",
+      "transition": "all",
+      "menu": false
+    }
+  }
+]

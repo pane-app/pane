@@ -1,0 +1,75 @@
+<div style="width: 1440px; height: 900px; position: relative; overflow: hidden; background: #0c0d0f; display: grid; grid-template-columns: 400px 400px 400px; column-gap: 56px; padding: 64px; box-sizing: border-box">
+<svg class="grain" aria-hidden="true"><filter id="grain"><feTurbulence type="fractalNoise" sc-camel-base-frequency="0.85" sc-camel-num-octaves="2" sc-camel-stitch-tiles="stitch"></feTurbulence><feColorMatrix type="saturate" values="0"></feColorMatrix></filter><rect width="100%" height="100%" filter="url(#grain)"></rect></svg>
+
+<div style="position: relative; display: flex; flex-direction: column; gap: 28px">
+<div style="display: flex; align-items: center; gap: 16px">
+<svg sc-camel-view-box="0 0 24 24" width="56" height="56" aria-hidden="true"><rect class="ic" x="3" y="7" width="13" height="13" rx="3.5" style="color: #8e8f94; stroke-width: 1.2"></rect><rect x="8" y="3.5" width="13" height="13" rx="3.5" fill="#ededef" opacity="0.94"></rect></svg>
+<span style="font-size: 64px; font-weight: 600; letter-spacing: -0.045em; line-height: 1; color: #ffffff">Pane</span>
+</div>
+<p style="margin: 0; font-size: 24px; line-height: 1.32; letter-spacing: -0.01em; color: #d9dadd; text-wrap: pretty">A fast, quiet launcher. Everything else is a plugin.</p>
+
+<div style="display: flex; flex-direction: column; gap: 20px; margin-top: 8px">
+<div style="display: flex; gap: 16px"><span class="mono" style="font-size: 12px; color: {{accent}}; padding-top: 2px">01</span><div style="display: flex; flex-direction: column; gap: 4px"><span style="font-size: 15px; font-weight: 500; color: #ededef">Keyboard first, mouse welcome</span><span style="font-size: 13.5px; line-height: 1.5; color: #a3a4a9">Every row, action and layout has a shortcut. Hover and click still work everywhere.</span></div></div>
+<div style="display: flex; gap: 16px"><span class="mono" style="font-size: 12px; color: {{accent}}; padding-top: 2px">02</span><div style="display: flex; flex-direction: column; gap: 4px"><span style="font-size: 15px; font-weight: 500; color: #ededef">Nothing runs until you ask</span><span style="font-size: 13.5px; line-height: 1.5; color: #a3a4a9">The core is search, actions and settings. Plugins load on first use and unload when idle.</span></div></div>
+<div style="display: flex; gap: 16px"><span class="mono" style="font-size: 12px; color: {{accent}}; padding-top: 2px">03</span><div style="display: flex; flex-direction: column; gap: 4px"><span style="font-size: 15px; font-weight: 500; color: #ededef">Glass that stays readable</span><span style="font-size: 13.5px; line-height: 1.5; color: #a3a4a9">Tint never drops below 55%, so text holds 4.5:1 on any wallpaper. Solid mode follows the OS.</span></div></div>
+<div style="display: flex; gap: 16px"><span class="mono" style="font-size: 12px; color: {{accent}}; padding-top: 2px">04</span><div style="display: flex; flex-direction: column; gap: 4px"><span style="font-size: 15px; font-weight: 500; color: #ededef">Same muscle memory on every OS</span><span style="font-size: 13.5px; line-height: 1.5; color: #a3a4a9">One layout on macOS, Windows and Linux. Only the modifier keys change.</span></div></div>
+<div style="display: flex; gap: 16px"><span class="mono" style="font-size: 12px; color: {{accent}}; padding-top: 2px">05</span><div style="display: flex; flex-direction: column; gap: 4px"><span style="font-size: 15px; font-weight: 500; color: #ededef">Plugins say what they touch</span><span style="font-size: 13.5px; line-height: 1.5; color: #a3a4a9">Network hosts, clipboard, files and screen are asked for up front, in plain words.</span></div></div>
+</div>
+</div>
+
+<div style="position: relative; display: flex; flex-direction: column; gap: 14px">
+<span class="h">Glass layers</span>
+<div style="position: relative; height: 520px; border-radius: 16px; overflow: hidden; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08)">
+<div class="wp wp-graphite"><div class="bands"></div></div>
+<div class="layer" style="left: 28px; top: 34px; width: 330px; height: 250px; border-radius: 18px; background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0) 36%), rgba(22,23,26,0.7); -webkit-backdrop-filter: blur(44px) saturate(160%); backdrop-filter: blur(44px) saturate(160%); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.075), inset 0 1px 0 rgba(255,255,255,0.1), 0 40px 90px -24px rgba(0,0,0,0.7)">
+<span style="font-size: 14px; font-weight: 500; color: #ededef">L1 · Panel</span>
+<span class="mono" style="font-size: 11.5px; line-height: 1.7; color: #a3a4a9">blur 44 · saturate 160%<br>tint rgba(22 23 26 / 70%)<br>radius 18 · 1px inner hairline</span>
+</div>
+<div class="layer" style="left: 150px; top: 196px; width: 240px; height: 176px; border-radius: 14px; background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0) 40%), rgba(38,39,43,0.82); -webkit-backdrop-filter: blur(30px) saturate(160%); backdrop-filter: blur(30px) saturate(160%); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.09), inset 0 1px 0 rgba(255,255,255,0.1), 0 28px 70px -14px rgba(0,0,0,0.75)">
+<span style="font-size: 14px; font-weight: 500; color: #ededef">L2 · Popover</span>
+<span class="mono" style="font-size: 11.5px; line-height: 1.7; color: #a3a4a9">blur 30 · tint 82%<br>radius 14 · for ⌘K, menus</span>
+</div>
+<div class="layer" style="left: 60px; top: 404px; width: 250px; height: 76px; border-radius: 12px; background: rgba(14,15,17,0.88); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.1), 0 20px 50px -12px rgba(0,0,0,0.7); flex-direction: row; align-items: center; justify-content: flex-start; gap: 12px">
+<span style="width: 8px; height: 8px; border-radius: 4px; background: {{accent}}; flex: none"></span>
+<div style="display: flex; flex-direction: column; gap: 3px"><span style="font-size: 13.5px; font-weight: 500; color: #ededef">L3 · Toast &amp; HUD</span><span class="mono" style="font-size: 11.5px; color: #a3a4a9">tint 88% · radius 12 · no blur</span></div>
+</div>
+</div>
+<div style="display: flex; align-items: flex-end; gap: 18px; margin-top: 6px">
+<div style="display: flex; flex-direction: column; align-items: center; gap: 6px"><span style="width: 56px; height: 40px; border-radius: 18px; box-shadow: inset 0 0 0 1.5px rgba(255,255,255,0.3)"></span><span class="mono" style="font-size: 11px; color: #8e8f94">18 panel</span></div>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 6px"><span style="width: 48px; height: 36px; border-radius: 14px; box-shadow: inset 0 0 0 1.5px rgba(255,255,255,0.3)"></span><span class="mono" style="font-size: 11px; color: #8e8f94">14 popover</span></div>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 6px"><span style="width: 44px; height: 32px; border-radius: 10px; box-shadow: inset 0 0 0 1.5px rgba(255,255,255,0.3)"></span><span class="mono" style="font-size: 11px; color: #8e8f94">10 row</span></div>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 6px"><span style="width: 28px; height: 28px; border-radius: 7px; box-shadow: inset 0 0 0 1.5px rgba(255,255,255,0.3)"></span><span class="mono" style="font-size: 11px; color: #8e8f94">7 tile</span></div>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 6px"><span style="width: 20px; height: 20px; border-radius: 5px; box-shadow: inset 0 0 0 1.5px rgba(255,255,255,0.3)"></span><span class="mono" style="font-size: 11px; color: #8e8f94">5 key</span></div>
+</div>
+</div>
+
+<div style="position: relative; display: flex; flex-direction: column; gap: 26px">
+<div style="display: flex; flex-direction: column; gap: 6px">
+<span class="h" style="margin-bottom: 4px">Color</span>
+<div class="tok"><span class="sw" style="background: #ededef"></span><span style="flex-grow: 1; color: #ededef">Ink</span><span class="mono" style="font-size: 11.5px; color: #8e8f94">#EDEDEF · titles</span></div>
+<div class="tok"><span class="sw" style="background: #a3a4a9"></span><span style="flex-grow: 1; color: #ededef">Ink 2</span><span class="mono" style="font-size: 11.5px; color: #8e8f94">#A3A4A9 · body</span></div>
+<div class="tok"><span class="sw" style="background: #8e8f94"></span><span style="flex-grow: 1; color: #ededef">Ink 3</span><span class="mono" style="font-size: 11.5px; color: #8e8f94">#8E8F94 · labels, meta</span></div>
+<div class="tok"><span class="sw" style="background: rgba(255,255,255,0.085)"></span><span style="flex-grow: 1; color: #ededef">Selection</span><span class="mono" style="font-size: 11.5px; color: #8e8f94">white 8.5% · row focus</span></div>
+<div class="tok"><span class="sw" style="background: {{accent}}"></span><span style="flex-grow: 1; color: #ededef">Accent</span><span class="mono" style="font-size: 11.5px; color: #8e8f94">{{accentUpper}} · caret, ↵, on</span></div>
+<div class="tok"><span class="sw" style="background: #ff9a92"></span><span style="flex-grow: 1; color: #ededef">Danger</span><span class="mono" style="font-size: 11.5px; color: #8e8f94">#FF9A92 · quit, delete</span></div>
+</div>
+
+<div style="display: flex; flex-direction: column">
+<span class="h" style="margin-bottom: 10px">Type · Geist &amp; Geist Mono</span>
+<div class="trow"><span style="font-size: 19px; color: #f3f3f5">Search field</span><span class="mono" style="font-size: 11.5px; color: #8e8f94">19 / 400</span></div>
+<div class="trow"><span style="font-size: 14px; font-weight: 500; color: #ededef">Row title</span><span class="mono" style="font-size: 11.5px; color: #8e8f94">14 / 500</span></div>
+<div class="trow"><span style="font-size: 12.5px; color: #a3a4a9">Subtitle, meta, footer</span><span class="mono" style="font-size: 11.5px; color: #8e8f94">12.5 / 400</span></div>
+<div class="trow"><span style="font-size: 12px; font-weight: 500; color: #8e8f94">Section label</span><span class="mono" style="font-size: 11.5px; color: #8e8f94">12 / 500</span></div>
+<div class="trow" style="align-items: center"><span class="keys"><span class="kbd">⌘</span><span class="kbd">K</span></span><span class="mono" style="font-size: 11.5px; color: #8e8f94">Mono 11 / 500</span></div>
+</div>
+
+<div style="display: flex; flex-direction: column">
+<span class="h" style="margin-bottom: 10px">One keymap, three systems</span>
+<div class="kmap" style="border-top: 0; color: #8e8f94; font-size: 11.5px; height: 24px"><span></span><span>macOS</span><span>Windows</span><span>Linux</span></div>
+<div class="kmap"><span style="color: #d9dadd">Open Pane</span><span class="keys"><span class="kbd">⌥</span><span class="kbd">Space</span></span><span class="keys"><span class="kbd">Alt</span><span class="kbd">Space</span></span><span class="keys"><span class="kbd">Alt</span><span class="kbd">Space</span></span></div>
+<div class="kmap"><span style="color: #d9dadd">Actions</span><span class="keys"><span class="kbd">⌘</span><span class="kbd">K</span></span><span class="keys"><span class="kbd">Ctrl</span><span class="kbd">K</span></span><span class="keys"><span class="kbd">Ctrl</span><span class="kbd">K</span></span></div>
+<div class="kmap"><span style="color: #d9dadd">Quick slot</span><span class="keys"><span class="kbd">⌘</span><span class="kbd">1</span></span><span class="keys"><span class="kbd">Ctrl</span><span class="kbd">1</span></span><span class="keys"><span class="kbd">Ctrl</span><span class="kbd">1</span></span></div>
+<div class="kmap"><span style="color: #d9dadd">Snap left</span><span class="keys"><span class="kbd">⌃</span><span class="kbd">⌥</span><span class="kbd">←</span></span><span class="keys"><span class="kbd">Win</span><span class="kbd">Alt</span><span class="kbd">←</span></span><span class="keys"><span class="kbd">Super</span><span class="kbd">Alt</span><span class="kbd">←</span></span></div>
+</div>
+</div>
+</div>

@@ -8,8 +8,7 @@
 //! hotkey and alias configuration Manage extensions already offers.
 //! Nothing is listed that has no working operation behind it (#100): no
 //! quit, new window or hide. The same items describe a quick slot's own
-//! entries and the slots a full set offers to replace (see
-//! `quick_slots`).
+//! entries (see `quick_slots`).
 //!
 //! An alias or hotkey flow opened here returns to the search it came from
 //! — the same rows, the target still selected, the outcome in the status —
@@ -28,52 +27,42 @@ pub enum ResultAction {
     Hotkey,
     /// Sets or changes the command's alias.
     Alias,
-    /// Pins the result to the first empty quick slot (see
-    /// `quick_slots`); with all five taken, the slot to replace is chosen
-    /// first ([`ResultAction::ReplaceSlot`]).
+    /// Pins the result: a quick slot at the end of the list (see
+    /// `quick_slots`).
     Pin,
-    /// Puts the result in the quick slot at this index, in place of what
-    /// it holds: the explicit choice a full set of slots asks for.
-    ReplaceSlot(usize),
-    /// Empties the quick slot that holds the result.
+    /// Takes the quick slot that holds the result out of the list.
     Unpin,
-    /// Swaps the result's quick slot with the one to its left.
-    MoveSlotLeft,
-    /// Swaps the result's quick slot with the one to its right.
-    MoveSlotRight,
+    /// Swaps the result's quick slot with the one before it.
+    MovePinUp,
+    /// Swaps the result's quick slot with the one after it.
+    MovePinDown,
 }
 
 impl ResultAction {
     /// The action's name in records and reports: "invoke", "hotkey",
-    /// "alias", "pin", "replace-slot", "unpin", "move-slot-left",
-    /// "move-slot-right".
+    /// "alias", "pin", "unpin", "move-pin-up", "move-pin-down".
     pub fn id(self) -> &'static str {
         match self {
             ResultAction::Invoke => "invoke",
             ResultAction::Hotkey => "hotkey",
             ResultAction::Alias => "alias",
             ResultAction::Pin => "pin",
-            ResultAction::ReplaceSlot(_) => "replace-slot",
             ResultAction::Unpin => "unpin",
-            ResultAction::MoveSlotLeft => "move-slot-left",
-            ResultAction::MoveSlotRight => "move-slot-right",
+            ResultAction::MovePinUp => "move-pin-up",
+            ResultAction::MovePinDown => "move-pin-down",
         }
     }
 
-    /// A quick slot entry's fixed label: "Pin to Quick Slot", "Remove from
-    /// Quick Slot", "Move Slot Left", "Move Slot Right". `None` for the
-    /// other actions, and for [`ResultAction::ReplaceSlot`], whose label
-    /// names the slot and what it holds.
+    /// A quick slot entry's fixed label: "Pin", "Unpin", "Move Up", "Move
+    /// Down" (a window that lays the pins out side by side may say left and
+    /// right). `None` for the other actions.
     pub fn quick_slot_label(self) -> Option<&'static str> {
         match self {
-            ResultAction::Pin => Some("Pin to Quick Slot"),
-            ResultAction::Unpin => Some("Remove from Quick Slot"),
-            ResultAction::MoveSlotLeft => Some("Move Slot Left"),
-            ResultAction::MoveSlotRight => Some("Move Slot Right"),
-            ResultAction::Invoke
-            | ResultAction::Hotkey
-            | ResultAction::Alias
-            | ResultAction::ReplaceSlot(_) => None,
+            ResultAction::Pin => Some("Pin"),
+            ResultAction::Unpin => Some("Unpin"),
+            ResultAction::MovePinUp => Some("Move Up"),
+            ResultAction::MovePinDown => Some("Move Down"),
+            ResultAction::Invoke | ResultAction::Hotkey | ResultAction::Alias => None,
         }
     }
 
@@ -87,10 +76,9 @@ impl ResultAction {
             (
                 ResultAction::Invoke
                 | ResultAction::Pin
-                | ResultAction::ReplaceSlot(_)
                 | ResultAction::Unpin
-                | ResultAction::MoveSlotLeft
-                | ResultAction::MoveSlotRight,
+                | ResultAction::MovePinUp
+                | ResultAction::MovePinDown,
                 _,
             ) => None,
             (ResultAction::Hotkey, false) => Some("Assign Hotkey…"),

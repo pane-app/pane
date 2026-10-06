@@ -27,7 +27,10 @@
 
 use std::sync::Arc;
 
-use gpui::{FontFeatures, FontWeight, Hsla, Pixels, SharedString, px, rgb_to_hsla, rgba};
+use gpui::{
+    FontFeatures, FontWeight, Hsla, Pixels, SharedString, hsla, px, rgb_to_hsla, rgba,
+    transparent_black,
+};
 
 /// Which palette a [`Theme`] carries. The host settings pick one — the
 /// user's preference, or the system's appearance where the preference
@@ -41,6 +44,24 @@ pub(crate) enum Appearance {
 /// A reference-stated color: `0xRRGGBBAA`.
 fn color(hex: u32) -> Hsla {
     rgb_to_hsla(rgba(hex))
+}
+
+/// The stronger wash a control takes while pressed: its hover `wash` at
+/// twice the alpha (at most opaque). Derived from the hover wash so every
+/// theme — dark, light, over a background image — gets one without new
+/// tokens. A selected row's press doubles its selected wash instead. An
+/// opaque wash (the close button's danger) has no alpha left to double,
+/// so it darkens instead.
+pub(crate) fn pressed(wash: Hsla) -> Hsla {
+    if wash.alpha >= 1. {
+        let mut darker = wash;
+        darker.lightness *= 0.85;
+        return darker;
+    }
+    Hsla {
+        alpha: (wash.alpha * 2.).min(1.),
+        ..wash
+    }
 }
 
 /// The semantic tokens. Field groups follow the roles the launcher uses:
@@ -191,6 +212,12 @@ pub(crate) struct Theme {
     pub(crate) field_edge: Hsla,
     /// A Settings page's heading (#FFFFFF).
     pub(crate) heading_text: Hsla,
+    /// A Settings card: the raised block a section's rows sit in (white
+    /// 4.7% over the panel in dark), its 1px inset ring and the rule
+    /// between its rows. Pane's own: the reference's board has no cards.
+    pub(crate) card_fill: Hsla,
+    pub(crate) card_edge: Hsla,
+    pub(crate) card_rule: Hsla,
     /// The Settings controls and the Appearance preview (#98): see
     /// [`ControlColors`].
     pub(crate) controls: ControlColors,
@@ -244,9 +271,16 @@ pub(crate) struct Theme {
     pub(crate) slot_hover: Hsla,
     /// A pinned slot's title (`.slot-t`: #D9DADD).
     pub(crate) slot_title: Hsla,
-    /// An empty slot's dashed outline (Pane's own: the reference authors
-    /// no empty slot; white 10%).
+    /// The pin hint's dashed outline, in the strip's cell after the last
+    /// pin (Pane's own: the reference authors no such tile; white 10%).
     pub(crate) slot_empty_edge: Hsla,
+
+    // -- Over a background image (ADR 0028) -----------------------------------
+    /// The frosted surfaces over the launcher's background image — the
+    /// search pill, the pins, the selected row and the footer — when one
+    /// is drawn (see [`Theme::over_backdrop`]); `None`, the palettes' own,
+    /// draws none of it.
+    pub(crate) frost: Option<Frost>,
 
     // -- Type and geometry --------------------------------------------------
     /// Families, sizes and weights.
@@ -556,19 +590,48 @@ pub(crate) struct SettingsGeometry {
     pub(crate) aside_width: Pixels,
     /// The gap between an aside's caption and its content.
     pub(crate) aside_gap: Pixels,
+    /// Pane's own page layout (the board's page above is the workbench's
+    /// fixture's): the content's padding above, either side and below,
+    /// and the widest it grows in a large window.
+    pub(crate) content_padding_top: Pixels,
+    pub(crate) content_padding_x: Pixels,
+    pub(crate) content_padding_bottom: Pixels,
+    pub(crate) content_max_width: Pixels,
+    /// A section: the space between sections, between a section's label
+    /// and its card, and the label's inset from the card's edge.
+    pub(crate) section_gap: Pixels,
+    pub(crate) section_label_gap: Pixels,
+    pub(crate) section_label_inset: Pixels,
+    /// A card: its radius and its rows' side padding.
+    pub(crate) card_radius: Pixels,
+    pub(crate) card_padding_x: Pixels,
+    /// A card's row: at least 48 high, 10 above and below its text.
+    pub(crate) card_row_height: Pixels,
+    pub(crate) card_row_padding_y: Pixels,
+    /// The width of a choice at a row's end: a select's trigger and its
+    /// popup, a segmented choice's track.
+    pub(crate) choice_width: Pixels,
+    /// The width of a segmented choice with more segments than
+    /// [`SettingsGeometry::choice_width`] holds: the background image's
+    /// five effects.
+    pub(crate) wide_choice_width: Pixels,
 }
 
-/// The pinned home's geometry: the reference's grid of five `.slot`s under
-/// the "Pinned" label, and each slot's anatomy.
+/// The pinned home's geometry: the reference's grid of `.slot`s under the
+/// "Pinned" label — five equal columns, wrapping onto more rows as pins
+/// are added (`crate::ui::pinned::PINNED_COLUMNS`) — and each slot's
+/// anatomy, which the pin hint's cell shares.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PinnedGeometry {
-    /// The gap between the five equal columns.
+    /// The gap between the strip's equal columns, and between its rows
+    /// once it wraps.
     pub(crate) columns_gap: Pixels,
     /// The grid's padding above and below its slots.
     pub(crate) strip_padding_top: Pixels,
     pub(crate) strip_padding_bottom: Pixels,
-    /// A slot: its height, radius and paddings (14 above, 8 either side,
-    /// 10 below), and the gap between its tile and its title.
+    /// A slot: its height, radius and paddings (8 all round), and the gap
+    /// between its tile and its title — Pane's compact strip, lower than
+    /// the reference's 100px slots so the results keep more room.
     pub(crate) slot_height: Pixels,
     pub(crate) slot_radius: Pixels,
     pub(crate) slot_padding_top: Pixels,
@@ -577,9 +640,9 @@ pub(crate) struct PinnedGeometry {
     pub(crate) slot_gap: Pixels,
     /// An unavailable slot's gap between its tile and its title, the
     /// reason right under the title (Pane's own state): the tile, both
-    /// lines and the reference's 9px gaps would overflow the slot's 76px
-    /// inside its paddings, so the lines would shrink and clip; 42, 2 and
-    /// the two lines (16.25 and 14.95) fit.
+    /// lines and the 7px gaps would overflow the slot's 64px inside its
+    /// paddings, so the lines would shrink and clip; 30, 2 and the two
+    /// lines (16.25 and 14.95) fit.
     pub(crate) unavailable_gap: Pixels,
     /// The corner key hint's inset from the slot's top and right (8).
     pub(crate) keys_inset: Pixels,
@@ -1057,6 +1120,15 @@ pub(crate) struct ControlGeometry {
     pub(crate) well_gap: Pixels,
     pub(crate) well_glyph: Pixels,
     pub(crate) recorder_min_width: Pixels,
+    /// A key binding recorder (Discord's keybind field): 220×36, its icon
+    /// buttons 4 in from its right edge.
+    pub(crate) recorder_width: Pixels,
+    pub(crate) recorder_height: Pixels,
+    pub(crate) recorder_inset: Pixels,
+    /// An icon button: a 28px square, radius 6, its glyph 16.
+    pub(crate) icon_button_size: Pixels,
+    pub(crate) icon_button_radius: Pixels,
+    pub(crate) icon_button_glyph: Pixels,
     /// A pressable list row's radius (the sidebar item's 8) and the 14px
     /// chevron at its right end.
     pub(crate) list_radius: Pixels,
@@ -1202,6 +1274,9 @@ impl Theme {
             field_fill: color(0x0000003D),
             field_edge: color(0xFFFFFF0F),
             heading_text: color(0xFFFFFFFF),
+            card_fill: color(0xFFFFFF0C),
+            card_edge: color(0xFFFFFF0F),
+            card_rule: color(0xFFFFFF0D),
             controls: ControlColors::dark(),
 
             footer_mark: color(0xEDEDEFEB),
@@ -1226,6 +1301,8 @@ impl Theme {
             slot_hover: color(0xFFFFFF12),
             slot_title: color(0xD9DADDFF),
             slot_empty_edge: color(0xFFFFFF1A),
+
+            frost: None,
 
             typography: Typography::shared(),
             geometry: Geometry::shared(),
@@ -1308,6 +1385,9 @@ impl Theme {
             field_fill: color(0x0000000A),
             field_edge: color(0x00000014),
             heading_text: color(0x111214FF),
+            card_fill: color(0xFFFFFFB3),
+            card_edge: color(0x00000012),
+            card_rule: color(0x0000000F),
             controls: ControlColors::light(),
 
             footer_mark: color(0x202126EB),
@@ -1333,9 +1413,114 @@ impl Theme {
             slot_title: color(0x2A2B31FF),
             slot_empty_edge: color(0x0000001A),
 
+            frost: None,
+
             typography: Typography::shared(),
             geometry: Geometry::shared(),
         }
+    }
+
+    /// This palette over the launcher's background image (ADR 0028), its
+    /// panel painted `canvas` — the color the backdrop was baked over (see
+    /// `crate::background`). The values are the background mockup's
+    /// "Hero" preset, as the user chose them: the panel is the canvas
+    /// with no sheen — opaque on the solid material, at the palette's
+    /// glass tint alpha on glass, so the window's frost still shows
+    /// through it; the frosted surfaces blur what is behind
+    /// them 30px under the canvas at 40% (the footer at 60%) and a cool
+    /// silver edge; hover and selection are plain white washes (dark ones
+    /// in the light palette); and the secondary text steps up a shade to
+    /// read over the picture. The light values are the dark ones turned
+    /// over, not yet tuned.
+    pub(crate) fn over_backdrop(&self, canvas: Hsla) -> Theme {
+        let light = self.panel_solid.lightness > 0.5;
+        let at = |base: Hsla, alpha: f32| Hsla { alpha, ..base };
+        let wash = |alpha: f32| at(color(if light { 0x000000FF } else { 0xFFFFFFFF }), alpha);
+        let edge = if light {
+            color(0x00000017)
+        } else {
+            hsla(210. / 360., 0.18, 0.78, 0.09)
+        };
+        let frost = Frost {
+            blur: px(30.),
+            tint: at(canvas, 0.4),
+            edge,
+            top: wash(0.06),
+            label: if light {
+                color(0x3B3D44FF)
+            } else {
+                color(0xC9CACEFF)
+            },
+            pill_margin: (px(8.), px(4.), px(10.)),
+            pill_padding_x: px(16.),
+            pill_radius: px(16.),
+        };
+        Theme {
+            text_muted: if light {
+                color(0x4A4D55FF)
+            } else {
+                color(0xA9AAAFFF)
+            },
+            text_placeholder: if light {
+                color(0x4A4D55FF)
+            } else {
+                color(0xA9AAAFFF)
+            },
+            panel_tint: at(canvas, self.panel_tint.alpha),
+            panel_solid: canvas,
+            panel_sheen: transparent_black(),
+            footer_tint: at(canvas, 0.6),
+            hairline_soft: edge,
+            row_hover: wash(0.06),
+            row_selected: wash(0.10),
+            row_selected_border: Hsla {
+                alpha: edge.alpha + 0.01,
+                ..edge
+            },
+            slot_background: frost.tint,
+            slot_edge: edge,
+            slot_hover: wash(0.09),
+            frost: Some(frost),
+            ..self.clone()
+        }
+    }
+}
+
+/// The frosted surfaces over the launcher's background image (see
+/// [`Theme::over_backdrop`]): Roboco's composer pill, a blur of what is
+/// behind the surface inside the window under a thin tint of the canvas.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Frost {
+    /// The blur behind a frosted surface (GPUI's `backdrop_blur`).
+    pub(crate) blur: Pixels,
+    /// A frosted surface's tint: the canvas at 40%.
+    pub(crate) tint: Hsla,
+    /// A frosted surface's 1px inset edge: a cool silver at 9%.
+    pub(crate) edge: Hsla,
+    /// A frosted surface's top inset line: white 6%.
+    pub(crate) top: Hsla,
+    /// The section labels' ink over the picture (#C9CACE), a step above
+    /// the muted ink the rest of the secondary text takes.
+    pub(crate) label: Hsla,
+    /// The search field as a frosted pill inside the search header's 64px
+    /// row, which keeps its height (so the compact window's does not
+    /// change): its margins above, below and either side (8, 4, 10), its
+    /// own padding either side (16, against the plain header's 20) and its
+    /// radius (16).
+    pub(crate) pill_margin: (Pixels, Pixels, Pixels),
+    pub(crate) pill_padding_x: Pixels,
+    pub(crate) pill_radius: Pixels,
+}
+
+impl Frost {
+    /// A frosted surface's inset edges: the 1px ring and the top line.
+    pub(crate) fn edges(&self) -> Vec<gpui::BoxShadow> {
+        vec![
+            gpui::BoxShadow::new(px(0.), px(0.), self.edge)
+                .spread_radius(px(1.))
+                .inset(),
+            gpui::BoxShadow::new(px(0.), px(1.), self.top).inset(),
+        ]
     }
 }
 
@@ -1425,9 +1610,9 @@ impl Geometry {
                 glyph: px(16.),
             },
             slot_tile: TileMetrics {
-                size: px(42.),
-                radius: px(11.),
-                glyph: px(22.),
+                size: px(30.),
+                radius: px(8.),
+                glyph: px(17.),
             },
             mini_tile: TileMetrics {
                 size: px(18.),
@@ -1462,6 +1647,19 @@ impl Geometry {
                 controls_width: px(388.),
                 aside_width: px(400.),
                 aside_gap: px(10.),
+                content_padding_top: px(20.),
+                content_padding_x: px(24.),
+                content_padding_bottom: px(24.),
+                content_max_width: px(680.),
+                section_gap: px(24.),
+                section_label_gap: px(8.),
+                section_label_inset: px(4.),
+                card_radius: px(10.),
+                card_padding_x: px(14.),
+                card_row_height: px(48.),
+                card_row_padding_y: px(10.),
+                choice_width: px(200.),
+                wide_choice_width: px(360.),
             },
             controls: ControlGeometry {
                 group_gap: px(18.),
@@ -1497,6 +1695,12 @@ impl Geometry {
                 well_gap: px(8.),
                 well_glyph: px(14.),
                 recorder_min_width: px(96.),
+                recorder_width: px(220.),
+                recorder_height: px(36.),
+                recorder_inset: px(4.),
+                icon_button_size: px(28.),
+                icon_button_radius: px(6.),
+                icon_button_glyph: px(16.),
                 list_radius: px(8.),
                 chevron: px(14.),
                 menu_padding_y: px(4.),
@@ -1599,12 +1803,12 @@ impl Geometry {
                 columns_gap: px(8.),
                 strip_padding_top: px(2.),
                 strip_padding_bottom: px(6.),
-                slot_height: px(100.),
+                slot_height: px(80.),
                 slot_radius: px(12.),
-                slot_padding_top: px(14.),
+                slot_padding_top: px(8.),
                 slot_padding_x: px(8.),
-                slot_padding_bottom: px(10.),
-                slot_gap: px(9.),
+                slot_padding_bottom: px(8.),
+                slot_gap: px(7.),
                 unavailable_gap: px(2.),
                 keys_inset: px(8.),
                 focus_width: px(2.),

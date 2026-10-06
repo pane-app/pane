@@ -215,13 +215,10 @@ pub fn resolve(layout: &DisplayLayout, choice: OpeningMonitor) -> Option<Resolve
 fn fallback_reason(choice: OpeningMonitor) -> String {
     let named = match choice {
         OpeningMonitor::Primary => "the primary display",
-        OpeningMonitor::Pointer => "the display the pointer is on",
-        OpeningMonitor::ActiveWindow => "the display of the window you are working in",
+        OpeningMonitor::Pointer => "the display with the mouse",
+        OpeningMonitor::ActiveWindow => "the display with the active window",
     };
-    format!(
-        "Pane cannot open on {named}: it is not connected, or this system does not tell \
-         Pane where it is. The launcher opens on the primary display instead."
-    )
+    format!("Pane can't find {named}, so the launcher opens on the primary display instead.")
 }
 
 #[cfg(test)]
@@ -315,7 +312,7 @@ mod tests {
                 resolved
                     .fallback
                     .as_deref()
-                    .is_some_and(|reason| { reason.contains("this system does not tell Pane") }),
+                    .is_some_and(|reason| { reason.contains("on the primary display instead") }),
                 "{choice:?} says why: {:?}",
                 resolved.fallback
             );
@@ -347,10 +344,9 @@ mod tests {
         let resolved = resolve(&layout, OpeningMonitor::ActiveWindow).unwrap();
         assert_eq!(resolved.display.id, DisplayId(9));
         assert!(
-            resolved
-                .fallback
-                .as_deref()
-                .is_some_and(|reason| reason.contains("it is not connected")),
+            resolved.fallback.as_deref().is_some_and(
+                |reason| reason.contains("Pane can't find the display with the active window")
+            ),
             "the reason names the fallback: {:?}",
             resolved.fallback
         );

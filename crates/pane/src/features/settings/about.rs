@@ -43,7 +43,6 @@ use super::{Page, SettingsWindow, search};
 use crate::app::launcher_changed_outside;
 use crate::ui::controls::{self, status_note};
 use crate::ui::icon::Glyph;
-use crate::ui::settings_shell;
 use crate::ui::theme::Theme;
 
 /// The documentation entry's address: Pane's repository, whose README is
@@ -54,23 +53,22 @@ const DOCUMENTATION: &str = "https://github.com/hoangvu12/pane";
 /// search jumps to (see [`entries`]).
 const DOCUMENTATION_ROW: &str = "documentation";
 
-/// The page's heading.
+/// The page's title.
 pub(crate) const TITLE: &str = "About";
 
 /// What the page is, in one line: its sidebar entry's description in
-/// the search, and its heading's subtitle.
-pub(crate) const ABOUT: &str = "Pane's version, documentation and diagnostics";
+/// the search.
+pub(crate) const ABOUT: &str = "Version, updates and documentation";
 
-/// What the page's sections say under their labels.
-pub(crate) const VERSION_NOTE: &str = "The version of this Pane build";
-pub(crate) const DOCUMENTATION_NOTE: &str = "Open Pane's repository documentation";
-pub(crate) const DIAGNOSTICS_NOTE: &str = "Copy what Pane knows of this installation";
+/// What the rows say under their names.
+pub(crate) const DOCUMENTATION_NOTE: &str = "Pane's README on GitHub";
+pub(crate) const DIAGNOSTICS_NOTE: &str = "Your version, system and data folder";
 
 /// The buttons' labels.
 pub(crate) const CHECK_LABEL: &str = "Check for updates";
-pub(crate) const DOCUMENTATION_LABEL: &str = "Open documentation";
-pub(crate) const DIAGNOSTICS_LABEL: &str = "Copy diagnostics";
-pub(crate) const COPIED: &str = "Copied the diagnostics to the clipboard";
+pub(crate) const DOCUMENTATION_LABEL: &str = "Open";
+pub(crate) const DIAGNOSTICS_LABEL: &str = "Copy";
+pub(crate) const COPIED: &str = "Copied to the clipboard";
 
 /// The About page, registered last in the window's page list: the spec's
 /// section order names it the last of the seven.
@@ -171,9 +169,7 @@ fn render(
         // No source: the state is explained, never glossed over as a
         // check that would run or a release that exists.
         ApplicationUpdate::Unconfigured => (
-            "No artifact source is configured for this Pane, so there is no release to check \
-             for an update."
-                .into(),
+            "This build has no update source.".into(),
             theme.text_muted,
             Action::None,
         ),
@@ -204,14 +200,10 @@ fn render(
             Action::None,
         ),
         // The states a check answers.
-        ApplicationUpdate::Unchecked => (
-            "Pane has not checked for an update yet.".into(),
-            theme.text_muted,
-            Action::Check,
-        ),
+        ApplicationUpdate::Unchecked => ("Not checked yet".into(), theme.text_muted, Action::Check),
         ApplicationUpdate::Current => ("Pane is up to date".into(), theme.success, Action::Check),
         ApplicationUpdate::Failed(why) => (
-            format!("Could not check for a Pane update: {why}").into(),
+            format!("Couldn't check for updates: {why}").into(),
             theme.danger,
             Action::Check,
         ),
@@ -221,7 +213,7 @@ fn render(
         // chosen again.
         ApplicationUpdate::Offered { version, failure } => match failure {
             Some(why) => (
-                format!("Could not update Pane to {version}: {why}").into(),
+                format!("Couldn't update to {version}: {why}").into(),
                 theme.danger,
                 Action::Update(version.clone()),
             ),
@@ -232,8 +224,7 @@ fn render(
             ),
         },
         ApplicationUpdate::Installed { version } => (
-            format!("Installed Pane {version}; the new version is used the next time Pane starts")
-                .into(),
+            format!("Pane {version} is installed and starts next time").into(),
             theme.success,
             Action::None,
         ),
@@ -246,7 +237,7 @@ fn render(
         opened: opened.map(|opened| match opened {
             Ok(()) => (format!("Opened {DOCUMENTATION}").into(), theme.success),
             Err(why) => (
-                format!("Could not open the documentation: {why}").into(),
+                format!("Couldn't open the documentation: {why}").into(),
                 theme.danger,
             ),
         }),
@@ -334,12 +325,12 @@ pub(crate) enum AboutControl {
 }
 
 /// The About page's composition, which the visual workbench's fixture
-/// draws too: the heading block, then in the page's column a field group
-/// per section (#99) — the version, the updates (the status and the
-/// button the state offers), the documentation and the diagnostics, each
-/// action a Settings button — with what each last reported. `attach` adds
-/// each button's behavior; the composition gives each its identity, its
-/// accessibility and its look.
+/// draws too: one card of rows (#99) — the version, the updates (the
+/// status and the button the state offers), the documentation and the
+/// diagnostics, each action a Settings button at its row's end — with
+/// what each last reported under its name. `attach` adds each button's
+/// behavior; the composition gives each its identity, its accessibility
+/// and its look.
 pub(crate) fn compose(
     view: &AboutView,
     theme: &Theme,
@@ -348,25 +339,21 @@ pub(crate) fn compose(
     // The version: what this build runs, as `pane --version` prints it. A
     // labelled node, so assistive technology reads the version rather than
     // passing it by.
-    let name = format!("Pane {}", view.version);
-    let version = controls::field(theme)
-        .child(
-            controls::field_label(name.clone(), theme)
-                .id("about-version")
-                .debug_selector(|| "about-version".into())
-                .role(Role::Label)
-                .aria_label(name)
-                .aria_description(VERSION_NOTE),
-        )
-        .child(controls::field_description(
-            VERSION_NOTE,
-            theme.text_muted,
-            theme,
-        ));
+    let version = controls::setting_row("Version", Vec::new(), theme).child(
+        div()
+            .flex_none()
+            .text_size(theme.typography.settings_text_size)
+            .font_family(theme.typography.mono_family.clone())
+            .text_color(theme.text_body)
+            .id("about-version")
+            .debug_selector(|| "about-version".into())
+            .role(Role::Label)
+            .aria_label(format!("Pane {}", view.version))
+            .child(view.version.clone()),
+    );
     // The update flow: the status of the check, the offer and the install,
     // with the button that acts on it — a second surface of the root rows'
-    // own flow (see the module docs). Each button's explanation is also its
-    // accessible description, as root search's rows' subtitles are.
+    // own flow (see the module docs).
     let update_button = match &view.action {
         Action::None => None,
         Action::Check => Some(attach(
@@ -374,96 +361,84 @@ pub(crate) fn compose(
             action_button(
                 "about-check-update",
                 CHECK_LABEL,
-                "Read the artifact source's index for a newer version of Pane",
+                "Looks for a newer version of Pane",
                 theme,
             ),
         )),
         Action::Update(version) => {
-            let title = format!("Update Pane to {version}");
+            let title = format!("Update to {version}");
             Some(attach(
                 AboutControl::Update,
                 action_button(
                     "about-update",
                     &title,
-                    "Your extensions and settings are kept; the new version is used the next \
-                     time Pane starts",
+                    "Keeps your extensions and settings. The new version starts next time.",
                     theme,
                 ),
             ))
         }
     };
-    let updates = controls::field(theme)
-        .child(label("Updates", theme))
-        .child(
-            controls::field_description(view.update_status.clone(), view.update_tone, theme)
-                .id("about-update-status")
-                .debug_selector(|| "about-update-status".into())
-                .role(Role::Status)
-                .aria_label(view.update_status.clone()),
-        )
-        .children(update_button.map(|button| div().flex().child(button)));
+    let status = status_note(
+        "about-update-status",
+        view.update_status.clone(),
+        view.update_tone,
+        theme,
+    );
+    let updates = controls::setting_row("Updates", vec![status.into_any_element()], theme)
+        .children(update_button);
     // The documentation: Pane's repository, opened with the launcher's
     // link opener, and what the opening reported.
-    let documentation = controls::field(theme)
-        .child(label("Documentation", theme))
-        .child(controls::field_description(
-            DOCUMENTATION_NOTE,
-            theme.text_muted,
-            theme,
-        ))
-        .child(
-            div().flex().child(attach(
-                AboutControl::Documentation,
-                controls::button(DOCUMENTATION_LABEL, true, theme)
-                    .id("about-documentation")
-                    .debug_selector(|| "about-documentation".into())
-                    .role(Role::Link)
-                    .aria_label(DOCUMENTATION_LABEL)
-                    .aria_description(DOCUMENTATION_NOTE),
-            )),
-        )
-        .children(
-            view.opened
-                .as_ref()
-                .map(|(text, color)| status_note("about-status", text.clone(), *color, theme)),
-        );
+    let mut documentation_lines = vec![controls::row_line(
+        DOCUMENTATION_NOTE,
+        theme.text_muted,
+        theme,
+    )];
+    documentation_lines.extend(view.opened.as_ref().map(|(text, color)| {
+        status_note("about-status", text.clone(), *color, theme).into_any_element()
+    }));
+    let documentation =
+        controls::setting_row("Documentation", documentation_lines, theme).child(attach(
+            AboutControl::Documentation,
+            controls::button("about-documentation", DOCUMENTATION_LABEL, true, theme)
+                .debug_selector(|| "about-documentation".into())
+                .role(Role::Link)
+                .aria_label("Open documentation")
+                .aria_description(DOCUMENTATION_NOTE),
+        ));
     // The diagnostics: what Pane already knows of this installation,
     // copied to this computer's clipboard by the user's explicit choice
     // (see the module docs).
-    let diagnostics = controls::field(theme)
-        .child(label("Diagnostics", theme))
-        .child(controls::field_description(
-            DIAGNOSTICS_NOTE,
-            theme.text_muted,
+    let mut diagnostics_lines = vec![controls::row_line(
+        DIAGNOSTICS_NOTE,
+        theme.text_muted,
+        theme,
+    )];
+    diagnostics_lines.extend(view.copied.then(|| {
+        status_note("about-diagnostics-status", COPIED, theme.success, theme).into_any_element()
+    }));
+    let diagnostics = controls::setting_row("Diagnostics", diagnostics_lines, theme).child(attach(
+        AboutControl::Diagnostics,
+        action_button(
+            "about-diagnostics",
+            DIAGNOSTICS_LABEL,
+            "Copies your version, system and data folder",
             theme,
-        ))
-        .child(div().flex().child(attach(
-            AboutControl::Diagnostics,
-            action_button(
-                "about-diagnostics",
-                DIAGNOSTICS_LABEL,
-                DIAGNOSTICS_NOTE,
-                theme,
-            ),
-        )))
-        .children(
-            view.copied
-                .then(|| status_note("about-diagnostics-status", COPIED, theme.success, theme)),
-        );
-    let column = controls::column(theme)
-        .child(
-            settings_shell::page_header(TITLE, Some(ABOUT.into()), theme)
-                .id("about-title")
-                .debug_selector(|| "about-title".into()),
-        )
-        .child(version)
-        .child(updates)
-        .child(documentation)
-        .child(diagnostics);
+        ),
+    ));
+    let card = controls::card(
+        [
+            version.into_any_element(),
+            updates.into_any_element(),
+            documentation.into_any_element(),
+            diagnostics.into_any_element(),
+        ],
+        theme,
+    );
+    let page = controls::page(theme).child(controls::section(None, card, theme));
     div()
         .id("about")
         .debug_selector(|| "about".into())
-        .child(column)
+        .child(page)
 }
 
 /// One of the page's buttons, named `selector`: `title` is what it says
@@ -474,11 +449,14 @@ fn action_button(
     description: &'static str,
     theme: &Theme,
 ) -> Stateful<Div> {
-    controls::button(title.to_owned(), true, theme)
-        .id(selector)
+    controls::button(selector, title.to_owned(), true, theme)
         .debug_selector(move || selector.into())
         .role(Role::Button)
-        .aria_label(title.to_owned())
+        .aria_label(if title == DIAGNOSTICS_LABEL {
+            "Copy diagnostics".to_owned()
+        } else {
+            title.to_owned()
+        })
         .aria_description(description)
 }
 
@@ -513,9 +491,9 @@ fn run(pending: impl Future<Output = ()> + 'static, cx: &mut Context<SettingsWin
     .detach();
 }
 
-/// "Checking for a Pane update…", as the page says it while one runs.
+/// "Checking for updates…", as the page says it while one runs.
 fn checking_text() -> SharedString {
-    "Checking for a Pane update…".into()
+    "Checking for updates…".into()
 }
 
 /// What the page says while an update installs: the status line's own
@@ -567,11 +545,4 @@ fn update_line(update: &ApplicationUpdate) -> String {
         }
         ApplicationUpdate::Failed(why) => format!("could not check: {why}"),
     }
-}
-
-/// A section's field label (#99), as the board labels its fields.
-fn label(text: &'static str, theme: &Theme) -> Stateful<Div> {
-    controls::field_label(text, theme)
-        .id(text)
-        .debug_selector(move || format!("about-label-{text}"))
 }

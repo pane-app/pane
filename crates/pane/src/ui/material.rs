@@ -7,14 +7,19 @@
 //!   asks the platform for a blurred window background (Windows acrylic via
 //!   DWM composition, macOS vibrancy). It is set at window creation and
 //!   re-applied as the material changes, and blurs whatever is *behind the
-//!   window*. This is the launcher's glass. It is never simulated: no
-//!   wallpaper is drawn inside the app.
+//!   window*. This is the launcher's glass. It is never simulated: no copy
+//!   of the desktop's wallpaper is drawn inside the app. A background
+//!   image the user chooses for the launcher (ADR 0028) is not glass
+//!   either: it is the user's own picture ([`Material::panel_over`]),
+//!   drawn translucent over the glass panel so the frost still shows
+//!   through, and on the opaque panel otherwise.
 //! - **In-scene frost** — GPUI's `Styled::backdrop_blur(radius)` blurs
 //!   content *inside* the window, behind an element. The L2 popover
 //!   ([`Material::popover`]) uses it in glass mode, blurring the list
 //!   behind the launcher footer's menu the way the reference's `.pop`
 //!   blurs the page behind it; the window's own glass is never simulated
-//!   with it.
+//!   with it. Over a background image the frosted surfaces use it too
+//!   (`Theme::frost`).
 //!
 //! Failure honesty: whether the compositor actually applied the blur is not
 //! observable from the application — GPUI exposes no query for it. On
@@ -37,7 +42,7 @@
 
 use gpui::prelude::*;
 use gpui::{
-    BoxShadow, Div, Hsla, Pixels, WindowBackgroundAppearance, div, linear_color_stop,
+    AnyElement, BoxShadow, Div, Hsla, Pixels, WindowBackgroundAppearance, div, linear_color_stop,
     linear_gradient, px, relative, solid_background, transparent_black,
 };
 
@@ -199,6 +204,27 @@ impl Material {
         self.tinted_panel(theme, theme.panel_tint, content)
     }
 
+    /// [`Material::panel`] with `under` laid between the surface and
+    /// `content`: the launcher's background image (ADR 0028), which paints
+    /// over the panel's fill and sheen and under everything the launcher
+    /// shows. `under` places itself (absolutely) and takes no input.
+    pub(crate) fn panel_over(
+        &self,
+        theme: &Theme,
+        under: impl IntoElement,
+        content: impl IntoElement,
+    ) -> Div {
+        let shape = (theme.geometry.panel_radius, theme.hairline);
+        self.l1_surface(
+            theme,
+            theme.panel_tint,
+            shape,
+            Some(under.into_any_element()),
+            content,
+        )
+        .size_full()
+    }
+
     /// The Settings window's L1 panel: [`Material::panel`]'s surface at
     /// the Settings board's own glass tint, `.78` against the root's
     /// `.70` ([`Theme::settings_tint`]). The solid fallback, the sheen and
@@ -227,13 +253,14 @@ impl Material {
             theme.geometry.preview.panel_radius,
             theme.controls.preview_panel_edge,
         );
-        self.l1_surface(theme, theme.panel_tint, shape, content)
+        self.l1_surface(theme, theme.panel_tint, shape, None, content)
     }
 
     /// The L1 panel with `tint` as its glass (see [`Material::panel`]).
     fn tinted_panel(&self, theme: &Theme, tint: Hsla, content: impl IntoElement) -> Div {
         let shape = (theme.geometry.panel_radius, theme.hairline);
-        self.l1_surface(theme, tint, shape, content).size_full()
+        self.l1_surface(theme, tint, shape, None, content)
+            .size_full()
     }
 
     /// The L1 surface: `tint` as its glass (the solid panel otherwise),
@@ -245,6 +272,7 @@ impl Material {
         theme: &Theme,
         tint: Hsla,
         (radius, edge): (Pixels, Hsla),
+        under: Option<AnyElement>,
         content: impl IntoElement,
     ) -> Div {
         let background = match self.mode {
@@ -266,6 +294,7 @@ impl Material {
                 linear_color_stop(theme.panel_sheen, 0.),
                 linear_color_stop(transparent_black(), 0.36),
             )))
+            .children(under)
             .child(content)
     }
 
@@ -281,7 +310,9 @@ impl Material {
     /// first line stays reachable when the content scrolls.
     ///
     /// Its padding is the reference's: 16 on the left, 8 on the right,
-    /// where the strip's buttons carry their own padding.
+    /// where the strip's buttons carry their own padding. Over a
+    /// background image the strip is frosted: it blurs what scrolls
+    /// behind it (see [`Theme::over_backdrop`]).
     pub(crate) fn footer(theme: &Theme) -> Div {
         let geometry = &theme.geometry;
         div()
@@ -292,6 +323,9 @@ impl Material {
             .max_h(relative(0.35))
             .pl(geometry.footer_padding_left)
             .pr(geometry.footer_padding_right)
+            .when_some(theme.frost, |footer, frost| {
+                footer.backdrop_blur(frost.blur)
+            })
             .bg(theme.footer_tint)
             .border_t_1()
             .border_color(theme.hairline_soft)

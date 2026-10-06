@@ -1,10 +1,10 @@
 //! Quick slots through the launcher's public interface: what can be
-//! pinned, how the five slots fill, move and empty, how a pin resolves
+//! pinned, how the list of slots grows, moves and shrinks, how a pin resolves
 //! through the registry as it is now — a disabled, missing or not yet
 //! listed target keeps its slot and says why — what invoking a slot runs,
 //! and how the arrangement is recorded in `quick-slots.json`: across a
-//! restart, never over a record Pane cannot read, and back to what the
-//! record holds when a write fails.
+//! restart, from a record of the first version, never over a record Pane
+//! cannot read, and back to what the record holds when a write fails.
 //!
 //! Most tests pin commands this build registers (their components are
 //! never opened); the disabled-command test installs the settings sample,
@@ -19,8 +19,8 @@ use std::sync::{Arc, Mutex};
 use futures::executor::block_on;
 use pane_core::applications::{Application, Applications};
 use pane_core::{
-    CommandRegistration, Launcher, PackageIdentity, PinTarget, QUICK_SLOTS, ResultAction, Runtime,
-    SavedData, Screen, SlotChange, Status,
+    CommandRegistration, Launcher, PackageIdentity, PinTarget, ResultAction, Runtime, SavedData,
+    Screen, SlotChange, Status,
 };
 use tempfile::TempDir;
 
@@ -52,7 +52,7 @@ fn command(id: &str, title: &str) -> CommandRegistration {
     }
 }
 
-/// Six registered commands: one more than there are slots.
+/// Six registered commands.
 fn six_commands() -> Vec<CommandRegistration> {
     ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"]
         .iter()
@@ -92,7 +92,7 @@ fn pin(launcher: &Launcher, title: &str) -> SlotChange {
     change
 }
 
-/// The slots' titles, "" for an empty one.
+/// The slots' titles, in order.
 fn titles(launcher: &Launcher) -> Vec<String> {
     launcher
         .quick_slots()
@@ -112,24 +112,22 @@ fn actions(launcher: &Launcher) -> Vec<(ResultAction, String, bool)> {
 }
 
 #[test]
-fn a_fresh_installation_has_five_empty_slots_and_no_record() {
+fn a_fresh_installation_has_no_slots_and_no_record() {
     let data = tempfile::tempdir().unwrap();
     let launcher = launcher(data.path(), six_commands());
-    let slots = launcher.quick_slots();
-    assert_eq!(slots.len(), QUICK_SLOTS);
-    assert!(slots.iter().all(|slot| slot.is_empty() && !slot.ready()));
+    assert!(launcher.quick_slots().is_empty());
     assert!(launcher.quick_slots_problem().is_none());
     assert_eq!(launcher.view().status, Status::Idle);
     assert!(!record(data.path()).exists(), "nothing is fabricated");
 }
 
 #[test]
-fn pinning_a_command_fills_the_first_empty_slot_and_records_its_identity() {
+fn pinning_a_command_adds_a_slot_and_records_its_identity() {
     let data = tempfile::tempdir().unwrap();
     let launcher = launcher(data.path(), six_commands());
     let target = select(&launcher, "", "Bravo");
     assert!(
-        actions(&launcher).contains(&(ResultAction::Pin, "Pin to Quick Slot".into(), true)),
+        actions(&launcher).contains(&(ResultAction::Pin, "Pin".into(), true)),
         "{:?}",
         actions(&launcher)
     );
@@ -139,22 +137,28 @@ fn pinning_a_command_fills_the_first_empty_slot_and_records_its_identity() {
     block_on(recorded);
 
     let slots = launcher.quick_slots();
-    assert_eq!(slots[0].target, Some(PinTarget::Command("bravo".into())));
+    assert_eq!(slots.len(), 1);
+    assert_eq!(slots[0].target, PinTarget::Command("bravo".into()));
     assert_eq!(slots[0].title, "Bravo");
     assert!(slots[0].ready());
-    assert!(slots[1..].iter().all(|slot| slot.is_empty()));
     assert_eq!(
         launcher.view().status,
-        Status::Result("Pinned Bravo to Quick Slot 1".into())
+        Status::Result("Pinned Bravo".into())
     );
     // The record holds the command's id, in the slot's place: never the
     // row's index or its title.
     let text = fs::read_to_string(record(data.path())).unwrap();
     let recorded: serde_json::Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(recorded["version"], 1);
+    assert_eq!(recorded["version"], 2);
     assert_eq!(
-        recorded["slots"],
-        serde_json::json!([{ "command": "bravo" }, null, null, null, null])
+        recorded["pins"],
+        serde_json::json!([{ "command": "bravo" }])
+    );
+    // Pinned, the row's own entry unpins it.
+    assert!(
+        actions(&launcher).contains(&(ResultAction::Unpin, "Unpin".into(), true)),
+        "{:?}",
+        actions(&launcher)
     );
 }
 
@@ -170,7 +174,7 @@ fn the_arrangement_survives_a_restart_in_its_order() {
     let restarted = launcher(data.path(), six_commands());
     assert_eq!(
         titles(&restarted),
-        ["Delta", "Alpha", "Charlie", "", ""],
+        ["Delta", "Alpha", "Charlie"],
         "the slots' order is the one recorded"
     );
 }
@@ -184,11 +188,11 @@ fn pinning_a_pinned_target_names_its_slot_and_changes_nothing() {
     let before = fs::read_to_string(record(data.path())).unwrap();
 
     assert_eq!(pin(&launcher, "Bravo"), SlotChange::AlreadyPinned(1));
-    assert_eq!(titles(&launcher), ["Alpha", "Bravo", "", "", ""]);
+    assert_eq!(titles(&launcher), ["Alpha", "Bravo"]);
     assert_eq!(fs::read_to_string(record(data.path())).unwrap(), before);
     assert_eq!(
         launcher.view().status,
-        Status::Result("Bravo is already in Quick Slot 2".into())
+        Status::Result("Bravo is already pinned".into())
     );
 }
 
@@ -196,7 +200,9 @@ fn pinning_a_pinned_target_names_its_slot_and_changes_nothing() {
 fn a_pinned_result_is_removed_and_moved_but_never_past_either_end() {
     let data = tempfile::tempdir().unwrap();
     let launcher = launcher(data.path(), six_commands());
-    pin(&launcher, "Alpha");
+    for title in ["Alpha", "Bravo", "Charlie"] {
+        pin(&launcher, title);
+    }
     let target = select(&launcher, "", "Alpha");
     // The slot's own panel removes and moves it.
     let own: Vec<_> = launcher
@@ -210,81 +216,79 @@ fn a_pinned_result_is_removed_and_moved_but_never_past_either_end() {
         own,
         [
             (ResultAction::Invoke, "Open command".into(), true),
-            (ResultAction::Unpin, "Remove from Quick Slot".into(), true),
-            (ResultAction::MoveSlotLeft, "Move Slot Left".into(), false),
-            (ResultAction::MoveSlotRight, "Move Slot Right".into(), true),
+            (ResultAction::Unpin, "Unpin".into(), true),
+            (ResultAction::MovePinUp, "Move Up".into(), false),
+            (ResultAction::MovePinDown, "Move Down".into(), true),
         ],
-        "the first slot cannot move left"
+        "the first slot cannot move up"
     );
-    let (change, _) = launcher.change_quick_slots(&target, ResultAction::MoveSlotLeft);
+    let (change, _) = launcher.change_quick_slots(&target, ResultAction::MovePinUp);
     assert_eq!(change, SlotChange::Refused);
 
-    let (change, recorded) = launcher.change_quick_slots(&target, ResultAction::MoveSlotRight);
+    let (change, recorded) = launcher.change_quick_slots(&target, ResultAction::MovePinDown);
     assert_eq!(change, SlotChange::Changed(Some(1)));
     block_on(recorded);
-    assert_eq!(titles(&launcher), ["", "Alpha", "", "", ""]);
+    assert_eq!(titles(&launcher), ["Bravo", "Alpha", "Charlie"]);
 
-    // Moved to the last slot, it cannot move right.
-    for _ in 0..3 {
-        let (_, recorded) = launcher.change_quick_slots(&target, ResultAction::MoveSlotRight);
-        block_on(recorded);
-    }
-    assert_eq!(launcher.quick_slot_of(&target), Some(QUICK_SLOTS - 1));
-    assert!(!launcher.quick_slot_action_ready(&target, ResultAction::MoveSlotRight));
-    assert!(launcher.quick_slot_action_ready(&target, ResultAction::MoveSlotLeft));
+    // Moved to the last slot, it cannot move down.
+    let (_, recorded) = launcher.change_quick_slots(&target, ResultAction::MovePinDown);
+    block_on(recorded);
+    assert_eq!(launcher.quick_slot_of(&target), Some(2));
+    assert!(!launcher.quick_slot_action_ready(&target, ResultAction::MovePinDown));
+    assert!(launcher.quick_slot_action_ready(&target, ResultAction::MovePinUp));
 
+    // Unpinned, it leaves no gap.
     let (change, recorded) = launcher.change_quick_slots(&target, ResultAction::Unpin);
     assert_eq!(change, SlotChange::Changed(None));
     block_on(recorded);
-    assert!(launcher.quick_slots().iter().all(|slot| slot.is_empty()));
+    assert_eq!(titles(&launcher), ["Bravo", "Charlie"]);
     let restarted = self::launcher(data.path(), six_commands());
-    assert!(restarted.quick_slots().iter().all(|slot| slot.is_empty()));
+    assert_eq!(titles(&restarted), ["Bravo", "Charlie"]);
 }
 
 #[test]
-fn with_every_slot_taken_pinning_asks_which_slot_to_replace() {
+fn pinning_never_runs_out_of_room() {
     let data = tempfile::tempdir().unwrap();
     let launcher = launcher(data.path(), six_commands());
     for title in ["Alpha", "Bravo", "Charlie", "Delta", "Echo"] {
         pin(&launcher, title);
     }
-    let before = fs::read_to_string(record(data.path())).unwrap();
-    let target = select(&launcher, "", "Foxtrot");
-    let (change, recorded) = launcher.change_quick_slots(&target, ResultAction::Pin);
-    assert_eq!(change, SlotChange::ChooseReplacement);
-    block_on(recorded);
-    assert_eq!(
-        fs::read_to_string(record(data.path())).unwrap(),
-        before,
-        "nothing is replaced without a choice"
-    );
-
-    let replacements = launcher
-        .pin_replacements(&target)
-        .expect("the five slots to choose from");
-    let labels: Vec<_> = replacements
-        .items
-        .iter()
-        .map(|item| (item.action, item.label.as_str()))
-        .collect();
-    assert_eq!(
-        labels,
-        [
-            (ResultAction::ReplaceSlot(0), "Replace Slot 1: Alpha"),
-            (ResultAction::ReplaceSlot(1), "Replace Slot 2: Bravo"),
-            (ResultAction::ReplaceSlot(2), "Replace Slot 3: Charlie"),
-            (ResultAction::ReplaceSlot(3), "Replace Slot 4: Delta"),
-            (ResultAction::ReplaceSlot(4), "Replace Slot 5: Echo"),
-        ]
-    );
-    let (change, recorded) = launcher.change_quick_slots(&target, ResultAction::ReplaceSlot(2));
-    assert_eq!(change, SlotChange::Changed(Some(2)));
-    block_on(recorded);
+    assert_eq!(pin(&launcher, "Foxtrot"), SlotChange::Changed(Some(5)));
     assert_eq!(
         titles(&launcher),
-        ["Alpha", "Bravo", "Foxtrot", "Delta", "Echo"]
+        ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"]
     );
-    assert!(launcher.pin_replacements(&target).is_none(), "it is pinned");
+}
+
+#[test]
+fn a_first_version_record_is_read_as_its_pins_in_order() {
+    let data = tempfile::tempdir().unwrap();
+    fs::write(
+        record(data.path()),
+        r#"{ "version": 1, "slots": [null, { "command": "charlie" }, null, { "command": "alpha" }, null] }"#,
+    )
+    .unwrap();
+    let launcher = launcher(data.path(), six_commands());
+    assert!(launcher.quick_slots_problem().is_none());
+    assert_eq!(
+        titles(&launcher),
+        ["Charlie", "Alpha"],
+        "its gaps are closed"
+    );
+
+    // The next change writes the current version.
+    pin(&launcher, "Bravo");
+    let text = fs::read_to_string(record(data.path())).unwrap();
+    let recorded: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(recorded["version"], 2);
+    assert_eq!(
+        recorded["pins"],
+        serde_json::json!([
+            { "command": "charlie" },
+            { "command": "alpha" },
+            { "command": "bravo" }
+        ])
+    );
 }
 
 #[test]
@@ -301,11 +305,11 @@ fn panes_own_rows_cannot_be_pinned() {
     );
     let (change, _) = launcher.change_quick_slots(&target, ResultAction::Pin);
     assert_eq!(change, SlotChange::Refused);
-    assert!(launcher.quick_slots().iter().all(|slot| slot.is_empty()));
+    assert!(launcher.quick_slots().is_empty());
 }
 
 #[test]
-fn invoking_a_slot_opens_its_command_and_an_empty_slot_runs_nothing() {
+fn invoking_a_slot_opens_its_command_and_a_slot_past_the_list_runs_nothing() {
     let data = tempfile::tempdir().unwrap();
     built("sample_rust.wasm");
     let launcher = launcher(data.path(), vec![command("rust", "Rust sample")]);
@@ -315,7 +319,7 @@ fn invoking_a_slot_opens_its_command_and_an_empty_slot_runs_nothing() {
     block_on(launcher.activate_quick_slot(1));
     assert!(
         matches!(launcher.view().screen, Screen::Root { .. }),
-        "an empty slot invokes nothing"
+        "a slot past the list invokes nothing"
     );
     block_on(launcher.activate_quick_slot(0));
     let view = launcher.view();
@@ -377,7 +381,7 @@ fn a_disabled_commands_slot_says_why_runs_nothing_and_resolves_again_once_enable
         Status::Error("Settings sample is disabled".into())
     );
     // It can still be removed from its own slot's actions.
-    let target = slot.target.as_ref().unwrap().key();
+    let target = slot.target.key();
     assert!(launcher.quick_slot_action_ready(&target, ResultAction::Unpin));
     assert!(!launcher.quick_slot_action_ready(&target, ResultAction::Invoke));
 
@@ -431,17 +435,17 @@ fn a_missing_target_keeps_its_slot_says_why_and_can_be_removed() {
     let data = tempfile::tempdir().unwrap();
     fs::write(
         record(data.path()),
-        r#"{ "version": 1, "slots": [null, { "command": "local:/nowhere#gone" }] }"#,
+        r#"{ "version": 2, "pins": [{ "command": "local:/nowhere#gone" }] }"#,
     )
     .unwrap();
     let launcher = launcher(data.path(), six_commands());
-    let slot = &launcher.quick_slots()[1];
+    let slot = &launcher.quick_slots()[0];
     assert_eq!(slot.title, "gone", "named by its id, never a guess");
     assert_eq!(
         slot.unavailable.as_deref(),
         Some("Its extension is not installed")
     );
-    let target = slot.target.as_ref().unwrap().key();
+    let target = slot.target.key();
     let own = launcher
         .quick_slot_actions(&target)
         .expect("its slot's actions");
@@ -453,22 +457,23 @@ fn a_missing_target_keeps_its_slot_says_why_and_can_be_removed() {
         [
             (ResultAction::Invoke, false),
             (ResultAction::Unpin, true),
-            (ResultAction::MoveSlotLeft, true),
-            (ResultAction::MoveSlotRight, true),
+            (ResultAction::MovePinUp, false),
+            (ResultAction::MovePinDown, false),
         ]
     );
     let (change, recorded) = launcher.change_quick_slots(&target, ResultAction::Unpin);
     assert_eq!(change, SlotChange::Changed(None));
     block_on(recorded);
-    assert!(launcher.quick_slots().iter().all(|slot| slot.is_empty()));
+    assert!(launcher.quick_slots().is_empty());
 }
 
 #[test]
 fn an_unreadable_record_is_reported_kept_and_never_replaced() {
     for garbage in [
         "{ not a record",
-        r#"{ "version": 2, "slots": [] }"#,
-        r#"{ "version": 1, "slots": [{ "command": "alpha" }, { "command": "alpha" }] }"#,
+        r#"{ "version": 3, "pins": [] }"#,
+        r#"{ "version": 2, "pins": [{ "command": "alpha" }, { "command": "alpha" }] }"#,
+        r#"{ "version": 2, "pins": [null] }"#,
         r#"{ "version": 1, "slots": [{ "row": 3 }] }"#,
     ] {
         let data = tempfile::tempdir().unwrap();
@@ -483,11 +488,11 @@ fn an_unreadable_record_is_reported_kept_and_never_replaced() {
             "{garbage}: {:?}",
             launcher.view().status
         );
-        assert!(launcher.quick_slots().iter().all(|slot| slot.is_empty()));
+        assert!(launcher.quick_slots().is_empty());
 
         let target = select(&launcher, "", "Alpha");
         assert!(
-            actions(&launcher).contains(&(ResultAction::Pin, "Pin to Quick Slot".into(), false)),
+            actions(&launcher).contains(&(ResultAction::Pin, "Pin".into(), false)),
             "{garbage}: pinning cannot run"
         );
         let (change, recorded) = launcher.change_quick_slots(&target, ResultAction::Pin);
@@ -514,14 +519,10 @@ fn a_record_that_cannot_be_written_puts_the_saved_arrangement_back_and_says_why(
     let target = select(&launcher, "", "Bravo");
     let (change, recorded) = launcher.change_quick_slots(&target, ResultAction::Pin);
     assert_eq!(change, SlotChange::Changed(Some(1)));
-    assert_eq!(titles(&launcher), ["Alpha", "Bravo", "", "", ""], "at once");
+    assert_eq!(titles(&launcher), ["Alpha", "Bravo"], "at once");
     block_on(recorded);
 
-    assert_eq!(
-        titles(&launcher),
-        ["Alpha", "", "", "", ""],
-        "back to what the record held"
-    );
+    assert_eq!(titles(&launcher), ["Alpha"], "back to what the record held");
     assert!(
         matches!(&launcher.view().status, Status::Error(problem)
             if problem.starts_with("Could not keep the quick slots")),
@@ -572,7 +573,7 @@ fn an_application_is_pinned_by_its_identity_and_a_cold_home_resolves_and_opens_i
         install(&launcher, &built("packages/applications"));
         let target = select(&launcher, "fire", "Firefox");
         assert!(
-            actions(&launcher).contains(&(ResultAction::Pin, "Pin to Quick Slot".into(), true)),
+            actions(&launcher).contains(&(ResultAction::Pin, "Pin".into(), true)),
             "{:?}",
             actions(&launcher)
         );

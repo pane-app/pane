@@ -101,7 +101,8 @@ pub(crate) fn section_label(label: SharedString, note: Option<SharedString>, the
         .text_size(typography.section_size)
         .font_weight(typography.medium)
         .letter_spacing(typography.section_size * typography.section_tracking)
-        .text_color(theme.text_muted)
+        // A step brighter over a background image (ADR 0028).
+        .text_color(theme.frost.map_or(theme.text_muted, |frost| frost.label))
         .child(div().child(label))
         .when_some(note, |label, note| {
             label.child(div().font_weight(typography.regular).child(note))

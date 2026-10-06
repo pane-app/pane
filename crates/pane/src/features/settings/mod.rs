@@ -7,17 +7,18 @@
 //! [`pane_core::Launcher`] the launcher window holds — so Settings runs
 //! no second extension runtime and duplicates no launcher state. The two
 //! windows also share the host settings (`crate::settings`): what the
-//! Appearance page chooses repaints both, without a restart, and what the
-//! General page chooses — today, the Open Pane hotkey and whether Pane
-//! starts at login — reaches the platform through the same entity. Its shell is
-//! the reference's Settings board (#97, [`crate::ui::settings_shell`]): the
-//! 1120×720 panel at the board's own glass tint, the 48px custom titlebar
-//! where the platform hides its own (macOS's traffic lights; on Windows,
-//! Pane's caption buttons in place of the board's lone close glyph; Linux
-//! keeps the window manager's frame), the 232px sidebar of section items
-//! with the search field above them ([`search`]), and the selected page,
-//! which opens with its heading block. The shell module documents the
-//! policy for windows smaller than the board.
+//! General page's Appearance section chooses repaints both, without a
+//! restart, and what the rest of the General page chooses (the Open Pane
+//! hotkey, whether Pane starts at login) reaches the platform through the
+//! same entity. Its shell is the reference's Settings board's (#97,
+//! [`crate::ui::settings_shell`]) at Pane's own 860×600: the panel at the
+//! board's own glass tint, the 48px custom titlebar naming the page where
+//! the platform hides its own (macOS's traffic lights; on Windows, Pane's
+//! caption buttons in place of the board's lone close glyph; Linux keeps
+//! the window manager's frame), the 232px sidebar of section items with
+//! the search field above them ([`search`]), and the selected page, its
+//! sections of rows in raised cards. The shell module documents the
+//! window's sizes.
 //!
 //! ## Section transitions
 //!
@@ -41,8 +42,7 @@
 //! [`SettingsWindow::new`]. Later pages add their module under
 //! `settings/` and one line there — no empty feature folder, no new
 //! framework — and the sidebar lists only registered pages, so no
-//! section ships as a placeholder. The Appearance and General pages'
-//! choices live in
+//! section ships as a placeholder. The General page's choices live in
 //! the shared host settings rather than the window, since the launcher
 //! window renders by them too (and the platform's login registration
 //! outlives any window); a page whose state is the window's own
@@ -81,11 +81,33 @@ pub(crate) mod launcher;
 mod search;
 mod shortcuts;
 
-actions!(settings, [NextSection, PreviousSection, CloseSettings]);
+actions!(
+    settings,
+    [NextSection, PreviousSection, CloseSettings, EscapeSettings]
+);
 
 /// The id of the window's key context, which the sidebar's keys are bound
 /// to.
 const CONTEXT: &str = "Settings";
+
+/// The window's own keys, bound to [`gpui::NoAction`] in a listening
+/// recorder's `context`: the sidebar's Up and Down, the close shortcut and
+/// the find shortcut. Bindings win over a key handler, so without these
+/// the window would act on them; with them, they reach the recorder as the
+/// combination being recorded.
+pub(crate) fn captured_while_recording(context: &'static str) -> [KeyBinding; 4] {
+    let (close, find) = if cfg!(target_os = "macos") {
+        ("cmd-w", "cmd-f")
+    } else {
+        ("ctrl-w", "ctrl-f")
+    };
+    [
+        KeyBinding::new("down", gpui::NoAction, Some(context)),
+        KeyBinding::new("up", gpui::NoAction, Some(context)),
+        KeyBinding::new(close, gpui::NoAction, Some(context)),
+        KeyBinding::new(find, gpui::NoAction, Some(context)),
+    ]
+}
 
 /// Registers the Settings window's key bindings: the sidebar's navigation
 /// keys, the window's focus traversal and the platform's close-window
@@ -116,6 +138,10 @@ pub(crate) fn bind_keys(cx: &mut App) {
             CloseSettings,
             Some(CONTEXT),
         ),
+        // Escape closes the window where the Keyboard page says so; a
+        // control that takes Escape itself (a recorder, a select, the
+        // search field) binds it deeper and keeps it.
+        KeyBinding::new("escape", EscapeSettings, Some(CONTEXT)),
     ]);
     appearance::bind_keys(cx);
     general::bind_keys(cx);
@@ -190,6 +216,14 @@ impl SettingsWindow {
         // `shortcuts::WATCH`, compares the catalog the page last drew with
         // a fresh one and asks for a redraw when they differ — the next
         // frame draws the launcher as it is now. It ends with the window.
+        // A recorder stops listening when the window loses focus: the keys
+        // it would capture go to another window.
+        cx.observe_window_activation(window, |this, window, cx| {
+            if !window.is_window_active() {
+                this.stop_recorders(cx);
+            }
+        })
+        .detach();
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(shortcuts::WATCH).await;
@@ -207,18 +241,12 @@ impl SettingsWindow {
         .detach();
         SettingsWindow {
             launcher: launcher.clone(),
-            // The sidebar's order: the sections the reference lists
-            // (General, Launcher, Appearance, Shortcuts, Keyboard,
-            // Extensions), About last. Of those, this milestone ships
-            // General, Launcher, Appearance, Shortcuts, Keyboard and
-            // Extensions; General — the Open Pane hotkey and the
-            // launch-at-login choice — is the page the window first
-            // shows, and the later tickets' pages take their places in
-            // this order as they land.
+            // The sidebar's order: General (with the Appearance section),
+            // Launcher, Shortcuts, Keyboard, Extensions, About last.
+            // General is the page the window first shows.
             pages: vec![
                 general::page(),
                 launcher::page(),
-                appearance::page(),
                 shortcuts::page(),
                 keyboard::page(),
                 extensions::page(),
@@ -235,7 +263,7 @@ impl SettingsWindow {
             general: general::State::new(cx),
             launcher_page: launcher::State::new(window, cx),
             shortcuts: shortcuts::State::new(launcher, cx),
-            keyboard: keyboard::State::new(cx),
+            keyboard: keyboard::State::new(window, cx),
             search: search::State::new(cx),
         }
     }
@@ -279,6 +307,30 @@ impl SettingsWindow {
         window.focus_prev(cx);
     }
 
+    /// Stops every recorder listening, changing nothing: the window lost
+    /// focus, so the keys it would capture go elsewhere.
+    fn stop_recorders(&mut self, cx: &mut Context<Self>) {
+        if self.general.recording || self.keyboard.recording.is_some() {
+            self.general.recording = false;
+            self.general.rejection = None;
+            self.keyboard.recording = None;
+            self.keyboard.rejection = None;
+            cx.notify();
+        }
+        self.shortcuts_cancel_recording(cx);
+    }
+
+    /// Escape, where no control took it: closes this window if the
+    /// Keyboard page's choice says Escape closes Settings.
+    fn escape_settings(&mut self, _: &EscapeSettings, window: &mut Window, cx: &mut Context<Self>) {
+        if crate::settings::shared(cx)
+            .read(cx)
+            .escape_closes_settings()
+        {
+            window.remove_window();
+        }
+    }
+
     /// The platform's close-window shortcut: closes this window only —
     /// the launcher keeps running, and with it the global hotkeys and
     /// whatever the launcher was showing.
@@ -307,6 +359,7 @@ impl SettingsWindow {
                     // reference's `.nav` does — and the identity,
                     // accessibility and click behavior are attached here.
                     settings_shell::sidebar_item(
+                        ("section", index),
                         SidebarItem {
                             label: page.title.into(),
                             glyph: page.icon,
@@ -321,7 +374,6 @@ impl SettingsWindow {
                         },
                         theme,
                     )
-                    .id(("section", index))
                     .debug_selector(move || format!("section-{}", page.title))
                     .role(Role::ListBoxOption)
                     .aria_label(page.title)
@@ -418,9 +470,9 @@ impl SettingsWindow {
         if arriving.is_some() {
             window.request_animation_frame();
         }
-        // The board's page padding, inside a viewport that scrolls on its
-        // own, independent of the sidebar.
-        settings_shell::page_viewport(theme)
+        // The page's padding, inside a viewport that scrolls on its own,
+        // independent of the sidebar.
+        settings_shell::content_viewport(theme)
             .id("settings-page")
             .debug_selector(|| "settings-page".into())
             .overflow_y_scroll()
@@ -448,9 +500,13 @@ impl Render for SettingsWindow {
             .on_action(cx.listener(Self::focus_next))
             .on_action(cx.listener(Self::focus_previous))
             .on_action(cx.listener(Self::search_focus))
-            .on_action(cx.listener(Self::close_settings));
+            .on_action(cx.listener(Self::close_settings))
+            .on_action(cx.listener(Self::escape_settings));
+        // The titlebar names the page showing.
+        let title = self.pages[self.selected].title;
         compose(
             root,
+            title,
             self.render_sidebar(&theme, cx),
             self.render_page(&theme, window, cx),
             &theme,
@@ -462,10 +518,12 @@ impl Render for SettingsWindow {
 /// The Settings window's composition, which the visual workbench's
 /// fixture draws too: `root` — the window's key context and actions —
 /// made the shell's column, with the shared Geist family and base text
-/// color on everything, the custom titlebar where the platform hides its
-/// own, then `sidebar` beside `page`, on the Settings panel.
+/// color on everything, the custom titlebar (labelled `title`) where the
+/// platform hides its own, then `sidebar` beside `page`, on the Settings
+/// panel.
 pub(crate) fn compose(
     root: Div,
+    title: &'static str,
     sidebar: impl IntoElement,
     page: impl IntoElement,
     theme: &ui::theme::Theme,
@@ -483,7 +541,9 @@ pub(crate) fn compose(
     // gate — `cfg!` would leave the call compiled on Linux, where the
     // function does not exist.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    let content = content.child(titlebar(theme));
+    let content = content.child(titlebar(title, theme));
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let _ = title;
     let content = content.child(settings_shell::body(sidebar, page));
     material.settings_panel(theme, content)
 }
@@ -498,7 +558,7 @@ pub(crate) fn compose(
 /// control hitboxes in paint order and takes the first one under the
 /// pointer, so a drag region wrapping the buttons would swallow them.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn titlebar(theme: &ui::theme::Theme) -> Div {
+fn titlebar(title: &'static str, theme: &ui::theme::Theme) -> Div {
     let titlebar = settings_shell::titlebar(theme);
     let titlebar = titlebar.debug_selector(|| "settings-titlebar".into());
     // macOS: clear of the traffic lights, which stay where AppKit puts
@@ -512,7 +572,7 @@ fn titlebar(theme: &ui::theme::Theme) -> Div {
     let inset = theme.geometry.settings.caption_width * 3.;
     #[cfg(not(target_os = "windows"))]
     let inset = px(0.);
-    let label = settings_shell::titlebar_label("Settings", theme);
+    let label = settings_shell::titlebar_label(title, theme);
     let titlebar = titlebar.child(
         // The one place to grab the window by, outside the page and
         // the sidebar.
@@ -589,6 +649,11 @@ fn control_button(
     theme: &ui::theme::Theme,
 ) -> impl IntoElement {
     let glyph_size = theme.geometry.settings.caption_glyph;
+    let hover = if area == WindowControlArea::Close {
+        theme.danger
+    } else {
+        theme.row_hover
+    };
     div()
         .id(id)
         .debug_selector(move || id.into())
@@ -604,23 +669,15 @@ fn control_button(
         .role(Role::Button)
         .aria_label(label)
         .on_click(move |_: &gpui::ClickEvent, window, _| activate(window))
-        .hover(|button| {
-            // The close button's hover is the danger tone, as Windows
-            // paints it; the others take the row hover wash. The wash
-            // fades in and out over the shared pointer span, and the
-            // press takes the selected wash below it — a window control
-            // closes or maximizes the frame the click lands, so the
-            // press is a flicker at most, but it is never a delay.
-            if area == WindowControlArea::Close {
-                button.bg(theme.danger)
-            } else {
-                button.bg(theme.row_hover)
-            }
-        })
-        .when(area != WindowControlArea::Close, |button| {
-            button.active(|button| button.bg(theme.row_selected))
-        })
-        .transitions(|fades| fades.bg(crate::ui::motion::pointer_fade()))
+        // The close button's hover is the danger tone, as Windows paints
+        // it; the others take the row hover wash. The press takes the
+        // stronger wash of either. Both change at once, as every control's
+        // do: a fade here would have to be the press's too, since GPUI
+        // fades a property the same way in every state — and a window
+        // control closes or maximizes the frame the click lands, so the
+        // press is a flicker at most, but it is never a delay.
+        .hover(move |button| button.bg(hover))
+        .active(move |button| button.bg(ui::theme::pressed(hover)))
         .child(glyph(mark, glyph_size, theme.text_title))
 }
 
@@ -643,12 +700,11 @@ pub(crate) fn open(launcher: &Launcher, cx: &mut App) -> WindowHandle<SettingsWi
             return open;
         }
     }
-    // The window is the reference's Settings board: 1120×720, or the
-    // primary display's work area less a margin where that is smaller,
-    // with the frost background, a floor that keeps every control
-    // reachable at small sizes and display scaling, and the custom
-    // titlebar where the platform hides its own. See the shell module
-    // for the smaller-window policy.
+    // The window opens at 860×600, or the primary display's work area
+    // less a margin where that is smaller, with the frost background, a
+    // floor that keeps every control reachable at small sizes and display
+    // scaling, and the custom titlebar where the platform hides its own.
+    // See the shell module for the window's sizes.
     let work_area = cx
         .primary_display()
         .map(|display| display.visible_bounds().size)
@@ -685,6 +741,56 @@ pub(crate) fn open(launcher: &Launcher, cx: &mut App) -> WindowHandle<SettingsWi
         Ok(window)
     })
     .expect("failed to open Pane's Settings window")
+}
+
+/// A select of a few fixed choices at a settings row's end: the shared
+/// searchable select ([`crate::ui::select`]) over `choices` (read live),
+/// marking `committed` (read live), committing through `commit`. The row
+/// around it names the setting.
+pub(crate) fn choice_select(
+    name: &'static str,
+    debug: &'static str,
+    choices: fn(&App) -> Vec<crate::ui::select::Choice>,
+    committed: fn(&App) -> &'static str,
+    commit: fn(&str, &mut App),
+    window: &mut Window,
+    cx: &mut Context<SettingsWindow>,
+) -> gpui::Entity<crate::ui::select::Select> {
+    cx.new(|cx| {
+        crate::ui::select::Select::new(
+            name,
+            "",
+            debug,
+            std::rc::Rc::new(move |cx: &App| {
+                let visuals = crate::settings::visuals(cx);
+                crate::ui::select::Model {
+                    theme: visuals.theme,
+                    material: visuals.material,
+                    choices: choices(cx),
+                    committed: Some(committed(cx).into()),
+                }
+            }),
+            std::rc::Rc::new(move |id: &str, _: &mut Window, cx: &mut App| commit(id, cx)),
+            window,
+            cx,
+        )
+    })
+}
+
+/// A plain choice for [`choice_select`]: `id` labelled `label`, offered
+/// unless `unavailable` says why not.
+pub(crate) fn choice(
+    id: &'static str,
+    label: impl Into<gpui::SharedString>,
+    unavailable: Option<String>,
+) -> crate::ui::select::Choice {
+    crate::ui::select::Choice {
+        id: id.into(),
+        label: label.into(),
+        subtitle: None,
+        keywords: Vec::new(),
+        unavailable_reason: unavailable.map(Into::into),
+    }
 }
 
 /// One page of Pane's Settings: the sidebar entry that lists it, and

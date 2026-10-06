@@ -31,7 +31,7 @@ use gpui::{
 };
 use pane_core::hotkeys::Shortcut;
 use pane_core::placement::{DisplayLayout, Point};
-use pane_core::{KeyboardAction, OpeningMonitor, Reopening};
+use pane_core::{KeyboardAction, OpeningMonitor};
 use serde::Serialize;
 
 use super::{
@@ -145,7 +145,9 @@ fn launcher_view() -> launcher::LauncherView {
     launcher::LauncherView {
         unavailable: None,
         fallback: None,
-        reopening: Reopening::RestoreView,
+        window_mode: pane_core::WindowMode::Expanded,
+        compact_pinned: false,
+        pinned_layout: pane_core::PinnedLayout::Horizontal,
         status: None,
     }
 }
@@ -204,29 +206,29 @@ fn keyboard_view(cx: &App) -> keyboard::KeyboardView {
         recording: None,
         rejection: None,
         status: None,
+        escape: pane_core::EscapeBehavior::default(),
+        escape_closes: true,
     }
 }
 
 /// One entry of the Extensions page's fixture lists.
-fn item(title: &str, subtitle: &str, reason: Option<&str>) -> extensions::ExtensionItem {
+fn item(title: &str, reason: Option<&str>) -> extensions::ExtensionItem {
     extensions::ExtensionItem {
         id: title.to_lowercase().replace(' ', "-"),
         title: title.to_owned(),
-        subtitle: Some(subtitle.to_owned()),
         reason: reason.map(str::to_owned),
         icon: Some((IconTone::Command, Glyph::Blocks)),
     }
 }
 
-/// The Extensions page's fixture state: the management list of an
-/// installed package — one operation unavailable here, with its reason —
-/// its command and the install sources; or the confirmation disabling a
-/// package other packages require asks for.
+/// The Extensions page's fixture state: an installed package's card — one
+/// operation unavailable here — and the install sources; or the
+/// confirmation disabling a package other packages require asks for.
 fn extensions_view(confirm: bool) -> extensions::ExtensionsView {
     if confirm {
         return extensions::ExtensionsView {
             title: "Disable Clipboard History?".into(),
-            subtitle: None,
+            listing: false,
             status: None,
             details: vec![
                 "Notes requires Clipboard History, so disabling it disables Notes too.".into(),
@@ -234,39 +236,49 @@ fn extensions_view(confirm: bool) -> extensions::ExtensionsView {
             ],
             empty: false,
             back: false,
-            rows: vec![
-                item("Disable all 2", "Disable Clipboard History and Notes", None),
-                item("Cancel", "Keep both running", None),
-            ],
-            commands: Vec::new(),
+            packages: Vec::new(),
+            rows: vec![item("Disable all 2", None), item("Cancel", None)],
+            auto_update: None,
             installs: Vec::new(),
         };
     }
     extensions::ExtensionsView {
         title: "Extensions".into(),
-        subtitle: Some(extensions::ABOUT.into()),
+        listing: true,
         status: None,
         details: Vec::new(),
         empty: false,
         back: false,
-        rows: vec![
-            item("Settings sample", "Enabled · a local folder", None),
-            item(
-                "Disable Settings sample",
-                "Stop it running; its settings and data are kept",
-                None,
-            ),
-            item(
-                "Develop Settings sample",
-                "Rebuild and reload it as its source changes",
-                Some("Development needs a build command in the package's manifest"),
-            ),
-        ],
-        commands: vec![item(
-            "Greeting",
-            "Settings sample · Opens in Pane's launcher",
-            None,
-        )],
+        packages: vec![extensions::PackageCard {
+            id: "settings-sample".into(),
+            title: "Settings sample".into(),
+            icon: Some((IconTone::Command, Glyph::Blocks)),
+            enabled: true,
+            badges: Vec::new(),
+            auto_update: None,
+            actions: vec![
+                (
+                    "reload:settings-sample".into(),
+                    "Reload".into(),
+                    "Reload Settings sample".into(),
+                    None,
+                ),
+                (
+                    "develop:settings-sample".into(),
+                    "Develop".into(),
+                    "Develop Settings sample".into(),
+                    Some("Development needs a build command in the package's manifest".into()),
+                ),
+                (
+                    "uninstall:settings-sample".into(),
+                    "Uninstall".into(),
+                    "Uninstall Settings sample".into(),
+                    None,
+                ),
+            ],
+        }],
+        rows: Vec::new(),
+        auto_update: Some(("updates".into(), true)),
         installs: extensions::install_items(),
     }
 }
@@ -313,14 +325,19 @@ pub(crate) fn render_page(
     cx: &App,
 ) -> AnyElement {
     match page {
-        PanePage::General { recording } => {
-            general::compose(&general_view(recording), recording, theme, |_, part| part)
-                .into_any_element()
-        }
+        PanePage::General { recording } => general::compose(
+            &general_view(recording),
+            recording,
+            None,
+            theme,
+            |_, part| part,
+        )
+        .into_any_element(),
         PanePage::Launcher => {
             let select =
                 select.map(|select| div().id("launcher-monitor").w_full().child(select.clone()));
-            launcher::compose(&launcher_view(), select, theme, |_, part| part).into_any_element()
+            launcher::compose(&launcher_view(), (select, None), theme, |_, part| part)
+                .into_any_element()
         }
         PanePage::Keyboard => {
             keyboard::compose(&keyboard_view(cx), None, theme, |_, part| part).into_any_element()
@@ -345,13 +362,7 @@ pub(crate) fn heading(page: PanePage) -> Option<(String, Option<String>)> {
         PanePage::General { .. } => fixed(general::TITLE, general::ABOUT),
         PanePage::Launcher => fixed(launcher::TITLE, launcher::ABOUT),
         PanePage::Keyboard => fixed(keyboard::TITLE, keyboard::ABOUT),
-        PanePage::Extensions { confirm } => {
-            let view = extensions_view(confirm);
-            Some((
-                view.title,
-                view.subtitle.map(|subtitle| subtitle.to_string()),
-            ))
-        }
+        PanePage::Extensions { confirm } => Some((extensions_view(confirm).title, None)),
         PanePage::About => fixed(about::TITLE, about::ABOUT),
         PanePage::Form => None,
     }
@@ -979,7 +990,7 @@ fn declared_parts(
             column.heading(Some(general::ABOUT));
             column.label("Open Pane");
             let hint = if recording {
-                crate::ui::controls::RECORDING_HINT
+                crate::ui::controls::RECORDING_TEXT
             } else {
                 general::RECORDER_HINT
             };
@@ -1023,7 +1034,7 @@ fn declared_parts(
             let dimmed = theme.geometry.controls.disabled_opacity;
             column.row(
                 general::tray_row_title(),
-                &[(general::tray_row_subtitle(), muted)],
+                &[],
                 &[Trailing::Toggle {
                     name: "tray-visibility",
                     on: view.tray,
@@ -1041,33 +1052,15 @@ fn declared_parts(
             column.well(SELECT_TRIGGER);
             column.note(launcher::MONITOR_DESCRIPTION, muted);
             column.next_group();
-            column.label("Reopening");
-            let labels: Vec<&str> = launcher::REOPENINGS
-                .iter()
-                .map(|&(_, name, _, _)| name)
-                .collect();
-            let chosen = launcher::REOPENINGS
-                .iter()
-                .position(|&(choice, ..)| choice == launcher_view().reopening)
-                .unwrap_or_default();
-            column.track("reopening", &labels, chosen);
-            column.note(launcher::REOPENINGS[chosen].2, muted);
-            column.next_group();
-            let line = theme.typography.settings.field_description;
-            let (x, y, width) = (column.x, column.y, column.width);
-            column.line(
-                ("text", launcher::DISMISSAL),
-                (x, y, width),
-                (line.size, theme.typography.regular, line.line_height),
-                (muted, 1.),
-            );
+            column.label(launcher::REOPENING_NAME);
+            column.well(launcher::REOPENING_DEBUG);
         }
         PanePage::Keyboard => {
             let view = keyboard_view(cx);
             column.heading(Some(keyboard::ABOUT));
             column.label("In-app navigation");
             for row in &view.rows {
-                let description = keyboard::row_description(row, false);
+                let lines: Vec<(&str, Hsla)> = Vec::new();
                 let well = Trailing::Well {
                     name: row.action.id(),
                     width: recorder_width(window, theme, &row.keys),
@@ -1082,18 +1075,12 @@ fn declared_parts(
                     ],
                     None => vec![well],
                 };
-                column.row(
-                    row.action.title(),
-                    &[(description.as_str(), muted)],
-                    &trailing,
-                    1.,
-                );
+                column.row(row.action.title(), &lines, &trailing, 1.);
             }
-            column.note(keyboard::NOTE, muted);
         }
         PanePage::Extensions { confirm } => {
             let view = extensions_view(confirm);
-            column.heading(view.subtitle.as_deref());
+            column.heading(None);
             if !view.details.is_empty() {
                 let line = theme.typography.settings.field_description;
                 for detail in &view.details {
@@ -1111,30 +1098,17 @@ fn declared_parts(
                 column.y -= f(theme.geometry.controls.list_gap);
                 column.next_group();
             }
-            let lines = |entry: &extensions::ExtensionItem| {
-                usize::from(entry.subtitle.is_some()) + usize::from(entry.reason.is_some())
-            };
-            for row in &view.rows {
-                column.item(&row.title, lines(row));
+            for card in &view.packages {
+                column.item(&card.title, 0);
             }
-            for (label, entries) in [("Commands", &view.commands), ("Install", &view.installs)] {
-                if entries.is_empty() {
-                    continue;
-                }
-                // The list's last gap gives way to the column's.
-                column.y +=
-                    f(theme.geometry.controls.group_gap) - f(theme.geometry.controls.list_gap);
-                column.label(label);
-                for entry in entries {
-                    column.item(&entry.title, lines(entry));
-                }
+            for row in &view.rows {
+                column.item(&row.title, usize::from(row.reason.is_some()));
             }
         }
         PanePage::About => {
             column.heading(Some(about::ABOUT));
             let view = about_view(theme);
             column.label(&format!("Pane {}", view.version));
-            column.note_at_top(about::VERSION_NOTE, muted);
             column.next_group();
             column.label("Updates");
             column.note_at_top(ABOUT_UPDATE, view.update_tone);

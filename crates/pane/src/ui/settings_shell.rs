@@ -6,32 +6,35 @@
 //! (12px by 10px of padding, a 2px gap) holding the 34px search field and
 //! the 36px section items, and the page beside it, padded 26px above, 32px
 //! either side and 24px below. A page opens with its heading block — the
-//! 22px/600 heading over its 13px subtitle — and the Appearance page lays
-//! its controls and its preview out in two columns, 388px and 400px with
-//! 36px between them, which fill the canonical page exactly.
+//! 22px/600 heading over its 13px subtitle — and the board's Appearance
+//! page lays its controls and its preview out in two columns, 388px and
+//! 400px with 36px between them, which fill the canonical page exactly.
+//! The workbench's fixture draws that board.
 //!
-//! The pieces return plain [`Div`]s. Identity, accessibility, focus,
-//! scrolling and every handler stay with the caller (the Settings window's
+//! Pane's own window keeps the board's titlebar and sidebar, and draws its
+//! pages its own way ([`content_viewport`], `ui::controls::page`): no
+//! heading block (the titlebar names the page), and sections of rows in
+//! raised cards, padded 20 above and 24 either side and below. It has no
+//! Appearance page and no preview: the theme and material are a section
+//! of the General page.
+//!
+//! The pieces return plain [`Div`]s, but for the sidebar item, which takes
+//! its id so it can keep its press. Accessibility, focus, scrolling and
+//! every handler stay with the caller (the Settings window's
 //! feature module owns its sections, its search and its pages); nothing
 //! here imports launcher state.
 //!
-//! ## Smaller windows
+//! ## Window size
 //!
-//! The reference fixes its board; it defines no responsive behavior. Pane's
-//! window can be smaller, and this is the policy that keeps every control
-//! reachable there:
-//!
-//! - The window opens at the board's 1120×720 ([`SETTINGS_CLIENT`]), or —
-//!   on a work area too small for it — at the work area less a margin on
-//!   each side, never below the window's minimum ([`opening_size`]).
+//! - The window opens at 860×600 ([`WINDOW_CLIENT`]), or, on a work area
+//!   too small for it, at the work area less a margin on each side, never
+//!   below the window's minimum ([`opening_size`]).
 //! - The minimum is 560×400 ([`SETTINGS_MINIMUM`]). The user can resize
-//!   between the two, and maximize.
+//!   and maximize; past 680px the page's content stops growing and
+//!   centers.
 //! - The titlebar keeps its 48px and the sidebar its 232px at every size.
 //!   The sections scroll inside the sidebar when the window is short.
 //! - The page scrolls on its own, vertically, independent of the sidebar.
-//! - The two columns collapse into one when the page is narrower than
-//!   both ([`page_columns`]): the aside wraps below the controls, at most
-//!   its 400px wide and never wider than the page.
 //!
 //! ## Pointer feedback
 //!
@@ -41,18 +44,25 @@
 //! unselected: GPUI updates an element's remembered hover state only while
 //! a hover style is attached, so a style that comes and goes leaves the
 //! state stale, and a stale state laid out against the pointer the paint
-//! sees never settles.
+//! sees never settles. While held, an item takes the stronger
+//! [`crate::ui::theme::pressed`] wash of its hover, at once too — an
+//! adaptation: the board authors no pressed state.
 
 use gpui::prelude::*;
-use gpui::{BoxShadow, Div, Entity, Hsla, Pixels, SharedString, div, px};
+use gpui::{BoxShadow, Div, ElementId, Entity, Hsla, Pixels, SharedString, Stateful, div, px};
 use gpui_elements::editable_text::{EditableTextState, text_input};
 
 use crate::ui::icon::{Glyph, glyph};
-use crate::ui::theme::Theme;
+use crate::ui::theme::{Theme, pressed};
 
-/// The Settings window's client size, in logical pixels: the reference
-/// Settings board's 1120×720 panel (48 titlebar + 672 body).
+/// The reference Settings board's 1120×720 panel (48 titlebar + 672
+/// body), in logical pixels: the size the workbench's fixture draws the
+/// board's scenarios at.
 pub(crate) const SETTINGS_CLIENT: (f32, f32) = (1120., 720.);
+
+/// The size Pane's Settings window opens at, in logical pixels: narrower
+/// than the board, as a list of settings rows needs no more.
+pub(crate) const WINDOW_CLIENT: (f32, f32) = (860., 600.);
 
 /// The smallest the Settings window can be made, in logical pixels.
 pub(crate) const SETTINGS_MINIMUM: (f32, f32) = (560., 400.);
@@ -65,19 +75,19 @@ pub(crate) const SEARCH_PLACEHOLDER: &str = "Search settings";
 const WORK_AREA_MARGIN: f32 = 24.;
 
 /// The size the Settings window opens at on a work area of `work_area`
-/// (logical pixels; `None` when the platform names none): the reference's
-/// 1120×720, or the work area less [`WORK_AREA_MARGIN`] on each side where
-/// that is smaller, never below [`SETTINGS_MINIMUM`].
+/// (logical pixels; `None` when the platform names none): 860×600, or the
+/// work area less [`WORK_AREA_MARGIN`] on each side where that is smaller,
+/// never below [`SETTINGS_MINIMUM`].
 pub(crate) fn opening_size(work_area: Option<(f32, f32)>) -> (f32, f32) {
     let Some((width, height)) = work_area else {
-        return SETTINGS_CLIENT;
+        return WINDOW_CLIENT;
     };
     let fit = |canonical: f32, room: f32, floor: f32| {
         canonical.min(room - 2. * WORK_AREA_MARGIN).max(floor)
     };
     (
-        fit(SETTINGS_CLIENT.0, width, SETTINGS_MINIMUM.0),
-        fit(SETTINGS_CLIENT.1, height, SETTINGS_MINIMUM.1),
+        fit(WINDOW_CLIENT.0, width, SETTINGS_MINIMUM.0),
+        fit(WINDOW_CLIENT.1, height, SETTINGS_MINIMUM.1),
     )
 }
 
@@ -105,7 +115,8 @@ pub(crate) fn titlebar(theme: &Theme) -> Div {
         .border_color(theme.hairline_soft)
 }
 
-/// The titlebar's label: 13px/500 in the body color.
+/// The titlebar's label: 13px/500 in the body color. Pane's window names
+/// the page showing; the board's says "Settings".
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) fn titlebar_label(label: impl Into<SharedString>, theme: &Theme) -> Div {
     let typography = &theme.typography;
@@ -238,10 +249,15 @@ pub(crate) struct SidebarItem {
 /// of side padding and a 10px gap, the 16px glyph in the muted color,
 /// the 13px/500 label — #B3B4B9 at rest; white 5% and #EDEDEF under the
 /// pointer; white 9% and white while selected, which the pointer does not
-/// change — and the 12px count at its right end. No wash fades (see the
-/// module docs). The caller attaches the item's identity, accessibility
-/// and click.
-pub(crate) fn sidebar_item(item: SidebarItem, theme: &Theme) -> Div {
+/// change — and the 12px count at its right end. While held it takes the
+/// [`pressed`] wash of its hover (of its selected wash, if selected). No
+/// wash fades (see the module docs). The item is `id`; the caller attaches
+/// its accessibility and click.
+pub(crate) fn sidebar_item(
+    id: impl Into<ElementId>,
+    item: SidebarItem,
+    theme: &Theme,
+) -> Stateful<Div> {
     let settings = &theme.geometry.settings;
     let typography = &theme.typography;
     let (hover, hover_text) = if item.selected {
@@ -301,7 +317,9 @@ pub(crate) fn sidebar_item(item: SidebarItem, theme: &Theme) -> Div {
             theme.nav_text
         })
         .when(item.selected, |row| row.bg(theme.nav_selected))
+        .id(id)
         .hover(move |row| row.bg(hover).text_color(hover_text))
+        .active(move |row| row.bg(pressed(hover)).text_color(hover_text))
         .child(glyph(item.glyph, settings.item_glyph, theme.nav_icon).flex_none())
         .child(text)
         .when_some(item.count, |row, count| {
@@ -329,6 +347,24 @@ pub(crate) fn page_viewport(theme: &Theme) -> Div {
         .pt(settings.page_padding_top)
         .px(settings.page_padding_x)
         .pb(settings.page_padding_bottom)
+        .text_size(theme.typography.row_subtitle_size)
+        .text_color(theme.text_body)
+}
+
+/// Pane's page area: the area beside the sidebar, padded 20 above, 24
+/// either side and below, its text 13px in the body ink unless a page
+/// sets its own. The caller names it, makes it scroll and adds the page
+/// (see `ui::controls::page`). The board's own page is
+/// [`page_viewport`], which the workbench's fixture draws.
+pub(crate) fn content_viewport(theme: &Theme) -> Div {
+    let settings = &theme.geometry.settings;
+    div()
+        .flex_1()
+        .min_w(px(0.))
+        .h_full()
+        .pt(settings.content_padding_top)
+        .px(settings.content_padding_x)
+        .pb(settings.content_padding_bottom)
         .text_size(theme.typography.row_subtitle_size)
         .text_color(theme.text_body)
 }
@@ -436,15 +472,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_roomy_work_area_opens_the_reference_board_size() {
-        assert_eq!(opening_size(Some((1920., 1040.))), (1120., 720.));
-        assert_eq!(opening_size(None), (1120., 720.));
+    fn a_roomy_work_area_opens_the_window_size() {
+        assert_eq!(opening_size(Some((1920., 1040.))), (860., 600.));
+        assert_eq!(opening_size(None), (860., 600.));
     }
 
     #[test]
     fn a_small_work_area_opens_the_window_inside_it() {
-        // 1366×768 at 125%, less its taskbar: 1093×614 logical.
-        assert_eq!(opening_size(Some((1093., 614.))), (1045., 566.));
+        // 1366×768 at 150%, less its taskbar: 910×488 logical.
+        assert_eq!(opening_size(Some((910., 488.))), (860., 440.));
     }
 
     #[test]

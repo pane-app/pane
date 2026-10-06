@@ -21,10 +21,15 @@
 //!
 //! What animates and what never does:
 //!
-//! - A **view transition** — the launcher's screen *kind* changes (root
-//!   search to a command, a command back to root, a form or custom view
-//!   opening or closing) — moves the content that changes: the arriving
-//!   content fades in over a tiny directional shift. The shift is a
+//! - A **view transition** — the launcher's screen *kind* changes going
+//!   forward (root search to a command, a form or custom view opening)
+//!   because the pointer opened it (a row clicked, an entry from the
+//!   Settings window) — moves the content that changes: the arriving
+//!   content fades in over a tiny shift from below. Every keyboard open
+//!   (Enter, Ctrl and a number, a command's hotkey) lands at once, and so
+//!   does backing out (Escape, return to root): keyboard opens and exits
+//!   are the most frequent actions in a launcher, repeated many times a
+//!   day, and neither should ever be something the user waits on. The shift is a
 //!   relative `top` inset, applied after layout like a CSS transform, so
 //!   the stable shell chrome (the panel, the footer with its action
 //!   strip, the query field, the heading) never moves. The departing
@@ -69,7 +74,8 @@
 //!   overlay keeps occluding so a click on it cannot invoke what is
 //!   underneath; the frame that completes the exit unmounts it all, so
 //!   nothing of a closed popup can intercept a click. Reopening during
-//!   the exit retargets the same tween from the presentation on screen —
+//!   the exit retargets the same tweens (the look and the fade) from the
+//!   presentation on screen —
 //!   a reversal, not a second overlay stacked on a dying one.
 //! - A **query or result update** — typing, rows changing, selection,
 //!   status, a screen's own contents, a Settings page's filter narrowing
@@ -77,28 +83,19 @@
 //!   Navigation, dispatch, cancellation and focus are applied by the
 //!   window before any frame draws; the transition only paints what
 //!   already changed, so it can never rerun a command, delay its
-//!   request, resubmit a form, change history or wait for typing. A
-//!   rapid open/back/open starts the next transition from the current
-//!   presentation (the interrupted offset), so a reversal retargets
-//!   smoothly instead of flashing — and so does a rapid section switch
-//!   or a re-reversed disclosure.
+//!   request, resubmit a form, change history or wait for typing.
+//!   Backing out mid-arrival drops the arrival, so root lands settled; a
+//!   rapid section switch or a re-reversed disclosure starts the next
+//!   transition from the current presentation (the interrupted value), so
+//!   a reversal retargets smoothly instead of flashing.
 //! - A **control's pointer feedback** — the wash a row, an item or a
 //!   button takes under the pointer, and the stronger wash it takes
-//!   while pressed — fades over 150ms between the control's rest,
-//!   hover and pressed styles. The mechanism is the pinned renderer's
-//!   own: GPUI CE's style transitions interpolate the background from
-//!   the value on screen (a fast reversal continues from where the
-//!   wash is), jump to the endpoint under reduced motion, and request
-//!   frames only while a fade is in flight — so this family is another
-//!   caller of the renderer's toolkit, not a parallel system built
-//!   here. The curve and span come from this module like every other
-//!   family's, and only color interpolates: a control's geometry and
-//!   hit target never move, the styles stay the semantic Theme's own
-//!   tokens, and no activation waits on the fade — a click or a key
-//!   acts the frame it is pressed, exactly as it did before the fade
-//!   existed. Keyboard focus and an option's active state stay
-//!   immediately legible: the focus ring and the selected wash are
-//!   rest styles, not fades.
+//!   while pressed ([`crate::ui::theme::pressed`]) — changes at once:
+//!   the hover tens of times a day, the press the instant the pointer
+//!   goes down, so the family has no motion at all. (GPUI fades a
+//!   property the same way in every state, so a hover fade would have
+//!   delayed the press too.) Keyboard focus and an option's active
+//!   state stay rest styles: the focus ring and the selected wash.
 //!
 //! Reduced motion: [`App::reduce_motion`] decides, and
 //! [`observe_reduced_motion`] connects that flag to what the operating
@@ -109,8 +106,9 @@
 //! schedules no further cosmetic frames.
 //!
 //! Frame discipline: every transition — a view transition, a Settings
-//! section arrival, a group disclosure, a popup's entrance or exit, a
-//! control's pointer fade — runs for its bounded duration and requests
+//! section arrival, a group disclosure, a popup's entrance or exit —
+//! runs for its bounded duration (a control's hover and pressed washes
+//! have none: they change at once) and requests
 //! animation frames only while one is in flight. Completing, cancelling
 //! (the screen changed again), reduced motion, an unmounted window and a
 //! hidden window all end with a frame that requests nothing — the window
@@ -134,26 +132,21 @@ use gpui::{App, div, prelude::*, px};
 /// Which way a view transition goes, set by the navigation that caused it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Direction {
-    /// Into a view: a command opens from root search, a form or custom
-    /// view opens, a package is previewed. The arriving content rises into
-    /// place from below.
+    /// Into a view the pointer opened: a row clicked, a package previewed
+    /// or a root result opened from the Settings window. The arriving
+    /// content rises into place from below.
     Forward,
-    /// Back out: returning to root search or a shallower view. The
-    /// arriving content settles down into place from above.
+    /// Back out — returning to root search or a shallower view — and
+    /// every change nothing armed: a keyboard open, a summon, a reply.
+    /// The arriving content lands at once, with no transition.
     Back,
 }
 
-/// How long the content of a view that opens takes to arrive: 150ms, in
-/// the ticket's 120-180ms window and just above Roboco's 140ms menu
-/// entrance. Ease-out quint covers most of the distance in the first
-/// third of it, so the arrival reads fast and the settle reads gentle.
-pub(crate) const VIEW_ENTER: Duration = Duration::from_millis(150);
-
-/// How long the content of a shallower view takes to arrive when the user
-/// backs out: 120ms, faster than the entrance for the same reason
-/// Roboco's menu exit (100ms) is faster than its entrance (140ms) — the
-/// way out should not linger.
-pub(crate) const VIEW_RETURN: Duration = Duration::from_millis(120);
+/// How long the content of a view the pointer opened takes to arrive:
+/// 100ms, a hint of direction rather than a motion the user watches;
+/// ease-out quint covers most of the distance in the first third of it.
+/// Keyboard opens skip it entirely (see the module docs).
+pub(crate) const VIEW_ENTER: Duration = Duration::from_millis(100);
 
 /// How long the content of a Settings section takes to arrive when the
 /// user switches sections: 150ms — in the ticket's 120-180ms window, the
@@ -184,15 +177,6 @@ pub(crate) const POPUP_ENTER: Duration = Duration::from_millis(140);
 /// to nothing, so the popup unmounts invisible; see the module docs for
 /// what the exit's inert visuals may and may not do while it runs.
 pub(crate) const POPUP_EXIT: Duration = Duration::from_millis(100);
-
-/// How long a control's pointer feedback — the hover wash, the pressed
-/// wash — takes to fade: 150ms, in the ticket's 100-150ms window and the
-/// span the motion research proposes for a Tailwind-like color fade, so
-/// the pointer family shares its value with the section arrivals: one
-/// look per family, and the pointer's is the same as the slower content
-/// families'. A wash reads best a touch slower than it feels: the press
-/// itself is immediate, only the color moves.
-pub(crate) const POINTER_FADE: Duration = Duration::from_millis(150);
 
 /// How far the arriving content starts from its resting place, in logical
 /// pixels: 3px, in the ticket's 2-4px window. Far enough to read as
@@ -252,8 +236,9 @@ fn ease(progress: f32) -> f32 {
 
 /// Below this much distance from its target a presentation counts as
 /// already settled: a retarget from there has nothing to continue and no
-/// transition starts.
-const SETTLED_WITHIN: f32 = 0.05;
+/// transition starts. Small enough for both units the tweens run in —
+/// a px offset and a 0-1 look — that nothing visible is skipped.
+const SETTLED_WITHIN: f32 = 0.001;
 
 /// Starts the tween for a presentation that just changed.
 ///
@@ -312,15 +297,15 @@ fn advance_tween(
         *tween = arrive(target, fresh, duration, tween.take(), now);
     }
     let in_flight = (*tween)?;
-    let value = in_flight.value(now);
-    if (value - target).abs() < SETTLED_WITHIN {
-        // The tween has run its course (or was retargeted from nothing):
-        // the presentation has arrived, so the record goes and no further
-        // frame is requested for it.
+    if now.saturating_duration_since(in_flight.started) >= in_flight.duration {
+        // The tween has run its course: the presentation has arrived, so
+        // the record goes and no further frame is requested for it. Only
+        // the clock ends a tween — ending it on closeness to the target
+        // would cut the ease's long tail short and snap the rest.
         *tween = None;
         return None;
     }
-    Some(value)
+    Some(in_flight.value(now))
 }
 
 /// The fade that follows an arrival offset: the floor at the full shift,
@@ -339,11 +324,13 @@ fn fade(offset: f32) -> f32 {
 ///
 /// `screen_changed` says the launcher's screen *kind* changed since the
 /// last drawn frame (a real view transition); query and result updates
-/// pass `false` and never animate. `reduced` is
-/// [`App::reduce_motion`]: reduced motion settles immediately — no
-/// transition is started or kept — and, engaged mid-transition, the very
-/// next frame lands settled. A transition that has run its duration ends
-/// here, so nothing keeps requesting frames once the content has arrived.
+/// pass `false` and never animate. Backing out lands at once: a change in
+/// the [`Direction::Back`] direction drops any arrival in flight and
+/// starts none. `reduced` is [`App::reduce_motion`]: reduced motion
+/// settles immediately — no transition is started or kept — and, engaged
+/// mid-transition, the very next frame lands settled. A transition that
+/// has run its duration ends here, so nothing keeps requesting frames once
+/// the content has arrived.
 pub(crate) fn advance(
     transition: &mut Option<Tween>,
     navigation: Direction,
@@ -351,15 +338,15 @@ pub(crate) fn advance(
     reduced: bool,
     now: Instant,
 ) -> Option<(f32, f32)> {
-    let (fresh, duration) = match navigation {
-        Direction::Forward => (VIEW_SHIFT, VIEW_ENTER),
-        Direction::Back => (-VIEW_SHIFT, VIEW_RETURN),
-    };
+    if screen_changed && navigation == Direction::Back {
+        *transition = None;
+        return None;
+    }
     let offset = advance_tween(
         transition,
         0.,
-        fresh,
-        duration,
+        VIEW_SHIFT,
+        VIEW_ENTER,
         screen_changed,
         reduced,
         now,
@@ -413,6 +400,35 @@ pub(crate) fn advance_disclosure(
     )
 }
 
+/// How long the launcher's number hints take to slide in once Ctrl has
+/// been held (see [`advance_reveal`]).
+pub(crate) const REVEAL_IN: Duration = Duration::from_millis(160);
+
+/// How long the number hints take to slide away when Ctrl is released:
+/// 120ms, faster than they arrive, as every exit here is faster than its
+/// entrance.
+pub(crate) const REVEAL_OUT: Duration = Duration::from_millis(120);
+
+/// Advances a reveal — the number hints' look, 0 hidden, 1 shown — over
+/// the reveal spans, as [`advance_disclosure`] advances a group's.
+/// `shown` is the hints' state this frame and `changed` says it flipped
+/// since the last drawn frame. Returns the look while the reveal is in
+/// flight; `None` when settled.
+pub(crate) fn advance_reveal(
+    reveal: &mut Option<Tween>,
+    shown: bool,
+    changed: bool,
+    reduced: bool,
+    now: Instant,
+) -> Option<f32> {
+    let (target, duration) = if shown {
+        (1., REVEAL_IN)
+    } else {
+        (0., REVEAL_OUT)
+    };
+    advance_tween(reveal, target, 1. - target, duration, changed, reduced, now)
+}
+
 /// Advances a popup's entrance or exit — the popup's look, 0 closed, 1
 /// open — over the popup family's spans, and returns its presentation
 /// while one is in flight: the offset from rest toward the trigger, in
@@ -433,44 +449,53 @@ pub(crate) fn advance_disclosure(
 /// one above its trigger a positive one. The exit's fade runs all the
 /// way to nothing — the popup unmounts invisible — while the entrance
 /// starts from the floor the view transitions fade from, so its first
-/// frame already shows the popup faintly. Reduced motion settles either
-/// way at once, as everywhere.
+/// frame already shows the popup faintly. Because the two ends differ,
+/// the fade is its own tween beside the look's rather than a function of
+/// the look: a reversal retargets each from what is on screen, so the
+/// opacity turns around as smoothly as the shift does. Reduced motion
+/// settles either way at once, as everywhere.
 pub(crate) fn advance_popup(
-    popup: &mut Option<Tween>,
+    popup: &mut PopupMotion,
     open: bool,
     toward: f32,
     changed: bool,
     reduced: bool,
     now: Instant,
 ) -> Option<(f32, f32)> {
-    let (target, duration) = if open {
-        (1., POPUP_ENTER)
+    let (target, fresh_opacity, duration) = if open {
+        (1., VIEW_OPACITY_FLOOR, POPUP_ENTER)
     } else {
-        (0., POPUP_EXIT)
+        (0., 1., POPUP_EXIT)
     };
-    let look = advance_tween(popup, target, 1. - target, duration, changed, reduced, now)?;
-    let offset = toward * (1. - look);
-    let opacity = if open {
-        VIEW_OPACITY_FLOOR + (1. - VIEW_OPACITY_FLOOR) * look
-    } else {
-        look
-    };
-    Some((offset, opacity))
+    let opacity = advance_tween(
+        &mut popup.fade,
+        target,
+        fresh_opacity,
+        duration,
+        changed,
+        reduced,
+        now,
+    );
+    let look = advance_tween(
+        &mut popup.look,
+        target,
+        1. - target,
+        duration,
+        changed,
+        reduced,
+        now,
+    )?;
+    Some((toward * (1. - look), opacity.unwrap_or(target)))
 }
 
-/// The motion for a control's pointer feedback — the wash a row, an item
-/// or a button takes under the pointer and the stronger one it takes
-/// while pressed — for GPUI CE's style transitions: `transitions(|t|
-/// t.bg(motion::pointer_fade()))`. The renderer's transition system is
-/// the mechanism (see the module docs): it interpolates the background
-/// between the control's rest, hover and pressed styles, continues from
-/// the value on screen when the pointer reverses, jumps to the endpoint
-/// under reduced motion, and requests frames only while a fade is in
-/// flight. The span is this module's pointer family's; the curve is the
-/// same quintic ease-out every other family runs, so a wash settles in
-/// the launcher's one look.
-pub(crate) fn pointer_fade() -> gpui::Motion {
-    gpui::Motion::new(POINTER_FADE).with_easing(gpui::ease_out_quint())
+/// A popup's motion in flight: its look (0 closed, 1 open), which the
+/// shift toward the trigger follows, and its fade, which starts from a
+/// different place each way (see [`advance_popup`]). Both run the same
+/// span on the same curve, so they settle on the same frame.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct PopupMotion {
+    look: Option<Tween>,
+    fade: Option<Tween>,
 }
 
 /// Wraps `content` — the area that changes between the launcher's screens

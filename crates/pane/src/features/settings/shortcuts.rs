@@ -62,9 +62,7 @@ use pane_core::{
 use super::{Page, SettingsWindow, search};
 use crate::ui::controls;
 use crate::ui::icon::{Glyph, glyph_rotated};
-use crate::ui::keycap::{CapStyle, key_sequence};
 use crate::ui::motion;
-use crate::ui::settings_shell;
 use crate::ui::theme::Theme;
 
 /// The page's sidebar title, its identity in the sidebar and the tests'
@@ -72,8 +70,8 @@ use crate::ui::theme::Theme;
 pub(crate) const TITLE: &str = "Shortcuts";
 
 /// What the page is, in one line: its sidebar entry's description in
-/// the search, and its heading's subtitle.
-const ABOUT: &str = "Aliases and global hotkeys for installed commands";
+/// the search.
+const ABOUT: &str = "Aliases and hotkeys for your commands";
 
 /// The target id of the page's filter field, the control the sidebar's
 /// search jumps to (see [`entries`]).
@@ -106,9 +104,9 @@ const PLACEHOLDER: &str = "Filter commands and extensions";
 pub(crate) const WATCH: Duration = Duration::from_millis(500);
 
 /// The Alias column's width; the Name column takes the rest.
-const ALIAS_WIDTH: Pixels = px(240.);
+const ALIAS_WIDTH: Pixels = px(130.);
 /// The Hotkey column's width.
-const HOTKEY_WIDTH: Pixels = px(190.);
+const HOTKEY_WIDTH: Pixels = px(200.);
 
 actions!(
     shortcuts,
@@ -142,24 +140,22 @@ pub(crate) fn bind_keys(cx: &mut App) {
         // While the recorder listens, the cell's context is the recorder's
         // instead (see [`hotkey_cell`]), where those keys stay with the
         // recorder's activation — a no-op while it listens, since neither
-        // can be part of a binding — Escape cancels, and the keys the
-        // window would otherwise act on (the sidebar's navigation, Tab's
-        // traversal) are bound to [`gpui::NoAction`] so they do nothing
-        // instead; everything else reaches the cell's own key handler as
-        // the combination being recorded.
+        // can be part of a binding — Escape and Tab cancel, and the
+        // sidebar's navigation keys are bound to [`gpui::NoAction`] so they
+        // do nothing instead; everything else reaches the cell's own key
+        // handler as the combination being recorded.
         KeyBinding::new("enter", RecordHotkey, Some(HOTKEY_CELL)),
         KeyBinding::new("space", RecordHotkey, Some(HOTKEY_CELL)),
         KeyBinding::new("enter", RecordHotkey, Some(HOTKEY_RECORDER)),
         KeyBinding::new("space", RecordHotkey, Some(HOTKEY_RECORDER)),
         KeyBinding::new("escape", CancelHotkeyRecording, Some(HOTKEY_RECORDER)),
-        KeyBinding::new("down", gpui::NoAction, Some(HOTKEY_RECORDER)),
-        KeyBinding::new("up", gpui::NoAction, Some(HOTKEY_RECORDER)),
-        KeyBinding::new("tab", gpui::NoAction, Some(HOTKEY_RECORDER)),
-        KeyBinding::new("shift-tab", gpui::NoAction, Some(HOTKEY_RECORDER)),
+        KeyBinding::new("tab", CancelHotkeyRecording, Some(HOTKEY_RECORDER)),
+        KeyBinding::new("shift-tab", CancelHotkeyRecording, Some(HOTKEY_RECORDER)),
         // The Clear button beside a recorded hotkey.
         KeyBinding::new("enter", ClearHotkey, Some(HOTKEY_CLEAR)),
         KeyBinding::new("space", ClearHotkey, Some(HOTKEY_CLEAR)),
     ]);
+    cx.bind_keys(super::captured_while_recording(HOTKEY_RECORDER));
 }
 
 /// The Shortcuts page, registered in the window's page list.
@@ -622,7 +618,7 @@ impl SettingsWindow {
     /// Cancels the hotkey recorder, if one is listening, changing nothing:
     /// Escape on its cell, or a mouse-down outside it while it listens
     /// (see the cell's `on_mouse_down_out`).
-    fn shortcuts_cancel_recording(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn shortcuts_cancel_recording(&mut self, cx: &mut Context<Self>) {
         if self.shortcuts.recording.take().is_some() {
             cx.notify();
         }
@@ -799,7 +795,7 @@ fn render(
     let empty = groups.is_empty().then(|| {
         controls::field_description(
             if query.trim().is_empty() {
-                "No extensions are installed.".to_owned()
+                "No extensions installed yet.".to_owned()
             } else {
                 format!("No commands match “{}”", query.trim())
             },
@@ -809,22 +805,27 @@ fn render(
         .id("shortcuts-empty")
         .debug_selector(|| "shortcuts-empty".into())
     });
+    // The catalog's card: the column captions over the groups, each a list
+    // header over its commands' rows, padded 4 so the headers' washes sit
+    // inside the card's corners.
     let catalog_block = div()
+        .id("shortcuts-title")
+        .debug_selector(|| "shortcuts-title".into())
+        .w_full()
         .flex()
         .flex_col()
         .gap(theme.geometry.controls.list_gap)
+        .p(px(4.))
+        .rounded(theme.geometry.settings.card_radius)
+        .bg(theme.card_fill)
         .child(columns_header(
             catalog.hotkeys_unavailable.as_deref(),
             &theme,
         ))
         .children(empty)
         .children(groups);
-    let column = controls::column(&theme)
-        .child(
-            settings_shell::page_header(TITLE, Some(ABOUT.into()), &theme)
-                .id("shortcuts-title")
-                .debug_selector(|| "shortcuts-title".into()),
-        )
+    let page = controls::page(&theme)
+        .gap(theme.geometry.settings.section_label_gap)
         .child(filter)
         .child(catalog_block)
         .children(
@@ -837,7 +838,7 @@ fn render(
         .id("shortcuts")
         .debug_selector(|| "shortcuts".into())
         .key_context(PAGE)
-        .child(column)
+        .child(page)
         .into_any_element()
 }
 
@@ -896,7 +897,10 @@ fn columns_header(hotkeys_unavailable: Option<&str>, theme: &Theme) -> Stateful<
                 .flex()
                 .flex_row()
                 .gap(theme.geometry.controls.row_gap)
-                .pl(commands_inset(theme))
+                // Over the rows' own text, past their padding.
+                .pl(commands_inset(theme) + theme.geometry.settings.card_padding_x)
+                .pr(theme.geometry.settings.card_padding_x)
+                .pt(px(8.))
                 .child(controls::caption("Name", theme).flex_1().min_w(px(0.)))
                 .child(
                     controls::caption("Alias", theme)
@@ -1040,8 +1044,7 @@ fn group_element(
         gpui::radians(angle),
     );
     let ring = controls::focus_ring(theme);
-    let header = controls::group_header(chevron, group.title.clone(), lines, theme)
-        .id(key.clone())
+    let header = controls::group_header(key.clone(), chevron, group.title.clone(), lines, theme)
         .debug_selector(|| format!("shortcut-group-{key}"))
         .key_context(GROUP)
         .track_focus(&handle)
@@ -1290,10 +1293,7 @@ fn editor_element(
         .expect("the editor draws only for the command being edited");
     let input = editing.input.clone();
     let error = editing.error.clone();
-    let hint = format!(
-        "Alias: one word that finds {} in root search; empty for none",
-        command.title
-    );
+    let hint = "One word. Leave empty for none.".to_owned();
     let ring = controls::well_shadows(true, theme);
     div()
         .w(ALIAS_WIDTH)
@@ -1341,17 +1341,15 @@ fn editor_element(
         })
 }
 
-/// The Hotkey column's cell: the command's hotkey as the reference's caps
-/// (from the launcher's binding adapter, `crate::keyboard::hotkey_keys`) —
-/// or "None" — in an inline field's well (#99) that, as a button, starts
-/// the recorder, with a Clear button beside it while a hotkey is recorded.
-/// While the recorder listens, the well shows it — the keys pressed next
-/// are the binding being recorded, captured, Escape cancels — with why
-/// the last capture was refused below, and the hint of what is being
-/// recorded; Clear hides, since a click while it listens only cancels. A
+/// The Hotkey column's cell: the shared recorder ([`controls::recorder`])
+/// showing the command's hotkey written out — or "None" — with its clear
+/// button, enabled while a hotkey is recorded. Clicked or pressed with
+/// Enter it listens, ringed red: the keys pressed next are the binding
+/// being recorded, captured; Escape, Tab, a click outside or another click
+/// on it cancels, and why the last capture was refused shows below. A
 /// command a hotkey cannot be recorded for (its package is disabled, or it
-/// is unavailable on this system) shows its recorded hotkey in the well,
-/// as a label, at the disabled opacity. Whatever the cell shows, why the
+/// is unavailable on this system) shows its recorded hotkey at the
+/// disabled opacity, taking no input. Whatever the cell shows, why the
 /// hotkey is not active is below it.
 fn hotkey_cell(
     this: &mut SettingsWindow,
@@ -1392,28 +1390,43 @@ fn hotkey_cell(
         inactive.clone()
     };
 
-    // What the well shows: the listening mark, the hotkey's caps, or
-    // "None".
-    let value = if listening {
-        controls::listening_mark(theme).into_any_element()
-    } else {
-        match command.hotkey.as_ref() {
-            Some(shortcut) => div()
-                .id(SharedString::from(format!("hotkey-keys-{id}")))
-                .flex()
-                .child(key_sequence(
-                    &crate::keyboard::hotkey_keys(shortcut),
-                    CapStyle::Regular,
-                    theme,
-                ))
-                .into_any_element(),
-            None => cell_text(None, theme).into_any_element(),
-        }
-    };
-    let well = controls::well(true, theme)
-        .flex_1()
-        .min_w(px(0.))
-        .child(value)
+    // The Clear button, inside the recorder of a command that can record
+    // and has a hotkey: it forgets the hotkey through the same checks and
+    // record the recorder writes.
+    let clear = (command.hotkey_editable && command.hotkey.is_some()).then(|| {
+        let handle = this
+            .shortcuts
+            .hotkey_clears
+            .entry(id.clone())
+            .or_insert_with(|| cx.focus_handle().tab_stop(true))
+            .clone();
+        let for_keys = id.clone();
+        let for_click = id.clone();
+        let ring = controls::focus_ring(theme);
+        controls::icon_button(format!("hotkey-clear-{id}"), Glyph::Reset, true, theme)
+            .debug_selector(|| format!("shortcut-hotkey-clear-{id}"))
+            .key_context(HOTKEY_CLEAR)
+            .track_focus(&handle)
+            .role(Role::Button)
+            .aria_label(format!("Clear the hotkey for {}", command.title))
+            .focus(move |button| button.shadow(ring))
+            .on_action(cx.listener(move |this, _: &ClearHotkey, window, cx| {
+                this.shortcuts_apply_hotkey(&for_keys, None, window, cx);
+            }))
+            .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
+                // The button sits inside the recorder: its click is its own.
+                cx.stop_propagation();
+                this.shortcuts_apply_hotkey(&for_click, None, window, cx);
+            }))
+            .into_any_element()
+    });
+    let text = command
+        .hotkey
+        .as_ref()
+        .map(|shortcut| controls::binding_text(&crate::keyboard::hotkey_keys(shortcut)))
+        .unwrap_or_else(|| "None".into());
+    let recorder = controls::recorder(text, listening, clear, theme)
+        .w_full()
         .id(format!("hotkey-{id}"))
         .debug_selector(|| format!("shortcut-hotkey-{id}"))
         .aria_label(label)
@@ -1428,108 +1441,63 @@ fn hotkey_cell(
         let for_keys = id.clone();
         let for_click = id.clone();
         let for_out = id.clone();
-        let ring = controls::well_shadows(true, theme);
         // While the recorder listens, the cell's context is the recorder's
         // (see [`bind_keys`]): its keys are the binding being recorded.
-        well.key_context(if listening {
-            HOTKEY_RECORDER
-        } else {
-            HOTKEY_CELL
-        })
-        .track_focus(&handle)
-        .role(Role::Button)
-        .cursor_pointer()
-        .focus(move |cell| cell.shadow(ring))
-        .on_action(cx.listener(move |this, _: &RecordHotkey, window, cx| {
-            this.shortcuts_record_hotkey(&for_keys, window, cx);
-        }))
-        .on_action(cx.listener(SettingsWindow::shortcuts_cancel_hotkey))
-        .on_key_down(cx.listener(SettingsWindow::shortcuts_hotkey_key_down))
-        // A mouse-down anywhere outside the cell while it listens cancels
-        // the recording and is consumed, as the General page's recorder
-        // and the footer menu's popup do: the click underneath does not
-        // act, and the recorder gives up the keys.
-        .on_mouse_down_out(cx.listener(move |this, _: &MouseDownEvent, _window, cx| {
-            if this
-                .shortcuts
-                .recording
-                .as_ref()
-                .is_some_and(|recording| recording.command == for_out)
-            {
-                this.shortcuts_cancel_recording(cx);
-                cx.stop_propagation();
-            }
-        }))
-        .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
-            this.shortcuts_record_hotkey(&for_click, window, cx);
-        }))
+        recorder
+            .key_context(if listening {
+                HOTKEY_RECORDER
+            } else {
+                HOTKEY_CELL
+            })
+            .track_focus(&handle)
+            .role(Role::Button)
+            .on_action(cx.listener(move |this, _: &RecordHotkey, window, cx| {
+                this.shortcuts_record_hotkey(&for_keys, window, cx);
+            }))
+            .on_action(cx.listener(SettingsWindow::shortcuts_cancel_hotkey))
+            .on_key_down(cx.listener(SettingsWindow::shortcuts_hotkey_key_down))
+            // A mouse-down anywhere outside the cell while it listens cancels
+            // the recording and is consumed, as the General page's recorder
+            // and the footer menu's popup do: the click underneath does not
+            // act, and the recorder gives up the keys.
+            .on_mouse_down_out(cx.listener(move |this, _: &MouseDownEvent, _window, cx| {
+                if this
+                    .shortcuts
+                    .recording
+                    .as_ref()
+                    .is_some_and(|recording| recording.command == for_out)
+                {
+                    this.shortcuts_cancel_recording(cx);
+                    cx.stop_propagation();
+                }
+            }))
+            // A click starts recording, or stops it again.
+            .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
+                let listening = this
+                    .shortcuts
+                    .recording
+                    .as_ref()
+                    .is_some_and(|recording| recording.command == for_click);
+                if listening {
+                    this.shortcuts_cancel_recording(cx);
+                } else {
+                    this.shortcuts_record_hotkey(&for_click, window, cx);
+                }
+            }))
     } else {
-        well.role(Role::Label)
+        recorder
+            .role(Role::Label)
+            .cursor_default()
             .opacity(theme.geometry.controls.disabled_opacity)
     };
 
-    // The Clear button, beside a recorded hotkey of a command that can
-    // record: it forgets the hotkey through the same checks and record
-    // the recorder writes. It hides while the recorder listens, since a
-    // click there only cancels it.
-    let clear = (!listening && command.hotkey.is_some() && command.hotkey_editable).then(|| {
-        let handle = this
-            .shortcuts
-            .hotkey_clears
-            .entry(id.clone())
-            .or_insert_with(|| cx.focus_handle().tab_stop(true))
-            .clone();
-        let for_keys = id.clone();
-        let for_click = id.clone();
-        let ring = controls::focus_ring(theme);
-        controls::ghost_button("Clear", true, theme)
-            .id(format!("hotkey-clear-{id}"))
-            .debug_selector(|| format!("shortcut-hotkey-clear-{id}"))
-            .key_context(HOTKEY_CLEAR)
-            .track_focus(&handle)
-            .role(Role::Button)
-            .aria_label(format!("Clear the hotkey for {}", command.title))
-            .focus(move |button| button.shadow(ring))
-            .on_action(cx.listener(move |this, _: &ClearHotkey, window, cx| {
-                this.shortcuts_apply_hotkey(&for_keys, None, window, cx);
-            }))
-            .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
-                this.shortcuts_apply_hotkey(&for_click, None, window, cx);
-            }))
-    });
-
-    // The hint of what is being recorded, and why the last capture was
-    // refused — both only while the recorder listens.
-    let hint = listening.then(|| {
-        format!(
-            "Press the keys that should open {}; they are captured here and do not act. Esc \
-             cancels",
-            command.title
-        )
-    });
     div()
         .w(HOTKEY_WIDTH)
         .flex_none()
         .flex()
         .flex_col()
         .gap(theme.geometry.controls.list_gap)
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(theme.geometry.controls.button_gap)
-                .child(cell)
-                .when_some(clear, |row, clear| row.child(clear)),
-        )
-        .when_some(hint, |column, hint| {
-            column.child(cell_note(
-                "shortcut-hotkey-hint".into(),
-                hint,
-                theme.text_muted,
-                theme,
-            ))
-        })
+        .child(cell)
         .when_some(rejection, |column, why| {
             column.child(cell_note(
                 "shortcut-hotkey-error".into(),

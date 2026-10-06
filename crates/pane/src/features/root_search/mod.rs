@@ -178,7 +178,7 @@ impl LauncherWindow {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let input = &self.query.input;
-        let visuals = crate::settings::visuals(cx);
+        let visuals = crate::settings::launcher_visuals(cx);
         div()
             .id("search")
             .debug_selector(|| "search".into())
@@ -221,6 +221,9 @@ impl LauncherWindow {
 /// so a typed query runs about 0.1px a character wider than the
 /// reference's — under a pixel for the authored queries (#93).
 ///
+/// Over a background image (ADR 0028, `Theme::frost`) the same field is a
+/// frosted pill inside the 64px row, with no hairline below it.
+///
 /// Both the launcher's search screens ([`LauncherWindow::render_search`])
 /// and the visual workbench's root fixture (#91) compose this header, so
 /// the fixture measures the production chrome rather than a copy of it.
@@ -231,15 +234,10 @@ pub(crate) fn search_header(
 ) -> Div {
     let geometry = &theme.geometry;
     let typography = &theme.typography;
-    div()
-        .flex_none()
+    let field = div()
         .flex()
         .items_center()
         .gap(geometry.search_gap)
-        .h(geometry.search_height)
-        .px(geometry.search_padding_x)
-        .border_b_1()
-        .border_color(theme.hairline_soft)
         .child(
             div()
                 .window_control_area(WindowControlArea::Drag)
@@ -272,5 +270,34 @@ pub(crate) fn search_header(
                 .min_w(px(0.))
                 .whitespace_nowrap()
                 .overflow_x_scroll(),
-        )
+        );
+    match theme.frost {
+        None => field
+            .flex_none()
+            .h(geometry.search_height)
+            .px(geometry.search_padding_x)
+            .border_b_1()
+            .border_color(theme.hairline_soft),
+        // Over a background image (ADR 0028), the field is a frosted pill
+        // inside the header's row, with no hairline under it.
+        Some(frost) => {
+            let (top, bottom, side) = frost.pill_margin;
+            div()
+                .flex_none()
+                .flex()
+                .h(geometry.search_height)
+                .pt(top)
+                .pb(bottom)
+                .px(side)
+                .child(
+                    field
+                        .flex_1()
+                        .px(frost.pill_padding_x)
+                        .rounded(frost.pill_radius)
+                        .backdrop_blur(frost.blur)
+                        .bg(frost.tint)
+                        .shadow(frost.edges()),
+                )
+        }
+    }
 }

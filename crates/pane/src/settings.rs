@@ -61,6 +61,17 @@
 //! three instead of one pretense. The adapters the tests inject are
 //! fakes; an entity built without one manages no registration at all.
 //!
+//! The launcher's background image (ADR 0028) is recorded as the Launcher
+//! page's choices are, after one step of its own: the picture the user
+//! chooses is copied into the data folder off the window's thread, and only
+//! the kept copy's name is recorded (see [`crate::background`]); a copy the
+//! record no longer names is removed once the record is written. The
+//! entity also bakes the launcher's backdrop from the copy, off the
+//! window's thread, as the launcher asks for it while drawing
+//! ([`Settings::request_backdrop`]), and [`launcher_visuals`] hands the
+//! launcher its visuals over it. The Settings window keeps the plain
+//! [`visuals`].
+//!
 //! What this module does not do: it makes no palette or surface decision
 //! of its own. [`crate::ui::Visuals`] stays presentation — this module
 //! resolves the preferences into it, including the platform's
@@ -78,9 +89,11 @@ use pane_core::autostart::{Autostart, Registration};
 use pane_core::hotkeys::Shortcut;
 use pane_core::tray::Tray;
 use pane_core::{
-    Binding, HostSettings, Keyboard, KeyboardAction, Launcher, MaterialPreference, ThemePreference,
+    BackgroundEffect, Binding, HostSettings, Keyboard, KeyboardAction, Launcher,
+    MaterialPreference, ThemePreference,
 };
 
+use crate::background::{self, Backdrop};
 use crate::ui::Visuals;
 use crate::ui::material::{Material, MaterialMode};
 use crate::ui::theme::{Appearance, Theme};
@@ -237,6 +250,18 @@ pub(crate) struct Settings {
     /// unavailability of a whole platform (Linux today) is read from the
     /// adapter itself, not kept here.
     tray_problem: Option<String>,
+    /// The launcher's background image as last baked (ADR 0028): what it
+    /// was baked for, and the backdrop or why it could not be made. The
+    /// launcher keeps drawing a backdrop until the next one is ready.
+    backdrop: Option<(background::Key, Result<Backdrop, String>)>,
+    /// What the bake in flight is for, if one is.
+    baking: Option<background::Key>,
+    /// How many chosen pictures are being copied into the data folder;
+    /// nothing is pruned from the backgrounds folder meanwhile, so a copy
+    /// is never removed before its choice is recorded.
+    importing: usize,
+    /// Why the last picture chosen could not be kept, if it could not.
+    import_problem: Option<String>,
 }
 
 impl Settings {
@@ -283,6 +308,10 @@ impl Settings {
             launcher: None,
             tray: None,
             tray_problem: None,
+            backdrop: None,
+            baking: None,
+            importing: 0,
+            import_problem: None,
         };
         settings.reconcile_login();
         settings
@@ -391,6 +420,275 @@ impl Settings {
         self.record_choice(chosen, cx);
     }
 
+    /// How much of the launcher shows while the query is blank.
+    pub(crate) fn window_mode(&self) -> pane_core::WindowMode {
+        self.chosen.window_mode
+    }
+
+    /// Chooses the window mode; the launcher window resizes as it next
+    /// draws.
+    pub(crate) fn set_window_mode(&mut self, mode: pane_core::WindowMode, cx: &mut Context<Self>) {
+        let mut chosen = self.chosen.clone();
+        chosen.window_mode = mode;
+        self.record_choice(chosen, cx);
+    }
+
+    /// Whether the compact window shows the pins as a row of icons under
+    /// the search field.
+    pub(crate) fn compact_pinned(&self) -> bool {
+        self.chosen.compact_pinned
+    }
+
+    /// Chooses whether the compact window shows the pins; the launcher
+    /// window resizes as it next draws.
+    pub(crate) fn set_compact_pinned(&mut self, on: bool, cx: &mut Context<Self>) {
+        let mut chosen = self.chosen.clone();
+        chosen.compact_pinned = on;
+        self.record_choice(chosen, cx);
+    }
+
+    /// How the pinned home lays out its quick slots.
+    pub(crate) fn pinned_layout(&self) -> pane_core::PinnedLayout {
+        self.chosen.pinned_layout
+    }
+
+    /// Chooses the pinned home's layout.
+    pub(crate) fn set_pinned_layout(
+        &mut self,
+        layout: pane_core::PinnedLayout,
+        cx: &mut Context<Self>,
+    ) {
+        let mut chosen = self.chosen.clone();
+        chosen.pinned_layout = layout;
+        self.record_choice(chosen, cx);
+    }
+
+    /// What the launcher's back key does.
+    pub(crate) fn escape(&self) -> pane_core::EscapeBehavior {
+        self.chosen.escape
+    }
+
+    /// Chooses what the launcher's back key does.
+    pub(crate) fn set_escape(&mut self, escape: pane_core::EscapeBehavior, cx: &mut Context<Self>) {
+        let mut chosen = self.chosen.clone();
+        chosen.escape = escape;
+        self.record_choice(chosen, cx);
+    }
+
+    /// Whether Escape closes the Settings window.
+    pub(crate) fn escape_closes_settings(&self) -> bool {
+        self.chosen.escape_closes_settings
+    }
+
+    /// Chooses whether Escape closes the Settings window.
+    pub(crate) fn set_escape_closes_settings(&mut self, closes: bool, cx: &mut Context<Self>) {
+        let mut chosen = self.chosen.clone();
+        chosen.escape_closes_settings = closes;
+        self.record_choice(chosen, cx);
+    }
+
+    /// The extra selection keys.
+    pub(crate) fn navigation(&self) -> pane_core::NavigationBindings {
+        self.chosen.navigation
+    }
+
+    /// Why `navigation` cannot be chosen, if it cannot: one of its keys is
+    /// already an action's binding.
+    pub(crate) fn navigation_conflict(
+        &self,
+        navigation: pane_core::NavigationBindings,
+    ) -> Option<String> {
+        let (previous, next) = navigation.bindings()?;
+        KeyboardAction::ALL.into_iter().find_map(|action| {
+            let bound = self.chosen.keyboard.binding(action);
+            let id = bound.id();
+            (id == previous || id == next).then(|| format!("{bound} is {}", action.title()))
+        })
+    }
+
+    /// Chooses the extra selection keys: the keymap is re-made at once,
+    /// then the record is written. A set whose keys an action already has
+    /// is refused.
+    pub(crate) fn set_navigation(
+        &mut self,
+        navigation: pane_core::NavigationBindings,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if let Some(conflict) = self.navigation_conflict(navigation) {
+            return Err(conflict);
+        }
+        if self.unreadable.is_none() && self.chosen.navigation != navigation {
+            crate::keyboard::rebuild(cx, &self.chosen.keyboard, navigation);
+        }
+        let mut chosen = self.chosen.clone();
+        chosen.navigation = navigation;
+        self.record_choice(chosen, cx);
+        Ok(())
+    }
+
+    /// The launcher's background image: the file name of Pane's copy of
+    /// it in the data folder's backgrounds folder, or `None` for the plain
+    /// panel.
+    pub(crate) fn background(&self) -> Option<&str> {
+        self.chosen.background.as_deref()
+    }
+
+    /// The texture drawn into the background image.
+    pub(crate) fn background_effect(&self) -> BackgroundEffect {
+        self.chosen.background_effect
+    }
+
+    /// Whether a chosen picture is still being copied into the data
+    /// folder.
+    pub(crate) fn importing_background(&self) -> bool {
+        self.importing > 0
+    }
+
+    /// Why the background image is not drawn as chosen, if it is not: the
+    /// last picture chosen could not be kept, or the kept copy could not
+    /// be drawn. The Appearance section shows it.
+    pub(crate) fn background_problem(&self) -> Option<String> {
+        if let Some(problem) = &self.import_problem {
+            return Some(problem.clone());
+        }
+        match &self.backdrop {
+            Some((key, Err(problem))) if self.background() == Some(key.name.as_str()) => Some(
+                format!("Pane could not draw the background image: {problem}"),
+            ),
+            _ => None,
+        }
+    }
+
+    /// Chooses the picture at `source` as the launcher's background image:
+    /// Pane's own copy of it is made off the window's thread (see
+    /// [`crate::background::import`]), and the choice is recorded once the
+    /// copy is kept, as the Launcher page's choices are. A file that is
+    /// not a picture, or a copy that cannot be kept, is reported and
+    /// changes nothing. With an unreadable record, or no data folder to
+    /// keep the copy in, the choice is refused at once.
+    pub(crate) fn choose_background(&mut self, source: PathBuf, cx: &mut Context<Self>) {
+        if let Some(problem) = self.unreadable.clone() {
+            self.save_error = Some(format!("Pane does not replace it: {problem}"));
+            cx.notify();
+            return;
+        }
+        let Some(dir) = self.dir.clone() else {
+            self.import_problem =
+                Some("Pane has no data folder to keep a background image in".into());
+            cx.notify();
+            return;
+        };
+        self.importing += 1;
+        self.import_problem = None;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let imported = cx
+                .background_executor()
+                .spawn(async move { background::import(&source, &dir) })
+                .await;
+            this.update(cx, |settings, cx| {
+                settings.importing -= 1;
+                match imported {
+                    Ok(name) => {
+                        let mut chosen = settings.chosen.clone();
+                        chosen.background = Some(name);
+                        settings.record_choice(chosen, cx);
+                    }
+                    Err(problem) => settings.import_problem = Some(problem),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Reports why no picture could be chosen — the platform's file picker
+    /// could not open — where an import's problem shows.
+    pub(crate) fn background_refused(&mut self, problem: String, cx: &mut Context<Self>) {
+        self.import_problem = Some(problem);
+        cx.notify();
+    }
+
+    /// Removes the launcher's background image: the plain panel comes back
+    /// at once, and Pane's copy of the picture is removed once the record
+    /// no longer names it.
+    pub(crate) fn clear_background(&mut self, cx: &mut Context<Self>) {
+        self.import_problem = None;
+        let mut chosen = self.chosen.clone();
+        chosen.background = None;
+        self.record_choice(chosen, cx);
+    }
+
+    /// Chooses the texture drawn into the background image; the backdrop
+    /// is baked again as the launcher next draws.
+    pub(crate) fn set_background_effect(
+        &mut self,
+        effect: BackgroundEffect,
+        cx: &mut Context<Self>,
+    ) {
+        let mut chosen = self.chosen.clone();
+        chosen.background_effect = effect;
+        self.record_choice(chosen, cx);
+    }
+
+    /// Asks for the backdrop the launcher window draws at `scale`, its
+    /// scale factor, as it draws: a backdrop is baked off the window's
+    /// thread only when the picture, its effect, the palette, the scale or
+    /// the material changed since the last bake (or the one in flight), and the
+    /// launcher keeps drawing the last one until it is ready, then
+    /// repaints. With no background image chosen there is no backdrop.
+    /// Nothing here repaints by itself: the launcher calls it while it
+    /// draws.
+    pub(crate) fn request_backdrop(&mut self, scale: f32, cx: &mut Context<Self>) {
+        let Some((dir, name)) = self.dir.clone().zip(self.chosen.background.clone()) else {
+            self.backdrop = None;
+            self.baking = None;
+            return;
+        };
+        let key = background::Key {
+            name,
+            effect: self.chosen.background_effect,
+            appearance: resolve(self.theme_preference(), self.system),
+            scale,
+            glass: self.material().is_glass(),
+        };
+        let baked = self.backdrop.as_ref().map(|(baked, _)| baked);
+        if baked == Some(&key) || self.baking.as_ref() == Some(&key) {
+            return;
+        }
+        self.baking = Some(key.clone());
+        let file = background::path(&dir, &key.name);
+        cx.spawn(async move |this, cx| {
+            let baking = key.clone();
+            let baked = cx
+                .background_executor()
+                .spawn(async move { background::bake(&file, &baking) })
+                .await;
+            this.update(cx, |settings, cx| {
+                // A bake another request has overtaken is dropped; the
+                // newer one is in flight.
+                if settings.baking.as_ref() == Some(&key) {
+                    settings.baking = None;
+                    settings.backdrop = Some((key, baked));
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The backdrop the launcher draws, if a background image is chosen
+    /// and one is ready.
+    fn backdrop(&self) -> Option<&Backdrop> {
+        self.chosen.background.as_ref()?;
+        match &self.backdrop {
+            Some((_, Ok(backdrop))) => Some(backdrop),
+            _ => None,
+        }
+    }
+
     /// Records one of the Launcher page's choices — the opening display or
     /// what reopening shows. Neither changes what the windows render, so
     /// nothing repaints; the record is written off the window's thread, and
@@ -444,6 +742,14 @@ impl Settings {
                 "Pane could not read the settings record, so the shortcut is not changed: {problem}"
             ));
         }
+        // The extra selection keys are taken too.
+        if let Some((previous, next)) = self.chosen.navigation.bindings()
+            && (binding.id() == previous || binding.id() == next)
+        {
+            return Err(format!(
+                "{binding} already moves the selection: turn off the navigation bindings first"
+            ));
+        }
         let mut chosen = self.chosen.clone();
         chosen.keyboard.checked_set(action, binding)?;
         if chosen == self.chosen {
@@ -454,7 +760,7 @@ impl Settings {
         }
         self.chosen = chosen;
         let keyboard = self.chosen.keyboard.clone();
-        crate::keyboard::rebuild(cx, &keyboard);
+        crate::keyboard::rebuild(cx, &keyboard, self.chosen.navigation);
         cx.notify();
         self.save(cx);
         Ok(())
@@ -757,7 +1063,24 @@ impl Settings {
         self.saving = false;
         match written {
             Ok(()) => {
+                let replaced = self.saved.background != snapshot.background;
                 self.saved = snapshot;
+                // A background image the record no longer names is
+                // removed from the data folder — unless a picture is being
+                // copied in, whose copy no record names yet. The folder
+                // holds a copy or two, so this is a listing and a removal,
+                // done here so no import can start in between.
+                if replaced
+                    && self.importing == 0
+                    && let Some(dir) = &self.dir
+                {
+                    let keep: Vec<&str> = [&self.saved.background, &self.chosen.background]
+                        .into_iter()
+                        .flatten()
+                        .map(String::as_str)
+                        .collect();
+                    background::prune(dir, &keep);
+                }
             }
             Err(why) => {
                 let mut problem = format!("Pane could not save your choice: {why}");
@@ -813,9 +1136,11 @@ impl Settings {
                     // the same way: the keymap is re-made over what the
                     // record holds, so a binding that could not be saved
                     // stops working and the recorded one works again.
-                    if snapshot.keyboard != self.saved.keyboard {
+                    if snapshot.keyboard != self.saved.keyboard
+                        || snapshot.navigation != self.saved.navigation
+                    {
                         let keyboard = self.chosen.keyboard.clone();
-                        crate::keyboard::rebuild(cx, &keyboard);
+                        crate::keyboard::rebuild(cx, &keyboard, self.chosen.navigation);
                     }
                 }
                 self.save_error = Some(problem);
@@ -835,18 +1160,24 @@ impl Settings {
 /// platform — a glass request without compositor frost becomes the solid
 /// surface, which [`crate::ui::material`] explains.
 fn visuals_of(theme: ThemePreference, material: MaterialPreference, system: Appearance) -> Visuals {
-    let appearance = match theme {
-        ThemePreference::Dark => Appearance::Dark,
-        ThemePreference::Light => Appearance::Light,
-        ThemePreference::System => system,
-    };
     let mode = match material {
         MaterialPreference::Glass => MaterialMode::Glass,
         MaterialPreference::Solid => MaterialMode::Opaque,
     };
     Visuals {
-        theme: Theme::new(appearance),
+        theme: Theme::new(resolve(theme, system)),
         material: Material::new(mode),
+        backdrop: None,
+    }
+}
+
+/// The palette the theme preference `theme` resolves to with the system's
+/// `appearance`.
+fn resolve(theme: ThemePreference, system: Appearance) -> Appearance {
+    match theme {
+        ThemePreference::Dark => Appearance::Dark,
+        ThemePreference::Light => Appearance::Light,
+        ThemePreference::System => system,
     }
 }
 
@@ -954,6 +1285,14 @@ pub(crate) fn keyboard_of(cx: &App) -> Keyboard {
         .unwrap_or_default()
 }
 
+/// The extra selection keys in force, as [`keyboard_of`] reads the
+/// bindings.
+pub(crate) fn navigation_of(cx: &App) -> pane_core::NavigationBindings {
+    cx.try_global::<Shared>()
+        .map(|shared| shared.0.read(cx).chosen.navigation)
+        .unwrap_or_default()
+}
+
 /// Attaches the launcher that owns the window's global-shortcut
 /// registration, and applies the recorded Open Pane hotkey through it:
 /// the binding Pane starts with, whatever the record holds. Called by the
@@ -1047,6 +1386,24 @@ pub(crate) fn follow<T: 'static>(
 /// registers (see the module docs), which re-renders it.
 pub(crate) fn visuals(cx: &App) -> Visuals {
     shared(cx).read(cx).effective.clone()
+}
+
+/// The visuals the launcher window renders with: [`visuals`], over the
+/// background image's backdrop when one is chosen and ready (ADR 0028) —
+/// the palette then painted over its canvas, with the frosted surfaces
+/// (`Theme::over_backdrop`). Everything the launcher draws reads these;
+/// the Settings window and the visual workbench read [`visuals`]. The
+/// launcher asks for the backdrop as it draws, through
+/// [`Settings::request_backdrop`].
+pub(crate) fn launcher_visuals(cx: &App) -> Visuals {
+    let settings = shared(cx);
+    let settings = settings.read(cx);
+    let mut visuals = settings.effective.clone();
+    if let Some(backdrop) = settings.backdrop() {
+        visuals.theme = visuals.theme.over_backdrop(backdrop.canvas);
+        visuals.backdrop = Some(backdrop.clone());
+    }
+    visuals
 }
 
 /// The window background appearance the material in effect asks for, for

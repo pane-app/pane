@@ -118,6 +118,65 @@ pub(crate) fn key_sequence(keys: &KeySequence, style: CapStyle, theme: &Theme) -
         .children(keys.keys.iter().map(|key| cap(key, style, theme)))
 }
 
+/// How far a number hint travels as it is revealed, in px.
+const HINT_TRAVEL: f32 = 18.;
+
+/// The width of a row's number hint, its fade included.
+const ROW_HINT_WIDTH: f32 = 96.;
+
+/// The single cap naming `number`, the digit Ctrl picks an item with.
+fn number_cap(number: usize, theme: &Theme) -> Stateful<Div> {
+    let keys = KeySequence {
+        keys: vec![Key::new(number.to_string(), format!("Ctrl+{number}"))],
+    };
+    key_sequence(&keys, CapStyle::Regular, theme)
+}
+
+/// A result row's number hint while Ctrl is held: `number`'s cap at the
+/// row's right end over a fade from transparent to the panel, which
+/// covers the row's kind, sliding in from the right as `look` goes from
+/// 0 (hidden) to 1 (shown). The row is its positioned, clipping parent.
+pub(crate) fn row_number_hint(number: usize, look: f32, theme: &Theme) -> Div {
+    let panel = theme.panel_solid;
+    let clear = gpui::Hsla { alpha: 0., ..panel };
+    div()
+        .absolute()
+        .top(px(0.))
+        .bottom(px(0.))
+        .right(px(-HINT_TRAVEL * (1. - look)))
+        .w(px(ROW_HINT_WIDTH))
+        .flex()
+        .items_center()
+        .justify_end()
+        .pr(theme.geometry.row_padding_x)
+        .opacity(look)
+        .bg(gpui::linear_gradient(
+            90.,
+            gpui::linear_color_stop(clear, 0.),
+            gpui::linear_color_stop(
+                gpui::Hsla {
+                    alpha: 0.94,
+                    ..panel
+                },
+                0.45,
+            ),
+        ))
+        .child(number_cap(number, theme))
+}
+
+/// A quick slot's number hint while Ctrl is held: `number`'s cap in the
+/// slot's top right corner, sliding down from above as `look` goes from 0
+/// (hidden) to 1 (shown). The slot is its positioned parent.
+pub(crate) fn slot_number_hint(number: usize, look: f32, theme: &Theme) -> Div {
+    let inset = theme.geometry.pinned.keys_inset;
+    div()
+        .absolute()
+        .top(inset - px(HINT_TRAVEL * (1. - look)))
+        .right(inset)
+        .opacity(look)
+        .child(number_cap(number, theme))
+}
+
 /// One cap of `style` showing `key`'s label.
 fn cap(key: &Key, style: CapStyle, theme: &Theme) -> Div {
     let typography = &theme.typography;

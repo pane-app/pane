@@ -1,5 +1,8 @@
-//! Quick slots: the five ordered places on root search's home where the
-//! user pins results, to reach each with one click or Ctrl+1 to Ctrl+5.
+//! Quick slots: the ordered list of results the user pins to root search's
+//! home, to reach each with one click (and the first five with Ctrl+1 to
+//! Ctrl+5, which the window numbers). The list has no gaps and no length
+//! limit: pinning adds to its end, unpinning takes an entry out and closes
+//! the gap, and moving an entry swaps it with its neighbor.
 //!
 //! A slot holds an identity, never a row: a registered command by its id,
 //! or an indexed result (an installed application) by its own id under
@@ -25,7 +28,10 @@
 //! Pane runs), written atomically, one write at a time, each holding the
 //! arrangement as it is when it begins. A change takes effect at once;
 //! a write that fails puts back the arrangement the record last held and
-//! says why. A fresh installation has no record and pins nothing.
+//! says why. A fresh installation has no record and pins nothing. A
+//! record of the first version — five positional slots, `null` for an
+//! empty one — is read as the list of its pins in order; the next change
+//! writes the current version.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -41,14 +47,15 @@ use super::{CommandRegistration, Entry, Launcher, Screen, State, Status, off_thr
 use crate::atomic::{Readers, write_atomically};
 use crate::packages::{InstalledPackage, paused_reason};
 
-/// How many quick slots there are.
-pub const QUICK_SLOTS: usize = 5;
-
 /// The record's file name, in Pane's data folder beside `settings.json`.
 const FILE: &str = "quick-slots.json";
 
-/// The record's version; a record of another version is not read.
-const VERSION: u64 = 1;
+/// The record's version: `{ "version": 2, "pins": [ … ] }`.
+const VERSION: u64 = 2;
+
+/// The first version, still read: `{ "version": 1, "slots": [ … ] }`, five
+/// positional slots with `null` for an empty one.
+const SLOTS_VERSION: u64 = 1;
 
 /// What a quick slot holds: a stable identity, resolved each time through
 /// the registry as it is then.
@@ -77,12 +84,10 @@ impl PinTarget {
 /// One quick slot as it stands now.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QuickSlot {
-    /// What the slot holds; `None` for an empty slot, which invokes
-    /// nothing.
-    pub target: Option<PinTarget>,
+    /// What the slot holds.
+    pub target: PinTarget,
     /// The title to show: the target's own as root search lists it, else
     /// the best name Pane has for it (its command's title, or its id).
-    /// Empty for an empty slot.
     pub title: String,
     /// What invoking it reaches, once resolved.
     pub kind: Option<RowKind>,
@@ -92,23 +97,9 @@ pub struct QuickSlot {
 }
 
 impl QuickSlot {
-    fn empty() -> QuickSlot {
-        QuickSlot {
-            target: None,
-            title: String::new(),
-            kind: None,
-            unavailable: None,
-        }
-    }
-
-    /// Whether the slot holds nothing.
-    pub fn is_empty(&self) -> bool {
-        self.target.is_none()
-    }
-
     /// Whether invoking the slot runs its target now.
     pub fn ready(&self) -> bool {
-        self.target.is_some() && self.unavailable.is_none()
+        self.unavailable.is_none()
     }
 }
 
@@ -120,16 +111,13 @@ pub enum SlotChange {
     Refused,
     /// Nothing: the target already holds the slot at this index.
     AlreadyPinned(usize),
-    /// Nothing yet: all five slots are taken, so the slot to replace must
-    /// be chosen first ([`Launcher::pin_replacements`]).
-    ChooseReplacement,
     /// The slots changed: the target now holds the slot at this index
     /// (`None` once removed). The returned future records it.
     Changed(Option<usize>),
 }
 
-/// The five slots, in order.
-type Arrangement = [Option<PinTarget>; QUICK_SLOTS];
+/// The pinned targets, in order.
+type Arrangement = Vec<PinTarget>;
 
 /// The quick slots in Pane and their record.
 #[derive(Default)]
@@ -175,16 +163,12 @@ impl Kept {
 
     /// The slot holding `target`, if one does.
     fn slot_of(&self, target: &PinTarget) -> Option<usize> {
-        self.chosen
-            .iter()
-            .position(|slot| slot.as_ref() == Some(target))
+        self.chosen.iter().position(|slot| slot == target)
     }
 
     /// The slot holding the target with key `key`, if one does.
     fn slot_keyed(&self, key: &str) -> Option<usize> {
-        self.chosen
-            .iter()
-            .position(|slot| slot.as_ref().is_some_and(|target| target.key() == key))
+        self.chosen.iter().position(|slot| slot.key() == key)
     }
 }
 
@@ -212,47 +196,39 @@ fn read(file: &Path) -> Result<Arrangement, String> {
 fn parse(text: &str) -> Result<Arrangement, String> {
     let fields: Map<String, Value> =
         serde_json::from_str(text).map_err(|error| format!("is invalid: {error}"))?;
-    match fields.get("version").and_then(Value::as_u64) {
-        Some(VERSION) => {}
+    // The first version's positional slots may be empty (`null`); the
+    // current version's list holds pins only.
+    let (field, gaps) = match fields.get("version").and_then(Value::as_u64) {
+        Some(VERSION) => ("pins", false),
+        Some(SLOTS_VERSION) => ("slots", true),
         Some(version) => {
             return Err(format!(
                 "has version {version}, which this Pane does not read"
             ));
         }
         None => return Err("is invalid: it has no version".into()),
-    }
-    let mut arrangement = Arrangement::default();
-    let Some(slots) = fields.get("slots") else {
+    };
+    let mut arrangement = Arrangement::new();
+    let Some(entries) = fields.get(field) else {
         return Ok(arrangement);
     };
-    let slots = slots
+    let entries = entries
         .as_array()
-        .ok_or("is invalid: its slots are not a list")?;
-    if slots.len() > QUICK_SLOTS {
-        return Err(format!(
-            "is invalid: it has {} slots, and there are {QUICK_SLOTS}",
-            slots.len()
-        ));
-    }
-    for (index, slot) in slots.iter().enumerate() {
-        let target = match slot {
-            Value::Null => continue,
+        .ok_or_else(|| format!("is invalid: its {field} are not a list"))?;
+    for (index, entry) in entries.iter().enumerate() {
+        let target = match entry {
+            Value::Null if gaps => continue,
             Value::Object(entry) => target_of(entry)
-                .map_err(|problem| format!("is invalid: slot {}: {problem}", index + 1))?,
-            _ => {
-                return Err(format!(
-                    "is invalid: slot {} is neither empty nor a pin",
-                    index + 1
-                ));
-            }
+                .map_err(|problem| format!("is invalid: pin {}: {problem}", index + 1))?,
+            _ => return Err(format!("is invalid: pin {} is not a pin", index + 1)),
         };
-        if arrangement.contains(&Some(target.clone())) {
+        if arrangement.contains(&target) {
             return Err(format!(
-                "is invalid: slot {} pins what another slot pins",
+                "is invalid: pin {} pins what another pin pins",
                 index + 1
             ));
         }
-        arrangement[index] = Some(target);
+        arrangement.push(target);
     }
     Ok(arrangement)
 }
@@ -283,20 +259,18 @@ fn target_of(entry: &Map<String, Value>) -> Result<PinTarget, String> {
     }
 }
 
-/// The record's text for `arrangement`: every slot, in order, `null` for
-/// an empty one.
+/// The record's text for `arrangement`: every pin, in order.
 fn text(arrangement: &Arrangement) -> String {
-    let slots: Vec<Value> = arrangement
+    let pins: Vec<Value> = arrangement
         .iter()
-        .map(|slot| match slot {
-            None => Value::Null,
-            Some(PinTarget::Command(id)) => serde_json::json!({ "command": id }),
-            Some(PinTarget::Indexed { command, result }) => {
+        .map(|pin| match pin {
+            PinTarget::Command(id) => serde_json::json!({ "command": id }),
+            PinTarget::Indexed { command, result } => {
                 serde_json::json!({ "command": command, "result": result })
             }
         })
         .collect();
-    let record = serde_json::json!({ "version": VERSION, "slots": slots });
+    let record = serde_json::json!({ "version": VERSION, "pins": pins });
     serde_json::to_string_pretty(&record).expect("a JSON value always serializes")
 }
 
@@ -435,14 +409,11 @@ fn resolve_indexed(state: &State, target: &PinTarget, command: &str) -> Resolved
     })
 }
 
-/// The slot at `index` as it stands in `state`.
-fn view(launcher: &Launcher, state: &State, index: usize) -> QuickSlot {
-    let Some(Some(target)) = state.quick_slots.chosen.get(index) else {
-        return QuickSlot::empty();
-    };
+/// The slot holding `target` as it stands in `state`.
+fn view(launcher: &Launcher, state: &State, target: &PinTarget) -> QuickSlot {
     let resolved = resolve(launcher, state, target);
     QuickSlot {
-        target: Some(target.clone()),
+        target: target.clone(),
         title: resolved.title,
         kind: resolved.kind,
         unavailable: resolved.outcome.err(),
@@ -487,23 +458,28 @@ fn item(action: ResultAction, available: bool) -> ResultActionItem {
 }
 
 /// The Actions panel's quick slot entry for root search's selected row, a
-/// result a slot can hold: pinning it — a no-op naming its slot once it is
-/// pinned, whose own panel removes and moves it ([`slot_items`]). It
-/// cannot run while the record cannot be read.
+/// result a slot can hold: pinning it, or unpinning it once it is pinned
+/// (its slot's own panel also moves it, [`slot_items`]). It cannot run
+/// while the record cannot be read.
 pub(super) fn pin_item(state: &State) -> ResultActionItem {
-    item(ResultAction::Pin, state.quick_slots.unreadable.is_none())
+    let pinned =
+        pin_of_selected(state).is_some_and(|pin| state.quick_slots.slot_of(&pin).is_some());
+    let action = if pinned {
+        ResultAction::Unpin
+    } else {
+        ResultAction::Pin
+    };
+    item(action, state.quick_slots.unreadable.is_none())
 }
 
-/// A pinned slot's own entries: removing it, and moving it left and right
-/// where there is a slot to move to.
-fn slot_items(slot: usize, readable: bool) -> Vec<ResultActionItem> {
+/// A pinned slot's own entries, for the slot at `slot` of `count`:
+/// removing it, and moving it up and down where there is a slot to move
+/// to.
+fn slot_items(slot: usize, count: usize, readable: bool) -> Vec<ResultActionItem> {
     vec![
         item(ResultAction::Unpin, readable),
-        item(ResultAction::MoveSlotLeft, readable && slot > 0),
-        item(
-            ResultAction::MoveSlotRight,
-            readable && slot + 1 < QUICK_SLOTS,
-        ),
+        item(ResultAction::MovePinUp, readable && slot > 0),
+        item(ResultAction::MovePinDown, readable && slot + 1 < count),
     ]
 }
 
@@ -539,7 +515,7 @@ fn change(
         return refused;
     }
     match action {
-        ResultAction::Pin | ResultAction::ReplaceSlot(_) => {
+        ResultAction::Pin => {
             let Some(pin) = pin_of_selected(state).filter(|pin| pin.key() == target) else {
                 return refused;
             };
@@ -547,44 +523,35 @@ fn change(
             if let Some(slot) = state.quick_slots.slot_of(&pin) {
                 return (
                     SlotChange::AlreadyPinned(slot),
-                    format!("{title} is already in Quick Slot {}", slot + 1),
+                    format!("{title} is already pinned"),
                 );
             }
-            let slot = match action {
-                ResultAction::ReplaceSlot(slot) if slot < QUICK_SLOTS => slot,
-                ResultAction::ReplaceSlot(_) => return refused,
-                _ => match state.quick_slots.chosen.iter().position(Option::is_none) {
-                    Some(slot) => slot,
-                    None => return (SlotChange::ChooseReplacement, String::new()),
-                },
-            };
-            state.quick_slots.chosen[slot] = Some(pin);
+            state.quick_slots.chosen.push(pin);
             (
-                SlotChange::Changed(Some(slot)),
-                format!("Pinned {title} to Quick Slot {}", slot + 1),
+                SlotChange::Changed(Some(state.quick_slots.chosen.len() - 1)),
+                format!("Pinned {title}"),
             )
         }
-        ResultAction::Unpin | ResultAction::MoveSlotLeft | ResultAction::MoveSlotRight => {
+        ResultAction::Unpin | ResultAction::MovePinUp | ResultAction::MovePinDown => {
             let Some(slot) = state.quick_slots.slot_keyed(target) else {
                 return refused;
             };
-            let title = view(launcher, state, slot).title;
+            let pinned = state.quick_slots.chosen[slot].clone();
+            let title = view(launcher, state, &pinned).title;
+            let count = state.quick_slots.chosen.len();
             let moved_to = match action {
-                ResultAction::MoveSlotLeft if slot > 0 => slot - 1,
-                ResultAction::MoveSlotRight if slot + 1 < QUICK_SLOTS => slot + 1,
+                ResultAction::MovePinUp if slot > 0 => slot - 1,
+                ResultAction::MovePinDown if slot + 1 < count => slot + 1,
                 ResultAction::Unpin => {
-                    state.quick_slots.chosen[slot] = None;
-                    return (
-                        SlotChange::Changed(None),
-                        format!("Removed {title} from Quick Slot {}", slot + 1),
-                    );
+                    state.quick_slots.chosen.remove(slot);
+                    return (SlotChange::Changed(None), format!("Unpinned {title}"));
                 }
                 _ => return refused,
             };
             state.quick_slots.chosen.swap(slot, moved_to);
             (
                 SlotChange::Changed(Some(moved_to)),
-                format!("Moved {title} to Quick Slot {}", moved_to + 1),
+                format!("Moved {title} to place {}", moved_to + 1),
             )
         }
         ResultAction::Invoke | ResultAction::Hotkey | ResultAction::Alias => refused,
@@ -613,12 +580,15 @@ impl Launcher {
         self
     }
 
-    /// The five quick slots, in order, each resolved through the registry
-    /// as it is now (see the module docs).
+    /// The quick slots, in order, each resolved through the registry as
+    /// it is now (see the module docs).
     pub fn quick_slots(&self) -> Vec<QuickSlot> {
         let state = self.lock();
-        (0..QUICK_SLOTS)
-            .map(|index| view(self, &state, index))
+        state
+            .quick_slots
+            .chosen
+            .iter()
+            .map(|target| view(self, &state, target))
             .collect()
     }
 
@@ -641,7 +611,6 @@ impl Launcher {
             .quick_slots
             .chosen
             .iter()
-            .flatten()
             .filter_map(|target| match target {
                 PinTarget::Indexed { command, .. } => Some(command.clone()),
                 PinTarget::Command(_) => None,
@@ -671,11 +640,11 @@ impl Launcher {
         async move { launcher.show_indexed_results(asking).await }
     }
 
-    /// Invokes the quick slot at `index` (0 to 4) from root search: its
-    /// target is resolved again now and, when it can run, opened as its
-    /// row would be — the command opens, the application is opened — in
-    /// the package's generation current now. A target that cannot run
-    /// says why on the status line and nothing runs; an empty slot,
+    /// Invokes the quick slot at `index` from root search: its target is
+    /// resolved again now and, when it can run, opened as its row would
+    /// be — the command opens, the application is opened — in the
+    /// package's generation current now. A target that cannot run says why
+    /// on the status line and nothing runs; an index past the list,
     /// another screen than root search, or an action still running (the
     /// slot's own opening, invoked again) does nothing. Await the returned
     /// future to apply the reply.
@@ -686,7 +655,7 @@ impl Launcher {
         // a second press or click during an opening invokes nothing.
         let ready = matches!(state.view.screen, Screen::Root { .. })
             && state.view.status != Status::Running;
-        let target = state.quick_slots.chosen.get(index).cloned().flatten();
+        let target = state.quick_slots.chosen.get(index).cloned();
         let entry = match target.filter(|_| ready) {
             Some(target) => match resolve(self, state, &target).outcome {
                 Ok(entry) => Some(entry),
@@ -735,16 +704,16 @@ impl Launcher {
     /// The Actions panel's entries for the quick slot holding `target`, as
     /// a slot's own panel lists them: invoking it (unavailable while its
     /// target cannot run), removing it — whatever its target's state, so
-    /// a disabled or missing one can always be removed — and moving it
-    /// left and right where there is a slot to move to. `None` off root
-    /// search, or when no slot holds it.
+    /// a disabled or missing one can always be removed — and moving it up
+    /// and down where there is a slot to move to. `None` off root search,
+    /// or when no slot holds it.
     pub fn quick_slot_actions(&self, target: &str) -> Option<ResultActions> {
         let state = self.lock();
         if !matches!(state.view.screen, Screen::Root { .. }) {
             return None;
         }
         let slot = state.quick_slots.slot_keyed(target)?;
-        let shown = view(self, &state, slot);
+        let shown = view(self, &state, &state.quick_slots.chosen[slot]);
         let readable = state.quick_slots.unreadable.is_none();
         // Named as the footer names the same row's primary action.
         let primary = match shown.kind {
@@ -756,7 +725,7 @@ impl Launcher {
             label: primary.to_owned(),
             available: shown.ready(),
         }];
-        items.extend(slot_items(slot, readable));
+        items.extend(slot_items(slot, state.quick_slots.chosen.len(), readable));
         Some(ResultActions {
             target: target.to_owned(),
             title: shown.title,
@@ -764,63 +733,23 @@ impl Launcher {
         })
     }
 
-    /// The explicit choice a full set of slots asks for when root search's
-    /// selected row, `target`, is pinned: one entry per slot, naming what
-    /// it holds now, each replacing it ([`ResultAction::ReplaceSlot`]).
-    /// `None` unless `target` is still the selected row, can be pinned, is
-    /// not pinned yet and every slot is taken.
-    pub fn pin_replacements(&self, target: &str) -> Option<ResultActions> {
-        let state = self.lock();
-        let pin = pin_of_selected(&state).filter(|pin| pin.key() == target)?;
-        let kept = &state.quick_slots;
-        if kept.unreadable.is_some()
-            || kept.slot_of(&pin).is_some()
-            || kept.chosen.iter().any(Option::is_none)
-        {
-            return None;
-        }
-        let items = (0..QUICK_SLOTS)
-            .map(|slot| ResultActionItem {
-                action: ResultAction::ReplaceSlot(slot),
-                label: format!(
-                    "Replace Slot {}: {}",
-                    slot + 1,
-                    view(self, &state, slot).title
-                ),
-                available: true,
-            })
-            .collect();
-        Some(ResultActions {
-            target: target.to_owned(),
-            title: selected_title(&state),
-            items,
+    /// Whether `action` can run on the quick slot holding `target` now.
+    pub fn quick_slot_action_ready(&self, target: &str, action: ResultAction) -> bool {
+        self.quick_slot_actions(target).is_some_and(|actions| {
+            actions
+                .items
+                .iter()
+                .any(|item| item.action == action && item.available)
         })
     }
 
-    /// Whether `action` can run on the quick slot holding `target` now, or
-    /// — for [`ResultAction::ReplaceSlot`] — on the selected row `target`
-    /// waiting for a slot to replace.
-    pub fn quick_slot_action_ready(&self, target: &str, action: ResultAction) -> bool {
-        let listed = |actions: Option<ResultActions>| {
-            actions.is_some_and(|actions| {
-                actions
-                    .items
-                    .iter()
-                    .any(|item| item.action == action && item.available)
-            })
-        };
-        listed(self.quick_slot_actions(target)) || listed(self.pin_replacements(target))
-    }
-
     /// Changes the quick slots as `action` asks, for `target`: root
-    /// search's selected row (by its id) for [`ResultAction::Pin`] and
-    /// [`ResultAction::ReplaceSlot`], or the slot holding it for
-    /// [`ResultAction::Unpin`], [`ResultAction::MoveSlotLeft`] and
-    /// [`ResultAction::MoveSlotRight`].
+    /// search's selected row (by its id) for [`ResultAction::Pin`], or the
+    /// slot holding it for [`ResultAction::Unpin`],
+    /// [`ResultAction::MovePinUp`] and [`ResultAction::MovePinDown`].
     ///
-    /// Pinning fills the first empty slot; with none empty it changes
-    /// nothing and asks for the slot to replace instead. Pinning what a
-    /// slot already holds changes nothing and names that slot. A change
+    /// Pinning adds a slot at the end; pinning what a slot already holds
+    /// changes nothing and names that slot. A change
     /// takes effect at once and the returned future records it — off the
     /// window's thread, one write at a time — saying on the status line
     /// what changed, or, when the record cannot be written, why, with the
@@ -843,7 +772,7 @@ impl Launcher {
                 state.view.status = Status::Result(said);
                 None
             }
-            SlotChange::Refused | SlotChange::ChooseReplacement => None,
+            SlotChange::Refused => None,
         };
         drop(guard);
         let launcher = self.clone();

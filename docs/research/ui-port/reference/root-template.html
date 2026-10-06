@@ -1,0 +1,105 @@
+<div style="width: 1440px; height: 900px; position: relative; overflow: hidden; display: flex; justify-content: center; align-items: flex-start; padding-top: 150px; box-sizing: border-box">
+<div class="wp wp-{{wp}}"><div class="bands"></div></div>
+<svg class="grain" aria-hidden="true"><filter id="grain"><feTurbulence type="fractalNoise" sc-camel-base-frequency="0.85" sc-camel-num-octaves="2" sc-camel-stitch-tiles="stitch"></feTurbulence><feColorMatrix type="saturate" values="0"></feColorMatrix></filter><rect width="100%" height="100%" filter="url(#grain)"></rect></svg>
+
+<section class="glass" aria-label="Pane launcher" style="position: relative; z-index: 1; width: 760px; display: flex; flex-direction: column; overflow: hidden; opacity: {{panelOpacity}}; transform: scale({{panelScale}}); transition: opacity 0.14s ease, transform 0.14s ease; pointer-events: {{panelPE}}">
+<div style="height: 64px; display: flex; align-items: center; gap: 14px; padding: 0 20px; border-bottom: 1px solid rgba(255,255,255,0.06)">
+<svg class="ic" sc-camel-view-box="0 0 24 24" width="20" height="20" aria-hidden="true" style="color: #8e8f94; flex: none"><path d="M4 11a7 7 0 1 0 14 0a7 7 0 1 0 -14 0 M16.2 16.2L20 20"></path></svg>
+<input class="q" type="text" aria-label="Search apps, commands and plugins" placeholder="Search apps, commands, plugins…" value="{{query}}" sc-camel-on-change="{{onQuery}}" sc-camel-on-key-down="{{onKey}}" ref="{{setQ}}" style="flex-grow: 1; caret-color: {{accent}}">
+</div>
+
+<div class="list" ref="{{setList}}" style="height: 404px; overflow-y: auto; padding: 4px 10px 10px; display: flex; flex-direction: column; gap: 2px">
+<sc-if value="{{showPinned}}" hint-placeholder-val="{{ true }}">
+<div class="label"><span>Pinned</span><span style="display: flex; gap: 3px; align-items: center"><span class="kbd">{{k.mod}}</span><span class="kbd">1–5</span></span></div>
+<div style="display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; padding: 2px 0 6px; flex: none">
+<sc-for list="{{pinned}}" as="s" hint-placeholder-count="5">
+<button class="slot" type="button" sc-camel-on-click="{{s.open}}">
+<span class="slot-k"><span class="kbd">{{k.mod}}</span><span class="kbd">{{s.n}}</span></span>
+<span class="tile app" style="width: 42px; height: 42px; border-radius: 11px; background: {{s.bg}}; color: {{s.fg}}"><svg class="ic b" sc-camel-view-box="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="{{s.icon}}"></path></svg></span>
+<span class="slot-t">{{s.title}}</span>
+</button>
+</sc-for>
+</div>
+</sc-if>
+
+<sc-for list="{{sections}}" as="sec" hint-placeholder-count="2">
+<div class="label"><span>{{sec.label}}</span><span style="font-weight: 400">{{sec.note}}</span></div>
+<sc-for list="{{sec.items}}" as="item" hint-placeholder-count="4">
+<button type="button" class="{{item.cls}}" sc-camel-on-click="{{item.pick}}" sc-camel-on-mouse-move="{{item.hover}}">
+<span class="{{item.tileCls}}" style="background: {{item.bg}}; color: {{item.fg}}"><svg class="{{item.icCls}}" sc-camel-view-box="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="{{item.icon}}"></path></svg></span>
+<span class="row-t"><span>{{item.pre}}</span><span style="color: {{accent}}">{{item.hit}}</span><span>{{item.post}}</span></span>
+<sc-if value="{{item.hasSub}}" hint-placeholder-val="{{ true }}"><span class="row-s">{{item.sub}}</span></sc-if>
+<span style="flex-grow: 1"></span>
+<sc-if value="{{item.hasAlias}}" hint-placeholder-val="{{ false }}"><span class="alias">{{item.alias}}</span></sc-if>
+<sc-if value="{{item.hasKeys}}" hint-placeholder-val="{{ false }}"><span class="keys"><sc-for list="{{item.keys}}" as="kc" hint-placeholder-count="2"><span class="kbd">{{kc}}</span></sc-for></span></sc-if>
+<span class="row-kind">{{item.kind}}</span>
+</button>
+</sc-for>
+</sc-for>
+</div>
+
+<sc-if value="{{menu}}" hint-placeholder-val="{{ false }}">
+<div aria-hidden="true" style="position: absolute; left: 0; right: 0; top: 64px; bottom: 50px; background: rgba(6,7,8,0.34); z-index: 2; pointer-events: none"></div>
+<div class="pop" role="dialog" aria-label="Actions for {{selTitle}}" style="position: absolute; right: 10px; bottom: 58px; width: 320px; z-index: 3; display: flex; flex-direction: column; overflow: hidden">
+<div style="display: flex; align-items: center; gap: 8px; height: 30px; padding: 8px 14px 0; font-size: 12px; font-weight: 500; color: #8e8f94">
+<span class="{{selTile.tileCls}}" style="width: 18px; height: 18px; border-radius: 5px; background: {{selTile.bg}}; color: {{selTile.fg}}"><svg class="ic b" sc-camel-view-box="0 0 24 24" width="11" height="11" aria-hidden="true"><path d="{{selTile.icon}}"></path></svg></span>
+<span>{{selTitle}}</span>
+</div>
+<div style="display: flex; flex-direction: column; gap: 1px; padding: 6px">
+<sc-for list="{{acts}}" as="a" hint-placeholder-count="7">
+<sc-if value="{{a.sep}}" hint-placeholder-val="{{ false }}">
+<div class="sep"></div>
+<sc-if value="{{a.hasTitle}}" hint-placeholder-val="{{ false }}"><div class="alabel">{{a.title}}</div></sc-if>
+</sc-if>
+<sc-if value="{{a.row}}" hint-placeholder-val="{{ true }}">
+<button type="button" class="{{a.cls}}" sc-camel-on-click="{{a.run}}" sc-camel-on-mouse-move="{{a.hover}}">
+<svg class="ic" sc-camel-view-box="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="{{a.icon}}"></path></svg>
+<span style="flex-grow: 1">{{a.label}}</span>
+<sc-if value="{{a.primary}}" hint-placeholder-val="{{ false }}"><span class="kbd" style="background: {{accent}}; color: #111210; box-shadow: none">↵</span></sc-if>
+<sc-if value="{{a.notPrimary}}" hint-placeholder-val="{{ true }}"><span class="keys"><sc-for list="{{a.keys}}" as="kc" hint-placeholder-count="2"><span class="kbd">{{kc}}</span></sc-for></span></sc-if>
+</button>
+</sc-if>
+</sc-for>
+<sc-if value="{{menuEmpty}}" hint-placeholder-val="{{ false }}"><div style="padding: 14px 10px; font-size: 13px; color: #8e8f94">No actions match</div></sc-if>
+</div>
+<div style="display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 14px; border-top: 1px solid rgba(255,255,255,0.07)">
+<svg class="ic" sc-camel-view-box="0 0 24 24" width="15" height="15" aria-hidden="true" style="color: #8e8f94; flex: none"><path d="M4 11a7 7 0 1 0 14 0a7 7 0 1 0 -14 0 M16.2 16.2L20 20"></path></svg>
+<input type="text" aria-label="Search actions" placeholder="Search actions…" value="{{menuQ}}" sc-camel-on-change="{{onMenuQ}}" sc-camel-on-key-down="{{onKey}}" ref="{{setMenuQ}}" style="flex-grow: 1; min-width: 0; height: 40px; background: transparent; border: 0; outline: none; font-size: 13px; color: #ededef; caret-color: {{accent}}">
+</div>
+</div>
+</sc-if>
+
+<div style="height: 50px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 8px 0 16px; border-top: 1px solid rgba(255,255,255,0.06); background: rgba(0,0,0,0.14); position: relative; z-index: 3">
+<div style="display: flex; align-items: center; gap: 12px; min-width: 0">
+<svg sc-camel-view-box="0 0 24 24" width="18" height="18" aria-hidden="true" style="flex: none"><rect class="ic" x="3" y="7" width="13" height="13" rx="3.5" style="color: #8e8f94"></rect><rect x="8" y="3.5" width="13" height="13" rx="3.5" fill="#ededef" opacity="0.92"></rect></svg>
+<sc-if value="{{menuOff}}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: #8e8f94; white-space: nowrap">
+<span class="kbd">↵</span><span>opens instantly ·</span><span class="keys"><span class="kbd">{{k.mod}}</span><span class="kbd">K</span></span><span>for more</span>
+</div>
+</sc-if>
+<sc-if value="{{menu}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: #8e8f94; white-space: nowrap">
+<span>Type to filter actions ·</span><span class="kbd">Esc</span><span>goes back</span>
+</div>
+</sc-if>
+</div>
+<div style="display: flex; align-items: center; gap: 4px">
+<button class="fbtn" type="button" sc-camel-on-click="{{launchSel}}"><span>{{primary}}</span><span class="kbd" style="background: {{accent}}; color: #111210; box-shadow: none">↵</span></button>
+<span style="width: 1px; height: 16px; background: rgba(255,255,255,0.1)"></span>
+<button class="fbtn" type="button" aria-pressed="{{menuPressed}}" sc-camel-on-click="{{toggleMenu}}" style="background: {{actBg}}"><span>Actions</span><span class="keys"><span class="kbd">{{k.mod}}</span><span class="kbd">K</span></span></button>
+</div>
+</div>
+</section>
+
+<sc-if value="{{hasToast}}" hint-placeholder-val="{{ false }}">
+<div role="status" style="position: absolute; left: 0; right: 0; bottom: 150px; z-index: 5; display: flex; justify-content: center; pointer-events: none">
+<div style="display: flex; align-items: center; gap: 12px; height: 58px; padding: 0 20px 0 12px; border-radius: 14px; background: rgba(14,15,17,0.9); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.1), 0 20px 50px -12px rgba(0,0,0,0.7)">
+<span class="{{toast.tileCls}}" style="width: 34px; height: 34px; border-radius: 9px; background: {{toast.bg}}; color: {{toast.fg}}"><svg class="{{toast.icCls}}" sc-camel-view-box="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="{{toast.icon}}"></path></svg></span>
+<div style="display: flex; flex-direction: column; gap: 2px">
+<span style="font-size: 14px; font-weight: 500; color: #ededef">{{toast.text}}</span>
+<span style="font-size: 12px; color: #8e8f94">{{toast.sub}}</span>
+</div>
+</div>
+</div>
+</sc-if>
+</div>

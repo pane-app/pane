@@ -1,7 +1,8 @@
 //! The Settings window's sidebar search, on GPUI's test platform: the
 //! one field Cmd+F / Ctrl+F focuses, finding the settings the pages
-//! registered — the Appearance choices, the Shortcuts filter, the
-//! Extensions page's management rows and install rows, the About
+//! registered — the theme and material choices of the General page's
+//! Appearance section, the Shortcuts filter, the Extensions page's
+//! management rows and install rows, the About
 //! documentation — with the arrows and Enter driving the results, the
 //! pointer doing the same, Escape clearing and then leaving, no results
 //! said, unavailable entries explained, a control revealed on its page
@@ -199,12 +200,19 @@ fn find_focuses_the_search_and_typing_matches_registered_settings(cx: &mut TestA
     // section, the General page the window opens on.
     assert_eq!(focused_label(&mut sc).as_deref(), Some("General"));
 
+    // The theme choices are on the General page, in its Appearance
+    // section: walk down to the Launcher page first, so the jump has a
+    // page to open.
+    sc.simulate_keystrokes("down");
+    sc.run_until_parked();
+    assert!(sc.debug_bounds("launcher").is_some(), "the Launcher page");
+
     // Cmd+F / Ctrl+F focuses the one search input, from anywhere in the
     // Settings window.
     sc.simulate_keystrokes(find_shortcut());
     assert_eq!(focused_label(&mut sc).as_deref(), Some("Search settings"));
 
-    // Typing finds real registered host settings: the Appearance choices.
+    // Typing finds real registered host settings: the theme choices.
     // The result identifies its page and its control — the setting and
     // the group it sits in — and the sidebar is showing the search's
     // results, not the sections.
@@ -216,7 +224,7 @@ fn find_focuses_the_search_and_typing_matches_registered_settings(cx: &mut TestA
     );
     let (_, json) = accessibility(&mut sc);
     assert!(
-        json.contains("Appearance · Theme"),
+        json.contains("General · Theme"),
         "the result names the page and the group: {json}"
     );
     assert!(
@@ -233,7 +241,11 @@ fn find_focuses_the_search_and_typing_matches_registered_settings(cx: &mut TestA
     // page navigation, restored — since the choice takes no focus.
     sc.simulate_keystrokes("enter");
     sc.run_until_parked();
-    assert!(sc.debug_bounds("appearance").is_some(), "the page opened");
+    assert!(sc.debug_bounds("general").is_some(), "the page opened");
+    assert!(
+        sc.debug_bounds("appearance").is_some(),
+        "with the choice's section"
+    );
     assert!(
         sc.debug_bounds("settings-search-result-Dark").is_none(),
         "the query cleared"
@@ -244,7 +256,7 @@ fn find_focuses_the_search_and_typing_matches_registered_settings(cx: &mut TestA
     );
     assert_eq!(
         focused_label(&mut sc).as_deref(),
-        Some("Appearance"),
+        Some("General"),
         "the sidebar has the keyboard focus, its selected section read"
     );
 
@@ -285,26 +297,32 @@ fn arrows_move_the_selection_and_the_pointer_opens_what_is_clicked(cx: &mut Test
     let (_launcher, settings, cx) = open(cx);
     let mut sc = settings_context(&settings, cx);
 
-    // "theme" matches the Appearance page's own entry and its theme
-    // choices, in registration order; the first is selected.
+    // The theme choices are on the General page the window opens on:
+    // walk down to the Launcher page first, so the jump has a page to
+    // open.
+    sc.simulate_keystrokes("down");
+    sc.run_until_parked();
+
+    // "theme" matches the General page's three theme choices — by the
+    // group they sit in, since no title holds the word — in registration
+    // order; the first is selected.
     sc.simulate_keystrokes(find_shortcut());
     sc.simulate_input("theme");
     sc.run_until_parked();
     assert_eq!(
         selected_result(&mut sc).as_deref(),
-        Some("Appearance"),
+        Some("System"),
         "the first result is selected"
     );
 
-    // The arrows move the selection, and stop at the ends: "theme"
-    // matches the Appearance page's own entry and its three theme
-    // choices, in registration order.
-    sc.simulate_keystrokes("down");
-    assert_eq!(selected_result(&mut sc).as_deref(), Some("System"));
+    // The arrows move the selection, and stop at the ends: System, Light,
+    // then Dark.
     sc.simulate_keystrokes("down");
     assert_eq!(selected_result(&mut sc).as_deref(), Some("Light"));
+    sc.simulate_keystrokes("down");
+    assert_eq!(selected_result(&mut sc).as_deref(), Some("Dark"));
     sc.simulate_keystrokes("up");
-    assert_eq!(selected_result(&mut sc).as_deref(), Some("System"));
+    assert_eq!(selected_result(&mut sc).as_deref(), Some("Light"));
     sc.simulate_keystrokes("down down down");
     assert_eq!(
         selected_result(&mut sc).as_deref(),
@@ -315,8 +333,8 @@ fn arrows_move_the_selection_and_the_pointer_opens_what_is_clicked(cx: &mut Test
     // Enter opens the selected result, as it did of the first.
     sc.simulate_keystrokes("enter");
     sc.run_until_parked();
-    assert!(sc.debug_bounds("appearance").is_some());
-    assert_eq!(focused_label(&mut sc).as_deref(), Some("Appearance"));
+    assert!(sc.debug_bounds("general").is_some());
+    assert_eq!(focused_label(&mut sc).as_deref(), Some("General"));
 
     // The pointer does the same: a click on a result opens it — here the
     // About page's documentation entry.
@@ -402,14 +420,14 @@ fn escape_clears_the_query_then_returns_to_page_navigation(cx: &mut TestAppConte
 
     // Page navigation also leaves the search: a query showing clears when
     // the sections' keys move the page. Tab reaches the sections from the
-    // field; Down walks the sections — the Shortcuts page is three Down
+    // field; Down walks the sections — the Shortcuts page is two Down
     // presses from the General page the window opens on (General, the
-    // Launcher page, Appearance, then Shortcuts).
+    // Launcher page, then Shortcuts).
     sc.simulate_keystrokes(find_shortcut());
     sc.simulate_input("dark");
     sc.run_until_parked();
     sc.simulate_keystrokes("tab");
-    sc.simulate_keystrokes("down down down");
+    sc.simulate_keystrokes("down down");
     sc.run_until_parked();
     assert!(
         sc.debug_bounds("section-Shortcuts").is_some(),
@@ -427,28 +445,22 @@ fn a_jump_reveals_the_control_on_its_page(cx: &mut TestAppContext) {
     let (_launcher, settings, cx) = open(cx);
     let mut sc = settings_context(&settings, cx);
 
-    // The window opens on the General page; the Appearance page's
-    // overflow is what the reveal has to scroll through, so walk to it.
-    let appearance = sc
-        .debug_bounds("section-Appearance")
-        .expect("the Appearance section");
-    sc.simulate_click(appearance.center(), Modifiers::none());
-    sc.run_until_parked();
-
-    // A short window — shorter than the floor the app asks the system
-    // for, which the layout still handles — so the Appearance page
-    // overflows its viewport far enough that revealing a lower choice
-    // has to scroll, not just land in view.
+    // The window opens on the General page, whose Appearance section —
+    // the theme and material choices, at the page's end — is what the
+    // reveal has to scroll to. A short window — shorter than the floor
+    // the app asks the system for, which the layout still handles — so
+    // the page overflows its viewport far enough that the Solid choice,
+    // on the page's last row, starts out of view below the page area.
     sc.cx
-        .simulate_window_resize(AnyWindowHandle::from(settings), size(px(560.), px(300.)));
+        .simulate_window_resize(AnyWindowHandle::from(settings), size(px(560.), px(260.)));
     sc.run_until_parked();
     let page = sc.debug_bounds("settings-page").expect("the page area");
     let solid = sc
         .debug_bounds("appearance-material-Solid")
         .expect("the Solid choice");
     assert!(
-        solid.top() - page.top() > px(40.),
-        "the choice starts well below the top of the page area: {solid:?} in {page:?}"
+        solid.top() >= page.bottom(),
+        "the choice starts below the page area, out of view: {solid:?} in {page:?}"
     );
 
     // The jump: search for the choice and press Enter.
@@ -459,13 +471,16 @@ fn a_jump_reveals_the_control_on_its_page(cx: &mut TestAppContext) {
     // The reveal runs over the frames after the jump's page paints.
     pump(&mut sc);
 
+    // The reveal scrolls the control toward the top of the page area; on
+    // the page's last row it lands where the page's scroll ends, the
+    // whole choice in view.
     let solid = sc
         .debug_bounds("appearance-material-Solid")
         .expect("the Solid choice");
     let page = sc.debug_bounds("settings-page").expect("the page area");
     assert!(
-        (solid.top() - page.top()).abs() <= px(1.),
-        "the control was revealed at the top of the page area: {solid:?} in {page:?}"
+        solid.top() >= page.top() && solid.bottom() <= page.bottom(),
+        "the control was revealed in the page area: {solid:?} in {page:?}"
     );
 }
 
@@ -474,8 +489,8 @@ fn a_jump_to_the_shortcuts_filter_focuses_it(cx: &mut TestAppContext) {
     let (_launcher, settings, cx) = open(cx);
     let mut sc = settings_context(&settings, cx);
 
-    // The Shortcuts page's filter is the one control of the registered
-    // settings that takes keyboard focus.
+    // The Shortcuts page's filter is a registered control that takes
+    // keyboard focus.
     sc.simulate_keystrokes(find_shortcut());
     sc.simulate_input("filter");
     sc.run_until_parked();
@@ -504,7 +519,7 @@ fn a_jump_to_the_shortcuts_filter_focuses_it(cx: &mut TestAppContext) {
 #[gpui::test]
 fn an_override_marks_the_choices_unavailable_in_the_results(cx: &mut TestAppContext) {
     // The host settings with an override in force for this process, so
-    // the Appearance choices are listed but cannot be used here.
+    // the theme and material choices are listed but cannot be used here.
     let data = tempfile::tempdir().unwrap();
     cx.update(|cx| {
         pane::settings::init_with_overrides(
@@ -530,7 +545,10 @@ fn an_override_marks_the_choices_unavailable_in_the_results(cx: &mut TestAppCont
     // reason the page gives.
     let (_, json) = accessibility(&mut sc);
     assert!(
-        json.contains("PANE_THEME=dark overrides the saved choice for this process"),
+        json.contains(
+            "General · Theme. Set by PANE_THEME=dark for this session. \
+             Changes here won't apply or be saved."
+        ),
         "the override is the reason: {json}"
     );
 
@@ -538,7 +556,7 @@ fn an_override_marks_the_choices_unavailable_in_the_results(cx: &mut TestAppCont
     // page keeps showing, disabled, with its notice.
     sc.simulate_keystrokes("enter");
     sc.run_until_parked();
-    assert!(sc.debug_bounds("appearance").is_some(), "the page opened");
+    assert!(sc.debug_bounds("general").is_some(), "the page opened");
     assert!(
         sc.debug_bounds("appearance-theme-Light").is_some(),
         "the choice is revealed"

@@ -4,14 +4,16 @@
 //!
 //! What it lists is the core's ([`pane_core::Launcher::result_actions`]):
 //! the result's primary action — the footer's, the same dispatch — then
-//! pinning it to a quick slot, then, for an installed command, its hotkey
-//! and alias configuration. Nothing is listed without a working operation
-//! behind it (#100). Pinning with all five slots taken turns the panel
-//! into the explicit choice of the slot to replace; pinning what a slot
-//! holds already moves focus to that slot. A quick slot has a panel of its
-//! own — opened by a secondary click on it, or the Open actions binding
-//! while it has focus — invoking, removing and moving it (see
-//! [`crate::features::quick_slots`]).
+//! pinning it (or unpinning it, once it is pinned), then, for an installed
+//! command, its hotkey and alias configuration. Nothing is listed without
+//! a working operation behind it (#100). Pinning adds the result after the
+//! last pin. A quick slot has a panel of its own — opened by a secondary
+//! click on it, or the Open actions binding while it has focus — invoking,
+//! unpinning and moving it (see [`crate::features::quick_slots`]); while
+//! the pins lie side by side on the strip, its moves say left and right
+//! rather than up and down. The pin entries show the launcher's own keys
+//! for them (Ctrl+Shift+F, Ctrl+Alt and an arrow), as the primary entry
+//! shows the invoke binding.
 //!
 //! The panel holds its target: the row selected when it opened, by its
 //! stable id. While it is open the pointer cannot move root search's
@@ -35,7 +37,7 @@ use gpui::{
 use gpui_elements::editable_text::actions::DEFAULT_INPUT_CONTEXT;
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
 use pane_core::{
-    KeyboardAction, PinTarget, ResultAction, ResultActionItem, ResultActions, RowKind, Screen,
+    KeyboardAction, PinnedLayout, ResultAction, ResultActionItem, ResultActions, RowKind, Screen,
     SlotChange,
 };
 
@@ -45,7 +47,7 @@ use crate::ui::icon::{Glyph, IconTone, TileSize, glyph, tile_at};
 use crate::ui::input::TextEditingKeys;
 use crate::ui::keycap::{CapStyle, KeySequence, key_sequence};
 use crate::ui::material::{Material, popover_shadows};
-use crate::ui::theme::Theme;
+use crate::ui::theme::{Theme, pressed};
 
 actions!(
     actions_panel,
@@ -64,10 +66,70 @@ pub(crate) const NO_MATCH: &str = "No actions match";
 pub(crate) const NOTHING_SELECTED: &str = "Select a result to see its actions";
 /// The group label over the command's configuration.
 pub(crate) const PANE_GROUP: &str = "Pane";
-/// The group label over the slots a full set offers to replace.
-pub(crate) const REPLACE_GROUP: &str = "Replace a Quick Slot";
 /// The group label over a quick slot's own operations.
 pub(crate) const SLOT_GROUP: &str = "Quick Slot";
+/// What a quick slot's earlier move says while the pins lie side by side
+/// on the strip (the core's own label says up).
+pub(crate) const MOVE_LEFT: &str = "Move Left";
+/// What a quick slot's later move says on the strip (the core's own label
+/// says down).
+pub(crate) const MOVE_RIGHT: &str = "Move Right";
+
+/// The keys the quick slot entries show, the launcher's own fixed keys for
+/// them: the pin key on Pin and Unpin, and a move key on each move — the
+/// arrow along the pins' layout.
+pub(crate) struct SlotKeys {
+    pub(crate) toggle_pin: KeySequence,
+    pub(crate) earlier: KeySequence,
+    pub(crate) later: KeySequence,
+}
+
+impl SlotKeys {
+    /// The keys for the pins laid out `horizontal`ly (Left and Right) or
+    /// down the list (Up and Down).
+    pub(crate) fn new(horizontal: bool) -> SlotKeys {
+        let arrow = usize::from(horizontal);
+        let [earlier, later] = [true, false].map(|earlier| {
+            crate::keyboard::binding_keys(&crate::keyboard::move_pin_bindings(earlier)[arrow])
+        });
+        SlotKeys {
+            toggle_pin: crate::keyboard::binding_keys(&crate::keyboard::toggle_pin_binding()),
+            earlier,
+            later,
+        }
+    }
+
+    /// The keys entry `action` shows, if it is a quick slot entry.
+    fn of(&self, action: ResultAction) -> Option<&KeySequence> {
+        match action {
+            ResultAction::Pin | ResultAction::Unpin => Some(&self.toggle_pin),
+            ResultAction::MovePinUp => Some(&self.earlier),
+            ResultAction::MovePinDown => Some(&self.later),
+            ResultAction::Invoke | ResultAction::Hotkey | ResultAction::Alias => None,
+        }
+    }
+}
+
+/// `actions` as the panel lists them with the pins laid out `horizontal`ly:
+/// the moves say left and right there, so the filter matches what is
+/// shown.
+fn laid_out(mut actions: ResultActions, horizontal: bool) -> ResultActions {
+    if horizontal {
+        for item in &mut actions.items {
+            match item.action {
+                ResultAction::MovePinUp => item.label = MOVE_LEFT.to_owned(),
+                ResultAction::MovePinDown => item.label = MOVE_RIGHT.to_owned(),
+                _ => {}
+            }
+        }
+    }
+    actions
+}
+
+/// Whether the Launcher page lays the pins out side by side, on the strip.
+fn pins_horizontal(cx: &App) -> bool {
+    crate::settings::shared(cx).read(cx).pinned_layout() == PinnedLayout::Horizontal
+}
 
 /// Registers the panel's keys: Up and Down in its search field, above the
 /// field's own caret keys, and Enter, Escape and Tab in the panel, above
@@ -114,9 +176,6 @@ struct Opened {
 enum Subject {
     /// Root search's selected result.
     Result,
-    /// Root search's selected result, which every quick slot is too full
-    /// to take: the entries are the slots it can replace.
-    Replacing,
     /// The quick slot holding the target.
     Slot,
 }
@@ -126,7 +185,6 @@ impl Subject {
     fn group(self) -> &'static str {
         match self {
             Subject::Result => PANE_GROUP,
-            Subject::Replacing => REPLACE_GROUP,
             Subject::Slot => SLOT_GROUP,
         }
     }
@@ -180,7 +238,7 @@ impl LauncherWindow {
     }
 
     /// Opens the Actions panel for the quick slot at `index`: invoking,
-    /// removing and moving it. An empty slot has none.
+    /// unpinning and moving it.
     pub(crate) fn open_slot_actions(
         &mut self,
         index: usize,
@@ -190,9 +248,7 @@ impl LauncherWindow {
         let Some(slot) = self.launcher.quick_slots().into_iter().nth(index) else {
             return;
         };
-        let Some(target) = slot.target.as_ref().map(PinTarget::key) else {
-            return;
-        };
+        let target = slot.target.key();
         let opened = self
             .launcher
             .quick_slot_actions(&target)
@@ -253,18 +309,18 @@ impl LauncherWindow {
     /// The panel's entries as they stand now: the core's, while it still
     /// has the target selected, else the ones the panel opened with, all
     /// unavailable — a target removed or disabled behind the panel runs
-    /// nothing.
-    fn live_actions(&self) -> Option<ResultActions> {
+    /// nothing. The moves are labelled for the pins' layout (see
+    /// `laid_out`).
+    fn live_actions(&self, cx: &App) -> Option<ResultActions> {
         let panel = self.actions.as_ref()?.opened.as_ref()?;
         let opened = &panel.actions;
         let live = match panel.subject {
             Subject::Result => self.launcher.result_actions(),
-            Subject::Replacing => self.launcher.pin_replacements(&opened.target),
             Subject::Slot => self.launcher.quick_slot_actions(&opened.target),
         };
-        match live {
-            Some(live) if live.target == opened.target => Some(live),
-            _ => Some(ResultActions {
+        let actions = match live {
+            Some(live) if live.target == opened.target => live,
+            _ => ResultActions {
                 items: opened
                     .items
                     .iter()
@@ -274,13 +330,14 @@ impl LauncherWindow {
                     })
                     .collect(),
                 ..opened.clone()
-            }),
-        }
+            },
+        };
+        Some(laid_out(actions, pins_horizontal(cx)))
     }
 
     /// What the filter lists now.
     fn listed(&self, cx: &App) -> Vec<ResultActionItem> {
-        let (Some(panel), Some(actions)) = (self.actions.as_ref(), self.live_actions()) else {
+        let (Some(panel), Some(actions)) = (self.actions.as_ref(), self.live_actions(cx)) else {
             return Vec::new();
         };
         actions
@@ -323,8 +380,7 @@ impl LauncherWindow {
     /// Runs the listed entry `index`, once, if the core still has the
     /// panel's target — the selected row, or the slot holding it — with
     /// that action ready; the panel closes, but an entry that cannot run
-    /// does nothing. Pinning with every slot taken keeps the panel open on
-    /// the slots to replace instead.
+    /// does nothing.
     fn run_action(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let opened = self
             .actions
@@ -337,9 +393,7 @@ impl LauncherWindow {
         };
         let ready = match subject {
             Subject::Result => self.launcher.result_action_ready(&target, action),
-            Subject::Replacing | Subject::Slot => {
-                self.launcher.quick_slot_action_ready(&target, action)
-            }
+            Subject::Slot => self.launcher.quick_slot_action_ready(&target, action),
         };
         if !ready {
             return;
@@ -361,16 +415,14 @@ impl LauncherWindow {
                 }
             }
             ResultAction::Pin
-            | ResultAction::ReplaceSlot(_)
             | ResultAction::Unpin
-            | ResultAction::MoveSlotLeft
-            | ResultAction::MoveSlotRight => {
-                let (change, recording) = self.launcher.change_quick_slots(&target, action);
-                if change == SlotChange::ChooseReplacement {
-                    self.choose_replacement(&target, cx);
-                    return;
-                }
+            | ResultAction::MovePinUp
+            | ResultAction::MovePinDown => {
+                // Closed first, so the focus it gives back — a slot's, for
+                // the panel its Open actions binding opened — is the one
+                // the change makes follow a moved or unpinned slot.
                 self.close_actions(window, cx);
+                let change = self.change_quick_slot(&target, action, window, cx);
                 // Pinning what a slot holds already moves focus to that
                 // slot: a typed query is cleared first, so the home and
                 // the slot show (the status keeps naming the slot).
@@ -381,30 +433,8 @@ impl LauncherWindow {
                     }
                     self.focus_slot(slot, window, cx);
                 }
-                self.show_until_done(recording, window, cx);
             }
         }
-    }
-
-    /// Turns the open panel over `target`, which no slot can take while
-    /// all five are full, into the explicit choice of the slot to replace.
-    fn choose_replacement(&mut self, target: &str, cx: &mut Context<Self>) {
-        let Some(replacements) = self.launcher.pin_replacements(target) else {
-            return;
-        };
-        let Some(panel) = self.actions.as_mut() else {
-            return;
-        };
-        let kind = panel.opened.as_ref().and_then(|opened| opened.kind);
-        panel.opened = Some(Opened {
-            actions: replacements,
-            kind,
-            subject: Subject::Replacing,
-        });
-        panel.selected = 0;
-        let filter = panel.filter.clone();
-        filter.update(cx, |filter, cx| filter.emplace("", cx));
-        cx.notify();
     }
 
     /// Test support: whether the Actions panel is open.
@@ -424,7 +454,7 @@ impl LauncherWindow {
     /// right edge 10px in from the window's.
     pub(crate) fn render_actions_layer(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let panel = self.actions.as_ref()?;
-        let visuals = crate::settings::visuals(cx);
+        let visuals = crate::settings::launcher_visuals(cx);
         let theme = &visuals.theme;
         let opened = panel.opened.as_ref();
         let listed = self.listed(cx);
@@ -435,6 +465,7 @@ impl LauncherWindow {
             .binding(KeyboardAction::InvokeSelectedAction)
             .clone();
         let invoke = crate::keyboard::binding_keys(&invoke);
+        let slot_keys = SlotKeys::new(pins_horizontal(cx));
         let surface = compose(
             PanelView {
                 target: opened.map(|opened| (&opened.actions, opened.kind)),
@@ -444,6 +475,7 @@ impl LauncherWindow {
                 filtering,
                 selected: panel.selected,
                 invoke: &invoke,
+                slot_keys: Some(&slot_keys),
                 filter: &panel.filter,
             },
             theme,
@@ -501,6 +533,9 @@ pub(crate) struct PanelView<'a> {
     pub(crate) selected: usize,
     /// The invoke binding's keys, the primary entry's.
     pub(crate) invoke: &'a KeySequence,
+    /// The quick slot entries' keys; `None` draws them without (the
+    /// visual workbench's reference panel shows none).
+    pub(crate) slot_keys: Option<&'a SlotKeys>,
     /// The search field's text.
     pub(crate) filter: &'a Entity<EditableTextState>,
 }
@@ -523,6 +558,7 @@ pub(crate) fn compose(
         view.selected,
         primary_glyph(view.target.and_then(|(_, kind)| kind)),
         view.invoke,
+        view.slot_keys,
         theme,
         attach,
     );
@@ -624,10 +660,9 @@ fn action_glyph(action: ResultAction, primary: Glyph) -> Glyph {
         ResultAction::Hotkey => Glyph::ActionHotkey,
         ResultAction::Alias => Glyph::ActionAlias,
         ResultAction::Pin
-        | ResultAction::ReplaceSlot(_)
         | ResultAction::Unpin
-        | ResultAction::MoveSlotLeft
-        | ResultAction::MoveSlotRight => Glyph::ActionPin,
+        | ResultAction::MovePinUp
+        | ResultAction::MovePinDown => Glyph::ActionPin,
     }
 }
 
@@ -637,7 +672,9 @@ fn action_glyph(action: ResultAction, primary: Glyph) -> Glyph {
 /// `selected` indexes `listed`; `attach` gives each row its handlers (the
 /// launcher's pointer and click; the fixture's none). The primary entry
 /// shows the invoke binding in the accent caps, as the footer's button
-/// does; the configuration has no keys of its own.
+/// does; the quick slot entries show `slot_keys` in the regular caps,
+/// when given; the configuration has no keys of its own.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn list_children(
     listed: &[ResultActionItem],
     group: &'static str,
@@ -645,6 +682,7 @@ pub(crate) fn list_children(
     selected: usize,
     primary: Glyph,
     invoke: &KeySequence,
+    slot_keys: Option<&SlotKeys>,
     theme: &Theme,
     attach: impl Fn(Stateful<Div>, usize) -> Stateful<Div>,
 ) -> Vec<AnyElement> {
@@ -655,7 +693,12 @@ pub(crate) fn list_children(
             PanelChild::Group => group_label(group, theme).into_any_element(),
             PanelChild::Entry(index) => {
                 let item = &listed[index];
-                let keys = (item.action == ResultAction::Invoke).then_some(invoke);
+                let keys = match item.action {
+                    ResultAction::Invoke => Some((invoke, CapStyle::Accent)),
+                    action => slot_keys
+                        .and_then(|keys| keys.of(action))
+                        .map(|keys| (keys, CapStyle::Regular)),
+                };
                 let row = action_row(
                     index,
                     action_glyph(item.action, primary),
@@ -678,12 +721,13 @@ pub(crate) fn list_children(
 
 /// An entry (`.arow`): 36 high, radius 8, 8px either side, its 16px glyph
 /// in the icon gray, its 13px/450 label filling the row, and its keys at
-/// the right; the 11% wash when selected, the 6% one on hover.
+/// the right in their caps' style; the 11% wash when selected, the 6% one
+/// on hover.
 pub(crate) fn action_row(
     index: usize,
     glyph_of: Glyph,
     label: impl Into<SharedString>,
-    keys: Option<&KeySequence>,
+    keys: Option<(&KeySequence, CapStyle)>,
     selected: bool,
     available: bool,
     theme: &Theme,
@@ -712,11 +756,21 @@ pub(crate) fn action_row(
         .when(!selected && available, |row| {
             row.hover(|row| row.bg(theme.control_hover))
         })
+        // While held, an available entry takes the stronger wash of its
+        // hover, or of its selected wash, at once.
+        .when(available, |row| {
+            let press = pressed(if selected {
+                theme.action_selected
+            } else {
+                theme.control_hover
+            });
+            row.active(move |row| row.bg(press))
+        })
         .when(!available, |row| row.opacity(0.5).aria_disabled(true))
         .child(glyph(glyph_of, geometry.glyph_size, theme.action_icon).flex_none())
         .child(div().flex_1().min_w(px(0.)).truncate().child(label))
-        .when_some(keys, |row, keys| {
-            row.child(key_sequence(keys, CapStyle::Accent, theme))
+        .when_some(keys, |row, (keys, style)| {
+            row.child(key_sequence(keys, style, theme))
         })
 }
 

@@ -1,0 +1,108 @@
+<div style="width: 1440px; height: 900px; position: relative; overflow: hidden; display: flex; justify-content: center; align-items: flex-start; padding-top: 80px; box-sizing: border-box">
+<div class="wp wp-graphite"><div class="bands"></div></div>
+<svg class="grain" aria-hidden="true"><filter id="grain"><feTurbulence type="fractalNoise" sc-camel-base-frequency="0.85" sc-camel-num-octaves="2" sc-camel-stitch-tiles="stitch"></feTurbulence><feColorMatrix type="saturate" values="0"></feColorMatrix></filter><rect width="100%" height="100%" filter="url(#grain)"></rect></svg>
+
+<section class="glass" aria-label="Plugin Store" style="position: relative; z-index: 1; width: 1160px; height: 740px; display: flex; flex-direction: column; overflow: hidden">
+<div style="height: 64px; display: flex; align-items: center; gap: 12px; padding: 0 12px 0 14px; border-bottom: 1px solid rgba(255,255,255,0.06); flex: none">
+<button type="button" aria-label="Back to all results" style="width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; background: rgba(255,255,255,0.06); color: #c9cace; flex: none"><svg class="ic" sc-camel-view-box="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M19 12H5 M11 6l-6 6 6 6"></path></svg></button>
+<span style="display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px 0 6px; border-radius: 8px; background: rgba(255,255,255,0.08); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08); font-size: 13px; font-weight: 500; color: #ededef; flex: none">
+<span class="tile" style="width: 20px; height: 20px; border-radius: 5px; background: rgba(255,255,255,0.1); color: #e9e9ec"><svg class="ic" sc-camel-view-box="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="M4 4h7v7H4z M13 4h7v7h-7z M4 13h7v7H4z M16.5 13.5v6 M13.5 16.5h6"></path></svg></span>
+<span>Plugin Store</span>
+</span>
+<input class="q" type="text" aria-label="Search plugins" placeholder="Search plugins by name, app or task…" style="flex-grow: 1; caret-color: {{accent}}">
+<a href="https://example.com/docs/plugins" class="fbtn" style="text-decoration: none"><svg class="ic" sc-camel-view-box="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M9 8l-4 4 4 4 M15 8l4 4-4 4"></path></svg><span>Build a plugin</span></a>
+</div>
+
+<div style="flex-grow: 1; min-height: 0; display: grid; grid-template-columns: 208px minmax(0, 1fr) 384px">
+<nav aria-label="Store sections" style="display: flex; flex-direction: column; gap: 2px; padding: 10px; border-right: 1px solid rgba(255,255,255,0.06)">
+<button type="button" class="nav on" aria-current="page"><svg class="ic" sc-camel-view-box="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M3.5 12a8.5 8.5 0 1 0 17 0a8.5 8.5 0 1 0 -17 0 M15.5 8.5l-2 5-5 2 2-5z"></path></svg><span>Discover</span></button>
+<button type="button" class="nav"><svg class="ic" sc-camel-view-box="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Installed</span><span class="count">7</span></button>
+<button type="button" class="nav"><svg class="ic" sc-camel-view-box="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 19V5 M6 11l6-6 6 6"></path></svg><span>Updates</span><span class="count mono" style="min-width: 20px; height: 20px; border-radius: 10px; display: grid; place-items: center; background: {{accent}}; color: #111210">2</span></button>
+<div class="label" style="padding-left: 10px; margin-top: 8px">Categories</div>
+<button type="button" class="nav"><span>Developer</span></button>
+<button type="button" class="nav"><span>Productivity</span></button>
+<button type="button" class="nav"><span>Design</span></button>
+<button type="button" class="nav"><span>Media</span></button>
+<button type="button" class="nav"><span>System</span></button>
+<button type="button" class="nav"><span>AI</span></button>
+<button type="button" class="nav"><span>Themes</span></button>
+</nav>
+
+<div class="list" style="overflow-y: auto; padding: 4px 10px 10px; display: flex; flex-direction: column; gap: 2px">
+<div class="label"><span>Staff picks</span><span style="font-weight: 400">Reviewed by the Pane team</span></div>
+<sc-for list="{{plugins}}" as="p" hint-placeholder-count="7">
+<button type="button" class="{{p.cls}}">
+<span class="tile" style="width: 36px; height: 36px; border-radius: 9px; background: {{p.bg}}; color: {{p.fg}}"><svg class="ic" sc-camel-view-box="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="{{p.icon}}"></path></svg></span>
+<span style="display: flex; flex-direction: column; gap: 3px; min-width: 0; flex-grow: 1">
+<span style="display: flex; align-items: baseline; gap: 8px"><span style="font-size: 14px; font-weight: 500; color: #ededef">{{p.name}}</span><span style="font-size: 12.5px; color: #8e8f94">{{p.author}}</span></span>
+<span style="font-size: 13px; color: #a3a4a9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{p.desc}}</span>
+</span>
+<span style="display: flex; align-items: center; gap: 8px; flex: none; color: #8e8f94">
+<sc-for list="{{p.perms}}" as="pm" hint-placeholder-count="1"><svg class="ic" sc-camel-view-box="0 0 24 24" width="14" height="14"><title>{{pm.label}}</title><path d="{{pm.icon}}"></path></svg></sc-for>
+<span class="mono" style="font-size: 11.5px; min-width: 44px; text-align: right">{{p.size}}</span>
+</span>
+<span class="{{p.pillCls}}">{{p.action}}</span>
+</button>
+</sc-for>
+</div>
+
+<aside aria-label="Git Pulls details" class="list" style="overflow-y: auto; padding: 18px 20px 16px; border-left: 1px solid rgba(255,255,255,0.06); display: flex; flex-direction: column; gap: 16px">
+<div style="display: flex; align-items: center; gap: 14px">
+<span class="tile" style="width: 52px; height: 52px; border-radius: 13px; background: #173352; color: #8fc3ff"><svg class="ic" sc-camel-view-box="0 0 24 24" width="26" height="26" aria-hidden="true"><path d="M4 6a2 2 0 1 0 4 0a2 2 0 1 0 -4 0 M4 18a2 2 0 1 0 4 0a2 2 0 1 0 -4 0 M16 18a2 2 0 1 0 4 0a2 2 0 1 0 -4 0 M6 8v8 M18 16v-6a3 3 0 0 0-3-3h-3 M14 5l-2 2 2 2"></path></svg></span>
+<div style="display: flex; flex-direction: column; gap: 4px">
+<span style="font-size: 20px; font-weight: 600; letter-spacing: -0.01em; color: #ffffff">Git Pulls</span>
+<span style="font-size: 12.5px; color: #8e8f94">@jonas · v1.4.0 · Open source</span>
+</div>
+</div>
+<div style="display: flex; gap: 8px">
+<button type="button" style="display: flex; align-items: center; justify-content: center; gap: 8px; height: 38px; padding: 0 14px; flex-grow: 1; border-radius: 10px; background: {{accent}}; color: #111210; font-size: 13.5px; font-weight: 600">Install<span class="kbd" style="background: rgba(0,0,0,0.12); color: #111210; box-shadow: none">↵</span></button>
+<a href="https://example.com/plugins/git-pulls" style="display: flex; align-items: center; gap: 6px; height: 38px; padding: 0 14px; border-radius: 10px; background: rgba(255,255,255,0.07); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08); font-size: 13px; font-weight: 500; text-decoration: none">View source</a>
+</div>
+<p style="margin: 0; font-size: 13.5px; line-height: 1.55; color: #c9cace; text-wrap: pretty">Review, filter and check out pull requests without leaving the keyboard. Open a PR, copy its branch, or jump straight into a diff in your editor.</p>
+
+<div style="display: flex; flex-direction: column">
+<div style="font-size: 12px; font-weight: 500; color: #8e8f94; height: 24px">Adds 3 commands</div>
+<div class="crow"><svg class="ic" sc-camel-view-box="0 0 24 24" width="15" height="15" aria-hidden="true" style="color: #8e8f94"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span style="flex-grow: 1">My Pull Requests</span><span class="alias">pr</span></div>
+<div class="crow"><svg class="ic" sc-camel-view-box="0 0 24 24" width="15" height="15" aria-hidden="true" style="color: #8e8f94"><path d="M3.5 12s3-6 8.5-6 8.5 6 8.5 6-3 6-8.5 6-8.5-6-8.5-6z M9.5 12a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0 -5 0"></path></svg><span style="flex-grow: 1">Review Requests</span><span class="alias">rr</span></div>
+<div class="crow"><svg class="ic" sc-camel-view-box="0 0 24 24" width="15" height="15" aria-hidden="true" style="color: #8e8f94"><path d="M4 11a7 7 0 1 0 14 0a7 7 0 1 0 -14 0 M16.2 16.2L20 20"></path></svg><span style="flex-grow: 1">Search Pull Requests</span><span class="alias">prs</span></div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 8px">
+<div style="font-size: 12px; font-weight: 500; color: #8e8f94">Asks for</div>
+<div style="border-radius: 12px; background: rgba(0,0,0,0.2); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.07); display: flex; flex-direction: column">
+<div class="perm">
+<svg class="ic" sc-camel-view-box="0 0 24 24" width="16" height="16" aria-hidden="true" style="color: #d9dadd; flex: none; margin-top: 1px"><path d="M3.5 12a8.5 8.5 0 1 0 17 0a8.5 8.5 0 1 0 -17 0 M3.5 12h17 M12 3.5c2.3 2.4 3.4 5.2 3.4 8.5s-1.1 6.1-3.4 8.5 M12 3.5C9.7 5.9 8.6 8.7 8.6 12s1.1 6.1 3.4 8.5"></path></svg>
+<div style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 13px; font-weight: 500; color: #ededef">Network — one host</span><span class="mono" style="font-size: 12px; color: #a3a4a9">api.github.com</span></div>
+</div>
+<div class="perm">
+<svg class="ic" sc-camel-view-box="0 0 24 24" width="16" height="16" aria-hidden="true" style="color: #d9dadd; flex: none; margin-top: 1px"><path d="M14.5 4a5.5 5.5 0 1 0 0 11a5.5 5.5 0 1 0 0-11z M10.6 13.4L4 20 M6.5 17.5l2 2"></path></svg>
+<div style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 13px; font-weight: 500; color: #ededef">Secure storage</span><span style="font-size: 12.5px; color: #a3a4a9">Keeps your token in the system keychain</span></div>
+</div>
+<div class="perm">
+<svg class="ic" sc-camel-view-box="0 0 24 24" width="16" height="16" aria-hidden="true" style="color: #8e8f94; flex: none; margin-top: 1px"><path d="M12 3.5a8.5 8.5 0 1 0 0 17a8.5 8.5 0 1 0 0-17z M6 6l12 12"></path></svg>
+<div style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 13px; font-weight: 500; color: #a3a4a9">Never sees</span><span style="font-size: 12.5px; color: #8e8f94">Clipboard, files, screen, other plugins</span></div>
+</div>
+</div>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; gap: 6px">
+<span class="mono" style="height: 26px; display: flex; align-items: center; padding: 0 9px; border-radius: 7px; background: rgba(255,255,255,0.05); font-size: 11.5px; color: #b9babe">61 KB</span>
+<span style="height: 26px; display: flex; align-items: center; padding: 0 9px; border-radius: 7px; background: rgba(255,255,255,0.05); font-size: 12px; color: #b9babe">Loads on first use</span>
+<span style="height: 26px; display: flex; align-items: center; padding: 0 9px; border-radius: 7px; background: rgba(255,255,255,0.05); font-size: 12px; color: #b9babe">No background process</span>
+</div>
+</aside>
+</div>
+
+<div style="height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 8px 0 16px; border-top: 1px solid rgba(255,255,255,0.06); background: rgba(0,0,0,0.14); flex: none">
+<div style="display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 12.5px; color: #8e8f94; white-space: nowrap">
+<svg class="ic" sc-camel-view-box="0 0 24 24" width="16" height="16" aria-hidden="true" style="flex: none"><path d="M12 3.5l7 2.5v5.5c0 4.3-2.9 7.6-7 9-4.1-1.4-7-4.7-7-9V6z M9 12l2 2 4-4"></path></svg>
+<span>Every plugin runs sandboxed and only loads when you use it</span>
+</div>
+<div style="display: flex; align-items: center; gap: 4px">
+<button class="fbtn" type="button"><span>Install Git Pulls</span><span class="kbd" style="background: {{accent}}; color: #111210; box-shadow: none">↵</span></button>
+<span style="width: 1px; height: 16px; background: rgba(255,255,255,0.1)"></span>
+<button class="fbtn" type="button"><span>Actions</span><span class="keys"><span class="kbd">{{k.mod}}</span><span class="kbd">K</span></span></button>
+</div>
+</div>
+</section>
+</div>

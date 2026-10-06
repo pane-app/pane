@@ -11,7 +11,8 @@
 //! keycaps and footer buttons are the launcher's own families.
 //!
 //! Like the rest of this layer it decides nothing: the caller passes the
-//! display values and attaches identity, focus and handlers. Both the
+//! display values and attaches identity, focus and handlers (a tab and a
+//! row take their id, so they can keep a press). Both the
 //! launcher's Clipboard History adapter
 //! (`crate::features::clipboard_history`) and the visual workbench's
 //! fixture compose the view through [`compose`] and the parts below, so the
@@ -30,7 +31,7 @@ use gpui::{
 use gpui_elements::editable_text::{EditableTextState, text_input};
 
 use crate::ui::icon::{self, Glyph, IconTone};
-use crate::ui::theme::Theme;
+use crate::ui::theme::{Theme, pressed};
 
 /// The split view's client size in the reference, in logical pixels: the
 /// clipboard board's 940×600 (64 header + 46 tabs + 438 body + 52 footer).
@@ -225,16 +226,24 @@ pub(crate) fn capture_button(
         .font_weight(theme.typography.medium)
         .text_color(color)
         .hover(|button| button.bg(theme.control_hover))
+        .active(|button| button.bg(crate::ui::theme::pressed(theme.control_hover)))
         .cursor_pointer()
         .child(icon::glyph(glyph, theme.split.capture_glyph, color))
         .child(div().whitespace_nowrap().child(label.into()))
 }
 
-/// A tab: `label`, chosen or not (`on`). The caller attaches its identity
-/// and click.
-pub(crate) fn tab(label: impl Into<SharedString>, on: bool, theme: &Theme) -> Div {
+/// A tab, `id`: `label`, chosen or not (`on`). While held it takes the
+/// [`pressed`] wash of its hover, or of its chosen wash, at once. The
+/// caller attaches its click.
+pub(crate) fn tab(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    on: bool,
+    theme: &Theme,
+) -> Stateful<Div> {
     let split = &theme.split;
     let tab = div()
+        .id(id)
         .flex_none()
         .flex()
         .items_center()
@@ -253,9 +262,14 @@ pub(crate) fn tab(label: impl Into<SharedString>, on: bool, theme: &Theme) -> Di
                     .spread_radius(px(1.))
                     .inset(),
             ])
+            .active(|tab| tab.bg(pressed(split.tab_on)))
     } else {
         tab.text_color(split.tab_text)
             .hover(|tab| tab.bg(split.tab_hover).text_color(split.tab_hover_text))
+            .active(|tab| {
+                tab.bg(pressed(split.tab_hover))
+                    .text_color(split.tab_hover_text)
+            })
     }
 }
 
@@ -350,12 +364,21 @@ pub(crate) struct ClipRow {
 /// A record's row (the reference's `.row`): 44 high, radius 10, 10px
 /// either side, 12 between its mark, its 13.5px/500 title (truncating)
 /// and its time in Geist Mono 11.5. The hover wash shows on an unselected
-/// row; the selected one keeps its wash and inset edge. The caller
-/// attaches identity, accessibility and the click, which selects.
-pub(crate) fn clip_row(row: ClipRow, theme: &Theme) -> Div {
+/// row; the selected one keeps its wash and inset edge. While held, a row
+/// takes the [`pressed`] wash of its hover, or of its selected wash, at
+/// once. The row is `id`; the caller attaches accessibility and the click,
+/// which selects.
+pub(crate) fn clip_row(id: impl Into<ElementId>, row: ClipRow, theme: &Theme) -> Stateful<Div> {
     let geometry = &theme.geometry;
     let split = &theme.split;
+    let press = pressed(if row.selected {
+        theme.row_selected
+    } else {
+        theme.row_hover
+    });
     div()
+        .id(id)
+        .active(move |line| line.bg(press))
         .flex_none()
         .w_full()
         .h(geometry.row_min_height)

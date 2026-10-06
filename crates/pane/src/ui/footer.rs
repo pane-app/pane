@@ -17,7 +17,7 @@
 use gpui::{AnyElement, Div, IntoElement, SharedString, Stateful, div, prelude::*, px};
 
 use crate::ui::keycap::{CapStyle, KeySequence, key_sequence};
-use crate::ui::theme::Theme;
+use crate::ui::theme::{Theme, pressed};
 
 /// One part of the footer's hint line.
 pub(crate) enum HintPart {
@@ -102,7 +102,8 @@ pub(crate) fn footer_button(
                 .text_color(theme.footer_button_open_text),
             ButtonWash::Hover => button
                 .text_color(theme.footer_button_text)
-                .hover(|button| button.bg(theme.control_hover)),
+                .hover(|button| button.bg(theme.control_hover))
+                .active(|button| button.bg(pressed(theme.control_hover))),
             ButtonWash::None => button.text_color(theme.footer_button_text),
         })
         .child(

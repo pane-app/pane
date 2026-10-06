@@ -1,0 +1,659 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Pane background mockup</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:'Geist',ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;color:#ededef;background:#0a0b0d;-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;background:none;border:0;margin:0;padding:0;cursor:pointer;text-align:left}
+input{font:inherit;color:inherit;margin:0}
+.ic{fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.ic.b{stroke-width:2}
+.wp{position:absolute;inset:0;overflow:hidden;background:#0a0b0d}
+.bands{position:absolute;inset:-140px;filter:blur(36px)}
+.wp-graphite .bands{background:linear-gradient(122deg,rgba(0,0,0,0) 6%,rgba(198,202,210,.52) 14%,rgba(96,100,108,.22) 20%,rgba(0,0,0,0) 27%,rgba(0,0,0,0) 43%,rgba(224,227,234,.36) 51%,rgba(72,76,84,.16) 58%,rgba(0,0,0,0) 64%,rgba(0,0,0,0) 77%,rgba(188,192,200,.44) 86%,rgba(0,0,0,0) 94%),radial-gradient(60% 55% at 72% 28%,#2c2f35 0%,rgba(44,47,53,0) 100%),radial-gradient(50% 50% at 16% 88%,#1c1e22 0%,rgba(28,30,34,0) 100%),#0a0b0d}
+.wp-dusk .bands{background:linear-gradient(122deg,rgba(0,0,0,0) 8%,rgba(255,168,112,.42) 19%,rgba(0,0,0,0) 31%,rgba(0,0,0,0) 49%,rgba(146,154,255,.34) 60%,rgba(0,0,0,0) 72%,rgba(0,0,0,0) 82%,rgba(255,140,170,.22) 90%,rgba(0,0,0,0) 97%),radial-gradient(60% 60% at 76% 22%,#3b305e 0%,rgba(59,48,94,0) 100%),radial-gradient(55% 55% at 14% 86%,#4b2b30 0%,rgba(75,43,48,0) 100%),#130f22}
+.wp-daylight .bands{background:linear-gradient(122deg,rgba(255,255,255,0) 8%,rgba(255,255,255,.78) 20%,rgba(255,255,255,0) 33%,rgba(255,255,255,0) 50%,rgba(255,255,255,.6) 61%,rgba(255,255,255,0) 73%),radial-gradient(60% 60% at 70% 24%,#cdd6e2 0%,rgba(205,214,226,0) 100%),radial-gradient(50% 50% at 12% 90%,#7d8a9c 0%,rgba(125,138,156,0) 100%),#a3afbf}
+.grain{position:absolute;inset:0;width:100%;height:100%;opacity:.16;mix-blend-mode:overlay;pointer-events:none}
+.glass{position:relative;background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,0) 36%),rgba(22,23,26,.7);-webkit-backdrop-filter:blur(44px) saturate(160%);backdrop-filter:blur(44px) saturate(160%);border-radius:18px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.075),inset 0 1px 0 rgba(255,255,255,.1),0 0 0 .5px rgba(0,0,0,.75),0 50px 120px -30px rgba(0,0,0,.72),0 16px 40px -16px rgba(0,0,0,.5)}
+.pop{position:relative;background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,0) 40%),rgba(38,39,43,.82);-webkit-backdrop-filter:blur(30px) saturate(160%);backdrop-filter:blur(30px) saturate(160%);border-radius:14px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.09),inset 0 1px 0 rgba(255,255,255,.1),0 0 0 .5px rgba(0,0,0,.8),0 28px 70px -14px rgba(0,0,0,.75)}
+.q{height:64px;min-width:0;background:transparent;border:0;outline:none;font-size:19px;letter-spacing:-.005em;color:#f3f3f5}
+.q::placeholder{color:#86878c}
+.label{display:flex;align-items:center;justify-content:space-between;gap:8px;height:30px;padding:8px 10px 0;font-size:12px;font-weight:500;color:#8e8f94;letter-spacing:.01em;flex:none}
+.row{display:flex;align-items:center;gap:12px;width:100%;height:44px;padding:0 10px;border-radius:10px;flex:none}
+.row:hover{background:rgba(255,255,255,.035)}
+.row.sel{background:rgba(255,255,255,.085);box-shadow:inset 0 0 0 1px rgba(255,255,255,.05)}
+.row:focus-visible,.slot:focus-visible,.fbtn:focus-visible,.arow:focus-visible{outline:2px solid rgba(255,255,255,.5);outline-offset:-2px}
+.tile{display:grid;place-items:center;flex:none;width:28px;height:28px;border-radius:7px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08),inset 0 1px 0 rgba(255,255,255,.1)}
+.tile.app{box-shadow:inset 0 0 0 .5px rgba(255,255,255,.28),inset 0 1px 0 rgba(255,255,255,.35),0 1px 3px rgba(0,0,0,.45)}
+.row-t{font-size:14px;font-weight:500;color:#ededef;white-space:nowrap}
+.row-s{font-size:13px;color:#8e8f94;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row-kind{font-size:12.5px;color:#8e8f94;min-width:88px;text-align:right;flex:none}
+.alias{font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;color:#b9babe;padding:2px 6px;border-radius:5px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.14);flex:none}
+.kbd{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 5px;border-radius:5px;background:rgba(255,255,255,.07);box-shadow:inset 0 0 0 1px rgba(255,255,255,.08),inset 0 -1px 0 rgba(0,0,0,.35);font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;font-weight:500;color:#c9cace;line-height:1;flex:none}
+.keys{display:flex;gap:3px;flex:none}
+.slot{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;height:100px;padding:14px 8px 10px;border-radius:12px;background:rgba(255,255,255,.035);box-shadow:inset 0 0 0 1px rgba(255,255,255,.05);min-width:0}
+.slot:hover{background:rgba(255,255,255,.07)}
+.slot-t{font-size:12.5px;font-weight:500;color:#d9dadd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.slot-k{position:absolute;top:8px;right:8px;display:flex;gap:3px}
+.slot-k .kbd{min-width:17px;height:17px;padding:0 4px;font-size:10px}
+.fbtn{display:flex;align-items:center;gap:6px;height:34px;padding:0 8px;border-radius:8px;font-size:12.5px;font-weight:500;color:#d9dadd}
+.fbtn:hover{background:rgba(255,255,255,.06)}
+.arow{display:flex;align-items:center;gap:10px;width:100%;height:36px;padding:0 8px;border-radius:8px;font-size:13px;color:#e4e4e7;flex:none}
+.arow:hover{background:rgba(255,255,255,.06)}
+.arow.sel{background:rgba(255,255,255,.11)}
+.arow .ic{color:#a3a4a9;flex:none}
+.arow.danger,.arow.danger .ic{color:#ff9a92}
+.alabel{height:26px;display:flex;align-items:flex-end;padding:0 8px 4px;font-size:11.5px;font-weight:500;color:#8e8f94}
+.sep{height:1px;margin:4px 6px;background:rgba(255,255,255,.07);flex:none}
+.list{scrollbar-width:none}
+.list::-webkit-scrollbar{display:none}
+
+body{min-height:100vh;display:flex;flex-direction:column;align-items:center;gap:24px;padding:24px;
+  background:#15171c}
+.desk{position:relative;width:1100px;height:640px;border-radius:14px;overflow:hidden;display:flex;
+  justify-content:center;align-items:flex-start;padding-top:60px;
+  background:linear-gradient(135deg,#3a4150,#262a33 55%,#4b4f5c)}
+:root{--ho:1;--hh:58;--ps:1;--sy:0;--pb:0px;--be:100;--canvas:26,31,50;--fs:20;--fe:78;--op:.84;--dim:0;
+  --fb:16px;--ft:.15;--scan:1}
+.glass{background:rgb(var(--canvas))!important;-webkit-backdrop-filter:none!important;
+  backdrop-filter:none!important}
+.glass>*:not(.hero){position:relative;z-index:1}
+/* The hero: the image's box, the top --hh% of the panel, moving up as the
+   list scrolls (--sy is the list's scroll offset times --ps). */
+.hero{position:absolute;left:0;right:0;top:0;height:calc(var(--hh) * 1%);overflow:hidden;
+  transform:translateY(calc(var(--sy) * -1px));opacity:var(--ho);will-change:transform,opacity}
+.bg-img,.bg-sharp,.bg-scan{position:absolute;inset:0;-webkit-mask-image:linear-gradient(180deg,rgba(0,0,0,1) calc((var(--fs) + (var(--fe) - var(--fs)) * 0) * 1%), rgba(0,0,0,0.9) calc((var(--fs) + (var(--fe) - var(--fs)) * 0.2) * 1%), rgba(0,0,0,0.65) calc((var(--fs) + (var(--fe) - var(--fs)) * 0.4) * 1%), rgba(0,0,0,0.35) calc((var(--fs) + (var(--fe) - var(--fs)) * 0.6) * 1%), rgba(0,0,0,0.1) calc((var(--fs) + (var(--fe) - var(--fs)) * 0.8) * 1%), rgba(0,0,0,0) calc((var(--fs) + (var(--fe) - var(--fs)) * 1) * 1%));
+  mask-image:linear-gradient(180deg,rgba(0,0,0,1) calc((var(--fs) + (var(--fe) - var(--fs)) * 0) * 1%), rgba(0,0,0,0.9) calc((var(--fs) + (var(--fe) - var(--fs)) * 0.2) * 1%), rgba(0,0,0,0.65) calc((var(--fs) + (var(--fe) - var(--fs)) * 0.4) * 1%), rgba(0,0,0,0.35) calc((var(--fs) + (var(--fe) - var(--fs)) * 0.6) * 1%), rgba(0,0,0,0.1) calc((var(--fs) + (var(--fe) - var(--fs)) * 0.8) * 1%), rgba(0,0,0,0) calc((var(--fs) + (var(--fe) - var(--fs)) * 1) * 1%))}
+/* Progressive blur: the blurred image everywhere, the sharp one over it at
+   the top, fading out from --be minus 24% to --be. */
+.bg-img,.bg-sharp{background:50% 45%/cover no-repeat;opacity:var(--op)}
+.bg-img{filter:blur(var(--pb));transform:scale(calc(1 + var(--pb) / 300px))}
+.bg-sharp{-webkit-mask-image:linear-gradient(180deg,rgba(0,0,0,1) calc((var(--fs) + (var(--fe) - var(--fs)) * 0) * 1%), rgba(0,0,0,0.9) calc((var(--fs) + (var(--fe) - var(--fs)) * 0.2) * 1%), rgba(0,0,0,0.65) calc((var(--fs) + (var(--fe) - var(--fs)) * 0.4) * 1%), rgba(0,0,0,0.35) calc((var(--fs) + (var(--fe) - var(--fs)) * 0.6) * 1%), rgba(0,0,0,0.1) calc((var(--fs) + (var(--fe) - var(--fs)) * 0.8) * 1%), rgba(0,0,0,0) calc((var(--fs) + (var(--fe) - var(--fs)) * 1) * 1%)),linear-gradient(180deg,#000 calc((var(--be) - 24) * 1%),transparent calc(var(--be) * 1%));
+  mask-image:linear-gradient(180deg,rgba(0,0,0,1) calc((var(--fs) + (var(--fe) - var(--fs)) * 0) * 1%), rgba(0,0,0,0.9) calc((var(--fs) + (var(--fe) - var(--fs)) * 0.2) * 1%), rgba(0,0,0,0.65) calc((var(--fs) + (var(--fe) - var(--fs)) * 0.4) * 1%), rgba(0,0,0,0.35) calc((var(--fs) + (var(--fe) - var(--fs)) * 0.6) * 1%), rgba(0,0,0,0.1) calc((var(--fs) + (var(--fe) - var(--fs)) * 0.8) * 1%), rgba(0,0,0,0) calc((var(--fs) + (var(--fe) - var(--fs)) * 1) * 1%)),linear-gradient(180deg,#000 calc((var(--be) - 24) * 1%),transparent calc(var(--be) * 1%));
+  -webkit-mask-composite:source-in;mask-composite:intersect}
+.walls{width:1100px;display:flex;gap:6px;flex-wrap:wrap}
+.walls img{width:80px;height:45px;object-fit:cover;border-radius:6px;cursor:pointer;opacity:.7;
+  box-shadow:0 0 0 1px rgba(255,255,255,.1)}
+.walls img:hover{opacity:1}
+.walls img.on{opacity:1;box-shadow:0 0 0 2px #c9ee6a}
+.bg-scan{opacity:var(--scan);background:repeating-linear-gradient(180deg,
+  rgba(0,0,0,.48) 0 1px,transparent 1px 3px)}
+.bg-dim{position:absolute;inset:0;background:rgba(var(--canvas),var(--dim));
+  -webkit-mask-image:linear-gradient(180deg,rgba(0,0,0,1) calc((var(--fs) + (var(--fe) - var(--fs)) * 0) * 1%), rgba(0,0,0,0.9) calc((var(--fs) + (var(--fe) - var(--fs)) * 0.2) * 1%), rgba(0,0,0,0.65) calc((var(--fs) + (var(--fe) - var(--fs)) * 0.4) * 1%), rgba(0,0,0,0.35) calc((var(--fs) + (var(--fe) - var(--fs)) * 0.6) * 1%), rgba(0,0,0,0.1) calc((var(--fs) + (var(--fe) - var(--fs)) * 0.8) * 1%), rgba(0,0,0,0) calc((var(--fs) + (var(--fe) - var(--fs)) * 1) * 1%));mask-image:linear-gradient(180deg,rgba(0,0,0,1) calc((var(--fs) + (var(--fe) - var(--fs)) * 0) * 1%), rgba(0,0,0,0.9) calc((var(--fs) + (var(--fe) - var(--fs)) * 0.2) * 1%), rgba(0,0,0,0.65) calc((var(--fs) + (var(--fe) - var(--fs)) * 0.4) * 1%), rgba(0,0,0,0.35) calc((var(--fs) + (var(--fe) - var(--fs)) * 0.6) * 1%), rgba(0,0,0,0.1) calc((var(--fs) + (var(--fe) - var(--fs)) * 0.8) * 1%), rgba(0,0,0,0) calc((var(--fs) + (var(--fe) - var(--fs)) * 1) * 1%))}
+
+/* Frost: Roboco's composer pill — a 16px backdrop blur under a thin tint of
+   the canvas (85% of the blurred image shows), with a cool silver edge. */
+.frost{background:rgba(var(--canvas),var(--ft));-webkit-backdrop-filter:blur(var(--fb));
+  backdrop-filter:blur(var(--fb));box-shadow:inset 0 0 0 1px hsla(210,18%,78%,.09),
+  inset 0 1px 0 rgba(255,255,255,.06)}
+.hdr{border-bottom-color:hsla(210,18%,78%,.09)!important}
+body.pill .hdr{height:52px!important;margin:12px 12px 6px;border-radius:16px;border-bottom:0!important;
+  padding:0 16px!important}
+body.pill .hdr .q{height:52px}
+body.pill .list{height:398px!important}
+.slot{background:rgba(var(--canvas),var(--ft))}
+.slot,.row.sel,.ftr{-webkit-backdrop-filter:blur(var(--fb));backdrop-filter:blur(var(--fb))}
+.slot{box-shadow:inset 0 0 0 1px hsla(210,18%,78%,.09),inset 0 1px 0 rgba(255,255,255,.06)}
+.slot:hover{background:rgba(255,255,255,.09)}
+.row:hover{background:rgba(255,255,255,.06)}
+.row.sel{background:rgba(255,255,255,.10);box-shadow:inset 0 0 0 1px hsla(210,18%,78%,.10)}
+.ftr{background:rgba(var(--canvas),calc(var(--ft) + .2))!important;
+  border-top-color:hsla(210,18%,78%,.09)!important}
+body.today .hero{display:none}
+body.today .glass{background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,0) 36%),
+  rgba(22,23,26,.7)!important;backdrop-filter:blur(44px) saturate(160%)!important}
+body.today .frost,body.today .slot,body.today .row.sel,body.today .ftr{backdrop-filter:none}
+/* Over an image, the secondary text steps up, as Roboco hardens its foregrounds. */
+body:not(.today) .label{color:#c9cace}
+body:not(.today) .q::placeholder{color:#a9aaaf}
+body:not(.today) .row-s,body:not(.today) .row-kind{color:#a9aaaf}
+
+.panel{width:1100px;display:grid;grid-template-columns:repeat(2,1fr);gap:9px 28px;
+  color:#d9dadd;font-size:13px}
+.row2{grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.row2 button{padding:7px 12px;border-radius:8px;background:rgba(255,255,255,.08);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.1)}
+.row2 button.on{background:#c9ee6a;color:#111}
+.row2 label{display:flex;gap:6px;align-items:center;margin-left:10px}
+label.s{display:grid;grid-template-columns:150px 1fr 54px;align-items:center;gap:10px}
+.swatch{display:inline-block;width:14px;height:14px;border-radius:4px;vertical-align:middle;
+  background:rgb(26,31,50)}
+</style></head>
+<body class="pill">
+<div class="panel">
+  <div class="row2">
+    <button data-p="hero">Hero (scrolls away)</button>
+    <button data-p="prog">Progressive blur</button>
+    <button data-p="roboco">Roboco</button>
+    <button data-p="clean">Roboco, no scanlines</button>
+    <button data-p="whole">Whole image, frosted UI</button>
+    <button data-p="today">Today (glass, no image)</button>
+    <label><input type="checkbox" data-t="pill" checked>Search as a frosted pill</label>
+    <label><input type="checkbox" data-t="auto">Auto contrast</label>
+    <label><input type="checkbox" data-t="dissolve" checked>Dissolve on scroll</label>
+    <label><input type="checkbox" data-t="match" checked>Match wallpaper colors <span class="swatch"></span></label>
+  </div>
+  <label class="s">Fade starts (%)<input type="range" min="0" max="100" data-v="fs"><span></span></label>
+  <label class="s">Fade ends (%)<input type="range" min="10" max="160" data-v="fe"><span></span></label>
+  <label class="s">Image opacity<input type="range" min="0" max="1" step=".01" data-v="op"><span></span></label>
+  <label class="s">Dim over image<input type="range" min="0" max=".9" step=".01" data-v="dim"><span></span></label>
+  <label class="s">Frost blur<input type="range" min="0" max="44" data-v="fb" data-u="px"><span></span></label>
+  <label class="s">Frost tint<input type="range" min="0" max=".9" step=".01" data-v="ft"><span></span></label>
+  <label class="s">Scanlines<input type="range" min="0" max="1" step=".05" data-v="scan"><span></span></label>
+  <label class="s">Image height (%)<input type="range" min="30" max="100" data-v="hh"><span></span></label>
+  <label class="s">Scroll speed<input type="range" min="0" max="1.5" step=".05" data-v="ps"><span></span></label>
+  <label class="s">Sharp area ends (%)<input type="range" min="24" max="124" data-v="be"><span></span></label>
+  <label class="s">Lower blur<input type="range" min="0" max="60" data-v="pb" data-u="px"><span></span></label>
+</div>
+<div class="walls"><img src="imgs/yqkwg7-t.jpg" data-w="0" title="yqkwg7"><img src="imgs/216o5y-t.jpg" data-w="1" title="216o5y"><img src="imgs/6le51x-t.jpg" data-w="2" title="6le51x"><img src="imgs/6lek6q-t.jpg" data-w="3" title="6lek6q"><img src="imgs/6lelp6-t.jpg" data-w="4" title="6lelp6"><img src="imgs/7jxg59-t.jpg" data-w="5" title="7jxg59"><img src="imgs/8g87vj-t.jpg" data-w="6" title="8g87vj"><img src="imgs/9okm3w-t.jpg" data-w="7" title="9okm3w"><img src="imgs/d8v5e3-t.jpg" data-w="8" title="d8v5e3"><img src="imgs/d8vkro-t.jpg" data-w="9" title="d8vkro"><img src="imgs/gw1wml-t.jpg" data-w="10" title="gw1wml"><img src="imgs/jelx65-t.jpg" data-w="11" title="jelx65"><img src="imgs/lyg3ol-t.jpg" data-w="12" title="lyg3ol"><img src="imgs/lygjml-t.jpg" data-w="13" title="lygjml"><img src="imgs/lygkmq-t.jpg" data-w="14" title="lygkmq"><img src="imgs/pom8z9-t.jpg" data-w="15" title="pom8z9"><img src="imgs/pomg5p-t.jpg" data-w="16" title="pomg5p"><img src="imgs/vp25k3-t.jpg" data-w="17" title="vp25k3"><img src="imgs/vp2dxl-t.jpg" data-w="18" title="vp2dxl"><img src="imgs/vp2q78-t.jpg" data-w="19" title="vp2q78"><img src="imgs/w53elq-t.jpg" data-w="20" title="w53elq"><img src="imgs/xek7ld-t.jpg" data-w="21" title="xek7ld"><img src="imgs/yqkxvg-t.jpg" data-w="22" title="yqkxvg"></div>
+<div class="desk"><section class="glass" aria-label="Pane launcher" style="position: relative; z-index: 1; width: 760px; display: flex; flex-direction: column; overflow: hidden; opacity: 1; transform: scale(1); transition: opacity 0.14s, transform 0.14s; pointer-events: auto;"><div class="hero"><div class="bg-img"></div><div class="bg-sharp"></div><div class="bg-scan"></div><div class="bg-dim"></div></div>
+<div class="hdr" style="height: 64px; display: flex; align-items: center; gap: 14px; padding: 0px 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.06);">
+<svg class="ic" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" style="color: rgb(142, 143, 148); flex: 0 0 auto;">
+<path d="M4 11a7 7 0 1 0 14 0a7 7 0 1 0 -14 0 M16.2 16.2L20 20">
+</path>
+</svg>
+<input class="q" type="text" aria-label="Search apps, commands and plugins" placeholder="Search apps, commands, plugins…" value="" style="flex-grow: 1; caret-color: rgb(201, 238, 106);">
+</div>
+<div class="list" style="height: 404px; overflow-y: auto; padding: 4px 10px 10px; display: flex; flex-direction: column; gap: 2px;">
+<div class="label">
+<span>Pinned</span>
+<span style="display: flex; gap: 3px; align-items: center;">
+<span class="kbd">
+<span class="sc-interp">⌘</span>
+</span>
+<span class="kbd">1–5</span>
+</span>
+</div>
+<div style="display: grid; grid-template-columns: repeat(5, minmax(0px, 1fr)); gap: 8px; padding: 2px 0px 6px; flex: 0 0 auto;">
+<button class="slot" type="button">
+<span class="slot-k">
+<span class="kbd">
+<span class="sc-interp">⌘</span>
+</span>
+<span class="kbd">
+<span class="sc-interp">1</span>
+</span>
+</span>
+<span class="tile app" style="width: 42px; height: 42px; border-radius: 11px; background: linear-gradient(rgb(74, 77, 85), rgb(28, 30, 34)); color: rgb(200, 245, 180);">
+<svg class="ic b" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+<path d="M6 8l4 4-4 4 M12 16.5h6">
+</path>
+</svg>
+</span>
+<span class="slot-t">
+<span class="sc-interp">Terminal</span>
+</span>
+</button>
+<button class="slot" type="button">
+<span class="slot-k">
+<span class="kbd">
+<span class="sc-interp">⌘</span>
+</span>
+<span class="kbd">
+<span class="sc-interp">2</span>
+</span>
+</span>
+<span class="tile app" style="width: 42px; height: 42px; border-radius: 11px; background: linear-gradient(rgb(69, 163, 245), rgb(29, 98, 200)); color: rgb(255, 255, 255);">
+<svg class="ic b" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+<path d="M9 8l-4 4 4 4 M15 8l4 4-4 4 M13.2 5.5l-2.4 13">
+</path>
+</svg>
+</span>
+<span class="slot-t">
+<span class="sc-interp">Visual Studio Code</span>
+</span>
+</button>
+<button class="slot" type="button">
+<span class="slot-k">
+<span class="kbd">
+<span class="sc-interp">⌘</span>
+</span>
+<span class="kbd">
+<span class="sc-interp">3</span>
+</span>
+</span>
+<span class="tile app" style="width: 42px; height: 42px; border-radius: 11px; background: linear-gradient(rgb(255, 162, 77), rgb(226, 83, 15)); color: rgb(255, 255, 255);">
+<svg class="ic b" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+<path d="M3.5 12a8.5 8.5 0 1 0 17 0a8.5 8.5 0 1 0 -17 0 M3.5 12h17 M12 3.5c2.3 2.4 3.4 5.2 3.4 8.5s-1.1 6.1-3.4 8.5 M12 3.5C9.7 5.9 8.6 8.7 8.6 12s1.1 6.1 3.4 8.5">
+</path>
+</svg>
+</span>
+<span class="slot-t">
+<span class="sc-interp">Firefox</span>
+</span>
+</button>
+<button class="slot" type="button">
+<span class="slot-k">
+<span class="kbd">
+<span class="sc-interp">⌘</span>
+</span>
+<span class="kbd">
+<span class="sc-interp">4</span>
+</span>
+</span>
+<span class="tile app" style="width: 42px; height: 42px; border-radius: 11px; background: linear-gradient(rgb(161, 132, 255), rgb(91, 59, 208)); color: rgb(255, 255, 255);">
+<svg class="ic b" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+<path d="M6.5 3.5h8l3.5 3.5v13.5h-11.5z M14.5 3.5V7H18 M9.5 12h5.5 M9.5 15.5h4">
+</path>
+</svg>
+</span>
+<span class="slot-t">
+<span class="sc-interp">Obsidian</span>
+</span>
+</button>
+<button class="slot" type="button">
+<span class="slot-k">
+<span class="kbd">
+<span class="sc-interp">⌘</span>
+</span>
+<span class="kbd">
+<span class="sc-interp">5</span>
+</span>
+</span>
+<span class="tile app" style="width: 42px; height: 42px; border-radius: 11px; background: linear-gradient(rgb(61, 220, 120), rgb(18, 146, 69)); color: rgb(255, 255, 255);">
+<svg class="ic b" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+<path d="M9 17.5V6.5l10-2v11 M4 17.5a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0 -5 0 M14 15.5a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0 -5 0">
+</path>
+</svg>
+</span>
+<span class="slot-t">
+<span class="sc-interp">Spotify</span>
+</span>
+</button>
+</div>
+<div class="label">
+<span>
+<span class="sc-interp">Suggested</span>
+</span>
+<span style="font-weight: 400;">
+<span class="sc-interp">From your recent use</span>
+</span>
+</div>
+<button type="button" class="row sel">
+<span class="tile app" style="background: linear-gradient(rgb(255, 115, 159), rgb(207, 45, 99)); color: rgb(255, 255, 255);">
+<svg class="ic b" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+<path d="M4.5 19.5l1-4.5L15.5 5l3.5 3.5-10 10z M13 7.5l3.5 3.5">
+</path>
+</svg>
+</span>
+<span class="row-t">
+<span>
+<span class="sc-interp">Figma</span>
+</span>
+<span style="color: rgb(201, 238, 106);">
+<span class="sc-interp">
+</span>
+</span>
+<span>
+<span class="sc-interp">
+</span>
+</span>
+</span>
+<span style="flex-grow: 1;">
+</span>
+<span class="row-kind">
+<span class="sc-interp">Application</span>
+</span>
+</button>
+<button type="button" class="row">
+<span class="tile" style="background: rgba(255, 255, 255, 0.08); color: rgb(233, 233, 236);">
+<svg class="ic" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+<path d="M9 3.5h6v3H9z M7 5H5v15.5h14V5h-2 M9 12h6 M9 15.5h4">
+</path>
+</svg>
+</span>
+<span class="row-t">
+<span>
+<span class="sc-interp">Clipboard History</span>
+</span>
+<span style="color: rgb(201, 238, 106);">
+<span class="sc-interp">
+</span>
+</span>
+<span>
+<span class="sc-interp">
+</span>
+</span>
+</span>
+<span class="row-s">
+<span class="sc-interp">Clipboard</span>
+</span>
+<span style="flex-grow: 1;">
+</span>
+<span class="alias">
+<span class="sc-interp">cb</span>
+</span>
+<span class="keys">
+<span class="kbd">
+<span class="sc-interp">⌘</span>
+</span>
+<span class="kbd">
+<span class="sc-interp">⇧</span>
+</span>
+<span class="kbd">
+<span class="sc-interp">V</span>
+</span>
+</span>
+<span class="row-kind">
+<span class="sc-interp">Command</span>
+</span>
+</button>
+<button type="button" class="row">
+<span class="tile" style="background: rgba(255, 255, 255, 0.08); color: rgb(233, 233, 236);">
+<svg class="ic" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+<path d="M3.5 5.5h17v13h-17z M11 5.5v13">
+</path>
+</svg>
+</span>
+<span class="row-t">
+<span>
+<span class="sc-interp">Left Half</span>
+</span>
+<span style="color: rgb(201, 238, 106);">
+<span class="sc-interp">
+</span>
+</span>
+<span>
+<span class="sc-interp">
+</span>
+</span>
+</span>
+<span class="row-s">
+<span class="sc-interp">Window Manager</span>
+</span>
+<span style="flex-grow: 1;">
+</span>
+<span class="keys">
+<span class="kbd">
+<span class="sc-interp">⌃</span>
+</span>
+<span class="kbd">
+<span class="sc-interp">⌥</span>
+</span>
+<span class="kbd">
+<span class="sc-interp">←</span>
+</span>
+</span>
+<span class="row-kind">
+<span class="sc-interp">Command</span>
+</span>
+</button>
+<button type="button" class="row">
+<span class="tile" style="background: rgba(255, 255, 255, 0.08); color: rgb(233, 233, 236);">
+<svg class="ic" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+<path d="M5.5 3.5h8.5l4.5 4.5v12.5h-13z M14 3.5V8h4.5">
+</path>
+</svg>
+</span>
+<span class="row-t">
+<span>
+<span class="sc-interp">Search Files</span>
+</span>
+<span style="color: rgb(201, 238, 106);">
+<span class="sc-interp">
+</span>
+</span>
+<span>
+<span class="sc-interp">
+</span>
+</span>
+</span>
+<span class="row-s">
+<span class="sc-interp">Files</span>
+</span>
+<span style="flex-grow: 1;">
+</span>
+<span class="alias">
+<span class="sc-interp">f</span>
+</span>
+<span class="row-kind">
+<span class="sc-interp">Command</span>
+</span>
+</button>
+<div class="label">
+<span>
+<span class="sc-interp">Commands</span>
+</span>
+<span style="font-weight: 400;">
+<span class="sc-interp">
+</span>
+</span>
+</div>
+<button type="button" class="row">
+<span class="tile" style="background: rgba(255, 255, 255, 0.08); color: rgb(233, 233, 236);">
+<svg class="ic" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+<path d="M4 4h7v7H4z M13 4h7v7h-7z M4 13h7v7H4z M16.5 13.5v6 M13.5 16.5h6">
+</path>
+</svg>
+</span>
+<span class="row-t">
+<span>
+<span class="sc-interp">Plugin Store</span>
+</span>
+<span style="color: rgb(201, 238, 106);">
+<span class="sc-interp">
+</span>
+</span>
+<span>
+<span class="sc-interp">
+</span>
+</span>
+</span>
+<span class="row-s">
+<span class="sc-interp">Pane</span>
+</span>
+<span style="flex-grow: 1;">
+</span>
+<span class="alias">
+<span class="sc-interp">store</span>
+</span>
+<span class="row-kind">
+<span class="sc-interp">Command</span>
+</span>
+</button>
+<button type="button" class="row">
+<span class="tile" style="background: rgba(255, 255, 255, 0.08); color: rgb(233, 233, 236);">
+<svg class="ic" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+<path d="M19.5 14.5A7.5 7.5 0 1 1 9.5 4.5a6 6 0 0 0 10 10z">
+</path>
+</svg>
+</span>
+<span class="row-t">
+<span>
+<span class="sc-interp">Toggle Dark Mode</span>
+</span>
+<span style="color: rgb(201, 238, 106);">
+<span class="sc-interp">
+</span>
+</span>
+<span>
+<span class="sc-interp">
+</span>
+</span>
+</span>
+<span class="row-s">
+<span class="sc-interp">System</span>
+</span>
+<span style="flex-grow: 1;">
+</span>
+<span class="row-kind">
+<span class="sc-interp">Command</span>
+</span>
+</button>
+<button type="button" class="row">
+<span class="tile" style="background: rgba(255, 255, 255, 0.08); color: rgb(233, 233, 236);">
+<svg class="ic" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+<path d="M6 10.5h12V20H6z M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5">
+</path>
+</svg>
+</span>
+<span class="row-t">
+<span>
+<span class="sc-interp">Lock Screen</span>
+</span>
+<span style="color: rgb(201, 238, 106);">
+<span class="sc-interp">
+</span>
+</span>
+<span>
+<span class="sc-interp">
+</span>
+</span>
+</span>
+<span class="row-s">
+<span class="sc-interp">System</span>
+</span>
+<span style="flex-grow: 1;">
+</span>
+<span class="row-kind">
+<span class="sc-interp">Command</span>
+</span>
+</button>
+<button type="button" class="row">
+<span class="tile" style="background: rgba(255, 255, 255, 0.08); color: rgb(233, 233, 236);">
+<svg class="ic" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+<path d="M4 7h9 M17 7h3 M15 5v4 M4 17h3 M11 17h9 M9 15v4">
+</path>
+</svg>
+</span>
+<span class="row-t">
+<span>
+<span class="sc-interp">Settings</span>
+</span>
+<span style="color: rgb(201, 238, 106);">
+<span class="sc-interp">
+</span>
+</span>
+<span>
+<span class="sc-interp">
+</span>
+</span>
+</span>
+<span class="row-s">
+<span class="sc-interp">Pane</span>
+</span>
+<span style="flex-grow: 1;">
+</span>
+<span class="keys">
+<span class="kbd">
+<span class="sc-interp">⌘</span>
+</span>
+<span class="kbd">
+<span class="sc-interp">,</span>
+</span>
+</span>
+<span class="row-kind">
+<span class="sc-interp">Command</span>
+</span>
+</button>
+</div>
+<div class="ftr" style="height: 50px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0px 8px 0px 16px; border-top: 1px solid rgba(255, 255, 255, 0.06); background: rgba(0, 0, 0, 0.14); position: relative; z-index: 3;">
+<div style="display: flex; align-items: center; gap: 12px; min-width: 0px;">
+<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" style="flex: 0 0 auto;">
+<rect class="ic" x="3" y="7" width="13" height="13" rx="3.5" style="color: rgb(142, 143, 148);">
+</rect>
+<rect x="8" y="3.5" width="13" height="13" rx="3.5" fill="#ededef" opacity="0.92">
+</rect>
+</svg>
+<div style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: rgb(142, 143, 148); white-space: nowrap;">
+<span class="kbd">↵</span>
+<span>opens instantly ·</span>
+<span class="keys">
+<span class="kbd">
+<span class="sc-interp">⌘</span>
+</span>
+<span class="kbd">K</span>
+</span>
+<span>for more</span>
+</div>
+</div>
+<div style="display: flex; align-items: center; gap: 4px;">
+<button class="fbtn" type="button">
+<span>
+<span class="sc-interp">Open Application</span>
+</span>
+<span class="kbd" style="background: rgb(201, 238, 106); color: rgb(17, 18, 16); box-shadow: none;">↵</span>
+</button>
+<span style="width: 1px; height: 16px; background: rgba(255, 255, 255, 0.1);">
+</span>
+<button class="fbtn" type="button" aria-pressed="false" style="background: transparent;">
+<span>Actions</span>
+<span class="keys">
+<span class="kbd">
+<span class="sc-interp">⌘</span>
+</span>
+<span class="kbd">K</span>
+</span>
+</button>
+</div>
+</div>
+</section></div>
+<script>
+let current=0;
+const P={
+  hero:{hh:100,ps:1.25,fs:0,fe:105,op:.56,dim:.64,fb:30,ft:.4,scan:.5,be:73,pb:60},
+  prog:{hh:100,ps:0,fs:30,fe:118,op:.84,dim:0,fb:24,ft:.15,scan:.5,be:46,pb:28},
+  roboco:{hh:100,ps:0,fs:20,fe:78,op:.84,dim:0,fb:24,ft:.15,scan:1,be:124,pb:0},
+  clean:{hh:100,ps:0,fs:20,fe:78,op:.84,dim:0,fb:24,ft:.15,scan:0,be:124,pb:0},
+  whole:{hh:100,ps:0,fs:100,fe:160,op:.84,dim:.35,fb:24,ft:.15,scan:0,be:124,pb:0},
+  today:{fs:20,fe:78,op:0,dim:0,fb:16,ft:.15,scan:0},
+};
+const CANVAS={match:'26,31,50',plain:'22,23,26'};
+const root=document.documentElement.style;
+const inputs=[...document.querySelectorAll('input[data-v]')];
+function show(i){const u=i.dataset.u||'';root.setProperty('--'+i.dataset.v,i.value+u);
+  i.nextElementSibling.textContent=i.value+u}
+function set(k,v){const i=inputs.find(i=>i.dataset.v==k);i.value=v;show(i)}
+inputs.forEach(i=>i.addEventListener('input',()=>show(i)));
+document.querySelector('.hdr').classList.add('frost');
+const pill=document.querySelector('[data-t=pill]'),match=document.querySelector('[data-t=match]');
+pill.onchange=()=>document.body.classList.toggle('pill',pill.checked);
+match.onchange=()=>root.setProperty('--canvas',match.checked?CANVAS.match:CANVAS.plain);
+document.querySelectorAll('.row2 button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.row2 button').forEach(x=>x.classList.toggle('on',x==b));
+  document.body.classList.toggle('today',b.dataset.p=='today');
+  Object.entries(P[b.dataset.p]).forEach(([k,v])=>set(k,v));
+  if(typeof applyAuto=='function')applyAuto();
+});
+document.querySelector('[data-p='+(location.hash.slice(1)||'hero')+']').click();
+// The wallpapers: each with its own matched canvas. Click a thumbnail, or
+// press [ and ] to step through them.
+const WALLS=[['yqkwg7', '26,31,50', 0.15, 0.0], ['216o5y', '14,15,17', 0.15, 0.0], ['6le51x', '18,31,47', 0.15, 0.0], ['6lek6q', '59,22,28', 0.15, 0.0], ['6lelp6', '50,39,31', 0.38, 0.56], ['7jxg59', '44,44,38', 0.43, 0.61], ['8g87vj', '40,40,41', 0.39, 0.58], ['9okm3w', '13,15,25', 0.32, 0.38], ['d8v5e3', '31,26,25', 0.15, 0.0], ['d8vkro', '22,14,15', 0.36, 0.0], ['gw1wml', '40,40,41', 0.41, 0.63], ['jelx65', '22,17,16', 0.15, 0.0], ['lyg3ol', '23,23,25', 0.29, 0.0], ['lygjml', '14,15,17', 0.56, 0.0], ['lygkmq', '26,37,56', 0.62, 0.0], ['pom8z9', '38,32,27', 0.56, 0.18], ['pomg5p', '15,14,17', 0.37, 0.0], ['vp25k3', '30,40,44', 0.43, 0.49], ['vp2dxl', '14,14,17', 0.51, 0.3], ['vp2q78', '20,17,16', 0.37, 0.0], ['w53elq', '27,43,54', 0.51, 0.21], ['xek7ld', '14,14,17', 0.15, 0.0], ['yqkxvg', '44,45,36', 0.45, 0.49]];
+const auto=document.querySelector('[data-t=auto]');
+// The measured tint and dim of the wallpaper shown; the whole-image preset keeps
+// at least its own dim.
+function applyAuto(){if(!auto.checked||document.body.classList.contains('today'))return;
+  const [,,frost,dim]=WALLS[current];set('ft',frost);
+  const whole=document.querySelector('[data-p=whole]').classList.contains('on');
+  set('dim',whole?Math.max(dim,.35):dim)}
+auto.onchange=applyAuto;
+function wall(i){
+  current=(i+WALLS.length)%WALLS.length;
+  const [name,canvas]=WALLS[current];
+  document.querySelectorAll('.bg-img,.bg-sharp').forEach(l=>l.style.backgroundImage='url(imgs/'+name+'.jpg)');
+  CANVAS.match=canvas;
+  document.querySelector('.swatch').style.background='rgb('+canvas+')';
+  match.onchange();
+  applyAuto();
+  document.querySelectorAll('.walls img').forEach(t=>t.classList.toggle('on',+t.dataset.w==current));
+}
+document.querySelectorAll('.walls img').forEach(t=>t.onclick=()=>wall(+t.dataset.w));
+document.addEventListener('keydown',e=>{if(e.key=='[')wall(current-1);if(e.key==']')wall(current+1)});
+wall(0);
+// The hero follows the list's scroll.
+const list=document.querySelector('.list');
+// It also dissolves as it goes, gone once the list has scrolled half its
+// height, so no faded strip is left along the top edge.
+const dissolve=document.querySelector('[data-t=dissolve]');
+function follow(){
+  const css=getComputedStyle(document.documentElement);
+  root.setProperty('--sy',list.scrollTop*parseFloat(css.getPropertyValue('--ps')));
+  const height=document.querySelector('.glass').clientHeight*parseFloat(css.getPropertyValue('--hh'))/100;
+  root.setProperty('--ho',dissolve.checked?Math.max(0,1-list.scrollTop/(height*.5)):1)}
+dissolve.onchange=follow;
+list.addEventListener('scroll',follow);
+inputs.forEach(i=>i.addEventListener('input',follow));
+// Selection follows clicks, as the launcher's does.
+document.querySelectorAll('.row').forEach(r=>r.addEventListener('click',()=>{
+  document.querySelectorAll('.row').forEach(x=>x.classList.toggle('sel',x==r))}));
+</script>
+</body></html>

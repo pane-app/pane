@@ -1,117 +1,146 @@
 //! The Launcher page: the choices that govern the launcher window — which
-//! display it opens on, and what reopening it starts from.
+//! display it opens on, when reopening it pops back to root search, and
+//! its layout: the window mode (expanded or compact), how the pins are
+//! laid out, and whether the compact window shows them.
 //!
 //! Every value it shows and every choice it takes goes through the host
 //! settings ([`crate::settings`]), so the record's own rules — atomic
 //! writes, an unreadable record never replaced, a failed save reported
 //! with the shown choice rolled back — are the ones these choices live
-//! by. Neither choice changes what the windows render, so choosing here
-//! repaints nothing: the opening display is resolved against the display
-//! layout every time the launcher opens (through [`crate::placement`],
-//! the platform seam this page also reads to explain the choices), and
-//! what reopening shows is applied when the launcher is next opened.
+//! by. The display and reopening choices change nothing the windows
+//! render: the opening display is resolved against the display layout
+//! every time the launcher opens (through [`crate::placement`], the
+//! platform seam this page also reads to explain the choices), and what
+//! reopening shows is applied when the launcher is next opened. The
+//! layout choices are read by the launcher window as it draws.
 //!
-//! The opening monitor is the Pane-styled searchable select
-//! ([`crate::ui::select`]): the first real consumer of the shared
-//! control, whose choices are few but whose search and keywords the
-//! control needs exercised. The reopening choices are a segmented choice
-//! (#99, the Settings board's family) — two fixed choices a user scans
-//! faster than searches, the control's own rule for when a searchable
-//! select is warranted — with the chosen one's description under it.
+//! The display and the reopening delay are Pane-styled searchable
+//! selects ([`crate::ui::select`]); the window mode and the pinned
+//! layout are segmented choices (#99, the Settings board's family), two
+//! fixed choices a user scans faster than searches; showing the pins in
+//! the compact window is a switch.
 //!
 //! What the page explains, as the General page does for its hotkey: the
-//! choices the platform cannot answer — the pointer's display where the
-//! system does not tell Pane where the pointer is, the active window's
-//! display where it does not tell Pane which window is active — are
-//! shown with their reason and not offered, rather than pretending they
-//! succeeded; a platform that cannot choose the launcher's display at
-//! all (Wayland) explains that instead; and a choice whose display is
-//! disconnected falls back to the primary display, which the page says.
-//! The dismissal behavior is the specification's Escape contract, not a
-//! choice: backing out of what is open — a composition, a menu, a screen
-//! — comes first, and hiding the launcher never quits Pane.
+//! choices the platform cannot answer — the display with the mouse where
+//! the system does not tell Pane where the pointer is, the display with
+//! the active window where it does not tell Pane which window is active —
+//! are shown with their reason and not offered, rather than pretending
+//! they succeeded; a platform that cannot choose the launcher's display
+//! at all (Wayland) explains that instead; and a choice whose display
+//! cannot be found falls back to the primary display, which the page
+//! says.
 
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, Context, Div, Entity, Role, ScrollAnchor, SharedString, Stateful, Toggled,
-    Window, div, prelude::*,
+    AnyElement, App, Context, Div, Entity, Role, SharedString, Stateful, Toggled, Window, div,
+    prelude::*,
 };
 use pane_core::placement::{DisplayLayout, resolve};
-use pane_core::{Launcher, OpeningMonitor, Reopening};
+use pane_core::{Launcher, OpeningMonitor, PinnedLayout, Reopening, WindowMode};
 
 use super::{Page, SettingsWindow, search};
 use crate::ui::controls::{self, status_note as note};
 use crate::ui::icon::Glyph;
 use crate::ui::select::{Choice, Model, Select};
-use crate::ui::settings_shell;
 use crate::ui::theme::Theme;
 
 /// The opening-monitor choices the page offers, in row order: the
-/// preference, the row's name, subtitle, declared search keywords and
-/// test selector. The subtitle of the default names it as the
-/// provisional default, so the page does not silently turn the
-/// specification's proposal into a confirmed product decision.
-const MONITORS: [(OpeningMonitor, &str, &str, &[&str], &str); 3] = [
+/// preference, the row's name, declared search keywords and test
+/// selector. The pointer's display is the default (see
+/// [`OpeningMonitor`]), so it comes first.
+const MONITORS: [(OpeningMonitor, &str, &[&str], &str); 3] = [
+    (
+        OpeningMonitor::Pointer,
+        "Display with the mouse",
+        &["pointer", "cursor"],
+        "launcher-monitor-Pointer",
+    ),
     (
         OpeningMonitor::Primary,
         "Primary display",
-        "The system's main display, the provisional default",
         &["main"],
         "launcher-monitor-Primary",
     ),
     (
-        OpeningMonitor::Pointer,
-        "Pointer's display",
-        "The display the pointer is on when the launcher opens",
-        &["mouse", "cursor"],
-        "launcher-monitor-Pointer",
-    ),
-    (
         OpeningMonitor::ActiveWindow,
-        "Active window's display",
-        "The display of the window you are working in",
+        "Display with the active window",
         &["focused", "foreground"],
         "launcher-monitor-ActiveWindow",
     ),
 ];
 
-/// The reopening choices the page offers, in row order: the preference,
-/// the row's name and subtitle, and its test selector.
-pub(crate) const REOPENINGS: [(Reopening, &str, &str, &str); 2] = [
-    (
-        Reopening::RestoreView,
-        "Restore the current view",
-        "Show what the launcher was left on, when it is still valid; the provisional default",
-        "launcher-reopening-RestoreView",
-    ),
+/// The reopening choices the page offers (Raycast's "Pop to Root
+/// Search"), in list order: the preference, the choice's name, what it
+/// does and its id, which the select's row selector ends with.
+pub(crate) const REOPENINGS: [(Reopening, &str, &str, &str); 4] = [
     (
         Reopening::RootSearch,
-        "Start at root search",
-        "Begin from root search with an empty query, whatever was left",
-        "launcher-reopening-RootSearch",
+        "Immediately",
+        "Starts from an empty search",
+        "RootSearch",
+    ),
+    (
+        Reopening::After90Seconds,
+        "After 90 seconds",
+        "Shows what you left open if you come back within 90 seconds",
+        "After90Seconds",
+    ),
+    (
+        Reopening::After3Minutes,
+        "After 3 minutes",
+        "Shows what you left open if you come back within 3 minutes",
+        "After3Minutes",
+    ),
+    (
+        Reopening::RestoreView,
+        "Never",
+        "Shows what you left open, if it still exists",
+        "RestoreView",
     ),
 ];
 
-/// The page's heading.
+/// The reopening row's name and its select's debug prefix.
+pub(crate) const REOPENING_NAME: &str = "Pop to root search";
+pub(crate) const REOPENING_DEBUG: &str = "launcher-reopening";
+
+/// The layout rows: their names, and their segments — the preference, the
+/// segment's name and its test selector.
+pub(crate) const WINDOW_MODE_NAME: &str = "Window mode";
+pub(crate) const WINDOW_MODES: [(WindowMode, &str, &str); 2] = [
+    (WindowMode::Expanded, "Expanded", "launcher-window-Expanded"),
+    (WindowMode::Compact, "Compact", "launcher-window-Compact"),
+];
+pub(crate) const PINNED_NAME: &str = "Pinned items";
+pub(crate) const PINNED_LAYOUTS: [(PinnedLayout, &str, &str); 2] = [
+    (
+        PinnedLayout::Horizontal,
+        "Horizontal",
+        "launcher-pinned-Horizontal",
+    ),
+    (
+        PinnedLayout::Vertical,
+        "Vertical",
+        "launcher-pinned-Vertical",
+    ),
+];
+/// The switch that shows the pins under the compact window's search
+/// field: its name, and its id and selector.
+pub(crate) const COMPACT_PINNED_NAME: &str = "Show pinned in compact window mode";
+pub(crate) const COMPACT_PINNED_DEBUG: &str = "launcher-compact-pinned";
+
+/// The page's title.
 pub(crate) const TITLE: &str = "Launcher";
 
 /// What the page is, in one line: its sidebar entry's description in
-/// the search, and its heading's subtitle.
-pub(crate) const ABOUT: &str = "The display the launcher opens on, and what reopening shows";
+/// the search.
+pub(crate) const ABOUT: &str = "Where the launcher opens and what it shows";
 
 /// The opening monitor's select: its name, its description and the prefix
 /// of its debug selectors.
 pub(crate) const MONITOR_NAME: &str = "Display";
-pub(crate) const MONITOR_DESCRIPTION: &str = "The display the launcher opens on";
+pub(crate) const MONITOR_DESCRIPTION: &str = "Where the launcher opens";
 pub(crate) const MONITOR_DEBUG: &str = "launcher-monitor";
-
-/// The dismissal note: what Escape does, which is no choice.
-pub(crate) const DISMISSAL: &str = "Escape still backs out of what is open — a composition, a \
-                                     menu, an open screen — before it clears the query, and \
-                                     only then hides the launcher. Hiding never quits Pane: the \
-                                     Settings window stays open, and the next opening of the \
-                                     launcher reuses the same live window.";
 
 /// The Launcher page, registered after General in the window's page list:
 /// the page of the launcher window itself.
@@ -136,6 +165,8 @@ pub(crate) struct State {
     /// settings — and every choice it takes goes through the host
     /// settings, as the rows it replaced did.
     monitor: Entity<Select>,
+    /// The reopening choice's select.
+    reopening: Entity<Select>,
 }
 
 impl State {
@@ -169,7 +200,36 @@ impl State {
                 cx,
             )
         });
-        State { monitor }
+        let reopening = super::choice_select(
+            REOPENING_NAME,
+            REOPENING_DEBUG,
+            |_| {
+                REOPENINGS
+                    .iter()
+                    .map(|&(_, name, does, id)| crate::ui::select::Choice {
+                        subtitle: Some(does.into()),
+                        ..super::choice(id, name, None)
+                    })
+                    .collect()
+            },
+            |cx| {
+                let chosen = crate::settings::shared(cx).read(cx).reopening();
+                REOPENINGS
+                    .iter()
+                    .find(|&&(reopening, ..)| reopening == chosen)
+                    .map_or("RestoreView", |&(.., id)| id)
+            },
+            |id, cx| {
+                if let Some(&(reopening, ..)) = REOPENINGS.iter().find(|&&(.., of)| of == id) {
+                    crate::settings::shared(cx).update(cx, |settings, cx| {
+                        settings.set_reopening(reopening, cx);
+                    });
+                }
+            },
+            window,
+            cx,
+        );
+        State { monitor, reopening }
     }
 
     /// The popup's search field, for tests that drive composition the
@@ -212,12 +272,12 @@ fn monitor_model(cx: &App) -> Model {
 pub(crate) fn monitor_choices(layout: &DisplayLayout) -> Vec<Choice> {
     MONITORS
         .iter()
-        .map(|&(monitor, name, subtitle, keywords, _)| Choice {
+        .map(|&(monitor, name, keywords, _)| Choice {
             // The choice's identity: the preference itself, as the commit
             // path and the saved choice name it.
             id: monitor_name(monitor).into(),
             label: name.into(),
-            subtitle: Some(subtitle.into()),
+            subtitle: None,
             keywords: keywords.iter().map(|&word| word.into()).collect(),
             // A choice whose answer the system does not give is listed
             // with its reason, not offered: choosing it would pretend a
@@ -269,22 +329,23 @@ impl SettingsWindow {
     }
 }
 
-/// The settings the page offers the sidebar's search: each choice of both
-/// groups, named as the page names it, in the group it sits in, saying
-/// why it cannot be used where the system does not answer it — the result
-/// stays listed with its reason, as the control does on the page. The
-/// opening monitor's choices all jump to the one select control that
-/// offers them; the reopening choices to their rows. The reopening
-/// choices are no platform integration: they are always usable.
+/// The settings the page offers the sidebar's search: each choice of the
+/// display and reopening selects, named as the page names it, in the group
+/// it sits in, saying why it cannot be used where the system does not
+/// answer it — the result stays listed with its reason, as the control
+/// does on the page — then the Layout card's three rows. Each select's
+/// choices all jump to the one select control that offers them. The
+/// reopening and layout choices are no platform integration: they are
+/// always usable.
 fn entries(_launcher: &Launcher, cx: &App) -> Vec<search::Entry> {
     let placement = crate::placement::shared(cx);
     let layout = placement.layout();
     let unavailable = placement.unavailable();
-    let monitors = MONITORS.iter().map(|&(monitor, name, _, _, _)| {
+    let monitors = MONITORS.iter().map(|&(monitor, name, _, _)| {
         search::Entry {
             control: Some("launcher-monitor".into()),
             title: name.into(),
-            group: Some("Opening monitor".into()),
+            group: Some(MONITOR_NAME.into()),
             unavailable: match &unavailable {
                 // The platform cannot choose the launcher's display at all:
                 // every choice says so, as the page does.
@@ -293,33 +354,45 @@ fn entries(_launcher: &Launcher, cx: &App) -> Vec<search::Entry> {
             },
         }
     });
-    let reopenings = REOPENINGS
-        .iter()
-        .map(|&(_, name, _, selector)| search::Entry {
-            control: Some(selector.into()),
-            title: name.into(),
-            group: Some("Reopening".into()),
-            unavailable: None,
-        });
-    monitors.chain(reopenings).collect()
+    let reopenings = REOPENINGS.iter().map(|&(_, name, _, _)| search::Entry {
+        control: Some(REOPENING_DEBUG.into()),
+        title: name.into(),
+        group: Some(REOPENING_NAME.into()),
+        unavailable: None,
+    });
+    let layout = [
+        ("launcher-window-mode", WINDOW_MODE_NAME),
+        (COMPACT_PINNED_DEBUG, COMPACT_PINNED_NAME),
+        ("launcher-pinned", PINNED_NAME),
+    ]
+    .into_iter()
+    .map(|(control, title)| search::Entry {
+        control: Some(control.into()),
+        title: title.into(),
+        group: Some(LAYOUT.into()),
+        unavailable: None,
+    });
+    monitors.chain(reopenings).chain(layout).collect()
 }
 
-/// The page's one keyboard control is the opening-monitor select: its
-/// trigger takes focus (it is a tab stop, and Enter opens its choices),
-/// so a jump to any of the monitor's choices focuses it. The reopening
-/// rows take no keyboard focus (they are chosen with the pointer, as
-/// the reference's settings rows are), so a jump to one reveals it and
-/// the sidebar keeps the focus: `false`.
+/// The page's keyboard controls are its two selects, the display and the
+/// reopening delay: a select's trigger takes focus (it is a tab stop, and
+/// Enter opens its choices), so a jump to any of its choices focuses it.
+/// The Layout card's segments and switch take no keyboard focus (they are
+/// chosen with the pointer, as the reference's settings rows are), so a
+/// jump to one reveals it and the sidebar keeps the focus: `false`.
 fn focus(
     this: &mut SettingsWindow,
     target: &str,
     window: &mut Window,
     cx: &mut Context<SettingsWindow>,
 ) -> bool {
-    if target != "launcher-monitor" {
-        return false;
-    }
-    let trigger = this.launcher_page.monitor.read(cx).trigger_focus();
+    let select = match target {
+        "launcher-monitor" => &this.launcher_page.monitor,
+        REOPENING_DEBUG => &this.launcher_page.reopening,
+        _ => return false,
+    };
+    let trigger = select.read(cx).trigger_focus();
     window.focus(&trigger, cx);
     true
 }
@@ -334,177 +407,234 @@ pub(crate) struct LauncherView {
     /// What the launcher would open on now, when that is not the display
     /// the choice names.
     pub(crate) fallback: Option<String>,
-    /// The reopening choice in effect.
-    pub(crate) reopening: Reopening,
+    /// The layout choices in effect.
+    pub(crate) window_mode: WindowMode,
+    /// Whether the compact window shows the pins under its search field.
+    pub(crate) compact_pinned: bool,
+    pub(crate) pinned_layout: PinnedLayout,
     /// What a save reported, if it failed.
     pub(crate) status: Option<String>,
 }
 
 /// Which of the Launcher page's controls an element is, for the caller of
-/// [`compose`] that attaches its behavior: a reopening choice's segment.
+/// [`compose`] that attaches its behavior: a layout choice's segment, or
+/// the switch that shows the pins in the compact window.
 #[derive(Clone, Copy)]
 pub(crate) enum LauncherControl {
-    Reopening(Reopening),
+    WindowMode(WindowMode),
+    Pinned(PinnedLayout),
+    CompactPinned,
 }
 
-/// Draws the Launcher page: the opening monitor's select, the reopening
-/// choice, the dismissal note, and whatever the host settings and the
-/// platform report — an unsupported choice, a fallback, a save that
-/// failed.
+/// The layout section's label.
+pub(crate) const LAYOUT: &str = "Layout";
+
+/// Draws the Launcher page: the opening monitor's and the reopening
+/// choice's selects, the layout choices, and whatever the host settings
+/// and the platform report — an unsupported choice, a fallback, a save
+/// that failed.
 fn render(
     this: &mut SettingsWindow,
     _window: &mut Window,
     cx: &mut Context<SettingsWindow>,
 ) -> AnyElement {
     let settings = crate::settings::shared(cx);
-    let (chosen, reopening, status) = {
+    let (chosen, window_mode, compact_pinned, pinned_layout, status) = {
         let state = settings.read(cx);
-        (state.opening_monitor(), state.reopening(), state.status())
+        (
+            state.opening_monitor(),
+            state.window_mode(),
+            state.compact_pinned(),
+            state.pinned_layout(),
+            state.status(),
+        )
     };
     let placement = crate::placement::shared(cx);
     let layout = placement.layout();
     let view = LauncherView {
         unavailable: placement.unavailable(),
         fallback: resolve(&layout, chosen).and_then(|resolved| resolved.fallback),
-        reopening,
+        window_mode,
+        compact_pinned,
+        pinned_layout,
         status,
     };
     let visuals = crate::settings::visuals(cx);
     let theme = &visuals.theme;
-    // The select's scroll anchor, which the search's reveal scrolls to
+    // The selects' scroll anchors, which the search's reveal scrolls to
     // (see the window's render): the whole control is what a jump to any
-    // of the monitor's choices reveals. The select is offered only where
+    // of its choices reveals. The monitor's select is offered only where
     // the platform can choose the launcher's display.
     let select = view.unavailable.is_none().then(|| {
         let anchor = this.search_anchor("launcher-monitor");
         div()
             .id("launcher-monitor")
-            .w_full()
+            .flex_none()
             .anchor_scroll(Some(anchor))
             .child(this.launcher_page.monitor.clone())
     });
-    let anchors: Vec<ScrollAnchor> = REOPENINGS
-        .iter()
-        .map(|&(_, _, _, selector)| this.search_anchor(selector))
-        .collect();
-    compose(&view, select, theme, |control, element| match control {
-        LauncherControl::Reopening(preference) => {
-            let index = REOPENINGS
-                .iter()
-                .position(|&(choice, ..)| choice == preference)
-                .unwrap_or_default();
-            element
-                .anchor_scroll(anchors.get(index).cloned())
+    let reopening = div()
+        .id(REOPENING_DEBUG)
+        .flex_none()
+        .anchor_scroll(Some(this.search_anchor(REOPENING_DEBUG)))
+        .child(this.launcher_page.reopening.clone());
+    let mode_anchor = this.search_anchor("launcher-window-mode");
+    let pinned_anchor = this.search_anchor("launcher-pinned");
+    let compact_pinned_anchor = this.search_anchor(COMPACT_PINNED_DEBUG);
+    compose(
+        &view,
+        (select, Some(reopening)),
+        theme,
+        |control, element| match control {
+            LauncherControl::WindowMode(mode) => element
+                .anchor_scroll(Some(mode_anchor.clone()))
                 .on_click(cx.listener(move |_, _: &gpui::ClickEvent, _, cx| {
                     crate::settings::shared(cx).update(cx, |settings, cx| {
-                        settings.set_reopening(preference, cx);
+                        settings.set_window_mode(mode, cx);
                     });
-                }))
-        }
-    })
+                })),
+            LauncherControl::Pinned(layout) => element
+                .anchor_scroll(Some(pinned_anchor.clone()))
+                .on_click(cx.listener(move |_, _: &gpui::ClickEvent, _, cx| {
+                    crate::settings::shared(cx).update(cx, |settings, cx| {
+                        settings.set_pinned_layout(layout, cx);
+                    });
+                })),
+            LauncherControl::CompactPinned => element
+                .anchor_scroll(Some(compact_pinned_anchor.clone()))
+                .on_click(cx.listener(|_, _: &gpui::ClickEvent, _, cx| {
+                    let settings = crate::settings::shared(cx);
+                    let on = settings.read(cx).compact_pinned();
+                    settings.update(cx, |settings, cx| {
+                        settings.set_compact_pinned(!on, cx);
+                    });
+                })),
+        },
+    )
     .into_any_element()
 }
 
+/// One segmented choice at a settings row's end, named `group`: `choices`
+/// (the preference, its name, its selector), `chosen` marked, each
+/// attached as the `control` it is.
+fn segments<T: Copy + PartialEq>(
+    group: &'static str,
+    choices: &[(T, &'static str, &'static str)],
+    chosen: T,
+    theme: &Theme,
+    control: impl Fn(T) -> LauncherControl,
+    attach: &impl Fn(LauncherControl, Stateful<Div>) -> Stateful<Div>,
+) -> Stateful<Div> {
+    let segments = choices.iter().map(|&(choice, name, selector)| {
+        let on = choice == chosen;
+        let segment = controls::segment(name, on, true, theme)
+            .id(selector)
+            .debug_selector(move || selector.into())
+            .role(Role::RadioButton)
+            .aria_label(name)
+            .aria_toggled(if on { Toggled::True } else { Toggled::False });
+        attach(control(choice), segment)
+    });
+    controls::row_segment_track(theme)
+        .id(group)
+        .role(Role::RadioGroup)
+        .children(segments)
+}
+
 /// The Launcher page's composition, which the visual workbench's fixture
-/// draws too: the heading block, then in the page's column the platform's
-/// reason where it cannot choose the display; else `select` (the opening
-/// monitor's searchable select, a Settings field of its own, see
-/// [`crate::ui::select`]) with the fallback it explains; the reopening
-/// choice's field group — a segmented choice, the chosen one's
-/// description under it; the dismissal note; and a failed save's status.
-/// `attach` adds each reopening segment's behavior; the composition gives
-/// each its identity, its accessibility and its look.
+/// draws too: a card of the Display row — `selects.0`, the opening
+/// monitor's searchable select (see [`crate::ui::select`]), with the
+/// fallback it explains under its name, or where the platform cannot
+/// choose the display at all, why — and the Pop to root search row
+/// (`selects.1`); then the Layout card's window mode segments, the switch
+/// that shows the pins in the compact window, and the pinned items
+/// segments. A failed save's status sits above the cards. `attach` adds
+/// each control's behavior; the composition gives each its identity, its
+/// accessibility and its look.
 pub(crate) fn compose(
     view: &LauncherView,
-    select: Option<Stateful<Div>>,
+    selects: (Option<Stateful<Div>>, Option<Stateful<Div>>),
     theme: &Theme,
     attach: impl Fn(LauncherControl, Stateful<Div>) -> Stateful<Div>,
 ) -> Stateful<Div> {
-    let segments = REOPENINGS
-        .iter()
-        .map(|&(preference, name, subtitle, selector)| {
-            let chosen = preference == view.reopening;
-            let segment = controls::segment(name, chosen, true, theme)
-                .id(name)
-                .debug_selector(move || selector.into())
-                .role(Role::RadioButton)
-                .aria_label(name)
-                // What the choice does is read as its description, as a
-                // field's description is.
-                .aria_description(subtitle)
-                .aria_toggled(if chosen {
-                    Toggled::True
-                } else {
-                    Toggled::False
-                });
-            attach(LauncherControl::Reopening(preference), segment)
-        });
-    let description = REOPENINGS
-        .iter()
-        .find(|&&(preference, ..)| preference == view.reopening)
-        .map_or("", |&(_, _, subtitle, _)| subtitle);
-    let reopening = controls::field(theme)
+    let (select, reopening) = selects;
+    let reopening = controls::setting_row(REOPENING_NAME, Vec::new(), theme)
         .debug_selector(|| "launcher-reopening-field".into())
-        .child(controls::field_label("Reopening", theme))
-        .child(
-            controls::segment_track(theme)
-                .id("launcher-reopening")
-                .debug_selector(|| "launcher-reopening-track".into())
-                .role(Role::RadioGroup)
-                .aria_label("Reopening")
-                .children(segments),
-        )
-        .child(controls::field_description(
-            description,
-            theme.text_muted,
+        .children(reopening);
+    // The opening display, with the choice's own honesty: what the
+    // launcher opens on now, when that is not the display the choice
+    // names; or, where the platform cannot choose the display at all, why.
+    let mut lines = Vec::new();
+    lines.extend(view.unavailable.as_ref().map(|why| {
+        note(
+            "launcher-unavailable",
+            format!("Not available: {why}"),
+            theme.warning,
             theme,
+        )
+        .into_any_element()
+    }));
+    lines.extend(view.fallback.as_ref().map(|reason| {
+        note("launcher-fallback", reason.clone(), theme.warning, theme).into_any_element()
+    }));
+    let display = controls::setting_row(MONITOR_NAME, lines, theme)
+        .debug_selector(|| "launcher-monitor-field".into())
+        .children(select);
+    let card = controls::card(
+        [display.into_any_element(), reopening.into_any_element()],
+        theme,
+    );
+    let mode = controls::setting_row(WINDOW_MODE_NAME, Vec::new(), theme)
+        .debug_selector(|| "launcher-window-mode-field".into())
+        .child(segments(
+            "launcher-window-mode",
+            &WINDOW_MODES,
+            view.window_mode,
+            theme,
+            LauncherControl::WindowMode,
+            &attach,
         ));
-    let column =
-        controls::column(theme)
-            .child(
-                settings_shell::page_header(TITLE, Some(ABOUT.into()), theme)
-                    .id("launcher-title")
-                    .debug_selector(|| "launcher-title".into()),
-            )
-            // A platform that cannot choose the launcher's display at all:
-            // the reason, and no choices offered below.
-            .children(view.unavailable.as_ref().map(|why| {
-                note(
-                    "launcher-unavailable",
-                    format!("Not available: {why}"),
-                    theme.warning,
-                    theme,
-                )
-            }))
-            // The opening monitor, with the choice's own honesty: what the
-            // launcher would open on now, when that is not the display the
-            // choice names.
-            .children(select.map(|select| {
-                controls::field(theme)
-                    .debug_selector(|| "launcher-monitor-field".into())
-                    .child(select)
-                    .children(view.fallback.as_ref().map(|reason| {
-                        note("launcher-fallback", reason.clone(), theme.warning, theme)
-                    }))
-            }))
-            .child(reopening)
-            // Dismissal is not a choice: the specification's Escape contract
-            // stands as it is, and this says what it is.
-            .child(note(
-                "launcher-dismissal",
-                DISMISSAL,
-                theme.text_muted,
-                theme,
-            ))
-            .children(
-                view.status
-                    .as_ref()
-                    .map(|status| note("launcher-status", status.clone(), theme.danger, theme)),
-            );
+    let compact_pinned = super::general::switch_row(
+        super::general::SwitchRow {
+            id: COMPACT_PINNED_DEBUG,
+            selector: COMPACT_PINNED_DEBUG,
+            title: COMPACT_PINNED_NAME,
+            on: view.compact_pinned,
+            offered: true,
+            lines: Vec::new(),
+        },
+        theme,
+        |switch| attach(LauncherControl::CompactPinned, switch),
+    );
+    let pinned = controls::setting_row(PINNED_NAME, Vec::new(), theme)
+        .debug_selector(|| "launcher-pinned-field".into())
+        .child(segments(
+            "launcher-pinned",
+            &PINNED_LAYOUTS,
+            view.pinned_layout,
+            theme,
+            LauncherControl::Pinned,
+            &attach,
+        ));
+    let layout = controls::card(
+        [
+            mode.into_any_element(),
+            compact_pinned.into_any_element(),
+            pinned.into_any_element(),
+        ],
+        theme,
+    );
+    let page = controls::page(theme)
+        .children(view.status.as_ref().map(|status| {
+            note("launcher-status", status.clone(), theme.danger, theme)
+                .px(theme.geometry.settings.section_label_inset)
+        }))
+        .child(controls::section(None, card, theme))
+        .child(controls::section(Some(LAYOUT.into()), layout, theme));
     div()
         .id("launcher")
         .debug_selector(|| "launcher".into())
-        .child(column)
+        .child(page)
 }
 
 /// Why `monitor`'s choice cannot be answered on this platform, if it
@@ -513,16 +643,12 @@ pub(crate) fn compose(
 fn unsupported(layout: &DisplayLayout, monitor: OpeningMonitor) -> Option<String> {
     match monitor {
         OpeningMonitor::Primary => None,
-        OpeningMonitor::Pointer if layout.pointer.is_none() => Some(
-            "This system does not tell Pane where the pointer is outside its own windows, so \
-             the launcher opens on the primary display instead"
-                .into(),
-        ),
-        OpeningMonitor::ActiveWindow if layout.active.is_none() => Some(
-            "This system does not tell Pane which window is active, so the launcher opens on \
-             the primary display instead"
-                .into(),
-        ),
+        OpeningMonitor::Pointer if layout.pointer.is_none() => {
+            Some("This system doesn't report where the mouse is".into())
+        }
+        OpeningMonitor::ActiveWindow if layout.active.is_none() => {
+            Some("This system doesn't report the active window".into())
+        }
         _ => None,
     }
 }

@@ -9,10 +9,11 @@
 //! Interaction reference: the Raycast dropdown and the shadcn combobox
 //! as *behavior* references only (`docs/research/searchable-settings-
 //! selects.md`) — the visual language is entirely Pane's, the reference's
-//! families (#99, `ui::controls`): a Settings field — the name as its
-//! label, the trigger a field's well, the description under it — the L2
-//! popover material with its own shadows, the well for the popup's search
-//! field, and the Actions panel's entries for the choices. Nothing fades:
+//! families (#99, `ui::controls`): the trigger an inline well at a settings
+//! row's end (the row names the setting and says what it does), the L2
+//! popover material with its own shadows at the trigger's width, the well
+//! for the popup's search field, and the Actions panel's entries for the
+//! choices. Nothing fades:
 //! the Settings board's controls change at once. Nothing here imports a
 //! React toolkit, re-creates the theme, or knows what a setting is.
 //!
@@ -119,6 +120,10 @@ const PLACEHOLDER: &str = "Search choices";
 /// keeping the highlighted choice visible, so the popup stays a
 /// reasonable overlay even over a long choice list.
 const LIST_MAX_HEIGHT: Pixels = px(300.);
+
+/// The space between the trigger and the popup below it, and the least
+/// the popup keeps from the window's edges.
+const POPUP_GAP: Pixels = px(4.);
 
 actions!(
     pane_select,
@@ -238,11 +243,12 @@ pub(crate) struct Select {
     /// state only — never the committed choice, which the model holds.
     active: Option<SharedString>,
     /// The popup's entrance or exit in flight, if any: the popup's look
-    /// (0 closed, 1 open), presentation only — see [`crate::ui::motion`].
-    /// The draft below it outlives the close that started the exit (a
-    /// fresh open resets it), so the exiting popup paints what the user
-    /// saw; nothing interactive reads it while the exit runs.
-    transition: Option<crate::ui::motion::Tween>,
+    /// (0 closed, 1 open) and its fade, presentation only — see
+    /// [`crate::ui::motion`]. The draft below it outlives the close that
+    /// started the exit (a fresh open resets it), so the exiting popup
+    /// paints what the user saw; nothing interactive reads it while the
+    /// exit runs.
+    transition: crate::ui::motion::PopupMotion,
     /// Whether the last drawn frame drew the popup open — the one thing
     /// that starts or retargets the transition, so a reopen during the
     /// exit reverses from the presentation on screen.
@@ -320,7 +326,7 @@ impl Select {
             _query_changes,
             _deactivation,
             active: None,
-            transition: None,
+            transition: Default::default(),
             drawn_open: false,
             opened: false,
             #[cfg(any(test, debug_assertions))]
@@ -744,10 +750,9 @@ impl Select {
 
     /// The popup: the L2 popover surface with the search field above
     /// the choice rows, on the anchored, deferred overlay that paints
-    /// above the window and is constrained inside it. The popup is as
-    /// wide as its contents ask — the field, the rows — bounded by the
-    /// space the trigger leaves (content-width dropdowns, as Raycast's
-    /// are). See the module docs for the placement. `active` is the
+    /// above the window and is constrained inside it. The popup is the
+    /// trigger's width, 4 below it. See the module docs for the
+    /// placement. `active` is the
     /// highlighted choice's id, if one is highlighted; `in_flight` is
     /// the popup's presentation while its entrance or exit runs — the
     /// offset from rest toward the trigger and the opacity — and it is
@@ -849,7 +854,9 @@ impl Select {
         let debug = format!("{}-popup", self.debug);
         let popup = div()
             .id("popup")
-            .w_full()
+            // The trigger's own width, so the list reads as the trigger
+            // opened.
+            .w(theme.geometry.settings.choice_width)
             .flex()
             .flex_col()
             // The popup takes the clicks that land on it: a click on a
@@ -906,7 +913,8 @@ impl Select {
         deferred(
             anchored()
                 .anchor(gpui::Anchor::TopLeft)
-                .snap_to_window()
+                .offset(gpui::point(px(0.), POPUP_GAP))
+                .snap_to_window_with_margin(POPUP_GAP)
                 .child(popup),
         )
         .into_any_element()
@@ -940,6 +948,7 @@ impl Select {
             .or_else(|| choice.subtitle.clone())
             .unwrap_or_default();
         let row_element = controls::menu_row(
+            choice.id.clone(),
             choice.label.clone(),
             (!description.is_empty()).then(|| description.clone()),
             (highlighted, committed, offered),
@@ -950,7 +959,6 @@ impl Select {
         let label = choice.label.clone();
         let description_label = description.clone();
         let row_element = row_element
-            .id(choice.id.clone())
             .debug_selector(move || debug.clone())
             .role(Role::ListBoxOption)
             .aria_label(label)
@@ -1049,16 +1057,16 @@ impl Render for Select {
         // there (painting above the window, following the page's
         // scroll).
         //
-        // The block is a Settings field (#99): the setting's name as its
-        // label over the trigger and its anchoring row, its description
-        // under them — 8px apart, the field group's own gap.
-        let theme = &model.theme;
-        let debug = self.debug.clone();
-        let block = div()
+        // The block sits at a settings row's end, as wide as a row's
+        // choice; the row around it names the setting and says what it
+        // does.
+        let width = model.theme.geometry.settings.choice_width;
+        div()
             .relative()
+            .flex_none()
             .flex()
             .flex_col()
-            .w_full()
+            .w(width)
             .child(trigger)
             .child(
                 div()
@@ -1066,19 +1074,7 @@ impl Render for Select {
                     .h(px(0.))
                     .w_full()
                     .when_some(popup, |anchor, popup| anchor.child(popup)),
-            );
-        controls::field(theme)
-            .w_full()
-            .child(
-                controls::field_label(self.name.clone(), theme)
-                    .debug_selector(move || format!("{debug}-label")),
             )
-            .child(block)
-            .child(controls::field_description(
-                self.description.clone(),
-                theme.text_muted,
-                theme,
-            ))
     }
 }
 

@@ -127,10 +127,14 @@ fn keyboard_page(cx: &mut VisualTestContext) -> (WindowHandle<SettingsWindow>, V
     cx.simulate_keystrokes(settings_shortcut());
     cx.run_until_parked();
     let (settings, mut settings_cx) = open_settings(cx);
+    // A tall window, so every action's row is in view below the Behavior
+    // section.
+    settings_cx.simulate_resize(gpui::size(gpui::px(860.), gpui::px(1000.)));
+    settings_cx.run_until_parked();
     click(&mut settings_cx, "section-Keyboard");
     settings_cx.run_until_parked();
     assert!(
-        settings_cx.debug_bounds("keyboard-title").is_some(),
+        settings_cx.debug_bounds("keyboard").is_some(),
         "the Keyboard page is showing"
     );
     (settings, settings_cx)
@@ -602,13 +606,26 @@ fn the_windows_close_shortcut_is_captured_while_a_recorder_listens(cx: &mut Test
     );
     settings_cx.run_until_parked();
     assert!(
-        settings_cx.debug_bounds("keyboard-title").is_some(),
+        settings_cx.debug_bounds("keyboard").is_some(),
         "the Settings window stayed open"
     );
-    // The window still closes on it when no recorder is listening.
-    settings_cx.simulate_keystrokes("escape");
+    // The find shortcut is captured too: it records, and the search
+    // field is not focused.
+    let find = if cfg!(target_os = "macos") {
+        "cmd-f"
+    } else {
+        "ctrl-f"
+    };
+    settings_cx.simulate_keystrokes(find);
     settings_cx.run_until_parked();
-    settings_cx.update(|window, _| window.remove_window());
+    until_record(&mut settings_cx, data.path(), "back", find);
+    let tree = a11y(&mut settings_cx);
+    assert!(
+        !tree.contains("Recording; Back"),
+        "the recording ended with the keys, {tree}"
+    );
+    // The window still closes on it when no recorder is listening.
+    settings_cx.simulate_keystrokes(dismiss_shortcut());
     cx.run_until_parked();
     assert_eq!(settings_windows(cx), 0, "the window closed");
 }
@@ -700,14 +717,10 @@ fn a_reset_returns_to_the_default_through_the_same_checks(cx: &mut TestAppContex
     // Back is Ctrl+B; the reset row appears for it. A tall window, so
     // every row stays in view as the resets add theirs.
     let (_settings, mut settings_cx) = keyboard_page(cx);
-    settings_cx.simulate_resize(gpui::size(gpui::px(740.), gpui::px(900.)));
-    settings_cx.run_until_parked();
     record(&mut settings_cx, "keyboard-back", "ctrl-b");
     until_record(&mut settings_cx, data.path(), "back", "ctrl-b");
-    assert!(
-        settings_cx.debug_bounds("keyboard-reset-back").is_some(),
-        "the reset row is drawn for the custom binding"
-    );
+    let nodes = accessible_nodes(&mut settings_cx);
+    node(&nodes, "Button", "Reset Back to Escape");
     // The rebound key backs out of an opened command.
     cx.simulate_keystrokes("enter");
     settle(&window, cx);
@@ -730,10 +743,9 @@ fn a_reset_returns_to_the_default_through_the_same_checks(cx: &mut TestAppContex
         matches!(view.screen, Screen::Root { .. }),
         "Escape backs out"
     );
-    assert!(
-        settings_cx.debug_bounds("keyboard-reset-back").is_none(),
-        "nothing left to reset"
-    );
+    // The reset stays, naming no default: nothing is left to reset.
+    let nodes = accessible_nodes(&mut settings_cx);
+    node(&nodes, "Button", "Reset Back");
 
     // A reset that would land on another action's binding is refused:
     // Open Settings moves to Ctrl+9, Dismiss takes the freed default's
@@ -954,7 +966,7 @@ fn window_local_actions_stay_in_their_windows(cx: &mut TestAppContext) {
     assert!(hidden(&window, cx), "the launcher was dismissed");
     settings_cx.run_until_parked();
     assert!(
-        settings_cx.debug_bounds("keyboard-title").is_some(),
+        settings_cx.debug_bounds("keyboard").is_some(),
         "Settings stays open and answers"
     );
     assert!(

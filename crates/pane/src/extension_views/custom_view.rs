@@ -145,7 +145,7 @@ impl LauncherWindow {
         let focus = controls.focus.clone();
         let entity = cx.entity().downgrade();
         let (moved, released) = (entity.clone(), entity);
-        let visuals = crate::settings::visuals(cx);
+        let visuals = crate::settings::launcher_visuals(cx);
         let drawing = div()
             .debug_selector(|| "custom-view".into())
             .relative()

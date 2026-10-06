@@ -81,20 +81,40 @@ A labelled run of root results: "Commands" over a blank query's results, "Result
 _Avoid_: Group (a shortcut group is a Settings term), suggestions
 
 **Quick slot**:
-One of the five ordered places on root search's pinned home where the user pins a root result, to invoke it with one click or Ctrl+1 to Ctrl+5. It holds the result's identity — a registered command by its id, or an indexed result under the command that supplies it — never its row, title or a computed answer, and Pane keeps the five as its own record (`quick-slots.json`), not extension data. A target that is disabled, paused, missing or not listed yet keeps its slot and says why it cannot run; an empty slot invokes nothing.
+One pin in the ordered list of root results the user pins to root search's pinned home, to invoke with one click or, for the first five, its Ctrl+digit chord (see Number hints). The list has no gaps and no limit: pinning adds at the end, unpinning closes the gap, moving swaps a pin with its neighbour. It holds the result's identity — a registered command by its id, or an indexed result under the command that supplies it — never its row, title or a computed answer, and Pane keeps the list as its own record (`quick-slots.json`), not extension data. A target that is disabled, paused, missing or not listed yet keeps its slot and says why it cannot run.
 _Avoid_: Favorite, bookmark, shortcut, dock
 
 **Pinned home**:
-What root search shows above its results while the query is blank: the "Pinned" label and the five quick slots. A query hides it; clearing the query brings it back.
+What root search shows above its results while the query is blank: the "Pinned" label and the quick slots, as a five-column grid of tiles that wraps, with a "+ Pin" hint in the last row's next free cell (horizontal), or as result rows of the pinned results only, nothing without pins (vertical), as the Launcher page chooses. A query hides it; clearing the query brings it back.
 _Avoid_: Start page, dashboard, recents (Pane shows no recent use)
 
+**Number hints**:
+The numbers the launcher's items show while Ctrl is held alone for a moment, naming the Ctrl+digit chord that picks each: under the pinned home, the first five quick slots in order from 1 (later ones have none) and then the first rows, up to 9; or 1 to 9 the first rows of a query's results or a command's list. They show only while Ctrl is held; at rest nothing names the chords.
+_Avoid_: Shortcut labels, badges
+
+**Window mode**:
+How much of the launcher shows while root search's query is blank, as the Launcher page chooses: expanded (the whole launcher) or compact (only the search field, the results and footer appearing with a query; with "Show pinned in compact window mode" on, the quick slots show as a row of small icons under the field).
+_Avoid_: Size, density
+
 **Actions panel**:
-The panel, opened from the launcher's footer or its Open actions binding, that lists what can be done with root search's selected result: its primary action, then pinning it to a quick slot, then the alias and hotkey configuration of an installed command. A quick slot has one of its own, opening, removing and moving it. It lists only operations Pane can perform, and holds the result it opened for.
+The panel, opened from the launcher's footer or its Open actions binding, that lists what can be done with root search's selected result: its primary action, then pinning it to the quick slots or unpinning it, then the alias and hotkey configuration of an installed command. A quick slot has one of its own, opening, unpinning and moving it. It lists only operations Pane can perform, and holds the result it opened for.
 _Avoid_: Context menu, app menu (the Pane menu is separate)
 
 **Appearance**:
-How Pane's windows look, as the user chooses it on Settings' Appearance page: a theme (System, which follows the system's light or dark appearance as it changes, Light or Dark) and a material (Glass, a translucent tint over the system's blur where the platform provides it, or Solid, an opaque window). Both windows render a choice at once, and Pane keeps it in its own settings record; a development override (`PANE_THEME`, `PANE_MATERIAL`) wins for its process, disables the choices and is never saved. The page's preview is a picture of the launcher in the appearance in effect, not the user's results. Accent colors, blur and tint strength, density and pinned or tip visibility are not Pane settings: only the visual workbench's reference fixture draws those controls.
+How Pane's windows look, as the user chooses it on Settings' Appearance page: a theme (System, which follows the system's light or dark appearance as it changes, Light or Dark) and a material (Glass, a translucent tint over the system's blur where the platform provides it, or Solid, an opaque window), and, for the launcher alone, a background image with its background effect. Both windows render a choice at once, and Pane keeps it in its own settings record; a development override (`PANE_THEME`, `PANE_MATERIAL`) wins for its process, disables the choices and is never saved. The page's preview is a picture of the launcher in the appearance in effect, not the user's results. Accent colors, blur and tint strength, density, tip visibility and pinned visibility outside compact mode are not Pane settings: only the visual workbench's reference fixture draws those controls.
 _Avoid_: Theme (one half of it), skin, style
+
+**Background image**:
+A picture the user chooses on the Appearance page, drawn behind the launcher's content (ADR 0028). Pane keeps its own copy in its data folder, so the user's file can move or go. The picture fills the panel's top and fades into the panel's canvas, its own color moved toward the picture's; it scrolls away faster than the results and dissolves as they scroll. The Settings window never draws it. It is not glass: the panel under it is opaque, and no copy of the desktop's wallpaper is ever drawn.
+_Avoid_: Wallpaper (the desktop's), backdrop (the baked frame, an implementation word)
+
+**Background effect**:
+The texture drawn into the background image: None, Dither, ASCII, Halftone or Scanlines (the default), Roboco's new-thread background treatments.
+_Avoid_: Filter, style
+
+**Frost**:
+The surfaces drawn over the background image — the search field's pill, the pins, the selected row and the footer — which blur what is behind them inside the window under a thin tint of the canvas. Without a background image there is no frost.
+_Avoid_: Glass (the window's material), acrylic
 
 **Pane menu**:
 Pane's own menu, opened from the Pane mark at the left of the launcher's footer, holding Settings. It is not about any result.

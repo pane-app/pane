@@ -1,23 +1,29 @@
 //! The reference's icon treatment: stroke glyphs rendered as tinted SVG
 //! masks, and the vertical-gradient tiles they sit on.
 //!
-//! The glyphs are authored SVG assets in `crates/pane/assets/icons/`, path
-//! data copied from the reference's own icon set (stroke style: 1.6
-//! stroke-width, round caps and joins, 24×24 viewBox). They are embedded at
-//! compile time with `include_bytes!` — no runtime file lookup, no
-//! `AssetSource` registration; `svg().data(bytes)` renders them directly.
-//! GPUI renders an SVG as an alpha mask and tints it with the element's
-//! text color, so the glyph's color always comes from the caller's token.
-//! An application tile draws its glyph at the reference's heavier 2px
-//! stroke (`.ic.b`); the same path at 2px is derived from the asset once
-//! (see [`Glyph::bold_svg_bytes`]).
+//! The glyphs are SVG assets in `crates/pane/assets/icons/<set>/`, a folder
+//! per icon set holding a file for every glyph, and `glyph_svg!` names the
+//! set they are drawn from — switching sets is that one line:
 //!
-//! The reference's set has no menu, window-control, appearance, download,
-//! copy, keyboard, disclosure or display glyph, so those are Pane's own
-//! authoring in the same stroke style: the gear (the Settings rows), the Windows titlebar's close,
-//! minimize and maximize marks (see the Settings window's custom
-//! titlebar), the half-and-half circle (the Appearance page), the down
-//! arrow, the two squares, the keyboard, the chevron and the monitor.
+//! - `reicon/`, the set in use: the Outline weight of reicon
+//!   (<https://reicon.dev>, MIT; 1.5 stroke-width, round caps and joins,
+//!   24×24 viewBox, some glyphs drawn as filled 1.5-wide bands instead of
+//!   strokes), vendored by `scripts/icons/vendor-reicon.py`, which pins the
+//!   version and holds the glyph-to-icon mapping.
+//! - `pane/`, the alternate: Pane's hand-authored glyphs — the reference's
+//!   own path data and Pane's additions in its style (1.6 stroke-width).
+//!
+//! The Windows titlebar's close, minimize and maximize marks (see the
+//! Settings window's custom titlebar) stay `pane/`'s thin marks whatever
+//! the set, and the Pane mark (`mark-*.svg`) is Pane's own.
+//!
+//! The glyphs are embedded at compile time with `include_bytes!` — no
+//! runtime file lookup, no `AssetSource` registration; `svg().data(bytes)`
+//! renders them directly. GPUI renders an SVG as an alpha mask and tints
+//! it with the element's text color, so the glyph's color always comes
+//! from the caller's token. An application tile draws its glyph at the
+//! reference's heavier stroke (`.ic.b`, 2px over its 1.6); the heavier
+//! glyph is derived from the asset once (see [`Glyph::bold_svg_bytes`]).
 //!
 //! Tones are the reference's `appTone` map, exactly — the gradients this
 //! build's known identities and the visual workbench's reference rows use,
@@ -41,8 +47,16 @@ use gpui::{Div, Hsla, Svg, div, linear_color_stop, linear_gradient, px, rgb_to_h
 
 use crate::ui::theme::{Theme, TileMetrics};
 
-/// A stroke glyph: the reference's own icon set, and Pane's additions in
-/// its style (see the module docs).
+/// The embedded SVG of glyph file `$name` in the icon set in use — the one
+/// place the set is chosen: `"reicon"` or `"pane"`, a folder under
+/// `crates/pane/assets/icons/` (see the module docs).
+macro_rules! glyph_svg {
+    ($name:literal) => {
+        include_bytes!(concat!("../../assets/icons/", "reicon", "/", $name, ".svg"))
+    };
+}
+
+/// A stroke glyph, drawn from the icon set in use (see the module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Glyph {
     Search,
@@ -104,7 +118,7 @@ pub(crate) enum Glyph {
     /// else (`A.run`).
     ActionRun,
     /// A keyboard: the Actions panel's hotkey entry (`A.kb`; the Settings
-    /// window's Keyboard section keeps Pane's own [`Glyph::Keyboard`]).
+    /// window's Keyboard section has its own [`Glyph::Keyboard`]).
     ActionHotkey,
     /// A tag: the Actions panel's alias entry (`A.tag`).
     ActionAlias,
@@ -130,9 +144,14 @@ pub(crate) enum Glyph {
     Music,
     /// A pushpin: the Actions panel's quick slot entries (`A.pin`).
     ActionPin,
-    /// A plus: the Appearance board's custom accent swatch (the
-    /// reference's own path; fixture-only, #100).
+    /// A plus: the pinned home's "+ Pin" hint, and the Appearance board's
+    /// custom accent swatch (the reference's own path).
     Plus,
+    /// A counter-clockwise arrow: a key binding recorder's button that
+    /// resets the binding to its default.
+    Reset,
+    /// A keyboard: a key binding recorder's record mark.
+    Record,
     /// The Windows titlebar's close mark.
     #[cfg(target_os = "windows")]
     WindowClose,
@@ -188,63 +207,67 @@ impl Glyph {
         Glyph::Music,
         Glyph::ActionPin,
         Glyph::Plus,
+        Glyph::Reset,
+        Glyph::Record,
     ];
 
     /// The embedded SVG bytes for this glyph.
     pub(crate) fn svg_bytes(self) -> &'static [u8] {
         match self {
-            Glyph::Search => include_bytes!("../../assets/icons/search.svg"),
-            Glyph::Terminal => include_bytes!("../../assets/icons/terminal.svg"),
-            Glyph::Prompt => include_bytes!("../../assets/icons/prompt.svg"),
-            Glyph::Code => include_bytes!("../../assets/icons/code.svg"),
-            Glyph::Folder => include_bytes!("../../assets/icons/folder.svg"),
-            Glyph::Blocks => include_bytes!("../../assets/icons/blocks.svg"),
-            Glyph::File => include_bytes!("../../assets/icons/file.svg"),
-            Glyph::Pen => include_bytes!("../../assets/icons/pen.svg"),
-            Glyph::Clipboard => include_bytes!("../../assets/icons/clipboard.svg"),
-            Glyph::Layout => include_bytes!("../../assets/icons/layout.svg"),
-            Glyph::Moon => include_bytes!("../../assets/icons/moon.svg"),
-            Glyph::Lock => include_bytes!("../../assets/icons/lock.svg"),
-            Glyph::SearchNone => include_bytes!("../../assets/icons/search-none.svg"),
-            Glyph::ArrowRight => include_bytes!("../../assets/icons/arrow-right.svg"),
-            Glyph::Calculator => include_bytes!("../../assets/icons/calculator.svg"),
-            Glyph::Clock => include_bytes!("../../assets/icons/clock.svg"),
-            Glyph::Package => include_bytes!("../../assets/icons/package.svg"),
-            Glyph::Target => include_bytes!("../../assets/icons/target.svg"),
-            Glyph::Gear => include_bytes!("../../assets/icons/gear.svg"),
-            Glyph::Globe => include_bytes!("../../assets/icons/globe.svg"),
-            Glyph::Keyboard => include_bytes!("../../assets/icons/keyboard.svg"),
-            Glyph::ChevronRight => include_bytes!("../../assets/icons/chevron-right.svg"),
-            Glyph::Theme => include_bytes!("../../assets/icons/theme.svg"),
-            Glyph::Monitor => include_bytes!("../../assets/icons/monitor.svg"),
-            Glyph::Sliders => include_bytes!("../../assets/icons/sliders.svg"),
-            Glyph::ActionOpen => include_bytes!("../../assets/icons/action-open.svg"),
-            Glyph::ActionRun => include_bytes!("../../assets/icons/action-run.svg"),
-            Glyph::ActionHotkey => include_bytes!("../../assets/icons/action-hotkey.svg"),
-            Glyph::ActionAlias => include_bytes!("../../assets/icons/action-alias.svg"),
-            Glyph::ArrowLeft => include_bytes!("../../assets/icons/arrow-left.svg"),
-            Glyph::Pause => include_bytes!("../../assets/icons/pause.svg"),
-            Glyph::Shield => include_bytes!("../../assets/icons/shield.svg"),
-            Glyph::Lines => include_bytes!("../../assets/icons/lines.svg"),
-            Glyph::Link => include_bytes!("../../assets/icons/link.svg"),
-            Glyph::Image => include_bytes!("../../assets/icons/image.svg"),
-            Glyph::Mail => include_bytes!("../../assets/icons/mail.svg"),
-            Glyph::Notes => include_bytes!("../../assets/icons/notes.svg"),
-            Glyph::Music => include_bytes!("../../assets/icons/music.svg"),
-            Glyph::ActionPin => include_bytes!("../../assets/icons/action-pin.svg"),
-            Glyph::Plus => include_bytes!("../../assets/icons/plus.svg"),
+            Glyph::Search => glyph_svg!("search"),
+            Glyph::Terminal => glyph_svg!("terminal"),
+            Glyph::Prompt => glyph_svg!("prompt"),
+            Glyph::Code => glyph_svg!("code"),
+            Glyph::Folder => glyph_svg!("folder"),
+            Glyph::Blocks => glyph_svg!("blocks"),
+            Glyph::File => glyph_svg!("file"),
+            Glyph::Pen => glyph_svg!("pen"),
+            Glyph::Clipboard => glyph_svg!("clipboard"),
+            Glyph::Layout => glyph_svg!("layout"),
+            Glyph::Moon => glyph_svg!("moon"),
+            Glyph::Lock => glyph_svg!("lock"),
+            Glyph::SearchNone => glyph_svg!("search-none"),
+            Glyph::ArrowRight => glyph_svg!("arrow-right"),
+            Glyph::Calculator => glyph_svg!("calculator"),
+            Glyph::Clock => glyph_svg!("clock"),
+            Glyph::Package => glyph_svg!("package"),
+            Glyph::Target => glyph_svg!("target"),
+            Glyph::Gear => glyph_svg!("gear"),
+            Glyph::Globe => glyph_svg!("globe"),
+            Glyph::Keyboard => glyph_svg!("keyboard"),
+            Glyph::ChevronRight => glyph_svg!("chevron-right"),
+            Glyph::Theme => glyph_svg!("theme"),
+            Glyph::Monitor => glyph_svg!("monitor"),
+            Glyph::Sliders => glyph_svg!("sliders"),
+            Glyph::ActionOpen => glyph_svg!("action-open"),
+            Glyph::ActionRun => glyph_svg!("action-run"),
+            Glyph::ActionHotkey => glyph_svg!("action-hotkey"),
+            Glyph::ActionAlias => glyph_svg!("action-alias"),
+            Glyph::ArrowLeft => glyph_svg!("arrow-left"),
+            Glyph::Pause => glyph_svg!("pause"),
+            Glyph::Shield => glyph_svg!("shield"),
+            Glyph::Lines => glyph_svg!("lines"),
+            Glyph::Link => glyph_svg!("link"),
+            Glyph::Image => glyph_svg!("image"),
+            Glyph::Mail => glyph_svg!("mail"),
+            Glyph::Notes => glyph_svg!("notes"),
+            Glyph::Music => glyph_svg!("music"),
+            Glyph::ActionPin => glyph_svg!("action-pin"),
+            Glyph::Plus => glyph_svg!("plus"),
+            Glyph::Reset => glyph_svg!("reset"),
+            Glyph::Record => glyph_svg!("record"),
             #[cfg(target_os = "windows")]
-            Glyph::WindowClose => include_bytes!("../../assets/icons/window-close.svg"),
+            Glyph::WindowClose => include_bytes!("../../assets/icons/pane/window-close.svg"),
             #[cfg(target_os = "windows")]
-            Glyph::WindowMinimize => include_bytes!("../../assets/icons/window-minimize.svg"),
+            Glyph::WindowMinimize => include_bytes!("../../assets/icons/pane/window-minimize.svg"),
             #[cfg(target_os = "windows")]
-            Glyph::WindowMaximize => include_bytes!("../../assets/icons/window-maximize.svg"),
+            Glyph::WindowMaximize => include_bytes!("../../assets/icons/pane/window-maximize.svg"),
         }
     }
 
-    /// The glyph at the reference's 2px application stroke (`.ic.b`):
-    /// the asset with its 1.6 stroke width replaced, derived once per
-    /// glyph and kept for the process's life (a bounded set).
+    /// The glyph at the reference's heavier application stroke (`.ic.b`)
+    /// — see [`embolden`] — derived once per glyph and kept for the
+    /// process's life (a bounded set).
     pub(crate) fn bold_svg_bytes(self) -> &'static [u8] {
         static BOLD: OnceLock<Mutex<HashMap<Glyph, &'static [u8]>>> = OnceLock::new();
         let mut bold = BOLD
@@ -252,11 +275,46 @@ impl Glyph {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         bold.entry(self).or_insert_with(|| {
-            let svg = String::from_utf8_lossy(self.svg_bytes())
-                .replace(r#"stroke-width="1.6""#, r#"stroke-width="2""#);
+            let svg = embolden(&String::from_utf8_lossy(self.svg_bytes()));
             Box::leak(svg.into_bytes().into_boxed_slice())
         })
     }
+}
+
+/// The attribute the bold variant scales.
+const STROKE_WIDTH: &str = r#"stroke-width=""#;
+
+/// The application stroke over the set's own: the reference's 2px over
+/// its 1.6, so `pane/`'s 1.6 draws at 2 and reicon's 1.5 at 1.875.
+const BOLD_SCALE: f32 = 1.25;
+
+/// A filled shape, as both sets state it.
+const FILLED: &str = r#"fill="currentColor""#;
+
+/// A filled shape in the bold variant: reicon draws some Outline glyphs as
+/// filled 1.5-wide bands rather than strokes, and a 0.375 stroke of the
+/// glyph's own color widens such a band by the same quarter as
+/// [`BOLD_SCALE`].
+const FILLED_BOLD: &str =
+    r#"fill="currentColor" stroke="currentColor" stroke-width="0.375" stroke-linejoin="round""#;
+
+/// `svg` at the application stroke: every stated stroke width scaled by
+/// [`BOLD_SCALE`] and every filled shape widened (see [`FILLED_BOLD`]),
+/// whichever set the glyph is from.
+fn embolden(svg: &str) -> String {
+    let mut parts = svg.split(STROKE_WIDTH);
+    let mut bold = parts.next().unwrap_or_default().to_owned();
+    for part in parts {
+        let (width, rest) = part.split_once('"').unwrap_or((part, ""));
+        bold.push_str(STROKE_WIDTH);
+        match width.parse::<f32>() {
+            Ok(width) => bold.push_str(&(width * BOLD_SCALE).to_string()),
+            Err(_) => bold.push_str(width),
+        }
+        bold.push('"');
+        bold.push_str(rest);
+    }
+    bold.replace(FILLED, FILLED_BOLD)
 }
 
 /// A tile tone: the reference's app gradient pairs, or the neutral command
@@ -383,8 +441,8 @@ pub(crate) fn tile(tone: IconTone, glyph: Glyph, theme: &Theme) -> Div {
 }
 
 /// The reference's icon tile at `size`: a vertical gradient under the
-/// 2px-stroke glyph for app tones (`.tile.app`), or the theme's neutral
-/// surface under the 1.6px glyph for [`IconTone::Command`] (`.tile`),
+/// bold glyph for app tones (`.tile.app`), or the theme's neutral
+/// surface under the set's own stroke for [`IconTone::Command`] (`.tile`),
 /// with the tile chrome from the reference — a thin pale edge, a top
 /// inset highlight, and (app tones only) a short bottom shadow.
 pub(crate) fn tile_at(size: TileSize, tone: IconTone, glyph: Glyph, theme: &Theme) -> Div {
@@ -444,18 +502,46 @@ pub(crate) fn tile_at(size: TileSize, tone: IconTone, glyph: Glyph, theme: &Them
 mod tests {
     use super::*;
 
-    /// The 2px application stroke is derived by replacing the asset's
-    /// 1.6 stroke width, so every asset must state it exactly once, in the
-    /// form the replacement looks for — or an application tile would
-    /// silently draw the lighter stroke.
+    /// The stroke widths `svg` states.
+    fn stroke_widths(svg: &str) -> Vec<&str> {
+        svg.split(STROKE_WIDTH)
+            .skip(1)
+            .filter_map(|part| part.split('"').next())
+            .collect()
+    }
+
+    /// The application stroke is derived from the asset (see
+    /// [`embolden`]), so every asset must draw in a form the derivation
+    /// reaches — a numeric stroke width, or a filled shape — and the
+    /// derived glyph must keep none of the asset's widths, widen every
+    /// filled shape, and state no attribute twice on one element (which
+    /// would fail to parse and draw nothing) — or an application tile
+    /// would silently draw the lighter stroke.
     #[test]
     fn every_glyph_states_the_stroke_the_bold_variant_replaces() {
         for &glyph in Glyph::ALL {
             let svg = String::from_utf8_lossy(glyph.svg_bytes());
-            assert_eq!(svg.matches(r#"stroke-width="1.6""#).count(), 1, "{glyph:?}");
+            let widths = stroke_widths(&svg);
+            let filled = svg.matches(FILLED).count();
+            assert!(!widths.is_empty() || filled > 0, "{glyph:?}");
+            assert!(
+                widths.iter().all(|width| width.parse::<f32>().is_ok()),
+                "{glyph:?}: {widths:?}"
+            );
             let bold = String::from_utf8_lossy(glyph.bold_svg_bytes());
-            assert!(bold.contains(r#"stroke-width="2""#), "{glyph:?}");
-            assert!(!bold.contains("1.6"), "{glyph:?}");
+            let bold_widths = stroke_widths(&bold);
+            for width in &widths {
+                assert!(!bold_widths.contains(width), "{glyph:?} keeps {width}");
+            }
+            assert_eq!(bold.matches(FILLED_BOLD).count(), filled, "{glyph:?}");
+            for element in bold.split('<') {
+                for attribute in [" stroke=", " stroke-width=", " stroke-linejoin="] {
+                    assert!(
+                        element.matches(attribute).count() <= 1,
+                        "{glyph:?}: {element}"
+                    );
+                }
+            }
         }
     }
 }

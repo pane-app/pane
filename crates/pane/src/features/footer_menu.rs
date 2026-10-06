@@ -280,7 +280,7 @@ impl LauncherWindow {
         in_flight: Option<(f32, f32)>,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let visuals = crate::settings::visuals(cx);
+        let visuals = crate::settings::launcher_visuals(cx);
         match self.menu.as_ref() {
             Some(menu) => Some(menu_popup(
                 menu_list(Some(&menu.focus), menu.selected, &visuals.theme, cx),
@@ -383,6 +383,16 @@ fn menu_list(
             .when(!inert, |item| item.cursor_pointer())
             .when(!inert && !item_selected, |item| {
                 item.hover(|item| item.bg(theme.control_hover))
+            })
+            // While held, a live entry takes the stronger wash of its
+            // hover, or of its selected wash, at once.
+            .when(!inert, |item| {
+                let press = ui::theme::pressed(if item_selected {
+                    theme.action_selected
+                } else {
+                    theme.control_hover
+                });
+                item.active(move |item| item.bg(press))
             })
             .when(item_selected, |item| {
                 item.bg(theme.action_selected)

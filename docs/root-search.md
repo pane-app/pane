@@ -110,9 +110,9 @@ state and maps input to those calls.
 
 **The Actions panel** (#95) lists what can be done with the selected
 result, from the core's `Launcher::result_actions`: its primary action
-(the footer's, with the same dispatch), then, under "Pane", "Pin to Quick
-Slot" for a command or an indexed result (see [the pinned
-home](#the-pinned-home)) and, for an installed command, "Assign
+(the footer's, with the same dispatch), then, under "Pane", "Pin" for a
+command or an indexed result, or "Unpin" once it is pinned (see [the
+pinned home](#the-pinned-home)) and, for an installed command, "Assign
 Hotkey…"/"Change Hotkey…" and "Add Alias…"/"Change Alias…", which open the
 same hotkey screen and alias form Manage extensions does and return to this
 search when they end. Nothing without a working operation is listed: no new
@@ -128,7 +128,9 @@ that action, runs nothing. With no result selected it says so.
 ### The pinned home
 
 A blank query shows the **pinned home** (#101) above the results: the
-"Pinned" label, with the slots' chord, and five **quick slots**. A query
+"Pinned" label, with the slots' chord, and the **quick slots**, an ordered
+list of pins with no gaps and no limit
+([ADR 0027](adr/0027-quick-slots-are-an-ordered-list.md)). A query
 whose trimmed text is not blank hides it; clearing the query brings it
 back. The results below keep their own order and their "Commands" label:
 Pane lists no suggestions of recent use.
@@ -136,24 +138,46 @@ Pane lists no suggestions of recent use.
 - **What a slot holds** is an identity, never a row: a registered command
   by its id, or an indexed result (an installed application) by its own id
   under the command that supplies it. A computed answer, a file or Pane's
-  own rows cannot be pinned. A fresh installation pins nothing: empty slots
-  are dashed outlines saying so, which invoke nothing.
-- **Pinning:** the Actions panel's "Pin to Quick Slot" fills the first
-  empty slot. With all five taken, the panel lists the five slots under
-  "Replace a Quick Slot" and the one chosen is replaced. Pinning what a
-  slot already holds changes nothing, says which slot holds it and moves
-  focus there, clearing a typed query so the home and that slot show.
+  own rows cannot be pinned. A fresh installation pins nothing.
+- **Pinning:** the Actions panel's "Pin" adds the selected result at the
+  end of the list ("Pinned …"); there is no slot to choose and nothing is
+  replaced. Pinning what is already pinned changes nothing, says so and
+  moves focus to its slot, clearing a typed query so the home and that
+  slot show. On a row already pinned the panel offers "Unpin" instead.
 - **A slot's own actions** — a secondary click on it, or Ctrl+K while it
-  has focus — open it, remove it ("Remove from Quick Slot") or move it
-  ("Move Slot Left"/"Move Slot Right", not past either end).
+  has focus — open it, unpin it ("Unpin", which closes the gap) or move it
+  ("Move Up"/"Move Down", shown as "Move Left"/"Move Right" in the
+  horizontal layout; each swaps it with its neighbour, never past either
+  end).
+- **Keys** (default keys; Cmd for Ctrl on macOS): Ctrl+Shift+F pins or
+  unpins the focused slot, or root search's selected row; Ctrl+Alt+Up or
+  Left and Ctrl+Alt+Down or Right move the focused slot.
+- **Layout:** the Launcher page chooses horizontal (the default), a grid
+  of tiles five columns wide that wraps onto more rows, with one dashed
+  "+ Pin" hint tile in the next free cell of the last row (never starting
+  a row of its own; with no pins, the hint alone), or vertical, result rows
+  of the pinned results only (nothing with no pins). In the
+  [compact window mode](../CONTEXT.md) the pins show only if "Show pinned
+  in Compact mode" is on (`compactPinned` in the settings record, off by
+  default): a row of small icons under the search field while the window
+  is collapsed.
 - **Invoking a slot:** a click, Enter or Space while it has focus, or its
-  chord Ctrl+1 to Ctrl+5. The chords are the root search field's and the
+  chord: only the first five slots are numbered, Ctrl+1 to Ctrl+5, and the
+  numbers after the numbered slots, up to Ctrl+9, pick the first rows
+  below the home. With two slots, Ctrl+3 to Ctrl+9 pick the first seven
+  rows; with eight, Ctrl+1 to Ctrl+5 pick slots 1 to 5, slots 6 to 8 have
+  no number, and Ctrl+6 to Ctrl+9 pick the first four rows. With a query,
+  or in a command's list, Ctrl+1 to Ctrl+9 pick the first rows. Nothing
+  names the chords at rest: holding Ctrl alone for
+  400 ms slides each item's number in — a row's over its right end, a
+  slot's down into its corner (in compact mode, the first five icons') —
+  and releasing it slides them away. The
+  chords are the root search field's and the
   slots' own, never registered with the system, and act only on root
   search, with no overlay open, no input-method composition in the query
   and no action already running; a held chord's repeats and a double
   click's second click run nothing more. The slot is resolved again then,
-  and only a target that can run is run; an empty slot does nothing at
-  all, and a click keeps the query focused.
+  and only a target that can run is run; a click keeps the query focused.
 - **Resolution:** each slot is resolved through what is enabled now. A
   disabled, paused or missing target, or an application its command has
   not listed yet, keeps its slot and its name and says why it cannot run;
@@ -161,16 +185,21 @@ Pane lists no suggestions of recent use.
   resolves it again. Showing root search asks a pinned application's
   command for its results if it never answered, without typing a query.
 - **The record** is `quick-slots.json` in Pane's data folder, beside
-  `settings.json` (see [ADR 0026](adr/0026-host-keeps-quick-slots-by-identity.md)):
-  versioned, written atomically one write at a time; a write that fails
-  puts back what the record holds and says why, and a record Pane cannot
-  read is reported and never replaced.
+  `settings.json` (see [ADR 0026](adr/0026-host-keeps-quick-slots-by-identity.md)
+  and [ADR 0027](adr/0027-quick-slots-are-an-ordered-list.md)), version 2:
+  `{ "version": 2, "pins": [ { "command": "<id>" }, { "command": "<id>", "result": "<id>" } ] }`,
+  the pins in order. A version 1 record (five positional `slots`, `null`
+  for an empty one) is read as the list of its pins in order, and the next
+  change writes version 2. It is written atomically one write at a time; a
+  write that fails puts back what the record holds and says why, and a
+  record of an unknown version, or one that is not valid, is reported and
+  never replaced.
 
 **The footer** shows the Pane mark at its left — the button of Pane's own
 menu (Settings), a Windows/Pane adaptation of the reference's decorative
-mark — then the hint ("↵ opens instantly · Ctrl K for more", or "Type to
-filter actions · Esc goes back" while the panel is open), and at its right
-the primary action and the Actions button. While a status shows, its
+mark — then, while the panel is open, the hint "Type to filter actions ·
+Esc goes back" — and at its right the primary action and the Actions
+button, whose keys say how each is pressed. While a status shows, its
 message takes the strip and the buttons step aside.
 
 Each row shows what the launcher knows beyond its title and subtitle, from a read-only presentation (`Launcher::presentation`). That is:
