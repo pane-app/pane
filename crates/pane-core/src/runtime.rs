@@ -909,6 +909,13 @@ impl Runtime {
         *lock(&self.shared.search_timer) = Some(Arc::new(timer));
     }
 
+    /// The runtime's web requests: their limits and what each package
+    /// reached, which Pane's downloads of extensions' web images share
+    /// (#142).
+    pub(crate) fn network(&self) -> Arc<http::Network> {
+        self.shared.network.clone()
+    }
+
     /// `host:port` of every address the package with identity key `owner`
     /// tried to reach this session, sorted.
     pub(crate) fn contacted(&self, owner: &str) -> Vec<String> {

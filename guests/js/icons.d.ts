@@ -37,7 +37,10 @@ export interface IconOptions {
   tint?: Tint | null;
   /** The shape the icon is clipped to. */
   mask?: "circle" | "rounded-rectangle" | null;
-  /** Drawn when this icon cannot be: an unknown name, a missing image. */
+  /**
+   * Drawn when this icon cannot be: an unknown name, a missing image, a
+   * web image while it loads or if it fails, a path that does not exist.
+   */
   fallback?: Icon | null;
   /**
    * Shown on hover and read by assistive technology; an icon without one
@@ -54,8 +57,12 @@ export interface IconOptions {
  * - a PNG or SVG image the package ships, by its path (`"assets/logo.png"`;
  *   `logo@dark.png` and `logo@light.png` beside it are drawn in the dark
  *   and light themes), or `{ path }`, or a pair `{ light, dark }`;
- * - an image by URL, `{ url }`: a `data:` URL (web images come with a
- *   later version);
+ * - an image by URL, `{ url }`: a `data:` URL, or a web image by `http(s)`
+ *   address, which Pane downloads and keeps as the extension's cache, the
+ *   list showing the fallback (or a neutral placeholder) until it arrives
+ *   and if it fails;
+ * - the system's icon of a file, folder or application by its path,
+ *   `{ file }` (absolute, or from `~/`), drawn bare;
  *
  * each with any of the options.
  */
@@ -68,6 +75,7 @@ export type IconObject = IconOptions &
     | { path: string }
     | { light: string; dark: string }
     | { url: string }
+    | { file: string }
   );
 
 /** What every accessory may have besides what it shows. */
@@ -100,3 +108,15 @@ export function avatar(name: string): IconObject;
  * another `tint` to draw it in another colour.
  */
 export function progressRing(fraction: number): IconObject;
+
+/**
+ * The favicon of the website `url` is on: its `/favicon.ico`, a web image
+ * Pane downloads, with a globe in the secondary tone as its fallback.
+ */
+export function favicon(url: string): IconObject;
+
+/**
+ * The system's icon of the file, folder or application at `path`, with a
+ * document in the secondary tone as its fallback.
+ */
+export function fileIcon(path: string): IconObject;

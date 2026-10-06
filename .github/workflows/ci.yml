@@ -196,6 +196,9 @@ jobs:
           # session, so the pasteboard is live), never by default on a
           # developer's computer.
           PANE_TEST_REAL_CLIPBOARD: ${{ runner.os != 'Linux' && '1' || '' }}
+          # The Windows system icon adapter's test (#142) extracts real
+          # icons through the shell, which needs the runner's session.
+          PANE_TEST_SYSTEM_ICONS: ${{ runner.os == 'Windows' && '1' || '' }}
       # The Linux (X11) clipboard adapter's test also replaces what is on
       # the clipboard, and needs a display to watch: the same opt-in, run
       # under Xvfb (the step above runs without a display, so the test

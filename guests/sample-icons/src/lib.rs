@@ -25,14 +25,34 @@
 //!   accessory with its progress ring at 40%;
 //! - "Crowded row": five text accessories, of which a row draws three.
 //!
+//! And the icons Pane loads for the list (#142), which never waits for
+//! them:
+//!
+//! - "Favicon": the SDK's favicon of the image server's site, with a globe
+//!   as its fallback;
+//! - "Slow web image": `<server>/images/slow.png`, which the test server
+//!   holds back, so its fallback, reicon's `clock`, shows until it arrives;
+//! - "Same slow image": the same URL, which Pane downloads once;
+//! - "Broken image": `<server>/images/missing.png`, which the server does
+//!   not have, so its fallback, reicon's `link-broken`, stays, with the
+//!   tooltip "Image unavailable";
+//! - "File icon": the SDK's file icon of the file the `iconFile` setting
+//!   names (by default `~`, the home folder);
+//! - "Application icon": the system icon of the application the
+//!   `iconApplication` setting names (by default Windows' Notepad; on other
+//!   systems its fallback shows until the setting names one).
+//!
+//! The image server is the `imageServer` setting, by default
+//! `http://127.0.0.1:8741`; the tests set it to their own server.
+//!
 //! Every row's action answers "Chose <title>".
 #![no_std]
 
 use pane_guest::alloc::{format, string::String, vec::Vec};
-use pane_guest::icon::{avatar, progress_ring};
+use pane_guest::icon::{avatar, favicon, file_icon, progress_ring};
 use pane_guest::{
     Accessory, Color, Command, CustomView, FieldValue, FormError, Icon, Item, List, Mask,
-    NoCustomView, Tint, Tone,
+    NoCustomView, Tint, Tone, settings,
 };
 
 /// 2026-01-01T00:00:00Z, in milliseconds since the Unix epoch: the
@@ -41,6 +61,28 @@ const NEW_YEAR: i64 = 1_767_225_600_000;
 
 struct Icons;
 pane_guest::export!(Icons);
+
+/// The setting naming the server the web images come from, and its
+/// default.
+const IMAGE_SERVER: (&str, &str) = ("imageServer", "http://127.0.0.1:8741");
+
+/// The setting naming the file whose icon "File icon" shows, and its
+/// default: the home folder.
+const ICON_FILE: (&str, &str) = ("iconFile", "~");
+
+/// The setting naming the application whose icon "Application icon"
+/// shows, and its default: Windows' Notepad.
+const ICON_APPLICATION: (&str, &str) = ("iconApplication", r"C:\Windows\System32\notepad.exe");
+
+/// The value of the setting `(key, default)`: the saved one, or the
+/// default.
+fn setting((key, default): (&str, &str)) -> String {
+    settings::get(key)
+        .ok()
+        .flatten()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| default.into())
+}
 
 /// The row `id` titled `title`, whose action answers "Chose <title>".
 fn row(id: &'static str, title: &'static str) -> Item {
@@ -51,6 +93,9 @@ impl Command for Icons {
     type CustomView = NoCustomView;
 
     async fn render() -> Result<List, String> {
+        let server = setting(IMAGE_SERVER);
+        let server = server.trim_end_matches('/');
+        let slow = format!("{server}/images/slow.png");
         Ok(List::new("Icons sample").items([
             row("builtin", "Built-in icon")
                 .subtitle("reicon's star, by name")
@@ -93,6 +138,30 @@ impl Command for Icons {
             row("crowded", "Crowded row")
                 .subtitle("Five accessories, of which a row draws three")
                 .accessories(["1", "2", "3", "4", "5"].map(Accessory::text)),
+            row("favicon", "Favicon")
+                .subtitle("The site's favicon, downloaded and cached by Pane")
+                .icon(favicon(&format!("{server}/"))),
+            row("slow", "Slow web image")
+                .subtitle("Its fallback shows until the image arrives")
+                .icon(
+                    Icon::url(slow.clone()).fallback(Icon::builtin("clock").tint(Tone::Secondary)),
+                ),
+            row("same", "Same slow image")
+                .subtitle("The same address, downloaded once")
+                .icon(Icon::url(slow).fallback(Icon::builtin("clock").tint(Tone::Secondary))),
+            row("broken", "Broken image")
+                .subtitle("Its address has no image, so its fallback stays")
+                .icon(
+                    Icon::url(format!("{server}/images/missing.png"))
+                        .fallback(Icon::builtin("link-broken").tint(Tone::Orange))
+                        .tooltip("Image unavailable"),
+                ),
+            row("file", "File icon")
+                .subtitle("The system's icon of a file")
+                .icon(file_icon(&setting(ICON_FILE))),
+            row("application", "Application icon")
+                .subtitle("The system's icon of an application, drawn bare")
+                .icon(file_icon(&setting(ICON_APPLICATION))),
         ]))
     }
 

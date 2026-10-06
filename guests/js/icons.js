@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
-// Icon helpers for JS/TS commands (`@pane/extension/icons`, #139): an
-// avatar of initials and a progress ring, built from the icons Pane draws
-// (an SVG image by `data:` URL, a mask, a tint). Bundled into the command
-// that imports it, like any npm module. The Rust SDK's `pane_guest::icon`
-// has the same helpers, drawing the same.
+// Icon helpers for JS/TS commands (`@pane/extension/icons`, #139, #142):
+// an avatar of initials and a progress ring, built from the icons Pane
+// draws (an SVG image by `data:` URL, a mask, a tint), a website's favicon
+// (a web image Pane downloads, with a fallback) and a file's or
+// application's system icon. Bundled into the command that imports it,
+// like any npm module. The Rust SDK's `pane_guest::icon` has the same
+// helpers, drawing the same.
 
 /** The colours `avatar` picks from, by name. */
 const AVATAR_COLORS = [
@@ -102,4 +104,35 @@ export function progressRing(fraction) {
     `stroke-dasharray="${filled.toFixed(2)} ${circumference.toFixed(2)}" ` +
     'transform="rotate(-90 12 12)"/></svg>';
   return { url: svgUrl(svg), tint: "accent" };
+}
+
+/**
+ * The favicon of the website `url` is on: its `/favicon.ico`, a web image
+ * Pane downloads, with a globe in the secondary tone as its fallback,
+ * shown while it loads and if the site has none. An address without a
+ * scheme is taken as `https://`; one without a host is the globe alone.
+ */
+export function favicon(url) {
+  const globe = { builtin: "global", tint: "secondary" };
+  const text = String(url).trim();
+  const at = text.indexOf("://");
+  const scheme = at >= 0 ? text.slice(0, at).toLowerCase() : "https";
+  const rest = at >= 0 ? text.slice(at + 3) : text;
+  const end = rest.search(/[/?#]/);
+  let host = end >= 0 ? rest.slice(0, end) : rest;
+  // Any user information is not the site's.
+  host = host.slice(host.lastIndexOf("@") + 1);
+  if (host === "" || (scheme !== "http" && scheme !== "https")) {
+    return globe;
+  }
+  return { url: `${scheme}://${host}/favicon.ico`, fallback: globe };
+}
+
+/**
+ * The icon the system shows for the file, folder or application at `path`
+ * (absolute, or from `~/`), with a document in the secondary tone as its
+ * fallback, shown while Pane extracts it and if the path does not exist.
+ */
+export function fileIcon(path) {
+  return { file: path, fallback: { builtin: "document", tint: "secondary" } };
 }

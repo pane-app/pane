@@ -11,6 +11,11 @@
 //! stays current while the list is open; its tooltip is the absolute time.
 //! A row shows at most [`MAX_ACCESSORIES`]; while a package is developed,
 //! an item with more is reported in the status line.
+//!
+//! The web images and system icons the looks name (#142) start loading
+//! when they are remembered, and each row shows what they are now
+//! ([`shown_icon`]): the image once it loaded, its fallback until then
+//! (see `icon_loads`).
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -18,12 +23,16 @@ use std::path::Path;
 use super::clipboard_view::{clock_time, local_day, local_offset_ms, month_and_day};
 use super::{Launcher, State, Status, choices, owner};
 use crate::icons::{Icon, Tint};
+use crate::packages::PackageIdentity;
 use crate::runtime::{Accessory, AccessoryContent, Item, ItemLook, MAX_ACCESSORIES};
 
 /// The open command's items' looks, by item id, their images resolved.
 #[derive(Clone, Debug, Default)]
 pub(super) struct Looks {
     by_item: HashMap<String, ItemLook>,
+    /// The identity key of the package whose command drew them; `None`
+    /// for a command built into Pane.
+    owner: Option<String>,
     /// The items with more accessories than a row draws, as last reported
     /// while their package is developed.
     reported: Vec<(String, usize)>,
@@ -95,7 +104,9 @@ pub(super) fn remember(
     component: &Path,
     items: &[Item],
 ) -> Vec<(String, usize)> {
-    let folder = owner(&state.packages, component)
+    let package = owner(&state.packages, component);
+    let identity: Option<PackageIdentity> = package.map(|package| package.identity.clone());
+    let folder = package
         .map(|package| package.location.clone())
         .or_else(|| component.parent().map(Path::to_path_buf))
         .unwrap_or_default();
@@ -103,6 +114,19 @@ pub(super) fn remember(
         .iter()
         .map(|item| (item.id.clone(), resolved(item.look.clone(), &folder)))
         .collect();
+    state.looks.owner = identity.as_ref().map(PackageIdentity::key);
+    // The web images and system icons start loading; the list does not
+    // wait for them.
+    for look in state.looks.by_item.values() {
+        let accessories = look
+            .accessories
+            .iter()
+            .filter_map(|accessory| accessory.icon.as_ref());
+        let actions = look.action_icons.iter().flatten();
+        for icon in look.icon.iter().chain(accessories).chain(actions) {
+            state.icon_loads.want(identity.as_ref(), icon);
+        }
+    }
     let mut extra: Vec<(String, usize)> = items
         .iter()
         .filter(|item| item.look.accessories.len() > MAX_ACCESSORIES)
@@ -135,6 +159,13 @@ fn resolved(look: ItemLook, folder: &Path) -> ItemLook {
             .collect(),
         action_icons: look.action_icons.into_iter().map(icon).collect(),
     }
+}
+
+/// `icon`, one of the open command's items' (or their accessories'), as
+/// its row shows it now: a web image or a system icon that loaded as its
+/// image, one still loading or failed as its fallback.
+pub(super) fn shown_icon(state: &State, icon: &Icon) -> Icon {
+    state.icon_loads.shown(state.looks.owner.as_deref(), icon)
 }
 
 /// The icon of the installed command with id `id` (`<package key>#<id in

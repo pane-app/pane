@@ -16,10 +16,12 @@
 //! An icon is a built-in icon by name (the whole reicon set, such as
 //! `"star"` or `"arrow-up-right"`), a PNG or SVG image the package ships
 //! (with `@dark` and `@light` variants beside it, or a light and dark
-//! pair), or an image by URL (a `data:` URL; web images come with a later
-//! version). Every icon may have a tint, a mask and a fallback, and a
-//! tooltip, which also makes assistive technology read it. [`avatar`] and
-//! [`progress_ring`] build two common ones from these.
+//! pair), an image by URL (a `data:` URL, or a web image, which Pane
+//! downloads and caches, showing the fallback until it arrives), or the
+//! system's icon of a file or application by its path. Every icon may have
+//! a tint, a mask and a fallback, and a tooltip, which also makes
+//! assistive technology read it. [`avatar`], [`progress_ring`],
+//! [`favicon`] and [`file_icon`] build common ones from these.
 
 use alloc::boxed::Box;
 use alloc::format;
@@ -129,6 +131,7 @@ enum Source {
     Path(String),
     Pair { light: String, dark: String },
     Url(String),
+    File(String),
 }
 
 /// An icon (see the module docs).
@@ -187,10 +190,21 @@ impl Icon {
         })
     }
 
-    /// The image at `url`: a `data:` URL (an SVG or a PNG). A web address
-    /// draws the fallback in this version of Pane.
+    /// The image at `url`: a `data:` URL (an SVG or a PNG), or a web
+    /// image by `http(s)` address, which Pane downloads and keeps as the
+    /// extension's cache. The list never waits for a web image: the
+    /// fallback (or a neutral placeholder) shows until it arrives, and
+    /// stays if it cannot be downloaded or is not an image.
     pub fn url(url: impl Into<String>) -> Icon {
         Icon::of(Source::Url(url.into()))
+    }
+
+    /// The icon the system shows for the file, folder or application at
+    /// `path` (absolute, or from `~/`): a document's kind's, an
+    /// application's own, drawn bare. A path that does not exist draws the
+    /// fallback.
+    pub fn file(path: impl Into<String>) -> Icon {
+        Icon::of(Source::File(path.into()))
     }
 
     /// This icon drawn in `tint`: a built-in icon's colour, or an image
@@ -396,6 +410,35 @@ pub fn progress_ring(fraction: f32) -> Icon {
     Icon::url(svg_url(&svg)).tint(Tone::Accent)
 }
 
+/// The favicon of the website `url` is on: its `/favicon.ico`, a web
+/// image Pane downloads, with a globe in the secondary tone as its
+/// fallback, shown while it loads and if the site has none. An address
+/// without a scheme is taken as `https://`; one without a host is the globe
+/// alone.
+pub fn favicon(url: &str) -> Icon {
+    let globe = Icon::builtin("global").tint(Tone::Secondary);
+    let url = url.trim();
+    let (scheme, rest) = match url.split_once("://") {
+        Some((scheme, rest)) => (scheme.to_ascii_lowercase(), rest),
+        None => (String::from("https"), url),
+    };
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let host = &rest[..end];
+    // Any user information is not the site's.
+    let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
+    if host.is_empty() || !(scheme == "http" || scheme == "https") {
+        return globe;
+    }
+    Icon::url(format!("{scheme}://{host}/favicon.ico")).fallback(globe)
+}
+
+/// The icon the system shows for the file, folder or application at
+/// `path` ([`Icon::file`]), with a document in the secondary tone as its
+/// fallback, shown while Pane extracts it and if the path does not exist.
+pub fn file_icon(path: &str) -> Icon {
+    Icon::file(path).fallback(Icon::builtin("document").tint(Tone::Secondary))
+}
+
 /// `svg` as a `data:` URL, percent-encoded.
 fn svg_url(svg: &str) -> String {
     let mut url = String::from("data:image/svg+xml,");
@@ -475,6 +518,10 @@ pub(crate) fn write_icon(json: &mut String, icon: &Icon) {
         Source::Url(url) => {
             json.push_str("\"url\":");
             string(json, url);
+        }
+        Source::File(path) => {
+            json.push_str("\"file\":");
+            string(json, path);
         }
     }
     if let Some(tint) = &icon.tint {

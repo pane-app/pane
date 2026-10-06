@@ -43,6 +43,7 @@ mod choices;
 pub mod clipboard_view;
 mod command_search;
 mod hotkeys;
+mod icon_loads;
 mod indexed;
 mod network;
 mod presentation;
@@ -657,6 +658,9 @@ struct State {
     /// The open command's items' icons, tooltips and accessories, by item
     /// id (see `looks`).
     looks: looks::Looks,
+    /// The web images and system icons rows show, loaded in the background
+    /// (see `icon_loads`).
+    icon_loads: icon_loads::IconLoads,
     /// The clock dates are shown relative to: the system's, or the one a
     /// test gave the launcher ([`Launcher::with_clock`]).
     clock: Arc<dyn crate::clipboard::Clock>,
@@ -1198,6 +1202,22 @@ impl Launcher {
             .as_ref()
             .and_then(|installation| updates::UpdateControls::open(&installation.dir))
             .unwrap_or_default();
+        let developing = Arc::new(Developing::new(None, None));
+        // A web image or a system icon that loaded redraws its row: the
+        // window is told through development's shared configuration, as
+        // the launcher's other background work tells it.
+        let told = Arc::downgrade(&developing);
+        let icon_loads = icon_loads::IconLoads::new(
+            installation
+                .as_ref()
+                .map(|installation| (installation.data.clone(), installation.dir.clone())),
+            runtime.as_ref().ok().map(Runtime::network),
+            Arc::new(move || {
+                if let Some(developing) = told.upgrade() {
+                    developing.changed();
+                }
+            }),
+        );
         let mut state = State {
             // Replaced by root search below.
             view: LauncherView::new(Screen::Command, ""),
@@ -1214,6 +1234,7 @@ impl Launcher {
             actions_return: None,
             custom_view: None,
             looks: looks::Looks::default(),
+            icon_loads,
             clock: Arc::new(crate::clipboard::SystemClock),
             screen_epoch: 0,
             packages,
@@ -1270,7 +1291,7 @@ impl Launcher {
             services: None,
             updates: None,
             sources,
-            developing: Arc::new(Developing::new(None, None)),
+            developing,
             state: Arc::new(Mutex::new(state)),
         };
         if let (Ok(runtime), Some(installation)) = (&launcher.runtime, &launcher.installation) {
@@ -3231,6 +3252,12 @@ impl Launcher {
             }
             None => Err("this launcher does not install packages".into()),
         };
+        if cleared.is_ok() {
+            // Its web images went with its cache: a list naming them
+            // downloads them again.
+            let loads = self.lock().icon_loads.clone();
+            loads.forget(&identity.key());
+        }
         let components: Vec<PathBuf> = {
             let state = self.lock();
             let package = state.package(&identity);

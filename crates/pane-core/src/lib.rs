@@ -34,6 +34,7 @@ pub mod placement;
 mod platform;
 mod runtime;
 mod search;
+pub mod system_icons;
 mod threads;
 pub mod tray;
 mod zip;

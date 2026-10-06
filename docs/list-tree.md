@@ -144,9 +144,26 @@ command's in `pane.json`. It is one of:
   for each theme;
 - **`{"url": "data:image/svg+xml,…"}`**: an image by URL. A `data:` URL
   (an SVG or a PNG, percent-encoded or base64) is drawn as it is; this is
-  how the SDKs' avatar and progress ring helpers draw. A web image
-  (`http(s)`) comes with a later version (#142): until then its fallback
-  shows.
+  how the SDKs' avatar and progress ring helpers draw;
+- **`{"url": "https://example.com/logo.png"}`**: a web image (#142). Pane
+  downloads it itself, through its HTTP client and within the ceilings of
+  the extension's own web requests (ADR 0018: 10 s to connect, 20 s for
+  the response's head, 10 s between two pieces of its body, 30 s in all, a
+  4 MiB body), and keeps it as the package's extension cache, so it is not
+  downloaded again after a restart and "Clear cache" removes it. A list
+  never waits for one: its fallback (or, without one, a neutral image
+  glyph) shows until the image arrives, and stays if the download fails,
+  is over the limits or is not an image (PNG, JPEG, GIF, WebP, BMP, ICO or
+  SVG). Rows naming the same URL share one download. The SDKs' favicon
+  helper names a site's `/favicon.ico` this way, with a globe as its
+  fallback;
+- **`{"file": "/Users/me/report.pdf"}`**: a system icon (#142), the
+  icon the system shows for the file, folder or application at that path
+  (absolute, or from `~/`; on Windows a packaged application by
+  `shell:AppsFolder\<id>` too): a document's kind's, an application's own,
+  drawn bare. Pane extracts it in the background and keeps it in its own
+  folder; a path that does not exist shows the fallback. The SDKs' file
+  icon helper gives it a document as its fallback.
 
 Any icon may also have:
 
@@ -159,8 +176,9 @@ Any icon may also have:
 - **`mask`**: `circle` or `rounded-rectangle`, the shape an image is
   clipped to;
 - **`fallback`**: another icon, drawn when this one cannot be (a name Pane
-  does not have, an image the package does not ship or Pane cannot read),
-  nested at most 4 deep;
+  does not have, an image the package does not ship or Pane cannot read, a
+  web image or system icon while it loads or if it fails), nested at most 4
+  deep;
 - **`tooltip`**: shown while the pointer rests on the icon. It also makes
   the icon something assistive technology reads; an icon without one is
   decoration, which it skips.
@@ -176,7 +194,8 @@ In a tree, an icon Pane cannot read (an unknown source, say) is left out,
 and so is a tint, mask, fallback or tooltip it cannot read: never the
 tree's failure. In `pane.json`, an icon is checked at install: an unknown
 built-in name, an image the package does not ship, or a source other than a
-built-in icon or a packaged image refuses the package, with the reason.
+built-in icon or a packaged image (a URL, a system icon) refuses the
+package, with the reason.
 
 ## Accessories
 

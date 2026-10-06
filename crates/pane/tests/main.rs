@@ -28,6 +28,7 @@ mod shortcuts;
 mod tray;
 mod unresponsive;
 mod update;
+mod web_icons;
 mod window;
 
 /// Cargo no longer finds the files under `tests/` itself (`autotests =

@@ -87,7 +87,15 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   package's. `packages/sample-icons-plain` and its `-js`/`-ts` copies run
   the same components with no icon, so they show a first-letter tile. Held
   alike by `crates/pane-core/tests/icons.rs`, and the Rust ones by
-  `crates/pane/tests/icons.rs`.
+  `crates/pane/tests/icons.rs`. The same list also has the icons Pane
+  loads for it (#142): the SDK's favicon of a site, a web image the test
+  server holds back (and a second row naming it, downloaded once), a web
+  image the server does not have, the SDK's file icon of a file and of an
+  application. The images come from the server the `imageServer` setting
+  names (by default `http://127.0.0.1:8741`), the files from the
+  `iconFile` (by default `~`) and `iconApplication` (by default Windows'
+  Notepad) settings; held by `crates/pane-core/tests/web_icons.rs` and
+  `crates/pane/tests/web_icons.rs`, whose image server sets them.
 - `npm/greeter`: `@pane-samples/greeter`, the npm-distributed sample: an
   npm package holding a `pane.json` and one JavaScript component,
   `sample_npm_js.wasm` (from `sample-npm-js`, prebuilt like the other

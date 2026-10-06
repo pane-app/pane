@@ -139,10 +139,23 @@ pub(super) fn presentation(state: &State) -> Presentation {
             .iter()
             .map(|row| match state.looks.of(&row.id) {
                 Some(look) => RowPresentation {
-                    icon: look.icon.clone(),
+                    // Web images and system icons as they are now (#142).
+                    icon: look
+                        .icon
+                        .as_ref()
+                        .map(|icon| looks::shown_icon(state, icon)),
                     title_tooltip: look.title_tooltip.clone(),
                     subtitle_tooltip: look.subtitle_tooltip.clone(),
-                    accessories: looks::shown_accessories(look, now),
+                    accessories: looks::shown_accessories(look, now)
+                        .into_iter()
+                        .map(|accessory| ShownAccessory {
+                            icon: accessory
+                                .icon
+                                .as_ref()
+                                .map(|icon| looks::shown_icon(state, icon)),
+                            ..accessory
+                        })
+                        .collect(),
                     ..RowPresentation::default()
                 },
                 None => RowPresentation::default(),

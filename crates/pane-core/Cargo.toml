@@ -77,10 +77,11 @@ global-hotkey = "0.8"
 # The pasteboard of clipboard history on macOS (NSPasteboard's change count,
 # types, string and data, read inside an autorelease pool): pure Rust
 # bindings with no build script, already in the dependency tree through GPUI
-# CE's and global-hotkey's AppKit code.
+# CE's and global-hotkey's AppKit code. The system icon of a file or an
+# application (#142): NSWorkspace's icon, its images and their PNG.
 objc2.workspace = true
-objc2-app-kit = { version = "0.3", default-features = false, features = ["NSControl", "NSMenu", "NSMenuItem", "NSPasteboard", "NSResponder", "NSStatusBar", "NSStatusBarButton", "NSStatusItem", "NSView", "NSButton", "objc2-core-foundation"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSData", "NSError", "NSString", "std"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSControl", "NSMenu", "NSMenuItem", "NSPasteboard", "NSResponder", "NSStatusBar", "NSStatusBarButton", "NSStatusItem", "NSView", "NSButton", "NSWorkspace", "NSImage", "NSImageRep", "NSBitmapImageRep", "objc2-core-foundation"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSData", "NSDictionary", "NSError", "NSString", "std"] }
 
 [dev-dependencies]
 tempfile.workspace = true

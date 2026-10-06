@@ -49,10 +49,12 @@ mod schedules;
 mod search;
 mod services;
 mod stopping;
+mod system_icon_adapters;
 mod uninstall;
 mod uninstall_dependents;
 mod unresponsive;
 mod update;
+mod web_icons;
 
 /// Cargo no longer finds the files under `tests/` itself (`autotests =
 /// false`), so a file declared neither here nor as a target in Cargo.toml

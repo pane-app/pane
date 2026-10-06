@@ -6,12 +6,33 @@
 // JavaScript one; see the Rust sample for what each row shows. Its package
 // has an icon of its own and its "Icons" command another; its second
 // command has none, so it shows the package's. The date accessory is given
-// as milliseconds here (as a `Date` in the JavaScript sample).
+// as milliseconds here (as a `Date` in the JavaScript sample). The web
+// images come from the server the `imageServer` setting names, and the
+// system icons are of the file and the application the `iconFile` and
+// `iconApplication` settings name, as in the Rust sample (#142).
 import type { Accessory, Command, CustomView, Item, List } from "@pane/extension";
-import { avatar, progressRing } from "@pane/extension/icons";
+import { avatar, favicon, fileIcon, progressRing } from "@pane/extension/icons";
+import { get } from "pane:extension/settings@0.1.0";
 
 /** 2026-01-01T00:00:00Z: the "Packaged image" row's date. */
 const NEW_YEAR = Date.UTC(2026, 0, 1);
+
+/** The setting naming the server the web images come from. */
+const IMAGE_SERVER = "imageServer";
+/** The setting naming the file whose icon "File icon" shows. */
+const ICON_FILE = "iconFile";
+/** The setting naming the application whose icon "Application icon" shows. */
+const ICON_APPLICATION = "iconApplication";
+
+/** The value of the setting `key`: the saved one, or `fallback`. */
+function setting(key: string, fallback: string): string {
+  try {
+    const value = get(key);
+    return value != null && value.trim() !== "" ? value : fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 /** The row `id` titled `title`, whose action answers "Chose <title>". */
 function row(id: string, title: string, more: Partial<Item>): Item {
@@ -22,6 +43,8 @@ const crowded: Accessory[] = ["1", "2", "3", "4", "5"].map((text) => ({ text }))
 
 export const command: Command = {
   async render(): Promise<List> {
+    const server = setting(IMAGE_SERVER, "http://127.0.0.1:8741").replace(/\/+$/, "");
+    const slow = `${server}/images/slow.png`;
     return {
       title: "Icons sample",
       items: [
@@ -68,6 +91,34 @@ export const command: Command = {
         row("crowded", "Crowded row", {
           subtitle: "Five accessories, of which a row draws three",
           accessories: crowded,
+        }),
+        row("favicon", "Favicon", {
+          subtitle: "The site's favicon, downloaded and cached by Pane",
+          icon: favicon(`${server}/`),
+        }),
+        row("slow", "Slow web image", {
+          subtitle: "Its fallback shows until the image arrives",
+          icon: { url: slow, fallback: { builtin: "clock", tint: "secondary" } },
+        }),
+        row("same", "Same slow image", {
+          subtitle: "The same address, downloaded once",
+          icon: { url: slow, fallback: { builtin: "clock", tint: "secondary" } },
+        }),
+        row("broken", "Broken image", {
+          subtitle: "Its address has no image, so its fallback stays",
+          icon: {
+            url: `${server}/images/missing.png`,
+            fallback: { builtin: "link-broken", tint: "orange" },
+            tooltip: "Image unavailable",
+          },
+        }),
+        row("file", "File icon", {
+          subtitle: "The system's icon of a file",
+          icon: fileIcon(setting(ICON_FILE, "~")),
+        }),
+        row("application", "Application icon", {
+          subtitle: "The system's icon of an application, drawn bare",
+          icon: fileIcon(setting(ICON_APPLICATION, "C:\\Windows\\System32\\notepad.exe")),
         }),
       ],
     };

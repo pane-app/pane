@@ -9,8 +9,13 @@
 //!   `name@dark.png` and `name@light.png` beside `name.png` are drawn in the
 //!   dark and the light theme, or the author names a light and a dark file;
 //! - an **image by URL**: a `data:` URL is drawn as it is (the SDKs' avatar
-//!   and progress ring helpers make one); a web image, by `http(s)` URL, is
-//!   #142's, and shows its fallback until then;
+//!   and progress ring helpers make one); a **web image**, by `http(s)`
+//!   URL, is downloaded by Pane and cached as the package's extension cache
+//!   (#142, see `launcher::icon_loads`), its fallback shown until it
+//!   arrives and if it fails;
+//! - a **system icon**: the icon the system shows for a file or an
+//!   application, by its path, which the host extracts (#142, see
+//!   [`crate::system_icons`]);
 //! - a generated **first-letter tile**, which a package without an icon of
 //!   its own gets.
 //!
@@ -74,9 +79,14 @@ pub enum IconSource {
     /// variants. Relative to the package folder as a tree or manifest names
     /// it, absolute once resolved.
     Image { light: PathBuf, dark: PathBuf },
-    /// An image by URL: a `data:` URL, drawn as it is, or a web image
-    /// (#142).
+    /// An image by URL: a `data:` URL, drawn as it is, or a web image by
+    /// `http(s)` URL, which Pane downloads and caches (#142).
     Url(String),
+    /// The system's icon of the file or application at this path (#142):
+    /// a document's type icon, a folder's, an application's own. Absolute
+    /// once resolved (a leading `~` is the user's home folder); a path that
+    /// does not exist draws the fallback.
+    File(PathBuf),
     /// A generated tile showing this letter: the icon of a package that
     /// has none of its own.
     Letter(char),
@@ -205,10 +215,13 @@ impl Icon {
 
     /// This icon as Pane draws it for a package whose files are in
     /// `folder`: a packaged image's path made absolute, with the `@light`
-    /// and `@dark` variants it has picked; what cannot be drawn (an unknown
-    /// built-in name, an image missing from the package, a web image)
-    /// replaced by its fallback, resolved alike. `None` when neither it nor
-    /// any fallback can be drawn.
+    /// and `@dark` variants it has picked; a system icon's path made
+    /// absolute; what cannot be drawn (an unknown built-in name, an image
+    /// missing from the package, a URL that is neither `data:` nor
+    /// `http(s)`, a file that does not exist) replaced by its fallback,
+    /// resolved alike. `None` when neither it nor any fallback can be
+    /// drawn. A web image and a system icon stay as they are: what they
+    /// show depends on their loading (`launcher::icon_loads`).
     pub fn resolved(self, folder: &Path) -> Option<Icon> {
         let Icon {
             source,
@@ -226,8 +239,11 @@ impl Icon {
                 })
             }
             IconSource::Image { light, dark } => image_files(folder, &light, &dark),
-            // A data URL is drawn as it is; a web image is #142's.
-            IconSource::Url(url) => is_data_url(&url).then_some(IconSource::Url(url)),
+            // A data URL is drawn as it is; a web image once downloaded.
+            IconSource::Url(url) => {
+                (is_data_url(&url) || is_web_url(&url)).then_some(IconSource::Url(url))
+            }
+            IconSource::File(path) => system_path(&path).map(IconSource::File),
             IconSource::Letter(letter) => Some(IconSource::Letter(letter)),
         };
         match source {
@@ -277,7 +293,7 @@ pub(crate) fn parse_manifest_icon(value: &Value, what: &str) -> Result<Icon, Str
 /// Checks that `icon` and its fallbacks name only sources a manifest may:
 /// a built-in icon or an image the package ships.
 fn check_manifest_sources(icon: &Icon) -> Result<(), String> {
-    if let IconSource::Url(_) | IconSource::Letter(_) = icon.source {
+    if let IconSource::Url(_) | IconSource::File(_) | IconSource::Letter(_) = icon.source {
         return Err(
             "is not a built-in icon's name or an image the package ships, which a package's \
              and a command's icon are"
@@ -454,12 +470,19 @@ fn parse_at(value: &Value, depth: usize, strict: bool) -> Result<Icon, String> {
         if url.trim().is_empty() {
             return Err("gives an empty `url`".into());
         }
-        sources.push(IconSource::Url(url));
+        sources.push(IconSource::Url(url.trim().to_owned()));
+    }
+    if let Some(file) = text("file")? {
+        if file.trim().is_empty() {
+            return Err("gives an empty `file` path".into());
+        }
+        sources.push(IconSource::File(PathBuf::from(file.trim())));
     }
     let source = match sources.len() {
         0 => {
             return Err(
-                "names nothing to draw: give `builtin`, `path`, `light` and `dark`, or `url`"
+                "names nothing to draw: give `builtin`, `path`, `light` and `dark`, `url` or \
+                 `file`"
                     .into(),
             );
         }
@@ -663,6 +686,151 @@ fn parse_color(text: &str) -> Result<Color, String> {
 pub fn is_data_url(url: &str) -> bool {
     url.get(..5)
         .is_some_and(|scheme| scheme.eq_ignore_ascii_case("data:"))
+}
+
+/// Whether `url` is a web image's address: `http://` or `https://` with a
+/// host, which Pane downloads (#142).
+pub fn is_web_url(url: &str) -> bool {
+    let lower = url
+        .get(..8)
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    let scheme_ok = lower.starts_with("http://") || lower.starts_with("https://");
+    if !scheme_ok {
+        return false;
+    }
+    let (_, rest) = url.split_once("://").unwrap_or_default();
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..end];
+    !authority.is_empty() && !authority.contains('@') && !authority.contains(char::is_whitespace)
+}
+
+/// `path`, a system icon's, made absolute (a leading `~` is the user's
+/// home folder), if something is there: a file, a folder, an application
+/// bundle. Windows' `shell:` names (a packaged application in the Apps
+/// folder, `shell:AppsFolder\<id>`) are kept as they are, for the system
+/// to find. `None` for a relative path or one that does not exist.
+fn system_path(path: &Path) -> Option<PathBuf> {
+    let text = path.to_string_lossy();
+    if text
+        .get(..6)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("shell:"))
+    {
+        return Some(path.to_path_buf());
+    }
+    let path = match text.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with(['/', '\\']) => {
+            let home = std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .filter(|home| !home.is_empty())?;
+            PathBuf::from(home).join(rest.trim_start_matches(['/', '\\']))
+        }
+        _ => path.to_path_buf(),
+    };
+    (path.is_absolute() && path.exists()).then_some(path)
+}
+
+/// The name Pane caches the web image at `url` under, without its
+/// extension: the first 32 hex digits of the SHA-256 of the URL. The
+/// extension is the image's kind ([`image_kind`]).
+pub fn web_image_stem(url: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(url.as_bytes());
+    digest[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// The kinds of image a web image may be, by their file extension, as
+/// Pane caches them; the window draws each.
+pub const WEB_IMAGE_KINDS: [&str; 7] = ["png", "jpg", "gif", "webp", "bmp", "ico", "svg"];
+
+/// What kind of image `bytes` are, by their first bytes: the extension of
+/// one of [`WEB_IMAGE_KINDS`], or `None` when they are not an image Pane
+/// draws (a web page, an error message, a truncated file).
+pub fn image_kind(bytes: &[u8]) -> Option<&'static str> {
+    let starts = |magic: &[u8]| bytes.starts_with(magic);
+    if starts(b"\x89PNG\r\n\x1a\n") {
+        return Some("png");
+    }
+    if starts(&[0xFF, 0xD8, 0xFF]) {
+        return Some("jpg");
+    }
+    if starts(b"GIF87a") || starts(b"GIF89a") {
+        return Some("gif");
+    }
+    if starts(b"RIFF") && bytes.get(8..12) == Some(&b"WEBP"[..]) {
+        return Some("webp");
+    }
+    if starts(b"BM") && bytes.len() > 26 {
+        return Some("bmp");
+    }
+    if starts(&[0, 0, 1, 0]) && bytes.len() > 6 {
+        return Some("ico");
+    }
+    // An SVG: markup whose first element, after any declaration, comment
+    // or doctype, is `<svg`.
+    let head = &bytes[..bytes.len().min(4096)];
+    if head.contains(&0) {
+        return None;
+    }
+    let text = String::from_utf8_lossy(head);
+    let mut rest = text.trim_start_matches('\u{feff}').trim_start();
+    loop {
+        if rest.starts_with("<svg") {
+            return Some("svg");
+        }
+        let skipped = if rest.starts_with("<?") {
+            rest.find("?>").map(|end| end + 2)
+        } else if rest.starts_with("<!--") {
+            rest.find("-->").map(|end| end + 3)
+        } else if rest.starts_with("<!") {
+            rest.find('>').map(|end| end + 1)
+        } else {
+            None
+        };
+        rest = rest[skipped?..].trim_start();
+    }
+}
+
+/// `rgba`, `width` × `height` pixels of straight-alpha RGBA, row by row,
+/// as a PNG file: how Pane keeps a system icon it extracted.
+pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Option<Vec<u8>> {
+    use std::io::Write;
+    let row = usize::try_from(width).ok()?.checked_mul(4)?;
+    if width == 0 || height == 0 || rgba.len() != row.checked_mul(usize::try_from(height).ok()?)? {
+        return None;
+    }
+    let mut raw = Vec::with_capacity(rgba.len() + height as usize);
+    for line in rgba.chunks_exact(row) {
+        // Filter type 0: the row as it is.
+        raw.push(0);
+        raw.extend_from_slice(line);
+    }
+    let mut compressed =
+        flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    compressed.write_all(&raw).ok()?;
+    let compressed = compressed.finish().ok()?;
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut chunk = |kind: &[u8; 4], data: &[u8]| {
+        png.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        let mut crc = crc32fast::Hasher::new();
+        crc.update(kind);
+        crc.update(data);
+        png.extend_from_slice(kind);
+        png.extend_from_slice(data);
+        png.extend_from_slice(&crc.finalize().to_be_bytes());
+    };
+    let mut header = Vec::with_capacity(13);
+    header.extend_from_slice(&width.to_be_bytes());
+    header.extend_from_slice(&height.to_be_bytes());
+    // 8 bits a channel, RGBA, deflate, adaptive filtering, no interlace.
+    header.extend_from_slice(&[8, 6, 0, 0, 0]);
+    chunk(b"IHDR", &header);
+    chunk(b"IDAT", &compressed);
+    chunk(b"IEND", &[]);
+    Some(png)
 }
 
 /// What the `data:` URL `url` holds: its media type (`image/svg+xml`) and
@@ -1035,9 +1203,17 @@ mod tests {
                 filled: false
             }
         );
-        // A web image is #142's: its fallback for now.
+        // A web image stays one, its fallback with it, for its loading to
+        // decide; a URL Pane cannot download is its fallback.
+        let web =
+            resolved(json!({"url": "https://example.com/a.png", "fallback": "bell"})).unwrap();
         assert_eq!(
-            resolved(json!({"url": "https://example.com/a.png", "fallback": "bell"}))
+            web.source,
+            IconSource::Url("https://example.com/a.png".into())
+        );
+        assert!(web.fallback.is_some());
+        assert_eq!(
+            resolved(json!({"url": "ftp://example.com/a.png", "fallback": "bell"}))
                 .unwrap()
                 .source,
             IconSource::Builtin {
@@ -1051,6 +1227,119 @@ mod tests {
                 .source,
             IconSource::Url(_)
         ));
+    }
+
+    #[test]
+    fn a_system_icon_names_a_path_that_exists_else_its_fallback_shows() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = folder.path().join("notes.txt");
+        std::fs::write(&file, b"x").unwrap();
+        let icon = parse(&json!({"file": file.to_string_lossy(), "fallback": "document"})).unwrap();
+        assert_eq!(icon.source, IconSource::File(file.clone()));
+        let resolved = icon.resolved(folder.path()).unwrap();
+        assert_eq!(resolved.source, IconSource::File(file.clone()));
+        // A folder has an icon too.
+        let folder_icon = parse(&json!({"file": folder.path().to_string_lossy()})).unwrap();
+        assert!(folder_icon.resolved(folder.path()).is_some());
+        // Missing, or relative: the fallback, else nothing.
+        let gone = folder.path().join("gone.txt");
+        let missing = parse(
+            &json!({"file": gone.to_string_lossy(), "fallback": "document",
+                                    "tooltip": "Notes"}),
+        )
+        .unwrap()
+        .resolved(folder.path())
+        .unwrap();
+        assert_eq!(
+            (missing.source, missing.tooltip.as_deref()),
+            (
+                IconSource::Builtin {
+                    name: "document".into(),
+                    filled: false
+                },
+                Some("Notes")
+            )
+        );
+        assert_eq!(
+            parse(&json!({"file": "notes.txt"}))
+                .unwrap()
+                .resolved(folder.path()),
+            None
+        );
+        // Windows' shell names are the system's to find.
+        let packaged = parse(&json!({"file": "shell:AppsFolder\\Microsoft.WindowsCalculator"}))
+            .unwrap()
+            .resolved(folder.path())
+            .unwrap();
+        assert!(matches!(packaged.source, IconSource::File(_)));
+        // A manifest's icon cannot be one.
+        let error = parse_manifest_icon(&json!({"file": "/bin/sh"}), "the package").unwrap_err();
+        assert!(error.contains("not a built-in icon's name"), "{error}");
+        assert!(parse(&json!({"file": " "})).unwrap_err().contains("empty"));
+    }
+
+    #[test]
+    fn web_urls_are_http_and_https_addresses_with_a_host() {
+        for url in [
+            "https://example.com/favicon.ico",
+            "HTTP://127.0.0.1:8741/images/a.png",
+            "https://example.com",
+        ] {
+            assert!(is_web_url(url), "{url}");
+        }
+        for url in [
+            "data:image/png;base64,AA",
+            "ftp://example.com/a.png",
+            "https://",
+            "https:///a.png",
+            "https://user@example.com/a.png",
+            "example.com/a.png",
+        ] {
+            assert!(!is_web_url(url), "{url}");
+        }
+        let stem = web_image_stem("https://example.com/favicon.ico");
+        assert_eq!(stem.len(), 32);
+        assert!(stem.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(stem, web_image_stem("https://example.com/favicon.ico"));
+        assert_ne!(stem, web_image_stem("https://example.org/favicon.ico"));
+    }
+
+    #[test]
+    fn an_image_is_told_by_its_first_bytes() {
+        let png = encode_png(2, 1, &[255, 0, 0, 255, 0, 0, 255, 128]).unwrap();
+        assert_eq!(image_kind(&png), Some("png"));
+        assert_eq!(image_kind(&[0xFF, 0xD8, 0xFF, 0xE0, 0, 0]), Some("jpg"));
+        assert_eq!(image_kind(b"GIF89a\x01\x00"), Some("gif"));
+        assert_eq!(image_kind(b"RIFF\0\0\0\0WEBPVP8 "), Some("webp"));
+        assert_eq!(image_kind(&[0, 0, 1, 0, 1, 0, 16, 16]), Some("ico"));
+        assert_eq!(
+            image_kind(
+                b"\xef\xbb\xbf<?xml version=\"1.0\"?>\n<!-- drawn -->\n\
+                  <!DOCTYPE svg>\n<svg xmlns=\"http://www.w3.org/2000/svg\"/>"
+            ),
+            Some("svg")
+        );
+        for not_an_image in [
+            &b"<!doctype html><html><body>Not found</body></html>"[..],
+            &b"{\"error\": \"not found\"}"[..],
+            &b""[..],
+            &b"\x89PN"[..],
+        ] {
+            assert_eq!(image_kind(not_an_image), None);
+        }
+    }
+
+    #[test]
+    fn an_extracted_icon_is_kept_as_a_png_stating_its_size() {
+        let folder = tempfile::tempdir().unwrap();
+        let pixels: Vec<u8> = (0..3 * 2).flat_map(|_| [10, 20, 30, 255]).collect();
+        let png = encode_png(3, 2, &pixels).unwrap();
+        let path = folder.path().join("icon.png");
+        std::fs::write(&path, &png).unwrap();
+        assert_eq!(png_size(&path), Some((3, 2)));
+        assert!(png.ends_with(&[0xAE, 0x42, 0x60, 0x82]), "IEND's CRC");
+        assert_eq!(encode_png(3, 2, &pixels[..8]), None);
+        assert_eq!(encode_png(0, 0, &[]), None);
     }
 
     #[test]

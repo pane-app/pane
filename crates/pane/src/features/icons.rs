@@ -5,6 +5,10 @@
 //!
 //! - A packaged image's file is the light or the dark one, as the theme
 //!   is.
+//! - A web image or a system icon (#142) arrives as the image file Pane
+//!   downloaded or extracted once it is ready, and as its fallback (or a
+//!   neutral placeholder) until then: the launcher says when it changed,
+//!   and the row draws again.
 //! - A tint, an accessory's colour and a tag's are a theme tone (the text
 //!   levels, the accent, or a named colour in the theme's own shade) or the
 //!   author's raw colour, corrected for contrast against the panel: an icon
@@ -118,6 +122,22 @@ pub(crate) fn drawn(icon: &Icon, theme: &Theme) -> DrawnIcon {
                     theme.text_body,
                 ),
             },
+        },
+        // The launcher presents a system icon as its extracted image once
+        // it is ready, and as its fallback before (#142): one reaching
+        // here unloaded draws its fallback, else nothing.
+        IconSource::File(_) => match &fallback {
+            Some(fallback) => {
+                return DrawnIcon {
+                    label: label.or(fallback.label.clone()),
+                    ..(**fallback).clone()
+                };
+            }
+            None => (
+                IconImage::Glyph(Arc::from(EMPTY_SVG.as_bytes())),
+                "file".to_owned(),
+                theme.text_body,
+            ),
         },
         IconSource::Letter(letter) => (
             IconImage::Letter {

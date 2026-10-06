@@ -78,8 +78,9 @@ pub(crate) struct DrawnIcon {
 pub(crate) enum IconImage {
     /// A glyph's SVG markup, drawn as a mask in the icon's colour.
     Glyph(Arc<[u8]>),
-    /// A PNG or SVG file, in its own colours, or, `tinted`, as a mask in
-    /// the icon's colour.
+    /// An image file (a packaged PNG or SVG; a downloaded web image of any
+    /// kind GPUI decodes, or an extracted system icon, #142), in its own
+    /// colours, or, `tinted`, as a mask in the icon's colour.
     File { path: PathBuf, tinted: bool },
     /// Image data, in its own colours, or, `tinted` (SVG only), as a mask
     /// in the icon's colour.
