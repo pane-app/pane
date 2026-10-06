@@ -262,6 +262,8 @@ pub(crate) struct Undo(Vec<Entry>);
 impl Undo {
     /// Runs the list now, newest first, and returns why each teardown that
     /// failed did; each failure is logged too, and never stops the others.
+    /// Dropping it does the same, for code that needs no answer.
+    #[cfg(test)]
     pub fn run(mut self) -> Vec<String> {
         self.run_all()
     }

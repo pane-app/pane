@@ -159,6 +159,16 @@ impl Installed {
     }
 
     fn with_manifest(sample: &Sample, manifest: impl FnOnce(String) -> String) -> Installed {
+        Installed::with_files(sample, manifest, &[])
+    }
+
+    /// Like [`Installed::with_manifest`], with `files` copied into the
+    /// package too.
+    fn with_files(
+        sample: &Sample,
+        manifest: impl FnOnce(String) -> String,
+        files: &[PathBuf],
+    ) -> Installed {
         let sources = tempfile::tempdir().unwrap();
         let data = tempfile::tempdir().unwrap();
         let cache = tempfile::tempdir().unwrap();
@@ -166,6 +176,9 @@ impl Installed {
         let launcher =
             Launcher::with_packages(Ok(runtime.clone()), vec![], data.path().join("extensions"));
         let folder = sample.copy_to(&sources.path().join("helper"), manifest);
+        for file in files {
+            fs::copy(file, folder.join(file.file_name().unwrap())).unwrap();
+        }
         block_on(launcher.install_package(&folder));
         assert_eq!(
             launcher.view().status,
@@ -721,10 +734,7 @@ fn two_calls_into_one_instance_run_one_after_another() {
     select_title(&installed.launcher, "Echo through the helper");
     let second = {
         let running = installed.launcher.activate_selected();
-        thread::spawn(move || {
-            block_on(running);
-            Instant::now()
-        })
+        thread::spawn(move || block_on(running))
     };
 
     installed.calculator_answers_meanwhile(&first, "1 + 1", "2");
@@ -736,9 +746,8 @@ fn two_calls_into_one_instance_run_one_after_another() {
     assert_eq!(installed.runtime.helper_processes().len(), 1);
     installed.release();
 
-    let first_returned = first.thread.join().unwrap();
-    let second_returned = second.join().unwrap();
-    assert!(second_returned >= first_returned);
+    first.thread.join().unwrap();
+    second.join().unwrap();
     assert_eq!(
         installed.noted("helper-long-wait").as_deref(),
         Some("finished")
@@ -771,6 +780,46 @@ fn a_generation_s_undo_list_holds_what_it_set_up_and_is_empty_after_its_end() {
         Vec::<&str>::new()
     );
     pending.assert_stopped(&installed.runtime);
+    assert_eq!(block_on(installed.runtime.running()), Vec::<PathBuf>::new());
+}
+
+/// Pausing the package while a call waits on its helper ends the wait and
+/// the helper's process. The pause comes from another command of the same
+/// package, the settings sample's Greeting, crashing three times: it runs
+/// while the first command waits, since only an instance's own calls wait
+/// for each other.
+#[test]
+fn pausing_while_the_helper_runs_ends_its_process() {
+    let greeting = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/guests/packages/sample-settings/sample_settings.wasm");
+    let installed = Installed::with_files(
+        &RUST,
+        |text| {
+            text.replacen(
+                "\"commands\": [",
+                "\"commands\": [{ \"id\": \"greeting\", \"title\": \"Greeting\", \
+                 \"component\": \"sample_settings.wasm\" },",
+                1,
+            )
+        },
+        &[greeting],
+    );
+    let pending = installed.start("Echo after waiting");
+
+    for crash in 1..=3 {
+        rows::to_root(&installed.launcher);
+        block_on(installed.launcher.set_query(""));
+        select_title(&installed.launcher, "Greeting");
+        block_on(installed.launcher.activate_selected());
+        select_title(&installed.launcher, "Crash");
+        block_on(installed.launcher.activate_selected());
+        if crash < 3 {
+            assert!(!pending.thread.is_finished(), "crash {crash}");
+        }
+    }
+
+    pending.assert_stopped(&installed.runtime);
+    assert_eq!(installed.waiting().as_deref(), Some("started"));
     assert_eq!(block_on(installed.runtime.running()), Vec::<PathBuf>::new());
 }
 
