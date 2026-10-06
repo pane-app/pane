@@ -194,6 +194,19 @@ impl WasiHttpHooks for Sender {
             .as_ref()
             .map_or_else(String::new, |data| data.owner().to_owned());
         let (network, watch) = (self.network.clone(), self.watch.clone());
+        // On its generation's undo list until its response is received: the
+        // generation's end stops it at once, wherever it waits.
+        let (undo, mut aborted) = match &self.data {
+            Some(data) => {
+                let (abort, aborted) = tokio::sync::oneshot::channel::<()>();
+                let undo = data.generation().on_end("web request", move || {
+                    let _ = abort.send(());
+                    Ok(())
+                });
+                (Some(undo), Some(aborted))
+            }
+            None => (None, None),
+        };
         // Sending is host work: its polls are not the guest's computing, nor
         // are those receiving the response (see `send`).
         Box::new(crate::runtime::deadlines::hosted(
@@ -203,10 +216,41 @@ impl WasiHttpHooks for Sender {
                 let target = Target::of(&request)?;
                 let permit = network.connect(&owner, target.address())?;
                 let ceilings = Ceilings::new(limits, options);
-                send(request, target, ceilings, permit, watch).await
+                let sending = send(request, target, ceilings, permit, watch);
+                let Some(sent) = unless_aborted(sending, aborted.as_mut()).await else {
+                    return Err(Error::HttpRequestDenied);
+                };
+                let (response, receiving) = sent?;
+                let receiving: Receiving = Box::new(async move {
+                    let _undo = undo;
+                    unless_aborted(Box::into_pin(receiving), aborted.as_mut())
+                        .await
+                        .unwrap_or(Err(Error::HttpRequestDenied))
+                });
+                Ok((response, receiving))
             },
         ))
     }
+}
+
+/// `work`'s output, or `None` if `aborted` (a request's generation ended,
+/// see [`Sender::send_request`]) resolves first; a command built into Pane
+/// has none, and is never aborted.
+async fn unless_aborted<T>(
+    work: impl Future<Output = T>,
+    aborted: Option<&mut tokio::sync::oneshot::Receiver<()>>,
+) -> Option<T> {
+    let mut work = pin!(work);
+    let mut aborted = aborted;
+    std::future::poll_fn(|cx| {
+        if let Some(aborted) = aborted.as_mut()
+            && Pin::new(&mut **aborted).poll(cx).is_ready()
+        {
+            return Poll::Ready(None);
+        }
+        work.as_mut().poll(cx).map(Some)
+    })
+    .await
 }
 
 /// Where a request goes.

@@ -477,7 +477,14 @@ impl Shared {
         let watch = Arc::new(Watch::default());
         // Its epoch ticks, which end with it (see `deadlines::tick`).
         deadlines::tick(&code.engine, watch.clone());
-        let host = Host::new(code, self, number, Arc::clone(&faults), watch.clone());
+        let host = Host::new(
+            code,
+            self,
+            number,
+            Arc::clone(&faults),
+            watch.clone(),
+            requests.downgrade(),
+        );
         let shared = Arc::downgrade(self);
         {
             let (watch, shared) = (watch.clone(), shared.clone());
