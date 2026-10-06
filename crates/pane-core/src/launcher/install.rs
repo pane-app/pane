@@ -802,6 +802,13 @@ fn preview_view(
             .and_then(|installed| installed.git.as_ref());
         details.extend(git_lines(git, installed));
     }
+    // A published package has its own 512×512 icon (#139); one from npm or
+    // Git without it is installed anyway, with a caution.
+    if (package.npm.is_some() || package.git.is_some())
+        && let Some(caution) = crate::icons::caution(&package.folder, manifest.icon.as_ref())
+    {
+        details.push(format!("Caution: {caution}"));
+    }
     let titles: Vec<&str> = manifest.commands.iter().map(|c| c.title.as_str()).collect();
     if !titles.is_empty() {
         details.push(format!("Commands: {}", titles.join(", ")));

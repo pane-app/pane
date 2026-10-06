@@ -177,6 +177,7 @@ impl Launcher {
                 state.view.status = Status::Error(problem);
             }
             (None, Ok(view)) => {
+                super::looks::remember(state, &component, &view.items);
                 let list = CommandList::of(view.items);
                 if let Some(searching) = state.searching.as_mut() {
                     searching.list = Some(list.clone());

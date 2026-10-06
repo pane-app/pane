@@ -78,7 +78,30 @@ export interface Item {
    * when `form` is set. Omitted or `null` for none.
    */
   customView?: CustomViewInfo | null;
+  /** Drawn before the title (#139); omitted or `null` for none. */
+  icon?: Icon | null;
+  /** Shown while the pointer rests on the title: all of it, say. */
+  titleTooltip?: string | null;
+  /** Shown while the pointer rests on the subtitle. */
+  subtitleTooltip?: string | null;
+  /**
+   * On the right of the row, in order: text, a relative date, a coloured
+   * tag (#139). A row shows the first three.
+   */
+  accessories?: Accessory[] | null;
 }
+
+import type { Accessory, Icon } from "./icons";
+export type {
+  Accessory,
+  AccessoryOptions,
+  Color,
+  Icon,
+  IconObject,
+  IconOptions,
+  Tint,
+  Tone,
+} from "./icons";
 
 /** An operating system Pane runs on. */
 export type Platform = "windows" | "macos" | "linux";

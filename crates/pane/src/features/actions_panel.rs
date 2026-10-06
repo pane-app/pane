@@ -62,12 +62,13 @@ use gpui::{
 use gpui_elements::editable_text::actions::DEFAULT_INPUT_CONTEXT;
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
 use pane_core::{
-    ItemActions, KeyboardAction, OpenSubmenu, PinnedLayout, ResultAction, ResultActions, RowKind,
-    Screen, SlotChange, SubmenuState,
+    Icon, ItemActions, KeyboardAction, OpenSubmenu, PinnedLayout, ResultAction, ResultActions,
+    RowKind, Screen, SlotChange, SubmenuState,
 };
 
 use crate::app::{LauncherWindow, row_icon};
 use crate::features::quick_slots;
+use crate::ui::extension_icon::{self, IconSize};
 use crate::ui::icon::{Glyph, IconTone, TileSize, glyph, tile_at};
 use crate::ui::input::TextEditingKeys;
 use crate::ui::keycap::{CapStyle, KeySequence, key_sequence};
@@ -279,6 +280,9 @@ pub(crate) struct PanelEntry {
     pub(crate) section: Option<SharedString>,
     /// Its glyph.
     pub(crate) glyph: Glyph,
+    /// The icon an item's action or a submenu's entry gives (#139), drawn
+    /// in its glyph's place; `None` keeps the glyph.
+    pub(crate) icon: Option<Icon>,
     /// The keys shown at its right, in their caps' style.
     pub(crate) keys: Option<(KeySequence, CapStyle)>,
 }
@@ -307,6 +311,7 @@ fn result_entries(
                 submenu: false,
                 section: (!invoking).then(|| group.into()),
                 glyph: action_glyph(item.action, primary),
+                icon: None,
                 keys: if invoking {
                     Some((invoke.clone(), CapStyle::Accent))
                 } else {
@@ -344,6 +349,7 @@ fn item_entries(actions: &ItemActions, invoke: &KeySequence) -> Vec<PanelEntry> 
                 submenu: action.submenu,
                 section: action.section.clone().map(SharedString::from),
                 glyph: Glyph::ActionRun,
+                icon: action.icon.clone(),
                 keys,
             }
         })
@@ -362,6 +368,7 @@ fn submenu_entries(submenu: &OpenSubmenu) -> Vec<PanelEntry> {
         submenu: false,
         section: None,
         glyph,
+        icon: None,
         keys: None,
     };
     match &submenu.state {
@@ -378,6 +385,7 @@ fn submenu_entries(submenu: &OpenSubmenu) -> Vec<PanelEntry> {
                 submenu: entry.submenu,
                 section: entry.section.clone().map(SharedString::from),
                 glyph: Glyph::ActionRun,
+                icon: entry.icon.clone(),
                 keys: entry
                     .shortcut
                     .as_ref()
@@ -1242,8 +1250,18 @@ pub(crate) fn action_row(
         })
         .when(!available && !note, |row| row.opacity(0.5))
         .when(!available, |row| row.aria_disabled(true))
-        .child(
-            glyph(
+        .child(match &entry.icon {
+            // The action's own icon (#139), at the glyph's size, its web
+            // image or system icon as it is now (#142).
+            Some(icon) => extension_icon::draw(
+                &crate::features::icons::drawn(icon, theme),
+                IconSize::small(geometry.glyph_size),
+                ("action-icon", index),
+                &format!("action-{label}"),
+                theme,
+            )
+            .into_any_element(),
+            None => glyph(
                 glyph_of,
                 geometry.glyph_size,
                 if destructive {
@@ -1252,8 +1270,9 @@ pub(crate) fn action_row(
                     theme.action_icon
                 },
             )
-            .flex_none(),
-        )
+            .flex_none()
+            .into_any_element(),
+        })
         .child(div().flex_1().min_w(px(0.)).truncate().child(label))
         .when_some(keys, |row, (keys, style)| {
             row.child(key_sequence(keys, style, theme))

@@ -355,6 +355,8 @@ pub struct Item {
     form: Option<Form>,
     platforms: Option<Vec<Platform>>,
     custom_view: Option<CustomViewInfo>,
+    /// Its icon, tooltips and accessories (`crate::icon`, #139).
+    pub(crate) look: crate::icon::Look,
 }
 
 impl Item {
@@ -370,6 +372,7 @@ impl Item {
             form: None,
             platforms: None,
             custom_view: None,
+            look: crate::icon::Look::default(),
         }
     }
 
@@ -706,6 +709,7 @@ fn remember(list: List) -> String {
             );
             tree.push('}');
         }
+        crate::icon::write_look(&mut tree, &item.look);
         tree.push('}');
     }
     tree.push_str("]}}");

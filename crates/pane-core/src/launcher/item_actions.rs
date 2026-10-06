@@ -34,7 +34,8 @@
 
 use std::future::Future;
 
-use super::{Entry, Launcher, Screen, State, Status, owner};
+use super::{Entry, Launcher, Screen, State, Status, looks, owner};
+use crate::icons::Icon;
 use crate::keyboard::{Binding, PaneKeys};
 use crate::runtime::{Action, ActionStyle, SubmenuEntries};
 
@@ -81,6 +82,9 @@ pub struct ItemAction {
     /// Whether choosing it opens a submenu (#140) rather than calling the
     /// command back: the panel draws a chevron beside it.
     pub submenu: bool,
+    /// The icon the panel draws beside it (#139), as it is now: a web image
+    /// or a system icon once it loaded, its fallback until then (#142).
+    pub icon: Option<Icon>,
 }
 
 /// The actions of the selected item in an open command's list.
@@ -165,7 +169,9 @@ impl Launcher {
     pub fn item_actions(&self) -> Option<ItemActions> {
         let state = self.lock();
         let listed = selected_listed(&state)?;
-        Some(item_actions(listed, &state.pane_keys))
+        let mut actions = item_actions(listed, &state.pane_keys);
+        actions.actions = looks::with_action_icons(&state, &listed.actions, actions.actions);
+        Some(actions)
     }
 
     /// The shortcuts of the open command's list that Pane does not bind,
@@ -321,6 +327,9 @@ pub(super) fn bind(actions: &[Action], keys: &PaneKeys) -> Vec<ItemAction> {
                 shortcut,
                 unbound,
                 submenu: action.submenu().is_some(),
+                // Set by `looks::with_action_icons` where the panel lists
+                // them.
+                icon: None,
             }
         })
         .collect()
@@ -424,6 +433,7 @@ mod tests {
             section: None,
             style: ActionStyle::Default,
             shortcut: shortcut.map(Binding::parse),
+            icon: None,
         }
     }
 

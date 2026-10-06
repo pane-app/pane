@@ -50,6 +50,8 @@
 // error to answer with). A list Pane cannot read (a title that is not text,
 // say) is the command's failure, which Pane reports, not a crash.
 
+import { look } from "./look.js";
+
 /** The version of the tree the adapter writes (docs/list-tree.md). */
 const TREE_VERSION = 1;
 
@@ -184,6 +186,8 @@ function tree(list, actions) {
         if (item?.form != null) node.form = treeForm(item.form);
         if (item?.platforms != null) node.platforms = item.platforms;
         if (item?.customView != null) node.customView = item.customView;
+        // Its icon, tooltips and accessories (#139).
+        Object.assign(node, look(item));
         return node;
       })
     : list?.items;

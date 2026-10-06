@@ -94,6 +94,8 @@ jobs:
           # As in ci.yml: the real-clipboard adapter tests opt in where a
           # logged-in session exists; on Linux they run under Xvfb below.
           PANE_TEST_REAL_CLIPBOARD: ${{ runner.os != 'Linux' && '1' || '' }}
+          # As in ci.yml: the Windows system icon adapter's test (#142).
+          PANE_TEST_SYSTEM_ICONS: ${{ runner.os == 'Windows' && '1' || '' }}
       # The Linux (X11) clipboard adapter's test also replaces what is on
       # the clipboard, and needs a display to watch: the same opt-in, run
       # under Xvfb (the step above runs without a display, so the test

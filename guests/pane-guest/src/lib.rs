@@ -3,7 +3,8 @@
 //! An extension implements [`Command`] and calls [`export!`]: its screen is
 //! a [`List`] of [`Item`]s whose actions are closures, which the SDK hands
 //! Pane as the versioned JSON tree of ADR 0036's envelope (`render` and
-//! `handle-event`) and runs when the user chooses them; or, for a no-view
+//! `handle-event`) and runs when the user chooses them; its items may have
+//! icons, accessories and tooltips ([`icon`]). Or, for a no-view
 //! command, [`Command::run`] runs each time it is launched. Every command
 //! receives its launch record and may launch another command with
 //! [`commands`]. It tells the user what happened with a toast or a HUD
@@ -57,8 +58,10 @@ pub use pane::extension::commands::{LaunchRecord, LaunchSource, LaunchType};
 
 pub mod actions;
 pub mod feedback;
+pub mod icon;
 mod list;
 pub mod system;
+pub use icon::{Accessory, Color, Icon, Mask, Tint, Tone};
 pub use pane::extension::{cache, content, credentials, operations, settings};
 
 /// Pane's launcher window, as the command that runs in it sees it

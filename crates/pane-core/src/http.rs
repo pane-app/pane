@@ -118,6 +118,21 @@ impl Network {
             .unwrap_or_default()
     }
 
+    /// Notes that Pane reached `address` on behalf of the package `owner`
+    /// (a web image one of its icons names, #142): the package's network
+    /// use lists it with the addresses its own requests reached.
+    pub(crate) fn note_contacted(&self, owner: &str, address: String) {
+        let connections = self.limits().connections;
+        lock(&self.packages)
+            .entry(owner.to_owned())
+            .or_insert_with(|| PackageUse {
+                contacted: BTreeSet::new(),
+                connections: Arc::new(Semaphore::new(connections)),
+            })
+            .contacted
+            .insert(address);
+    }
+
     /// Notes that the package `owner` is reaching `address` and takes one of
     /// its connections, given back when the permit is dropped; refused while
     /// all are open.
@@ -734,8 +749,9 @@ impl Origin {
 pub(crate) struct OwnLimits {
     /// Connecting, the TLS handshake included.
     pub connect: Duration,
-    /// The wait for the response's head, and then for each piece of its
-    /// body.
+    /// The wait for the response's head.
+    pub first_byte: Duration,
+    /// The wait for each piece of its body.
     pub between_bytes: Duration,
     /// The whole request.
     pub deadline: Duration,
@@ -745,6 +761,7 @@ pub(crate) struct OwnLimits {
 /// registry, the artifact source and Git hosts alike.
 pub(crate) const OWN_LIMITS: OwnLimits = OwnLimits {
     connect: Duration::from_secs(30),
+    first_byte: Duration::from_secs(60),
     between_bytes: Duration::from_secs(60),
     deadline: Duration::from_secs(300),
 };
@@ -800,6 +817,57 @@ pub(crate) fn get_blocking_progressing(
         limits,
         progress,
     )
+}
+
+/// Downloads `url` for Pane on an extension's behalf, a web image one of
+/// its icons names (#142), within the ceilings of the extension's own web
+/// requests (`limits`, ADR 0018: connecting, the response's head, the wait
+/// between two pieces of its body, the whole request and its size). As
+/// [`get_blocking`] it trusts the system's certificates, follows no
+/// redirect and blocks the calling thread, which must not be running an
+/// async runtime. `aborted` resolving (the extension's generation ended)
+/// ends it at once.
+pub(crate) fn get_for_extension(
+    url: &str,
+    limits: HttpLimits,
+    aborted: Option<tokio::sync::oneshot::Receiver<()>>,
+) -> Result<Answer, GetError> {
+    let own = OwnLimits {
+        connect: limits.connect,
+        first_byte: limits.first_byte,
+        between_bytes: limits.between_bytes,
+        deadline: limits.deadline,
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| GetError::Failed(error.to_string()))?;
+    runtime.block_on(async move {
+        let mut aborted = aborted;
+        let unwatched = |_: u64| {};
+        let request = own_request(
+            http::Method::GET,
+            url,
+            &[],
+            None,
+            limits.body,
+            own,
+            &unwatched,
+        );
+        unless_aborted(request, aborted.as_mut())
+            .await
+            .unwrap_or_else(|| Err(GetError::Failed("its extension stopped".into())))
+    })
+}
+
+/// `host:port` of `url`, an `http(s)` address, as a package's network use
+/// lists it; `None` for anything else.
+pub(crate) fn address_of(url: &str) -> Option<String> {
+    let uri: http::Uri = url.parse().ok()?;
+    if !matches!(uri.scheme_str(), Some("http" | "https")) {
+        return None;
+    }
+    Target::of_uri(&uri).ok().map(|target| target.address())
 }
 
 /// Like [`get_blocking`], a POST of `body` (Git's `git-upload-pack`
@@ -890,7 +958,7 @@ async fn own_request(
         )))
         .map_err(|error| GetError::Failed(error.to_string()))?;
     let answered = async {
-        let response = timeout_at(within(limits.between_bytes), sender.send_request(request))
+        let response = timeout_at(within(limits.first_byte), sender.send_request(request))
             .await
             .map_err(|_| failed(Error::ConnectionReadTimeout))?
             .map_err(|error| failed(Error::from(error)))?;

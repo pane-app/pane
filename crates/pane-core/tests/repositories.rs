@@ -495,20 +495,17 @@ fn a_commit_no_branch_or_tag_points_to_is_previewed_with_a_caution() {
     );
     assert_eq!(titles(&launcher), ["Install"]);
 
-    // A commit a branch or a tag points to (here both) has no caution.
+    // A commit a branch or a tag points to (here both) has no caution
+    // about its commit (the sample has no icon, which is cautioned about
+    // apart, #139).
+    let unadvertised_caution = |line: &String| line.starts_with("Caution: no branch or tag");
     block_on(launcher.preview_git(&format!("{}@{}", greeter.url, greeter.release)));
     let details = self::details(&launcher);
-    assert!(
-        !details.iter().any(|line| line.starts_with("Caution:")),
-        "{details:#?}"
-    );
+    assert!(!details.iter().any(unadvertised_caution), "{details:#?}");
     // Nor does a tag or a branch, whose commit the server itself named.
     block_on(launcher.preview_git(&format!("{}@v0.1.0", greeter.url)));
     let details = self::details(&launcher);
-    assert!(
-        !details.iter().any(|line| line.starts_with("Caution:")),
-        "{details:#?}"
-    );
+    assert!(!details.iter().any(unadvertised_caution), "{details:#?}");
 }
 
 #[test]

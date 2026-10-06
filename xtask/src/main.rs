@@ -77,6 +77,8 @@ const PREBUILT: &[&str] = &[
     "sample_preferences_ts",
     "sample_arguments_js",
     "sample_arguments_ts",
+    "sample_icons_js",
+    "sample_icons_ts",
 ];
 
 fn main() -> ExitCode {
@@ -175,6 +177,7 @@ fn guests() -> Result<(), String> {
                 "sample_preferences",
                 "sample_arguments",
                 "sample_helper",
+                "sample_icons",
                 "faulty",
                 "operations_fixture",
                 "old_api",
@@ -209,7 +212,8 @@ fn guests() -> Result<(), String> {
             .map_err(|error| format!("copy {} failed: {error}", prebuilt.display()))?;
     }
     // Ready-to-run sample packages: each manifest in guests/packages with the
-    // component it names.
+    // component it names, and the images it shows (#139): the other files
+    // and folders beside its manifest.
     for (package, component) in SAMPLE_PACKAGES {
         let dest = out.join("packages").join(package);
         std::fs::create_dir_all(&dest).map_err(|error| error.to_string())?;
@@ -227,18 +231,34 @@ fn guests() -> Result<(), String> {
             std::fs::copy(&from, &to)
                 .map_err(|error| format!("copy {} failed: {error}", from.display()))?;
         }
-        // The help a package ships beside its preferences, which Pane's
-        // Setup screen shows.
-        let help = root.join(format!("guests/packages/{package}/HELP.md"));
-        if help.is_file() {
-            std::fs::copy(&help, dest.join("HELP.md"))
-                .map_err(|error| format!("copy {} failed: {error}", help.display()))?;
-        }
+        // Everything beside the package's pane.json: its icons, its
+        // assets/ folder, and the help (HELP.md) its Setup screen shows.
+        copy_package_files(&root.join("guests/packages").join(package), &dest)?;
     }
     echo_helper(&root, &out)?;
     npm_sample(&root, &out)?;
     git_sample(&root, &out)?;
     println!("guests built into {}", out.display());
+    Ok(())
+}
+
+/// Copies what a sample package folder `from` holds besides its
+/// `pane.json` (an icon, its `assets` folder) into `to`, folders and all.
+fn copy_package_files(from: &Path, to: &Path) -> Result<(), String> {
+    let entries = std::fs::read_dir(from)
+        .map_err(|error| format!("read {} failed: {error}", from.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        let target = to.join(entry.file_name());
+        if path.is_dir() {
+            std::fs::create_dir_all(&target).map_err(|error| error.to_string())?;
+            copy_package_files(&path, &target)?;
+        } else if entry.file_name() != "pane.json" {
+            std::fs::copy(&path, &target)
+                .map_err(|error| format!("copy {} failed: {error}", path.display()))?;
+        }
+    }
     Ok(())
 }
 
@@ -355,7 +375,7 @@ fn git_sample(root: &Path, out: &Path) -> Result<(), String> {
 /// (package folder in `guests/packages`, component) of each sample package,
 /// and of the default extensions (the calculator, applications and
 /// quicklinks).
-const SAMPLE_PACKAGES: [(&str, &str); 49] = [
+const SAMPLE_PACKAGES: [(&str, &str); 55] = [
     ("sample-rust", "sample_rust"),
     ("sample-settings", "sample_settings"),
     ("sample-js", "sample_js"),
@@ -405,6 +425,12 @@ const SAMPLE_PACKAGES: [(&str, &str); 49] = [
     ("sample-arguments", "sample_arguments"),
     ("sample-arguments-js", "sample_arguments_js"),
     ("sample-arguments-ts", "sample_arguments_ts"),
+    ("sample-icons", "sample_icons"),
+    ("sample-icons-js", "sample_icons_js"),
+    ("sample-icons-ts", "sample_icons_ts"),
+    ("sample-icons-plain", "sample_icons"),
+    ("sample-icons-plain-js", "sample_icons_js"),
+    ("sample-icons-plain-ts", "sample_icons_ts"),
 ];
 
 /// Rebuilds `guests/prebuilt/` from the JS/TS sample sources, then refreshes

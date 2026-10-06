@@ -11,6 +11,7 @@
 //! gives one of the wrong type is unreadable, which the runtime answers as
 //! [`super::CallError::Unreadable`]: the command's failure, never a crash.
 
+use crate::icons::{self, Icon, Tint};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -52,6 +53,104 @@ pub struct Item {
     /// When set (and `form` is not), activating the item opens this custom
     /// view instead of running its action.
     pub custom_view: Option<CustomViewInfo>,
+    /// How the item looks beyond its title and subtitle: its icon,
+    /// tooltips and accessories (#139).
+    pub look: ItemLook,
+}
+
+/// How an item looks beyond its title and subtitle (#139): its icon, the
+/// tooltips of its title and subtitle and its accessories, as the tree
+/// gives them (each action's icon is the action's, [`Action::icon`]).
+/// Packaged images are named relative to the package folder here; the
+/// launcher resolves them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ItemLook {
+    pub icon: Option<Icon>,
+    pub title_tooltip: Option<String>,
+    pub subtitle_tooltip: Option<String>,
+    /// Every accessory the tree gives, in order; a row draws the first
+    /// [`MAX_ACCESSORIES`].
+    pub accessories: Vec<Accessory>,
+}
+
+/// How many accessories a row draws; extras are not drawn, and Pane says
+/// so while the package is developed. Proposed (#139).
+pub const MAX_ACCESSORIES: usize = 3;
+
+/// One accessory on the right of a row (#139).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Accessory {
+    pub content: AccessoryContent,
+    /// Drawn before the text; an accessory may be an icon alone.
+    pub icon: Option<Icon>,
+    /// The colour of its text, or of a tag; Pane corrects its contrast.
+    pub color: Option<Tint>,
+    /// Shown on hover; a date's is its absolute time unless the tree gives
+    /// one.
+    pub tooltip: Option<String>,
+}
+
+/// What an accessory shows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AccessoryContent {
+    /// Text, such as a count; empty for an icon alone.
+    Text(String),
+    /// A time, in milliseconds since the Unix epoch, shown relative to now
+    /// ("2h") and kept current while the list is open.
+    Date(i64),
+    /// A coloured tag, such as "Open".
+    Tag(String),
+}
+
+impl ItemLook {
+    /// The look of `item`, as its tree gives it: what Pane cannot read of
+    /// an icon or an accessory is left out.
+    fn of(item: &WireItem) -> ItemLook {
+        ItemLook {
+            icon: item.icon.as_ref().and_then(icons::read),
+            title_tooltip: item.title_tooltip.clone(),
+            subtitle_tooltip: item.subtitle_tooltip.clone(),
+            accessories: item
+                .accessories
+                .iter()
+                .flatten()
+                .filter_map(read_accessory)
+                .collect(),
+        }
+    }
+}
+
+/// Reads one accessory: `{"text": …}`, `{"date": <ms>}` or `{"tag": …}`,
+/// with an optional `icon`, `color` and `tooltip`, or an icon alone.
+/// `None` for one Pane cannot read.
+fn read_accessory(value: &Value) -> Option<Accessory> {
+    let Value::Object(fields) = value else {
+        return None;
+    };
+    let text = |key: &str| match fields.get(key) {
+        Some(Value::String(text)) => Some(text.clone()),
+        _ => None,
+    };
+    let icon = fields.get("icon").and_then(icons::read);
+    let content = if let Some(tag) = text("tag") {
+        AccessoryContent::Tag(tag)
+    } else if let Some(date) = fields.get("date").and_then(Value::as_f64) {
+        AccessoryContent::Date(date as i64)
+    } else if let Some(text) = text("text") {
+        AccessoryContent::Text(text)
+    } else if icon.is_some() {
+        AccessoryContent::Text(String::new())
+    } else {
+        return None;
+    };
+    Some(Accessory {
+        content,
+        icon,
+        color: fields
+            .get("color")
+            .and_then(|color| icons::read_tint(color).ok()),
+        tooltip: text("tooltip"),
+    })
 }
 
 impl Item {
@@ -82,6 +181,10 @@ pub struct Action {
     /// shortcut is not one Pane can bind. Whether Pane binds it also
     /// depends on Pane's own keys (see `crate::keyboard::PaneKeys`).
     pub shortcut: Option<Result<Binding, String>>,
+    /// The icon the Actions panel draws beside it (#139), read leniently:
+    /// one Pane cannot read leaves the action without one. Packaged
+    /// images are named relative to the package folder here.
+    pub icon: Option<Icon>,
 }
 
 impl Action {
@@ -246,10 +349,22 @@ struct WireItem {
     platforms: Option<Vec<String>>,
     #[serde(default)]
     custom_view: Option<WireCustomView>,
+    /// Read leniently by [`icons::read`]: an icon Pane cannot draw leaves
+    /// the item without one, never the tree unreadable.
+    #[serde(default)]
+    icon: Option<Value>,
+    #[serde(default)]
+    title_tooltip: Option<String>,
+    #[serde(default)]
+    subtitle_tooltip: Option<String>,
+    /// Each read leniently by `read_accessory`.
+    #[serde(default)]
+    accessories: Option<Vec<Value>>,
 }
 
 /// The item `item` describes, or why Pane cannot read it.
 fn item(item: WireItem) -> Result<Item, String> {
+    let look = ItemLook::of(&item);
     let actions = item
         .actions
         .unwrap_or_default()
@@ -280,6 +395,7 @@ fn item(item: WireItem) -> Result<Item, String> {
                 WireRole::ColorWell => CustomViewRole::ColorWell,
             },
         }),
+        look,
     })
 }
 
@@ -288,6 +404,9 @@ fn item(item: WireItem) -> Result<Item, String> {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WireAction {
+    /// Read leniently into [`Action::icon`].
+    #[serde(default)]
+    icon: Option<Value>,
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]
@@ -349,6 +468,7 @@ fn action(action: WireAction) -> Result<Action, String> {
             .shortcut
             .as_ref()
             .and_then(|shortcut| shortcut_here(shortcut, Platform::current())),
+        icon: action.icon.as_ref().and_then(icons::read),
     })
 }
 
@@ -587,6 +707,65 @@ mod tests {
         .unwrap();
 
         assert_eq!(view.items[0].action().unwrap().callback(), Some("a"));
+    }
+
+    #[test]
+    fn an_items_icon_tooltips_and_accessories_are_read_and_what_pane_cannot_draw_left_out() {
+        use crate::icons::{Color, IconSource, Tone};
+        let view = read_view(
+            r##"{"version": 1, "view": {"type": "list", "title": "T", "items": [
+                {"id": "a", "title": "A", "icon": {"builtin": "star", "tint": "red"},
+                 "titleTooltip": "All of A", "subtitleTooltip": "More",
+                 "accessories": [
+                    {"text": "3", "tooltip": "Unread"},
+                    {"date": 1767225600000, "icon": "bell"},
+                    {"tag": "Open", "color": "#2f9e44"},
+                    {"icon": "star"},
+                    {"nothing": true},
+                    {"tag": "Odd", "color": "plaid"},
+                    "not an accessory"
+                 ],
+                 "actions": [{"onAction": "a", "icon": "copy"}, {"onAction": "b"}]},
+                {"id": "b", "title": "B", "icon": {"tint": "red"}}
+            ]}}"##,
+        )
+        .unwrap();
+        let look = &view.items[0].look;
+        assert_eq!(
+            look.icon.as_ref().map(|icon| (&icon.source, icon.tint)),
+            Some((
+                &IconSource::Builtin {
+                    name: "star".into(),
+                    filled: false
+                },
+                Some(Tint::Same(Color::Tone(Tone::Red)))
+            ))
+        );
+        assert_eq!(look.title_tooltip.as_deref(), Some("All of A"));
+        assert_eq!(look.subtitle_tooltip.as_deref(), Some("More"));
+        let contents: Vec<&AccessoryContent> =
+            look.accessories.iter().map(|a| &a.content).collect();
+        assert_eq!(
+            contents,
+            [
+                &AccessoryContent::Text("3".into()),
+                &AccessoryContent::Date(1_767_225_600_000),
+                &AccessoryContent::Tag("Open".into()),
+                &AccessoryContent::Text(String::new()),
+                &AccessoryContent::Tag("Odd".into()),
+            ]
+        );
+        assert_eq!(look.accessories[0].tooltip.as_deref(), Some("Unread"));
+        assert!(look.accessories[1].icon.is_some());
+        assert_eq!(
+            look.accessories[2].color,
+            Some(Tint::Same(Color::Rgba(0x2F9E44FF)))
+        );
+        assert_eq!(look.accessories[4].color, None, "a colour Pane cannot read");
+        let actions = &view.items[0].actions;
+        assert!(actions[0].icon.is_some() && actions[1].icon.is_none());
+        // An icon with nothing to draw: the item has none.
+        assert_eq!(view.items[1].look, ItemLook::default());
     }
 
     #[test]

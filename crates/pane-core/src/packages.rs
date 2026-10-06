@@ -21,6 +21,7 @@ use crate::arguments::{self, ManifestArgument};
 use crate::atomic::{Readers, write_atomically};
 use crate::git::{GitOrigin, GitRevision, GitSpec, InstalledGit, Repository};
 use crate::helpers::runner;
+use crate::icons::{self, Icon};
 use crate::launcher::CommandRegistration;
 use crate::npm::{Fetched, NpmOrigin, NpmPackage, NpmSpec};
 use crate::platform::{self, Platform};
@@ -311,6 +312,10 @@ fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
 pub struct Manifest {
     pub title: String,
     pub version: Option<String>,
+    /// The package's own icon (`"icon"`, #139): a built-in icon or an
+    /// image the package ships. `None` for none, which Pane shows as a
+    /// first-letter tile.
+    pub icon: Option<Icon>,
     /// The extension API the package needs, such as `0.1`.
     pub api_version: String,
     /// The operating systems the package supports; `None` when it does not
@@ -481,6 +486,8 @@ pub struct ManifestCommand {
     pub id: String,
     pub title: String,
     pub subtitle: Option<String>,
+    /// The command's own icon (`"icon"`, #139); `None` for its package's.
+    pub icon: Option<Icon>,
     /// The command's component, relative to the package folder.
     pub component: PathBuf,
     /// The operating systems the command supports; `None` for every system
@@ -542,6 +549,9 @@ struct ManifestJson {
     title: String,
     #[serde(default)]
     version: Option<String>,
+    /// Checked by [`icons::parse_manifest_icon`].
+    #[serde(default)]
+    icon: Option<serde_json::Value>,
     api_version: String,
     #[serde(default)]
     platforms: Option<Vec<String>>,
@@ -602,6 +612,9 @@ struct CommandJson {
     title: String,
     #[serde(default)]
     subtitle: Option<String>,
+    /// Checked by [`icons::parse_manifest_icon`].
+    #[serde(default)]
+    icon: Option<serde_json::Value>,
     component: String,
     #[serde(default)]
     platforms: Option<Vec<String>>,
@@ -651,7 +664,46 @@ impl Manifest {
             return Err(PackageError::UnsupportedPlatform(reason));
         }
         manifest.check_components(folder)?;
+        manifest.check_icons(folder)?;
         Ok((manifest, text))
+    }
+
+    /// Checks that every image the package's and its commands' icons name
+    /// is in `folder`, so that a package naming an image it does not ship
+    /// is refused at install (#139). Built-in names were checked when the
+    /// manifest was parsed.
+    fn check_icons(&self, folder: &Path) -> Result<(), PackageError> {
+        let package = self
+            .icon
+            .iter()
+            .map(|icon| (icon, "the package".to_owned()));
+        let commands = self.commands.iter().filter_map(|command| {
+            let icon = command.icon.as_ref()?;
+            Some((icon, format!("command `{}`", command.id)))
+        });
+        for (icon, what) in package.chain(commands) {
+            icons::check_manifest_files(icon, folder, &what)
+                .map_err(PackageError::InvalidManifest)?;
+        }
+        Ok(())
+    }
+
+    /// The files the package's and its commands' icons name, relative to
+    /// the package folder, with the `@light` and `@dark` variants they may
+    /// have: copied into the managed copy with the package.
+    pub(crate) fn icon_files(&self) -> Vec<PathBuf> {
+        let mut files: Vec<PathBuf> = Vec::new();
+        let named = self.icon.iter().chain(
+            self.commands
+                .iter()
+                .filter_map(|command| command.icon.as_ref()),
+        );
+        for file in named.flat_map(icons::package_files) {
+            if !files.contains(&file) {
+                files.push(file);
+            }
+        }
+        files
     }
 
     /// Reads a managed copy: like [`Manifest::read`], but a copy for other
@@ -766,6 +818,13 @@ impl Manifest {
         if json.title.trim().is_empty() {
             return Err(invalid("`title` is empty".into()));
         }
+        let icon = json
+            .icon
+            .as_ref()
+            .filter(|icon| !icon.is_null())
+            .map(|icon| icons::parse_manifest_icon(icon, "the package"))
+            .transpose()
+            .map_err(invalid)?;
         let platforms = parse_platforms(json.platforms, "`platforms`")?;
         let package_preferences =
             preferences::parse(json.preferences, "the package", &[]).map_err(invalid)?;
@@ -791,6 +850,13 @@ impl Manifest {
             {
                 return Err(invalid(format!("command id `{}` is repeated", command.id)));
             }
+            let icon = command
+                .icon
+                .as_ref()
+                .filter(|icon| !icon.is_null())
+                .map(|icon| icons::parse_manifest_icon(icon, &format!("command `{}`", command.id)))
+                .transpose()
+                .map_err(invalid)?;
             // Root search never asks a command that searches inside itself:
             // results it computed for root search would never be shown.
             if command.search && command.root_results {
@@ -839,6 +905,7 @@ impl Manifest {
                 id: command.id,
                 title: command.title,
                 subtitle: command.subtitle,
+                icon,
                 component,
                 platforms,
                 mode,
@@ -920,6 +987,7 @@ impl Manifest {
         Ok(Manifest {
             title: json.title,
             version: json.version,
+            icon,
             api_version: json.api_version,
             platforms,
             commands,
@@ -1554,6 +1622,43 @@ pub struct InstalledPackage {
     /// The identity each dependency the manifest declares was resolved to
     /// when the package was installed, by dependency id.
     dependencies: Vec<(String, PackageIdentity)>,
+    /// The package's icon and its commands' own, resolved in the managed
+    /// copy when it was read (#139).
+    icons: PackageIcons,
+}
+
+/// An installed package's icon and its commands' own, as Pane draws them.
+#[derive(Clone, Debug)]
+struct PackageIcons {
+    /// The package's icon, or its first-letter tile.
+    package: Icon,
+    /// Each command with an icon of its own, by manifest id.
+    commands: Vec<(String, Icon)>,
+}
+
+impl PackageIcons {
+    /// The icons of the package titled `title` whose managed copy is at
+    /// `location`, as `manifest` names them. An icon whose image is gone
+    /// from the copy is drawn as its fallback, or the package's.
+    fn of(manifest: Option<&Manifest>, title: &str, location: &Path) -> PackageIcons {
+        let package = manifest
+            .and_then(|manifest| manifest.icon.clone())
+            .and_then(|icon| icon.resolved(location))
+            .unwrap_or_else(|| Icon::letter_of(title));
+        let commands = manifest
+            .map(|manifest| {
+                manifest
+                    .commands
+                    .iter()
+                    .filter_map(|command| {
+                        let icon = command.icon.clone()?.resolved(location)?;
+                        Some((command.id.clone(), icon))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        PackageIcons { package, commands }
+    }
 }
 
 impl InstalledPackage {
@@ -1586,7 +1691,7 @@ impl InstalledPackage {
         };
         let npm = npm.and_then(|npm| npm.package(&identity));
         let git = git.and_then(|git| git.installed(&identity));
-        InstalledPackage {
+        let mut package = InstalledPackage {
             manifest,
             identity,
             location,
@@ -1595,7 +1700,17 @@ impl InstalledPackage {
             git,
             uses_network,
             dependencies,
-        }
+            icons: PackageIcons {
+                package: Icon::letter_of(""),
+                commands: Vec::new(),
+            },
+        };
+        package.icons = PackageIcons::of(
+            package.manifest.as_ref().ok(),
+            &package.title(),
+            &package.location,
+        );
+        package
     }
 
     /// The identity of the package this one's code calls by the dependency
@@ -1627,6 +1742,22 @@ impl InstalledPackage {
 
     pub fn version(&self) -> Option<String> {
         self.manifest.as_ref().ok()?.version.clone()
+    }
+
+    /// The package's icon as Pane draws it (#139): its manifest's, or a
+    /// tile with its title's first letter when it has none.
+    pub fn icon(&self) -> &Icon {
+        &self.icons.package
+    }
+
+    /// The icon of this package's command with manifest id `command`: its
+    /// own, else the package's.
+    pub fn command_icon(&self, command: &str) -> &Icon {
+        self.icons
+            .commands
+            .iter()
+            .find(|(id, _)| id == command)
+            .map_or(&self.icons.package, |(_, icon)| icon)
     }
 
     /// The commands this package offers in root search.
@@ -2592,6 +2723,52 @@ fn copy_package(package: &SourcePackage, location: &Path) -> io::Result<()> {
     let help = package.folder.join(preferences::HELP_FILE);
     if fs::symlink_metadata(&help).is_ok_and(|metadata| metadata.is_file()) {
         fs::copy(&help, location.join(preferences::HELP_FILE))?;
+    }
+    copy_images(package, location)
+}
+
+/// The folder of a package whose images its lists name (#139), as
+/// Raycast's `assets` folder is: copied whole into the managed copy.
+pub(crate) const ASSETS_DIR: &str = "assets";
+
+/// Copies the images a package shows into its managed copy at
+/// `location`: the files its own and its commands' icons name, with
+/// their `@light` and `@dark` variants where it has them, and its
+/// [`ASSETS_DIR`] folder, which holds the images its lists name. Only
+/// regular files and folders are copied; a link is not followed.
+fn copy_images(package: &SourcePackage, location: &Path) -> io::Result<()> {
+    for file in package.manifest.icon_files() {
+        let source = package.folder.join(&file);
+        if !fs::symlink_metadata(&source).is_ok_and(|metadata| metadata.is_file()) {
+            // A variant the package does not have; the icon itself was
+            // checked when the package was read.
+            continue;
+        }
+        let target = location.join(&file);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(source, target)?;
+    }
+    copy_folder(&package.folder.join(ASSETS_DIR), &location.join(ASSETS_DIR))
+}
+
+/// Copies the regular files and folders under `from` to `to`, if `from`
+/// is a folder; links and other entries are left behind.
+fn copy_folder(from: &Path, to: &Path) -> io::Result<()> {
+    if !fs::symlink_metadata(from).is_ok_and(|metadata| metadata.is_dir()) {
+        return Ok(());
+    }
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        let target = to.join(entry.file_name());
+        if kind.is_dir() {
+            copy_folder(&entry.path(), &target)?;
+        } else if kind.is_file() {
+            fs::copy(entry.path(), target)?;
+        }
     }
     Ok(())
 }

@@ -166,7 +166,13 @@ and a lazy submenu's `onOpen` as the action itself would be named.
   - **`customView`**: choosing the item opens this custom view instead
     (ignored when `form` is set);
   - **`platforms`**: the systems (`windows`, `macos`, `linux`) the item's
-    action works on; elsewhere the item is listed as unavailable.
+    action works on; elsewhere the item is listed as unavailable;
+  - **`icon`**: drawn before the title ([Icons](#icons), #139);
+  - **`titleTooltip`**, **`subtitleTooltip`**: text shown while the pointer
+    rests on the title or the subtitle, such as all of a title the row
+    cuts off;
+  - **`accessories`**: shown on the right of the row, in order
+    ([Accessories](#accessories), #139).
 
   An item with no action, form or custom view cannot be activated: the
   footer's button says "No actions", and Enter says so in the status line.
@@ -210,3 +216,118 @@ toasts the instance showed, and run the newest toast's.
   the list stays as it was, with the error. A scheduled run (#47) is the
   same: Pane draws the list, runs the scheduled item's action, and draws
   the list again when the command's screen is open.
+
+## Icons
+
+An icon (#139, ADR 0036) is an item's `icon`, an accessory's, an action's
+(`icon` beside `onAction`; the Actions panel draws it) and a package's and
+command's in `pane.json`. It is one of:
+
+- **text**: a built-in icon's name, or, when it ends in `.png` or `.svg`
+  (or names a folder), a packaged image's path: `"star"`,
+  `"assets/logo.png"`;
+- **`{"builtin": "star", "filled": true}`**: a built-in icon, from the
+  whole [reicon](https://reicon.dev) set Pane vendors
+  (`crates/pane-core/assets/reicon/`), by its reicon name in kebab case
+  (`ArrowUpRight` is `arrow-up-right`; reicon's own spelling works too), in
+  its Outline weight or, `filled`, its Filled one;
+- **`{"path": "assets/logo.png"}`**: a PNG or SVG file inside the package.
+  Beside `logo.png`, `logo@light.png` and `logo@dark.png` are drawn in the
+  light and the dark theme when the package has them;
+- **`{"light": "assets/sun.svg", "dark": "assets/moon.svg"}`**: one file
+  for each theme;
+- **`{"url": "data:image/svg+xml,…"}`**: an image by URL. A `data:` URL
+  (an SVG or a PNG, percent-encoded or base64) is drawn as it is; this is
+  how the SDKs' avatar and progress ring helpers draw;
+- **`{"url": "https://example.com/logo.png"}`**: a web image (#142). Pane
+  downloads it itself, through its HTTP client and within the ceilings of
+  the extension's own web requests (ADR 0018: 10 s to connect, 20 s for
+  the response's head, 10 s between two pieces of its body, 30 s in all, a
+  4 MiB body), and keeps it as the package's extension cache, so it is not
+  downloaded again after a restart and "Clear cache" removes it. A list
+  never waits for one: its fallback (or, without one, a neutral image
+  glyph) shows until the image arrives, and stays if the download fails,
+  is over the limits or is not an image (PNG, JPEG, GIF, WebP, BMP, ICO or
+  SVG). Rows naming the same URL share one download. The SDKs' favicon
+  helper names a site's `/favicon.ico` this way, with a globe as its
+  fallback;
+- **`{"file": "/Users/me/report.pdf"}`**: a system icon (#142), the
+  icon the system shows for the file, folder or application at that path
+  (absolute, or from `~/`; on Windows a packaged application by
+  `shell:AppsFolder\<id>` too): a document's kind's, an application's own,
+  drawn bare. Pane extracts it in the background and keeps it in its own
+  folder; a path that does not exist shows the fallback. The SDKs' file
+  icon helper gives it a document as its fallback.
+
+Any icon may also have:
+
+- **`tint`**: a colour, drawing a built-in icon in it, or an image as a mask
+  in it: a tone (`primary`, `secondary`, `accent`, `red`, `orange`,
+  `yellow`, `green`, `blue`, `purple`, `magenta`), a raw colour (`#rgb`,
+  `#rgba`, `#rrggbb`, `#rrggbbaa`), or `{"light": …, "dark": …}`. Pane
+  corrects the colour's contrast against the panel, so a raw colour cannot
+  make an icon unreadable;
+- **`mask`**: `circle` or `rounded-rectangle`, the shape an image is
+  clipped to;
+- **`fallback`**: another icon, drawn when this one cannot be (a name Pane
+  does not have, an image the package does not ship or Pane cannot read, a
+  web image or system icon while it loads or if it fails), nested at most 4
+  deep;
+- **`tooltip`**: shown while the pointer rests on the icon. It also makes
+  the icon something assistive technology reads; an icon without one is
+  decoration, which it skips.
+
+A list's images are named relative to the package folder; they belong under
+its `assets` folder, which Pane copies into its managed copy with the
+package (with the files the package's and its commands' icons name). Pane
+draws extensions' icons bare, without a tile behind them; Pane's own rows
+keep their tiles (ADR 0035). A package without an icon of its own shows a
+tile with its title's first letter.
+
+In a tree, an icon Pane cannot read (an unknown source, say) is left out,
+and so is a tint, mask, fallback or tooltip it cannot read: never the
+tree's failure. In `pane.json`, an icon is checked at install: an unknown
+built-in name, an image the package does not ship, or a source other than a
+built-in icon or a packaged image (a URL, a system icon) refuses the
+package, with the reason.
+
+## Accessories
+
+An item's `accessories` are shown on the right of its row, in order; a row
+draws the first three (Pane reports more while the package is developed).
+Each is an object with one of:
+
+- **`text`**: text, such as a count;
+- **`date`**: a time in milliseconds since the Unix epoch, shown relative to
+  now ("now", "5m", "2h", "3d", "2w", "4mo", "1y", "in 5m") and kept
+  current while the list is open; its tooltip is the time in full ("Jan 1,
+  2026, 14:02") unless it has one of its own;
+- **`tag`**: text on a wash of its colour;
+
+and optionally an **`icon`** (drawn before the text; an accessory may be an
+icon alone), a **`color`** (a colour or a light and dark pair, as a tint is,
+corrected for contrast as text) and a **`tooltip`**. Assistive technology
+reads the accessories with their row. An accessory Pane cannot read is left
+out.
+
+```json
+{
+  "id": "ada",
+  "title": "Ada Lovelace",
+  "icon": { "builtin": "user", "tint": "blue" },
+  "titleTooltip": "Ada Lovelace, the first programmer",
+  "accessories": [
+    { "text": "3", "tooltip": "Unread" },
+    { "date": 1767225600000 },
+    { "tag": "Open", "color": "green" }
+  ]
+}
+```
+
+In Rust, `pane_guest::{Icon, Accessory, Tone, Color, Tint, Mask}` build them
+(`Item::new(..).icon(Icon::builtin("user").tint(Tone::Blue))
+.accessory(Accessory::tag("Open").color(Tone::Green))`), and
+`pane_guest::icon::{avatar, progress_ring}` build an avatar of initials and
+a progress ring. In JavaScript and TypeScript, an item's `icon` and
+`accessories` take these shapes as they are (a `date` may be a `Date`), and
+`@pane/extension/icons` exports `avatar` and `progressRing`.

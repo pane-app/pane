@@ -2,23 +2,27 @@
 //! projection of what the launcher already knows about each row beyond
 //! its title and subtitle — what kind of thing it is, the alias and the
 //! global hotkey the user gave its command, where the query matched its
-//! title, the answer a command computed from the query — and how the rows
-//! group under section labels.
+//! title, the answer a command computed from the query, its icon — and
+//! how the rows group under section labels.
 //!
 //! Nothing here changes what root search lists, in which order, or what a
 //! row does: the projection is computed from the same state the rows and
 //! their entries come from, row for row. A row's kind comes from what
 //! activating it does (its entry), never from its title; a part of the
-//! projection the launcher has no data for is absent, not guessed. Only
-//! root search is projected: the rows of an opened command, a command's
-//! search, Manage extensions and the other screens present as they always
-//! did, with no kind, alias, hotkey, match or section.
+//! projection the launcher has no data for is absent, not guessed. Root
+//! search is projected, and an opened command's own list for how its items
+//! look (#139: their icons, tooltips and accessories, see `looks`): the
+//! rows of a command's search results, Manage extensions and the other
+//! screens present as they always did, with no kind, alias, hotkey, match,
+//! icon or section.
 
 use std::ops::Range;
 
 use super::aliases::{Sending, Via};
+use super::looks::{self, ShownAccessory};
 use super::{Entry, Row, Screen, State};
 use crate::hotkeys::Shortcut;
+use crate::icons::Icon;
 use crate::search::title_matches;
 
 /// What kind of thing a root row is, from what activating it does.
@@ -72,6 +76,18 @@ pub struct RowPresentation {
     /// through the Setup screen, runs it (see the launcher's `setup`). The
     /// row says "Needs setup".
     pub needs_setup: bool,
+    /// The row's icon, drawn bare (#139): an installed command's in root
+    /// search (its own, its package's, or its package's first-letter
+    /// tile), or an item's in an opened command's list. `None` for Pane's
+    /// own rows, which keep their tiles, and an item without one.
+    pub icon: Option<Icon>,
+    /// Shown when the pointer rests on the row's title (an item's).
+    pub title_tooltip: Option<String>,
+    /// Shown when the pointer rests on the row's subtitle (an item's).
+    pub subtitle_tooltip: Option<String>,
+    /// What the row shows on its right (an item's, at most
+    /// [`crate::runtime::MAX_ACCESSORIES`]), dates relative to now.
+    pub accessories: Vec<ShownAccessory>,
 }
 
 /// A computed answer: a root result a command computed from the query
@@ -114,6 +130,47 @@ pub struct Presentation {
 
 /// The presentation of `state`'s rows.
 pub(super) fn presentation(state: &State) -> Presentation {
+    let listed = match &state.view.screen {
+        Screen::Command => true,
+        Screen::CommandSearch { query } => query.trim().is_empty(),
+        _ => false,
+    };
+    if listed {
+        // An opened command's own list: how its items look.
+        let now = state.clock.now();
+        let rows = state
+            .view
+            .rows
+            .iter()
+            .map(|row| match state.looks.of(&row.id) {
+                Some(look) => RowPresentation {
+                    // Web images and system icons as they are now (#142).
+                    icon: look
+                        .icon
+                        .as_ref()
+                        .map(|icon| looks::shown_icon(state, icon)),
+                    title_tooltip: look.title_tooltip.clone(),
+                    subtitle_tooltip: look.subtitle_tooltip.clone(),
+                    accessories: looks::shown_accessories(look, now)
+                        .into_iter()
+                        .map(|accessory| ShownAccessory {
+                            icon: accessory
+                                .icon
+                                .as_ref()
+                                .map(|icon| looks::shown_icon(state, icon)),
+                            ..accessory
+                        })
+                        .collect(),
+                    ..RowPresentation::default()
+                },
+                None => RowPresentation::default(),
+            })
+            .collect();
+        return Presentation {
+            rows,
+            sections: Vec::new(),
+        };
+    }
     let Screen::Root { query } = &state.view.screen else {
         return Presentation {
             rows: vec![RowPresentation::default(); state.view.rows.len()],
@@ -140,6 +197,8 @@ pub(super) fn presentation(state: &State) -> Presentation {
                 answer: answer(state, row, entry, query),
                 needs_setup: matches!(entry, Entry::Open(_))
                     && state.setup_needed.contains(&row.id),
+                icon: icon(state, row, entry),
+                ..RowPresentation::default()
             }
         })
         .collect::<Vec<_>>();
@@ -180,6 +239,21 @@ fn answer(state: &State, row: &Row, entry: &Entry, query: &str) -> Option<Comput
         answer: text.clone(),
         command: computed.command_title.clone(),
     })
+}
+
+/// The icon of root search's `row`, when activating it (`entry`) reaches
+/// an installed command: opening it, saying why it cannot, or sending it
+/// text (whose row's id is the command's after `alias:` or `fallback:`).
+fn icon(state: &State, row: &Row, entry: &Entry) -> Option<Icon> {
+    let id = match entry {
+        Entry::Open(_) | Entry::Unavailable(_) => row.id.as_str(),
+        Entry::Send(_) => row
+            .id
+            .strip_prefix("alias:")
+            .or_else(|| row.id.strip_prefix("fallback:"))?,
+        _ => return None,
+    };
+    looks::icon_of(state, id)
 }
 
 /// What kind of thing activating `entry` from root search reaches.

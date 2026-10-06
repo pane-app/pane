@@ -81,6 +81,7 @@ pub use tree::{
     Action, ActionKind, ActionStyle, ActionSubmenu, Answer, Item, SubmenuEntries, TREE_VERSION,
     View,
 };
+pub use tree::{Accessory, AccessoryContent, ItemLook, MAX_ACCESSORIES};
 
 pub(crate) mod bindings {
     wasmtime::component::bindgen!({
@@ -966,6 +967,13 @@ impl Runtime {
         + 'static,
     ) {
         *lock(&self.shared.search_timer) = Some(Arc::new(timer));
+    }
+
+    /// The runtime's web requests: their limits and what each package
+    /// reached, which Pane's downloads of extensions' web images share
+    /// (#142).
+    pub(crate) fn network(&self) -> Arc<http::Network> {
+        self.shared.network.clone()
     }
 
     /// `host:port` of every address the package with identity key `owner`

@@ -23,6 +23,7 @@ members = [
     "sample-preferences",
     "sample-arguments",
     "sample-helper",
+    "sample-icons",
     "fixtures/faulty",
     "fixtures/operations",
     "fixtures/old-api",

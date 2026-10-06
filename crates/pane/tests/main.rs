@@ -17,6 +17,7 @@ mod confirmations;
 mod develop;
 mod feedback;
 mod hotkeys;
+mod icons;
 mod install;
 mod item_actions;
 mod keyboard;
@@ -35,6 +36,7 @@ mod system;
 mod tray;
 mod unresponsive;
 mod update;
+mod web_icons;
 mod window;
 
 /// Cargo no longer finds the files under `tests/` itself (`autotests =

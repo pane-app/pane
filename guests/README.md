@@ -73,6 +73,29 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   calling each by its dependency id; installing it installs the JavaScript
   sample too ([Dependencies](#dependencies-on-other-extensions)); held by
   `crates/pane-core/tests/dependencies.rs`.
+- `sample-icons`, `sample-icons-js`, `sample-icons-ts`: the icons sample in
+  Rust, JavaScript and TypeScript (#139): rows with a built-in icon, a
+  packaged image with `@light` and `@dark` variants, a light and dark pair,
+  a tinted icon, a masked image, an image that fails and draws its
+  fallback, the SDK's avatar and progress ring, and every accessory (text,
+  a relative date, a tag, an icon alone) with tooltips; one row has five
+  accessories, of which a row draws three
+  ([icons and accessories](../docs/list-tree.md#icons)). Their packages,
+  `packages/sample-icons` and its `-js`/`-ts` copies, have an icon of their
+  own (`icon.png`, 512×512) and their "Icons" command another
+  (`command.svg`); their second command has none, so it shows the
+  package's. `packages/sample-icons-plain` and its `-js`/`-ts` copies run
+  the same components with no icon, so they show a first-letter tile. Held
+  alike by `crates/pane-core/tests/icons.rs`, and the Rust ones by
+  `crates/pane/tests/icons.rs`. The same list also has the icons Pane
+  loads for it (#142): the SDK's favicon of a site, a web image the test
+  server holds back (and a second row naming it, downloaded once), a web
+  image the server does not have, the SDK's file icon of a file and of an
+  application. The images come from the server the `imageServer` setting
+  names (by default `http://127.0.0.1:8741`), the files from the
+  `iconFile` (by default `~`) and `iconApplication` (by default Windows'
+  Notepad) settings; held by `crates/pane-core/tests/web_icons.rs` and
+  `crates/pane/tests/web_icons.rs`, whose image server sets them.
 - `npm/greeter`: `@pane-samples/greeter`, the npm-distributed sample: an
   npm package holding a `pane.json` and one JavaScript component,
   `sample_npm_js.wasm` (from `sample-npm-js`, prebuilt like the other
@@ -1831,6 +1854,20 @@ and TypeScript: Pane sees only components.
   number is refused with "a newer Pane is needed".
 - `title` (required): the display title. It is not the package's identity.
 - `version` (optional): shown before installing and after an update.
+- `icon` (optional): the package's icon, shown in root search, quick slots,
+  Settings and Shortcuts: a PNG or SVG image in the package by its path
+  (`"icon.png"`; `icon@dark.png` and `icon@light.png` beside it are drawn
+  in the dark and light themes), a light and dark pair (`{"light":
+  "icon-light.png", "dark": "icon-dark.png"}`) or a built-in icon by name
+  (`"star"`, reicon's names in kebab case), with an optional `tint`,
+  `mask` and `fallback` as in [a list's icons](../docs/list-tree.md#icons).
+  Without one Pane shows a tile with the title's first letter. An unknown
+  built-in name or an image the package does not ship is refused at
+  install, with the reason; a package from npm or Git without its own
+  512×512 icon is installed with a caution. Each command may have an
+  `icon` of its own; one without shows its package's. A list's own
+  images live under the package's `assets` folder, which Pane copies with
+  the package.
 - `apiVersion` (required): the `pane:extension` contract the components are
   built against, `MAJOR.MINOR` (this Pane provides `0.1`, from
   [`wit/extension.wit`](../wit/extension.wit)). Before 1.0 the minor version

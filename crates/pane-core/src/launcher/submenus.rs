@@ -37,7 +37,7 @@ use std::future::Future;
 use std::path::PathBuf;
 
 use super::item_actions::{self, ItemAction, selected_listed};
-use super::{Launcher, State, stopped};
+use super::{Launcher, State, looks, stopped};
 use crate::extension_data::PackageData;
 use crate::keyboard::Binding;
 use crate::runtime::{Action, CallError, SubmenuEntries};
@@ -159,9 +159,11 @@ impl Launcher {
             state: match &level.entries {
                 Entries::Loading => SubmenuState::Loading,
                 Entries::Failed(why) => SubmenuState::Failed(why.clone()),
-                Entries::Listed(entries) => {
-                    SubmenuState::Listed(item_actions::bind(entries, &state.pane_keys))
-                }
+                Entries::Listed(entries) => SubmenuState::Listed(looks::with_action_icons(
+                    &state,
+                    entries,
+                    item_actions::bind(entries, &state.pane_keys),
+                )),
             },
         })
     }
@@ -339,7 +341,12 @@ impl Launcher {
             // answer is not shown.
             (Some(problem), _) => Entries::Failed(problem),
             (None, Ok(answer)) => match answer.entries {
-                Some(entries) => Entries::Listed(entries),
+                Some(entries) => {
+                    // Their web images and system icons start loading, as
+                    // the list's do (#142).
+                    looks::want_action_icons(state, &entries);
+                    Entries::Listed(entries)
+                }
                 None => Entries::Failed(
                     CallError::Unreadable(
                         "its answer to opening a submenu has no `entries`".into(),

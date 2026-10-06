@@ -7,13 +7,15 @@
 //! |---|---|---|---|---|
 //! | Settings | `settings.json` | kept | the user's choice | default |
 //! | Content | `content.json` | kept | the user's choice | default |
-//! | Cache | `cache.json` | removed | removed | default |
+//! | Cache | `cache.json`, `web-images/` | removed | removed | default |
 //! | Local credentials | `credentials.json` | kept | removed | the user only (Unix: 0600) |
 //! | Clipboard history | `clipboard-history.json` | kept | the user's choice | the user only (Unix: 0600) |
 //!
 //! Each kind has one file next to `installed.json`, holding every package's
 //! values under the package identity's key, so they belong to the source
-//! identity rather than the title or the managed copy. They are kept while
+//! identity rather than the title or the managed copy. The web images a
+//! package's icons name (#142) are cache too, downloaded by Pane into a
+//! folder per package under `web-images/`. They are kept while
 //! the package is disabled, updated or Pane is not running. The kind decides
 //! what a management action removes, and removing is done here by Pane,
 //! never by running the package. Deleting retained data (an uninstalled
@@ -46,6 +48,8 @@ const DATA_VERSION: u64 = 1;
 /// The kinds that hold preference values: a password's are local
 /// credentials, every other's settings.
 const PREFERENCE_KINDS: [DataKind; 2] = [DataKind::Settings, DataKind::LocalCredentials];
+/// The folder beside the files holding each package's cached web images.
+const WEB_IMAGES_DIR: &str = "web-images";
 
 /// A kind of data a package keeps through Pane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -343,6 +347,8 @@ fn write_previous(write: Write) -> Result<DataJson, String> {
 #[derive(Clone)]
 pub(crate) struct ExtensionData {
     files: Arc<Mutex<DataFile>>,
+    /// The folder the files are in.
+    dir: Arc<PathBuf>,
     /// The packages' clipboard history, typed and in a file of its own.
     clipboard: Arc<HistoryStore>,
 }
@@ -363,8 +369,18 @@ impl ExtensionData {
         lock_file(&files).writer = Some(start_writer(Arc::downgrade(&files)));
         ExtensionData {
             files,
+            dir: Arc::new(dir.to_path_buf()),
             clipboard: Arc::new(HistoryStore::open(dir)),
         }
+    }
+
+    /// The folder Pane caches the web images in that the icons of the
+    /// package with identity key `owner` name (#142): its extension cache,
+    /// removed with its cache values ([`ExtensionData::clear_cache`]).
+    pub fn web_images(&self, owner: &str) -> PathBuf {
+        self.dir
+            .join(WEB_IMAGES_DIR)
+            .join(crate::icons::web_image_stem(owner))
     }
 
     /// Waits until every write queued so far is done.
@@ -728,9 +744,20 @@ impl ExtensionData {
     /// runtime thread saving meanwhile never waits on the file system), and
     /// used only if nothing was saved meanwhile, so a value saved just
     /// before is not lost.
+    ///
+    /// The cache's web images (see [`ExtensionData::web_images`]) are
+    /// removed first, with their folder.
     fn remove(&self, kind: DataKind, identity: &PackageIdentity) -> Result<(), Removal> {
         if kind == DataKind::ClipboardHistory {
             return self.clipboard.remove(&identity.key());
+        }
+        if kind == DataKind::Cache {
+            let images = self.web_images(&identity.key());
+            match fs::remove_dir_all(&images) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(Removal::Unwritable(images, error)),
+            }
         }
         let (outcome, path) = loop {
             self.flush();
