@@ -164,7 +164,7 @@ impl Generation {
     }
 
     /// Resolves when the generation ends, with why.
-    pub fn wait_end(&self) -> impl Future<Output = End> + Send + 'static {
+    pub fn wait_end(&self) -> impl Future<Output = End> + Send + use<> {
         let mut ended = self.0.end.subscribe();
         async move {
             let end = ended.wait_for(Option::is_some).await.map(|end| *end);
