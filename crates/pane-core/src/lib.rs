@@ -20,6 +20,7 @@ mod helpers;
 mod host_settings;
 pub mod hotkeys;
 mod http;
+pub mod icons;
 mod integrity;
 mod keyboard;
 mod launcher;
@@ -79,3 +80,7 @@ pub use runtime::{
     TREE_VERSION, UNRESPONSIVE_LIMIT, View, ViewEvent, ViewId, WARN_AFTER,
 };
 pub use search::{SettingsEntry, settings_matches, title_matches};
+// Icons, accessories and tooltips (#139).
+pub use icons::{Color, Icon, IconSource, Mask, Tint, Tone};
+pub use launcher::{AccessoryKind, ShownAccessory, absolute_date, relative_date};
+pub use runtime::{Accessory, AccessoryContent, ItemLook, MAX_ACCESSORIES};

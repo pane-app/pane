@@ -109,6 +109,10 @@ pub struct LauncherWindow {
     /// Whether the next frame scrolls to the selected row again, once the
     /// list changed in this one has been laid out.
     scroll_again: bool,
+    /// Draws the window again now and then while its rows show a date,
+    /// keeping it current (#139; see
+    /// [`LauncherWindow::keep_dates_current`]).
+    pub(crate) dates: Option<gpui::Task<()>>,
     /// The launcher's view as the last frame drew it, for tests (see
     /// [`LauncherWindow::drawn_view`]). Test and debug builds only.
     #[cfg(any(test, debug_assertions))]
@@ -170,6 +174,7 @@ impl LauncherWindow {
             pointer_selection_frozen: false,
             scrolled_for: None,
             scroll_again: false,
+            dates: None,
             custom_view: None,
             menu_button,
             menu: None,
@@ -1047,6 +1052,30 @@ impl LauncherWindow {
             (Some(subtitle), Some(reason)) => Some(format!("{subtitle}. {reason}")),
             (subtitle, reason) => subtitle.clone().or(reason.clone()),
         };
+        // An extension item's accessories are read with the row (#139).
+        let spoken: Vec<String> = shown
+            .accessories
+            .iter()
+            .map(pane_core::ShownAccessory::spoken)
+            .filter(|spoken| !spoken.is_empty())
+            .collect();
+        let description = match (description, spoken.is_empty()) {
+            (description, true) => description,
+            (Some(description), false) => Some(format!("{description}. {}", spoken.join(", "))),
+            (None, false) => Some(spoken.join(", ")),
+        };
+        // Its icon: an extension's, drawn bare, or Pane's tile (#139).
+        let icon = match &shown.icon {
+            Some(icon) => crate::ui::extension_icon::RowIcon::Drawn(crate::features::icons::drawn(
+                icon, theme,
+            )),
+            None => row_icon(&row.id).into(),
+        };
+        let accessories = shown
+            .accessories
+            .iter()
+            .map(|accessory| crate::features::icons::accessory_look(accessory, theme))
+            .collect();
         // Root search's rows carry what the launcher knows beyond the
         // title: where the query matched, the alias and the hotkey the
         // user gave the command, and its kind.
@@ -1067,6 +1096,9 @@ impl LauncherWindow {
                 None
             },
             number,
+            title_tooltip: shown.title_tooltip.map(SharedString::from),
+            subtitle_tooltip: shown.subtitle_tooltip.map(SharedString::from),
+            accessories,
         };
         // Presentation only: the shared row paints the chrome, and the
         // identity, accessibility and click behavior are attached here.
@@ -1077,7 +1109,7 @@ impl LauncherWindow {
                 unavailable_reason: reason.map(SharedString::from),
                 selected,
                 unavailable_id: ("unavailable", index).into(),
-                icon: Some(row_icon(&row.id)),
+                icon: Some(icon),
             },
             meta,
             theme,
@@ -1311,6 +1343,7 @@ impl Render for LauncherWindow {
         // something is typed.
         let collapsed = self.fit_window_mode(&view, window, cx);
         self.keep_selected_visible(&view, &presentation, window, cx);
+        self.keep_dates_current(&presentation, cx);
         // What moves this frame — the arriving content, the footer menu
         // popup's entrance or exit, the number hints' slide — and whether
         // another frame is needed; see [`FrameMotion`] and

@@ -73,6 +73,7 @@ mod developing;
 mod extensions;
 mod files;
 mod install;
+mod looks;
 mod pausing;
 mod recovery;
 mod reload;
@@ -95,6 +96,7 @@ use developing::Developing;
 pub use developing::{BuildFailure, Development};
 pub use hotkeys::HotkeyOutcome;
 use hotkeys::{Bindings, OpenPane};
+pub use looks::{AccessoryKind, ShownAccessory, absolute_date, relative_date};
 use pausing::{Pauses, Recorder};
 pub use presentation::{
     ComputedAnswer, Presentation, RowKind, RowPresentation, Section, answer_sections, root_sections,
@@ -652,6 +654,12 @@ struct State {
     actions_return: Option<actions::Return>,
     /// The custom view on screen, if one is open.
     custom_view: Option<OpenCustomView>,
+    /// The open command's items' icons, tooltips and accessories, by item
+    /// id (see `looks`).
+    looks: looks::Looks,
+    /// The clock dates are shown relative to: the system's, or the one a
+    /// test gave the launcher ([`Launcher::with_clock`]).
+    clock: Arc<dyn crate::clipboard::Clock>,
     /// Incremented on every navigation, so a reply that arrives after the
     /// user has left the screen it was requested from is discarded.
     screen_epoch: u64,
@@ -1205,6 +1213,8 @@ impl Launcher {
             form: None,
             actions_return: None,
             custom_view: None,
+            looks: looks::Looks::default(),
+            clock: Arc::new(crate::clipboard::SystemClock),
             screen_epoch: 0,
             packages,
             retained,
@@ -1345,6 +1355,8 @@ impl Launcher {
     /// no way to replace the system's clock.
     #[cfg(any(test, debug_assertions))]
     pub fn with_clock(self, clock: Arc<dyn crate::clipboard::Clock>) -> Self {
+        // Rows' dates are shown relative to it too (see `looks`).
+        self.lock().clock = clock.clone();
         if let Some(installation) = &self.installation {
             let history = installation.data.clipboard_history();
             history.set_clock(clock.clone());
@@ -3639,12 +3651,14 @@ impl Launcher {
     /// place). While the command's search field holds text, what it found
     /// stays listed, and `view` is kept for when the text is cleared.
     fn relist(&self, state: &mut State, component: &Path, view: View) {
+        let extra = looks::remember(state, component, &view.items);
         let list = self.command_list(state, component, view.items);
         let searching = match &state.view.screen {
             Screen::Command => false,
             Screen::CommandSearch { query } => !query.trim().is_empty(),
             _ => return,
         };
+        self.report_extra_accessories(state, extra, false);
         state.view.title = view.title;
         if searching {
             if let Some(search) = state.searching.as_mut() {
@@ -3740,6 +3754,7 @@ impl Launcher {
         let state = &mut *state;
         match result {
             Ok(view) => {
+                let extra = looks::remember(state, &component, &view.items);
                 let CommandList { rows, entries } =
                     self.command_list(state, &component, view.items);
                 let screen = if search {
@@ -3755,6 +3770,7 @@ impl Launcher {
                 state.open = Some(component);
                 state.next_screen();
                 state.view = LauncherView::new(screen, view.title).with_rows(rows);
+                self.report_extra_accessories(state, extra, true);
             }
             Err(error) => state.view.status = Status::Error(error.to_string()),
         }

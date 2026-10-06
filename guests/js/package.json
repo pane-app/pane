@@ -2,7 +2,7 @@
   "name": "@pane/extension",
   "version": "0.1.0",
   "private": true,
-  "description": "TypeScript declarations for Pane's extension contract (wit/extension.wit), and web requests (@pane/extension/http)",
+  "description": "TypeScript declarations for Pane's extension contract (wit/extension.wit), web requests (@pane/extension/http) and icon helpers (@pane/extension/icons)",
   "license": "Apache-2.0 OR MIT",
   "types": "pane.d.ts",
   "exports": {
@@ -12,6 +12,10 @@
     "./http": {
       "types": "./http.d.ts",
       "default": "./http.js"
+    },
+    "./icons": {
+      "types": "./icons.d.ts",
+      "default": "./icons.js"
     }
   }
 }

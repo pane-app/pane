@@ -28,6 +28,7 @@ mod disable_dependents;
 mod files;
 mod helpers;
 mod hotkeys;
+mod icons;
 mod installer;
 mod launcher;
 mod list_tree;

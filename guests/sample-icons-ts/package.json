@@ -1,0 +1,12 @@
+{
+  "name": "pane-sample-icons-ts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pane's icons sample in TypeScript",
+  "license": "Apache-2.0 OR MIT",
+  "type": "module",
+  "main": "src/index.ts",
+  "devDependencies": {
+    "@pane/extension": "file:../js"
+  }
+}

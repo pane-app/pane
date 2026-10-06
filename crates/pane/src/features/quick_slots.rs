@@ -52,8 +52,8 @@ use pane_core::{
     KeyboardAction, LauncherView, PinnedLayout, QuickSlot, ResultAction, Screen, SlotChange,
 };
 
-use crate::app::{KEY_CONTEXT, LauncherWindow, row_icon};
-use crate::ui::icon::{Glyph, IconTone};
+use crate::app::{KEY_CONTEXT, LauncherWindow};
+use crate::ui::extension_icon::RowIcon;
 use crate::ui::pinned::{
     HOME_CHILDREN, PIN_HINT, SlotContent, home, home_rows, pin_hint, pinned_slot, shows_pin_hint,
 };
@@ -143,9 +143,10 @@ fn pin_hint_description(toggle_pin: &str, open_actions: &str) -> String {
     )
 }
 
-/// The tile `slot` shows: its row's, by its target's identity.
-fn slot_icon(slot: &QuickSlot) -> (IconTone, Glyph) {
-    row_icon(&slot.target.key())
+/// The icon `slot` shows: its row's, by its target's identity — an
+/// installed command's own icon (#139), else Pane's tile.
+fn slot_icon(launcher: &pane_core::Launcher, slot: &QuickSlot, theme: &Theme) -> RowIcon {
+    crate::features::icons::row_icon_of(launcher, &slot.target.key(), theme)
 }
 
 /// `element`, the slot at `index` showing `slot`, as assistive technology
@@ -553,7 +554,7 @@ impl LauncherWindow {
                 unavailable_reason: slot.unavailable.clone().map(Into::into),
                 unavailable_id: ("slot-unavailable", index).into(),
                 selected: false,
-                icon: Some(slot_icon(&slot)),
+                icon: Some(slot_icon(&self.launcher, &slot, theme)),
             },
             RowMeta {
                 number,
@@ -615,7 +616,7 @@ impl LauncherWindow {
         let content = SlotContent {
             index,
             title: slot.title.clone().into(),
-            icon: slot_icon(&slot),
+            icon: slot_icon(&self.launcher, &slot, theme),
             number,
             unavailable: slot.unavailable.clone().map(Into::into),
         };

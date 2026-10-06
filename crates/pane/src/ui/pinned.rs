@@ -34,7 +34,8 @@
 use gpui::prelude::*;
 use gpui::{AnyElement, BoxShadow, Div, Role, SharedString, Stateful, div, px, relative};
 
-use crate::ui::icon::{Glyph, IconTone, TileSize, glyph, tile_at};
+use crate::ui::extension_icon::{RowIcon, row_icon_at};
+use crate::ui::icon::{Glyph, TileSize, glyph};
 use crate::ui::keycap::slot_number_hint;
 use crate::ui::shell::section_label;
 use crate::ui::theme::{Theme, pressed};
@@ -60,8 +61,8 @@ pub(crate) struct SlotContent {
     pub(crate) index: usize,
     /// What it holds.
     pub(crate) title: SharedString,
-    /// The tile of what it holds.
-    pub(crate) icon: (IconTone, Glyph),
+    /// The icon of what it holds: Pane's tile, or an extension's icon.
+    pub(crate) icon: RowIcon,
     /// Its number and the number hint's look (0 hidden, 1 shown) while Ctrl
     /// is held; `None` draws none (a pin past the numbered ones has none).
     pub(crate) number: Option<(usize, f32)>,
@@ -189,7 +190,6 @@ pub(crate) fn pinned_slot(content: SlotContent, theme: &Theme) -> Stateful<Div> 
                     .inset(),
             ])
         });
-    let (tone, glyph) = content.icon;
     let unavailable = content.unavailable.is_some();
     let title = div()
         .max_w(relative(1.))
@@ -244,7 +244,14 @@ pub(crate) fn pinned_slot(content: SlotContent, theme: &Theme) -> Stateful<Div> 
         .hover(|slot| slot.bg(theme.slot_hover))
         .active(|slot| slot.bg(pressed(theme.slot_hover)))
         .child(
-            tile_at(TileSize::Slot, tone, glyph, theme).when(unavailable, |tile| tile.opacity(0.5)),
+            row_icon_at(
+                &content.icon,
+                TileSize::Slot,
+                "slot-icon",
+                &format!("slot-{number}"),
+                theme,
+            )
+            .when(unavailable, |tile| tile.opacity(0.5)),
         )
         .child(text)
         .when_some(content.number, |slot, (number, look)| {

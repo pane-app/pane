@@ -29,8 +29,9 @@
 use gpui::{App, ClickEvent, Context, Div, Role, Stateful, Window, div, prelude::*, px};
 use pane_core::{QuickSlot, Screen};
 
-use crate::app::{LauncherWindow, row_icon};
-use crate::ui::icon::{TileSize, tile_at};
+use crate::app::LauncherWindow;
+use crate::ui::extension_icon::row_icon_at;
+use crate::ui::icon::TileSize;
 use crate::ui::keycap::{CapStyle, Key, KeySequence, key_sequence};
 use crate::ui::theme::{Theme, pressed};
 
@@ -150,7 +151,8 @@ impl LauncherWindow {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let place = index + 1;
-        let (tone, glyph) = row_icon(&pin.target.key());
+        // An installed command's own icon (#139), else Pane's tile.
+        let icon = crate::features::icons::row_icon_of(&self.launcher, &pin.target.key(), theme);
         let ready = pin.ready();
         let hover = theme.row_hover;
         div()
@@ -179,7 +181,14 @@ impl LauncherWindow {
                 this.click_compact_pin(index, event, window, cx);
             }))
             .child(
-                tile_at(TileSize::Row, tone, glyph, theme).when(!ready, |tile| tile.opacity(0.5)),
+                row_icon_at(
+                    &icon,
+                    TileSize::Row,
+                    "pin-icon",
+                    &format!("compact-pin-{place}"),
+                    theme,
+                )
+                .when(!ready, |tile| tile.opacity(0.5)),
             )
             .when_some(number.filter(|_| look > 0.), |element, number| {
                 element.child(number_hint(number, look, theme))

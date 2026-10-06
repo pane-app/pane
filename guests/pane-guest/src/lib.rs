@@ -3,7 +3,8 @@
 //! An extension implements [`Command`] and calls [`export!`]: its screen is
 //! a [`List`] of [`Item`]s whose actions are closures, which the SDK hands
 //! Pane as the versioned JSON tree of ADR 0036's envelope (`render` and
-//! `handle-event`) and runs when the user chooses them. It may keep
+//! `handle-event`) and runs when the user chooses them; its items may have
+//! icons, accessories and tooltips ([`icon`]). It may keep
 //! values between runs with [`settings`], and its own records, disposable
 //! values and secrets with [`content`], [`cache`] and [`credentials`]. It
 //! may compute results from root search's query with [`root`], take a query
@@ -49,7 +50,9 @@ pub use exports::pane::extension::command::{
 };
 pub use list::{Command, Item, List};
 
+pub mod icon;
 mod list;
+pub use icon::{Accessory, Color, Icon, Mask, Tint, Tone};
 pub use pane::extension::{cache, content, credentials, operations, settings};
 
 impl operations::CallErrorKind {

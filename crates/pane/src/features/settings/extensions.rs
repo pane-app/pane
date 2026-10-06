@@ -43,7 +43,8 @@ use pane_core::{Launcher, Screen, Status};
 use super::{Page, SettingsWindow, search};
 use crate::app::{LauncherWindow, launcher_changed_outside, row_icon};
 use crate::ui::controls;
-use crate::ui::icon::{Glyph, IconTone, TileSize, tile_at};
+use crate::ui::extension_icon::{RowIcon, row_icon_at};
+use crate::ui::icon::{Glyph, TileSize};
 use crate::ui::theme::{Theme, pressed};
 
 /// What the page is, in one line: its sidebar entry's description in
@@ -177,7 +178,7 @@ pub(crate) struct ExtensionItem {
     pub(crate) title: String,
     /// Why the entry cannot be used here, if it cannot.
     pub(crate) reason: Option<String>,
-    pub(crate) icon: Option<(IconTone, Glyph)>,
+    pub(crate) icon: Option<RowIcon>,
 }
 
 /// One installed extension's card, as plain values: its rows of the
@@ -186,7 +187,9 @@ pub(crate) struct PackageCard {
     /// The launcher's enable/disable row for it: its identity's key.
     pub(crate) id: String,
     pub(crate) title: String,
-    pub(crate) icon: Option<(IconTone, Glyph)>,
+    /// Its tile: Pane's command tile until the caller gives the
+    /// extension's own icon (#139, see [`render`]).
+    pub(crate) icon: Option<RowIcon>,
     pub(crate) enabled: bool,
     /// What needs saying about it, in a word or two: paused, developing.
     pub(crate) badges: Vec<String>,
@@ -257,7 +260,7 @@ pub(crate) fn gather(
         .map(|(key, title, enabled)| PackageCard {
             id: key.clone(),
             title: title.clone(),
-            icon: Some(row_icon(key)),
+            icon: Some(row_icon(key).into()),
             enabled: *enabled,
             badges: Vec::new(),
             auto_update: None,
@@ -319,7 +322,7 @@ pub(crate) fn gather(
                 id: row.id.clone(),
                 title: row.title.clone(),
                 reason,
-                icon: Some(row_icon(&row.id)),
+                icon: Some(row_icon(&row.id).into()),
             }),
         }
     }
@@ -511,10 +514,15 @@ fn package_card(
         .min_h(settings.card_row_height)
         .px(settings.card_padding_x)
         .py(settings.card_row_padding_y)
-        .children(
-            card.icon
-                .map(|(tone, glyph)| tile_at(TileSize::Row, tone, glyph, theme)),
-        )
+        .children(card.icon.as_ref().map(|icon| {
+            row_icon_at(
+                icon,
+                TileSize::Row,
+                ("extension-icon", index),
+                &format!("extension-{}", card.title),
+                theme,
+            )
+        }))
         .child(label.flex_1().min_w(px(0.)))
         .child(toggle)
         .id(("extension-row", index))
@@ -586,9 +594,15 @@ fn item(entry: &ExtensionItem, id: ElementId, theme: &Theme) -> Stateful<Div> {
             controls::field_description(reason.clone(), theme.warning, theme).into_any_element()
         })
         .collect();
-    let tile = entry
-        .icon
-        .map(|(tone, glyph)| tile_at(TileSize::Row, tone, glyph, theme));
+    let tile = entry.icon.as_ref().map(|icon| {
+        row_icon_at(
+            icon,
+            TileSize::Row,
+            "extension-item-icon",
+            &entry.title,
+            theme,
+        )
+    });
     controls::list_item(id, tile, entry.title.clone(), lines, theme)
         .role(Role::Button)
         .aria_label(entry.title.clone())
@@ -643,7 +657,7 @@ fn render(
     } else {
         Vec::new()
     };
-    let (packages, rows, auto_update) = if listing {
+    let (mut packages, rows, auto_update) = if listing {
         gather(&list.rows, &packages)
     } else {
         // A confirmation's answers, or a details screen's rows, as they
@@ -660,6 +674,15 @@ fn render(
             .collect();
         (Vec::new(), rows, None)
     };
+    // Each card shows the extension's own icon, or its first-letter tile
+    // (#139).
+    for card in &mut packages {
+        card.icon = Some(crate::features::icons::row_icon_of(
+            &this.launcher,
+            &card.id,
+            &theme,
+        ));
+    }
     let installs = if listing && this.launcher.installs_packages() {
         install_items()
     } else {
@@ -738,7 +761,7 @@ pub(crate) fn install_items() -> Vec<ExtensionItem> {
             id: id.into(),
             title: title.into(),
             reason: None,
-            icon: Some(row_icon(id)),
+            icon: Some(row_icon(id).into()),
         })
         .collect()
 }

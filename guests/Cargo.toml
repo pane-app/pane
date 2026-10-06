@@ -19,6 +19,7 @@ members = [
     "sample-schedule",
     "sample-service",
     "sample-helper",
+    "sample-icons",
     "fixtures/faulty",
     "fixtures/operations",
     "fixtures/old-api",

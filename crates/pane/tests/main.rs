@@ -14,6 +14,7 @@ mod command_search;
 mod compact_pins;
 mod develop;
 mod hotkeys;
+mod icons;
 mod install;
 mod keyboard;
 mod launcher_settings;

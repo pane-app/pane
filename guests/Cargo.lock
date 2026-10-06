@@ -328,6 +328,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sample-icons"
+version = "0.1.0"
+dependencies = [
+ "pane-guest",
+]
+
+[[package]]
 name = "sample-operations"
 version = "0.1.0"
 dependencies = [

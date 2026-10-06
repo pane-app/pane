@@ -526,7 +526,7 @@ const DAY_MS: i64 = 86_400_000;
 
 /// The local day number of `at` (milliseconds since the Unix epoch) at
 /// `offset_ms` from UTC: days since 1970-01-01, local.
-fn local_day(at: u64, offset_ms: i64) -> i64 {
+pub(crate) fn local_day(at: u64, offset_ms: i64) -> i64 {
     local_ms(at, offset_ms).div_euclid(DAY_MS)
 }
 
@@ -546,7 +546,7 @@ pub fn day_of(copied_at: u64, now: u64, offset_ms: i64) -> ClipboardDay {
 }
 
 /// The local time of day of `at`, "14:02".
-fn clock_time(at: u64, offset_ms: i64) -> String {
+pub(crate) fn clock_time(at: u64, offset_ms: i64) -> String {
     let minutes = local_ms(at, offset_ms).rem_euclid(DAY_MS) / 60_000;
     format!("{:02}:{:02}", minutes / 60, minutes % 60)
 }
@@ -583,6 +583,13 @@ fn civil(day: i64) -> (i64, usize, i64) {
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + i64::from(month <= 2);
     (year, usize::try_from(month).unwrap_or(1), date)
+}
+
+/// The month's short name, the day of the month and the year of local
+/// day `day`: ("Sep", 28, 2026).
+pub(crate) fn month_and_day(day: i64) -> (&'static str, i64, i64) {
+    let (year, month, date) = civil(day);
+    (MONTHS[month - 1], date, year)
 }
 
 /// "Sep 28", or "Dec 31, 2025" for another year than `now`'s.

@@ -2,3 +2,7 @@
 *.wasm binary
 # Patches must apply to upstream's LF sources on every OS.
 tools/componentize-js/patches/*.patch text eol=lf
+# The whole reicon set (crates/pane-core/assets/reicon): offsets into the
+# binary file are byte counts, so neither file may change on checkout.
+crates/pane-core/assets/reicon/icons.bin binary
+crates/pane-core/assets/reicon/index.tsv text eol=lf
