@@ -16,7 +16,8 @@
 //! - "Draw an unreadable tree" answers a tree that is not JSON once, then
 //!   the list again;
 //! - "Answer unreadably" answers with something that is not JSON;
-//! - "Answer nothing" answers `{}`, with no text to show.
+//! - "Answer nothing" answers an object with no text to show, only a field
+//!   Pane does not know yet.
 //!
 //! It cannot use `pane-guest`, which writes the tree itself, so it supplies
 //! the allocator, panic handler, byte comparisons and `cabi_realloc`.

@@ -29,8 +29,8 @@ struct ClipboardHistory;
 pane_guest::export!(ClipboardHistory);
 
 // The items that turn keeping on, pause it, resume it and turn it off. Each
-// does only that, so pressing one again before the view is shown anew
-// changes nothing more.
+// does only that, so running one again (Pane draws the list again after
+// each, so only a stale callback can) changes nothing more.
 const TURN_ON: &str = "turn-on";
 const PAUSE: &str = "pause";
 const RESUME: &str = "resume";

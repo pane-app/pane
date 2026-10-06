@@ -486,8 +486,8 @@ fn nothing_is_watched_or_kept_until_history_is_turned_on(fixture: &'static Fixtu
 
     assert_eq!(run(&launcher, TURN_ON), result("Clipboard history is on"));
     assert!(pane.clipboard.watching());
-    // Pressing it again before the view is shown anew changes nothing.
-    assert_eq!(run(&launcher, TURN_ON), result("Clipboard history is on"));
+    // The list is drawn again at once: the row now pauses it.
+    assert_eq!(titles(&launcher)[..2], [PAUSE, TURN_OFF]);
     assert_eq!(pane.clipboard.started(), 1);
     assert!(pane.clipboard.copy("hello", Some("notepad.exe")));
     assert!(pane.clipboard.copy("second line\nand more", None));
