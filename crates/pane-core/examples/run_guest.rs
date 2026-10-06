@@ -45,7 +45,7 @@ fn main() -> ExitCode {
             block_on(runtime.render(&component)).map(|view| format!("{view:?}"))
         } else if let Some(item_id) = operation.strip_prefix("action:") {
             block_on(runtime.run_item(&component, item_id))
-                .map(|answer| answer.status.unwrap_or_default())
+                .map(|answer| format!("{answer:?}"))
         } else if let Some(form) = operation.strip_prefix("submit:") {
             let (item_id, values) = form.split_once(':').unwrap_or((form, ""));
             let values = values

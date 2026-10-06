@@ -153,6 +153,7 @@ mod operations_bindings {
 
 use bindings::exports::pane::extension::command;
 use bindings::pane::extension::commands as launching;
+use bindings::pane::extension::preferences as preference_values;
 use bindings::pane::extension::{
     applications, cache, clipboard_history, content, credentials, settings,
 };
@@ -1873,6 +1874,10 @@ pub(crate) struct GuestState {
     /// there, and once Pane gave up on it (a runtime hang), its fence is
     /// closed and the instance is stopped ([`GuestState::stopped`]).
     watch: Arc<Watch>,
+    /// The command, by its id in `pane.json`, Pane last opened, ran or
+    /// asked in this instance: whose preferences `pane:extension/
+    /// preferences` reads when the guest names none.
+    command: Option<String>,
 }
 
 impl Drop for GuestState {
@@ -1998,6 +2003,70 @@ data_host!(settings, DataKind::Settings);
 data_host!(content, DataKind::Content);
 data_host!(cache, DataKind::Cache);
 data_host!(credentials, DataKind::LocalCredentials);
+
+impl preference_values::Host for GuestState {
+    /// The effective preference values of `command` of the guest's own
+    /// package, as JSON (see `crate::preferences::values_json`): read from
+    /// the package's manifest and Pane's record of the values, a short
+    /// host call.
+    fn values(&mut self, command: Option<String>) -> Result<String, String> {
+        let _host = self.host();
+        if let Some(end) = self.stopped() {
+            return Err(stopped_code(end));
+        }
+        let owner = self.owner().ok_or(
+            "only installed packages declare preferences; this command is built into Pane",
+        )?;
+        let directory = lock(&self.directory)
+            .clone()
+            .ok_or("this Pane keeps no preferences")?;
+        let installed = directory();
+        let package = installed
+            .packages
+            .iter()
+            .find(|package| package.identity.key() == owner)
+            .ok_or("the extension is no longer installed")?;
+        let manifest = package
+            .manifest
+            .as_ref()
+            .map_err(|error| format!("{} cannot load: {error}", package.title()))?;
+        let command = match command
+            .or_else(|| self.call.command.clone())
+            .or_else(|| self.command.clone())
+        {
+            Some(command) => command,
+            None => {
+                let mut serving = manifest.commands.iter().filter(|declared| {
+                    package.location.join(&declared.component) == self.component
+                });
+                match (serving.next(), serving.next()) {
+                    (Some(only), None) => only.id.clone(),
+                    _ => {
+                        return Err(
+                            "this component serves several commands; name the command whose \
+                             preferences to read"
+                                .into(),
+                        );
+                    }
+                }
+            }
+        };
+        if !manifest
+            .commands
+            .iter()
+            .any(|declared| declared.id == command)
+        {
+            return Err(format!("{} has no command `{command}`", manifest.title));
+        }
+        let stored = installed
+            .data
+            .as_ref()
+            .map(|data| data.preference_values(&package.identity))
+            .unwrap_or_default();
+        let declared = crate::preferences::declared(manifest, &command);
+        Ok(crate::preferences::values_json(&declared, &stored))
+    }
+}
 
 impl launching::Host for GuestState {
     /// Hands the launch to the launcher, which starts it or says why it
@@ -2479,6 +2548,11 @@ impl Code {
             state
         })
         .expect("registering the system functions in a fresh linker cannot conflict");
+        preference_values::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
+            &mut linker,
+            |state| state,
+        )
+        .expect("registering preferences in a fresh linker cannot conflict");
         Code { engine, linker }
     }
 
@@ -3046,6 +3120,7 @@ impl Host {
         chain: &Chain,
     ) -> Result<View, CallError> {
         self.instance(path, data).await?;
+        self.note_command(path, launch.command.as_deref().or(call.command.as_deref()));
         let launch = launch_record(launch);
         let result = self
             .run_guest(path, chain, async |instance| {
@@ -3076,6 +3151,7 @@ impl Host {
         let _turn = self.turn_for(path, &chain).await?;
         self.instance(path, data).await?;
         let call = CallFor::launched(Some(command.clone()), launch);
+        self.note_command(path, Some(&command));
         let launch = launch_record(launch);
         let result = self
             .run_guest(path, &chain, async |instance| {
@@ -3457,6 +3533,7 @@ impl Host {
         let chain = self.chain();
         let _turn = self.turn_for(path, &chain).await?;
         self.instance(path, data).await?;
+        self.note_command(path, Some(&command));
         let service = self
             .instances
             .borrow()
@@ -3512,6 +3589,7 @@ impl Host {
             Err(()) => return Err(CallError::Cancelled),
         };
         self.instance(path, data).await?;
+        self.note_command(path, Some(&id));
         let search = self
             .instances
             .borrow()
@@ -3976,6 +4054,18 @@ impl Host {
         }
     }
 
+    /// Notes that the call `path`'s instance runs next is for `command`,
+    /// when the call names one: the command whose preferences the guest
+    /// reads when it names none (`pane:extension/preferences`). Called once
+    /// the instance is live, in the call's turn.
+    fn note_command(&self, path: &Path, command: Option<&str>) {
+        if let Some(command) = command
+            && let Some(instance) = self.instances.borrow_mut().get_mut(path)
+        {
+            instance.store.data_mut().command = Some(command.to_owned());
+        }
+    }
+
     /// Makes sure `path` has a live instance in the generation of `data`,
     /// instantiating it on first use. A call whose generation has ended (its
     /// package was disabled, reloaded or updated since it was asked for) gets
@@ -4046,6 +4136,7 @@ impl Host {
                 owner: self.helpers.new_owner(),
                 helpers: self.helpers.clone(),
                 watch: self.watch.clone(),
+                command: None,
             },
         );
         store.limiter(|state| state);

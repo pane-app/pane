@@ -3,10 +3,11 @@
 // The world JS/TS commands are componentized against. It exports exactly
 // Pane's contract and imports launching commands, the window and feedback
 // functions (wit/feedback.wit), the system functions (wit/system.wit:
-// the clipboard, opening, revealing, recycling), its extension data,
-// operations and installed applications (wit/extension.wit,
-// wit/commands.wit, wit/data.wit, wit/operations.wit and
-// wit/applications.wit, copied into deps/ by the build), its native helpers
+// the clipboard, opening, revealing, recycling), its extension data, its
+// package's preferences, operations and installed applications
+// (wit/extension.wit, wit/commands.wit, wit/data.wit, wit/preferences.wit,
+// wit/operations.wit and wit/applications.wit, copied into deps/ by the
+// build), its native helpers
 // (wit/helpers.wit), and declares the
 // WASI 0.3 imports JS source may use: a JS module can import only what this
 // world declares. WASI's own WIT (wit/deps: clocks, and `wasi:http` for web

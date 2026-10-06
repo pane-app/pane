@@ -118,6 +118,8 @@ name = "pane-guest"
 version = "0.1.0"
 dependencies = [
  "dlmalloc",
+ "serde",
+ "serde_json",
  "wit-bindgen",
 ]
 

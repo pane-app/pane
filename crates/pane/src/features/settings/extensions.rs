@@ -34,12 +34,29 @@
 //! reports — the windows showing it redraw (see
 //! [`crate::app::LauncherWindow::sync_screen`]). After any operation,
 //! including a failed one, the page shows what the launcher holds.
+//!
+//! An extension that declares preferences (#143) shows them on its card:
+//! the package's first, then each command's under that command's title,
+//! each with the control of its type — a text field (a password's hidden
+//! as it is typed), a switch for a checkbox, a segmented choice for a
+//! dropdown, and a text field with "Choose…" for a file, folder or
+//! application. Each change is saved as it is made
+//! ([`pane_core::Launcher::set_preference`]); a required preference that
+//! is unset is drawn in the error state. The Actions panel's "Configure
+//! Command…" and "Configure Extension…" open the page here
+//! ([`super::open_at`]).
+
+use std::collections::HashMap;
 
 use gpui::{
-    AnyElement, App, Context, Div, ElementId, Hsla, Role, SharedString, Stateful, Toggled, Window,
-    div, prelude::*, px,
+    AnyElement, App, Context, Div, ElementId, Entity, FocusHandle, Focusable, Hsla,
+    PathPromptOptions, Role, SharedString, Stateful, Subscription, Toggled, Window, div,
+    prelude::*, px,
 };
-use pane_core::{Launcher, Screen, Status};
+use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
+use pane_core::{
+    Launcher, PackageIdentity, PackagePreferences, PreferenceField, PreferenceKind, Screen, Status,
+};
 
 use super::{Page, SettingsWindow, search};
 use crate::app::{LauncherWindow, launcher_changed_outside, row_icon};
@@ -52,7 +69,42 @@ use crate::ui::theme::{Theme, pressed};
 pub(crate) const ABOUT: &str = "Install and manage extensions";
 
 /// The page's title: its sidebar entry, and its own heading.
-const TITLE: &str = "Extensions";
+pub(crate) const TITLE: &str = "Extensions";
+
+/// The scroll anchor of the preferences of the command `command` (its id
+/// in `pane.json`) on the card of the extension whose identity key is
+/// `package`: where "Configure Command…" takes the user. The card itself
+/// is anchored at the identity key, where "Configure Extension…" goes.
+pub(crate) fn command_preferences_anchor(package: &str, command: &str) -> String {
+    format!("preferences:{package}#{command}")
+}
+
+/// The Extensions page's own state: the text fields of the preferences on
+/// the extensions' cards (#143), each created when it first draws and kept,
+/// so what the user types survives redraws.
+#[derive(Default)]
+pub(crate) struct State {
+    /// Each text field by [`field_key`], with what saves its changes.
+    fields: HashMap<String, (Entity<EditableTextState>, Subscription)>,
+    /// Why the last change of a preference could not be saved, if it
+    /// could not; shown as the page's status.
+    problem: Option<String>,
+}
+
+/// The key of the text field of the preference kept as `key` of the
+/// extension whose identity key is `package`.
+fn field_key(package: &str, key: &str) -> String {
+    format!("{package}\u{1f}{key}")
+}
+
+/// A preference's text field as the page draws it: its editing state, its
+/// focus and the text it holds now.
+#[derive(Clone)]
+pub(crate) struct FieldInput {
+    input: Entity<EditableTextState>,
+    focus: FocusHandle,
+    text: String,
+}
 
 /// How many extensions are installed: the count the page's sidebar entry
 /// shows.
@@ -197,6 +249,9 @@ pub(crate) struct PackageCard {
     /// the row's own title (its accessible name and test selector) and why
     /// it cannot be used here, if it cannot.
     pub(crate) actions: Vec<(String, String, String, Option<String>)>,
+    /// The preferences it declares, its package's and its commands', with
+    /// their values; `None` when it declares none.
+    pub(crate) preferences: Option<PackagePreferences>,
 }
 
 /// What the Extensions page shows, as plain values: what [`render`] reads
@@ -225,6 +280,8 @@ pub(crate) struct ExtensionsView {
     /// The global automatic-updates row, and whether it is on.
     pub(crate) auto_update: Option<(String, bool)>,
     pub(crate) installs: Vec<ExtensionItem>,
+    /// The text fields of the preferences on the cards, by [`field_key`].
+    pub(crate) fields: HashMap<String, FieldInput>,
 }
 
 /// Which of the Extensions page's controls an element is, for the caller
@@ -237,6 +294,24 @@ pub(crate) enum ExtensionsControl {
     Install(String),
     /// A details screen's way back.
     Back,
+    /// Sets the preference kept as `key` of the extension whose identity
+    /// key is `package` to `value`: a checkbox's switch, a dropdown's
+    /// option.
+    SetPreference {
+        package: String,
+        key: String,
+        value: String,
+    },
+    /// A place on a card the Actions panel's "Configure Command…" reveals:
+    /// a command's preferences, by its anchor's id.
+    Anchor(String),
+    /// Asks for the path of the file, folder or application preference
+    /// kept as `key` of the extension whose identity key is `package`.
+    ChoosePath {
+        package: String,
+        key: String,
+        kind: PreferenceKind,
+    },
 }
 
 /// The launcher's rows gathered into cards: each installed extension's
@@ -263,6 +338,7 @@ pub(crate) fn gather(
             badges: Vec::new(),
             auto_update: None,
             actions: Vec::new(),
+            preferences: None,
         })
         .collect();
     let mut others = Vec::new();
@@ -363,7 +439,9 @@ pub(crate) fn compose(
         .packages
         .iter()
         .enumerate()
-        .map(|(index, card)| package_card(index, card, theme, &attach).into_any_element())
+        .map(|(index, card)| {
+            package_card(index, card, &view.fields, theme, &attach).into_any_element()
+        })
         .collect::<Vec<_>>();
     let packages = (!packages.is_empty()).then(|| {
         controls::section(
@@ -486,6 +564,7 @@ pub(crate) fn compose(
 fn package_card(
     index: usize,
     card: &PackageCard,
+    fields: &HashMap<String, FieldInput>,
     theme: &Theme,
     attach: &impl Fn(ExtensionsControl, Stateful<Div>) -> Stateful<Div>,
 ) -> Div {
@@ -576,7 +655,236 @@ fn package_card(
                 .into_any_element(),
         );
     }
+    if let Some(preferences) = &card.preferences {
+        rows.extend(preference_rows(preferences, fields, theme, attach));
+    }
     controls::card(rows, theme)
+}
+
+/// The rows of an extension's preferences on its card: the package's, then
+/// each command's under a row naming the command.
+fn preference_rows(
+    preferences: &PackagePreferences,
+    fields: &HashMap<String, FieldInput>,
+    theme: &Theme,
+    attach: &impl Fn(ExtensionsControl, Stateful<Div>) -> Stateful<Div>,
+) -> Vec<AnyElement> {
+    let package = preferences.identity.key();
+    let mut rows: Vec<AnyElement> = preferences
+        .fields
+        .iter()
+        .map(|field| preference_row(&package, field, fields, theme, attach))
+        .collect();
+    for command in &preferences.commands {
+        let selector = format!("preference-command-{}", command.command);
+        let anchor = command_preferences_anchor(&package, &command.command);
+        let header = controls::setting_row(command.title.clone(), Vec::new(), theme)
+            .id(SharedString::from(anchor.clone()))
+            .debug_selector(move || selector)
+            .role(Role::Heading)
+            .aria_label(command.title.clone());
+        rows.push(attach(ExtensionsControl::Anchor(anchor), header).into_any_element());
+        rows.extend(
+            command
+                .fields
+                .iter()
+                .map(|field| preference_row(&package, field, fields, theme, attach)),
+        );
+    }
+    rows
+}
+
+/// One preference's row: its title over its description and, while it is
+/// required and unset, "Required" in the error tone; its control at the
+/// right.
+fn preference_row(
+    package: &str,
+    field: &PreferenceField,
+    fields: &HashMap<String, FieldInput>,
+    theme: &Theme,
+    attach: &impl Fn(ExtensionsControl, Stateful<Div>) -> Stateful<Div>,
+) -> AnyElement {
+    let preference = &field.preference;
+    let key = field.key.clone();
+    let mut lines = Vec::new();
+    if let Some(description) = &preference.description {
+        lines.push(controls::row_line(
+            description.clone(),
+            theme.text_muted,
+            theme,
+        ));
+    }
+    if field.missing {
+        let selector = format!("preference-error-{key}");
+        lines.push(
+            controls::field_description("Required", theme.danger, theme)
+                .debug_selector(move || selector)
+                .into_any_element(),
+        );
+    }
+    // What the control shows: the value set, else the default.
+    let effective = field.value.clone().or_else(|| preference.default.clone());
+    let set = |value: String| ExtensionsControl::SetPreference {
+        package: package.to_owned(),
+        key: key.clone(),
+        value,
+    };
+    let control: AnyElement = match preference.kind {
+        PreferenceKind::Checkbox => {
+            let on = effective.as_deref() == Some("true");
+            let selector = format!("preference-toggle-{key}");
+            let label = preference
+                .label
+                .clone()
+                .unwrap_or_else(|| preference.title.clone());
+            let switch = controls::toggle(on, theme)
+                .id(SharedString::from(selector.clone()))
+                .debug_selector(move || selector)
+                .role(Role::Switch)
+                .aria_label(label)
+                .aria_toggled(if on { Toggled::True } else { Toggled::False })
+                .cursor_pointer();
+            attach(set((!on).to_string()), switch).into_any_element()
+        }
+        PreferenceKind::Dropdown => {
+            let count = preference.options.len();
+            let options = preference
+                .options
+                .iter()
+                .enumerate()
+                .map(|(position, option)| {
+                    let chosen = effective.as_deref() == Some(option.value.as_str());
+                    let selector = format!("preference-option-{key}-{}", option.value);
+                    let segment = controls::segment(option.title.clone(), chosen, true, theme)
+                        .id(SharedString::from(selector.clone()))
+                        .debug_selector(move || selector)
+                        .role(Role::RadioButton)
+                        .aria_label(option.title.clone())
+                        .aria_toggled(if chosen {
+                            Toggled::True
+                        } else {
+                            Toggled::False
+                        })
+                        .aria_position_in_set(position + 1)
+                        .aria_size_of_set(count);
+                    attach(set(option.value.clone()), segment)
+                });
+            controls::row_segment_track(theme)
+                .id(SharedString::from(format!("preference-options-{key}")))
+                .role(Role::RadioGroup)
+                .aria_label(preference.title.clone())
+                .children(options)
+                .into_any_element()
+        }
+        PreferenceKind::Text
+        | PreferenceKind::Password
+        | PreferenceKind::File
+        | PreferenceKind::Folder
+        | PreferenceKind::Application => {
+            let well = fields
+                .get(&field_key(package, &key))
+                .map(|input| text_well(field, input, theme));
+            let choose = matches!(
+                preference.kind,
+                PreferenceKind::File | PreferenceKind::Folder | PreferenceKind::Application
+            )
+            .then(|| {
+                let selector = format!("preference-choose-{key}");
+                let button = controls::ghost_button(
+                    SharedString::from(selector.clone()),
+                    "Choose…",
+                    true,
+                    theme,
+                )
+                .debug_selector(move || selector)
+                .role(Role::Button)
+                .aria_label(format!("Choose {}", preference.title));
+                attach(
+                    ExtensionsControl::ChoosePath {
+                        package: package.to_owned(),
+                        key: key.clone(),
+                        kind: preference.kind,
+                    },
+                    button,
+                )
+            });
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(theme.geometry.controls.button_gap)
+                .children(well)
+                .children(choose)
+                .into_any_element()
+        }
+    };
+    let selector = format!("preference-{key}");
+    controls::setting_row(preference.title.clone(), lines, theme)
+        .child(control)
+        .id(SharedString::from(format!(
+            "preference-row-{package}-{key}"
+        )))
+        .debug_selector(move || selector)
+        .into_any_element()
+}
+
+/// A text preference's well: its editable text, a password's drawn as
+/// dots (the editable glyphs are transparent under them), in the error
+/// state's ring while it is required and unset.
+fn text_well(field: &PreferenceField, input: &FieldInput, theme: &Theme) -> Stateful<Div> {
+    let preference = &field.preference;
+    let secret = preference.kind.is_secret();
+    let key = &field.key;
+    let selector = format!("preference-field-{key}");
+    let ring = controls::well_shadows(true, theme);
+    let shown = if secret {
+        "\u{2022}".repeat(input.text.chars().count())
+    } else {
+        input.text.clone()
+    };
+    let placeholder = preference.placeholder.clone().unwrap_or_default();
+    let editable = controls::well_input(
+        text_input(SharedString::from(format!("preference-input-{key}")))
+            .state(input.input.downgrade()),
+        placeholder.clone(),
+        theme,
+    );
+    let well = controls::well(true, theme)
+        .w(px(240.))
+        .id(SharedString::from(selector.clone()))
+        .debug_selector(move || selector)
+        .track_focus(&input.focus)
+        .role(Role::TextInput)
+        .aria_label(preference.title.clone())
+        .aria_value(shown.clone())
+        .aria_placeholder(placeholder)
+        .when(field.missing, |well| {
+            well.aria_description("Required")
+                .shadow(controls::error_ring(theme))
+        })
+        .focus(move |well| well.shadow(ring));
+    if !secret {
+        return well.child(editable);
+    }
+    well.child(
+        div()
+            .relative()
+            .flex_1()
+            .min_w(px(0.))
+            .child(editable.text_color(gpui::transparent_black()))
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .text_size(theme.typography.settings_text_size)
+                    .text_color(theme.text_title)
+                    .child(shown),
+            ),
+    )
 }
 
 /// One entry as a Settings list item named `id`: its tile and its title,
@@ -669,6 +977,25 @@ fn render(
     } else {
         Vec::new()
     };
+    // Each card's preferences, and the text fields that edit them.
+    let mut packages = packages;
+    for card in &mut packages {
+        card.preferences = this
+            .launcher
+            .packages()
+            .iter()
+            .find(|package| package.identity.key() == card.id)
+            .and_then(|package| this.launcher.preferences_of(&package.identity));
+    }
+    let fields = text_fields(this, &packages, cx);
+    // A change that could not be saved says why, where no operation's
+    // status shows.
+    let status = status.or_else(|| {
+        this.extensions
+            .problem
+            .clone()
+            .map(|problem| (SharedString::from(problem), theme.danger))
+    });
     let view = ExtensionsView {
         title: list.title.clone(),
         listing,
@@ -687,6 +1014,7 @@ fn render(
         rows,
         auto_update,
         installs,
+        fields,
     };
     // Each row's scroll anchor, keyed by the row's own id, which the
     // search's reveal scrolls to.
@@ -698,6 +1026,16 @@ fn render(
                 .chain(card.auto_update.iter().map(|(id, _)| id.clone()))
                 .chain(card.actions.iter().map(|(id, ..)| id.clone()))
         })
+        .chain(view.packages.iter().flat_map(|card| {
+            card.preferences.iter().flat_map(|preferences| {
+                let package = preferences.identity.key();
+                preferences
+                    .commands
+                    .iter()
+                    .map(move |command| command_preferences_anchor(&package, &command.command))
+                    .collect::<Vec<_>>()
+            })
+        }))
         .chain(view.rows.iter().map(|row| row.id.clone()))
         .chain(view.auto_update.iter().map(|(id, _)| id.clone()))
         .chain(view.installs.iter().map(|row| row.id.clone()));
@@ -729,8 +1067,156 @@ fn render(
                 cx.notify();
             }))
         }
+        ExtensionsControl::SetPreference {
+            package,
+            key,
+            value,
+        } => element.on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+            save_preference(this, &package, &key, &value, cx);
+        })),
+        ExtensionsControl::Anchor(id) => element.anchor_scroll(anchors.get(&id).cloned()),
+        ExtensionsControl::ChoosePath { package, key, kind } => {
+            element.on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
+                choose_path(this, &package, &key, kind, window, cx);
+            }))
+        }
     })
     .into_any_element()
+}
+
+/// The text fields of the text, password, file, folder and application
+/// preferences on `cards`, by [`field_key`]: each created the first time
+/// its preference draws, holding the value set then, and saving each
+/// change as it is made.
+fn text_fields(
+    this: &mut SettingsWindow,
+    cards: &[PackageCard],
+    cx: &mut Context<SettingsWindow>,
+) -> HashMap<String, FieldInput> {
+    let mut drawn = HashMap::new();
+    for card in cards {
+        let Some(preferences) = &card.preferences else {
+            continue;
+        };
+        let package = preferences.identity.key();
+        let all = preferences.fields.iter().chain(
+            preferences
+                .commands
+                .iter()
+                .flat_map(|command| &command.fields),
+        );
+        for field in all {
+            if matches!(
+                field.preference.kind,
+                PreferenceKind::Checkbox | PreferenceKind::Dropdown
+            ) {
+                continue;
+            }
+            let id = field_key(&package, &field.key);
+            let input = match this.extensions.fields.get(&id) {
+                Some((input, _)) => input.clone(),
+                None => {
+                    let input = cx.new(|cx| EditableTextState::new(StringStorage::default(), cx));
+                    input.focus_handle(cx).tab_stop(true);
+                    if let Some(value) = field.value.as_deref().filter(|value| !value.is_empty()) {
+                        input.update(cx, |input, cx| input.emplace(value, cx));
+                    }
+                    let (owner, key) = (package.clone(), field.key.clone());
+                    let changes = cx.subscribe(&input, move |this, input, _: &TextChanged, cx| {
+                        let text = input.read(cx).as_str().to_owned();
+                        save_preference(this, &owner, &key, &text, cx);
+                    });
+                    this.extensions
+                        .fields
+                        .insert(id.clone(), (input.clone(), changes));
+                    input
+                }
+            };
+            let focus = input.focus_handle(cx);
+            let text = input.read(cx).as_str().to_owned();
+            drawn.insert(id, FieldInput { input, focus, text });
+        }
+    }
+    drawn
+}
+
+/// Saves `value` as the preference kept as `key` of the extension whose
+/// identity key is `package`, as the user changed it on its card; the
+/// launcher window redraws (a row may no longer need setup), and a value
+/// that cannot be saved says why on the page.
+fn save_preference(
+    this: &mut SettingsWindow,
+    package: &str,
+    key: &str,
+    value: &str,
+    cx: &mut Context<SettingsWindow>,
+) {
+    let Some(identity) = identity_of(&this.launcher, package) else {
+        cx.notify();
+        return;
+    };
+    let saved = this.launcher.set_preference(&identity, key, Some(value));
+    launcher_changed_outside(cx);
+    cx.notify();
+    cx.spawn(async move |this, cx| {
+        let problem = saved.await.err();
+        this.update(cx, |this, cx| {
+            this.extensions.problem = problem;
+            cx.notify();
+        })
+        .ok();
+        cx.update(launcher_changed_outside);
+    })
+    .detach();
+}
+
+/// Asks for the path of the file, folder or application (`kind`)
+/// preference kept as `key` of the extension whose identity key is
+/// `package`, and sets its field to it, which saves it.
+fn choose_path(
+    this: &mut SettingsWindow,
+    package: &str,
+    key: &str,
+    kind: PreferenceKind,
+    window: &mut Window,
+    cx: &mut Context<SettingsWindow>,
+) {
+    let picked = cx.prompt_for_paths(PathPromptOptions {
+        files: kind != PreferenceKind::Folder,
+        // A macOS application is a folder (its bundle).
+        directories: kind == PreferenceKind::Folder
+            || (kind == PreferenceKind::Application && cfg!(target_os = "macos")),
+        multiple: false,
+        prompt: Some("Choose".into()),
+    });
+    let (package, key) = (package.to_owned(), key.to_owned());
+    cx.spawn_in(window, async move |this, cx| {
+        let Ok(Ok(Some(paths))) = picked.await else {
+            return;
+        };
+        let Some(path) = paths.into_iter().next() else {
+            return;
+        };
+        let path = path.to_string_lossy().into_owned();
+        this.update(cx, |this, cx| {
+            if let Some((input, _)) = this.extensions.fields.get(&field_key(&package, &key)) {
+                let input = input.clone();
+                input.update(cx, |input, cx| input.emplace(&path, cx));
+            }
+            save_preference(this, &package, &key, &path, cx);
+        })
+        .ok();
+    })
+    .detach();
+}
+
+/// The installed package whose identity key is `key`.
+fn identity_of(launcher: &Launcher, key: &str) -> Option<PackageIdentity> {
+    launcher
+        .packages()
+        .into_iter()
+        .map(|package| package.identity)
+        .find(|identity| identity.key() == key)
 }
 
 /// The launcher's install rows, as the page lists them (see

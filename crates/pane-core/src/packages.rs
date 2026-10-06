@@ -23,6 +23,7 @@ use crate::helpers::runner;
 use crate::launcher::CommandRegistration;
 use crate::npm::{Fetched, NpmOrigin, NpmPackage, NpmSpec};
 use crate::platform::{self, Platform};
+use crate::preferences::{self, Preference};
 use crate::runtime::{CallError, Exports};
 use pane_target::Target;
 
@@ -332,6 +333,9 @@ pub struct Manifest {
     /// in the package's commands, and lists only that folder for it
     /// (`pane:extension/files`).
     pub folder_access: bool,
+    /// The preferences the package declares for all its commands
+    /// (`"preferences"`; see `preferences`).
+    pub preferences: Vec<Preference>,
 }
 
 /// A native helper a package ships: a prebuilt program per target (operating
@@ -511,6 +515,9 @@ pub struct ManifestCommand {
     /// `run-cycle` export in a cycle the service itself paces, with no
     /// interval the manifest declares (see `launcher/services`).
     pub service: bool,
+    /// The preferences the command declares for itself (`"preferences"`),
+    /// besides its package's.
+    pub preferences: Vec<Preference>,
 }
 
 #[derive(Deserialize)]
@@ -532,6 +539,8 @@ struct ManifestJson {
     dependencies: Vec<DependencyJson>,
     #[serde(default)]
     folder_access: bool,
+    #[serde(default)]
+    preferences: Vec<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -594,6 +603,8 @@ struct CommandJson {
     schedule: Option<ScheduleJson>,
     #[serde(default)]
     service: bool,
+    #[serde(default)]
+    preferences: Vec<serde_json::Value>,
 }
 
 /// A command's `schedule`, as `pane.json` writes it.
@@ -736,6 +747,8 @@ impl Manifest {
             return Err(invalid("`title` is empty".into()));
         }
         let platforms = parse_platforms(json.platforms, "`platforms`")?;
+        let package_preferences =
+            preferences::parse(json.preferences, "the package", &[]).map_err(invalid)?;
         if json.commands.is_empty() && json.operations.is_empty() {
             return Err(invalid("`commands` is empty".into()));
         }
@@ -792,6 +805,12 @@ impl Manifest {
                 command.platforms,
                 &format!("`platforms` of command `{}`", command.id),
             )?;
+            let own = preferences::parse(
+                command.preferences,
+                &format!("command `{}`", command.id),
+                &package_preferences,
+            )
+            .map_err(invalid)?;
             commands.push(ManifestCommand {
                 id: command.id,
                 title: command.title,
@@ -805,6 +824,7 @@ impl Manifest {
                 search: command.search,
                 schedule,
                 service,
+                preferences: own,
             });
         }
         let mut operations: Vec<ManifestOperation> = Vec::new();
@@ -882,6 +902,7 @@ impl Manifest {
             helpers,
             dependencies,
             folder_access: json.folder_access,
+            preferences: package_preferences,
         })
     }
 
@@ -2529,6 +2550,12 @@ fn copy_package(package: &SourcePackage, location: &Path) -> io::Result<()> {
     }
     for file in helper_files {
         make_executable(&location.join(file))?;
+    }
+    // The help the Setup screen shows beside a command's preferences, if
+    // the package ships it: a regular file only, never a link followed.
+    let help = package.folder.join(preferences::HELP_FILE);
+    if fs::symlink_metadata(&help).is_ok_and(|metadata| metadata.is_file()) {
+        fs::copy(&help, location.join(preferences::HELP_FILE))?;
     }
     Ok(())
 }

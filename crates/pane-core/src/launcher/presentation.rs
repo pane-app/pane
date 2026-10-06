@@ -67,6 +67,11 @@ pub struct RowPresentation {
     /// The answer the row is, when a command computed it from the query
     /// and activating it copies it (see [`ComputedAnswer`]).
     pub answer: Option<ComputedAnswer>,
+    /// Whether the row's command needs setup: a required preference of
+    /// its package's or its own is unset, so only a launch by the user,
+    /// through the Setup screen, runs it (see the launcher's `setup`). The
+    /// row says "Needs setup".
+    pub needs_setup: bool,
 }
 
 /// A computed answer: a root result a command computed from the query
@@ -133,6 +138,8 @@ pub(super) fn presentation(state: &State) -> Presentation {
                     .flatten(),
                 matched: title_matches(&row.title, query),
                 answer: answer(state, row, entry, query),
+                needs_setup: matches!(entry, Entry::Open(_))
+                    && state.setup_needed.contains(&row.id),
             }
         })
         .collect::<Vec<_>>();

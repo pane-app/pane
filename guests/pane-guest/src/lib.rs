@@ -10,7 +10,8 @@
 //! ([`feedback`]), and may close Pane's window or pop back to root search
 //! ([`window`]); Pane shows nothing of an action's answer. It may keep
 //! values between runs with [`settings`], and its own records, disposable
-//! values and secrets with [`content`], [`cache`] and [`credentials`]. It
+//! values and secrets with [`content`], [`cache`] and [`credentials`], and
+//! read the preferences its package declares with [`preferences`]. It
 //! may compute results from root search's query with [`root`], run a continuing
 //! service while its package's code may run with [`service`], call
 //! operations other packages publish with [`operations::call`], serve those
@@ -76,6 +77,58 @@ pub use pane::extension::{cache, content, credentials, operations, settings};
 /// ```
 pub mod window {
     pub use crate::pane::extension::window::{PopToRootType, clear_search, close, pop_to_root};
+}
+
+/// The preferences the command's package declares in `pane.json` under
+/// `preferences`, for the whole extension or for one command, as the user
+/// set them in Pane (`pane:extension/preferences`): on the Setup screen
+/// before the command's first run, and on the extension's card in
+/// Settings. Pane stores them; a command only reads them, as a type of its
+/// own that serde deserializes. A checkbox's value is a `bool`, every other
+/// kind's a `String`; a preference with no value and no default is absent,
+/// so declare an optional one as an `Option`:
+///
+/// ```ignore
+/// #[derive(serde::Deserialize)]
+/// #[serde(rename_all = "camelCase")]
+/// struct Preferences {
+///     api_key: String,
+///     units: String,
+///     greeting: Option<String>,
+///     verbose: bool,
+/// }
+///
+/// let preferences: Preferences = pane_guest::preferences::values()?;
+/// ```
+pub mod preferences {
+    use alloc::string::String;
+    use serde::de::DeserializeOwned;
+
+    /// The effective preference values of the command Pane is running:
+    /// its package's preferences, then its own, each the value the user set
+    /// or else its declared default. An error says why Pane refused, or
+    /// why they do not deserialize into `T`.
+    pub fn values<T: DeserializeOwned>() -> Result<T, String> {
+        read(None)
+    }
+
+    /// Like [`values`], for the command with id `command` (in `pane.json`)
+    /// of the same package: for a component serving several commands, in a
+    /// call Pane makes for no command in particular (its root results).
+    pub fn values_of<T: DeserializeOwned>(command: &str) -> Result<T, String> {
+        read(Some(command))
+    }
+
+    /// The effective values as Pane sends them, a JSON object's text.
+    pub fn json(command: Option<&str>) -> Result<String, String> {
+        crate::pane::extension::preferences::values(command)
+    }
+
+    fn read<T: DeserializeOwned>(command: Option<&str>) -> Result<T, String> {
+        let text = json(command)?;
+        serde_json::from_str(&text)
+            .map_err(|error| alloc::format!("the preferences do not fit their type: {error}"))
+    }
 }
 
 /// How the command was launched, and launching another command

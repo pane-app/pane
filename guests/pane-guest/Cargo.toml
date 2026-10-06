@@ -8,3 +8,7 @@ license.workspace = true
 [dependencies]
 wit-bindgen = { version = "=0.62.0", default-features = false, features = ["macros", "async"] }
 dlmalloc = { version = "0.2", features = ["global"] }
+# Preferences arrive as JSON, which `preferences::values` deserializes into
+# the command's own type.
+serde = { version = "1", default-features = false, features = ["alloc"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }

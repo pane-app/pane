@@ -57,6 +57,11 @@ pub struct LaunchRecord {
     /// The JSON value, as text, another command passed when it launched
     /// this one.
     pub context: Option<String>,
+    /// The command launched, by its id in `pane.json`, where Pane knows
+    /// it: Pane's own note, not part of the WIT record. It tells
+    /// `pane:extension/preferences` whose values a component serving
+    /// several commands reads when the guest names none.
+    pub command: Option<String>,
 }
 
 impl LaunchRecord {

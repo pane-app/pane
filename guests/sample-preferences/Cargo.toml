@@ -1,0 +1,13 @@
+[package]
+name = "sample-preferences"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pane-guest.workspace = true
+serde = { version = "1", default-features = false, features = ["alloc", "derive"] }

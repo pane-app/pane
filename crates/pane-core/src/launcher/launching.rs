@@ -83,6 +83,12 @@ impl Launcher {
         opening: Opening,
         data: Option<PackageData>,
     ) {
+        // The setup gate (#143, see `setup`): a command whose required
+        // preferences are unset shows the Setup screen instead, which
+        // launches it again from here once submitted.
+        let Some(opening) = self.setup_gate(epoch, opening) else {
+            return;
+        };
         if opening.no_view {
             self.run_no_view(epoch, opening, data).await
         } else {
@@ -182,8 +188,10 @@ impl Launcher {
     /// not for a no-view command, which runs without it (ADR 0037). The
     /// window asks before [`Launcher::press_hotkey`].
     pub fn hotkey_shows_window(&self, shortcut: &crate::hotkeys::Shortcut) -> bool {
-        self.hotkey_opening(&self.lock(), shortcut)
-            .is_none_or(|opening| !opening.no_view)
+        let state = self.lock();
+        // One that needs setup shows the Setup screen first (see `setup`).
+        self.hotkey_opening(&state, shortcut)
+            .is_none_or(|opening| !opening.no_view || self.opening_needs_setup(&state, &opening))
     }
 
     /// Whether a command a guest launched asked for Pane's window since
@@ -278,6 +286,7 @@ impl Launcher {
             arguments: request.arguments,
             fallback_text: None,
             context: request.context,
+            command: Some(request.command.clone()),
         };
         if request.launch_type == LaunchType::UserInitiated {
             if no_view {

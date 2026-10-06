@@ -260,6 +260,12 @@ impl Services {
                 continue;
             }
             for command in package.service_commands() {
+                // Its required preferences are unset: its service does not
+                // run, and it says "Needs setup" instead (see `setup`); not
+                // a failure.
+                if launcher.needs_setup(package, command.manifest_id()) {
+                    continue;
+                }
                 let manifest_id = command.manifest_id().to_owned();
                 let id = command.id;
                 let component = command.component;

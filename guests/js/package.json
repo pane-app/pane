@@ -2,7 +2,7 @@
   "name": "@pane/extension",
   "version": "0.1.0",
   "private": true,
-  "description": "TypeScript declarations for Pane's extension contract (wit/extension.wit), web requests (@pane/extension/http), toasts, HUDs and the window (@pane/extension/feedback), and the clipboard, opening, revealing and recycling with the standard actions (@pane/extension/system)",
+  "description": "TypeScript declarations for Pane's extension contract (wit/extension.wit), web requests (@pane/extension/http), toasts, HUDs and the window (@pane/extension/feedback), the clipboard, opening, revealing and recycling with the standard actions (@pane/extension/system), and preferences (@pane/extension/preferences)",
   "license": "Apache-2.0 OR MIT",
   "types": "pane.d.ts",
   "exports": {
@@ -20,6 +20,10 @@
     "./system": {
       "types": "./system.d.ts",
       "default": "./system.js"
+    },
+    "./preferences": {
+      "types": "./preferences.d.ts",
+      "default": "./preferences.js"
     }
   }
 }

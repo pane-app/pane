@@ -469,8 +469,11 @@ impl Launcher {
                 },
                 value: current,
                 error: None,
+                description: None,
+                secret: false,
             }],
             submit_label: "Save alias".into(),
+            setup: None,
         };
         let view = LauncherView::new(Screen::Form(form), format!("Alias for {title}"));
         let return_to = std::mem::replace(&mut state.view, view);
