@@ -14,6 +14,7 @@
 /// <reference path="./operations.d.ts" />
 /// <reference path="./applications.d.ts" />
 /// <reference path="./helpers.d.ts" />
+/// <reference path="./programs-host.d.ts" />
 /// <reference path="./files.d.ts" />
 /// <reference path="./clipboard.d.ts" />
 

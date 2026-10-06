@@ -701,8 +701,8 @@ impl Launcher {
         for dependency in &mut plan.install {
             match self.check_components(dependency).await {
                 // Recorded as the package's own is: whether it can make web
-                // requests.
-                Ok(network) => dependency.network = network,
+                // requests and run system programs.
+                Ok(checked) => dependency.note_imports(checked),
                 Err(error) => {
                     let required = plan
                         .required
@@ -805,6 +805,9 @@ fn preview_view(
     }
     if let Some(helpers) = helpers::describe(&manifest.helpers) {
         details.push(helpers);
+    }
+    if package.programs {
+        details.push(super::programs::PREVIEW_NOTE.into());
     }
     details.push(format!(
         "Compatible: needs extension API {}, and its components import only WASI 0.3",

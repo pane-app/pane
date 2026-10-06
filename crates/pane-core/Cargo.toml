@@ -52,11 +52,14 @@ futures.workspace = true
 
 # Listing the Apps folder and opening a shortcut or packaged app as Explorer
 # does, global hotkeys (`RegisterHotKey`), the Job Object that stops a
-# development build with every process it started, and the clipboard format
-# listener of clipboard history (a message-only window, the clipboard and its
-# global memory); already in the dependency tree through GPUI CE.
+# development build or a system program with every process it started (and
+# the thread list that lets a program started suspended run), the system
+# search path in the registry, the elevation prompt (`ShellExecuteExW` with
+# `runas`), and the clipboard format listener of clipboard history (a
+# message-only window, the clipboard and its global memory); already in the
+# dependency tree through GPUI CE.
 [target.'cfg(windows)'.dependencies]
-windows = { workspace = true, features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_DataExchange", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_DataExchange", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
 
 # Global hotkeys on X11 (key grabs on the root window) and the X11
 # clipboard of clipboard history (XFIXES selection events, selection
@@ -108,3 +111,9 @@ path = "tests/clipboard_adapter_macos.rs"
 [[test]]
 name = "hotkey_adapters"
 path = "tests/hotkey_adapters.rs"
+
+# The containment of a system program's processes (a Job Object, a process
+# group) against the real system.
+[[test]]
+name = "program_adapters"
+path = "tests/program_adapters.rs"

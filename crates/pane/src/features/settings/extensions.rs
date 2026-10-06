@@ -139,10 +139,10 @@ const INSTALL: &str = "Install";
 
 /// Whether the launcher's screen is held by the extension-management
 /// flow: the list itself, or one of the screens its rows open — a
-/// confirmation, pause, build, network or runtime details. While it is,
-/// the page draws the launcher's live view, so the flow's confirmations
-/// show here; otherwise it reads the list without entering the flow, and
-/// the launcher's screen stays wherever the user left it.
+/// confirmation, pause, build, network, program or runtime details. While
+/// it is, the page draws the launcher's live view, so the flow's
+/// confirmations show here; otherwise it reads the list without entering
+/// the flow, and the launcher's screen stays wherever the user left it.
 fn in_extension_flow(screen: &Screen) -> bool {
     matches!(
         screen,
@@ -152,13 +152,14 @@ fn in_extension_flow(screen: &Screen) -> bool {
             | Screen::BuildDetails { .. }
             | Screen::RuntimeDetails { .. }
             | Screen::NetworkDetails { .. }
+            | Screen::ProgramDetails { .. }
     )
 }
 
 /// Whether the screen is one of the flow's details screens — pause, build,
-/// network or runtime details — which offer no Cancel row of their own (a
-/// confirmation's is its own), so the page offers the way out the launcher
-/// window's Escape is there.
+/// network, program or runtime details — which offer no Cancel row of their
+/// own (a confirmation's is its own), so the page offers the way out the
+/// launcher window's Escape is there.
 fn details_screen(screen: &Screen) -> bool {
     matches!(
         screen,
@@ -166,6 +167,7 @@ fn details_screen(screen: &Screen) -> bool {
             | Screen::BuildDetails { .. }
             | Screen::RuntimeDetails { .. }
             | Screen::NetworkDetails { .. }
+            | Screen::ProgramDetails { .. }
     )
 }
 

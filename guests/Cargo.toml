@@ -21,6 +21,7 @@ members = [
     "sample-service",
     "sample-actions",
     "sample-helper",
+    "sample-programs",
     "fixtures/faulty",
     "fixtures/operations",
     "fixtures/old-api",

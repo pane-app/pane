@@ -2,7 +2,7 @@
   "name": "@pane/extension",
   "version": "0.1.0",
   "private": true,
-  "description": "TypeScript declarations for Pane's extension contract (wit/extension.wit), web requests (@pane/extension/http), and toasts, HUDs and the window (@pane/extension/feedback)",
+  "description": "TypeScript declarations for Pane's extension contract (wit/extension.wit), web requests (@pane/extension/http), toasts, HUDs and the window (@pane/extension/feedback), and system programs (@pane/extension/programs)",
   "license": "Apache-2.0 OR MIT",
   "types": "pane.d.ts",
   "exports": {
@@ -16,6 +16,10 @@
     "./feedback": {
       "types": "./feedback.d.ts",
       "default": "./feedback.js"
+    },
+    "./programs": {
+      "types": "./programs.d.ts",
+      "default": "./programs.js"
     }
   }
 }

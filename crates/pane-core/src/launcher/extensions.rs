@@ -5,7 +5,8 @@
 
 use super::pausing::{self, Pauses};
 use super::{
-    Entry, Launcher, LauncherView, Row, Screen, State, first_index, network, retained, updates,
+    Entry, Launcher, LauncherView, Row, Screen, State, first_index, network, programs, retained,
+    updates,
 };
 use crate::packages::{InstalledPackage, PackageIdentity};
 
@@ -51,7 +52,11 @@ impl Launcher {
         );
         rows.extend(package_rows);
         entries.extend(package_entries);
-        for (row, entry) in self.network_rows(state) {
+        for (row, entry) in self
+            .network_rows(state)
+            .into_iter()
+            .chain(self.program_rows(state))
+        {
             rows.push(row);
             entries.push(entry);
         }
@@ -172,10 +177,15 @@ fn extension_rows(
             id: package.identity.key(),
             title: package.title(),
             subtitle: Some(format!(
-                "{state}{developing}{network} · {}",
+                "{state}{developing}{network}{programs} · {}",
                 package.identity,
                 network = if package.uses_network {
                     format!(" · {}", network::USES_THE_NETWORK)
+                } else {
+                    String::new()
+                },
+                programs = if package.uses_programs {
+                    format!(" · {}", programs::RUNS_SYSTEM_PROGRAMS)
                 } else {
                     String::new()
                 }

@@ -428,8 +428,10 @@ pub(crate) struct Spec {
     pub owner: u64,
 }
 
-/// The helper processes of one runtime, for stopping and diagnostics.
-/// Cloning shares them.
+/// The helper processes of one runtime, and the system programs its guests
+/// run ([`crate::programs`]), for stopping and diagnostics: both belong to
+/// the instance that started them, its generation and Pane, and end the
+/// same ways. Cloning shares them.
 #[derive(Clone, Default)]
 pub(crate) struct Helpers {
     state: Arc<Mutex<State>>,
@@ -439,12 +441,37 @@ pub(crate) struct Helpers {
 #[derive(Default)]
 struct State {
     runs: Vec<Arc<Run>>,
-    /// Set once Pane is quitting: no helper starts any more.
+    /// Set once Pane is quitting: no helper or program starts any more.
     quitting: bool,
+    /// The programs each installed package ran this session, by its
+    /// identity key, as the extension list shows them.
+    programs_run: std::collections::HashMap<String, std::collections::BTreeSet<String>>,
+    /// Where a program named by a bare name is found, if a test said;
+    /// otherwise the system's search path at the time of each call.
+    search_path: Option<crate::programs::runner::SearchPath>,
+}
+
+/// What a supervised process is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Kind {
+    /// A native helper its package ships.
+    Helper,
+    /// A program installed on the system ([`crate::programs`]).
+    Program,
+}
+
+/// Why a process may not start, or run on once it started.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Refusal {
+    /// Pane is quitting.
+    Quitting,
+    /// The code that asked for it is stopped.
+    Stopped(End),
 }
 
 /// One helper process and the thread supervising it.
-struct Run {
+pub(crate) struct Run {
+    kind: Kind,
     owner: u64,
     pid: u32,
     /// The file it runs.
@@ -461,11 +488,16 @@ struct Run {
 impl Run {
     /// Asks the supervising thread to end and reap the process, without
     /// waiting for it.
-    fn request_stop(&self) {
+    pub(crate) fn request_stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
         if let Some(supervisor) = self.supervisor.get() {
             supervisor.unpark();
         }
+    }
+
+    /// Whether Pane asked for the process to end ([`Run::request_stop`]).
+    pub(crate) fn stop_requested(&self) -> bool {
+        self.stop.load(Ordering::SeqCst)
     }
 
     /// Waits until the process has been reaped, or `deadline` passes.
@@ -532,7 +564,97 @@ impl Helpers {
     /// The process ids of the helpers running now, not yet reaped. A
     /// diagnostic for tests and logs.
     pub fn running(&self) -> Vec<u32> {
-        self.lock().runs.iter().map(|run| run.pid).collect()
+        self.running_of(Kind::Helper)
+    }
+
+    /// The process ids of the system programs guests run now (not the
+    /// processes those started), not yet reaped. A diagnostic for tests and
+    /// logs.
+    pub fn running_programs(&self) -> Vec<u32> {
+        self.running_of(Kind::Program)
+    }
+
+    fn running_of(&self, kind: Kind) -> Vec<u32> {
+        self.lock()
+            .runs
+            .iter()
+            .filter(|run| run.kind == kind)
+            .map(|run| run.pid)
+            .collect()
+    }
+
+    /// Registers the process `pid` running `program`, started by `owner`'s
+    /// code, supervised by the calling thread, unless Pane is quitting or
+    /// `stopped` says the code is: checked under the lock that quitting and
+    /// ending a runtime thread's processes take, so that either sees it or
+    /// it does not run on (the caller ends it then).
+    pub(crate) fn register(
+        &self,
+        kind: Kind,
+        owner: u64,
+        pid: u32,
+        program: PathBuf,
+        stopped: impl FnOnce() -> Option<End>,
+    ) -> Result<Arc<Run>, Refusal> {
+        let mut state = self.lock();
+        if state.quitting {
+            return Err(Refusal::Quitting);
+        }
+        if let Some(end) = stopped() {
+            return Err(Refusal::Stopped(end));
+        }
+        let run = Arc::new(Run {
+            kind,
+            owner,
+            pid,
+            program,
+            stop: AtomicBool::new(false),
+            supervisor: OnceLock::new(),
+            done: Mutex::new(false),
+            reaped: Condvar::new(),
+        });
+        let _ = run.supervisor.set(thread::current());
+        state.runs.push(run.clone());
+        Ok(run)
+    }
+
+    /// Takes `run` off the processes running, once its supervising thread
+    /// reaped it, and tells those waiting for it.
+    pub(crate) fn unregister(&self, run: &Arc<Run>) {
+        self.lock().runs.retain(|other| !Arc::ptr_eq(other, run));
+        *run.done.lock().unwrap_or_else(|p| p.into_inner()) = true;
+        run.reaped.notify_all();
+    }
+
+    /// Notes that the installed package with the identity key `package` ran
+    /// `program` this session.
+    pub(crate) fn note_program(&self, package: &str, program: String) {
+        self.lock()
+            .programs_run
+            .entry(package.to_owned())
+            .or_default()
+            .insert(program);
+    }
+
+    /// The programs the installed package with the identity key `package`
+    /// ran this session, in order.
+    pub(crate) fn programs_run(&self, package: &str) -> Vec<String> {
+        self.lock()
+            .programs_run
+            .get(package)
+            .map(|programs| programs.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Finds programs named by a bare name on what `search_path` answers
+    /// at each call from now on, instead of the system's search path.
+    pub(crate) fn set_search_path(&self, search_path: crate::programs::runner::SearchPath) {
+        self.lock().search_path = Some(search_path);
+    }
+
+    /// What [`Helpers::set_search_path`] set, if anything.
+    pub(crate) fn search_path(&self) -> Option<crate::programs::runner::SearchPath> {
+        self.lock().search_path.clone()
     }
 
     /// Asks the supervising threads to end every helper process `owner`
@@ -689,6 +811,7 @@ impl Helpers {
             return Err(stopped_code(end));
         }
         let run = Arc::new(Run {
+            kind: Kind::Helper,
             owner: spec.owner,
             pid: child.0.id(),
             program: spec.program.clone(),

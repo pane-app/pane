@@ -39,6 +39,7 @@ mod npm;
 mod operations;
 mod packages;
 mod pausing;
+mod programs;
 mod quick_slots;
 mod quicklinks;
 mod reload;

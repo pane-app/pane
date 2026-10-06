@@ -1,0 +1,147 @@
+package pane:extension@0.1.0;
+
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// System programs (ADR 0033): programs installed on the system, such as
+// PowerShell, winget, git or any executable, which Pane starts for a
+// command (a WASI 0.3 guest cannot start a process). Native helpers
+// (wit/helpers.wit) stay for programs a package ships. Rust commands use
+// them through pane-guest (`pane_guest::programs`), JavaScript and
+// TypeScript ones through `@pane/extension/programs` (guests/js). A
+// command whose component imports this interface is noted when it is
+// installed, updated or reloaded, and the extension list says it runs
+// system programs and which it ran this session; nothing else is asked
+// beyond the system's own elevation prompt. Kept apart from the other
+// files so that a command that runs none does not import it. The header
+// follows `package`: comments above it would document the package, which
+// extension.wit already does.
+
+/// Runs programs installed on the system.
+///
+/// A program belongs to the call that started it. Pane ends it, and every
+/// process it started in turn (on Windows a Job Object holds them, on macOS
+/// and Linux a process group), when that call returns or is dropped, when
+/// the package's code stops (it is disabled, reloaded, updated, paused or
+/// uninstalled), and when Pane quits; a process that `spawn` started cannot
+/// outlive its call. When the program exits, what it left running ends
+/// too. A command that wants a program to keep running on its own opens it
+/// with the system instead. A no-view command may keep its call, and so
+/// its program, for as long as the work takes, reporting through a toast.
+interface programs {
+  /// Why a program did not run or answer. `message` explains it for
+  /// people; `kind` tells them apart.
+  record program-error {
+    kind: program-error-kind,
+    message: string,
+  }
+
+  enum program-error-kind {
+    /// There is no program by that name on the search path, no file at that
+    /// path, or no folder at the working folder given.
+    not-found,
+    /// It cannot run so here: an elevated run outside Windows, an elevated
+    /// `spawn`, or a file the system would not start.
+    unavailable,
+    /// The user declined the system's elevation prompt.
+    declined,
+    /// The command's timeout passed: Pane ended the program and every
+    /// process it started.
+    timed-out,
+    /// The program wrote more than Pane keeps of a `run`'s stream (16 MiB
+    /// of its standard output or its standard error): Pane ended it.
+    too-much-output,
+    /// Pane refused or ended the run: the command's code was stopped, Pane
+    /// is quitting, the call that started it ended, its input was closed,
+    /// or what was asked is not a program Pane can run as given (a relative
+    /// path, a NUL character, over Pane's limits).
+    refused,
+    /// Pane lost track of the program or of one of its streams.
+    failed,
+  }
+
+  /// An environment variable to set, or with no value to remove.
+  record env-var {
+    name: string,
+    value: option<string>,
+  }
+
+  record options {
+    /// The absolute path of the folder it runs in; none for the user's home
+    /// folder.
+    folder: option<string>,
+    /// Changes to the environment it inherits from Pane, in order. Its
+    /// `PATH` is the search path its name was found on, unless changed
+    /// here.
+    environment: list<env-var>,
+    /// How long it may run, in milliseconds, before Pane ends it and the
+    /// call answers `timed-out`; none for no limit but the call's.
+    timeout-ms: option<u32>,
+    /// Whether it gets a console window of its own on Windows; by default
+    /// it runs without one. Elsewhere it changes nothing.
+    show-window: bool,
+    /// Whether it runs as an administrator: on Windows through the system's
+    /// elevation prompt, which the user may decline (`declined`). An
+    /// elevated program's streams cannot be reached: it takes no input or
+    /// environment changes, and its run answers only its exit code. On
+    /// macOS and Linux it is `unavailable` for now.
+    elevated: bool,
+  }
+
+  /// How a program run with `run` exited, and what it wrote.
+  record output {
+    /// Its exit code; none when the system ended it (a signal on macOS or
+    /// Linux).
+    exit-code: option<s32>,
+    stdout: list<u8>,
+    stderr: list<u8>,
+  }
+
+  /// Runs `program` with `args` and waits for it: `program` is an absolute
+  /// path, run as given, or a bare name such as `git`, found on the user's
+  /// search path as it is now (on Windows read from the registry, so a tool
+  /// installed after Pane started is found). Each argument reaches the
+  /// program as it is: no shell reads them, unless the program is one
+  /// (`powershell` with a script, say). `input` is written to its standard
+  /// input, which is then closed. Answers its exit code, whatever it is,
+  /// and its standard output and error.
+  run: async func(program: string, args: list<string>, input: list<u8>, options: options) -> result<output, program-error>;
+
+  /// Names a program `spawn` started, for the functions below; it names
+  /// it only during the call that started it.
+  type process-id = u64;
+
+  /// Starts `program` with `args`, named as for `run`, and answers once it
+  /// runs: the command then writes its input, reads its output as it comes
+  /// (to report progress, say), waits for it or kills it. An elevated
+  /// program cannot be spawned.
+  spawn: async func(program: string, args: list<string>, options: options) -> result<process-id, program-error>;
+
+  /// Writes `bytes` to the program's standard input, answering once they
+  /// were written.
+  write-input: async func(process: process-id, bytes: list<u8>) -> result<_, program-error>;
+
+  /// Closes the program's standard input: it reads its end once it read
+  /// what was written before.
+  close-input: async func(process: process-id) -> result<_, program-error>;
+
+  /// The next bytes the program wrote to its standard output, as they
+  /// come; none once it ended.
+  read-output: async func(process: process-id) -> result<option<list<u8>>, program-error>;
+
+  /// The next bytes the program wrote to its standard error; none once it
+  /// ended.
+  read-error: async func(process: process-id) -> result<option<list<u8>>, program-error>;
+
+  /// Waits for the program to exit, answering its exit code (none when the
+  /// system ended it), or why Pane ended it.
+  wait: async func(process: process-id) -> result<option<s32>, program-error>;
+
+  /// Ends the program and every process it started; `wait` answers how it
+  /// exited.
+  kill: async func(process: process-id) -> result<_, program-error>;
+}
+
+/// The programs import alone, for guest bindings.
+world programs-user {
+  import programs;
+}

@@ -73,6 +73,8 @@ const PREBUILT: &[&str] = &[
     "sample_service_ts",
     "sample_actions_js",
     "sample_actions_ts",
+    "sample_programs_js",
+    "sample_programs_ts",
 ];
 
 fn main() -> ExitCode {
@@ -169,6 +171,7 @@ fn guests() -> Result<(), String> {
                 "sample_service",
                 "sample_actions",
                 "sample_helper",
+                "sample_programs",
                 "faulty",
                 "operations_fixture",
                 "old_api",
@@ -342,7 +345,7 @@ fn git_sample(root: &Path, out: &Path) -> Result<(), String> {
 /// (package folder in `guests/packages`, component) of each sample package,
 /// and of the default extensions (the calculator, applications and
 /// quicklinks).
-const SAMPLE_PACKAGES: [(&str, &str); 43] = [
+const SAMPLE_PACKAGES: [(&str, &str); 46] = [
     ("sample-rust", "sample_rust"),
     ("sample-settings", "sample_settings"),
     ("sample-js", "sample_js"),
@@ -386,6 +389,9 @@ const SAMPLE_PACKAGES: [(&str, &str); 43] = [
     ("sample-actions", "sample_actions"),
     ("sample-actions-js", "sample_actions_js"),
     ("sample-actions-ts", "sample_actions_ts"),
+    ("sample-programs", "sample_programs"),
+    ("sample-programs-js", "sample_programs_js"),
+    ("sample-programs-ts", "sample_programs_ts"),
 ];
 
 /// Rebuilds `guests/prebuilt/` from the JS/TS sample sources, then refreshes
