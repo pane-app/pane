@@ -61,18 +61,19 @@ impl Item {
     }
 }
 
-/// An action of an item.
+/// An action of an item, or an entry of an action's submenu, which is an
+/// action too.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Action {
     /// What the action is called, as the footer and the Actions panel name
     /// it; `None` when the tree gives no title.
     pub title: Option<String>,
-    /// The callback id Pane passes to the command's `handle-event` when the
-    /// user chooses the action.
-    pub callback: String,
+    /// What choosing it does: hand a callback id to the command, or open a
+    /// submenu (#140).
+    pub kind: ActionKind,
     /// The title of the section the action belongs to in the Actions
-    /// panel; `None` for an untitled one. Consecutive actions with the same
-    /// section are one section.
+    /// panel (or in its submenu); `None` for an untitled one. Consecutive
+    /// actions with the same section are one section.
     pub section: Option<String>,
     /// How the action is drawn.
     pub style: ActionStyle,
@@ -81,6 +82,56 @@ pub struct Action {
     /// shortcut is not one Pane can bind. Whether Pane binds it also
     /// depends on Pane's own keys (see `crate::keyboard::PaneKeys`).
     pub shortcut: Option<Result<Binding, String>>,
+}
+
+impl Action {
+    /// The callback id Pane passes to the command's `handle-event` when the
+    /// user chooses the action; `None` for one that opens a submenu.
+    pub fn callback(&self) -> Option<&str> {
+        match &self.kind {
+            ActionKind::Callback(callback) => Some(callback),
+            ActionKind::Submenu(_) => None,
+        }
+    }
+
+    /// The submenu the action opens; `None` for one with a callback.
+    pub fn submenu(&self) -> Option<&ActionSubmenu> {
+        match &self.kind {
+            ActionKind::Callback(_) => None,
+            ActionKind::Submenu(submenu) => Some(submenu),
+        }
+    }
+}
+
+/// What choosing an action does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ActionKind {
+    /// Pane passes this callback id to the command's `handle-event`.
+    Callback(String),
+    /// The Actions panel opens this submenu in place (#140).
+    Submenu(ActionSubmenu),
+}
+
+/// A submenu an action opens in the Actions panel: further choices, such
+/// as "Open With…", that are not all listed at once.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActionSubmenu {
+    /// Its title, which the panel shows as its context while it is open.
+    pub title: String,
+    /// Its entries, or how Pane asks for them.
+    pub entries: SubmenuEntries,
+}
+
+/// Where a submenu's entries come from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SubmenuEntries {
+    /// Given with the tree, in order. Each is an action: a callback, or a
+    /// submenu of its own.
+    Given(Vec<Action>),
+    /// Asked for each time the submenu opens: Pane passes this callback id
+    /// to the command's `handle-event`, and its answer's `entries` are the
+    /// submenu's.
+    Asked(String),
 }
 
 /// How an action is drawn.
@@ -99,6 +150,9 @@ pub struct Answer {
     /// Text shown to the user as the result, in the status line; `None`
     /// when the command shows none. Transitional: toasts replace it.
     pub status: Option<String>,
+    /// The entries of the submenu the command was asked to open (#140), in
+    /// order; `None` when the answer gives none.
+    pub entries: Option<Vec<Action>>,
 }
 
 /// The view `tree` describes, or why Pane cannot read it.
@@ -119,9 +173,15 @@ pub(crate) fn read_view(tree: &str) -> Result<View, String> {
     }
     let list: List =
         serde_json::from_value(tree.view).map_err(|error| format!("its list: {error}"))?;
+    let items = list
+        .items
+        .into_iter()
+        .map(item)
+        .collect::<Result<Vec<Item>, String>>()
+        .map_err(|error| format!("its list: {error}"))?;
     Ok(View {
         title: list.title,
-        items: list.items.into_iter().map(Item::from).collect(),
+        items,
     })
 }
 
@@ -130,8 +190,19 @@ pub(crate) fn read_view(tree: &str) -> Result<View, String> {
 pub(crate) fn read_answer(answer: &str) -> Result<Answer, String> {
     let answer: WireAnswer =
         serde_json::from_str(answer).map_err(|error| format!("its answer: {error}"))?;
+    let entries = answer
+        .entries
+        .map(|entries| {
+            entries
+                .into_iter()
+                .map(action)
+                .collect::<Result<Vec<Action>, String>>()
+        })
+        .transpose()
+        .map_err(|error| format!("its answer: {error}"))?;
     Ok(Answer {
         status: answer.status,
+        entries,
     })
 }
 
@@ -167,47 +238,52 @@ struct WireItem {
     custom_view: Option<WireCustomView>,
 }
 
-impl From<WireItem> for Item {
-    fn from(item: WireItem) -> Item {
-        Item {
-            id: item.id,
-            title: item.title,
-            subtitle: item.subtitle,
-            actions: item
-                .actions
-                .unwrap_or_default()
-                .into_iter()
-                .map(Action::from)
-                .collect(),
-            form: item.form.map(Form::from),
-            platforms: item.platforms.map(|names| {
-                names
-                    .iter()
-                    .filter_map(|name| match name.as_str() {
-                        "windows" => Some(Platform::Windows),
-                        "macos" => Some(Platform::Macos),
-                        "linux" => Some(Platform::Linux),
-                        _ => None,
-                    })
-                    .collect()
-            }),
-            custom_view: item.custom_view.map(|view| CustomViewInfo {
-                title: view.title,
-                label: view.label,
-                role: match view.role {
-                    WireRole::ColorWell => CustomViewRole::ColorWell,
-                },
-            }),
-        }
-    }
+/// The item `item` describes, or why Pane cannot read it.
+fn item(item: WireItem) -> Result<Item, String> {
+    let actions = item
+        .actions
+        .unwrap_or_default()
+        .into_iter()
+        .map(action)
+        .collect::<Result<Vec<Action>, String>>()?;
+    Ok(Item {
+        id: item.id,
+        title: item.title,
+        subtitle: item.subtitle,
+        actions,
+        form: item.form.map(Form::from),
+        platforms: item.platforms.map(|names| {
+            names
+                .iter()
+                .filter_map(|name| match name.as_str() {
+                    "windows" => Some(Platform::Windows),
+                    "macos" => Some(Platform::Macos),
+                    "linux" => Some(Platform::Linux),
+                    _ => None,
+                })
+                .collect()
+        }),
+        custom_view: item.custom_view.map(|view| CustomViewInfo {
+            title: view.title,
+            label: view.label,
+            role: match view.role {
+                WireRole::ColorWell => CustomViewRole::ColorWell,
+            },
+        }),
+    })
 }
 
+/// An action, or an entry of a submenu: exactly one of `onAction` and
+/// `submenu`.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WireAction {
     #[serde(default)]
     title: Option<String>,
-    on_action: String,
+    #[serde(default)]
+    on_action: Option<String>,
+    #[serde(default)]
+    submenu: Option<WireSubmenu>,
     #[serde(default)]
     section: Option<String>,
     /// `default` or `destructive`; a style Pane does not know is drawn as
@@ -221,22 +297,78 @@ struct WireAction {
     shortcut: Option<Value>,
 }
 
-impl From<WireAction> for Action {
-    fn from(action: WireAction) -> Action {
-        Action {
-            title: action.title,
-            callback: action.on_action,
-            section: action.section,
-            style: match action.style.as_deref() {
-                Some("destructive") => ActionStyle::Destructive,
-                _ => ActionStyle::Default,
-            },
-            shortcut: action
-                .shortcut
-                .as_ref()
-                .and_then(|shortcut| shortcut_here(shortcut, Platform::current())),
+/// A submenu: its title, and exactly one of `entries` (given at once) and
+/// `onOpen` (the callback id Pane passes to `handle-event` to ask for them).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WireSubmenu {
+    title: String,
+    #[serde(default)]
+    entries: Option<Vec<WireAction>>,
+    #[serde(default)]
+    on_open: Option<String>,
+}
+
+/// The action `action` describes, or why Pane cannot read it.
+fn action(action: WireAction) -> Result<Action, String> {
+    let named = match &action.title {
+        Some(title) => format!("the action “{title}”"),
+        None => "an untitled action".to_owned(),
+    };
+    let kind = match (action.on_action, action.submenu) {
+        (Some(callback), None) => ActionKind::Callback(callback),
+        (None, Some(submenu)) => ActionKind::Submenu(self::submenu(submenu)?),
+        (Some(_), Some(_)) => {
+            return Err(format!(
+                "{named} has both an `onAction` and a `submenu`; an action has one of them"
+            ));
         }
-    }
+        (None, None) => {
+            return Err(format!("{named} needs an `onAction` or a `submenu`"));
+        }
+    };
+    Ok(Action {
+        title: action.title,
+        kind,
+        section: action.section,
+        style: match action.style.as_deref() {
+            Some("destructive") => ActionStyle::Destructive,
+            _ => ActionStyle::Default,
+        },
+        shortcut: action
+            .shortcut
+            .as_ref()
+            .and_then(|shortcut| shortcut_here(shortcut, Platform::current())),
+    })
+}
+
+/// The submenu `submenu` describes, or why Pane cannot read it.
+fn submenu(submenu: WireSubmenu) -> Result<ActionSubmenu, String> {
+    let entries = match (submenu.entries, submenu.on_open) {
+        (Some(entries), None) => SubmenuEntries::Given(
+            entries
+                .into_iter()
+                .map(action)
+                .collect::<Result<Vec<Action>, String>>()?,
+        ),
+        (None, Some(callback)) => SubmenuEntries::Asked(callback),
+        (Some(_), Some(_)) => {
+            return Err(format!(
+                "the submenu “{}” has both `entries` and an `onOpen`; a submenu has one of them",
+                submenu.title
+            ));
+        }
+        (None, None) => {
+            return Err(format!(
+                "the submenu “{}” needs `entries` or an `onOpen`",
+                submenu.title
+            ));
+        }
+    };
+    Ok(ActionSubmenu {
+        title: submenu.title,
+        entries,
+    })
 }
 
 /// The systems a per-system shortcut may name.
@@ -384,6 +516,9 @@ enum WireRole {
 struct WireAnswer {
     #[serde(default)]
     status: Option<String>,
+    /// A submenu's entries, when the command was asked to open one.
+    #[serde(default)]
+    entries: Option<Vec<WireAction>>,
 }
 
 #[cfg(test)]
@@ -411,7 +546,7 @@ mod tests {
         assert_eq!(view.items.len(), 3);
         let a = &view.items[0];
         assert_eq!(a.subtitle.as_deref(), Some("first"));
-        assert_eq!(a.action().unwrap().callback, "open-a");
+        assert_eq!(a.action().unwrap().callback(), Some("open-a"));
         assert_eq!(a.action().unwrap().title.as_deref(), Some("Open"));
         let b = &view.items[1];
         assert_eq!(b.platforms, Some(vec![Platform::Windows]));
@@ -441,7 +576,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(view.items[0].action().unwrap().callback, "a");
+        assert_eq!(view.items[0].action().unwrap().callback(), Some("a"));
     }
 
     #[test]
@@ -466,7 +601,7 @@ mod tests {
             (
                 r#"{"version": 1, "view": {"type": "list", "title": "T", "items": [
                     {"id": "a", "title": "A", "actions": [{"title": "no callback"}]}]}}"#,
-                "missing field `onAction`",
+                "the action “no callback” needs an `onAction` or a `submenu`",
             ),
         ] {
             let error = read_view(tree).unwrap_err();
@@ -554,10 +689,119 @@ mod tests {
         assert_eq!(
             read_answer(r#"{"status": "Saved", "toast": {}}"#),
             Ok(Answer {
-                status: Some("Saved".into())
+                status: Some("Saved".into()),
+                entries: None,
             })
         );
         assert_eq!(read_answer("{}"), Ok(Answer::default()));
         assert!(read_answer("\"Saved\"").is_err());
+    }
+
+    #[test]
+    fn a_submenu_is_given_at_once_or_asked_for_when_opened() {
+        let view = read_view(
+            r#"{"version": 1, "view": {"type": "list", "title": "T", "items": [
+                {"id": "a", "title": "A", "actions": [
+                    {"title": "Open", "onAction": "a"},
+                    {"title": "Open With…", "section": "Share",
+                     "submenu": {"title": "Open With", "entries": [
+                        {"title": "Notepad", "onAction": "a#1/0", "section": "Editors",
+                         "shortcut": {"modifiers": ["ctrl", "shift"], "key": "n"}},
+                        {"title": "More", "submenu": {"title": "More", "onOpen": "a#1/1"}},
+                        {"title": "Forget", "onAction": "a#1/2", "style": "destructive"}
+                     ]}},
+                    {"title": "Move to List…",
+                     "submenu": {"title": "Move to List", "onOpen": "a#2", "icon": "list"}}
+                ]}]}}"#,
+        )
+        .unwrap();
+
+        let actions = &view.items[0].actions;
+        assert_eq!(actions[0].callback(), Some("a"));
+        assert_eq!(actions[0].submenu(), None);
+        assert_eq!(actions[1].callback(), None);
+        assert_eq!(actions[1].section.as_deref(), Some("Share"));
+        let open_with = actions[1].submenu().unwrap();
+        assert_eq!(open_with.title, "Open With");
+        let SubmenuEntries::Given(entries) = &open_with.entries else {
+            panic!("given at once: {open_with:?}");
+        };
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].callback(), Some("a#1/0"));
+        assert_eq!(entries[0].section.as_deref(), Some("Editors"));
+        assert_eq!(
+            entries[0].shortcut,
+            Some(Ok(Binding::parse("ctrl-shift-n").unwrap()))
+        );
+        // An entry may open a submenu of its own.
+        assert_eq!(
+            entries[1].submenu().map(|more| &more.entries),
+            Some(&SubmenuEntries::Asked("a#1/1".into()))
+        );
+        assert_eq!(entries[2].style, ActionStyle::Destructive);
+        let lists = actions[2].submenu().unwrap();
+        assert_eq!(
+            (lists.title.as_str(), &lists.entries),
+            ("Move to List", &SubmenuEntries::Asked("a#2".into()))
+        );
+    }
+
+    #[test]
+    fn a_submenu_pane_cannot_read_says_why() {
+        let tree = |action: &str| {
+            format!(
+                r#"{{"version": 1, "view": {{"type": "list", "title": "T", "items": [
+                    {{"id": "a", "title": "A", "actions": [{action}]}}]}}}}"#
+            )
+        };
+        for (action, why) in [
+            (
+                r#"{"title": "Both", "onAction": "a", "submenu": {"title": "S", "onOpen": "s"}}"#,
+                "the action “Both” has both an `onAction` and a `submenu`",
+            ),
+            (
+                r#"{"submenu": {"title": "S", "entries": [], "onOpen": "s"}}"#,
+                "the submenu “S” has both `entries` and an `onOpen`",
+            ),
+            (
+                r#"{"submenu": {"title": "S"}}"#,
+                "the submenu “S” needs `entries` or an `onOpen`",
+            ),
+            (r#"{"submenu": {"onOpen": "s"}}"#, "missing field `title`"),
+            (
+                r#"{"title": "Outer", "submenu": {"title": "S", "entries": [{"title": "Inner"}]}}"#,
+                "the action “Inner” needs an `onAction` or a `submenu`",
+            ),
+        ] {
+            let error = read_view(&tree(action)).unwrap_err();
+            assert!(error.contains(why), "{action}: {error}");
+        }
+    }
+
+    #[test]
+    fn an_answer_reads_a_submenus_entries() {
+        let answer = read_answer(
+            r#"{"entries": [
+                {"title": "Inbox", "onAction": "m/0", "section": "Lists"},
+                {"title": "Nested", "submenu": {"title": "N", "entries": []}}
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(answer.status, None);
+        let entries = answer.entries.unwrap();
+        assert_eq!(entries[0].callback(), Some("m/0"));
+        assert_eq!(entries[0].section.as_deref(), Some("Lists"));
+        assert_eq!(
+            entries[1].submenu().map(|nested| &nested.entries),
+            Some(&SubmenuEntries::Given(Vec::new()))
+        );
+
+        assert_eq!(
+            read_answer(r#"{"entries": []}"#).unwrap().entries,
+            Some(Vec::new())
+        );
+        let error = read_answer(r#"{"entries": [{"title": "X"}]}"#).unwrap_err();
+        assert!(error.starts_with("its answer: "), "{error}");
+        assert!(error.contains("needs an `onAction`"), "{error}");
     }
 }

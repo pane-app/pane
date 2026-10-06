@@ -286,6 +286,12 @@ impl LauncherWindow {
     }
 
     fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
+        // The open Actions panel takes Enter from the key press itself, once
+        // per press ([`LauncherWindow::panel_keys`]).
+        if self.actions.is_some() {
+            cx.propagate();
+            return;
+        }
         // An item of a command's list runs its primary action once per
         // press: the key is handed on to [`LauncherWindow::item_action_keys`],
         // which sees whether it is a held key's repeat (an action cannot).
@@ -299,10 +305,18 @@ impl LauncherWindow {
     }
 
     /// What the invoke binding does with the selected row: submits a form,
-    /// or activates the row.
+    /// opens the Actions panel at the submenu an item's primary action
+    /// opens (#140), or activates the row.
     fn invoke_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let primary_submenu = actions_panel::commands_list(&self.launcher.view().screen)
+            && self
+                .launcher
+                .item_actions()
+                .is_some_and(|actions| actions.actions.first().is_some_and(|first| first.submenu));
         if matches!(self.launcher.view().screen, Screen::Form(_)) {
             self.submit_form(window, cx);
+        } else if primary_submenu {
+            self.open_item_submenu(0, window, cx);
         } else {
             self.activate_selected(window, cx);
         }
@@ -314,9 +328,10 @@ impl LauncherWindow {
     /// [`LauncherWindow::confirm`] hands on), Ctrl+Enter and
     /// Ctrl+Shift+Enter run the selected item's first, second and third
     /// action, and an action's own shortcut runs that action, without the
-    /// Actions panel (#137). A missing action runs nothing, and the key goes
-    /// no further. Once per press: the system's repeats of a held key run
-    /// nothing more.
+    /// Actions panel (#137); an action that opens a submenu opens the panel
+    /// at that submenu instead (#140). A missing action runs nothing, and
+    /// the key goes no further. Once per press: the system's repeats of a
+    /// held key run nothing more.
     fn item_action_keys(
         &mut self,
         event: &KeyDownEvent,
@@ -356,7 +371,13 @@ impl LauncherWindow {
         if event.is_held {
             return;
         }
-        if index == 0 {
+        if actions
+            .actions
+            .get(index)
+            .is_some_and(|action| action.submenu)
+        {
+            self.open_item_submenu(index, window, cx);
+        } else if index == 0 {
             self.activate_selected(window, cx);
         } else {
             self.motion.land_at_once();
@@ -1025,9 +1046,11 @@ impl LauncherWindow {
     fn sync_screen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // The Actions panel belongs to root search: a screen that replaced
         // it (a hotkey pressed, a change from Settings) takes the panel
-        // with it, and its own focus with it.
-        if !matches!(self.launcher.view().screen, Screen::Root { .. }) {
-            self.actions = None;
+        // with it, and its own focus and submenus with it.
+        if !matches!(self.launcher.view().screen, Screen::Root { .. })
+            && self.actions.take().is_some()
+        {
+            self.launcher.close_submenus();
         }
         self.sync_form(window, cx);
         self.sync_custom_view(window, cx);

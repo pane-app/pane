@@ -10,12 +10,21 @@
 //! be activated. Every action answers its title and the item's
 //! ("Open: Alpha note"); the JavaScript and TypeScript samples answer the
 //! same.
+//!
+//! "Delta note" shows submenus (#140): "Open With…" gives its entries at
+//! once, in sections, two with shortcuts and a destructive one; "Move to
+//! List…" gives them when it opens, in a section that counts how many times
+//! it was asked ("Asked 1 time"); and "Tag…" fails when it opens ("The tags
+//! could not be loaded"). An entry answers what it did and the item's
+//! ("Open With Notepad: Delta note", "Move to Later: Delta note").
 #![no_std]
+
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use pane_guest::alloc::{format, string::String, vec::Vec};
 use pane_guest::{
     Action, Command, CustomView, FieldValue, FormError, Item, List, Modifier, NoCustomView,
-    Shortcut,
+    Shortcut, Submenu,
 };
 
 use Modifier::{Cmd, Ctrl, Shift};
@@ -31,6 +40,67 @@ async fn answer(title: &str, item: &str) -> Result<String, String> {
 /// The action titled `title` of the item titled `item`: it answers both.
 fn action(title: &'static str, item: &'static str) -> Action {
     Action::new(title, move || answer(title, item))
+}
+
+/// The action titled `title` of the item titled `item` that answers `said`
+/// and the item's title.
+fn answering(title: &'static str, said: &'static str, item: &'static str) -> Action {
+    Action::new(title, move || answer(said, item))
+}
+
+/// How many times this instance was asked for "Move to List…"'s entries.
+static LISTS_ASKED: AtomicU32 = AtomicU32::new(0);
+
+/// "Delta note": its submenus.
+fn delta() -> Item {
+    let delta = "Delta note";
+    Item::new("delta", delta)
+        .subtitle("Submenus, given at once or asked for when opened")
+        .actions([
+            action("Open", delta),
+            Action::submenu(
+                "Open With…",
+                Submenu::new("Open With").entries([
+                    answering("Notepad", "Open With Notepad", delta)
+                        .section("Editors")
+                        .shortcut(Shortcut::new([Ctrl, Shift], "n")),
+                    answering("WordPad", "Open With WordPad", delta).section("Editors"),
+                    answering("Browser", "Open With Browser", delta)
+                        .section("Other")
+                        .shortcut(Shortcut::new([Ctrl, Shift], "b")),
+                    action("Forget Applications", delta)
+                        .section("Danger")
+                        .destructive()
+                        .shortcut(Shortcut::new([Ctrl, Shift], "d")),
+                ]),
+            ),
+            Action::submenu(
+                "Move to List…",
+                Submenu::lazy("Move to List", move || async move {
+                    let asked = LISTS_ASKED.fetch_add(1, Ordering::Relaxed) + 1;
+                    let times = if asked == 1 { "time" } else { "times" };
+                    let section = format!("Asked {asked} {times}");
+                    let lists: Vec<Action> = ["Inbox", "Later", "Someday"]
+                        .into_iter()
+                        .map(|list| {
+                            Action::new(list, move || async move {
+                                Ok::<String, String>(format!("Move to {list}: {delta}"))
+                            })
+                            .section(section.clone())
+                        })
+                        .collect();
+                    Ok::<Vec<Action>, String>(lists)
+                }),
+            )
+            .section("Organize"),
+            Action::submenu(
+                "Tag…",
+                Submenu::lazy("Tags", || async {
+                    Err::<Vec<Action>, String>("The tags could not be loaded".into())
+                }),
+            )
+            .section("Organize"),
+        ])
 }
 
 impl Command for Actions {
@@ -75,6 +145,7 @@ impl Command for Actions {
                 .subtitle("One action")
                 .action(action("Open", beta)),
             Item::new("gamma", "Gamma note").subtitle("No actions"),
+            delta(),
         ]))
     }
 

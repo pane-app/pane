@@ -50,6 +50,7 @@ mod schedules;
 mod search;
 mod services;
 mod stopping;
+mod submenus;
 mod uninstall;
 mod uninstall_dependents;
 mod unresponsive;

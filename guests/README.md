@@ -134,10 +134,12 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   actions in sections, a destructive one, shortcuts for every system and
   one per system, one shortcut that is Pane's own Ctrl+K and one that
   collides once the user gives a Pane key Ctrl+Shift+Y, an item with one
-  action and one with none ([several actions per item](../docs/list-tree.md)).
-  Their packages are `packages/sample-actions` and its `-js`/`-ts`
-  copies; held alike by `crates/pane-core/tests/item_actions.rs`, and the
-  Rust one by `crates/pane/tests/item_actions.rs`.
+  action and one with none ([several actions per item](../docs/list-tree.md)),
+  and an item with submenus (#140): one given at once, one given when it
+  opens and one whose opening fails. Their packages are
+  `packages/sample-actions` and its `-js`/`-ts` copies; held alike by
+  `crates/pane-core/tests/item_actions.rs` and `submenus.rs`, and the Rust
+  one by `crates/pane/tests/item_actions.rs` and `submenus.rs`.
 - `hello-rust`, `hello-js`, `hello-ts`: one "Say hello" command each, a
   package built in its own folder, as an author's would be, for
   [development mode](../docs/development-mode.md): Pane builds and reloads

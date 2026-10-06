@@ -49,7 +49,7 @@ pub use exports::pane::extension::command::{
     FormError, Frame, GuestCustomView, Key, Platform, Point, Rect, Shape, Text, TextField,
     ViewEvent,
 };
-pub use list::{Action, Command, Item, List, Modifier, Shortcut};
+pub use list::{Action, Command, Item, List, Modifier, Shortcut, Submenu};
 pub use pane::extension::commands::{LaunchRecord, LaunchSource, LaunchType};
 
 mod list;

@@ -74,7 +74,10 @@ pub use memory::peaks::memory_peak;
 pub(crate) use supervisor::CRASH_WINDOW;
 use supervisor::{NotSent, Shared};
 pub use supervisor::{RuntimeFailure, RuntimeStatus};
-pub use tree::{Action, ActionStyle, Answer, Item, TREE_VERSION, View};
+pub use tree::{
+    Action, ActionKind, ActionStyle, ActionSubmenu, Answer, Item, SubmenuEntries, TREE_VERSION,
+    View,
+};
 
 pub(crate) mod bindings {
     wasmtime::component::bindgen!({
@@ -3032,7 +3035,13 @@ impl Host {
                 "the item {item_id} has no action"
             )));
         };
-        self.handle_event_in_turn(path, action.callback.clone(), "{}".into(), data, &chain)
+        let Some(callback) = action.callback() else {
+            return Err(CallError::Guest(format!(
+                "the item {item_id}'s first action opens a submenu, which only the Actions \
+                 panel shows"
+            )));
+        };
+        self.handle_event_in_turn(path, callback.to_owned(), "{}".into(), data, &chain)
             .await
     }
 
@@ -4439,7 +4448,8 @@ mod tests {
         assert_eq!(
             saved_note,
             Ok(Answer {
-                status: Some("Saved a note".into())
+                status: Some("Saved a note".into()),
+                entries: None,
             })
         );
         assert!(lock(&reported).is_empty(), "{:?}", lock(&reported));
@@ -4608,7 +4618,8 @@ mod tests {
         assert_eq!(
             block_on(runtime.run_item_with(&component, "note", Some(current))),
             Ok(Answer {
-                status: Some("Saved a note".into())
+                status: Some("Saved a note".into()),
+                entries: None,
             })
         );
         assert_eq!(

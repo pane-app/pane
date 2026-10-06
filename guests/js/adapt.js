@@ -14,7 +14,14 @@
 // Pane's `handle-event` hands such an id back, and the adapter runs the
 // function, answering `{"status": text}`. An id the list does not name (an
 // instance that has not drawn the list yet asks it first) is a search
-// result's, which the command's `runSearchResult` runs. A no-view command's
+// result's, which the command's `runSearchResult` runs.
+//
+// An action may open a `submenu` instead (#140): `{ title, entries }`, its
+// entries given with the list and named after the action and their place
+// (`<callback>/0`, `<callback>/1`, ...), or `{ title, onOpen }`, a function
+// Pane asks for the entries each time the submenu opens: the adapter names
+// it as the action would be named, and answers Pane's `handle-event` for it
+// with `{"entries": [...]}`, naming the entries the same way. A no-view command's
 // `run` answers the same way. Both `render` and `run` receive the command's
 // launch record (wit/commands.wit); the adapter passes it on, and draws the
 // list again with the last one it was given.
@@ -26,10 +33,11 @@
 //   it is, and anything else (an `Error`, a string) as a message about the
 //   whole form;
 // - from every other handler that answers with an error (`render`, an
-//   item's `onAction`, `runSearchResult`, `run`, `openView`, a custom view's
-//   `handleEvent`, `resultsFor`, `results`, `runOperation`, `runCycle`),
-//   the message of an `Error` or of an object with a `message`, or the text
-//   of anything else.
+//   item's `onAction`, a submenu's `onOpen`, `runSearchResult`, `run`,
+//   `openView`, a custom view's `handleEvent`, `resultsFor`, `results`,
+//   `runOperation`, `runCycle`), the message of an `Error` or of an object
+//   with a `message`, or the text of anything else. A submenu's `onOpen`
+//   resolving with something other than a list is such an error too.
 //
 // A crash is then only what a crash should be: an action resolving with a
 // value that is not text, a provider resolving with a value of the wrong
@@ -111,9 +119,44 @@ function treeForm(form) {
 }
 
 /**
+ * `given`, an item's actions or a submenu's entries, as the tree writes
+ * them: each one's callback named `name(place)`, and its function (an
+ * action's `onAction`, or a lazy submenu's `onOpen`) kept in `callbacks` by
+ * that name. A submenu given with the list names its entries after the
+ * action that opens it: `<name>/0`, `<name>/1`, ...
+ */
+function wireActions(given, name, callbacks) {
+  return given.map((action, index) => {
+    const callback = name(index);
+    const wire = {};
+    const submenu = action?.submenu;
+    if (submenu !== null && typeof submenu === "object") {
+      const node = { title: submenu.title };
+      if (typeof submenu.onOpen === "function") {
+        node.onOpen = callback;
+        callbacks.set(callback, { open: submenu.onOpen });
+      } else if (Array.isArray(submenu.entries)) {
+        node.entries = wireActions(submenu.entries, (place) => `${callback}/${place}`, callbacks);
+      } else {
+        node.entries = submenu.entries;
+      }
+      wire.submenu = node;
+    } else {
+      wire.onAction = callback;
+      if (typeof action?.onAction === "function") callbacks.set(callback, { run: action.onAction });
+    }
+    if (action?.title != null) wire.title = action.title;
+    if (action?.section != null) wire.section = action.section;
+    if (action?.style != null) wire.style = action.style;
+    if (action?.shortcut != null) wire.shortcut = action.shortcut;
+    return wire;
+  });
+}
+
+/**
  * `list`, the list the command's `render` resolved with, as its tree;
  * its items' actions go into `actions` by callback id, in place of those
- * of the list drawn before.
+ * of the list drawn before (and of the lazy submenus opened since).
  */
 function tree(list, actions) {
   actions.clear();
@@ -125,18 +168,13 @@ function tree(list, actions) {
         if (typeof item?.onAction === "function") given.push({ onAction: item.onAction });
         if (Array.isArray(item?.actions)) given.push(...item.actions);
         if (given.length > 0) {
-          node.actions = given.map((action, index) => {
-            // The item's id names its first action's callback, and the id
-            // and their place its later ones'.
-            const callback = index === 0 ? item.id : `${item.id}#${index}`;
-            const wire = { onAction: callback };
-            if (action?.title != null) wire.title = action.title;
-            if (action?.section != null) wire.section = action.section;
-            if (action?.style != null) wire.style = action.style;
-            if (action?.shortcut != null) wire.shortcut = action.shortcut;
-            if (typeof action?.onAction === "function") actions.set(callback, action.onAction);
-            return wire;
-          });
+          // The item's id names its first action's callback, and the id and
+          // their place its later ones'.
+          node.actions = wireActions(
+            given,
+            (index) => (index === 0 ? item.id : `${item.id}#${index}`),
+            actions,
+          );
         }
         if (item?.form != null) node.form = treeForm(item.form);
         if (item?.platforms != null) node.platforms = item.platforms;
@@ -175,7 +213,11 @@ export function adaptCommand(command) {
   if (command === null || typeof command !== "object") return command;
   const own = { ...missing, ...command };
   const render = adapted(own, "render", message);
-  /** The actions of the list the instance drew last, by callback id. */
+  /**
+   * The callbacks of the list the instance drew last (and of the lazy
+   * submenus opened since), by callback id: `{ run }` for an action, `{ open }`
+   * for a lazy submenu.
+   */
   const actions = new Map();
   /**
    * The launch record the list was last drawn with: a launch by the user
@@ -206,11 +248,20 @@ export function adaptCommand(command) {
         // A fresh instance: the list names its actions once drawn.
         await draw(drawnFor);
       }
-      const action = actions.get(callback);
+      const found = actions.get(callback);
       let status;
       try {
-        if (action !== undefined) {
-          status = await action();
+        if (found?.open !== undefined) {
+          // A lazy submenu opens: its entries, named after it.
+          const entries = await found.open();
+          if (!Array.isArray(entries)) {
+            throw new Error("the submenu's onOpen resolved with something other than a list");
+          }
+          const named = (place) => `${callback}/${place}`;
+          return JSON.stringify({ entries: wireActions(entries, named, actions) });
+        }
+        if (found?.run !== undefined) {
+          status = await found.run();
         } else if (typeof command.runSearchResult === "function") {
           status = await command.runSearchResult(callback);
         } else {

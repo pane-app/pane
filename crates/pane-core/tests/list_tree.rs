@@ -225,7 +225,8 @@ fn an_unreadable_tree_when_the_command_opens_is_shown_as_a_failed_view() {
                 .handle_event(&component(), "cb-unreadable", "{}")
         ),
         Ok(pane_core::Answer {
-            status: Some("Handled cb-unreadable with {}".into())
+            status: Some("Handled cb-unreadable with {}".into()),
+            entries: None,
         })
     );
 
@@ -278,7 +279,7 @@ fn the_runtime_reads_the_tree_and_runs_an_item_by_its_callback() {
     assert_eq!(view.title, "Drawn 1 times");
     let first = &view.items[0];
     assert_eq!(
-        first.action().map(|action| action.callback.as_str()),
+        first.action().and_then(|action| action.callback()),
         Some("cb-first")
     );
     assert_eq!(
@@ -290,7 +291,8 @@ fn the_runtime_reads_the_tree_and_runs_an_item_by_its_callback() {
     assert_eq!(
         block_on(runtime.run_item(&component(), "first")),
         Ok(pane_core::Answer {
-            status: Some("Handled cb-first with {}".into())
+            status: Some("Handled cb-first with {}".into()),
+            entries: None,
         })
     );
     assert_eq!(
