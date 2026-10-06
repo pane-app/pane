@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 use gpui::{
     AnyWindowHandle, Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext,
-    WindowHandle, prelude::*, px,
+    WindowHandle, px,
 };
 use pane::{LauncherWindow, SettingsWindow};
 use pane_core::{Launcher, PackageIdentity, Runtime, Screen, Status};
