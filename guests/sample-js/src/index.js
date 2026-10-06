@@ -6,6 +6,7 @@
 // (guests/sample-rust) and the TypeScript sample. The JSDoc types let
 // TypeScript check this file against Pane's contract; they are optional.
 // @ts-check
+import { showToast } from "@pane/extension/feedback";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
 import * as z from "zod/mini";
 
@@ -164,12 +165,22 @@ class ColorPicker {
 }
 
 /**
- * Runs the action of the item `itemId`; each item's action is this with its
- * id.
+ * Runs the action of the item `itemId`, showing a toast with what it did;
+ * each item's action is this with its id.
+ * @param {string} itemId
+ * @returns {Promise<void>}
+ */
+async function act(itemId) {
+  showToast({ title: await outcome(itemId) });
+}
+
+/**
+ * Does what the item `itemId`'s action does, and resolves with the text
+ * its toast shows.
  * @param {string} itemId
  * @returns {Promise<string>}
  */
-async function act(itemId) {
+async function outcome(itemId) {
   switch (itemId) {
     case "greet":
       return "Hello from the JavaScript guest";

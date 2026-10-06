@@ -4,6 +4,7 @@
 #![no_std]
 
 use pane_guest::alloc::{format, string::String, vec::Vec};
+use pane_guest::feedback::{Toast, show_toast};
 use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, settings};
 
 /// The settings key recording that a start was attempted.
@@ -12,9 +13,10 @@ const ATTEMPTED: &str = "start-attempted";
 struct FailingStart;
 pane_guest::export!(FailingStart);
 
-/// Runs the action `id`: answers that it ran.
-async fn act(id: &str) -> Result<String, String> {
-    Ok(format!("ran {id}"))
+/// Runs the action `id`: shows a toast saying that it ran.
+async fn act(id: &str) -> Result<(), String> {
+    show_toast(Toast::success(format!("ran {id}")));
+    Ok(())
 }
 
 impl Command for FailingStart {
@@ -30,7 +32,7 @@ impl Command for FailingStart {
     }
 
     /// A callback no item names runs as an action of that id too.
-    async fn run_search_result(id: String) -> Result<String, String> {
+    async fn run_search_result(id: String) -> Result<(), String> {
         act(&id).await
     }
 

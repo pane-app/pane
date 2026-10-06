@@ -35,9 +35,12 @@ use pane_core::{Launcher, Runtime, Screen, Status};
 use serde_json::Value;
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use rows::{select_title, titles};
 
 const MANAGE_ROW: &str = "Manage extensions…";
@@ -437,11 +440,12 @@ fn subtitle(launcher: &Launcher, title: &str) -> String {
         .unwrap_or_else(|| panic!("no row {title:?} in {:?}", titles(launcher)))
 }
 
-/// Runs the item titled `title` of the open command.
+/// Runs the item titled `title` of the open command, returning what it
+/// showed: its toast, or the status line.
 fn run(launcher: &Launcher, title: &str) -> Status {
     select_title(launcher, title);
     block_on(launcher.activate_selected());
-    launcher.view().status
+    shown(launcher)
 }
 
 /// Submits the form of the row `title` of the open command with `values`,

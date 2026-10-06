@@ -66,7 +66,7 @@ use super::faults::Faults;
 
 use super::{
     CallError, Code, HealthReport, Host, Request, SharedApplications, SharedClipboard,
-    SharedDirectory, SharedLaunches, lock, unavailable,
+    SharedDirectory, SharedHostFunctions, SharedLaunches, lock, unavailable,
 };
 use crate::helpers::runner::Helpers;
 
@@ -204,6 +204,8 @@ pub(super) struct Shared {
     pub(super) clipboard: SharedClipboard,
     pub(super) directory: SharedDirectory,
     pub(super) launches: SharedLaunches,
+    /// What the window and feedback host functions do: the launcher's.
+    pub(super) host_functions: SharedHostFunctions,
     pub(super) health: Arc<Mutex<Option<HealthReport>>>,
     /// Custom view ids, never reused, even by a restarted thread: a view
     /// the window still shows from a crashed one must not name a new view.
@@ -333,6 +335,7 @@ impl Shared {
             clipboard: SharedClipboard::default(),
             directory: SharedDirectory::default(),
             launches: SharedLaunches::default(),
+            host_functions: SharedHostFunctions::default(),
             health: Arc::default(),
             next_view: Arc::default(),
             network: Arc::default(),

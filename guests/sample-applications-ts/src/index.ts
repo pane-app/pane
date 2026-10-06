@@ -16,6 +16,7 @@ import type {
   IndexedResults,
   List,
 } from "@pane/extension";
+import { showToast } from "@pane/extension/feedback";
 import { installed, open, type Application } from "pane:extension/applications@0.1.0";
 
 const SAMPLE = "TypeScript applications sample";
@@ -37,11 +38,14 @@ function applications(): Application[] {
   );
 }
 
-/** Opens the application with id `itemId`, the action of its item. */
-async function act(itemId: string): Promise<string> {
+/**
+ * Opens the application with id `itemId`, the action of its item, and shows
+ * a toast saying so.
+ */
+async function act(itemId: string): Promise<void> {
   host(() => open(itemId));
   const name = applications().find((app) => app.id === itemId)?.name ?? itemId;
-  return `Opened ${name}`;
+  showToast({ title: `Opened ${name}` });
 }
 
 async function render(): Promise<List> {

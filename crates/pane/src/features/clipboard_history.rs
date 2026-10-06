@@ -586,7 +586,17 @@ impl LauncherWindow {
         // The footer: when and where the selected record was copied (or
         // the outcome of what was just done to it), then Delete, Copy and
         // Manage.
+        // A toast the command showed speaks where the outcome would (#141).
+        let toast = self.footer_toast(&view.status).map(|shown| {
+            let (selector, color) = match shown.toast.style {
+                pane_core::ToastStyle::Animated => ("toast-animated", theme.warning),
+                pane_core::ToastStyle::Success => ("toast-success", theme.success),
+                pane_core::ToastStyle::Failure => ("toast-failure", theme.danger),
+            };
+            (selector, shown.toast.text(), color)
+        });
         let status = match &view.status {
+            _ if toast.is_some() => toast,
             Status::Idle => None,
             Status::Running => Some(("status-running", "Running…".to_owned(), theme.warning)),
             Status::Progress(work) => Some(("status-progress", work.clone(), theme.warning)),

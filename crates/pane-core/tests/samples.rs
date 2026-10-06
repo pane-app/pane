@@ -23,9 +23,12 @@ use wasmtime::{Config, Engine};
 #[path = "support/platforms.rs"]
 mod platforms;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/guests.rs"]
 mod guests;
 
+use feedback::shown;
 use guests::guest;
 
 struct Sample {
@@ -81,7 +84,8 @@ impl Sample {
         launcher
     }
 
-    /// Runs the item `id` in an opened launcher and returns the status.
+    /// Runs the item `id` in an opened launcher and returns what it showed:
+    /// its toast, or the status line.
     fn run(&self, launcher: &Launcher, id: &str) -> Status {
         let index = launcher
             .view()
@@ -91,7 +95,7 @@ impl Sample {
             .unwrap_or_else(|| panic!("the {} sample has no {id} item", self.language));
         launcher.select(index);
         block_on(launcher.activate_selected());
-        launcher.view().status
+        shown(launcher)
     }
 
     /// A launcher with this sample's form opened.
@@ -126,15 +130,13 @@ impl Sample {
         launcher
     }
 
-    /// The random item's answer in a runtime of its own.
+    /// The number the random item's toast shows, in a runtime of its own.
     fn fresh_random(&self) -> f64 {
-        let answer = block_on(Runtime::start().unwrap().run_item(&self.path(), "random"))
-            .expect("the random item answers");
-        let value: f64 = answer
-            .status
-            .expect("the answer has text")
-            .parse()
-            .expect("the answer is a number");
+        let launcher = self.open();
+        let value: f64 = match self.run(&launcher, "random") {
+            Status::Result(text) => text.parse().expect("the toast shows a number"),
+            other => panic!("the random item shows no number: {other:?}"),
+        };
         assert!((0.0..1.0).contains(&value), "{value} is not in [0, 1)");
         value
     }
@@ -171,7 +173,7 @@ fn an_async_wasi_wait_shows_running_until_it_answers(sample: &Sample) {
     block_on(pending);
 
     assert_eq!(
-        launcher.view().status,
+        shown(&launcher),
         Status::Result(format!("Waited 50 ms inside the {} guest", sample.language))
     );
 }

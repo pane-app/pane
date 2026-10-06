@@ -3,9 +3,9 @@
 // Pane's schedule sample in TypeScript: a command whose `pane.json` entry
 // declares a `schedule`, so Pane runs its "Run now" item every interval
 // while the package is enabled, without the user asking. Each run adds one
-// to a count kept in its content and answers the new count. Items, titles,
-// results and errors match the Rust schedule sample (guests/sample-schedule)
-// and the JavaScript one. "Run slowly" notes in its settings that it
+// to a count kept in its content and shows the new count in a toast. Items,
+// titles, toasts and errors match the Rust schedule sample
+// (guests/sample-schedule) and the JavaScript one. "Run slowly" notes in its settings that it
 // started, waits ten seconds, then notes that it finished: disabling or
 // reloading the package meanwhile stops the call, so it never finishes.
 // "Answer an error" throws, which is an error the extension answers with,
@@ -14,6 +14,7 @@
 // without waiting for up to a minute, so Pane stops it after five seconds
 // of its own computing and counts that as a crash too.
 import type { Command, CustomView, Item, List } from "@pane/extension";
+import { showToast } from "@pane/extension/feedback";
 import { get, set } from "pane:extension/settings@0.1.0";
 import * as content from "pane:extension/content@0.1.0";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
@@ -37,8 +38,20 @@ function count(): number {
   return counted;
 }
 
-/** Runs the action of the item `itemId`. */
-async function act(itemId: string): Promise<string> {
+/** Runs the action of the item `itemId`, showing a toast with what it did. */
+async function act(itemId: string): Promise<void> {
+  const done = await outcome(itemId);
+  // Resolving with a value, where an action resolves with nothing, is a
+  // crash, unlike throwing, which is an error the extension answers with.
+  if (done === null) return null as unknown as void;
+  showToast({ title: done });
+}
+
+/**
+ * Does what the item `itemId`'s action does; the text its toast shows, or
+ * `null` for "Crash", which crashes.
+ */
+async function outcome(itemId: string): Promise<string | null> {
   switch (itemId) {
     case "count":
     case "slow": {
@@ -60,11 +73,9 @@ async function act(itemId: string): Promise<string> {
       // Throwing is an error the extension answers with, never a crash.
       throw new Error("The schedule sample refuses, to show how an error looks");
     case "crash":
-      // Resolving with something other than a string is a crash, unlike
-      // throwing, which is an error the extension answers with. The run
-      // is counted, as the Rust sample's is.
+      // The run is counted, as the Rust sample's is, then it crashes.
       content.set(COUNT, String(count() + 1));
-      return undefined as unknown as string;
+      return null;
     case "busy": {
       // The run is counted, then it computes without awaiting anything:
       // the guest never yields to Pane by itself, so Pane stops it after

@@ -12,6 +12,7 @@
 // the timer wins; Pane ends the helper's process as soon as the call that
 // started it returns.
 // @ts-check
+import { showToast } from "@pane/extension/feedback";
 import { run } from "pane:extension/helpers@0.1.0";
 import { set } from "pane:extension/settings@0.1.0";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
@@ -44,11 +45,21 @@ async function helperRun(helper, args, input) {
 }
 
 /**
- * Runs the action of the item `itemId`.
+ * Runs the action of the item `itemId`, showing a toast with what it did.
+ * @param {string} itemId
+ * @returns {Promise<void>}
+ */
+async function act(itemId) {
+  showToast({ title: await outcome(itemId) });
+}
+
+/**
+ * Does what the item `itemId`'s action does, and resolves with the text
+ * its toast shows.
  * @param {string} itemId
  * @returns {Promise<string>}
  */
-async function act(itemId) {
+async function outcome(itemId) {
   switch (itemId) {
     case "echo":
       return helperRun(ECHO, [], "hello from Pane");

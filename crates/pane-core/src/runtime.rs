@@ -52,6 +52,7 @@ use crate::http;
 
 pub(crate) mod deadlines;
 mod faults;
+mod host_functions;
 mod memory;
 mod supervisor;
 mod tree;
@@ -74,6 +75,7 @@ pub use memory::peaks::memory_peak;
 pub(crate) use supervisor::CRASH_WINDOW;
 use supervisor::{NotSent, Shared};
 pub use supervisor::{RuntimeFailure, RuntimeStatus};
+pub(crate) use tree::read_shortcut;
 pub use tree::{Action, ActionStyle, Answer, Item, TREE_VERSION, View};
 
 pub(crate) mod bindings {
@@ -146,12 +148,14 @@ use bindings::pane::extension::commands as launching;
 use bindings::pane::extension::{
     applications, cache, clipboard_history, content, credentials, settings,
 };
+use bindings::pane::extension::{feedback as feedback_host, window as window_host};
 use indexed_bindings::exports::pane::extension::indexed_results;
 use root_bindings::exports::pane::extension::root_results;
 
 use crate::applications::Applications;
 use crate::clipboard::{self, Capture, CaptureState};
 use crate::extension_data::{DataKind, PackageData};
+use crate::feedback::HostFunctions;
 use crate::files::{FileAccess, Folders};
 use crate::generation::{End, Fence, Generation, Registration};
 use crate::helpers;
@@ -314,6 +318,44 @@ type SharedDirectory = Arc<Mutex<Option<Directory>>>;
 /// What starts the commands guests launch (`pane:extension/commands`),
 /// once the launcher has said: the launcher's own.
 type SharedLaunches = Arc<Mutex<Option<Launches>>>;
+
+/// What the window and feedback host functions guests call do
+/// (`wit/feedback.wit`, and `commands.set-subtitle`), once the launcher has
+/// said: the launcher's own.
+type SharedHostFunctions = Arc<Mutex<Option<Arc<dyn HostFunctions>>>>;
+
+/// What a call into a guest is for, as the host functions it calls see it
+/// (`crate::feedback::Caller`): the command it runs for, if Pane knows it,
+/// and whether a window was shown for it. Set as the call starts; any other
+/// call (an operation, a root search's ask, a service's cycle) has none.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CallFor {
+    /// The manifest id of the command the call runs for.
+    pub(crate) command: Option<String>,
+    /// Whether a window was shown for the call: the user launched the
+    /// command or works in its screen; not a background launch or a
+    /// schedule.
+    pub(crate) windowed: bool,
+}
+
+impl CallFor {
+    /// A call for `command` (if known) launched as `launch` says: with a
+    /// window unless in the background.
+    fn launched(command: Option<String>, launch: &LaunchRecord) -> CallFor {
+        CallFor {
+            command,
+            windowed: !launch.is_background(),
+        }
+    }
+
+    /// A call the user makes in the command's screen: with a window.
+    fn in_window(command: Option<String>) -> CallFor {
+        CallFor {
+            command,
+            windowed: true,
+        }
+    }
+}
 
 /// What Pane shows of an item's custom view besides the view's drawing.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -660,12 +702,16 @@ pub(crate) struct Checked {
 enum Request {
     Render {
         component: PathBuf,
+        /// The manifest id of the command whose screen it draws, if known.
+        command: Option<String>,
         launch: LaunchRecord,
         data: Option<PackageData>,
         reply: oneshot::Sender<Result<View, CallError>>,
     },
     HandleEvent {
         component: PathBuf,
+        /// The manifest id of the command whose event it is, if known.
+        command: Option<String>,
         callback: String,
         details: String,
         data: Option<PackageData>,
@@ -673,6 +719,8 @@ enum Request {
     },
     RunItem {
         component: PathBuf,
+        /// The manifest id of the command whose item it runs, if known.
+        command: Option<String>,
         item_id: String,
         launch: LaunchRecord,
         data: Option<PackageData>,
@@ -980,7 +1028,8 @@ impl Runtime {
         component: &Path,
         launch: &LaunchRecord,
     ) -> Result<View, CallError> {
-        self.render_launched_with(component, launch, None).await
+        self.render_launched_with(component, None, launch, None)
+            .await
     }
 
     /// Runs the no-view command with manifest id `command` in `component`
@@ -1029,7 +1078,7 @@ impl Runtime {
         callback: &str,
         details: &str,
     ) -> Result<Answer, CallError> {
-        self.handle_event_with(component, callback, details, None)
+        self.handle_event_with(component, None, callback, details, None)
             .await
     }
 
@@ -1049,15 +1098,17 @@ impl Runtime {
         component: &Path,
         data: Option<PackageData>,
     ) -> Result<View, CallError> {
-        self.render_launched_with(component, &LaunchRecord::default(), data)
+        self.render_launched_with(component, None, &LaunchRecord::default(), data)
             .await
     }
 
-    /// Like [`Runtime::render_launched`]; the command reads and saves
-    /// `data`.
+    /// Like [`Runtime::render_launched`], for the command with manifest id
+    /// `command` (if known: its host functions act for it); the command
+    /// reads and saves `data`.
     pub(crate) async fn render_launched_with(
         &self,
         component: &Path,
+        command: Option<&str>,
         launch: &LaunchRecord,
         data: Option<PackageData>,
     ) -> Result<View, CallError> {
@@ -1065,6 +1116,7 @@ impl Runtime {
         self.call(
             Request::Render {
                 component: component.to_path_buf(),
+                command: command.map(str::to_owned),
                 launch: launch.clone(),
                 data,
                 reply,
@@ -1074,10 +1126,13 @@ impl Runtime {
         .await
     }
 
-    /// Like [`Runtime::handle_event`]; the command reads and saves `data`.
+    /// Like [`Runtime::handle_event`], for the command with manifest id
+    /// `command` (if known: its host functions act for it); the command
+    /// reads and saves `data`.
     pub(crate) async fn handle_event_with(
         &self,
         component: &Path,
+        command: Option<&str>,
         callback: &str,
         details: &str,
         data: Option<PackageData>,
@@ -1086,6 +1141,7 @@ impl Runtime {
         self.call(
             Request::HandleEvent {
                 component: component.to_path_buf(),
+                command: command.map(str::to_owned),
                 callback: callback.to_owned(),
                 details: details.to_owned(),
                 data,
@@ -1103,16 +1159,18 @@ impl Runtime {
         item_id: &str,
         data: Option<PackageData>,
     ) -> Result<Answer, CallError> {
-        self.run_item_launched_with(component, item_id, &LaunchRecord::default(), data)
+        self.run_item_launched_with(component, None, item_id, &LaunchRecord::default(), data)
             .await
     }
 
-    /// Like [`Runtime::run_item_with`], drawing the list with the launch
-    /// record `launch`: a scheduled item's run draws it with its
-    /// schedule's.
+    /// Like [`Runtime::run_item_with`], for the command with manifest id
+    /// `command` (if known: its host functions act for it), drawing the
+    /// list with the launch record `launch`: a scheduled item's run draws it
+    /// with its schedule's.
     pub(crate) async fn run_item_launched_with(
         &self,
         component: &Path,
+        command: Option<&str>,
         item_id: &str,
         launch: &LaunchRecord,
         data: Option<PackageData>,
@@ -1121,6 +1179,7 @@ impl Runtime {
         self.call(
             Request::RunItem {
                 component: component.to_path_buf(),
+                command: command.map(str::to_owned),
                 item_id: item_id.to_owned(),
                 launch: launch.clone(),
                 data,
@@ -1511,6 +1570,15 @@ impl Runtime {
         *lock(&self.shared.launches) = Some(launches);
     }
 
+    /// Has `host_functions` carry out the window and feedback host
+    /// functions guests call from now on, also for calls already queued and
+    /// on a restarted runtime thread. Until then a window function answers
+    /// that no window was shown, a toast or a HUD is shown nowhere, and a
+    /// subtitle is refused.
+    pub(crate) fn set_host_functions(&self, host_functions: Arc<dyn HostFunctions>) {
+        *lock(&self.shared.host_functions) = Some(host_functions);
+    }
+
     /// Tells `health` of each later failure of a call into an installed
     /// package's code (see [`Health`]). Like [`Runtime::set_directory`], it
     /// applies at once, to calls already queued too, and holds for a
@@ -1781,6 +1849,11 @@ pub(crate) struct GuestState {
     directory: SharedDirectory,
     /// Starts the commands the guest launches.
     launches: SharedLaunches,
+    /// Carries out the window and feedback host functions the guest calls.
+    host_functions: SharedHostFunctions,
+    /// What the call the guest runs now is for, as its host functions see
+    /// it.
+    call: CallFor,
     /// The runtime's helper processes; those of this instance are ended
     /// with it.
     helpers: Helpers,
@@ -1950,6 +2023,12 @@ impl launching::Host for GuestState {
                 .collect(),
             context,
         })
+    }
+
+    /// Hands the subtitle to the launcher, which keeps it for the command
+    /// the call runs for (see `host_functions`).
+    fn set_subtitle(&mut self, subtitle: Option<String>) -> Result<(), String> {
+        self.set_command_subtitle(subtitle)
     }
 }
 
@@ -2304,6 +2383,8 @@ struct Host {
     directory: SharedDirectory,
     /// Starts the commands guests launch.
     launches: SharedLaunches,
+    /// Carries out the window and feedback host functions guests call.
+    host_functions: SharedHostFunctions,
     /// The helper processes guests started.
     helpers: Helpers,
     /// Told of each failure of a call into an installed package's code.
@@ -2376,6 +2457,14 @@ impl Code {
         .expect("registering files in a fresh linker cannot conflict");
         launching::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)
             .expect("registering launching commands in a fresh linker cannot conflict");
+        window_host::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| {
+            state
+        })
+        .expect("registering the window functions in a fresh linker cannot conflict");
+        feedback_host::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| {
+            state
+        })
+        .expect("registering toasts and HUDs in a fresh linker cannot conflict");
         Code { engine, linker }
     }
 
@@ -2537,6 +2626,7 @@ impl Host {
             nudge,
             directory: shared.directory.clone(),
             launches: shared.launches.clone(),
+            host_functions: shared.host_functions.clone(),
             helpers: shared.helpers.clone(),
             health: shared.health.clone(),
             faults,
@@ -2599,21 +2689,30 @@ impl Host {
         let task: Task<'a> = match request {
             Request::Render {
                 component,
+                command,
                 launch,
                 data,
                 reply,
             } => Box::pin(async move {
-                let _ = reply.send(self.render_tree(&component, &launch, data).await);
+                let call = CallFor::launched(command, &launch);
+                let _ = reply.send(self.render_tree(&component, call, &launch, data).await);
             }),
             Request::HandleEvent {
                 component,
+                command,
                 callback,
                 details,
                 data,
                 reply,
             } => Box::pin(async move {
                 let result = self
-                    .handle_event(&component, callback.clone(), details, data)
+                    .handle_event(
+                        &component,
+                        CallFor::in_window(command),
+                        callback.clone(),
+                        details,
+                        data,
+                    )
                     .await;
                 // An injected fault may lose this answer, after the action
                 // ran.
@@ -2622,12 +2721,16 @@ impl Host {
             }),
             Request::RunItem {
                 component,
+                command,
                 item_id,
                 launch,
                 data,
                 reply,
             } => Box::pin(async move {
-                let result = self.run_item(&component, &item_id, &launch, data).await;
+                let call = CallFor::launched(command, &launch);
+                let result = self
+                    .run_item(&component, call, &item_id, &launch, data)
+                    .await;
                 self.faults.before_answer(&item_id);
                 let _ = reply.send(result);
             }),
@@ -2909,18 +3012,21 @@ impl Host {
     async fn render_tree(
         &self,
         path: &Path,
+        call: CallFor,
         launch: &LaunchRecord,
         data: Option<PackageData>,
     ) -> Result<View, CallError> {
         let chain = self.chain();
         let _turn = self.turn_for(path, &chain).await?;
-        self.render_in_turn(path, launch, data, &chain).await
+        self.render_in_turn(path, call, launch, data, &chain).await
     }
 
-    /// [`Host::render_tree`] in `chain`, which holds `path`'s turn.
+    /// [`Host::render_tree`] in `chain`, which holds `path`'s turn. The
+    /// host functions the guest calls act as `call` says.
     async fn render_in_turn(
         &self,
         path: &Path,
+        call: CallFor,
         launch: &LaunchRecord,
         data: Option<PackageData>,
         chain: &Chain,
@@ -2929,6 +3035,7 @@ impl Host {
         let launch = launch_record(launch);
         let result = self
             .run_guest(path, chain, async |instance| {
+                instance.store.data_mut().call = call;
                 let command = instance.bindings.pane_extension_command();
                 instance
                     .store
@@ -2954,9 +3061,11 @@ impl Host {
         let chain = self.chain();
         let _turn = self.turn_for(path, &chain).await?;
         self.instance(path, data).await?;
+        let call = CallFor::launched(Some(command.clone()), launch);
         let launch = launch_record(launch);
         let result = self
             .run_guest(path, &chain, async |instance| {
+                instance.store.data_mut().call = call;
                 let exported = instance.bindings.pane_extension_command();
                 instance
                     .store
@@ -2973,20 +3082,23 @@ impl Host {
     async fn handle_event(
         &self,
         path: &Path,
+        call: CallFor,
         callback: String,
         details: String,
         data: Option<PackageData>,
     ) -> Result<Answer, CallError> {
         let chain = self.chain();
         let _turn = self.turn_for(path, &chain).await?;
-        self.handle_event_in_turn(path, callback, details, data, &chain)
+        self.handle_event_in_turn(path, call, callback, details, data, &chain)
             .await
     }
 
-    /// [`Host::handle_event`] in `chain`, which holds `path`'s turn.
+    /// [`Host::handle_event`] in `chain`, which holds `path`'s turn. The
+    /// host functions the guest calls act as `call` says.
     async fn handle_event_in_turn(
         &self,
         path: &Path,
+        call: CallFor,
         callback: String,
         details: String,
         data: Option<PackageData>,
@@ -2995,6 +3107,7 @@ impl Host {
         self.instance(path, data).await?;
         let result = self
             .run_guest(path, chain, async |instance| {
+                instance.store.data_mut().call = call;
                 let command = instance.bindings.pane_extension_command();
                 instance
                     .store
@@ -3015,6 +3128,7 @@ impl Host {
     async fn run_item(
         &self,
         path: &Path,
+        call: CallFor,
         item_id: &str,
         launch: &LaunchRecord,
         data: Option<PackageData>,
@@ -3022,7 +3136,7 @@ impl Host {
         let chain = self.chain();
         let _turn = self.turn_for(path, &chain).await?;
         let view = self
-            .render_in_turn(path, launch, data.clone(), &chain)
+            .render_in_turn(path, call.clone(), launch, data.clone(), &chain)
             .await?;
         let Some(item) = view.items.iter().find(|item| item.id == item_id) else {
             return Err(CallError::Guest(format!("unknown item: {item_id}")));
@@ -3032,8 +3146,15 @@ impl Host {
                 "the item {item_id} has no action"
             )));
         };
-        self.handle_event_in_turn(path, action.callback.clone(), "{}".into(), data, &chain)
-            .await
+        self.handle_event_in_turn(
+            path,
+            call,
+            action.callback.clone(),
+            "{}".into(),
+            data,
+            &chain,
+        )
+        .await
     }
 
     async fn submit_form(
@@ -3052,6 +3173,7 @@ impl Host {
             .collect();
         let result = self
             .run_guest(path, &chain, async |instance| {
+                instance.store.data_mut().call = CallFor::in_window(None);
                 let command = instance.bindings.pane_extension_command();
                 instance
                     .store
@@ -3080,6 +3202,7 @@ impl Host {
         self.instance(path, data).await?;
         let result = self
             .run_guest(path, &chain, async |instance| {
+                instance.store.data_mut().call = CallFor::in_window(None);
                 let command = instance.bindings.pane_extension_command();
                 instance
                     .store
@@ -3121,6 +3244,7 @@ impl Host {
         let resource = open.resource;
         let result = self
             .run_guest(&path, &chain, async |instance| {
+                instance.store.data_mut().call = CallFor::in_window(None);
                 let custom_view = instance.bindings.pane_extension_command().custom_view();
                 instance
                     .store
@@ -3389,6 +3513,7 @@ impl Host {
                 path,
                 &chain,
                 async |instance| {
+                    instance.store.data_mut().call = CallFor::in_window(Some(id.clone()));
                     instance
                         .store
                         .run_concurrent(async |store| search.call_search(store, id, query).await)
@@ -3544,6 +3669,9 @@ impl Host {
             .take()
             .unwrap_or_else(|| operations::channel().1);
         instance.store.data_mut().serving = true;
+        // No command and no window unless the call says otherwise (see
+        // `CallFor`): an operation's or a root search's call has none.
+        instance.store.data_mut().call = CallFor::default();
         let mut cancelled = std::pin::pin!(cancelled);
         let faults = self.faults.clone();
         let watch = self.watch.clone();
@@ -3900,6 +4028,8 @@ impl Host {
                 clipboard: self.clipboard.clone(),
                 directory: self.directory.clone(),
                 launches: self.launches.clone(),
+                host_functions: self.host_functions.clone(),
+                call: CallFor::default(),
                 owner: self.helpers.new_owner(),
                 helpers: self.helpers.clone(),
                 watch: self.watch.clone(),
@@ -4212,7 +4342,7 @@ mod tests {
             let (runtime, component) = (runtime.clone(), component.clone());
             std::thread::spawn(move || {
                 // Not listed: the fixture runs it as a callback no item names.
-                block_on(runtime.handle_event_with(&component, "hold", "{}", Some(owned)))
+                block_on(runtime.handle_event_with(&component, None, "hold", "{}", Some(owned)))
             })
         };
         let started = Instant::now();
@@ -4436,12 +4566,7 @@ mod tests {
         let saved_note =
             block_on(runtime.run_item_with(&component, "note", Some(packages.owned_by(&identity))));
 
-        assert_eq!(
-            saved_note,
-            Ok(Answer {
-                status: Some("Saved a note".into())
-            })
-        );
+        assert_eq!(saved_note, Ok(Answer::default()));
         assert!(lock(&reported).is_empty(), "{:?}", lock(&reported));
         assert_eq!(runtime.status(), RuntimeStatus::Running);
         assert_eq!(runtime.abandoned_threads(), 0);
@@ -4607,9 +4732,7 @@ mod tests {
         assert_eq!(block_on(runtime.running()), vec![component.clone()]);
         assert_eq!(
             block_on(runtime.run_item_with(&component, "note", Some(current))),
-            Ok(Answer {
-                status: Some("Saved a note".into())
-            })
+            Ok(Answer::default())
         );
         assert_eq!(
             saved(&packages, &identity, "slow-save").as_deref(),

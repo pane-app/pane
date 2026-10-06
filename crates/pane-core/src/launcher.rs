@@ -42,6 +42,7 @@ mod application_update;
 mod choices;
 pub mod clipboard_view;
 mod command_search;
+mod feedback;
 mod hotkeys;
 mod indexed;
 mod item_actions;
@@ -84,6 +85,7 @@ mod retained;
 mod schedules;
 mod services;
 mod shortcuts;
+mod subtitles;
 mod uninstall;
 mod updates;
 
@@ -723,6 +725,18 @@ struct State {
     /// The open command's unbound shortcuts as last noted, so a developed
     /// package's report is made again only when they change.
     reported_unbound: Vec<UnboundShortcut>,
+    /// The manifest id of the command whose view is open, beside its
+    /// component ([`State::open`]): the host functions its calls make act
+    /// for it.
+    open_command: Option<String>,
+    /// The window the host functions drive, whether it is shown, and the
+    /// toast (see `feedback`).
+    feedback: feedback::Feedback,
+    /// The subtitles commands gave their root search rows (see
+    /// `subtitles`).
+    subtitles: Record<subtitles::Subtitles>,
+    /// The writes of the subtitles' record still going on.
+    subtitle_saves: Arc<launching::InFlight>,
 }
 
 /// What is happening to a package, which stops another change to it
@@ -1225,6 +1239,11 @@ impl Launcher {
                 Record::default(),
             ),
         };
+        let subtitles = installation
+            .as_ref()
+            .map_or_else(Record::default, |installation| {
+                Record::open(&installation.dir)
+            });
         let update_controls = installation
             .as_ref()
             .and_then(|installation| updates::UpdateControls::open(&installation.dir))
@@ -1265,6 +1284,10 @@ impl Launcher {
             update_controls,
             pane_keys: PaneKeys::default(),
             reported_unbound: Vec::new(),
+            open_command: None,
+            feedback: feedback::Feedback::default(),
+            subtitles,
+            subtitle_saves: Arc::default(),
         };
         if let (Some(installation), Some(files)) = (&installation, &state.files) {
             files.open_record(&installation.dir);
@@ -1498,6 +1521,11 @@ impl Launcher {
     /// running.
     fn report_failures(&self) {
         self.report_runtime_crashes();
+        // The window and feedback host functions commands call are the
+        // launcher's, for every command it runs (see `feedback`).
+        if let Ok(runtime) = &self.runtime {
+            runtime.set_host_functions(Arc::new(feedback::Hosted(self.downgrade())));
+        }
         let (Ok(runtime), Some(_)) = (&self.runtime, &self.installation) else {
             return;
         };
@@ -2893,10 +2921,17 @@ impl Launcher {
                 Some(reason) => Entry::Unavailable(reason.reason().to_owned()),
                 None => Entry::Open(Opening::of(&command, no_view, LaunchSource::RootSearch)),
             };
+            // A subtitle the command set replaces its manifest's.
+            let subtitle = state
+                .subtitles
+                .chosen
+                .subtitle_of(&command.id)
+                .map(str::to_owned)
+                .or(command.subtitle);
             let row = Row {
                 id: command.id,
                 title: command.title,
-                subtitle: command.subtitle,
+                subtitle,
                 unavailable,
             };
             (row, entry)
@@ -3547,6 +3582,7 @@ impl Launcher {
         // Its search in progress, if any, is stopped.
         state.searching = None;
         state.open = None;
+        state.open_command = None;
         state.launch = LaunchRecord::default();
         state.form = None;
         state.next_screen();
@@ -3601,10 +3637,17 @@ impl Launcher {
             }
             return;
         }
+        let command = self.lock().open_command.clone();
         let result = match self.runtime() {
             Ok(runtime) => {
                 runtime
-                    .handle_event_with(&component, &callback, "{}", data.clone())
+                    .handle_event_with(
+                        &component,
+                        command.as_deref(),
+                        &callback,
+                        "{}",
+                        data.clone(),
+                    )
                     .await
             }
             Err(error) => Err(error),
@@ -3619,12 +3662,20 @@ impl Launcher {
             let Some(mut state) = self.lock_if_current(epoch) else {
                 return;
             };
-            let ended = stopped(&state, &component, &data);
+            let state = &mut *state;
+            let ended = stopped(state, &component, &data);
             let list_again = handled && ended.is_none();
             state.view.status = match (ended, result) {
                 // Stopped while it was running: its answer is not shown.
                 (Some(problem), _) => Status::Error(problem),
-                (None, Ok(answer)) => answer.status.map_or(Status::Idle, Status::Result),
+                // The answer shows nothing: the command said what it had
+                // to through a toast or a HUD (#141).
+                (None, Ok(_)) => Status::Idle,
+                // An error it answered with is a failure toast.
+                (None, Err(CallError::Guest(message))) => {
+                    self.show_failure(state, &component, command.as_deref(), message);
+                    Status::Idle
+                }
                 (None, Err(error)) => Status::Error(error.to_string()),
             };
             if !list_again {
@@ -3641,11 +3692,14 @@ impl Launcher {
     /// with the list as it was.
     async fn list_again(&self, epoch: u64, component: PathBuf, data: Option<PackageData>) {
         // The record its screen was opened with: the same each time.
-        let launch = self.lock().launch.clone();
+        let (launch, command) = {
+            let state = self.lock();
+            (state.launch.clone(), state.open_command.clone())
+        };
         let answer = match self.runtime() {
             Ok(runtime) => {
                 runtime
-                    .render_launched_with(&component, &launch, data.clone())
+                    .render_launched_with(&component, command.as_deref(), &launch, data.clone())
                     .await
             }
             Err(error) => Err(error),
@@ -3736,7 +3790,7 @@ impl Launcher {
         let result = match self.runtime() {
             Ok(runtime) => {
                 runtime
-                    .render_launched_with(&component, &launch, data.clone())
+                    .render_launched_with(&component, Some(command.as_str()), &launch, data.clone())
                     .await
             }
             Err(error) => Err(error),
@@ -3782,6 +3836,7 @@ impl Launcher {
             Ok(view) => {
                 let CommandList { rows, entries } =
                     self.command_list(state, &component, view.items);
+                state.open_command = Some(command.clone());
                 let screen = if search {
                     state.searching = Some(command_search::Searching::new(command));
                     Screen::CommandSearch {

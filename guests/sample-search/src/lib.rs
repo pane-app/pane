@@ -14,11 +14,12 @@
 //! stopped where it waits for the service; an unreachable or failing
 //! service is an error shown in place of results, not a crash, so it never
 //! pauses the extension. Activating a result fetches that package's
-//! details. Items, answers and errors match the JavaScript and TypeScript
-//! samples.
+//! details and shows them in a toast. Items, toasts and errors match the
+//! JavaScript and TypeScript samples.
 #![no_std]
 
 use pane_guest::alloc::{borrow::ToOwned, format, string::String, vec, vec::Vec};
+use pane_guest::feedback::{Toast, show_toast};
 use pane_guest::http;
 use pane_guest::search::SearchResult;
 use pane_guest::{
@@ -100,9 +101,16 @@ fn encode(text: &str) -> String {
     encoded
 }
 
-/// Runs the action `id`: the "about" item's, or a search result's
+/// Runs the action `id` and shows a toast with what [`outcome`] answers.
+async fn act(id: &str) -> Result<(), String> {
+    let done = outcome(id).await?;
+    show_toast(Toast::success(done));
+    Ok(())
+}
+
+/// What the action `id` answers: the "about" item's, or a search result's
 /// ("package:<name>"), which fetches that package's details.
-async fn act(id: &str) -> Result<String, String> {
+async fn outcome(id: &str) -> Result<String, String> {
     if id == "about" {
         return Ok("Type in the search field to search the package registry".into());
     }
@@ -144,8 +152,8 @@ impl Command for Packages {
     }
 
     /// Runs the search result the user chose, by its id
-    /// ("package:<name>"): fetches that package's details.
-    async fn run_search_result(id: String) -> Result<String, String> {
+    /// ("package:<name>"): fetches that package's details and shows them.
+    async fn run_search_result(id: String) -> Result<(), String> {
         act(&id).await
     }
 

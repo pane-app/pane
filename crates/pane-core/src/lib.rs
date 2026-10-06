@@ -13,6 +13,7 @@ mod dependencies;
 pub mod develop;
 pub mod downloads;
 mod extension_data;
+pub mod feedback;
 pub mod files;
 mod generation;
 pub mod git;
@@ -39,6 +40,10 @@ pub mod tray;
 mod zip;
 
 pub use defaults::{ArtifactSource, DefaultExtension};
+pub use feedback::{
+    Hud, NextShowing, PopToRoot, ShownToast, Toast, ToastAction, ToastSlot, ToastStyle,
+    WindowControl, WindowPresence,
+};
 pub use helpers::runner::{MAX_HELPER_INPUT, MAX_HELPER_OUTPUT};
 pub use host_settings::{
     BackgroundEffect, EscapeBehavior, HostSettings, MaterialPreference, NavigationBindings,

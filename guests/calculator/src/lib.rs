@@ -7,6 +7,7 @@
 mod expression;
 
 use pane_guest::alloc::{format, string::String, vec, vec::Vec};
+use pane_guest::feedback::{Toast, show_toast};
 use pane_guest::root::{RootAction, RootResult};
 use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
 
@@ -31,14 +32,21 @@ const EXAMPLES: [(&str, &str, &str); 3] = [
     ),
 ];
 
-/// Runs the action of the item `item_id`: the answer to its example.
-async fn act(item_id: &str) -> Result<String, String> {
+/// Runs the action of the item `item_id`: a toast with the answer to its
+/// example.
+async fn act(item_id: &str) -> Result<(), String> {
     let (_, _, example) = EXAMPLES
         .iter()
         .find(|(id, _, _)| *id == item_id)
         .ok_or_else(|| format!("unknown item: {item_id}"))?;
     match expression::evaluate(example) {
-        Outcome::Answer(value) => Ok(format!("{example} = {}", expression::format(value))),
+        Outcome::Answer(value) => {
+            show_toast(Toast::success(format!(
+                "{example} = {}",
+                expression::format(value)
+            )));
+            Ok(())
+        }
         other => Err(format!("{example} has no answer: {other:?}")),
     }
 }

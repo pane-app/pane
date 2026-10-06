@@ -6,7 +6,9 @@
 // forms with a text field and a choice, the operating systems an item's
 // action supports, and custom views the extension draws from rectangles and
 // text; and the run entry point of a command that opens no screen (ADR
-// 0037). Both receive the command's launch record (wit/commands.wit). This
+// 0037). Both receive the command's launch record (wit/commands.wit), and
+// every command may close the window and show toasts and HUDs
+// (wit/feedback.wit). This
 // is not the full Pane SDK: the SDKs (`pane-guest`, `@pane/extension`) hide
 // the JSON and the callback ids.
 package pane:extension@0.1.0;
@@ -185,21 +187,25 @@ interface command {
   /// says `"mode": "no-view"`. Pane calls it, never `render`, each time the
   /// command is launched (Enter on its row, its alias, a fallback, its
   /// global hotkey, its quick slot, another command, or its schedule), and
-  /// opens no screen. The answer is a JSON object, as `handle-event`'s is:
-  /// for now `{"status": "..."}` is text shown to the user as the result,
-  /// and `{}` shows nothing. An error is shown to the user as the failure;
-  /// it is an operation error, which never counts towards pausing the
-  /// extension (a crash does). A component that serves no no-view command
-  /// answers with an error; Pane never calls it then.
+  /// opens no screen. The answer is a JSON object, as `handle-event`'s is
+  /// (`{}`); Pane shows nothing of it: the command tells the user what
+  /// happened with a toast or a HUD (wit/feedback.wit). An error is shown
+  /// to the user as a failure toast with a "Copy Error" action; it is an
+  /// operation error, which never counts towards pausing the extension (a
+  /// crash does). Once the run ends, a toast it left in the animated style
+  /// is hidden. A component that serves no no-view command answers with an
+  /// error; Pane never calls it then.
   run: async func(command: string, launch: launch-record) -> result<string, string>;
 
   /// Handles the user's choice of the callback `callback`, an id the
   /// command's tree named (such as an item's action's), or a search
   /// result's id (wit/search.wit). `details` is a JSON object with the
   /// event's details, `{}` when it has none. The answer is a JSON object
-  /// (docs/list-tree.md): for now, `{"status": "..."}` is text shown to the
-  /// user as the result. Pane then calls `render` again and keeps the
-  /// selection on the same item. An error is shown to the user.
+  /// (docs/list-tree.md), `{}` for now; Pane shows nothing of it: the
+  /// command tells the user what happened with a toast or a HUD
+  /// (wit/feedback.wit). Pane then calls `render` again and keeps the
+  /// selection on the same item. An error is shown to the user as a failure
+  /// toast.
   handle-event: async func(callback: string, details: string) -> result<string, string>;
 
   /// Handle the submitted form of the item with `item-id`. `values` holds
@@ -214,5 +220,7 @@ interface command {
 
 world extension {
   import commands;
+  import window;
+  import feedback;
   export command;
 }

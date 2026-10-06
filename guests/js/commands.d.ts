@@ -69,4 +69,14 @@ declare module "pane:extension/commands@0.1.0" {
     arguments_: ArgumentValue[],
     context?: string | null,
   ): void;
+
+  /**
+   * Replaces the subtitle the calling command's row shows in root search
+   * (and matches), until it is set again; `null` gives back the one its
+   * `pane.json` entry declares. Pane keeps it across restarts and updates,
+   * and forgets it on uninstall. A refusal (a call Pane does not know the
+   * command of, such as an operation's) throws an object whose `payload`
+   * is the reason. `@pane/extension/feedback`'s `setSubtitle` calls it.
+   */
+  export function setSubtitle(subtitle?: string | null): void;
 }

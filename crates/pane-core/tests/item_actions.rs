@@ -22,9 +22,12 @@ use pane_core::{
 };
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use rows::select_title;
 
 /// One language's actions sample package.
@@ -160,6 +163,12 @@ impl Pane {
         self.launcher.view().status
     }
 
+    /// What the user is shown of the last outcome: an action's toast, or
+    /// the status line.
+    fn shown(&self) -> Status {
+        shown(&self.launcher)
+    }
+
     fn actions(&self) -> ItemActions {
         self.launcher
             .item_actions()
@@ -204,15 +213,15 @@ fn enter_and_the_action_chords_run_the_first_three_actions() {
 
         block_on(launcher.activate_selected());
         assert_eq!(
-            pane.status(),
+            pane.shown(),
             answered("Open: Alpha note"),
             "{}",
             fixture.title
         );
         block_on(launcher.run_selected_action(1));
-        assert_eq!(pane.status(), answered("Copy: Alpha note"));
+        assert_eq!(pane.shown(), answered("Copy: Alpha note"));
         block_on(launcher.run_selected_action(2));
-        assert_eq!(pane.status(), answered("Rename: Alpha note"));
+        assert_eq!(pane.shown(), answered("Rename: Alpha note"));
         // Pane drew the list again after each, keeping the selection.
         assert_eq!(pane.actions().title, "Alpha note");
 
@@ -221,9 +230,9 @@ fn enter_and_the_action_chords_run_the_first_three_actions() {
         assert_eq!(launcher.selected_action().label, "Open");
         block_on(launcher.run_selected_action(1));
         block_on(launcher.run_selected_action(2));
-        assert_eq!(pane.status(), answered("Rename: Alpha note"), "nothing ran");
+        assert_eq!(pane.shown(), answered("Rename: Alpha note"), "nothing ran");
         block_on(launcher.activate_selected());
-        assert_eq!(pane.status(), answered("Open: Beta note"));
+        assert_eq!(pane.shown(), answered("Open: Beta note"));
     }
 }
 
@@ -327,15 +336,15 @@ fn the_panel_lists_sections_shortcuts_and_the_destructive_style() {
 
         // The panel runs an action on its item, while it is still selected.
         block_on(pane.launcher.run_item_action("alpha", 8));
-        assert_eq!(pane.status(), answered("Delete: Alpha note"));
+        assert_eq!(pane.shown(), answered("Delete: Alpha note"));
         block_on(pane.launcher.run_item_action("beta", 0));
         assert_eq!(
-            pane.status(),
+            pane.shown(),
             answered("Delete: Alpha note"),
             "another item's action runs nothing"
         );
         block_on(pane.launcher.run_item_action("alpha", 9));
-        assert_eq!(pane.status(), answered("Delete: Alpha note"), "no tenth");
+        assert_eq!(pane.shown(), answered("Delete: Alpha note"), "no tenth");
     }
 }
 
@@ -350,13 +359,13 @@ fn a_shortcut_runs_its_action_with_its_modifiers_exactly_on_its_system() {
 
         let index = actions.bound_to(&binding("ctrl-shift-c")).unwrap();
         block_on(pane.launcher.run_selected_action(index));
-        assert_eq!(pane.status(), answered("Copy Link: Alpha note"));
+        assert_eq!(pane.shown(), answered("Copy Link: Alpha note"));
         let index = actions.bound_to(&binding(reveal)).unwrap();
         block_on(pane.launcher.run_selected_action(index));
-        assert_eq!(pane.status(), answered("Reveal: Alpha note"));
+        assert_eq!(pane.shown(), answered("Reveal: Alpha note"));
         let index = actions.bound_to(&binding("ctrl-x")).unwrap();
         block_on(pane.launcher.run_selected_action(index));
-        assert_eq!(pane.status(), answered("Delete: Alpha note"));
+        assert_eq!(pane.shown(), answered("Delete: Alpha note"));
 
         // Exactly these modifiers: no more, no fewer.
         for other in [
@@ -408,7 +417,7 @@ fn a_shortcut_the_user_gave_a_pane_action_is_not_bound() {
         );
         // The action stays listed and runs from the panel.
         block_on(pane.launcher.run_item_action("alpha", 4));
-        assert_eq!(pane.status(), answered("Archive: Alpha note"));
+        assert_eq!(pane.shown(), answered("Archive: Alpha note"));
 
         let unbound: Vec<(String, String)> = pane
             .launcher
@@ -458,7 +467,7 @@ fn development_mode_reports_the_shortcuts_pane_does_not_bind() {
         // The same list drawn again after an action is not reported again.
         select_title(&pane.launcher, "Alpha note");
         block_on(pane.launcher.activate_selected());
-        assert_eq!(pane.status(), answered("Open: Alpha note"));
+        assert_eq!(pane.shown(), answered("Open: Alpha note"));
         pane.launcher.stop_developing(&pane.identity);
     }
 }

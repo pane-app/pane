@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
 // Pane's actions sample in JavaScript: a list whose items carry several
-// actions (#137). Items, actions, sections, shortcuts and answers match the
-// Rust actions sample (guests/sample-actions) and the TypeScript one.
+// actions (#137), and what a command does after it acts (#141). Items,
+// actions, sections, shortcuts, toasts and commands match the Rust actions
+// sample (guests/sample-actions) and the TypeScript one.
 // "Alpha note" has nine actions, in an untitled section and the "Edit",
 // "Share" and "Danger" sections: Enter runs "Open", Ctrl+Enter "Copy" and
 // Ctrl+Shift+Enter "Rename", and Ctrl+K lists them all. Its shortcuts show
@@ -11,18 +12,110 @@
 // leaves free until the user gives one of its keys Ctrl+Shift+Y
 // ("Archive"), and a destructive "Delete". "Beta note" has one action, so
 // Ctrl+Enter does nothing there, and "Gamma note" has none, so it cannot be
-// activated. Every action answers its title and the item's
-// ("Open: Alpha note").
+// activated. Every one of their actions shows a success toast with its
+// title and the item's ("Open: Alpha note").
+// "Window" closes the window with each way the next showing may go, pops to
+// root search and clears the search field; "In the Background" launches
+// the "Window functions" no-view command in the background, whose toast
+// says what each function answered there. "Feedback" shows a HUD (and a
+// failure HUD), a toast updated from animated ("Uploading…") to success
+// ("Uploaded") with Open and Retry actions, hides it, fails, and sets and
+// clears the command's row subtitle ("3 unread"). The no-view commands
+// "Spin" (it leaves an animated toast, which Pane hides when the run ends)
+// and "Stumble" (it fails) show what Pane does at a run's end.
+
+import {
+  clearSearchBar,
+  closeMainWindow,
+  popToRoot,
+  setSubtitle,
+  showHUD,
+  showToast,
+} from "@pane/extension/feedback";
+import { launch } from "pane:extension/commands@0.1.0";
 
 /**
- * The action titled `title` of the item titled `item`: it answers both.
+ * The action titled `title` of the item titled `item`: it shows both.
  * @param {string} title
  * @param {string} item
  * @param {{ section?: string, style?: "destructive", shortcut?: import("@pane/extension").Shortcut }} [more]
  * @returns {import("@pane/extension").Action}
  */
 function action(title, item, more = {}) {
-  return { title, onAction: async () => `${title}: ${item}`, ...more };
+  return {
+    title,
+    onAction: async () => {
+      showToast({ title: `${title}: ${item}` });
+    },
+    ...more,
+  };
+}
+
+/**
+ * What a window function answered: nothing more when a window was shown
+ * for the call, else the failure that none was.
+ * @param {boolean} shown
+ */
+function windowed(shown) {
+  if (!shown) throw new Error("No window was shown");
+}
+
+/**
+ * The "Window" item's action titled `title`, which runs `run`.
+ * @param {string} title
+ * @param {() => boolean} run
+ * @returns {import("@pane/extension").Action}
+ */
+function windowAction(title, run) {
+  return {
+    title,
+    onAction: async () => {
+      windowed(run());
+    },
+  };
+}
+
+/**
+ * The upload toast "Start Upload" showed, which "Finish Upload" and "Hide
+ * Toast" change.
+ * @type {import("@pane/extension/feedback").Toast | null}
+ */
+let upload = null;
+
+/**
+ * Starts the upload: an animated toast, remembered.
+ * @returns {import("@pane/extension/feedback").Toast}
+ */
+function startUpload() {
+  const shown = showToast({ style: "animated", title: "Uploading…" });
+  upload = shown;
+  return shown;
+}
+
+/**
+ * The upload's toast once it is done: a success with Open and Retry.
+ * @returns {import("@pane/extension/feedback").ToastOptions}
+ */
+function uploaded() {
+  return {
+    style: "success",
+    title: "Uploaded",
+    message: "notes.txt",
+    primaryAction: {
+      title: "Open",
+      onAction: async () => {
+        showToast({ title: "Opened the upload" });
+      },
+      shortcut: { modifiers: ["ctrl", "shift"], key: "o" },
+    },
+    secondaryAction: {
+      title: "Retry",
+      onAction: async () => {
+        startUpload().update(uploaded());
+      },
+      shortcut: { modifiers: ["ctrl", "shift"], key: "r" },
+    },
+  };
 }
 
 const ALPHA = "Alpha note";
@@ -78,8 +171,122 @@ export const command = {
         },
         { id: "beta", title: BETA, subtitle: "One action", actions: [action("Open", BETA)] },
         { id: "gamma", title: "Gamma note", subtitle: "No actions" },
+        {
+          id: "window",
+          title: "Window",
+          subtitle: "Close, pop to root search, clear the search",
+          actions: [
+            windowAction("Close", () => closeMainWindow()),
+            windowAction("Close to Root Search", () =>
+              closeMainWindow({ popToRootType: "immediate" }),
+            ),
+            windowAction("Close and Keep Screen", () =>
+              closeMainWindow({ popToRootType: "suspended" }),
+            ),
+            windowAction("Close and Clear Root Search", () =>
+              closeMainWindow({ clearRootSearch: true }),
+            ),
+            windowAction("Pop to Root", () => popToRoot()),
+            windowAction("Pop to Root and Clear Search", () => popToRoot({ clearSearchBar: true })),
+            windowAction("Clear Search", () => clearSearchBar()),
+            {
+              title: "In the Background",
+              onAction: async () => {
+                launch({ command: "window-functions" }, "background", [], null);
+              },
+            },
+          ],
+        },
+        {
+          id: "feedback",
+          title: "Feedback",
+          subtitle: "A HUD, toasts and this command's subtitle",
+          actions: [
+            {
+              title: "Show HUD",
+              onAction: async () => {
+                showHUD("Copied to Clipboard");
+              },
+            },
+            {
+              title: "Show Failure HUD",
+              onAction: async () => {
+                showHUD("Could not copy", "failure");
+              },
+            },
+            {
+              title: "Start Upload",
+              onAction: async () => {
+                startUpload();
+              },
+            },
+            {
+              title: "Finish Upload",
+              onAction: async () => {
+                if (upload === null) throw new Error("Nothing is uploading");
+                upload.update(uploaded());
+              },
+            },
+            {
+              title: "Upload",
+              onAction: async () => {
+                startUpload().update(uploaded());
+              },
+            },
+            {
+              title: "Hide Toast",
+              onAction: async () => {
+                if (upload !== null) upload.hide();
+                upload = null;
+              },
+            },
+            {
+              title: "Fail",
+              onAction: async () => {
+                throw new Error("The upload failed");
+              },
+            },
+            {
+              title: "Set Subtitle",
+              onAction: async () => {
+                setSubtitle("3 unread");
+              },
+            },
+            {
+              title: "Clear Subtitle",
+              onAction: async () => {
+                setSubtitle(null);
+              },
+            },
+          ],
+        },
       ],
     };
+  },
+
+  async run(id) {
+    switch (id) {
+      // What each window function answers where it runs: in the
+      // background, that no window was shown. Launched from root search
+      // with its query typed, the close empties that query.
+      case "window-functions": {
+        const closed = closeMainWindow({ clearRootSearch: true });
+        const popped = popToRoot();
+        const cleared = clearSearchBar();
+        showToast({
+          title: `close: ${closed}, pop to root: ${popped}, clear search: ${cleared}`,
+        });
+        return;
+      }
+      // Leaves its toast in progress: Pane hides it once the run ends.
+      case "spin":
+        showToast({ style: "animated", title: "Spinning…" });
+        return;
+      case "stumble":
+        throw new Error("Stumbled on purpose");
+      default:
+        throw new Error(`\`${id}\` opens a screen`);
+    }
   },
 
   async submitForm(itemId) {

@@ -93,13 +93,14 @@ pub enum ActionStyle {
     Destructive,
 }
 
-/// What a command's `handle-event` answered.
+/// What a command's `handle-event` or `run` answered: a JSON object, `{}`
+/// for now. Pane shows nothing of it (#141): a command tells the user what
+/// happened through a toast or a HUD (`crate::feedback`), and the
+/// `status` text the first version of the tree carried is ignored. Later
+/// fields (a lazy submenu's entries, #140) are read here.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Answer {
-    /// Text shown to the user as the result, in the status line; `None`
-    /// when the command shows none. Transitional: toasts replace it.
-    pub status: Option<String>,
-}
+#[non_exhaustive]
+pub struct Answer {}
 
 /// The view `tree` describes, or why Pane cannot read it.
 pub(crate) fn read_view(tree: &str) -> Result<View, String> {
@@ -126,13 +127,22 @@ pub(crate) fn read_view(tree: &str) -> Result<View, String> {
 }
 
 /// What `answer`, the text a command's `handle-event` answered, says, or
-/// why Pane cannot read it.
+/// why Pane cannot read it: it must be a JSON object.
 pub(crate) fn read_answer(answer: &str) -> Result<Answer, String> {
-    let answer: WireAnswer =
+    let _answer: WireAnswer =
         serde_json::from_str(answer).map_err(|error| format!("its answer: {error}"))?;
-    Ok(Answer {
-        status: answer.status,
-    })
+    Ok(Answer {})
+}
+
+/// The binding a toast action's shortcut gives on this system, written as
+/// an item's action's shortcut is in the tree (JSON text): `None` when it
+/// gives none here, `Err` with why when it is not one Pane can bind.
+pub(crate) fn read_shortcut(shortcut: &str) -> Option<Result<Binding, String>> {
+    match serde_json::from_str::<Value>(shortcut) {
+        Ok(Value::Null) => None,
+        Ok(value) => shortcut_here(&value, Platform::current()),
+        Err(error) => Some(Err(format!("its shortcut is not JSON: {error}"))),
+    }
 }
 
 /// The tree's root: its version and its view, whose type decides how the
@@ -380,11 +390,10 @@ enum WireRole {
     ColorWell,
 }
 
+/// An answer object. Its fields are ignored for now: the first version's
+/// `status` text is no longer shown.
 #[derive(Deserialize)]
-struct WireAnswer {
-    #[serde(default)]
-    status: Option<String>,
-}
+struct WireAnswer {}
 
 #[cfg(test)]
 mod tests {
@@ -550,14 +559,23 @@ mod tests {
     }
 
     #[test]
-    fn an_answer_reads_its_status() {
+    fn an_answer_is_an_object_whose_status_is_no_longer_shown() {
         assert_eq!(
             read_answer(r#"{"status": "Saved", "toast": {}}"#),
-            Ok(Answer {
-                status: Some("Saved".into())
-            })
+            Ok(Answer::default())
         );
         assert_eq!(read_answer("{}"), Ok(Answer::default()));
         assert!(read_answer("\"Saved\"").is_err());
+    }
+
+    #[test]
+    fn a_toast_actions_shortcut_reads_as_an_items_does() {
+        assert_eq!(
+            read_shortcut(r#"{"modifiers": ["ctrl", "shift"], "key": "r"}"#),
+            Some(Ok(Binding::parse("ctrl-shift-r").unwrap()))
+        );
+        assert_eq!(read_shortcut("null"), None);
+        assert!(matches!(read_shortcut("ctrl-r"), Some(Err(why)) if why.contains("not JSON")));
+        assert!(matches!(read_shortcut(r#""ctrl-r""#), Some(Err(_))));
     }
 }

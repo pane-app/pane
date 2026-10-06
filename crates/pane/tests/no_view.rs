@@ -17,7 +17,7 @@ use pane_core::{Launcher, LauncherView, PackageIdentity, Runtime, Screen, Status
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::settle;
+use settle::{settle, settle_shown};
 
 #[path = "support/packages.rs"]
 mod packages;
@@ -47,13 +47,19 @@ impl Hotkeys for FakeSystem {
     }
 }
 
-/// What "Report launch" answers when the user launches it from `source`
-/// with nothing more.
-fn reported(source: &str) -> Status {
-    Status::Result(format!(
+/// What "Report launch" says in its toast when the user launches it from
+/// `source` with nothing more.
+fn report(source: &str) -> String {
+    format!(
         "Report: user-initiated from {source}; fallback text: none; context: none; \
          arguments: none"
-    ))
+    )
+}
+
+/// What the user reads once "Report launch" ran from `source`: its toast,
+/// as [`settle_shown`] reads it.
+fn reported(source: &str) -> Status {
+    Status::Result(report(source))
 }
 
 /// Presses the global hotkey `shortcut`, as the system's adapter would
@@ -79,6 +85,19 @@ fn until_done(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> La
             return view;
         }
         assert!(Instant::now() < deadline, "timed out: {view:?}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Runs the window until it shows a HUD, and answers what the HUD says.
+fn until_hud(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> String {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        cx.run_until_parked();
+        if let Some(hud) = cx.read_entity(window, |window, _| window.hud()) {
+            return hud;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for a HUD");
         std::thread::sleep(Duration::from_millis(5));
     }
 }
@@ -126,8 +145,8 @@ fn enter_on_a_no_view_row_runs_it_and_opens_no_screen(cx: &mut TestAppContext) {
     let selected = view.selected.map(|index| view.rows[index].title.as_str());
     assert_eq!(selected, Some("Report launch"));
     cx.simulate_keystrokes("enter");
+    assert_eq!(settle_shown(&window, cx), reported("root-search"));
     let view = settle(&window, cx);
-    assert_eq!(view.status, reported("root-search"));
     assert_eq!(
         view.screen,
         Screen::Root {
@@ -135,13 +154,12 @@ fn enter_on_a_no_view_row_runs_it_and_opens_no_screen(cx: &mut TestAppContext) {
         },
         "no screen opened"
     );
-    assert!(cx.debug_bounds("status-result").is_some());
+    assert!(cx.debug_bounds("toast-success").is_some());
 
     // Enter again runs it again, still from root search.
     cx.simulate_keystrokes("enter");
-    let view = settle(&window, cx);
-    assert_eq!(view.status, reported("root-search"));
-    assert!(matches!(view.screen, Screen::Root { .. }));
+    assert_eq!(settle_shown(&window, cx), reported("root-search"));
+    assert!(matches!(settle(&window, cx).screen, Screen::Root { .. }));
 }
 
 #[gpui::test]
@@ -167,10 +185,12 @@ fn a_no_view_hotkey_runs_the_command_without_showing_the_window(cx: &mut TestApp
     }
     assert!(hidden(&window, cx), "the launcher hid");
 
-    // The command's hotkey runs it, and the window stays hidden.
+    // The command's hotkey runs it, and the window stays hidden: its toast
+    // is shown as a HUD.
     press(&window, &shortcut, cx);
     let view = until_done(&window, cx);
-    assert_eq!(view.status, reported("hotkey"));
+    assert_eq!(view.status, Status::Idle);
+    assert_eq!(until_hud(&window, cx), report("hotkey"));
     assert!(matches!(view.screen, Screen::Root { .. }));
     assert!(hidden(&window, cx), "the window was not shown");
 

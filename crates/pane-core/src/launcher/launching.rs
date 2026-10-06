@@ -7,13 +7,14 @@
 //! command opens as it always did, its `render` receiving the record (and
 //! the same record each time its screen is drawn again while it is open). A
 //! no-view command's `run` is called once per launch and no screen opens:
-//! root search, or whatever is shown, stays as it is, and the answer is
-//! shown in the status line while that screen is still the one shown (from
-//! root search, while the query it was launched from is still typed), as a
-//! query sent through an alias was. Its global hotkey runs it without
-//! showing Pane's window ([`Launcher::hotkey_shows_window`], amending ADR
-//! 0016). An error it answers is the extension's operation error and never
-//! counts towards pausing; a crash still does.
+//! root search, or whatever is shown, stays as it is. Its answer shows
+//! nothing (#141): the command says what happened through a toast or a HUD
+//! (see `feedback`). An error it answers with is shown as a failure toast
+//! with a "Copy Error" action, and a toast it left in the animated style is
+//! hidden once the run ends. Its global hotkey runs it without showing
+//! Pane's window ([`Launcher::hotkey_shows_window`], amending ADR 0016). An
+//! error it answers is the extension's operation error and never counts
+//! towards pausing; a crash still does.
 //!
 //! A command launches another with `pane:extension/commands.launch`
 //! ([`Launcher::launch_from_guest`]): one of its own package's by manifest
@@ -33,6 +34,7 @@ use crate::extension_data::PackageData;
 use crate::launch::{LaunchRecord, LaunchRequest, LaunchSource, LaunchType};
 use crate::operations::{MAX_OPERATION_JSON, identity_key};
 use crate::packages::{CommandMode, paused_reason};
+use crate::runtime::{Answer, CallError};
 
 /// Counts the launches guests asked for that are still running, so tests
 /// and development builds can wait for them ([`Launcher::wait_for_launches`]).
@@ -49,11 +51,11 @@ impl InFlight {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn begin(&self) {
+    pub(super) fn begin(&self) {
         *self.lock() += 1;
     }
 
-    fn end(&self) {
+    pub(super) fn end(&self) {
         let mut running = self.lock();
         *running = running.saturating_sub(1);
         self.done.notify_all();
@@ -61,7 +63,7 @@ impl InFlight {
 
     /// Waits until none runs; `false` if one still does after `limit`.
     #[cfg(any(test, debug_assertions))]
-    fn settled(&self, limit: std::time::Duration) -> bool {
+    pub(super) fn settled(&self, limit: std::time::Duration) -> bool {
         let running = self.lock();
         let (running, _) = self
             .done
@@ -98,10 +100,10 @@ impl Launcher {
     }
 
     /// Runs the no-view command of `opening` (`run`) with its launch
-    /// record, and shows its answer while the screen it was launched from
-    /// is still shown (from root search, while the query it was launched
-    /// from is still typed), which stays as it was. A background launch
-    /// shows nothing: no window was shown for it.
+    /// record. The screen it was launched from stays as it was; an error
+    /// it answers with is a failure toast, and a toast it left animated is
+    /// hidden once it ends. A background launch's error shows nothing: no
+    /// window was shown for it.
     pub(super) async fn run_no_view(
         &self,
         epoch: u64,
@@ -131,27 +133,49 @@ impl Launcher {
             }
             Err(error) => Err(error),
         };
-        if background {
-            return;
-        }
-        let Some(mut state) = self.lock_if_current(epoch) else {
-            return;
-        };
-        if matches!(state.view.screen, Screen::Root { .. }) {
-            let Some(sent) = state.sent_from.clone() else {
-                // The query changed meanwhile, which cleared the status.
-                return;
-            };
-            if state.view.query() != Some(sent.as_str()) {
-                return;
+        let mut guard = self.lock();
+        let state = &mut *guard;
+        // Nothing will finish a toast the run left in progress.
+        self.clear_animated_toast(state, &component);
+        let ended = stopped(state, &component, &data);
+        // A toast is not about a screen: an error the command answered with
+        // is shown wherever the user is now, unless it ran in the
+        // background.
+        let result = match result {
+            Err(CallError::Guest(message)) if ended.is_none() => {
+                if !background {
+                    self.show_failure(state, &component, Some(command.as_str()), message);
+                }
+                Ok(Answer::default())
             }
-        }
-        state.view.status = match (stopped(&state, &component, &data), result) {
-            // Stopped while it was running: its answer is not shown.
-            (Some(problem), _) => Status::Error(problem),
-            (None, Ok(answer)) => answer.status.map_or(Status::Idle, Status::Result),
-            (None, Err(error)) => Status::Error(error.to_string()),
+            other => other,
         };
+        if background || state.screen_epoch != epoch {
+            drop(guard);
+            self.changed();
+            return;
+        }
+        let shown_here = match state.view.screen {
+            // From root search, while the query it was launched from is
+            // still typed: a changed query is about something else.
+            Screen::Root { .. } => state
+                .sent_from
+                .clone()
+                .is_some_and(|sent| state.view.query() == Some(sent.as_str())),
+            _ => true,
+        };
+        if shown_here {
+            state.view.status = match (ended, result) {
+                // Stopped while it was running: its answer is not shown.
+                (Some(problem), _) => Status::Error(problem),
+                // The answer shows nothing: the command said what it had
+                // to through a toast or a HUD.
+                (None, Ok(_)) => Status::Idle,
+                (None, Err(error)) => Status::Error(error.to_string()),
+            };
+        }
+        drop(guard);
+        self.changed();
     }
 
     /// Whether pressing the global hotkey `shortcut` shows Pane's window:

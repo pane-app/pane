@@ -4,24 +4,29 @@
 //! the user or in the background, and from where), the text sent through
 //! its alias or as a fallback, and the context another command passed.
 //!
-//! - "Report launch" answers its launch record, and keeps it in its
-//!   settings for "Last launches". Sent "fail", it answers an error, which
-//!   never pauses the extension; sent "crash", it crashes, and three crashes
-//!   within five minutes pause the extension.
+//! - "Report launch" shows its launch record in a toast, and keeps it in
+//!   its settings for "Last launches". Sent "fail", it answers an error,
+//!   which Pane shows as a failure toast and which never pauses the
+//!   extension; sent "crash", it crashes, and three crashes within five
+//!   minutes pause the extension.
 //! - "Tick" runs every minute on its own schedule, in the background,
 //!   counting its runs and keeping its last launch record.
-//! - "Last launches" answers what "Report launch" and "Tick" kept.
+//! - "Last launches" shows what "Report launch" and "Tick" kept.
 //! - "Launch" launches the command its text names, passing it the context
 //!   `{"from":"launch"}`: `report` (a command of this package), or
 //!   `<package identity>#report` (one of another package), user-initiated,
-//!   or in the background when the text starts with `background `.
+//!   or in the background when the text starts with `background `, and
+//!   shows a toast saying so.
 //! - "Show launch" is a view command: its list shows its launch record.
 //!
-//! The JavaScript and TypeScript no-view samples answer the same.
+//! A command launched in the background (a schedule's run, or one another
+//! command launched so) does its work but shows no toast. The JavaScript
+//! and TypeScript no-view samples show the same.
 #![no_std]
 
 use pane_guest::alloc::{format, string::String, vec::Vec};
 use pane_guest::commands::{self, CommandRef, launch_type_name, source_name};
+use pane_guest::feedback::{Toast, show_toast};
 use pane_guest::{Command, Item, LaunchRecord, LaunchType, List, NoCustomView, settings};
 
 /// The settings key holding the last launch record "Report launch" ran
@@ -58,7 +63,7 @@ fn describe(launch: &LaunchRecord) -> String {
     )
 }
 
-/// What "Report launch" answers for `launch`.
+/// What "Report launch" shows for `launch`.
 fn report(launch: &LaunchRecord) -> Result<String, String> {
     match launch.fallback_text.as_deref() {
         Some("fail") => return Err("Report launch fails on request".into()),
@@ -70,7 +75,7 @@ fn report(launch: &LaunchRecord) -> Result<String, String> {
     Ok(format!("Report: {described}"))
 }
 
-/// What "Tick" answers for `launch`, counting the run.
+/// What "Tick" would show for `launch`, counting the run.
 fn tick(launch: &LaunchRecord) -> Result<String, String> {
     let ticks = settings::get(TICKS)?
         .and_then(|ticks| ticks.parse::<u64>().ok())
@@ -81,7 +86,7 @@ fn tick(launch: &LaunchRecord) -> Result<String, String> {
     Ok(format!("Ticked {ticks} times"))
 }
 
-/// What "Last launches" answers: what "Report launch" and "Tick" kept.
+/// What "Last launches" shows: what "Report launch" and "Tick" kept.
 fn last() -> Result<String, String> {
     let report = settings::get(REPORT)?.unwrap_or_else(|| "none".into());
     let ticks = settings::get(TICKS)?.unwrap_or_else(|| "0".into());
@@ -91,7 +96,8 @@ fn last() -> Result<String, String> {
     ))
 }
 
-/// Launches the command `text` names, as "Launch" does.
+/// Launches the command `text` names, as "Launch" does, answering what it
+/// shows.
 fn launch(text: Option<&str>) -> Result<String, String> {
     let text = text.ok_or(
         "Launch needs the command to launch: send it `report`, \
@@ -145,13 +151,18 @@ impl Command for NoView {
         ]))
     }
 
-    async fn run(command: String, launch: LaunchRecord) -> Result<String, String> {
-        match command.as_str() {
+    async fn run(command: String, launch: LaunchRecord) -> Result<(), String> {
+        let done = match command.as_str() {
             "report" => report(&launch),
             "tick" => tick(&launch),
             "last" => last(),
             "launch" => self::launch(launch.fallback_text.as_deref()),
             other => Err(format!("unknown command: {other}")),
+        }?;
+        // Nobody is there to see a background launch's toast.
+        if launch.launch_type != LaunchType::Background {
+            show_toast(Toast::success(done));
         }
+        Ok(())
     }
 }

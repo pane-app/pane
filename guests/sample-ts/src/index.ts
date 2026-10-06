@@ -19,7 +19,8 @@ import type {
   Shape,
   ViewEvent,
 } from "@pane/extension";
-import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
+import { showToast } from "@pane/extension/feedback";
+import { waitFor }from "wasi:clocks/monotonic-clock@0.3.0";
 import * as z from "zod/mini";
 
 // Module top-level code runs once, when the component is built, and its state
@@ -173,8 +174,16 @@ class ColorPicker implements CustomView {
   }
 }
 
-/** Runs the action of the item `itemId`; each item's action is this with its id. */
-async function act(itemId: string): Promise<string> {
+/**
+ * Runs the action of the item `itemId`, showing a toast with what it did;
+ * each item's action is this with its id.
+ */
+async function act(itemId: string): Promise<void> {
+  showToast({ title: await outcome(itemId) });
+}
+
+/** Does what the item `itemId`'s action does; the text its toast shows. */
+async function outcome(itemId: string): Promise<string> {
   switch (itemId) {
     case "greet":
       return "Hello from the TypeScript guest";

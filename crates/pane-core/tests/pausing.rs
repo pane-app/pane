@@ -15,9 +15,12 @@ use pane_core::{
 };
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use rows::{manage, select_title, titles, to_root};
 
 const COMMAND: &str = "Greeting";
@@ -133,7 +136,7 @@ fn row(launcher: &Launcher, title: &str) -> Row {
 }
 
 /// From root search, opens the command and runs its item titled `item`,
-/// returning the outcome.
+/// returning the outcome: its toast, or the status line.
 fn run(launcher: &Launcher, item: &str) -> Status {
     to_root(launcher);
     select_title(launcher, COMMAND);
@@ -146,7 +149,7 @@ fn run(launcher: &Launcher, item: &str) -> Status {
     );
     select_title(launcher, item);
     block_on(launcher.activate_selected());
-    launcher.view().status
+    shown(launcher)
 }
 
 /// Activates the extension manager's row titled `title`, returning the
@@ -363,7 +366,7 @@ fn other_packages_keep_running_while_one_is_paused() {
     select_title(&launcher, "Use a casual greeting");
     block_on(launcher.activate_selected());
     assert_eq!(
-        launcher.view().status,
+        shown(&launcher),
         Status::Result("Saved the casual greeting".into())
     );
 }

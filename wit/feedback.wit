@@ -1,0 +1,114 @@
+package pane:extension@0.1.0;
+
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// What a command does after it acts (ADR 0037): close Pane's window, pop
+// back to root search, clear the search field, and tell the user what
+// happened with a HUD or a toast. Every command imports them, whatever its
+// mode, through the `extension` world (wit/extension.wit). Rust commands
+// use them through pane-guest (`pane_guest::window`,
+// `pane_guest::feedback`), JavaScript and TypeScript ones through
+// `@pane/extension/feedback` or the modules
+// "pane:extension/window@0.1.0" and "pane:extension/feedback@0.1.0"
+// (guests/js/feedback.d.ts). None of them is a reason to pause an
+// extension: a refusal is an answer, and the time spent in them is not
+// the guest's computing. The header follows `package`: comments above it
+// would document the package, which extension.wit already does.
+
+/// Pane's launcher window, as the command that runs in it sees it.
+interface window {
+  /// What the launcher shows the next time it is shown, once `close` hid
+  /// it.
+  enum pop-to-root-type {
+    /// What the user's Launcher setting says: the screen left on display,
+    /// or root search.
+    default,
+    /// Root search, which the launcher returns to now.
+    immediate,
+    /// The screen left on display, whatever the setting says.
+    suspended,
+  }
+
+  /// Hides the launcher. With `clear-root-search`, root search's query is
+  /// empty the next time it shows. `pop` decides what the next showing
+  /// shows. Answers whether a window was shown for the call: in a call with
+  /// none (a background launch, a schedule, a service, a search of root
+  /// search), it does nothing and answers false.
+  close: func(clear-root-search: bool, pop: pop-to-root-type) -> bool;
+
+  /// Returns to root search with the window open, emptying its search field
+  /// with `clear-search`. Answers whether a window was shown for the call,
+  /// as `close` does.
+  pop-to-root: func(clear-search: bool) -> bool;
+
+  /// Empties the search field on screen: root search's, or the command's
+  /// own. Answers whether a window was shown for the call, as `close` does.
+  clear-search: func() -> bool;
+}
+
+/// Telling the user what happened: a toast in the launcher's footer, or a
+/// HUD over other applications.
+interface feedback {
+  /// How a toast or a HUD is drawn.
+  enum toast-style {
+    /// Work in progress, with a spinner: a toast in this style stays until
+    /// it is updated or hidden, or the window deactivates.
+    animated,
+    /// The work succeeded. A toast hides after 3 seconds (pausing while
+    /// the pointer is over it or it has the focus); a HUD after 1.2.
+    success,
+    /// The work failed. A toast hides after 3 seconds, as a success does;
+    /// a HUD after 3.
+    failure,
+  }
+
+  /// One of a toast's actions: the user can choose it with the pointer,
+  /// from the keyboard once the toast has the focus, or with its shortcut
+  /// while the toast shows. Choosing it calls the command's `handle-event`
+  /// with `callback`, as an item's action does. The command's instance may
+  /// have been replaced meanwhile, so the callback id should say what it
+  /// is about.
+  record toast-action {
+    title: string,
+    callback: string,
+    /// Its shortcut as JSON, written as an item's action's shortcut is in
+    /// the tree (docs/list-tree.md): `{"modifiers": ["ctrl"], "key": "r"}`
+    /// for every system, or one per system. A shortcut that is one of
+    /// Pane's own keys is not bound.
+    shortcut: option<string>,
+  }
+
+  /// A toast: one at a time, in the launcher's footer.
+  record toast {
+    style: toast-style,
+    title: string,
+    /// More text under the title.
+    message: option<string>,
+    primary: option<toast-action>,
+    secondary: option<toast-action>,
+  }
+
+  /// Names a toast the command showed, for updating or hiding it.
+  type toast-id = u64;
+
+  /// Shows `toast` in the launcher's footer, replacing the toast shown, if
+  /// any: toasts do not queue. While the launcher is hidden or in the
+  /// compact window mode, the toast is shown as a HUD instead. Answers the
+  /// id that updates or hides it.
+  show-toast: func(toast: toast) -> toast-id;
+
+  /// Changes the toast `id` names to `toast` (its style, title, message
+  /// and actions), shown again if it had left. Does nothing once another
+  /// toast replaced it or it was hidden with `hide-toast`.
+  update-toast: func(id: toast-id, toast: toast);
+
+  /// Hides the toast `id` names. Does nothing once another toast replaced
+  /// it.
+  hide-toast: func(id: toast-id);
+
+  /// Closes the launcher, then shows `title` in a small window of its own
+  /// near the bottom of the screen the launcher was on, over other
+  /// applications, which never takes the focus: for 1.2 seconds, or 3 for
+  /// the failure style.
+  show-hud: func(title: string, style: toast-style);
+}

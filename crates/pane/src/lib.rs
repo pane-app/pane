@@ -7,10 +7,8 @@
 use std::path::PathBuf;
 
 use gpui::{App, KeyBinding, WindowBackgroundAppearance, actions};
-// `Window` names the rounded-corner preference's parameter, which only
-// Windows has; the import follows the same gate so it is not unused on the
-// other platforms.
-#[cfg(target_os = "windows")]
+// `Window` names the rounded-corner preference's and the HUD's
+// click-through's parameter.
 use gpui::Window;
 use pane_core::{CommandRegistration, Keyboard};
 
@@ -74,6 +72,7 @@ pub(crate) fn bind_keys_with(
     features::clipboard_history::bind_keys(cx, &text_editing, keyboard);
     features::quick_slots::bind_keys(cx);
     features::footer_menu::bind_keys(cx);
+    features::toast::bind_keys(cx);
     features::actions_panel::bind_keys(cx, &text_editing);
     features::settings::bind_keys(cx);
     ui::select::bind_keys(cx);
@@ -274,6 +273,69 @@ pub fn prefer_rounded_window_corners(window: &Window) {
         )
     };
 }
+
+/// Makes `window`, a HUD's (see `features::hud`), let the pointer through
+/// to what is under it and never activate, where the system allows: on
+/// Windows a layered, transparent, non-activating window (fully opaque, so
+/// it still shows); on macOS one that ignores mouse events. Elsewhere, and
+/// on GPUI's test platform, it stays as GPUI made it: a pop-up that was
+/// shown without the focus.
+#[cfg(target_os = "windows")]
+pub(crate) fn make_click_through(window: &Window) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::{COLORREF, HWND};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GWL_EXSTYLE, GetWindowLongPtrW, LWA_ALPHA, SetLayeredWindowAttributes, SetWindowLongPtrW,
+        WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TRANSPARENT,
+    };
+    let handle = match HasWindowHandle::window_handle(window) {
+        Ok(handle) => handle,
+        Err(_) => return,
+    };
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return;
+    };
+    let hwnd = HWND(handle.hwnd.get() as *mut _);
+    let added = (WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE).0 as isize;
+    // SAFETY: `hwnd` is this window, which GPUI created before the handle
+    // was read; only its extended style and its layered opacity change.
+    unsafe {
+        let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style | added);
+        let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA);
+    }
+}
+
+/// Makes `window`, a HUD's, let the pointer through (see the Windows
+/// version): an AppKit window that ignores mouse events.
+#[cfg(target_os = "macos")]
+pub(crate) fn make_click_through(window: &Window) {
+    use objc2::msg_send;
+    use objc2::rc::Retained;
+    use objc2::runtime::NSObject;
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let handle = match HasWindowHandle::window_handle(window) {
+        Ok(handle) => handle,
+        Err(_) => return,
+    };
+    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+        return;
+    };
+    // SAFETY: `view` is the `NSView` GPUI built this window from, and its
+    // `NSWindow` is held only for this call, which changes nothing but
+    // whether it takes mouse events.
+    let view = handle.ns_view.cast::<NSObject>();
+    let ns_window: Option<Retained<NSObject>> = unsafe { msg_send![view, window] };
+    if let Some(ns_window) = ns_window {
+        let _: () = unsafe { msg_send![&*ns_window, setIgnoresMouseEvents: true] };
+    }
+}
+
+/// Makes `window`, a HUD's, let the pointer through where the system
+/// allows: on Linux the HUD stays the pop-up GPUI made, shown without the
+/// focus.
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub(crate) fn make_click_through(_window: &Window) {}
 
 /// Where Pane keeps disposable cached data, such as compiled extension code:
 /// `%LOCALAPPDATA%\Pane\cache` on Windows, `~/Library/Caches/Pane` on

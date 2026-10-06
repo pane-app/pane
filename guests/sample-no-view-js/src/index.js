@@ -5,22 +5,28 @@
 // served by one component. Each receives its launch record: how it was
 // launched (by the user or in the background, and from where), the text
 // sent through its alias or as a fallback, and the context another command
-// passed. Commands, answers and errors match the Rust no-view sample
+// passed. Commands, toasts and errors match the Rust no-view sample
 // (guests/sample-no-view) and the TypeScript one.
 //
-// - "Report launch" answers its launch record, and keeps it in its settings
-//   for "Last launches". Sent "fail", it answers an error, which never
-//   pauses the extension; sent "crash", it crashes, and three crashes within
-//   five minutes pause the extension.
+// - "Report launch" shows its launch record in a toast, and keeps it in its
+//   settings for "Last launches". Sent "fail", it answers an error, which
+//   Pane shows as a failure toast and which never pauses the extension;
+//   sent "crash", it crashes, and three crashes within five minutes pause
+//   the extension.
 // - "Tick" runs every minute on its own schedule, in the background,
 //   counting its runs and keeping its last launch record.
-// - "Last launches" answers what "Report launch" and "Tick" kept.
+// - "Last launches" shows what "Report launch" and "Tick" kept.
 // - "Launch" launches the command its text names, passing it the context
 //   {"from":"launch"}: `report` (a command of this package), or
 //   `<package identity>#report` (one of another package), user-initiated,
-//   or in the background when the text starts with `background `.
+//   or in the background when the text starts with `background `, and
+//   shows a toast saying so.
 // - "Show launch" is a view command: its list shows its launch record.
+//
+// A command launched in the background (a schedule's run, or one another
+// command launched so) does its work but shows no toast.
 // @ts-check
+import { showToast } from "@pane/extension/feedback";
 import { launch } from "pane:extension/commands@0.1.0";
 import { get, set } from "pane:extension/settings@0.1.0";
 
@@ -49,24 +55,20 @@ function describe(record) {
 }
 
 /**
- * What "Report launch" answers for `record`.
+ * What "Report launch" shows for `record` (sent "crash", it crashes
+ * instead: see `run`).
  * @param {import("@pane/extension").LaunchRecord} record
  * @returns {string}
  */
 function report(record) {
   if (record.fallbackText === "fail") throw new Error("Report launch fails on request");
-  if (record.fallbackText === "crash") {
-    // Resolving with something other than a string is a crash, unlike
-    // throwing, which is an error the extension answers with.
-    return /** @type {string} */ (/** @type {unknown} */ (undefined));
-  }
   const described = describe(record);
   set(REPORT, described);
   return `Report: ${described}`;
 }
 
 /**
- * What "Tick" answers for `record`, counting the run.
+ * What "Tick" would show for `record`, counting the run.
  * @param {import("@pane/extension").LaunchRecord} record
  * @returns {string}
  */
@@ -80,7 +82,7 @@ function tick(record) {
 }
 
 /**
- * What "Last launches" answers: what "Report launch" and "Tick" kept.
+ * What "Last launches" shows: what "Report launch" and "Tick" kept.
  * @returns {string}
  */
 function last() {
@@ -91,7 +93,8 @@ function last() {
 }
 
 /**
- * Launches the command `text` names, as "Launch" does.
+ * Launches the command `text` names, as "Launch" does, answering what it
+ * shows.
  * @param {string | null | undefined} text
  * @returns {string}
  */
@@ -131,17 +134,31 @@ export const command = {
     };
   },
   async run(id, record) {
+    /** @type {string} */
+    let done;
     switch (id) {
       case "report":
-        return report(record);
+        if (record.fallbackText === "crash") {
+          // Resolving with a value, where `run` resolves with nothing, is a
+          // crash, unlike throwing, which is an error the extension answers
+          // with.
+          return /** @type {void} */ (/** @type {unknown} */ (null));
+        }
+        done = report(record);
+        break;
       case "tick":
-        return tick(record);
+        done = tick(record);
+        break;
       case "last":
-        return last();
+        done = last();
+        break;
       case "launch":
-        return launchNamed(record.fallbackText);
+        done = launchNamed(record.fallbackText);
+        break;
       default:
         throw new Error(`unknown command: ${id}`);
     }
+    // Nobody is there to see a background launch's toast.
+    if (record.launchType !== "background") showToast({ title: done });
   },
 };

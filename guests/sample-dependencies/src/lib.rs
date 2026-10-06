@@ -16,6 +16,7 @@
 #![no_std]
 
 use pane_guest::alloc::{format, string::String, string::ToString, vec::Vec};
+use pane_guest::feedback::{Toast, show_toast};
 use pane_guest::operations::{CallErrorKind, call};
 use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
 use serde_json::{Value, json};
@@ -36,8 +37,17 @@ async fn greet(dependency: &str) -> Result<String, pane_guest::operations::CallE
         .into())
 }
 
-/// Runs the action of the item `item_id`.
-async fn act(item_id: &str) -> Result<String, String> {
+/// Runs the action of the item `item_id`: a toast with the greeting, or
+/// with how to get the optional greeter.
+async fn act(item_id: &str) -> Result<(), String> {
+    let said = greeting(item_id).await?;
+    show_toast(Toast::success(said));
+    Ok(())
+}
+
+/// The greeting the item `item_id` gets, or how to get the optional
+/// greeter.
+async fn greeting(item_id: &str) -> Result<String, String> {
     match item_id {
         "required" => greet("greeter").await.map_err(|error| error.explain()),
         "optional" => match greet("rust-greeter").await {

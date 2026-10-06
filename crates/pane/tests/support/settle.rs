@@ -49,3 +49,25 @@ pub fn until(
         std::thread::sleep(Duration::from_millis(5));
     }
 }
+
+/// Runs the window until the launcher is no longer running an action, as
+/// [`settle`] does, and answers what the user reads of the outcome, as the
+/// status line said it before toasts (#141): the toast in the footer while
+/// the status line is idle (a success as [`Status::Result`] with its
+/// title, a failure as [`Status::Error`] with its title and message, work
+/// in progress as [`Status::Progress`]), and the status line otherwise.
+pub fn settle_shown(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> Status {
+    let view = settle(window, cx);
+    if view.status != Status::Idle {
+        return view.status;
+    }
+    let toast = cx.read_entity(window, |window, _| window.launcher().toast());
+    match toast {
+        None => Status::Idle,
+        Some(shown) => match shown.toast.style {
+            pane_core::ToastStyle::Success => Status::Result(shown.toast.text()),
+            pane_core::ToastStyle::Failure => Status::Error(shown.toast.text()),
+            pane_core::ToastStyle::Animated => Status::Progress(shown.toast.text()),
+        },
+    }
+}

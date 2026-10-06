@@ -9,9 +9,9 @@
 //! or reloading the package meanwhile stops it, so it never finishes.
 //! "Crash" crashes on purpose (a panic traps the guest): three crashes in a
 //! row pause the package until the user retries it, keeping its data.
-//! "Count" adds one to a count kept in its content and answers the new
-//! count: an action whose effect is done once it has run. If its answer is
-//! lost (Pane's runtime crashed before answering), Pane does not run it
+//! "Count" adds one to a count kept in its content and shows the new count
+//! in a toast: an action whose effect is done once it has run. If its answer
+//! is lost (Pane's runtime crashed before it answered), Pane does not run it
 //! again by itself, so the count never grows without the user asking.
 //! "Stop responding" notes in its settings that it started, then computes
 //! without waiting for anything for up to a minute before noting that it
@@ -21,6 +21,7 @@
 #![no_std]
 
 use pane_guest::alloc::{format, string::String, vec::Vec};
+use pane_guest::feedback::{Toast, show_toast};
 use pane_guest::{
     Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, cache, content,
     credentials, settings,
@@ -49,8 +50,16 @@ const BUSY_FOR: u64 = 60_000_000_000;
 struct Greeting;
 pane_guest::export!(Greeting);
 
-/// Runs the action of the item `id`; each item's action is this with its id.
-async fn act(id: &str) -> Result<String, String> {
+/// Runs the action of the item `id` and shows a toast with what [`outcome`]
+/// answers; each item's action is this with its id.
+async fn act(id: &str) -> Result<(), String> {
+    let done = outcome(id).await?;
+    show_toast(Toast::success(done));
+    Ok(())
+}
+
+/// What the action of the item `id` does, answering what it did or found.
+async fn outcome(id: &str) -> Result<String, String> {
     match id {
         "formal" | "casual" => {
             settings::set(STYLE, id)?;

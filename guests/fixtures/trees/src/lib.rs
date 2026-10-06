@@ -6,7 +6,11 @@
 //! Its list, titled "Drawn <n> times", names each item's action by a
 //! callback id of its own (`cb-<item id>`), not the item's id as the SDKs
 //! do, and its trees carry fields Pane does not know at every level.
-//! Choosing an item answers "Handled <callback> with <details>", then:
+//! Choosing an item, except the last two below, shows a success toast
+//! titled "Handled <callback> with <details>" (`pane:extension/feedback`)
+//! and still answers that text as `status`, as Pane's contract once asked,
+//! beside a field Pane does not know: Pane must show nothing of the answer.
+//! Then:
 //!
 //! - "Reverse the list" lists the items in the other order from then on;
 //! - "Remove this item" leaves itself out from then on;
@@ -15,9 +19,10 @@
 //!   Pane cannot show, once, then the list again;
 //! - "Draw an unreadable tree" answers a tree that is not JSON once, then
 //!   the list again;
-//! - "Answer unreadably" answers with something that is not JSON;
-//! - "Answer nothing" answers an object with no text to show, only a field
-//!   Pane does not know yet.
+//! - "Answer unreadably" shows no toast and answers with something that is
+//!   not JSON;
+//! - "Answer nothing" shows no toast and answers an object with no text to
+//!   show, only a field Pane does not know yet.
 //!
 //! It cannot use `pane-guest`, which writes the tree itself, so it supplies
 //! the allocator, panic handler, byte comparisons and `cabi_realloc`.
@@ -36,6 +41,7 @@ wit_bindgen::generate!({ path: "../../../wit", world: "extension" });
 use exports::pane::extension::command::{
     CustomView, FieldValue, FormError, Frame, Guest, GuestCustomView, LaunchRecord, ViewEvent,
 };
+use pane::extension::feedback::{Toast, ToastStyle, show_toast};
 
 /// What the next drawing answers.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -178,6 +184,15 @@ impl Guest for Trees {
             other => return Err(format!("unknown callback: {other}")),
         }
         let status = format!("Handled {callback} with {details}");
+        show_toast(&Toast {
+            style: ToastStyle::Success,
+            title: status.clone(),
+            message: None,
+            primary: None,
+            secondary: None,
+        });
+        // Still the answer Pane once showed, with a field it does not know:
+        // Pane must ignore both.
         Ok(format!(
             "{{\"status\":{},\"unknown\":true}}",
             quoted(&status)

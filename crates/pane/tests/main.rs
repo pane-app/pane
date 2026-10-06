@@ -13,6 +13,7 @@ mod aliases;
 mod command_search;
 mod compact_pins;
 mod develop;
+mod feedback;
 mod hotkeys;
 mod install;
 mod item_actions;

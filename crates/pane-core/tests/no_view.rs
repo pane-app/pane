@@ -24,9 +24,12 @@ use pane_core::{
 };
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use rows::{manage, select_title, titles};
 
 /// One language's no-view sample package.
@@ -62,7 +65,7 @@ const NO_CONTEXT: &str = "none";
 /// The context the sample's "Launch" passes.
 const CONTEXT: &str = r#"{"from":"launch"}"#;
 
-/// What "Report launch" answers when launched as described.
+/// What "Report launch" shows when launched as described.
 fn report(launch_type: &str, source: &str, text: &str, context: &str) -> Status {
     Status::Result(format!(
         "Report: {}",
@@ -77,7 +80,7 @@ fn described(launch_type: &str, source: &str, text: &str, context: &str) -> Stri
     )
 }
 
-/// An error the sample answered with, as Pane shows it.
+/// An error the sample answered with, as Pane shows it (a failure toast).
 fn answered_error(message: &str) -> Status {
     Status::Error(format!("The extension reported an error: {message}"))
 }
@@ -173,21 +176,23 @@ impl Pane {
     }
 
     /// Types `query` in root search, chooses the row titled `title` and
-    /// waits for what it does; the status line.
+    /// waits for what it does; what it showed: its toast, or the status
+    /// line.
     fn run(&self, query: &str, title: &str) -> Status {
         self.search(query);
         select_title(&self.launcher, title);
         block_on(self.launcher.activate_selected());
-        self.launcher.view().status
+        shown(&self.launcher)
     }
 
     /// Types `query` in root search, which the alias it starts with makes
-    /// select its command's row, and presses Enter; the status line.
+    /// select its command's row, and presses Enter; what it showed: its
+    /// toast, or the status line.
     fn send(&self, query: &str) -> Status {
         self.search(query);
         assert_eq!(self.launcher.view().selected, Some(0), "{query}");
         block_on(self.launcher.activate_selected());
-        self.launcher.view().status
+        shown(&self.launcher)
     }
 
     /// Gives the command with manifest id `command` of the package from
@@ -197,7 +202,8 @@ impl Pane {
         block_on(outcome.expect("the alias is accepted"));
     }
 
-    /// What "Last launches" of the package from `folder` answers.
+    /// What "Last launches" of the package from `folder` shows in its
+    /// toast.
     fn last(&self, folder: &Path) -> String {
         self.search("last launches");
         let wanted = id(folder, "last");
@@ -210,7 +216,7 @@ impl Pane {
             .unwrap_or_else(|| panic!("no row {wanted} in {:?}", titles(&self.launcher)));
         self.launcher.select(index);
         block_on(self.launcher.activate_selected());
-        match self.launcher.view().status {
+        match shown(&self.launcher) {
             Status::Result(text) => text,
             other => panic!("Last launches answered {other:?}"),
         }
@@ -242,7 +248,7 @@ fn each_way_in_runs_the_command_once_with_its_record_and_opens_no_screen(fixture
     block_on(launcher.activate_selected());
     let view = launcher.view();
     assert_eq!(
-        view.status,
+        shown(launcher),
         report("user-initiated", "root-search", "none", NO_CONTEXT)
     );
     assert_eq!(
@@ -288,7 +294,7 @@ fn each_way_in_runs_the_command_once_with_its_record_and_opens_no_screen(fixture
     launcher.move_selection(1);
     block_on(launcher.activate_selected());
     assert_eq!(
-        launcher.view().status,
+        shown(launcher),
         report("user-initiated", "fallback", "zqx  words", NO_CONTEXT)
     );
 
@@ -305,7 +311,7 @@ fn each_way_in_runs_the_command_once_with_its_record_and_opens_no_screen(fixture
     );
     let view = launcher.view();
     assert_eq!(
-        view.status,
+        shown(launcher),
         report("user-initiated", "hotkey", "none", NO_CONTEXT)
     );
     assert_eq!(
@@ -324,7 +330,7 @@ fn each_way_in_runs_the_command_once_with_its_record_and_opens_no_screen(fixture
     block_on(launcher.activate_quick_slot(0));
     let view = launcher.view();
     assert_eq!(
-        view.status,
+        shown(launcher),
         report("user-initiated", "quick-slot", "none", NO_CONTEXT)
     );
     assert!(matches!(view.screen, Screen::Root { .. }));
@@ -375,9 +381,9 @@ fn a_schedule_without_an_item_runs_the_command_in_the_background(fixture: &Fixtu
     pane.clock.advance(MINUTE);
     assert!(pane.launcher.wait_for_schedules(PROMPTLY));
     let tick = described("background", "schedule", "none", NO_CONTEXT);
-    // The run showed nothing: the status line is still what the user saw.
+    // The run showed nothing: the toast is still the one the user saw.
     assert_eq!(
-        pane.launcher.view().status,
+        shown(&pane.launcher),
         Status::Result("Last report: none. Ticks: 0; last tick: none".into())
     );
     assert_eq!(

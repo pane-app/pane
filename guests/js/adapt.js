@@ -12,7 +12,11 @@
 // its callback id, and its later ones by the id and their place (`<id>#1`,
 // `<id>#2`, ...); an item's own `onAction` comes before its `actions`.
 // Pane's `handle-event` hands such an id back, and the adapter runs the
-// function, answering `{"status": text}`. An id the list does not name (an
+// function, answering `{}`: Pane shows nothing of an answer, and the
+// command tells the user what happened with a toast or a HUD
+// (`@pane/extension/feedback`, feedback.js). An id of the newest toast's
+// actions (`toast:<n>:primary`) runs that action, from the table
+// feedback.js keeps on `globalThis`. An id the list does not name (an
 // instance that has not drawn the list yet asks it first) is a search
 // result's, which the command's `runSearchResult` runs. A no-view command's
 // `run` answers the same way. Both `render` and `run` receive the command's
@@ -31,11 +35,12 @@
 //   the message of an `Error` or of an object with a `message`, or the text
 //   of anything else.
 //
-// A crash is then only what a crash should be: an action resolving with a
-// value that is not text, a provider resolving with a value of the wrong
-// type, or a custom view's `render` throwing (it has no error to answer
-// with). A list Pane cannot read (a title that is not text, say) is the
-// command's failure, which Pane reports, not a crash.
+// A crash is then only what a crash should be: an action, `run` or
+// `runSearchResult` resolving with a value (it resolves with nothing; text,
+// which Pane no longer shows, is let through), a provider resolving with a
+// value of the wrong type, or a custom view's `render` throwing (it has no
+// error to answer with). A list Pane cannot read (a title that is not text,
+// say) is the command's failure, which Pane reports, not a crash.
 
 /** The version of the tree the adapter writes (docs/list-tree.md). */
 const TREE_VERSION = 1;
@@ -160,11 +165,27 @@ const missing = {
   },
 };
 
-/** What `handle-event` and `run` answer for `status`, the text shown. */
-function answer(status) {
-  // An action answers text; anything else is a crash, as it was.
-  if (typeof status !== "string") return status;
-  return JSON.stringify({ status });
+/** What `handle-event` and `run` answer: Pane shows nothing of it. */
+const ANSWER = "{}";
+
+/**
+ * What `handle-event` and `run` answer for `value`, what an action, `run`
+ * or `runSearchResult` resolved with: nothing (or text, which Pane no
+ * longer shows) answers `{}`; any other value is answered as it is, which
+ * is not text, so the call crashes, as it always did.
+ */
+function answer(value) {
+  if (value === undefined || typeof value === "string") return ANSWER;
+  return value;
+}
+
+/** Where feedback.js keeps the newest toast's actions, by callback id. */
+const TOAST_ACTIONS = Symbol.for("pane.extension.toastActions");
+
+/** The newest toast's action named `callback`, if any. */
+function toastAction(callback) {
+  const actions = globalThis[TOAST_ACTIONS];
+  return actions instanceof Map ? actions.get(callback) : undefined;
 }
 
 /**
@@ -190,36 +211,47 @@ export function adaptCommand(command) {
     ...own,
     render: draw,
     async run(id, launch) {
-      let status;
+      let value;
       try {
         if (typeof command.run !== "function") {
           throw new Error(`\`${id}\` opens a screen; it has no run entry point`);
         }
-        status = await command.run(id, launch);
+        value = await command.run(id, launch);
       } catch (thrown) {
         throw message(thrown);
       }
-      return answer(status);
+      return answer(value);
     },
     async handleEvent(callback, _details) {
+      // A toast's action, which stays the toast's while it shows.
+      const ofToast = toastAction(callback);
+      if (ofToast !== undefined) {
+        let value;
+        try {
+          value = await ofToast();
+        } catch (thrown) {
+          throw message(thrown);
+        }
+        return answer(value);
+      }
       if (!actions.has(callback)) {
         // A fresh instance: the list names its actions once drawn.
         await draw(drawnFor);
       }
       const action = actions.get(callback);
-      let status;
+      let value;
       try {
         if (action !== undefined) {
-          status = await action();
+          value = await action();
         } else if (typeof command.runSearchResult === "function") {
-          status = await command.runSearchResult(callback);
+          value = await command.runSearchResult(callback);
         } else {
           throw new Error(`unknown action: ${callback}`);
         }
       } catch (thrown) {
         throw message(thrown);
       }
-      return answer(status);
+      return answer(value);
     },
     submitForm: adapted(own, "submitForm", formError),
     openView: adapted(own, "openView", message, adaptView),

@@ -298,7 +298,7 @@ fn item_actions(listed: &Listed, keys: &PaneKeys) -> ItemActions {
 
 /// Whether `binding` is a key a search field types or moves with: one held
 /// with no modifier but Shift, other than a function key.
-fn types(binding: &Binding) -> bool {
+pub(super) fn types(binding: &Binding) -> bool {
     let (control, alt, _shift, platform, function) = binding.modifiers();
     let key = binding.key();
     let function_key =

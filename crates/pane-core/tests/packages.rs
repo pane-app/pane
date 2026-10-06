@@ -17,11 +17,14 @@ use tempfile::TempDir;
 #[path = "support/platforms.rs"]
 mod platforms;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/guests.rs"]
 mod guests;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use guests::guest;
 use rows::titles;
 
@@ -157,7 +160,7 @@ fn a_previewed_local_package_installs_and_its_command_runs() {
     assert_eq!(launcher.view().title, "Rust sample");
     block_on(launcher.activate_selected());
     assert_eq!(
-        launcher.view().status,
+        shown(&launcher),
         Status::Result("Hello from the Rust guest".into())
     );
 }
@@ -243,7 +246,7 @@ fn a_new_version_in_the_same_folder_is_an_update_of_the_tracked_package() {
     block_on(launcher.activate_selected());
     block_on(launcher.activate_selected());
     assert_eq!(
-        launcher.view().status,
+        shown(&launcher),
         Status::Result("Hello from the TypeScript guest".into())
     );
 }
@@ -288,7 +291,7 @@ fn copies_in_different_folders_are_distinct_packages_despite_the_same_title() {
         block_on(launcher.activate_selected());
         block_on(launcher.activate_selected());
         assert_eq!(
-            launcher.view().status,
+            shown(&launcher),
             Status::Result(format!("Hello from the {answer} guest"))
         );
     }
@@ -339,7 +342,7 @@ fn installing_leaves_the_source_folder_untouched_and_runs_a_managed_copy() {
     block_on(launcher.activate_selected());
     block_on(launcher.activate_selected());
     assert_eq!(
-        launcher.view().status,
+        shown(&launcher),
         Status::Result("Hello from the Rust guest".into())
     );
 }
@@ -514,7 +517,7 @@ fn a_folder_path_with_spaces_and_unicode_is_its_identity() {
     block_on(launcher.activate_selected());
     block_on(launcher.activate_selected());
     assert_eq!(
-        launcher.view().status,
+        shown(&launcher),
         Status::Result("Hello from the Rust guest".into())
     );
 }
@@ -819,7 +822,7 @@ fn the_assembled_sample_packages_install_and_run_in_every_language() {
         assert_eq!(launcher.view().title, title);
         block_on(launcher.activate_selected());
         assert_eq!(
-            launcher.view().status,
+            shown(&launcher),
             Status::Result(format!("Hello from the {language} guest"))
         );
     }

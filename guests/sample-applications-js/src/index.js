@@ -9,6 +9,7 @@
 // sample (guests/sample-applications-ts). The JSDoc types let TypeScript
 // check this file against Pane's contract; they are optional.
 // @ts-check
+import { showToast } from "@pane/extension/feedback";
 import { installed, open } from "pane:extension/applications@0.1.0";
 
 const SAMPLE = "JavaScript applications sample";
@@ -39,14 +40,15 @@ function applications() {
 }
 
 /**
- * Opens the application with id `itemId`, the action of its item.
+ * Opens the application with id `itemId`, the action of its item, and
+ * shows a toast saying so.
  * @param {string} itemId
- * @returns {Promise<string>}
+ * @returns {Promise<void>}
  */
 async function act(itemId) {
   host(() => open(itemId));
   const name = applications().find((app) => app.id === itemId)?.name ?? itemId;
-  return `Opened ${name}`;
+  showToast({ title: `Opened ${name}` });
 }
 
 /** @type {import("@pane/extension").Command} */

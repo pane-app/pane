@@ -19,11 +19,14 @@ use tempfile::TempDir;
 #[path = "support/platforms.rs"]
 mod platforms;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/guests.rs"]
 mod guests;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use guests::guest_file as guest;
 use rows::{select_title, titles};
 
@@ -779,7 +782,7 @@ fn more_than_sixteen_packages_to_install_with_it_are_refused() {
 }
 
 /// From root search, opens the command titled `command` and runs its item
-/// titled `item`.
+/// titled `item`, returning the outcome: its toast, or the status line.
 fn run(launcher: &Launcher, command: &str, item: &str) -> Status {
     launcher.back();
     launcher.back();
@@ -787,7 +790,7 @@ fn run(launcher: &Launcher, command: &str, item: &str) -> Status {
     block_on(launcher.activate_selected());
     select_title(launcher, item);
     block_on(launcher.activate_selected());
-    launcher.view().status
+    shown(launcher)
 }
 
 #[test]

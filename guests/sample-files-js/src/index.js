@@ -23,7 +23,7 @@ const lastName = (path) => path.split("/").pop() ?? path;
 /**
  * Runs the action of the item `itemId`: none does anything.
  * @param {string} itemId
- * @returns {Promise<string>}
+ * @returns {Promise<void>}
  */
 async function act(itemId) {
   throw new Error(`unknown item: ${itemId}`);

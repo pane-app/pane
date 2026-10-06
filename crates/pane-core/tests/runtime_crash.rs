@@ -25,9 +25,12 @@ use pane_core::{
 };
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use rows::{manage, select_title, titles, to_root};
 
 const WHY_ROW: &str = "Why the extension runtime stopped";
@@ -214,11 +217,11 @@ fn open_at(launcher: &Launcher, command: &str, item: &str) {
 }
 
 /// From root search, opens `command` and runs its item `item`, returning
-/// the outcome.
+/// the outcome: its toast, or the status line.
 fn run(launcher: &Launcher, command: &str, item: &str) -> Status {
     open_at(launcher, command, item);
     block_on(launcher.activate_selected());
-    launcher.view().status
+    shown(launcher)
 }
 
 /// Activates the extension manager's row titled `title`, returning the

@@ -17,7 +17,7 @@ use pane_core::{CommandRegistration, Launcher, LauncherView, Runtime, Screen, St
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::settle;
+use settle::{settle, settle_shown};
 
 /// Open actions' default binding on this system.
 const OPEN_ACTIONS: &str = if cfg!(target_os = "macos") {
@@ -108,18 +108,18 @@ fn selector(name: &str) -> &'static str {
 }
 
 /// Enter, Ctrl+Enter and Ctrl+Shift+Enter run the selected item's first,
-/// second and third actions, whose answers the status line shows; on an
-/// item with one action the chords run nothing.
+/// second and third actions, whose toasts the footer shows; on an item
+/// with one action the chords run nothing.
 #[gpui::test]
 fn enter_and_the_action_chords_run_the_first_three_actions(cx: &mut TestAppContext) {
     let (window, cx) = opened(cx);
     cx.simulate_keystrokes("enter");
-    assert_eq!(settle(&window, cx).status, answered("Open: Alpha note"));
+    assert_eq!(settle_shown(&window, cx), answered("Open: Alpha note"));
     cx.simulate_keystrokes("ctrl-enter");
-    assert_eq!(settle(&window, cx).status, answered("Copy: Alpha note"));
+    assert_eq!(settle_shown(&window, cx), answered("Copy: Alpha note"));
     cx.simulate_keystrokes("ctrl-shift-enter");
+    assert_eq!(settle_shown(&window, cx), answered("Rename: Alpha note"));
     let view = settle(&window, cx);
-    assert_eq!(view.status, answered("Rename: Alpha note"));
     assert_eq!(selected_title(&view), "Alpha note", "the selection stays");
     assert!(!actions_open(&window, cx));
 
@@ -128,7 +128,7 @@ fn enter_and_the_action_chords_run_the_first_three_actions(cx: &mut TestAppConte
     cx.simulate_keystrokes("ctrl-enter");
     cx.simulate_keystrokes("ctrl-shift-enter");
     assert_eq!(
-        settle(&window, cx).status,
+        settle_shown(&window, cx),
         answered("Rename: Alpha note"),
         "nothing ran"
     );
@@ -140,22 +140,20 @@ fn enter_and_the_action_chords_run_the_first_three_actions(cx: &mut TestAppConte
 fn an_actions_shortcut_runs_it_from_the_list(cx: &mut TestAppContext) {
     let (window, cx) = opened(cx);
     cx.simulate_keystrokes("ctrl-shift-c");
-    let view = settle(&window, cx);
-    assert_eq!(view.status, answered("Copy Link: Alpha note"));
+    assert_eq!(settle_shown(&window, cx), answered("Copy Link: Alpha note"));
     assert!(!actions_open(&window, cx), "the panel stays closed");
 
     cx.simulate_keystrokes("ctrl-x");
-    assert_eq!(settle(&window, cx).status, answered("Delete: Alpha note"));
+    assert_eq!(settle_shown(&window, cx), answered("Delete: Alpha note"));
 
     // Not the same modifiers: nothing runs.
     cx.simulate_keystrokes("ctrl-c");
     cx.simulate_keystrokes("ctrl-shift-x");
-    assert_eq!(settle(&window, cx).status, answered("Delete: Alpha note"));
+    assert_eq!(settle_shown(&window, cx), answered("Delete: Alpha note"));
 
     // "Open Menu" asks for Ctrl+K, which opens the panel instead.
     cx.simulate_keystrokes("ctrl-k");
-    let view = settle(&window, cx);
-    assert_eq!(view.status, answered("Delete: Alpha note"));
+    assert_eq!(settle_shown(&window, cx), answered("Delete: Alpha note"));
     if !cfg!(target_os = "macos") {
         assert!(actions_open(&window, cx), "Ctrl+K is Pane's");
     }
@@ -167,7 +165,7 @@ fn an_actions_shortcut_runs_it_from_the_list(cx: &mut TestAppContext) {
 fn a_held_key_or_a_second_click_runs_nothing_more(cx: &mut TestAppContext) {
     let (window, cx) = opened(cx);
     cx.simulate_keystrokes("enter");
-    assert_eq!(settle(&window, cx).status, answered("Open: Alpha note"));
+    assert_eq!(settle_shown(&window, cx), answered("Open: Alpha note"));
 
     for held in ["ctrl-enter", "ctrl-shift-c", "enter"] {
         cx.simulate_event(gpui::KeyDownEvent {
@@ -176,14 +174,14 @@ fn a_held_key_or_a_second_click_runs_nothing_more(cx: &mut TestAppContext) {
             prefer_character_input: false,
         });
         assert_eq!(
-            settle(&window, cx).status,
+            settle_shown(&window, cx),
             answered("Open: Alpha note"),
             "a repeat of {held} runs nothing"
         );
     }
 
     cx.simulate_keystrokes("ctrl-enter");
-    assert_eq!(settle(&window, cx).status, answered("Copy: Alpha note"));
+    assert_eq!(settle_shown(&window, cx), answered("Copy: Alpha note"));
     let row = cx
         .debug_bounds("row-Alpha note")
         .expect("the row is drawn")
@@ -202,7 +200,7 @@ fn a_held_key_or_a_second_click_runs_nothing_more(cx: &mut TestAppContext) {
         click_count: 2,
     });
     assert_eq!(
-        settle(&window, cx).status,
+        settle_shown(&window, cx),
         answered("Copy: Alpha note"),
         "a second click runs nothing"
     );
@@ -304,9 +302,9 @@ fn typing_filters_the_actions_and_enter_runs_one(cx: &mut TestAppContext) {
     );
 
     cx.simulate_keystrokes("enter");
+    assert_eq!(settle_shown(&window, cx), answered("Copy Link: Alpha note"));
     let view = settle(&window, cx);
     assert!(!actions_open(&window, cx));
-    assert_eq!(view.status, answered("Copy Link: Alpha note"));
     assert_eq!(selected_title(&view), "Alpha note");
 }
 
@@ -333,8 +331,8 @@ fn escape_and_an_outside_click_close_only_the_panel(cx: &mut TestAppContext) {
         .expect("the row is drawn")
         .center();
     cx.simulate_click(beta, Modifiers::none());
+    assert_eq!(settle_shown(&window, cx), Status::Idle, "nothing ran");
     let view = settle(&window, cx);
     assert!(!actions_open(&window, cx));
-    assert_eq!(view.status, Status::Idle, "nothing ran");
     assert_eq!(selected_title(&view), "Alpha note");
 }

@@ -89,7 +89,7 @@ impl Launcher {
             let launch = state.launch.clone();
             return Some(Box::pin(async move {
                 let answer = runtime
-                    .render_launched_with(&component, &launch, data.clone())
+                    .render_launched_with(&component, Some(command.as_str()), &launch, data.clone())
                     .await;
                 launcher.show_listed_again(epoch, search, component, data, answer);
             }));

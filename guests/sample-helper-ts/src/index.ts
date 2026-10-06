@@ -12,6 +12,7 @@
 // wins; Pane ends the helper's process as soon as the call that started it
 // returns.
 import type { Command, CustomView, Item, List } from "@pane/extension";
+import { showToast } from "@pane/extension/feedback";
 import { run, type HelperError } from "pane:extension/helpers@0.1.0";
 import { set } from "pane:extension/settings@0.1.0";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
@@ -35,8 +36,13 @@ async function helperRun(helper: string, args: string[], input: string): Promise
   }
 }
 
-/** Runs the action of the item `itemId`. */
-async function act(itemId: string): Promise<string> {
+/** Runs the action of the item `itemId`, showing a toast with what it did. */
+async function act(itemId: string): Promise<void> {
+  showToast({ title: await outcome(itemId) });
+}
+
+/** Does what the item `itemId`'s action does; the text its toast shows. */
+async function outcome(itemId: string): Promise<string> {
   switch (itemId) {
     case "echo":
       return helperRun(ECHO, [], "hello from Pane");

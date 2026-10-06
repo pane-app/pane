@@ -94,6 +94,15 @@ interface commands {
   /// disabled, paused or unavailable on this system, or the context is not
   /// JSON. A refusal is an answer, never a failure of the caller.
   launch: func(target: command-ref, launch-type: launch-type, arguments: list<argument-value>, context: option<string>) -> result<_, string>;
+
+  /// Replaces the subtitle the calling command's row shows in root search
+  /// (such as "3 unread"), which root search also matches, until it is set
+  /// again; none gives back the subtitle its `pane.json` entry declares.
+  /// Pane keeps it as its own record, across restarts and updates, and
+  /// forgets it when the package is uninstalled. Refused when Pane does not
+  /// know which command the call is for (an operation's or a root search's
+  /// call).
+  set-subtitle: func(subtitle: option<string>) -> result<_, string>;
 }
 
 /// The commands import alone, for guest bindings.

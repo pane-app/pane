@@ -9,6 +9,27 @@
       "title": "Actions (TypeScript)",
       "subtitle": "Items with several actions, in sections, with shortcuts",
       "component": "sample_actions_ts.wasm"
+    },
+    {
+      "id": "window-functions",
+      "title": "Window functions (TypeScript)",
+      "subtitle": "Closes, pops to root and clears the search, saying what each answered",
+      "mode": "no-view",
+      "component": "sample_actions_ts.wasm"
+    },
+    {
+      "id": "spin",
+      "title": "Spin (TypeScript)",
+      "subtitle": "Leaves a toast in progress, which Pane hides when the run ends",
+      "mode": "no-view",
+      "component": "sample_actions_ts.wasm"
+    },
+    {
+      "id": "stumble",
+      "title": "Stumble (TypeScript)",
+      "subtitle": "Fails, so Pane shows a failure toast",
+      "mode": "no-view",
+      "component": "sample_actions_ts.wasm"
     }
   ]
 }

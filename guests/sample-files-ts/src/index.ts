@@ -18,7 +18,7 @@ const MAX_RESULTS = 20;
 const lastName = (path: string): string => path.split("/").pop() ?? path;
 
 /** Runs the action of the item `itemId`: none does anything. */
-async function act(itemId: string): Promise<string> {
+async function act(itemId: string): Promise<void> {
   throw new Error(`unknown item: ${itemId}`);
 }
 

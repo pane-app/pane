@@ -622,6 +622,14 @@ pub fn move_pin_keys(earlier: bool) -> [Binding; 2] {
     [vertical, horizontal].map(|arrow| default_binding(&format!("{PIN_MODIFIER}-alt-{arrow}")))
 }
 
+/// The launcher's key that moves the focus to the toast in its footer,
+/// when the toast offers actions (#141): Ctrl+T (Command+T on macOS). Tab
+/// then moves between its actions and Enter chooses one. Window-local and
+/// fixed, as [`pin_key`] is.
+pub fn toast_key() -> Binding {
+    default_binding(&format!("{PIN_MODIFIER}-t"))
+}
+
 /// The local chord that picks what number `number` (0 to 9) names in the
 /// launcher: Ctrl and the digit. Fixed, as [`pin_key`] is.
 pub fn number_key(number: usize) -> Binding {
@@ -650,7 +658,7 @@ pub fn action_key(index: usize) -> Option<Binding> {
 /// included) and the navigation bindings it adds, and the launcher's fixed
 /// keys: Escape, Ctrl+K (whatever Open actions is bound to), Up and Down,
 /// Tab, Enter and the action chords ([`action_key`]), Ctrl and a digit,
-/// and root search's pin keys.
+/// root search's pin keys and the toast's key ([`toast_key`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PaneKeys {
     keys: Vec<(Binding, String)>,
@@ -702,6 +710,7 @@ impl PaneKeys {
             add(number_key(number), "picks a numbered result");
         }
         add(pin_key(), "pins the selected result");
+        add(toast_key(), "moves the focus to the toast");
         for earlier in [true, false] {
             for key in move_pin_keys(earlier) {
                 add(key, "moves a pin");

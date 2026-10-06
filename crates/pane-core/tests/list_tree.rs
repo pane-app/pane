@@ -12,9 +12,12 @@ use std::path::PathBuf;
 use futures::executor::block_on;
 use pane_core::{CallError, CommandRegistration, Launcher, Runtime, Screen, Status};
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/guests.rs"]
 mod guests;
 
+use feedback::shown;
 use guests::guest;
 
 /// The fixture's items, (id, title), in their first order.
@@ -77,8 +80,9 @@ impl Pane {
         view.selected.map(|index| view.rows[index].id.clone())
     }
 
-    /// Chooses the item `id` and returns the status once it answered and
-    /// the list was drawn again.
+    /// Chooses the item `id` and returns what the user is shown once it
+    /// answered and the list was drawn again: its toast, or the status
+    /// line.
     fn choose(&self, id: &str) -> Status {
         let index = self
             .ids()
@@ -87,7 +91,7 @@ impl Pane {
             .unwrap_or_else(|| panic!("no item {id} in {:?}", self.ids()));
         self.launcher.select(index);
         block_on(self.launcher.activate_selected());
-        self.launcher.view().status
+        shown(&self.launcher)
     }
 
     fn title(&self) -> String {
@@ -134,6 +138,9 @@ fn choosing_an_item_hands_its_callback_to_the_command_and_draws_the_list_again()
     let pane = Pane::opened();
 
     assert_eq!(pane.choose("first"), handled("cb-first"));
+    // The toast says it: the `status` text the command still answers is
+    // not shown in the status line.
+    assert_eq!(pane.launcher.view().status, Status::Idle);
 
     // The callback is the one the tree named, not the item's id, and the
     // list was asked for again.
@@ -224,9 +231,7 @@ fn an_unreadable_tree_when_the_command_opens_is_shown_as_a_failed_view() {
             pane.runtime
                 .handle_event(&component(), "cb-unreadable", "{}")
         ),
-        Ok(pane_core::Answer {
-            status: Some("Handled cb-unreadable with {}".into())
-        })
+        Ok(pane_core::Answer::default())
     );
 
     block_on(pane.launcher.activate_selected());
@@ -289,9 +294,7 @@ fn the_runtime_reads_the_tree_and_runs_an_item_by_its_callback() {
     // Running an item draws the list, then hands its action's callback over.
     assert_eq!(
         block_on(runtime.run_item(&component(), "first")),
-        Ok(pane_core::Answer {
-            status: Some("Handled cb-first with {}".into())
-        })
+        Ok(pane_core::Answer::default())
     );
     assert_eq!(
         block_on(runtime.run_item(&component(), "missing")),

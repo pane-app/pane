@@ -9,6 +9,27 @@
       "title": "Actions",
       "subtitle": "Items with several actions, in sections, with shortcuts",
       "component": "sample_actions.wasm"
+    },
+    {
+      "id": "window-functions",
+      "title": "Window functions",
+      "subtitle": "Closes, pops to root and clears the search, saying what each answered",
+      "mode": "no-view",
+      "component": "sample_actions.wasm"
+    },
+    {
+      "id": "spin",
+      "title": "Spin",
+      "subtitle": "Leaves a toast in progress, which Pane hides when the run ends",
+      "mode": "no-view",
+      "component": "sample_actions.wasm"
+    },
+    {
+      "id": "stumble",
+      "title": "Stumble",
+      "subtitle": "Fails, so Pane shows a failure toast",
+      "mode": "no-view",
+      "component": "sample_actions.wasm"
     }
   ]
 }

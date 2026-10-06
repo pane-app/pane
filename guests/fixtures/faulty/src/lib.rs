@@ -6,6 +6,7 @@
 use core::cell::Cell;
 
 use pane_guest::alloc::{format, string::String, vec, vec::Vec};
+use pane_guest::feedback::{Toast, show_toast};
 use pane_guest::{
     Command, CustomView, CustomViewInfo, CustomViewRole, Field, FieldKind, FieldValue, Form,
     FormError, Frame, GuestCustomView, Item, Key, List, Shape, Text, TextField, ViewEvent,
@@ -44,11 +45,18 @@ fn acting(id: &'static str) -> Item {
     item(id).on_action(move || run(id))
 }
 
-/// Runs the action `id`: "error" is refused, "trap" traps, "grow-near-cap"
-/// and "grow-past-cap" grow the memory to either side of the cap, and
-/// "hold", which no item lists (tests run it by its callback id), holds the
-/// call.
-async fn run(id: &str) -> Result<String, String> {
+/// Runs the action `id` and shows a toast with what [`outcome`] answers.
+async fn run(id: &str) -> Result<(), String> {
+    let done = outcome(id).await?;
+    show_toast(Toast::success(done));
+    Ok(())
+}
+
+/// What the action `id` does: "error" is refused, "trap" traps,
+/// "grow-near-cap" and "grow-past-cap" grow the memory to either side of
+/// the cap, and "hold", which no item lists (tests run it by its callback
+/// id), holds the call. It answers what it did.
+async fn outcome(id: &str) -> Result<String, String> {
     match id {
         // Holds a stream open to the host (its stdout), with the future of
         // that write pending, saves `holding` as "started", then waits ten
@@ -168,7 +176,7 @@ impl Command for Faulty {
 
     /// A callback no item names runs as an action of that id, so tests can
     /// run "hold", which is not listed.
-    async fn run_search_result(id: String) -> Result<String, String> {
+    async fn run_search_result(id: String) -> Result<(), String> {
         run(&id).await
     }
 

@@ -13,6 +13,7 @@
 import * as history from "pane:extension/clipboard-history@0.1.0";
 import type { Capture, Entry, HistoryStatus } from "pane:extension/clipboard-history@0.1.0";
 import type { Command, CustomView, FieldValue, Form, Item, List } from "@pane/extension";
+import { showToast } from "@pane/extension/feedback";
 
 /** The longest title of a kept item, in characters. */
 const TITLE_CHARS = 80;
@@ -225,8 +226,13 @@ async function render(): Promise<List> {
   return { title: "Clipboard history (TypeScript)", items };
 }
 
-/** Runs the action of the item `itemId`. */
-async function act(itemId: string): Promise<string> {
+/** Runs the action of the item `itemId`, showing a toast with what it did. */
+async function act(itemId: string): Promise<void> {
+  showToast({ title: await outcome(itemId) });
+}
+
+/** Does what the item `itemId`'s action does; the text its toast shows. */
+async function outcome(itemId: string): Promise<string> {
   const wanted = CAPTURES[itemId];
   if (wanted) {
     host(() => history.setCapture(wanted[0]));
@@ -306,8 +312,8 @@ async function openView(itemId: string): Promise<CustomView> {
  * A callback no item's action names runs as the action of that id, so a
  * kept item's id (whose item opens a form) still copies it again.
  */
-async function runSearchResult(id: string): Promise<string> {
-  return act(id);
+async function runSearchResult(id: string): Promise<void> {
+  await act(id);
 }
 
 export const command: Command = { render, runSearchResult, submitForm, openView };

@@ -2,22 +2,26 @@
 //! this folder, choose "Develop Hello Rust" in Manage extensions, then edit
 //! `GREETING` and save. Pane builds the package with `cargo build --release
 //! --target wasm32-wasip2` and reloads it while it keeps running; "Say
-//! hello" then answers with the new text. See guests/README.md.
+//! hello" then shows the new text in a toast. See guests/README.md.
 #![no_std]
 
 use pane_guest::alloc::{format, string::String, vec::Vec};
+use pane_guest::feedback::{Toast, show_toast};
 use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
 
-/// What "Say hello" answers.
+/// What "Say hello" shows.
 const GREETING: &str = "Hello from Rust";
 
 struct Hello;
 pane_guest::export!(Hello);
 
 /// Runs the action of the item `id`.
-async fn act(id: &str) -> Result<String, String> {
+async fn act(id: &str) -> Result<(), String> {
     match id {
-        "hello" => Ok(GREETING.into()),
+        "hello" => {
+            show_toast(Toast::success(GREETING));
+            Ok(())
+        }
         other => Err(format!("unknown item: {other}")),
     }
 }

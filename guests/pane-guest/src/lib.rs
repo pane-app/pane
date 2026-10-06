@@ -6,7 +6,9 @@
 //! `handle-event`) and runs when the user chooses them; or, for a no-view
 //! command, [`Command::run`] runs each time it is launched. Every command
 //! receives its launch record and may launch another command with
-//! [`commands`]. It may keep
+//! [`commands`]. It tells the user what happened with a toast or a HUD
+//! ([`feedback`]), and may close Pane's window or pop back to root search
+//! ([`window`]); Pane shows nothing of an action's answer. It may keep
 //! values between runs with [`settings`], and its own records, disposable
 //! values and secrets with [`content`], [`cache`] and [`credentials`]. It
 //! may compute results from root search's query with [`root`], run a continuing
@@ -52,8 +54,27 @@ pub use exports::pane::extension::command::{
 pub use list::{Action, Command, Item, List, Modifier, Shortcut};
 pub use pane::extension::commands::{LaunchRecord, LaunchSource, LaunchType};
 
+pub mod feedback;
 mod list;
 pub use pane::extension::{cache, content, credentials, operations, settings};
+
+/// Pane's launcher window, as the command that runs in it sees it
+/// (`pane:extension/window`): [`window::close`] hides it, choosing what its
+/// next showing shows ([`window::PopToRootType`]) and whether root search's
+/// query is emptied; [`window::pop_to_root`] returns to root search with
+/// the window open; [`window::clear_search`] empties the search field on
+/// screen. Each answers whether a window was shown for the call: in a
+/// background launch, a schedule or a service, it does nothing and answers
+/// false.
+///
+/// ```ignore
+/// use pane_guest::window::{PopToRootType, close};
+///
+/// close(true, PopToRootType::Immediate);
+/// ```
+pub mod window {
+    pub use crate::pane::extension::window::{PopToRootType, clear_search, close, pop_to_root};
+}
 
 /// How the command was launched, and launching another command
 /// (`pane:extension/commands`). A no-view command's [`Command::run`]
@@ -68,11 +89,15 @@ pub use pane::extension::{cache, content, credentials, operations, settings};
 /// let own = CommandRef { source: None, command: "report".into() };
 /// launch(&own, LaunchType::Background, &[], Some(r#"{"from":"launch"}"#))?;
 /// ```
+///
+/// [`commands::set_subtitle`] replaces the subtitle the command's own row
+/// shows in root search (`Some("3 unread")`), until it is set again; `None`
+/// gives back the one its `pane.json` entry declares.
 pub mod commands {
     use core::cell::RefCell;
 
     pub use crate::pane::extension::commands::{
-        ArgumentValue, CommandRef, LaunchRecord, LaunchSource, LaunchType, launch,
+        ArgumentValue, CommandRef, LaunchRecord, LaunchSource, LaunchType, launch, set_subtitle,
     };
 
     /// The launch record of the call in progress.

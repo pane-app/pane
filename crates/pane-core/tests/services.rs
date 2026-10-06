@@ -26,9 +26,12 @@ use pane_core::clipboard::{Clock, ManualClock, SystemClock};
 use pane_core::{Launcher, Limits, PackageIdentity, Runtime, Screen, Status, Unavailable};
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use rows::{manage, select_title, titles, to_root};
 
 /// One language's Service sample package.
@@ -332,8 +335,8 @@ fn the_status_of_a_cycle_shows_on_the_command_screen(fixture: &Fixture) {
     let (started, _, folder) = pane.installed(fixture);
     pane.settled(&started);
 
-    // A cycle's status shows on the command's screen while it is open, as
-    // an action's answer does, without the window waiting for the cycle.
+    // A cycle's status shows in the status line of the command's screen
+    // while it is open, without the window waiting for the cycle.
     open(&started.launcher, fixture.command);
     pane.clock.advance(SECOND);
     pane.settled(&started);
@@ -346,7 +349,7 @@ fn the_status_of_a_cycle_shows_on_the_command_screen(fixture: &Fixture) {
     // event, and the next cycle reports it.
     run_item(&started.launcher, fixture.command, "Add an event");
     assert_eq!(
-        started.launcher.view().status,
+        shown(&started.launcher),
         Status::Result("Added event 1; the next cycle reports it".into())
     );
     pane.clock.advance(SECOND);

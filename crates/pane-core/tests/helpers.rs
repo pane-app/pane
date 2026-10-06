@@ -30,9 +30,12 @@ use futures::executor::block_on;
 use pane_core::{Launcher, Limits, PackageIdentity, Runtime, SavedData, Screen, Status, Target};
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use rows::{select_title, titles};
 
 /// Under the ten seconds "Echo after waiting" has its helper wait: a run
@@ -65,7 +68,7 @@ const RUST: Sample = Sample {
     package: "sample-helper",
     component: "sample_helper.wasm",
     title: "Helper sample",
-    version: "0.2.0",
+    version: "0.3.0",
 };
 
 const JAVASCRIPT: Sample = Sample {
@@ -201,11 +204,12 @@ impl Installed {
         }
     }
 
-    /// Opens the command and runs its item `item`, returning the status.
+    /// Opens the command and runs its item `item`, returning what it
+    /// showed: its toast, or the status line.
     fn run(&self, item: &str) -> Status {
         open_sample_at(&self.launcher, item);
         block_on(self.launcher.activate_selected());
-        self.launcher.view().status
+        shown(&self.launcher)
     }
 
     /// What "Echo after waiting" has noted: "started", "finished" or
@@ -499,7 +503,7 @@ fn cancelling_a_run_ends_the_helper_s_process(sample: &Sample) {
     pending.assert_stopped(&installed.runtime);
 
     assert_eq!(
-        installed.launcher.view().status,
+        shown(&installed.launcher),
         Status::Result("Stopped the helper after one second".into())
     );
     // The command runs its helper again at once.
@@ -583,7 +587,7 @@ fn quitting_while_the_helper_runs_ends_its_process(sample: &Sample) {
     pending.assert_stopped(&installed.runtime);
 
     assert_eq!(
-        installed.launcher.view().status,
+        shown(&installed.launcher),
         error("refused: helper `echo` was stopped before it finished")
     );
     assert_eq!(installed.waiting().as_deref(), Some("started"));

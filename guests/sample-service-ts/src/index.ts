@@ -27,6 +27,7 @@ import { get, set } from "pane:extension/settings@0.1.0";
 import * as content from "pane:extension/content@0.1.0";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
 import type { Cycle, Item, List, Service } from "@pane/extension";
+import { showToast } from "@pane/extension/feedback";
 
 /** The content key holding how many cycles the service has run, ever. */
 const CYCLES = "cycles";
@@ -65,8 +66,13 @@ function counted(key: string): number {
   return count;
 }
 
-/** Runs the action of the item `itemId`. */
-async function act(itemId: string): Promise<string> {
+/** Runs the action of the item `itemId`, showing a toast with what it did. */
+async function act(itemId: string): Promise<void> {
+  showToast({ title: await outcome(itemId) });
+}
+
+/** Does what the item `itemId`'s action does; the text its toast shows. */
+async function outcome(itemId: string): Promise<string> {
   switch (itemId) {
     case "add": {
       const events = counted(EVENTS) + 1;

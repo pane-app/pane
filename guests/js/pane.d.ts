@@ -9,6 +9,7 @@
 // never sees the JSON or the callback ids.
 /// <reference path="./wasi.d.ts" />
 /// <reference path="./commands.d.ts" />
+/// <reference path="./feedback-host.d.ts" />
 /// <reference path="./data.d.ts" />
 /// <reference path="./operations.d.ts" />
 /// <reference path="./applications.d.ts" />
@@ -43,12 +44,13 @@ export interface Item {
   subtitle?: string | null;
   /**
    * Runs when the user chooses the item: an untitled action before the
-   * item's `actions`, which Pane names "Run item". The text it resolves
-   * with is shown as the result; throwing shows the error as the failure.
-   * Pane then asks for the list again (`render`). Omitted or `null` for
-   * none.
+   * item's `actions`, which Pane names "Run item". Pane shows nothing of
+   * what it resolves with: it tells the user what happened itself, with a
+   * toast or a HUD (`@pane/extension/feedback`); throwing shows the error
+   * as a failure toast. Pane then asks for the list again (`render`).
+   * Omitted or `null` for none.
    */
-  onAction?: (() => Promise<string>) | null;
+  onAction?: (() => Promise<void>) | null;
   /**
    * The item's actions, in order (after `onAction`, if it is given): the
    * first is its primary action (Enter), the second its secondary action
@@ -81,14 +83,15 @@ export interface Item {
 export type Platform = "windows" | "macos" | "linux";
 
 /**
- * One of an item's actions. Choosing it runs `onAction`; the text it
- * resolves with is shown as the result, and throwing shows the error as the
- * failure. Pane then asks for the list again (`render`).
+ * One of an item's actions. Choosing it runs `onAction`, which tells the
+ * user what happened itself, with a toast or a HUD
+ * (`@pane/extension/feedback`); throwing shows the error as a failure
+ * toast. Pane then asks for the list again (`render`).
  */
 export interface Action {
   /** What the footer and the Actions panel call it. */
   title: string;
-  onAction: () => Promise<string>;
+  onAction: () => Promise<void>;
   /**
    * The title of its section in the Actions panel; consecutive actions with
    * the same section are one section. Omitted or `null` for an untitled one.
@@ -278,7 +281,10 @@ export interface CustomView {
  * ```ts
  * export const command: Command = {
  *   async render(launch) {
- *     return { title: "Hello", items: [{ id: "greet", title: "Say hello", onAction: async () => "Hello" }] };
+ *     return {
+ *       title: "Hello",
+ *       items: [{ id: "greet", title: "Say hello", onAction: async () => { showToast({ title: "Hello" }); } }],
+ *     };
  *   },
  *   async submitForm(id, values) { ... },
  *   async openView(id) { return new MyView(); },
@@ -290,7 +296,7 @@ export interface CustomView {
  *
  * ```ts
  * export const command: Command = {
- *   async run(id, launch) { return `Launched from ${launch.source}`; },
+ *   async run(id, launch) { showHUD(`Launched from ${launch.source}`); },
  * };
  * ```
  *
@@ -299,9 +305,12 @@ export interface CustomView {
  * `runSearchResult`, `openView` and a view's `handleEvent` an `Error`'s
  * message, or a thrown string as is; from `submitForm` a {@link FormError}
  * object as is, and an `Error` or string as a message about the whole form.
- * Resolving with a value of the wrong type, such as an action resolving with
- * `undefined` instead of a string, is a crash: Pane reports it and starts a
- * fresh instance for the next call, and repeated crashes pause the extension.
+ * An action, `run` and `runSearchResult` resolve with nothing: Pane shows
+ * nothing of what they resolve with (text is let through and ignored).
+ * Resolving with a value of the wrong type, such as an action resolving
+ * with `null` or a number, or a provider's `results` resolving with a
+ * string, is a crash: Pane reports it and starts a fresh instance for the
+ * next call, and repeated crashes pause the extension.
  * A crash closes any open custom view, whose state was in the old instance.
  * A list Pane cannot read, such as one whose title is not a string, is the
  * command's failure, which Pane reports, not a crash.
@@ -319,19 +328,21 @@ export interface Command {
    * one component can serve several commands), launched as `launch` says:
    * how (by the user or in the background, and from where), with any text
    * sent through its alias or as a fallback, and any context another
-   * command passed. The text it resolves with is shown as the result;
-   * throwing shows the error as the failure, which never counts towards
-   * pausing the extension. Pane calls it only for a command whose
-   * `pane.json` entry says `"mode": "no-view"`; without it, that is an
-   * error.
+   * command passed. Pane shows nothing of what it resolves with: it tells
+   * the user what happened with a toast or a HUD
+   * (`@pane/extension/feedback`). Throwing shows the error as a failure
+   * toast with a "Copy Error" action, which never counts towards pausing
+   * the extension, and a toast left animated is hidden once it ends. Pane
+   * calls it only for a command whose `pane.json` entry says `"mode":
+   * "no-view"`; without it, that is an error.
    */
-  run?(command: string, launch: LaunchRecord): Promise<string>;
+  run?(command: string, launch: LaunchRecord): Promise<void>;
   /**
    * Runs the search result with id `id` the user chose, for a command that
-   * searches as the user types ({@link CommandSearch}); the text is shown as
-   * the result. Without it, choosing a result is an error.
+   * searches as the user types ({@link CommandSearch}); throwing shows the
+   * error as a failure toast. Without it, choosing a result is an error.
    */
-  runSearchResult?(id: string): Promise<string>;
+  runSearchResult?(id: string): Promise<void>;
   /**
    * Handle the submitted form of the item with `itemId`. `values` holds every
    * field of the form, in order. The text is shown as the result; a thrown

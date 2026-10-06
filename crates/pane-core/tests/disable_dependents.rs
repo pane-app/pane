@@ -16,11 +16,14 @@ use futures::executor::block_on;
 use pane_core::{Launcher, PackageIdentity, Question, Runtime, Screen, Status};
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/guests.rs"]
 mod guests;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use guests::guest_file as guest;
 use rows::{select_title, titles};
 
@@ -172,12 +175,14 @@ fn toggle(launcher: &Launcher, title: &str) -> Status {
     press(launcher, title)
 }
 
-/// Opens the Greeting command and runs its item `item`.
+/// Opens the Greeting command and runs its item `item`, returning what it
+/// showed: its toast, or the status line.
 fn greet(launcher: &Launcher, item: &str) -> Status {
     to_root(launcher);
     press(launcher, "Greeting");
     assert_eq!(launcher.view().screen, Screen::Command);
-    press(launcher, item)
+    press(launcher, item);
+    shown(launcher)
 }
 
 /// Each installed package's title with whether it is enabled.

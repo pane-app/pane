@@ -19,7 +19,7 @@ use tempfile::TempDir;
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::settle;
+use settle::{settle, settle_shown};
 
 #[path = "support/packages.rs"]
 mod packages;
@@ -167,10 +167,7 @@ fn a_runtime_crash_is_explained_and_the_runtime_restarted_from_the_window(cx: &m
     cx.simulate_keystrokes("escape");
     settle(&window, cx);
     press_enter_on(&window, cx, "Say hello");
-    let view = press_enter_on(&window, cx, "Say hello");
-    assert!(
-        matches!(view.status, Status::Result(_)),
-        "{:?}",
-        view.status
-    );
+    press_enter_on(&window, cx, "Say hello");
+    let shown = settle_shown(&window, cx);
+    assert!(matches!(shown, Status::Result(_)), "{shown:?}");
 }

@@ -138,10 +138,17 @@ is how a search result's id ([command search](command-search.md)) is run.
   action again. Optional fields may be omitted or `null`. A field whose
   name starts with `on` holds a callback id.
 
-`handle-event` and `run` answer an object. Version 1 knows one field, **`status`**:
-text Pane shows as the action's result in the status line. That text is
-transitional; the ticket that brings toasts removes it. An answer without
-it shows nothing.
+`handle-event` and `run` answer an object, `{}` for now. Pane shows nothing
+of it (#141): an action, a no-view run or a search result says what happened
+through the host functions every command has (`wit/feedback.wit`), with a
+toast in the footer or a HUD, or by closing the window. The **`status`** text
+the first version of the tree carried is ignored. An error a command answers
+with is shown as a failure toast with a "Copy Error" action.
+
+A toast's action is a callback id too: choosing it calls the command's
+`handle-event` with it, as an item's action does. The SDKs name a toast's
+actions `toast:<n>:primary` and `toast:<n>:secondary`, `<n>` counting the
+toasts the instance showed, and run the newest toast's.
 
 ## Reading a tree
 

@@ -16,7 +16,7 @@ use service::Service;
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::settle;
+use settle::{settle, settle_shown};
 
 #[path = "support/packages.rs"]
 mod packages;
@@ -99,11 +99,10 @@ fn the_commands_own_search_field_lists_the_service_results(cx: &mut TestAppConte
         Some("/search?q=aurora")
     );
 
-    // Enter shows the selected package's details.
+    // Enter shows the selected package's details in a toast.
     cx.simulate_keystrokes("down enter");
-    let view = settle(&window, cx);
     assert_eq!(
-        view.status,
+        settle_shown(&window, cx),
         Status::Result(
             "aurora-cli 0.9.3 (Apache-2.0): Command-line parsing with subcommands".into()
         )

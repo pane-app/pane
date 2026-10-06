@@ -15,9 +15,12 @@ use pane_core::hotkeys::{HotkeyError, Hotkeys, Shortcut};
 use pane_core::{Launcher, PackageIdentity, Runtime, SavedData, Screen, Status, Unavailable};
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use rows::{select_title, titles};
 
 const MANAGE_ROW: &str = "Manage extensions…";
@@ -230,7 +233,7 @@ fn an_assigned_hotkey_opens_its_command_from_another_application() {
     // The command's own items work as when it is opened from root search.
     activate(&launcher, "Use a formal greeting");
     assert_eq!(
-        launcher.view().status,
+        shown(&launcher),
         Status::Result("Saved the formal greeting".into())
     );
 }

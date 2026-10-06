@@ -232,6 +232,17 @@ fn main() {
                 })
             })
             .expect("failed to open the Pane window");
+        // The opt-in native smoke of the HUD (scripts/smoke-windows-hud.ps1)
+        // has a development build show one at once, over the application
+        // in front.
+        #[cfg(debug_assertions)]
+        if let Ok(title) = std::env::var("PANE_TEST_SHOW_HUD") {
+            window
+                .update(cx, |launcher, window, cx| {
+                    launcher.show_smoke_hud(title, window, cx)
+                })
+                .ok();
+        }
         // Closing the launcher's own window quits Pane, as closing the one
         // window always did: closing the Settings window, which shares
         // nothing of the launcher's lifecycle, closes only that window,

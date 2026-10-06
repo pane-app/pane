@@ -24,6 +24,7 @@
 // 31-day cadence" make the next cycle answer cadences beyond Pane's
 // bounds, which it clamps to its 1-second minimum and 30-day maximum.
 // @ts-check
+import { showToast } from "@pane/extension/feedback";
 import { get, set } from "pane:extension/settings@0.1.0";
 import * as content from "pane:extension/content@0.1.0";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
@@ -71,11 +72,21 @@ function counted(key) {
 }
 
 /**
- * Runs the action of the item `itemId`.
+ * Runs the action of the item `itemId`, showing a toast with what it did.
+ * @param {string} itemId
+ * @returns {Promise<void>}
+ */
+async function act(itemId) {
+  showToast({ title: await outcome(itemId) });
+}
+
+/**
+ * Does what the item `itemId`'s action does, and resolves with the text
+ * its toast shows.
  * @param {string} itemId
  * @returns {Promise<string>}
  */
-async function act(itemId) {
+async function outcome(itemId) {
   switch (itemId) {
     case "add": {
       const events = counted(EVENTS) + 1;

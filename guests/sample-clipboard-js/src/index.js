@@ -11,6 +11,7 @@
 // not), exclude a program, clear, turn off and delete, delete recent items,
 // and Enter on an item copies it again or deletes it.
 // @ts-check
+import { showToast } from "@pane/extension/feedback";
 import * as history from "pane:extension/clipboard-history@0.1.0";
 
 /** The longest title of a kept item, in characters. */
@@ -190,11 +191,21 @@ function entryItem(entry) {
 }
 
 /**
- * Runs the action of the item `itemId`.
+ * Runs the action of the item `itemId`, showing a toast with what it did.
+ * @param {string} itemId
+ * @returns {Promise<void>}
+ */
+async function act(itemId) {
+  showToast({ title: await outcome(itemId) });
+}
+
+/**
+ * Does what the item `itemId`'s action does, and resolves with the text
+ * its toast shows.
  * @param {string} itemId
  * @returns {Promise<string>}
  */
-async function act(itemId) {
+async function outcome(itemId) {
   const wanted = CAPTURES[itemId];
   if (wanted) {
     host(() => history.setCapture(wanted[0]));
@@ -311,7 +322,7 @@ export const command = {
   // A callback no item's action names runs as the action of that id, so a
   // kept item's id (whose item opens a form) still copies it again.
   async runSearchResult(id) {
-    return act(id);
+    await act(id);
   },
 
   async submitForm(itemId, values) {

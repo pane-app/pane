@@ -30,11 +30,14 @@ mod artifacts;
 
 use artifacts::Artifacts;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/guests.rs"]
 mod guests;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use guests::guests;
 use rows::{select_title, titles};
 
@@ -244,7 +247,7 @@ fn installed(launcher: &Launcher) -> Vec<String> {
 }
 
 /// Opens the command titled `command` from root search and runs its item
-/// titled `item`, returning the status.
+/// titled `item`, returning what it showed: its toast, or the status line.
 fn run(launcher: &Launcher, command: &str, item: &str) -> Status {
     for _ in 0..3 {
         launcher.back();
@@ -253,7 +256,7 @@ fn run(launcher: &Launcher, command: &str, item: &str) -> Status {
     block_on(launcher.activate_selected());
     select_title(launcher, item);
     block_on(launcher.activate_selected());
-    launcher.view().status
+    shown(launcher)
 }
 
 fn error_of(launcher: &Launcher) -> String {
@@ -290,7 +293,7 @@ fn a_first_setup_acquires_the_calculator_and_it_answers() {
     assert_eq!(package.identity, identity);
     let record = dirs.record("calculator");
     assert_eq!(record["default"], "calculator");
-    assert_eq!(record["defaultVersion"], "0.2.0");
+    assert_eq!(record["defaultVersion"], "0.3.0");
     assert_eq!(record.get("local"), None);
     assert_eq!(record.get("npm"), None);
     // The managed copy holds the manifest and the component it names,
@@ -384,7 +387,7 @@ fn an_interrupted_download_is_tried_again_and_set_up() {
     dirs.publish();
     // The first download of the calculator's payload is interrupted
     // partway: the connection closes after its first bytes.
-    dirs.artifacts.drop_after("calculator-0.2.0.tgz", 16, 1);
+    dirs.artifacts.drop_after("calculator-0.3.0.tgz", 16, 1);
     let launcher = dirs.launcher();
 
     block_on(launcher.acquire_defaults());
@@ -522,18 +525,18 @@ fn a_row_tries_again_and_sets_the_extension_up() {
     // The payload is not there yet: the source answers 404 for it.
     let launcher = dirs.launcher();
     dirs.artifacts
-        .fail_status("calculator-0.2.0.tgz", 404, usize::MAX);
+        .fail_status("calculator-0.3.0.tgz", 404, usize::MAX);
     block_on(launcher.acquire_defaults());
     let error = error_of(&launcher);
     assert!(
-        error.contains("the payload `calculator-0.2.0.tgz` its index names is not there"),
+        error.contains("the payload `calculator-0.3.0.tgz` its index names is not there"),
         "{error}"
     );
     // The helper sample was set up; only the calculator failed.
     assert_eq!(installed(&launcher), ["Helper sample"]);
 
     // The source answers now; the row that tries again sets it up.
-    dirs.artifacts.stop_failing("calculator-0.2.0.tgz");
+    dirs.artifacts.stop_failing("calculator-0.3.0.tgz");
     select_title(&launcher, "Set up Calculator");
     block_on(launcher.activate_selected());
 

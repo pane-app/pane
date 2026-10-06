@@ -13,11 +13,14 @@ use std::path::PathBuf;
 use futures::executor::block_on;
 use pane_core::{CommandRegistration, GUEST_MEMORY, Launcher, Runtime, Screen, Status};
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/guests.rs"]
 mod guests;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use guests::guest;
 use rows::{manage, select_title, to_root};
 
@@ -29,7 +32,7 @@ const OUT_OF_MEMORY: &str =
 const JUST_UNDER: usize = 128 * 1024 * 1024 - 2 * 64 * 1024;
 
 /// Opens the command titled "Faulty" from root search and runs its item
-/// `item`, returning the outcome.
+/// `item`, returning the outcome: its toast, or the status line.
 fn run(launcher: &Launcher, item: &str) -> Status {
     to_root(launcher);
     select_title(launcher, "Faulty");
@@ -42,7 +45,7 @@ fn run(launcher: &Launcher, item: &str) -> Status {
     );
     select_title(launcher, item);
     block_on(launcher.activate_selected());
-    launcher.view().status
+    shown(launcher)
 }
 
 fn error(status: Status) -> String {

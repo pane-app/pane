@@ -1,11 +1,12 @@
 //! Pane's schedule sample: a command whose `pane.json` entry declares a
 //! schedule, so Pane runs its "Count" action every interval while the
 //! package is enabled and not paused, without the user asking. Each run
-//! adds one to a count kept in its content and answers the new count, so
-//! the run is visible in its saved data and on its screen. Disabling the
-//! package stops the schedule; enabling it starts it again, and the
-//! interval restarts. A restart schedules again whatever the manifest
-//! declares, without replaying work that fell due while Pane was stopped.
+//! adds one to a count kept in its content and shows the new count in a
+//! toast, so the run is visible in its saved data and on its screen (its
+//! list's title is the count). Disabling the package stops the schedule;
+//! enabling it starts it again, and the interval restarts. A restart
+//! schedules again whatever the manifest declares, without replaying work
+//! that fell due while Pane was stopped.
 //!
 //! Its other items stand for the ways a scheduled run can end, for
 //! Pane's checks and for trying them by hand: "Run slowly" waits ten
@@ -18,6 +19,7 @@
 #![no_std]
 
 use pane_guest::alloc::{format, string::String, vec::Vec};
+use pane_guest::feedback::{Toast, show_toast};
 use pane_guest::{
     Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, content, settings,
 };
@@ -47,9 +49,16 @@ fn count() -> Result<u64, String> {
         .map(|count| count.unwrap_or(0))
 }
 
-/// Runs the action of the item `item_id`; each item's action is this with
-/// its id.
-async fn act(item_id: &str) -> Result<String, String> {
+/// Runs the action of the item `item_id` and shows a toast with what
+/// [`outcome`] answers; each item's action is this with its id.
+async fn act(item_id: &str) -> Result<(), String> {
+    let done = outcome(item_id).await?;
+    show_toast(Toast::success(done));
+    Ok(())
+}
+
+/// What the action of the item `item_id` does, answering the count.
+async fn outcome(item_id: &str) -> Result<String, String> {
     match item_id {
         "count" | "slow" => {
             // One more run: counted before anything else, so a run Pane

@@ -134,10 +134,17 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   actions in sections, a destructive one, shortcuts for every system and
   one per system, one shortcut that is Pane's own Ctrl+K and one that
   collides once the user gives a Pane key Ctrl+Shift+Y, an item with one
-  action and one with none ([several actions per item](../docs/list-tree.md)).
+  action and one with none ([several actions per item](../docs/list-tree.md));
+  and (#141) a "Window" item closing the window each way, popping to root
+  search and clearing the search, a "Feedback" item showing HUDs, a toast
+  updated from animated to success with Open and Retry actions, a failure,
+  and the command's row subtitle, and the no-view commands "Window
+  functions", "Spin" and "Stumble"
+  ([what a command does after it acts](#what-a-command-does-after-it-acts)).
   Their packages are `packages/sample-actions` and its `-js`/`-ts`
-  copies; held alike by `crates/pane-core/tests/item_actions.rs`, and the
-  Rust one by `crates/pane/tests/item_actions.rs`.
+  copies; held alike by `crates/pane-core/tests/item_actions.rs` and
+  `crates/pane-core/tests/feedback.rs`, and the Rust one by
+  `crates/pane/tests/item_actions.rs` and `crates/pane/tests/feedback.rs`.
 - `hello-rust`, `hello-js`, `hello-ts`: one "Say hello" command each, a
   package built in its own folder, as an author's would be, for
   [development mode](../docs/development-mode.md): Pane builds and reloads
@@ -189,6 +196,7 @@ user chooses it, then Pane asks for the list again
 #![no_std]
 
 use pane_guest::alloc::{string::String, vec::Vec};
+use pane_guest::feedback::{Toast, show_toast};
 use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
 
 struct Hello;
@@ -198,8 +206,10 @@ impl Command for Hello {
     type CustomView = NoCustomView;
 
     async fn render() -> Result<List, String> {
-        Ok(List::new("Hello")
-            .item(Item::new("hi", "Say hi").on_action(|| async { Ok("hi!".into()) })))
+        Ok(List::new("Hello").item(Item::new("hi", "Say hi").on_action(|| async {
+            show_toast(Toast::success("hi!"));
+            Ok(())
+        })))
     }
 
     async fn submit_form(_item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {
@@ -212,8 +222,14 @@ impl Command for Hello {
 }
 ```
 
-Returning `Err` shows the message as an error; a panic traps the guest, which
-Pane reports and recovers from by starting a fresh instance on the next call.
+Pane shows nothing of an action's success: the action tells the user what
+happened itself, with a toast in the launcher's footer or a HUD over other
+applications once the launcher closes (`pane_guest::feedback`: `show_toast`
+with `Toast::success`, `Toast::failure` or `Toast::animated`, which it can
+update or hide, and `show_hud`), and may close the window or return to root
+search (`pane_guest::window`). Returning `Err` shows the message as a failure
+toast; a panic traps the guest, which Pane reports and recovers from by
+starting a fresh instance on the next call.
 WASI 0.3 interfaces are available through the
 [`wasip3`](https://docs.rs/wasip3/0.9.0/wasip3/) crate with
 `default-features = false`; the sample awaits `wasi:clocks` this way.
@@ -336,6 +352,7 @@ values, not engine objects:
 
 ```ts
 import type { Command } from "@pane/extension";
+import { showToast } from "@pane/extension/feedback";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
 
 export const command: Command = {
@@ -348,7 +365,7 @@ export const command: Command = {
           title: "Say hi",
           async onAction() {
             await waitFor(10_000_000); // 10 ms; the command suspends meanwhile
-            return "hi!";
+            showToast({ title: "hi!" });
           },
         },
       ],
@@ -363,9 +380,13 @@ export const command: Command = {
 };
 ```
 
-Throwing (a rejected promise) shows the error's message, or a thrown string,
-as an error. Returning a value of the wrong type, such as `undefined` from
-an `onAction`, traps the guest, which Pane reports and recovers from as for
+Pane shows nothing of what an `onAction` resolves with: it tells the user
+what happened with `@pane/extension/feedback` (`showToast`, `showHUD`), or
+closes the window (`closeMainWindow`, `popToRoot`, `clearSearchBar`); see
+[What a command does after it acts](#what-a-command-does-after-it-acts).
+Throwing (a rejected promise) shows the error's message, or a thrown
+string, as a failure toast. Resolving with a value, such as `null` from an
+`onAction`, traps the guest, which Pane reports and recovers from as for
 Rust; a list Pane cannot read (a title that is not text, say) is the
 command's failure, not a crash. npm dependencies are bundled into the component; the samples use
 [Zod](https://zod.dev) 4.6.5 (`zod/mini`) and show its validation failure as a
@@ -538,8 +559,8 @@ have lost only its answer: the user sees that the runtime stopped and runs
 it again only if they want it done again
 ([runtime crashes](../docs/pausing.md#when-the-extension-runtime-itself-crashes)).
 Write an action whose repetition matters so the user can tell whether it
-ran, as the Rust settings sample's **Count** does by answering the count it
-saved.
+ran, as the Rust settings sample's **Count** does by showing the count it
+saved in a toast.
 
 Every call Pane makes into a command (opening it, an action, a form, a
 search, a view event) may **compute for 5 seconds in all** (the compute
@@ -802,11 +823,13 @@ entry naming how often to run and which item's action to run.
   previewed or installed, before anything is installed.
 - `item` (required): the id of the item whose action runs, the same
   action Enter runs from the command's list, at most 256 characters. The
-  command usually lists the item, so the user can run it too, and its
-  answer is what Pane shows: the returned text on the command's screen
-  while it is open, an error the action answers with as an error, and a
-  trap as a crash of the package (three within five minutes pause it, as
-  for any action).
+  command usually lists the item, so the user can run it too. Pane shows
+  nothing of the run's success: a toast or HUD the action shows itself
+  (`pane_guest::feedback`) is shown as when the user runs it, as a HUD
+  while the launcher is hidden. An error the action answers with is shown
+  as a failure toast while the command's screen is open, and a trap counts
+  as a crash of the package (three within five minutes pause it, as for
+  any action).
 
 The schedule runs only while the package's code may run — it is enabled
 and not paused: installation alone schedules nothing that is not enabled,
@@ -878,8 +901,8 @@ impl pane_guest::service::Guest for Watching {
   outside is clamped (provisional bounds, as scheduled work's). Time
   that passes while a cycle runs is not replayed: the next cycle runs
   one cadence after its answer lands.
-- The status shows on the command's screen while it is open, as an
-  action's answer does, and the cycle runs whether or not it is.
+- The status shows on the command's screen while it is open, and the
+  cycle runs whether or not it is.
 
 A JavaScript or TypeScript command sets `"pane": { "service": true }`
 in its `package.json` so that it is built with the interface, and
@@ -971,10 +994,15 @@ knows at Enter what to do without running the command.
 A **no-view command** runs each time it is launched: Enter on its row in
 root search, its alias, a fallback, its global hotkey (which runs it
 without showing Pane's window), its quick slot, another command, or its
-own schedule. Root search, or whatever Pane shows, stays as it is; the
-text it answers is shown as the result, an error as the failure. An error
-it answers never counts towards [pausing](../docs/pausing.md); a crash
-does, as any call's. A `schedule` without an `item` makes Pane run the
+own schedule. Root search, or whatever Pane shows, stays as it is, and
+Pane shows nothing of a success: the command tells the user what happened
+itself, with a toast or a HUD (`pane_guest::feedback` in Rust), and may
+close the window (`pane_guest::window`). An error it answers is shown as
+a failure toast with a "Copy Error" action, and a toast it left in
+progress (the animated style) is hidden once the run ends. A run launched
+in the background has no one watching, so a command usually shows nothing
+then, as the samples do. An error it answers never counts towards
+[pausing](../docs/pausing.md); a crash does, as any call's. A `schedule` without an `item` makes Pane run the
 command itself every interval, in the background, showing nothing:
 
 ```json
@@ -997,7 +1025,8 @@ needs none of them:
 
 ```rust
 use pane_guest::alloc::{format, string::String};
-use pane_guest::{Command, LaunchRecord, NoCustomView};
+use pane_guest::feedback::{Toast, show_toast};
+use pane_guest::{Command, LaunchRecord, LaunchType, NoCustomView};
 
 struct Toggle;
 pane_guest::export!(Toggle);
@@ -1005,8 +1034,13 @@ pane_guest::export!(Toggle);
 impl Command for Toggle {
     type CustomView = NoCustomView;
 
-    async fn run(command: String, launch: LaunchRecord) -> Result<String, String> {
-        Ok(format!("{command} ran from {}", pane_guest::commands::source_name(launch.source)))
+    async fn run(command: String, launch: LaunchRecord) -> Result<(), String> {
+        // A background launch, such as a schedule's, shows nothing.
+        if launch.launch_type != LaunchType::Background {
+            let source = pane_guest::commands::source_name(launch.source);
+            show_toast(Toast::success(format!("{command} ran from {source}")));
+        }
+        Ok(())
     }
 }
 ```
@@ -1016,10 +1050,11 @@ a view command's `render(launch)` receives the record too:
 
 ```ts
 import type { Command } from "@pane/extension";
+import { showHUD } from "@pane/extension/feedback";
 
 export const command: Command = {
   async run(id, launch) {
-    return `${id} ran from ${launch.source}`;
+    showHUD(`${id} ran from ${launch.source}`);
   },
 };
 ```
@@ -1038,7 +1073,80 @@ reason, which the caller receives as an error. `launch` answers once the
 launch has started, not when the target has run. The
 [no-view sample](sample-no-view) does all of this in Rust, and its
 [JavaScript](sample-no-view-js) and [TypeScript](sample-no-view-ts) copies
-answer the same.
+do the same.
+
+## What a command does after it acts
+
+Pane shows nothing of what an action, a no-view `run` or a search result
+answers: the command says what happened itself, through host functions every
+command has, whatever its mode ([wit/feedback.wit](../wit/feedback.wit), ADR
+0037):
+
+- **A toast** in the launcher's footer, where the status line is: animated
+  (work in progress), success or failure, with an optional message and up to
+  two actions with shortcuts. One shows at a time: a new toast replaces the
+  one shown, whose handle then does nothing; the command can update or hide
+  its own. Success and failure leave after 3 seconds (paused while the pointer
+  is over the toast); an animated one stays until updated or hidden, or the
+  window deactivates, and Pane hides one a no-view run left once the run ends.
+  Ctrl+T (Command+T on macOS) moves the focus to its actions; choosing one
+  calls the command back, as an item's action does. While the launcher is
+  hidden or collapsed, a toast is shown as a HUD.
+- **A HUD**: Pane closes the window, then shows a short message near the
+  bottom of the screen, over other applications, for 1.2 seconds (3 for a
+  failure).
+- **The window**: `close` hides it, choosing what its next showing shows
+  (`default`: the user's Launcher setting; `immediate`: root search now;
+  `suspended`: the screen left on display) and whether root search's query is
+  emptied; `pop-to-root` returns to root search with the window open;
+  `clear-search` empties the search field. In a call no window was shown for
+  (a background launch, a schedule, a service) they do nothing and answer
+  false.
+- **The row's subtitle**: `set-subtitle` replaces the subtitle the command's
+  root search row shows (and matches), such as "3 unread", until set again;
+  Pane keeps it across restarts and forgets it on uninstall.
+
+An error an action or a run answers is shown as a failure toast with a "Copy
+Error" action.
+
+Rust (`pane_guest::feedback`, `pane_guest::window`,
+`pane_guest::commands::set_subtitle`):
+
+```rust
+use pane_guest::feedback::{Toast, ToastAction, ToastStyle, show_hud, show_toast};
+use pane_guest::window::{PopToRootType, close};
+
+let shown = show_toast(Toast::animated("Uploading…"));
+// ... the work ...
+shown.update(Toast::success("Uploaded").primary(ToastAction::new("Open", || async {
+    show_toast(Toast::success("Opened"));
+    Ok(())
+})));
+show_hud("Copied to Clipboard", ToastStyle::Success); // closes the window first
+close(true, PopToRootType::Immediate);
+```
+
+JavaScript or TypeScript (`@pane/extension/feedback`):
+
+```ts
+import { closeMainWindow, setSubtitle, showHUD, showToast } from "@pane/extension/feedback";
+
+const toast = showToast({ style: "animated", title: "Uploading…" });
+// ... the work ...
+toast.update({
+  style: "success",
+  title: "Uploaded",
+  primaryAction: { title: "Open", onAction: async () => showToast({ title: "Opened" }) },
+});
+showHUD("Copied to Clipboard");
+closeMainWindow({ clearRootSearch: true, popToRootType: "immediate" });
+setSubtitle("3 unread");
+```
+
+The [actions sample](sample-actions) and its
+[JavaScript](sample-actions-js) and [TypeScript](sample-actions-ts) copies
+use every one of them: its "Window" and "Feedback" items, and its no-view
+commands "Window functions", "Spin" and "Stumble".
 
 ## A command that takes a query
 
@@ -1050,19 +1158,22 @@ hello"), or makes it a fallback, which is listed below the results for any
 text typed, and invokes that row. Pane launches the command only then,
 never while the user types, with the text, trimmed and never empty, as its
 launch record's **fallback text**. Set `"takesQuery": true` on the command
-in `pane.json`. A no-view command runs with the text, its answer shown as
-the result (an error as the failure) while root search stays as it was; a
-view command opens its screen with it. See
+in `pane.json`. A no-view command runs with the text and tells the user
+what it did with a toast (an error it answers is shown as a failure toast)
+while root search stays as it was; a view command opens its screen with
+it. See
 [aliases and fallbacks](../docs/aliases.md).
 
 Rust, as [`sample-query`](sample-query) does, Echo being a no-view command:
 
 ```rust
-async fn run(command: String, launch: LaunchRecord) -> Result<String, String> {
-    match launch.fallback_text {
-        Some(text) => Ok(format!("Echo heard “{text}”")),
-        None => Ok("Echo heard nothing".into()),
-    }
+async fn run(command: String, launch: LaunchRecord) -> Result<(), String> {
+    let heard = match launch.fallback_text {
+        Some(text) => format!("Echo heard “{text}”"),
+        None => "Echo heard nothing".into(),
+    };
+    show_toast(Toast::success(heard));
+    Ok(())
 }
 ```
 
@@ -1072,7 +1183,9 @@ JavaScript or TypeScript, as the [JavaScript](sample-query-js) and
 ```ts
 export const command: Command = {
   async run(id, launch) {
-    return launch.fallbackText == null ? "Echo heard nothing" : `Echo heard “${launch.fallbackText}”`;
+    showToast({
+      title: launch.fallbackText == null ? "Echo heard nothing" : `Echo heard “${launch.fallbackText}”`,
+    });
   },
 };
 ```

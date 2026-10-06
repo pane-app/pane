@@ -9,9 +9,10 @@
 // `@pane/extension/http` (`wasi:http` underneath) and its address is a
 // setting the command's form changes. A search Pane no longer needs is
 // stopped where it waits; an unreachable or failing service is an error
-// shown in place of results, not a crash. Items, answers and errors match
+// shown in place of results, not a crash. Items, toasts and errors match
 // the Rust sample (guests/sample-search) and the JavaScript one.
 import type { Command, CommandSearch, FieldValue, Form, SearchResult } from "@pane/extension";
+import { showToast } from "@pane/extension/feedback";
 import { get as fetchUrl } from "@pane/extension/http";
 import { get, set } from "pane:extension/settings@0.1.0";
 
@@ -81,9 +82,15 @@ const SERVICE_FORM: Form = {
 
 /**
  * Runs the action `itemId`: the "about" item's, or a search result's
- * ("package:<name>"), which fetches that package's details.
+ * ("package:<name>"), which fetches that package's details; it shows a
+ * toast with what it found.
  */
-async function act(itemId: string): Promise<string> {
+async function act(itemId: string): Promise<void> {
+  showToast({ title: await outcome(itemId) });
+}
+
+/** The text the action `itemId`'s toast shows. */
+async function outcome(itemId: string): Promise<string> {
   if (itemId === "about") {
     return "Type in the search field to search the package registry";
   }
@@ -112,7 +119,7 @@ export const command: Command = {
   },
   // A search result's id ("package:<name>") names the package to show.
   async runSearchResult(id: string) {
-    return act(id);
+    await act(id);
   },
   async submitForm(itemId: string, values: FieldValue[]) {
     if (itemId !== "service") {

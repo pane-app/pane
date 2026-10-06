@@ -23,6 +23,11 @@
 //! Pane calls [`Command::run`] each time it is launched. Both receive the
 //! command's launch record: `run` as its argument, `render` through
 //! [`commands::current`](crate::commands::current).
+//!
+//! An action, a run and a search result answer success or an error. Pane
+//! shows nothing of a success: the command tells the user what happened
+//! with a toast or a HUD ([`crate::feedback`]), or closes the window
+//! ([`crate::window`]). An error is shown as a failure toast.
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
@@ -44,9 +49,8 @@ use wit::{
 /// The version of the tree this SDK writes (`docs/list-tree.md`).
 const TREE_VERSION: u32 = 1;
 
-/// What an action answers: text shown to the user as the result, or an
-/// error shown as the failure.
-type Answer = Pin<Box<dyn Future<Output = Result<String, String>>>>;
+/// What an action answers: success, or an error shown as a failure toast.
+pub(crate) type Answer = Pin<Box<dyn Future<Output = Result<(), String>>>>;
 
 /// What an action runs, once, when the user chooses it.
 type Run = Box<dyn FnOnce() -> Answer>;
@@ -171,12 +175,13 @@ pub struct Action {
 
 impl Action {
     /// An action titled `title` that runs `run` when the user chooses it.
-    /// The text it answers is shown as the result; an error is shown as
-    /// the failure. Pane draws the list again afterwards.
+    /// An error it answers is shown as a failure toast; on success it
+    /// tells the user what happened itself ([`crate::feedback`]). Pane
+    /// draws the list again afterwards.
     pub fn new<F, A>(title: impl Into<String>, run: F) -> Action
     where
         F: FnOnce() -> A + 'static,
-        A: Future<Output = Result<String, String>> + 'static,
+        A: Future<Output = Result<(), String>> + 'static,
     {
         Action {
             title: Some(title.into()),
@@ -273,14 +278,15 @@ impl Item {
 
     /// This item with an untitled action after its actions, which runs
     /// when the user chooses it: the item's primary action when it is the
-    /// first, which Pane names "Run item". The text it answers is shown as
-    /// the result; an error is shown as the failure. Pane draws the list
-    /// again afterwards. [`Item::action`] gives an action a title, a
-    /// section, a style and a shortcut.
+    /// first, which Pane names "Run item". An error it answers is shown as
+    /// a failure toast; on success it tells the user what happened itself
+    /// ([`crate::feedback`]). Pane draws the list again afterwards.
+    /// [`Item::action`] gives an action a title, a section, a style and a
+    /// shortcut.
     pub fn on_action<F, A>(mut self, action: F) -> Item
     where
         F: FnOnce() -> A + 'static,
-        A: Future<Output = Result<String, String>> + 'static,
+        A: Future<Output = Result<(), String>> + 'static,
     {
         self.actions.push(Action {
             title: None,
@@ -344,9 +350,10 @@ impl Item {
 ///     type CustomView = pane_guest::NoCustomView;
 ///
 ///     async fn render() -> Result<List, String> {
-///         Ok(List::new("Hello").item(
-///             Item::new("greet", "Say hello").on_action(|| async { Ok("Hello".into()) }),
-///         ))
+///         Ok(List::new("Hello").item(Item::new("greet", "Say hello").on_action(|| async {
+///             pane_guest::feedback::show_toast(Toast::success("Hello"));
+///             Ok(())
+///         })))
 ///     }
 ///     // submit_form, open_view ...
 /// }
@@ -358,8 +365,9 @@ impl Item {
 /// impl pane_guest::Command for Toggle {
 ///     type CustomView = pane_guest::NoCustomView;
 ///
-///     async fn run(command: String, launch: LaunchRecord) -> Result<String, String> {
-///         Ok("Toggled".into())
+///     async fn run(command: String, launch: LaunchRecord) -> Result<(), String> {
+///         pane_guest::feedback::show_hud("Toggled", ToastStyle::Success);
+///         Ok(())
 ///     }
 /// }
 /// ```
@@ -381,11 +389,14 @@ pub trait Command: 'static {
     /// component can serve several commands), launched as `launch` says:
     /// how (by the user or in the background, and from where), with any
     /// text sent through its alias or as a fallback, and any context
-    /// another command passed. The text it answers is shown as the result,
-    /// and an error is shown as the failure.
+    /// another command passed. Pane shows nothing of a success: the command
+    /// tells the user what happened with a toast or a HUD
+    /// ([`crate::feedback`]). An error is shown as a failure toast with a
+    /// "Copy Error" action, and a toast left in the animated style is
+    /// hidden once the run ends.
     /// Pane calls it only for a command whose `pane.json` entry says
     /// `"mode": "no-view"`; without it, that is an error.
-    fn run(command: String, launch: LaunchRecord) -> impl Future<Output = Result<String, String>> {
+    fn run(command: String, launch: LaunchRecord) -> impl Future<Output = Result<(), String>> {
         let _ = launch;
         async move {
             Err(format!(
@@ -396,9 +407,9 @@ pub trait Command: 'static {
 
     /// Runs the search result with `id` the user chose, for a command that
     /// searches as the user types (`pane_guest::search`): its id is the
-    /// callback Pane hands back. The text is shown as the result. Without
-    /// it, choosing an id no item names is an error.
-    fn run_search_result(id: String) -> impl Future<Output = Result<String, String>> {
+    /// callback Pane hands back. An error is shown as a failure toast.
+    /// Without it, choosing an id no item names is an error.
+    fn run_search_result(id: String) -> impl Future<Output = Result<(), String>> {
         async move { Err(format!("unknown action: {id}")) }
     }
 
@@ -438,11 +449,16 @@ impl<T: Command> wit::Guest for T {
 
     async fn run(command: String, launch: LaunchRecord) -> Result<String, String> {
         crate::commands::set_current(launch.clone());
-        let status = <T as Command>::run(command, launch).await?;
-        Ok(answer(&status))
+        <T as Command>::run(command, launch).await?;
+        Ok(ANSWER.into())
     }
 
     async fn handle_event(callback: String, _details: String) -> Result<String, String> {
+        // A toast's action, which stays the toast's while it shows.
+        if let Some(action) = crate::feedback::toast_action(&callback) {
+            action().await?;
+            return Ok(ANSWER.into());
+        }
         let action = match take(&callback) {
             Some(action) => Some(action),
             None => {
@@ -451,11 +467,11 @@ impl<T: Command> wit::Guest for T {
                 take(&callback)
             }
         };
-        let status = match action {
+        match action {
             Some(action) => action().await?,
             None => <T as Command>::run_search_result(callback).await?,
-        };
-        Ok(answer(&status))
+        }
+        Ok(ANSWER.into())
     }
 
     async fn submit_form(item_id: String, values: Vec<FieldValue>) -> Result<String, FormError> {
@@ -467,14 +483,9 @@ impl<T: Command> wit::Guest for T {
     }
 }
 
-/// The answer object of `handle-event` and `run` for `status`, the text
-/// shown as the result: `{"status": ...}`.
-fn answer(status: &str) -> String {
-    let mut answer = String::from("{\"status\":");
-    string(&mut answer, status);
-    answer.push('}');
-    answer
-}
+/// The answer object of `handle-event` and `run`: empty, since Pane shows
+/// nothing of an answer.
+const ANSWER: &str = "{}";
 
 /// The actions of the list the instance drew last, by callback id.
 struct Actions(RefCell<BTreeMap<String, Run>>);
@@ -589,7 +600,7 @@ fn remember(list: List) -> String {
 
 /// Writes `shortcut` as the tree's JSON: `{"modifiers": [...], "key": ...}`
 /// for every system, or such an object per system.
-fn write_shortcut(tree: &mut String, shortcut: &Shortcut) {
+pub(crate) fn write_shortcut(tree: &mut String, shortcut: &Shortcut) {
     if let Some(keys) = &shortcut.every {
         write_keys(tree, keys);
         return;

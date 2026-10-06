@@ -26,9 +26,12 @@ use futures::executor::block_on;
 use pane_core::{Launcher, Limits, PackageIdentity, Row, Runtime, RuntimeFailure, Screen, Status};
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use rows::{manage, select_title, titles, to_root};
 
 const COMMAND: &str = "Greeting";
@@ -170,11 +173,12 @@ fn open_at(launcher: &Launcher, item: &str) {
     select_title(launcher, item);
 }
 
-/// Opens the command, runs its item titled `item` and returns the outcome.
+/// Opens the command, runs its item titled `item` and returns the outcome:
+/// its toast, or the status line.
 fn run(launcher: &Launcher, item: &str) -> Status {
     open_at(launcher, item);
     block_on(launcher.activate_selected());
-    launcher.view().status
+    shown(launcher)
 }
 
 fn error(status: Status) -> String {
@@ -436,7 +440,7 @@ fn a_runtime_not_responding_yet_says_so_and_is_left_running_when_it_carries_on()
     }
     slow.join().unwrap();
     assert_eq!(
-        launcher.view().status,
+        shown(launcher),
         Status::Result("Saved after waiting 10 seconds".into())
     );
     assert_eq!(pane.saved("slow-save").as_deref(), Some("finished"));

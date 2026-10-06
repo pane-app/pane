@@ -15,9 +15,12 @@ use futures::executor::block_on;
 use pane_core::{Launcher, PackageIdentity, Runtime, SavedData, Screen, Status};
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use rows::select_title;
 
 /// Under the ten seconds "Save after waiting" waits after saving "started":
@@ -223,7 +226,7 @@ fn reloading_stops_a_pending_call_and_the_new_code_runs(fixture: &Fixture) {
     open_greeting_at(&installed.launcher, "Use a casual greeting");
     block_on(installed.launcher.activate_selected());
     assert_eq!(
-        installed.launcher.view().status,
+        shown(&installed.launcher),
         Status::Result("Saved the casual greeting".into())
     );
     assert_eq!(installed.slow_save().as_deref(), Some("started"));

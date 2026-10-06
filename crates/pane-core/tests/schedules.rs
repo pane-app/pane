@@ -3,9 +3,9 @@
 //! xtask guests` assembles, and a clock the tests set: a command whose
 //! `pane.json` entry declares a schedule runs its item's action every
 //! interval while its package is enabled and not paused — installation alone activates nothing until a
-//! run is due, and nothing of other packages; the answer of a run shows on
-//! the command's screen, and an error the extension answers with shows as
-//! one; disabling stops a run still pending, without replaying the ticks
+//! run is due, and nothing of other packages; the answer of a run shows in
+//! a toast on the command's screen, and an error the extension answers with
+//! shows as a failure toast; disabling stops a run still pending, without replaying the ticks
 //! that passed meanwhile, and its late answer is discarded; a restart
 //! schedules again whatever the manifest declares, from a full interval,
 //! without replaying work that fell due while Pane was stopped; and a run
@@ -26,9 +26,12 @@ use pane_core::clipboard::{Clock, ManualClock, SystemClock};
 use pane_core::{Launcher, Limits, PackageIdentity, Runtime, Screen, Status, Unavailable};
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use rows::{manage, select_title, titles, to_root};
 
 /// One language's Schedule sample package.
@@ -333,7 +336,7 @@ fn the_answer_of_a_scheduled_run_shows_on_the_command_screen(fixture: &Fixture) 
     pane.clock.advance(2 * SECOND);
     pane.settled(&started);
     assert_eq!(
-        started.launcher.view().status,
+        shown(&started.launcher),
         Status::Result("Ran 1 times".into())
     );
     assert_eq!(started.launcher.view().screen, Screen::Command);
@@ -355,7 +358,7 @@ fn an_error_a_scheduled_run_answers_with_shows_as_one(fixture: &Fixture) {
     pane.clock.advance(SECOND);
     pane.settled(&started);
     assert_eq!(
-        started.launcher.view().status,
+        shown(&started.launcher),
         Status::Error(
             "The extension reported an error: The schedule sample refuses, to show how an error looks".into()
         )

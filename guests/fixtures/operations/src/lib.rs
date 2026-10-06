@@ -13,8 +13,9 @@
 //! Two items spin after saving `spin` as "started": they compute without
 //! yielding until Pane refuses them their settings (they were stopped), or
 //! for 20 seconds. One then tries to save `spin` as "finished" and call
-//! `b`'s `remember`, and answers; the other fails. Tests stop `a` while it
-//! spins: what it tries afterwards must be refused and its answer discarded.
+//! `b`'s `remember`, and shows a toast saying how that went; the other
+//! fails. Tests stop `a` while it spins: what it tries afterwards must be
+//! refused and its outcome discarded.
 //!
 //! `wait` saves `waiting` as "started", waits ten seconds, then saves it as
 //! "finished" (tests stop it before); `secret` answers, but tests leave it
@@ -23,6 +24,7 @@
 
 use futures::FutureExt;
 use pane_guest::alloc::{format, string::String, string::ToString, vec::Vec};
+use pane_guest::feedback::{Toast, show_toast};
 use pane_guest::operations::call;
 use pane_guest::{
     Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, publish, settings,
@@ -134,9 +136,16 @@ async fn call_as_text(
         .map_err(|error| error.explain())
 }
 
-/// Runs the action of the item `item_id`; each item's action is this with
-/// its id, its title.
-async fn act(item_id: &str) -> Result<String, String> {
+/// Runs the action of the item `item_id` and shows a toast with what
+/// [`outcome`] answers; each item's action is this with its id, its title.
+async fn act(item_id: &str) -> Result<(), String> {
+    let done = outcome(item_id).await?;
+    show_toast(Toast::success(done));
+    Ok(())
+}
+
+/// What the action of the item `item_id` does, answering how it went.
+async fn outcome(item_id: &str) -> Result<String, String> {
     let Some(&(title, target, operation, version, input)) =
         ITEMS.iter().find(|(title, ..)| *title == item_id)
     else {

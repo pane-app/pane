@@ -19,7 +19,7 @@ mod paint;
 #[path = "../../pane-core/tests/support/artifacts.rs"]
 mod artifacts;
 
-use settle::{settle, until};
+use settle::{settle, settle_shown, until};
 
 #[path = "support/wait.rs"]
 mod wait;
@@ -131,14 +131,13 @@ fn the_keyboard_opens_the_sample_and_runs_an_action(cx: &mut TestAppContext, sam
     );
 
     cx.simulate_keystrokes("enter");
-    let view = settle(&window, cx);
     assert_eq!(
-        view.status,
+        settle_shown(&window, cx),
         Status::Result(format!("Hello from the {} guest", sample.language))
     );
     assert!(
-        cx.debug_bounds("status-result").is_some(),
-        "the answer is rendered"
+        cx.debug_bounds("toast-success").is_some(),
+        "the toast is rendered"
     );
 
     cx.simulate_keystrokes("escape");
@@ -156,7 +155,7 @@ fn clicking_a_row_runs_its_action(cx: &mut TestAppContext, sample: &Sample) {
 
     assert_eq!(view.selected, Some(1));
     assert_eq!(
-        view.status,
+        settle_shown(&window, cx),
         Status::Result(format!("Waited 50 ms inside the {} guest", sample.language))
     );
 }
@@ -164,17 +163,17 @@ fn clicking_a_row_runs_its_action(cx: &mut TestAppContext, sample: &Sample) {
 fn a_validation_error_is_rendered(cx: &mut TestAppContext, sample: &Sample) {
     let (window, cx) = open(cx, sample);
 
-    let view = click_row(&window, cx, "row-Validate settings");
+    click_row(&window, cx, "row-Validate settings");
 
     assert_eq!(
-        view.status,
+        settle_shown(&window, cx),
         Status::Error(
             "The extension reported an error: Invalid settings: port must be between 1 and 65535"
                 .into()
         )
     );
     assert!(
-        cx.debug_bounds("status-error").is_some(),
+        cx.debug_bounds("toast-failure").is_some(),
         "the error is rendered"
     );
 }
@@ -302,13 +301,13 @@ fn an_unavailable_action_is_listed_with_its_reason_and_others_still_run(
         cx.simulate_keystrokes(key);
     }
     cx.simulate_keystrokes("enter");
-    assert_eq!(settle(&window, cx).status, Status::Result(answer));
+    assert_eq!(settle_shown(&window, cx), Status::Result(answer));
     for _ in 0..index(available) {
         cx.simulate_keystrokes("up");
     }
     cx.simulate_keystrokes("enter");
     assert_eq!(
-        settle(&window, cx).status,
+        settle_shown(&window, cx),
         Status::Result(format!("Hello from the {} guest", sample.language))
     );
 }
@@ -926,6 +925,7 @@ fn assistive_technology_sees_the_list_the_selection_and_the_result(cx: &mut Test
     );
     assert_eq!(focused.as_deref(), Some("Say hello"));
 
+    // The action's toast is what the footer's status announces.
     cx.simulate_keystrokes("down enter");
     settle(&window, cx);
     let (nodes, focused) = accessibility_tree(cx);
@@ -1706,8 +1706,8 @@ fn a_long_error_wraps_grows_and_scrolls_inside_the_footer(cx: &mut TestAppContex
 
 /// The idle footer's selected action: its button, right-aligned in the
 /// strip, with the Enter keycap beside the label; the button and Enter run
-/// the same action; and a status — running, a result, an error — owns the
-/// strip while it shows, in place of the action.
+/// the same action; and the toast the action shows takes the hint's place
+/// in the strip, beside the buttons.
 #[gpui::test]
 fn the_footer_button_runs_the_selected_action_like_enter(cx: &mut TestAppContext) {
     let (window, cx) = open(cx, &RUST);
@@ -1776,22 +1776,26 @@ fn the_footer_button_runs_the_selected_action_like_enter(cx: &mut TestAppContext
         .debug_bounds("primary-action")
         .expect("the action button is rendered");
     cx.simulate_click(button.center(), Modifiers::none());
-    let view = settle(&window, cx);
     assert_eq!(
-        view.status,
+        settle_shown(&window, cx),
         Status::Result("Hello from the Rust guest".into())
     );
+    // The item's toast speaks in the strip, in the hint's place; with no
+    // actions of its own, it leaves the footer's buttons where they are.
     assert!(
-        cx.debug_bounds("status-result").is_some(),
-        "the answer is rendered"
+        cx.debug_bounds("status-toast").is_some(),
+        "the toast owns the strip"
     );
     assert!(
-        cx.debug_bounds("primary-action").is_none(),
-        "a status owns the strip while it shows, not the idle action"
+        cx.debug_bounds("toast-success").is_some(),
+        "the toast is rendered"
+    );
+    assert!(
+        cx.debug_bounds("primary-action").is_some(),
+        "a toast without actions keeps the footer's own buttons"
     );
 
-    // Back at root search the launcher is idle again, and the strip is the
-    // action again.
+    // Back at root search the button is root search's action again.
     cx.simulate_keystrokes("escape");
     settle(&window, cx);
     let nodes = accessible_nodes(cx);
@@ -1868,8 +1872,11 @@ fn the_footer_button_does_not_dispatch_an_unavailable_action(cx: &mut TestAppCon
         .expect("the action button is rendered");
     cx.simulate_click(button.center(), Modifiers::none());
 
-    let view = settle(&window, cx);
-    assert_eq!(view.status, Status::Idle, "the button dispatched nothing");
+    assert_eq!(
+        settle_shown(&window, cx),
+        Status::Idle,
+        "the button dispatched nothing"
+    );
     assert!(
         row_is_visible(cx, &format!("unavailable-reason-{unavailable}")),
         "the row's explanation stays visible"
@@ -1889,7 +1896,7 @@ fn the_footer_button_does_not_dispatch_an_unavailable_action(cx: &mut TestAppCon
     }
     cx.simulate_keystrokes("enter");
     assert_eq!(
-        settle(&window, cx).status,
+        settle_shown(&window, cx),
         Status::Result(format!("Ran the {available} in the Rust guest"))
     );
 }

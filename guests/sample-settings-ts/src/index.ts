@@ -3,7 +3,7 @@
 // Pane's settings sample in TypeScript: a command whose chosen greeting style
 // Pane keeps between runs, saved with `pane:extension/settings`, and one value
 // of each other kind of data: a note (content), the last greeting (cache) and
-// a sign-in token (credentials). Items, titles, results and errors match the
+// a sign-in token (credentials). Items, titles, toasts and errors match the
 // Rust settings sample (guests/sample-settings) and the JavaScript one.
 // "Save after waiting" notes in its settings that it started, waits ten
 // seconds, then notes that it finished: disabling or reloading the package
@@ -15,6 +15,7 @@
 // so it never finishes, and it counts towards pausing the package as a
 // crash does.
 import type { Command, CustomView, Item, List } from "@pane/extension";
+import { showToast } from "@pane/extension/feedback";
 import { get, set } from "pane:extension/settings@0.1.0";
 import * as cache from "pane:extension/cache@0.1.0";
 import * as content from "pane:extension/content@0.1.0";
@@ -77,8 +78,20 @@ async function render(): Promise<List> {
   };
 }
 
-/** Runs the action of the item `itemId`. */
-async function act(itemId: string): Promise<string> {
+/** Runs the action of the item `itemId`, showing a toast with what it did. */
+async function act(itemId: string): Promise<void> {
+  const done = await outcome(itemId);
+  // Resolving with a value, where an action resolves with nothing, is a
+  // crash, unlike throwing, which is an error the extension answers with.
+  if (done === null) return null as unknown as void;
+  showToast({ title: done });
+}
+
+/**
+ * Does what the item `itemId`'s action does; the text its toast shows, or
+ * `null` for "Crash", which crashes.
+ */
+async function outcome(itemId: string): Promise<string | null> {
   switch (itemId) {
     case "formal":
     case "casual":
@@ -121,9 +134,7 @@ async function act(itemId: string): Promise<string> {
       return "Finished computing after a minute";
     }
     case "crash":
-      // Resolving with something other than a string is a crash, unlike
-      // throwing, which is an error the extension answers with.
-      return undefined as unknown as string;
+      return null;
     default:
       throw new Error(`unknown item: ${itemId}`);
   }

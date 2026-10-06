@@ -12,6 +12,7 @@
 mod matching;
 
 use pane_guest::alloc::{format, string::String, vec::Vec};
+use pane_guest::feedback::{Toast, show_toast};
 use pane_guest::files::{self, FolderState};
 use pane_guest::root::{RootAction, RootResult};
 use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
@@ -30,10 +31,13 @@ fn policy() -> String {
     )
 }
 
-/// Runs the action of the item `item_id`.
-async fn act(item_id: &str) -> Result<String, String> {
+/// Runs the action of the item `item_id`: a toast saying what is searched.
+async fn act(item_id: &str) -> Result<(), String> {
     match item_id {
-        "policy" => Ok(policy()),
+        "policy" => {
+            show_toast(Toast::success(policy()));
+            Ok(())
+        }
         _ => Err(format!("unknown item: {item_id}")),
     }
 }

@@ -5,8 +5,8 @@
 //! `helpers`, and Pane runs the one for the system it runs on. The command
 //! itself stays a WASI 0.3 component.
 //!
-//! - "Echo through the helper" shows the helper's answer, which names the
-//!   system it was built for.
+//! - "Echo through the helper" shows the helper's answer in a toast, which
+//!   names the system it was built for.
 //! - "Echo after waiting" notes in its settings that it started, has the
 //!   helper wait ten seconds, then notes that it finished; disabling or
 //!   reloading the package meanwhile ends the helper's process, and it never
@@ -17,9 +17,9 @@
 //!   none on a helper.
 //! - "Echo after a long wait" has the helper wait forty seconds, longer than
 //!   the thirty Pane once allowed, then notes in its settings that it
-//!   finished and answers; other extensions' calls are served meanwhile.
-//!   (Tests end the wait early through the helper's release file instead of
-//!   waiting it out.)
+//!   finished and shows the answer; other extensions' calls are served
+//!   meanwhile. (Tests end the wait early through the helper's release file
+//!   instead of waiting it out.)
 //! - "Make the helper fail" and "Run an undeclared helper" show how Pane
 //!   explains a failed or missing helper.
 #![no_std]
@@ -29,6 +29,7 @@ use core::pin::pin;
 use core::task::Poll;
 
 use pane_guest::alloc::{format, string::String, vec::Vec};
+use pane_guest::feedback::{Toast, show_toast};
 use pane_guest::helpers::{self, HelperError};
 use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, settings};
 
@@ -76,9 +77,17 @@ async fn race<A, B>(
     .await
 }
 
-/// Runs the action of the item `item_id`; each item's action is this with
-/// its id.
-async fn act(item_id: &str) -> Result<String, String> {
+/// Runs the action of the item `item_id` and shows a toast with what
+/// [`outcome`] answers; each item's action is this with its id.
+async fn act(item_id: &str) -> Result<(), String> {
+    let done = outcome(item_id).await?;
+    show_toast(Toast::success(done));
+    Ok(())
+}
+
+/// What the item `item_id` does, answering the helper's answer or what
+/// became of the run.
+async fn outcome(item_id: &str) -> Result<String, String> {
     match item_id {
         "echo" => echo(&[], "hello from Pane").await,
         "wait" => {

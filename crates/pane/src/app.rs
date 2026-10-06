@@ -21,11 +21,12 @@ use gpui::{
     SharedString, Size, Stateful, Window, div, img, prelude::*, px, relative,
 };
 use pane_core::changes::Changes;
+use pane_core::feedback::WindowRequest;
 use pane_core::hotkeys::Shortcut;
 use pane_core::tray::TrayAction;
 use pane_core::{
-    ComputedAnswer, Launcher, LauncherView, Presentation, Row, RowPresentation, Screen,
-    SelectedAction, Status,
+    ComputedAnswer, Launcher, LauncherView, NextShowing, Presentation, Row, RowPresentation,
+    Screen, SelectedAction, Status, WindowPresence,
 };
 
 use crate::extension_views::{custom_view, form};
@@ -33,10 +34,12 @@ use crate::features::actions_panel;
 use crate::features::clipboard_history;
 use crate::features::compact_pins;
 use crate::features::footer_menu;
+use crate::features::hud;
 use crate::features::number_hints::row_number;
 use crate::features::quick_slots;
 use crate::features::root_search;
 use crate::features::settings;
+use crate::features::toast;
 use crate::ui::footer;
 use crate::ui::icon::{Glyph, IconTone};
 use crate::ui::keycap::CapStyle;
@@ -77,6 +80,10 @@ pub struct LauncherWindow {
     /// Pane's Clipboard History in the split view, while its command is
     /// open; see [`features::clipboard_history`].
     pub(crate) clipboard: Option<clipboard_history::ClipboardHistory>,
+    /// The footer toast's focus and time; see [`features::toast`].
+    pub(crate) toast: toast::ToastControls,
+    /// The HUD's window, while one shows; see [`features::hud`].
+    pub(crate) hud: hud::HudWindow,
     /// Root search's pinned home: its slots' focus; see
     /// [`features::quick_slots`].
     pub(crate) home: quick_slots::Home,
@@ -175,6 +182,8 @@ impl LauncherWindow {
             menu: None,
             actions: None,
             clipboard: None,
+            toast: toast::ToastControls::new(cx),
+            hud: hud::HudWindow::default(),
             home: quick_slots::Home::default(),
             motion: FrameMotion::new(),
             presence: Presence::default(),
@@ -182,13 +191,19 @@ impl LauncherWindow {
             drawn: None,
         };
         // The number hints go when the window loses focus: the Ctrl
-        // release would go to another window.
+        // release would go to another window. So does the toast, an
+        // animated one too (#141).
         cx.observe_window_activation(window, |this, window, cx| {
             if !window.is_window_active() {
                 this.end_numbers(cx);
+                this.launcher.window_deactivated();
+                cx.notify();
             }
         })
         .detach();
+        // What the launcher asks of the window for the host functions
+        // commands call (#141): hiding it, showing a HUD.
+        this.follow_window_requests(window, cx);
         // The launcher opens placed on the display the Launcher page's
         // choice resolves to, before the first frame is drawn.
         this.place(window, cx);
@@ -273,6 +288,75 @@ impl LauncherWindow {
             }
         })
         .detach();
+    }
+
+    /// Has the launcher drive this window for the host functions commands
+    /// call (#141): it hides the window and shows HUDs through it, as
+    /// [`LauncherWindow::window_requested`] carries out.
+    fn follow_window_requests(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (control, mut requests) = pane_core::feedback::channel();
+        self.launcher.attach_window(control);
+        cx.spawn_in(window, async move |this, cx| {
+            while let Some(request) = requests.next().await {
+                let done = this.update_in(cx, |this, window, cx| {
+                    this.window_requested(request, window, cx);
+                });
+                if done.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Carries out what the launcher asked of the window for a command's
+    /// host function: hides it (a command closed it, or is about to show a
+    /// HUD), or shows a HUD in a window of its own.
+    fn window_requested(
+        &mut self,
+        request: WindowRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match request {
+            WindowRequest::Hide => {
+                if !self.presence.hidden() {
+                    self.hide(window, cx);
+                }
+            }
+            WindowRequest::Hud(hud) => self.show_hud(hud, window, cx),
+        }
+        self.sync_screen(window, cx);
+        cx.notify();
+    }
+
+    /// Development builds only: hides the launcher and shows `title` as a
+    /// failure's HUD (3 seconds), as a command's `show-hud` would, for the
+    /// opt-in native smoke of the HUD's placement
+    /// (scripts/smoke-windows-hud.ps1), which names it in
+    /// `PANE_TEST_SHOW_HUD`.
+    #[cfg(debug_assertions)]
+    #[doc(hidden)]
+    pub fn show_smoke_hud(&mut self, title: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.window_requested(WindowRequest::Hide, window, cx);
+        let hud = pane_core::Hud {
+            title,
+            style: pane_core::ToastStyle::Failure,
+        };
+        self.window_requested(WindowRequest::Hud(hud), window, cx);
+    }
+
+    /// Test support: shows `hud` as the launcher's window seam would.
+    /// Test and debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn request_hud(
+        &mut self,
+        hud: pane_core::Hud,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.window_requested(WindowRequest::Hud(hud), window, cx);
     }
 
     fn select_next(&mut self, _: &SelectNext, _: &mut Window, cx: &mut Context<Self>) {
@@ -609,6 +693,7 @@ impl LauncherWindow {
     /// entry point that reaches the launcher from Settings — must find a
     /// visible window, opened on the display the placement resolves.
     fn unhide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.launcher.set_window_presence(WindowPresence::Shown);
         if self.presence.show() {
             window.set_visible(true);
             // The pointer is wherever it is now: the next event records it.
@@ -635,6 +720,8 @@ impl LauncherWindow {
     fn hide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.set_visible(false);
         self.presence.hide(cx.background_executor().now());
+        // A toast shown from now on is a HUD (#141).
+        self.launcher.set_window_presence(WindowPresence::Hidden);
         self.pointer = None;
         // A hidden launcher keeps nothing armed for whatever shows next.
         self.motion.land_at_once();
@@ -727,9 +814,14 @@ impl LauncherWindow {
         // here (the Settings window's focus is not the launcher's), and
         // nothing is run. Whether it pops counts the time the launcher was
         // hidden, so it is asked before the launcher is shown.
+        // A command that closed the launcher may have asked to keep its
+        // screen whatever the choice says (`suspended`, #141).
         let reopening = crate::settings::shared(cx).read(cx).reopening();
         let now = cx.background_executor().now();
-        let pops = self.presence.pops_to_root(reopening.pops_after(), now);
+        let pops = match self.launcher.take_next_showing() {
+            NextShowing::BySetting => self.presence.pops_to_root(reopening.pops_after(), now),
+            NextShowing::Restore => false,
+        };
         self.unhide(window, cx);
         window.activate_window();
         cx.activate(true);
@@ -1400,6 +1492,9 @@ impl Render for LauncherWindow {
         {
             self.drawn = Some(view.clone());
         }
+        // The toast the footer shows, if any, and its time (#141).
+        let toast = self.footer_toast(&view.status);
+        self.time_toast(toast.as_ref(), window, cx);
         // Pane's Clipboard History draws its own split view (#102).
         if let Some(split) = self.render_clipboard_history(&view, cx) {
             return split;
@@ -1407,6 +1502,15 @@ impl Render for LauncherWindow {
         // The compact window mode shows only the search field until
         // something is typed.
         let collapsed = self.fit_window_mode(&view, window, cx);
+        // Collapsed to its search field, the launcher has no footer for a
+        // toast: one shown is a HUD (#141).
+        if !self.presence.hidden() {
+            self.launcher.set_window_presence(if collapsed {
+                WindowPresence::Compact
+            } else {
+                WindowPresence::Shown
+            });
+        }
         self.keep_selected_visible(&view, &presentation, window, cx);
         // What moves this frame — the arriving content, the footer menu
         // popup's entrance or exit, the number hints' slide — and whether
@@ -1477,14 +1581,33 @@ impl Render for LauncherWindow {
         // The footer's status: while the launcher runs, works, answers or
         // fails, the strip is that message; `None` while it is idle, when
         // the strip becomes the selected action (below).
+        // Whether an action runs or the status line has something to say:
+        // the primary action steps aside then, toast or not.
+        let status_busy = view.status != Status::Idle;
         let (status_selector, status, status_color): (&str, Option<SharedString>, Hsla) =
             match view.status {
+                // A toast speaks where the status line would (#141).
+                _ if toast.is_some() => ("status-toast", None, theme.text_body),
                 Status::Idle => ("status-idle", None, theme.text_muted),
                 Status::Running => ("status-running", Some("Running…".into()), theme.warning),
                 Status::Progress(work) => ("status-progress", Some(work.into()), theme.warning),
                 Status::Result(answer) => ("status-result", Some(answer.into()), theme.success),
                 Status::Error(message) => ("status-error", Some(message.into()), theme.danger),
             };
+        // The strip's name for assistive technology: the status, or the
+        // toast's title and message.
+        let announced: Option<SharedString> = match &toast {
+            Some(shown) => Some(shown.toast.text().into()),
+            None => status.clone(),
+        };
+        // The toast's actions take the footer's buttons' place.
+        let toast_buttons = match &toast {
+            Some(shown) => self.toast_buttons(shown, &theme, cx),
+            None => Vec::new(),
+        };
+        let toast_middle = toast
+            .as_ref()
+            .map(|shown| self.render_toast(shown, &theme, cx).into_any_element());
         // The selected action: the one definition ([`SelectedAction`])
         // that drives the idle strip's button — its label, its
         // availability — and the dispatch both the button and Enter take.
@@ -1634,7 +1757,11 @@ impl Render for LauncherWindow {
             .on_action(cx.listener(Self::dismiss))
             .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(Self::toggle_actions))
+            .on_action(cx.listener(Self::focus_toast))
             .map(|content| Self::on_quick_slot_keys(content, cx))
+            // A toast's actions' shortcuts first: the toast is what was
+            // said last (#141).
+            .capture_key_down(cx.listener(Self::toast_action_keys))
             .capture_key_down(cx.listener(Self::item_action_keys))
             .on_action(cx.listener(Self::focus_next))
             .on_action(cx.listener(Self::focus_previous))
@@ -1710,37 +1837,38 @@ impl Render for LauncherWindow {
                         // announces it. While idle the strip carries no
                         // message and stays silent.
                         .role(Role::Status)
-                        .when_some(status.clone(), |footer, text| footer.aria_label(text))
+                        .when_some(announced, |footer, text| footer.aria_label(text))
                         .debug_selector(|| status_selector.into())
                         .text_size(theme.typography.footer_size)
                         .text_color(status_color)
                         .child(footer::footer_row(
                             self.render_menu_button(&theme, cx).into_any_element(),
-                            match status.clone() {
+                            match (toast_middle, status.clone()) {
+                                // The toast, in the hint's place (#141).
+                                (Some(toast), _) => toast,
                                 // Past the 35% cap the message scrolls in its
                                 // own viewport, inside the strip, instead of
                                 // being cut. The strip's bounds carry the
                                 // status-* debug selectors.
-                                Some(text) => {
+                                (None, Some(text)) => {
                                     footer::status_message(text, &theme).into_any_element()
                                 }
-                                None => footer::hint_slot(
+                                (None, None) => footer::hint_slot(
                                     self.footer_hint(with_actions, &theme),
                                     &theme,
                                 )
                                 .into_any_element(),
                             },
-                            // While a status shows, the primary action steps
-                            // aside — nothing is dispatched again from a frame
-                            // the status has already overtaken (a double click
-                            // on a quick open) — and Actions stays.
-                            self.footer_buttons(
-                                &action,
-                                with_actions,
-                                status.is_some(),
-                                &theme,
-                                cx,
-                            ),
+                            // A toast's actions, when it has any. While a
+                            // status shows, the primary action steps aside —
+                            // nothing is dispatched again from a frame the
+                            // status has already overtaken (a double click on
+                            // a quick open) — and Actions stays.
+                            if toast_buttons.is_empty() {
+                                self.footer_buttons(&action, with_actions, status_busy, &theme, cx)
+                            } else {
+                                toast_buttons
+                            },
                             &theme,
                         )),
                 )

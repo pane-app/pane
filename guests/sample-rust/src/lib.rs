@@ -8,6 +8,7 @@
 use core::cell::Cell;
 
 use pane_guest::alloc::{format, string::String, vec, vec::Vec};
+use pane_guest::feedback::{Toast, show_toast};
 use pane_guest::root::{RootAction, RootResult};
 use pane_guest::{
     Choice, Command, CustomView, CustomViewInfo, CustomViewRole, Field, FieldKind, FieldValue,
@@ -206,8 +207,16 @@ fn invalid(field: &str, message: &str) -> FormError {
     }
 }
 
-/// Runs the action of the item `id`; each item's action is this with its id.
-async fn act(id: &str) -> Result<String, String> {
+/// Runs the action of the item `id` and shows a toast with what [`outcome`]
+/// answers; each item's action is this with its id.
+async fn act(id: &str) -> Result<(), String> {
+    let done = outcome(id).await?;
+    show_toast(Toast::success(done));
+    Ok(())
+}
+
+/// What the action of the item `id` does, answering what it found.
+async fn outcome(id: &str) -> Result<String, String> {
     match id {
         "greet" => Ok("Hello from the Rust guest".into()),
         "wait" => {

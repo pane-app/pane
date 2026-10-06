@@ -20,6 +20,7 @@ use pane_guest::alloc::{
     vec::Vec,
 };
 use pane_guest::clipboard_history::{self as history, Capture, Entry, HistoryStatus};
+use pane_guest::feedback::{Toast, show_toast};
 use pane_guest::{
     Choice, Command, CustomView, Field, FieldKind, FieldValue, Form, FormError, Item, List,
     NoCustomView, TextField,
@@ -255,9 +256,16 @@ fn form_error(message: String) -> FormError {
     }
 }
 
-/// Runs the action of the item `item_id`; each item without a form runs
-/// this with its id.
-async fn act(item_id: String) -> Result<String, String> {
+/// Runs the action of the item `item_id` and shows a toast saying what it
+/// did; each item without a form runs this with its id.
+async fn act(item_id: String) -> Result<(), String> {
+    let done = run_item(item_id)?;
+    show_toast(Toast::success(done));
+    Ok(())
+}
+
+/// Does what the item `item_id` does, answering what that was.
+fn run_item(item_id: String) -> Result<String, String> {
     let wanted = match item_id.as_str() {
         TURN_ON => Some((Capture::On, "Clipboard history is on")),
         PAUSE => Some((Capture::Paused, "Clipboard history is paused")),
@@ -383,7 +391,7 @@ impl Command for ClipboardHistory {
 
     /// A callback no item's action names runs as the action of that id, so
     /// a kept item's id (whose item opens a form) still copies it again.
-    async fn run_search_result(id: String) -> Result<String, String> {
+    async fn run_search_result(id: String) -> Result<(), String> {
         act(id).await
     }
 

@@ -34,7 +34,7 @@ mod settle;
 #[path = "support/paint.rs"]
 mod paint;
 
-use settle::settle;
+use settle::{settle, settle_shown};
 
 #[path = "support/a11y.rs"]
 mod a11y;
@@ -587,7 +587,8 @@ fn an_alias_edited_inline_is_found_by_root_search_and_survives_a_restart(cx: &mu
     );
 
     // Root search follows at once: the alias, a space and more text lists
-    // the row that sends the text, and Enter sends it. Echo answers.
+    // the row that sends the text, and Enter sends it. Echo's toast says
+    // what it heard.
     cx.simulate_input("ec hello");
     let view = settle(&window, cx);
     assert_eq!(view.rows[0].title, "Echo");
@@ -596,8 +597,10 @@ fn an_alias_edited_inline_is_found_by_root_search_and_survives_a_restart(cx: &mu
         Some("Send “hello” · alias ec")
     );
     cx.simulate_keystrokes("enter");
-    let view = settle(&window, cx);
-    assert_eq!(view.status, Status::Result("Echo heard “hello”".into()));
+    assert_eq!(
+        settle_shown(&window, cx),
+        Status::Result("Echo heard “hello”".into())
+    );
 
     // The record on disk is the one the alias form writes, by command id.
     assert!(
@@ -625,7 +628,7 @@ fn an_alias_edited_inline_is_found_by_root_search_and_survives_a_restart(cx: &mu
     );
     cx.simulate_keystrokes("enter");
     assert_eq!(
-        settle(&window, cx).status,
+        settle_shown(&window, cx),
         Status::Result("Echo heard “hello”".into())
     );
     // And the Shortcuts page of a Settings window over that launcher
@@ -760,7 +763,7 @@ fn escape_cancels_the_edit_without_changing_anything(cx: &mut TestAppContext) {
     );
     cx.simulate_keystrokes("enter");
     assert_eq!(
-        settle(&window, cx).status,
+        settle_shown(&window, cx),
         Status::Result("Echo heard “hello”".into())
     );
 }

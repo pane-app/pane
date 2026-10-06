@@ -8,6 +8,7 @@
 
 use pane_guest::alloc::{format, string::String, vec::Vec};
 use pane_guest::applications::{self, Application};
+use pane_guest::feedback::{Toast, show_toast};
 use pane_guest::indexed::{IndexedAction, IndexedResult};
 use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
 
@@ -22,14 +23,16 @@ fn installed() -> Result<Vec<Application>, String> {
     Ok(found)
 }
 
-/// Opens the application `item_id`: the action of its item.
-async fn act(item_id: String) -> Result<String, String> {
+/// Opens the application `item_id`, the action of its item, and shows a
+/// toast saying so.
+async fn act(item_id: String) -> Result<(), String> {
     applications::open(&item_id)?;
     let name = installed()?
         .into_iter()
         .find(|application| application.id == item_id)
         .map_or(item_id, |application| application.name);
-    Ok(format!("Opened {name}"))
+    show_toast(Toast::success(format!("Opened {name}")));
+    Ok(())
 }
 
 impl Command for Applications {

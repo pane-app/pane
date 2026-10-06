@@ -11,9 +11,12 @@ use futures::executor::block_on;
 use pane_core::{CallError, Launcher, PackageIdentity, Runtime, Screen, Status};
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use rows::{select_title, titles};
 
 const INSTALL_ROW: &str = "Install extension from folder…";
@@ -108,7 +111,7 @@ fn subtitles(launcher: &Launcher) -> Vec<String> {
 }
 
 /// From root search, opens the command titled `command` and runs its item
-/// titled `item`, returning the outcome.
+/// titled `item`, returning the outcome: its toast, or the status line.
 fn run(launcher: &Launcher, command: &str, item: &str) -> Status {
     launcher.back();
     select_title(launcher, command);
@@ -116,7 +119,7 @@ fn run(launcher: &Launcher, command: &str, item: &str) -> Status {
     assert_eq!(launcher.view().screen, Screen::Command, "{command} opened");
     select_title(launcher, item);
     block_on(launcher.activate_selected());
-    launcher.view().status
+    shown(launcher)
 }
 
 /// Opens the extension manager from root search.

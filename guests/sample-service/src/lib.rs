@@ -28,6 +28,7 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use pane_guest::alloc::{format, string::String, vec::Vec};
+use pane_guest::feedback::{Toast, show_toast};
 use pane_guest::{
     Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, content, settings,
 };
@@ -82,9 +83,16 @@ fn counted(key: &str) -> Result<u64, String> {
         .map(|count| count.unwrap_or(0))
 }
 
-/// Runs the action of the item `item_id`; each item's action is this with
-/// its id.
-async fn act(item_id: &str) -> Result<String, String> {
+/// Runs the action of the item `item_id` and shows a toast with what
+/// [`outcome`] answers; each item's action is this with its id.
+async fn act(item_id: &str) -> Result<(), String> {
+    let done = outcome(item_id)?;
+    show_toast(Toast::success(done));
+    Ok(())
+}
+
+/// What the action of the item `item_id` does, answering what it changed.
+fn outcome(item_id: &str) -> Result<String, String> {
     match item_id {
         "add" => {
             let events = counted(EVENTS)? + 1;
