@@ -93,9 +93,10 @@ mod platform {
 /// and is opaque.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn straight_rgba(bgra: &[u8]) -> Vec<u8> {
-    let has_alpha = bgra.chunks_exact(4).any(|pixel| pixel[3] != 0);
+    let (pixels, _) = bgra.as_chunks::<4>();
+    let has_alpha = pixels.iter().any(|pixel| pixel[3] != 0);
     let mut rgba = Vec::with_capacity(bgra.len());
-    for pixel in bgra.chunks_exact(4) {
+    for pixel in pixels {
         let alpha = if has_alpha { pixel[3] } else { 255 };
         let straight = |channel: u8| -> u8 {
             match alpha {

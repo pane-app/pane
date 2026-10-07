@@ -399,12 +399,11 @@ fn program_named(path: &Path) -> bool {
     if path.file_name().is_some_and(program_type) {
         return true;
     }
-    let in_bundle = path.ancestors().skip(1).any(|folder| {
+    path.ancestors().skip(1).any(|folder| {
         folder
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("app"))
-    });
-    in_bundle
+    })
 }
 
 /// Whether the file a listing found at `path` runs as a program

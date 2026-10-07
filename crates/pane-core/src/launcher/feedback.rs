@@ -420,7 +420,7 @@ impl Launcher {
             if pop == PopToRoot::Immediate {
                 self.show_root(state, None);
             } else if clear_root_search && root_query_typed(state) {
-                let _ = self.search(state, "");
+                drop(self.search(state, ""));
             }
             hide_window(state);
         }
@@ -441,7 +441,7 @@ impl Launcher {
                 // Root search is listed afresh, its query empty.
                 self.show_root(state, None);
             } else if clear_search && root_query_typed(state) {
-                let _ = self.search(state, "");
+                drop(self.search(state, ""));
             }
         }
         self.changed();
@@ -462,7 +462,7 @@ impl Launcher {
                 Screen::CommandSearch { query } if !query.is_empty()
             );
             if root_query_typed(state) {
-                let _ = self.search(state, "");
+                drop(self.search(state, ""));
             } else if command_search {
                 self.clear_search_in_command(state);
             }

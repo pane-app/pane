@@ -294,14 +294,20 @@ pub fn relative_date(at: i64, now: i64) -> String {
     const YEAR: i64 = 365 * DAY;
     let apart = now.saturating_sub(at);
     let span = apart.saturating_abs();
-    let amount = match span {
-        ..MINUTE => return "now".into(),
-        ..HOUR => format!("{}m", span / MINUTE),
-        ..DAY => format!("{}h", span / HOUR),
-        ..WEEK => format!("{}d", span / DAY),
-        ..MONTH => format!("{}w", span / WEEK),
-        ..YEAR => format!("{}mo", (span / MONTH).max(1)),
-        _ => format!("{}y", span / YEAR),
+    let amount = if span < MINUTE {
+        return "now".into();
+    } else if span < HOUR {
+        format!("{}m", span / MINUTE)
+    } else if span < DAY {
+        format!("{}h", span / HOUR)
+    } else if span < WEEK {
+        format!("{}d", span / DAY)
+    } else if span < MONTH {
+        format!("{}w", span / WEEK)
+    } else if span < YEAR {
+        format!("{}mo", (span / MONTH).max(1))
+    } else {
+        format!("{}y", span / YEAR)
     };
     if apart < 0 {
         format!("in {amount}")
