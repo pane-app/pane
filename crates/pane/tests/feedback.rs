@@ -239,6 +239,41 @@ fn an_animated_toast_stays_until_it_is_updated(cx: &mut TestAppContext) {
     assert!(toast(&window, cx).is_none());
 }
 
+/// The window losing the focus does not end a success toast: it still
+/// leaves after its 3 seconds, not before.
+#[gpui::test]
+fn a_success_toast_keeps_its_time_when_the_window_loses_the_focus(cx: &mut TestAppContext) {
+    let (window, cx) = opened(cx);
+    pointer_leaves(cx);
+    // Only an active window can lose the focus: the test platform opens
+    // none active.
+    cx.update(|window, _| window.activate_window());
+    cx.simulate_keystrokes("enter");
+    settle(&window, cx);
+    assert!(cx.debug_bounds("toast-success").is_some());
+    cx.deactivate_window();
+    cx.run_until_parked();
+    wait(Duration::from_millis(1500), cx);
+    assert!(toast(&window, cx).is_some(), "a success stays for its time");
+    wait(Duration::from_millis(1600), cx);
+    assert!(toast(&window, cx).is_none(), "gone once its time ran");
+}
+
+/// An animated toast leaves the footer when the window loses the focus.
+#[gpui::test]
+fn an_animated_toast_leaves_when_the_window_loses_the_focus(cx: &mut TestAppContext) {
+    let (window, cx) = opened(cx);
+    pointer_leaves(cx);
+    cx.update(|window, _| window.activate_window());
+    select("Feedback", &window, cx);
+    choose("start upload", &window, cx);
+    settle(&window, cx);
+    assert!(cx.debug_bounds("toast-animated").is_some());
+    cx.deactivate_window();
+    cx.run_until_parked();
+    assert!(toast(&window, cx).is_none(), "an animated toast leaves");
+}
+
 /// The toast key moves the focus to the toast's first action, and Enter
 /// chooses it, calling the command back; an action's own shortcut runs it
 /// while the toast shows.

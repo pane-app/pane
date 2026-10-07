@@ -22,9 +22,11 @@
 //! while the launcher is shown expanded; while it is hidden or collapsed to
 //! its search field ([`WindowPresence`]), a toast shown or updated is shown
 //! as a HUD instead. The window hides a success or failure toast after
-//! [`crate::feedback::TOAST_DURATION`] ([`Launcher::toast_left`]), and any
-//! toast leaves the footer when the window deactivates
-//! ([`Launcher::window_deactivated`]); updating it shows it again. Choosing
+//! [`crate::feedback::TOAST_DURATION`] ([`Launcher::toast_left`]), whether
+//! the window deactivated or hid meanwhile or not; an animated toast stays
+//! until it is updated or hidden, or until the window deactivates or hides
+//! ([`Launcher::window_deactivated`]). Updating a toast that left shows it
+//! again. Choosing
 //! one of its actions calls its command's `handle-event` with the action's
 //! callback id, as an item's action does ([`Launcher::run_toast_action`]).
 //!
@@ -190,8 +192,10 @@ impl Launcher {
 
     /// Tells the launcher whether its window is shown, collapsed to its
     /// search field, or hidden. The window says so whenever it changes; a
-    /// toast shown while it is not shown expanded is shown as a HUD, and
-    /// the toast in the footer leaves when it stops being shown.
+    /// toast shown while it is not shown expanded is shown as a HUD. An
+    /// animated toast in the footer leaves when the window stops being
+    /// shown; a success or failure toast keeps its time (it leaves once
+    /// [`TOAST_DURATION`] has run, see [`Launcher::toast_left`]).
     ///
     /// A confirmation waiting (see `confirmations`) counts as shown once the
     /// window says it is shown, and is answered as not confirmed when it
@@ -203,10 +207,8 @@ impl Launcher {
                 return;
             }
             state.feedback.presence = presence;
-            if presence != WindowPresence::Shown
-                && let Some(current) = state.feedback.toast.as_mut()
-            {
-                current.in_footer = false;
+            if presence != WindowPresence::Shown {
+                leave_if_animated(&mut state.feedback);
             }
             match presence {
                 WindowPresence::Shown | WindowPresence::Compact => {
@@ -264,16 +266,14 @@ impl Launcher {
         }
     }
 
-    /// The window lost the focus: the toast leaves the footer, an animated
-    /// one too. Its command may still update it, which shows it again. A
-    /// confirmation the window showed is answered as not confirmed, and
-    /// its answer is not remembered.
+    /// The window lost the focus: an animated toast leaves the footer (its
+    /// command may still update it, which shows it again), while a success
+    /// or failure toast keeps its time. A confirmation the window showed is
+    /// answered as not confirmed, and its answer is not remembered.
     pub fn window_deactivated(&self) {
         let left = {
             let mut state = self.lock();
-            if let Some(current) = state.feedback.toast.as_mut() {
-                current.in_footer = false;
-            }
+            leave_if_animated(&mut state.feedback);
             confirmations::leave_confirmation(&mut state)
         };
         if left {
@@ -639,15 +639,24 @@ fn root_query_typed(state: &State) -> bool {
     matches!(&state.view.screen, Screen::Root { query } if !query.is_empty())
 }
 
-/// Has the window hide, and notes it hidden: the toast leaves the footer,
-/// and a confirmation it showed is answered as not confirmed.
+/// Has the window hide, and notes it hidden: an animated toast leaves the
+/// footer, and a confirmation it showed is answered as not confirmed.
 fn hide_window(state: &mut State) {
     state.feedback.window.hide();
     state.feedback.presence = WindowPresence::Hidden;
-    if let Some(current) = state.feedback.toast.as_mut() {
+    leave_if_animated(&mut state.feedback);
+    confirmations::leave_confirmation(state);
+}
+
+/// The window deactivated or stopped being shown: an animated toast in the
+/// footer leaves it, as it would stay there for ever otherwise. A success
+/// or failure toast stays until its time has run ([`TOAST_DURATION`]).
+fn leave_if_animated(feedback: &mut Feedback) {
+    if let Some(current) = feedback.toast.as_mut()
+        && !current.toast.style.hides_by_itself()
+    {
         current.in_footer = false;
     }
-    confirmations::leave_confirmation(state);
 }
 
 /// Shows the launcher's toast: in the footer while the window is shown
@@ -984,7 +993,7 @@ mod tests {
     }
 
     #[test]
-    fn a_toast_leaves_when_its_time_is_up_or_the_window_deactivates_and_an_update_brings_it_back() {
+    fn a_toast_leaves_when_its_time_is_up_and_an_animated_one_when_the_window_deactivates() {
         let (launcher, _window) = launcher();
         let id = launcher.show_given_toast(&call(true), toast(ToastStyle::Success, "Saved"));
         launcher.toast_left(id, 0);
@@ -995,11 +1004,39 @@ mod tests {
         launcher.toast_left(id, 0);
         assert_eq!(shown_title(&launcher).as_deref(), Some("Saved again"));
 
+        // A success or failure toast keeps its time when the window
+        // deactivates or hides: only its time ends it.
+        for style in [ToastStyle::Success, ToastStyle::Failure] {
+            launcher.set_window_presence(WindowPresence::Shown);
+            let id = launcher.show_given_toast(&call(true), toast(style, "Finished"));
+            launcher.window_deactivated();
+            assert_eq!(
+                shown_title(&launcher).as_deref(),
+                Some("Finished"),
+                "{style:?}"
+            );
+            launcher.set_window_presence(WindowPresence::Hidden);
+            launcher.set_window_presence(WindowPresence::Shown);
+            assert_eq!(
+                shown_title(&launcher).as_deref(),
+                Some("Finished"),
+                "{style:?}"
+            );
+            launcher.toast_left(id, 0);
+            assert_eq!(launcher.toast(), None, "{style:?}");
+        }
+
+        // An animated toast leaves when the window deactivates, and when it
+        // hides.
         let id = launcher.show_given_toast(&call(true), toast(ToastStyle::Animated, "Working"));
         launcher.window_deactivated();
-        assert_eq!(launcher.toast(), None, "an animated toast leaves too");
+        assert_eq!(launcher.toast(), None, "an animated toast leaves");
         launcher.update_given_toast(&call(true), id, toast(ToastStyle::Success, "Done"));
         assert_eq!(shown_title(&launcher).as_deref(), Some("Done"));
+        launcher.update_given_toast(&call(true), id, toast(ToastStyle::Animated, "Again"));
+        assert_eq!(shown_title(&launcher).as_deref(), Some("Again"));
+        launcher.set_window_presence(WindowPresence::Hidden);
+        assert_eq!(launcher.toast(), None, "an animated toast leaves");
     }
 
     #[test]
