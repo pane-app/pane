@@ -58,7 +58,10 @@ fn same_file(reported: &Path, made: &Path) -> bool {
 /// What Pane keeps for one test, and the fakes it acts through.
 struct World {
     _data: TempDir,
-    folder: TempDir,
+    _temp: TempDir,
+    /// The granted folder, named plainly inside `_temp` (whose own name
+    /// starts with a dot, which Pane refuses as hidden).
+    folder: PathBuf,
     opener: FakeOpener,
     system: Arc<RecordingSystem>,
 }
@@ -76,9 +79,11 @@ impl World {
         );
         cx.executor().allow_parking();
         let data = tempfile::tempdir().unwrap();
-        let folder = tempfile::tempdir().unwrap();
-        fs::write(folder.path().join("plan.txt"), "plan").unwrap();
-        fs::write(folder.path().join("run plan.bat"), "@echo off").unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let folder = temp.path().join("Granted");
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join("plan.txt"), "plan").unwrap();
+        fs::write(folder.join("run plan.bat"), "@echo off").unwrap();
         let runtime = Runtime::start().unwrap();
         let system = Arc::new(RecordingSystem::default());
         runtime.set_applications(system.clone());
@@ -89,7 +94,7 @@ impl World {
         block_on(launcher.install_package(&package));
         launcher.back();
         let identity = launcher.packages()[0].identity.clone();
-        block_on(launcher.grant_folder(&identity, folder.path()));
+        block_on(launcher.grant_folder(&identity, &folder));
         assert!(
             matches!(launcher.view().status, Status::Result(_)),
             "{:?}",
@@ -98,6 +103,7 @@ impl World {
         launcher.show_root_search();
         let world = World {
             _data: data,
+            _temp: temp,
             folder,
             opener,
             system,
@@ -192,7 +198,7 @@ fn enter_opens_a_document_and_closes_the_window(cx: &mut TestAppContext) {
     done(&window, cx);
     let opened = world.opener.take();
     assert_eq!(opened.len(), 1);
-    assert!(same_file(&opened[0], &world.folder.path().join("plan.txt")));
+    assert!(same_file(&opened[0], &world.folder.join("plan.txt")));
     assert!(world.system.take().is_empty());
     assert!(hidden(&window, cx), "the launcher closed");
 }
@@ -204,7 +210,7 @@ fn ctrl_enter_reveals_a_document_and_closes_the_window(cx: &mut TestAppContext) 
     cx.simulate_keystrokes(SECONDARY);
     done(&window, cx);
     match world.system.take().as_slice() {
-        [Done::Revealed(path)] => assert!(same_file(path, &world.folder.path().join("plan.txt"))),
+        [Done::Revealed(path)] => assert!(same_file(path, &world.folder.join("plan.txt"))),
         other => panic!("{other:?}"),
     }
     assert!(world.opener.take().is_empty());
@@ -220,7 +226,7 @@ fn enter_reveals_a_program_and_runs_nothing(cx: &mut TestAppContext) {
     done(&window, cx);
     match world.system.take().as_slice() {
         [Done::Revealed(path)] => {
-            assert!(same_file(path, &world.folder.path().join("run plan.bat")))
+            assert!(same_file(path, &world.folder.join("run plan.bat")))
         }
         other => panic!("{other:?}"),
     }
