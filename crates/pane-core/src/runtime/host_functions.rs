@@ -81,7 +81,7 @@ impl GuestState {
 impl GuestState {
     /// Who makes a host call: this instance's component, and what the call
     /// it runs is for.
-    fn caller(&self) -> Caller {
+    pub(super) fn caller(&self) -> Caller {
         Caller {
             component: self.component.clone(),
             command: self.call.command.clone(),

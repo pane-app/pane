@@ -52,6 +52,16 @@
 // "Ask in the Background" launches the no-view "Confirm Run" in the
 // background, where it toasts "Not asked" with the reason. Run by the user,
 // "Confirm Run" asks "Run it?" and toasts "Ran" or "Did not run".
+//
+// "Paste" (#148) has the standard Paste (it pastes "Pasted by the actions
+// sample" where Pane can paste, and copies it with a HUD where it cannot
+// yet), the same Paste titled after the application in front ("Paste to
+// Notepad"), a paste that says each answer of the host function ("Paste
+// Directly"), "Front Application", which says that application's name and
+// icon, or that there is none, and "Search Selection", which searches the
+// web for the selected text and says when nothing is selected. Where Pane
+// cannot do one yet, a failure toast says "Not available here yet" with
+// Pane's reason; a failure is an error the command answers with.
 import type { Action, Command, CustomView, Item, List, Shortcut } from "@pane/extension";
 import {
   clearSearchBar,
@@ -68,12 +78,17 @@ import { launch } from "pane:extension/commands@0.1.0";
 import {
   copy,
   copyAction,
+  frontApplication,
   moveToTrashAction,
+  NotAvailableError,
   open,
   openAction,
   openWithAction,
+  paste,
+  pasteAction,
   readClipboard,
   runningOn,
+  selectedText,
   showInFileManager,
   showInFileManagerAction,
   trash,
@@ -277,6 +292,85 @@ function standardItem(): Item {
       openWithAction(file),
       showInFileManagerAction(file),
       moveToTrashAction([deleteMe]),
+    ],
+  };
+}
+
+/** The text the sample pastes. */
+const PASTED_TEXT = "Pasted by the actions sample";
+
+/** Where "Search Selection" searches. */
+const SEARCH = "https://www.google.com/search?q=";
+
+/**
+ * Runs `run`, which may throw a {@link NotAvailableError} where Pane cannot
+ * do something yet: then a failure toast says "Not available here yet" with
+ * Pane's reason, which is not an error the command answers with. Any other
+ * error is the command's.
+ */
+function unlessNotAvailable(run: () => void): void {
+  try {
+    run();
+  } catch (error) {
+    if (!(error instanceof NotAvailableError)) throw error;
+    showToast({ style: "failure", title: "Not available here yet", message: error.message });
+  }
+}
+
+/** The title of a Paste to the application in front: "Paste to Notepad". */
+function pasteTitle(): string {
+  try {
+    const front = frontApplication();
+    if (front != null) return `Paste to ${front.name}`;
+  } catch {
+    // Not available or failed: Pane does not know the application.
+  }
+  return "Paste to Active App";
+}
+
+/** "Paste": the standard Paste, the front application and the selected text. */
+function pasteItem(): Item {
+  return {
+    id: "paste",
+    title: "Paste",
+    subtitle: "Paste, the application in front and the selected text",
+    actions: [
+      pasteAction(PASTED_TEXT),
+      pasteAction(PASTED_TEXT, { title: pasteTitle() }),
+      {
+        title: "Paste Directly",
+        onAction: async () => {
+          unlessNotAvailable(() => paste(PASTED_TEXT));
+        },
+      },
+      {
+        title: "Front Application",
+        onAction: async () => {
+          unlessNotAvailable(() => {
+            const front = frontApplication();
+            if (front == null) {
+              showToast({ title: "No application is in front" });
+            } else {
+              const icon = front.icon == null ? "none" : front.icon.file;
+              showToast({ title: `Front application: ${front.name}, icon ${icon}` });
+            }
+          });
+        },
+      },
+      {
+        title: "Search Selection",
+        onAction: async () => {
+          unlessNotAvailable(() => {
+            const text = selectedText();
+            if (text == null) {
+              showToast({ style: "failure", title: "Nothing is selected" });
+              return;
+            }
+            open(`${SEARCH}${encodeURIComponent(text)}`);
+            showToast({ title: `Searched for “${text}”` });
+          });
+        },
+      },
     ],
   };
 }
@@ -535,6 +629,7 @@ export const command: Command = {
         },
         systemItem(),
         standardItem(),
+        pasteItem(),
       ],
     };
   },

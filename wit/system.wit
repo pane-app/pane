@@ -3,15 +3,18 @@ package pane:extension@0.1.0;
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
 // The system's clipboard, opening things, the file manager and the Recycle
-// Bin (ADR 0037): every command imports them, whatever its mode, through
-// the `extension` world (wit/extension.wit). Rust commands use them through
-// pane-guest (`pane_guest::system`, and the standard actions of
+// Bin (ADR 0037), and pasting into the application that was in front
+// before Pane, that application and the text selected in it: every command
+// imports them, whatever its mode, through the `extension` world
+// (wit/extension.wit). Rust commands use them through pane-guest
+// (`pane_guest::system`, and the standard actions of
 // `pane_guest::actions`), JavaScript and TypeScript ones through
 // `@pane/extension/system` or the module "pane:extension/system@0.1.0"
 // (guests/js/system.d.ts). Each does only what it names: none closes the
-// window or tells the user anything. The SDKs' standard actions (Copy,
-// Open, Open With…, Show in Explorer, Move to Recycle Bin) compose them
-// with `window.close` and a HUD or a toast (wit/feedback.wit). None is a
+// window or tells the user anything, but `paste`, which closes it by
+// nature. The SDKs' standard actions (Copy, Paste, Open, Open With…, Show
+// in Explorer, Move to Recycle Bin) compose them with `window.close` and a
+// HUD or a toast (wit/feedback.wit). None is a
 // reason to pause an extension: a refusal is an answer, and the time spent
 // in them (a handler starting, the clipboard held by another program) is
 // not the guest's computing. The header follows `package`: comments above
@@ -82,4 +85,47 @@ interface system {
   /// could not move, each with why; a path that does not exist is one of
   /// them.
   trash: func(paths: list<string>) -> result<_, list<not-trashed>>;
+
+  /// Why `paste`, `front-application` or `selected-text` did not answer.
+  variant system-error {
+    /// Pane cannot do this on this system yet: on macOS and Linux (X11
+    /// included), and on Windows until Pane's Windows power features land.
+    /// Nothing went wrong, and the command can do something else, as the
+    /// SDKs' Paste copies instead. Says what is not available, for the
+    /// user.
+    not-available(string),
+    /// It went wrong: why, for the user.
+    failed(string),
+  }
+
+  /// The application that was in front before Pane.
+  record front-app {
+    /// Its name, as the system shows it ("Notepad").
+    name: string,
+    /// What its icon is the system's icon of: its program's path, its
+    /// bundle or its desktop entry, or a Windows `shell:AppsFolder` name.
+    /// An item shows it as a file icon (`{"file": …}` in the tree). None
+    /// when Pane knows no such thing.
+    icon: option<string>,
+  }
+
+  /// Closes the window (as `window.close` does, in a call a window was
+  /// shown for), brings the application that was in front before Pane
+  /// back to the front and pastes `content` into it, then puts back what
+  /// the clipboard held before, unless something else was copied
+  /// meanwhile. The paste goes through the clipboard: `content` is put
+  /// there concealed, so clipboard managers do not keep it, and so is
+  /// what is put back. `not-available` leaves the window and the
+  /// clipboard as they were; the SDKs' Paste then copies instead and
+  /// says so.
+  paste: func(content: clip) -> result<_, system-error>;
+
+  /// The application that was in front before Pane (its name and icon),
+  /// or none (the desktop, say). It lets an action say "Paste to
+  /// Notepad".
+  front-application: func() -> result<option<front-app>, system-error>;
+
+  /// The text selected in the application that was in front before Pane,
+  /// or none when nothing is selected there, which is not a failure.
+  selected-text: func() -> result<option<string>, system-error>;
 }

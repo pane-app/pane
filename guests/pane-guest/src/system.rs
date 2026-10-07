@@ -1,6 +1,7 @@
 //! The system Pane runs on (`pane:extension/system`): the clipboard,
 //! opening anything, showing a path in the file manager and moving paths
-//! to the Recycle Bin.
+//! to the Recycle Bin; pasting into the application that was in front
+//! before Pane, that application, and the text selected in it.
 //!
 //! ```ignore
 //! use pane_guest::system::{self, Clip};
@@ -11,17 +12,49 @@
 //! ```
 //!
 //! Each function does only what it names: none closes the window or tells
-//! the user anything. The standard actions of [`crate::actions`] compose
-//! them with [`crate::window::close`] and a HUD or a toast, as Raycast's
-//! built-in actions do. Paths are absolute; a relative one is refused.
+//! the user anything but [`paste`], which closes it by nature. The
+//! standard actions of [`crate::actions`] compose them with
+//! [`crate::window::close`] and a HUD or a toast, as Raycast's built-in
+//! actions do. Paths are absolute; a relative one is refused.
+//!
+//! [`paste`], [`front_application`] and [`selected_text`] answer
+//! [`SystemError::NotAvailable`] where Pane cannot do them yet (on macOS
+//! and Linux, and on Windows until Pane's Windows power features land),
+//! which is not a failure:
+//!
+//! ```ignore
+//! use pane_guest::system::{self, SystemError};
+//!
+//! let title = match system::front_application() {
+//!     Ok(Some(front)) => format!("Paste to {}", front.name),
+//!     _ => "Paste".into(),
+//! };
+//! match system::selected_text() {
+//!     Ok(Some(text)) => { /* search for it */ }
+//!     Ok(None) => { /* nothing is selected */ }
+//!     Err(SystemError::NotAvailable(why)) => { /* do something else */ }
+//!     Err(SystemError::Failed(why)) => return Err(why),
+//! }
+//! ```
 
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
 pub use crate::pane::extension::system::{
-    Clip, HostSystem, NotTrashed, copy, open, read_clipboard, reveal, running_on, trash,
+    Clip, FrontApp, HostSystem, NotTrashed, SystemError, copy, front_application, open, paste,
+    read_clipboard, reveal, running_on, selected_text, trash,
 };
+
+impl SystemError {
+    /// What it says, for the user: why the function is not available, or
+    /// why it failed.
+    pub fn message(&self) -> &str {
+        match self {
+            SystemError::NotAvailable(why) | SystemError::Failed(why) => why,
+        }
+    }
+}
 
 /// What the system's file manager is called: "Explorer" on Windows,
 /// "Finder" on macOS, "File Manager" elsewhere ("Show in Explorer").
