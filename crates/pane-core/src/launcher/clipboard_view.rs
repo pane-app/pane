@@ -288,10 +288,14 @@ impl Launcher {
                 .map(|record| record.text.clone())
                 .ok_or_else(|| "That item is no longer kept".to_owned()),
         };
-        if let Err(why) = &text {
+        {
             let mut state = self.lock();
             if state.screen_epoch == epoch {
-                state.view.status = Status::Error(why.clone());
+                state.view.status = match &text {
+                    Err(why) => Status::Error(why.clone()),
+                    // Running until it is pasted, or copied instead.
+                    Ok(_) => Status::Running,
+                };
             }
         }
         let data = view.reading.data.clone();

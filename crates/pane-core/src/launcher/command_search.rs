@@ -228,7 +228,8 @@ impl Launcher {
             }
             (None, Ok(view)) => {
                 super::looks::remember(state, &component, &view.items);
-                let list = CommandList::of(view.items);
+                // Pane's folder rows lead it again, as when it opened.
+                let list = self.command_list(state, &component, view.items);
                 if let Some(searching) = state.searching.as_mut() {
                     searching.list = Some(list.clone());
                 }

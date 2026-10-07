@@ -1106,9 +1106,13 @@ fn a_launcher_that_does_not_reach_the_system_explains_it() {
                 .into()
         )
     );
-    // Root search stays usable.
+    // Root search stays usable. ("Create Quicklink" matches too: its
+    // subtitle says "from root search".)
     search(&launcher, "search quicklinks");
-    assert_eq!(titles(&launcher), ["Search Quicklinks"]);
+    assert_eq!(
+        titles(&launcher).first().map(String::as_str),
+        Some("Search Quicklinks")
+    );
 }
 
 /// A link handler that records what it is asked to open.

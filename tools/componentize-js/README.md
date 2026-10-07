@@ -22,6 +22,10 @@ this page is for maintaining the toolchain.
   Wasmtime 47 stubs unknown imports for the snapshot with sync functions,
   which an async import refuses. Wasmtime 49 does this itself, so moving
   componentize-qjs to it would retire the patch.
+  `0004-task-context-stack-pointer.patch` generates wit-dylib's adapters
+  with the stack pointer in task context slot 0, where the runtime and the
+  P3 libc keep it: with the default global, an adapter's frame overwrote
+  the runtime's own once an async export had resumed.
 - [`p3_build.rs`](p3_build.rs): the componentizer entry point, compiled as an
   example of the patched crate.
 - [`package.json`](package.json) / `package-lock.json`: esbuild 0.28.2 and

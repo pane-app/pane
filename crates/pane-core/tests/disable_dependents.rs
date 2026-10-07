@@ -333,7 +333,9 @@ fn disable_all_disables_the_shown_set_stops_it_and_keeps_its_settings() {
         ("Package d".to_string(), true),
     ];
     assert_eq!(enabled(&restarted), alone);
-    assert_eq!(enabled(&dirs.launcher()), alone);
+    // Read by a launcher of its own: one on the same runtime would take
+    // the toasts `restarted`'s calls show.
+    assert_eq!(enabled(&dirs.restarted()), alone);
 
     // Settings b kept its settings.
     assert_eq!(

@@ -52,6 +52,13 @@ impl Dirs {
         Launcher::with_packages(Ok(self.runtime.clone()), vec![], self.packages_dir())
     }
 
+    /// A second launcher on the same records, with a runtime of its own:
+    /// one on `runtime` would take its window and feedback host functions,
+    /// so later calls' toasts would not reach the launcher a test drives.
+    fn reader(&self) -> Launcher {
+        Launcher::with_packages(Runtime::start(), vec![], self.packages_dir())
+    }
+
     fn packages_dir(&self) -> PathBuf {
         self.data.path().join("extensions")
     }
@@ -342,7 +349,7 @@ fn uninstall_all_keeping_saved_data_removes_the_shown_set_and_the_dependency_com
     assert_eq!(installed(&restarted), ["Package d"]);
     block_on(restarted.install_package(&dirs.folder("a")));
     assert_eq!(installed(&restarted), ["Package d", "Package a"]);
-    assert_eq!(installed(&dirs.launcher()), ["Package d", "Package a"]);
+    assert_eq!(installed(&dirs.reader()), ["Package d", "Package a"]);
     assert_eq!(restarted.retained_data(), retained);
 
     // Settings b installed again finds its settings.
