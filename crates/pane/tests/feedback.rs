@@ -22,7 +22,7 @@ use pane_core::{
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::{settle, settle_shown};
+use settle::{settle, settle_bare, settle_shown};
 
 /// Open actions' default binding on this system.
 const OPEN_ACTIONS: &str = if cfg!(target_os = "macos") {
@@ -93,12 +93,20 @@ fn select(title: &str, window: &Entity<LauncherWindow>, cx: &mut VisualTestConte
 /// through the Actions panel, as a user does, until it has run (the
 /// window may have closed meanwhile, so this does not wait for a frame).
 fn choose(filter: &str, window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) {
+    // The keys go where the last frame put them: not into a panel or a
+    // dialog an earlier choice closed.
+    settle_bare(window, cx);
     cx.simulate_keystrokes(OPEN_ACTIONS);
     settle(window, cx);
     cx.simulate_input(filter);
     settle(window, cx);
     cx.simulate_keystrokes("enter");
     done(window, cx);
+    // While the window shows, the keys pressed next go where a frame of
+    // its outcome puts them.
+    if !hidden(window, cx) {
+        settle(window, cx);
+    }
 }
 
 /// Runs the window until the launcher no longer runs an action: a hidden

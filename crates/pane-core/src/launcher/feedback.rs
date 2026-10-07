@@ -329,8 +329,10 @@ impl Launcher {
                 self.put_toast(&mut state, owner, command, copied);
             }
             Some((owner, command, ToastDoes::Callback(callback))) => {
-                // The status line is about this action from now on.
+                // The status line is about this action from now on: it
+                // runs until the command answered, as an item's action does.
                 state.sent_from = None;
+                state.view.status = Status::Running;
                 let data = self.data_in(&state, &owner);
                 run = Some((state.screen_epoch, owner, command, callback, data));
             }
@@ -380,13 +382,28 @@ impl Launcher {
             let mut state = self.lock();
             let state = &mut *state;
             let ended = stopped(state, &component, &data);
+            let current = state.screen_epoch == epoch;
             match (&ended, result) {
-                (Some(_), _) | (None, Ok(_)) => {}
+                (Some(problem), _) => {
+                    if current {
+                        state.view.status = Status::Error(problem.clone());
+                    }
+                }
+                // The answer shows nothing: the command said what it had to
+                // through a toast or a HUD.
+                (None, Ok(_)) => {
+                    if current {
+                        state.view.status = Status::Idle;
+                    }
+                }
                 (None, Err(CallError::Guest(message))) => {
+                    if current {
+                        state.view.status = Status::Idle;
+                    }
                     self.show_failure(state, &component, command.as_deref(), message);
                 }
                 (None, Err(error)) => {
-                    if state.screen_epoch == epoch {
+                    if current {
                         state.view.status = Status::Error(error.to_string());
                     }
                 }

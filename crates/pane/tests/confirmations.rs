@@ -28,7 +28,7 @@ mod settle;
 #[path = "support/setup.rs"]
 mod setup;
 
-use settle::{settle, settle_shown};
+use settle::{settle, settle_bare, settle_shown};
 use setup::{actions_shortcut, settings_shortcut};
 
 /// The folders one test's package and extensions are kept in.
@@ -98,6 +98,9 @@ fn select(title: &str, window: &Entity<LauncherWindow>, cx: &mut VisualTestConte
 /// through the Actions panel, as a user does, without waiting for it to
 /// end: it may wait on a confirmation.
 fn choose(filter: &str, window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) {
+    // The keys go where the last frame put them: not into a panel or a
+    // dialog an earlier choice closed.
+    settle_bare(window, cx);
     cx.simulate_keystrokes(actions_shortcut());
     settle(window, cx);
     cx.simulate_input(filter);
@@ -218,6 +221,9 @@ fn a_click_outside_or_the_window_losing_the_focus_answers_no(cx: &mut TestAppCon
     cx.simulate_click(gpui::point(px(4.), px(4.)), Modifiers::none());
     assert_eq!(answered(&window, cx), Status::Result("Stopped".into()));
 
+    // Only an active window can lose the focus: the test platform opens
+    // none active.
+    cx.update(|window, _| window.activate_window());
     choose("ask", &window, cx);
     asked(&window, cx);
     cx.deactivate_window();

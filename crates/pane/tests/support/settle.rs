@@ -24,6 +24,33 @@ pub fn settle(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> La
     until(window, cx, |view| view.status != Status::Running)
 }
 
+/// Runs the window, as [`settle`] does, until its last frame also drew
+/// nothing over the launcher: no Actions panel, no confirmation. Keys go
+/// where the last frame put them, so after Enter chose an action in the
+/// panel, or answered a confirmation, a test waits for this before it
+/// presses the next keys.
+pub fn settle_bare(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> LauncherView {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        cx.run_until_parked();
+        let (view, drawn, over) = cx.read_entity(window, |window, _| {
+            (
+                window.launcher().view(),
+                window.drawn_view().cloned(),
+                window.drawn_over(),
+            )
+        });
+        if view.status != Status::Running && drawn.as_ref() == Some(&view) && !over {
+            return view;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out: the launcher shows {view:?}, the window last drew {drawn:?} (over it: {over})"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 /// Runs the window until `done` holds for the launcher's view and the
 /// window's last frame drew that view.
 pub fn until(

@@ -128,6 +128,11 @@ pub struct LauncherWindow {
     /// [`LauncherWindow::drawn_view`]). Test and debug builds only.
     #[cfg(any(test, debug_assertions))]
     drawn: Option<LauncherView>,
+    /// Whether the last frame drew the Actions panel or a confirmation
+    /// over the launcher, for tests (see [`LauncherWindow::drawn_over`]).
+    /// Test and debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    drawn_over: bool,
 }
 
 /// What the list was last scrolled for. When any of it changes, the list
@@ -199,6 +204,8 @@ impl LauncherWindow {
             presence: Presence::default(),
             #[cfg(any(test, debug_assertions))]
             drawn: None,
+            #[cfg(any(test, debug_assertions))]
+            drawn_over: false,
         };
         // The number hints go when the window loses focus: the Ctrl
         // release would go to another window. So does the toast, an
@@ -242,6 +249,17 @@ impl LauncherWindow {
     #[doc(hidden)]
     pub fn drawn_view(&self) -> Option<&LauncherView> {
         self.drawn.as_ref()
+    }
+
+    /// Test support: whether the last frame drew the Actions panel or a
+    /// confirmation over the launcher. The keys a test presses go where
+    /// the last frame put them, so one that pressed Enter in the panel
+    /// waits for a frame without it before pressing the next keys. Test
+    /// and debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn drawn_over(&self) -> bool {
+        self.drawn_over
     }
 
     /// Test support: the view transition the last frame drew, as the
@@ -1181,12 +1199,11 @@ impl LauncherWindow {
     /// is safe wherever the launcher changed, including from another
     /// window's own flow.
     fn sync_screen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // The Actions panel belongs to root search: a screen that replaced
-        // it (a hotkey pressed, a change from Settings) takes the panel
-        // with it, and its own focus and submenus with it.
-        if !matches!(self.launcher.view().screen, Screen::Root { .. })
-            && self.actions.take().is_some()
-        {
+        // The Actions panel belongs to the screen it opened over, root
+        // search or a command's list: a screen that replaced it (a hotkey
+        // pressed, a change from Settings) takes the panel with it, and
+        // its own focus and submenus with it.
+        if !self.actions_belong_to(&self.launcher.view().screen) && self.actions.take().is_some() {
             self.launcher.close_submenus();
         }
         self.sync_form(window, cx);
@@ -1599,6 +1616,7 @@ impl Render for LauncherWindow {
         #[cfg(any(test, debug_assertions))]
         {
             self.drawn = Some(view.clone());
+            self.drawn_over = self.actions.is_some() || self.launcher.confirmation().is_some();
         }
         // The toast the footer shows, if any, and its time (#141).
         let toast = self.footer_toast(&view.status);

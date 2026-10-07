@@ -206,6 +206,9 @@ pub(crate) struct ActionsPanel {
     keep_selection: Option<usize>,
     /// What had focus when the panel opened, restored when it closes.
     restore: Option<FocusHandle>,
+    /// Whether it opened over root search rather than a command's list:
+    /// the screen it belongs to (see [`LauncherWindow::actions_belong_to`]).
+    on_root: bool,
     _filtering: Subscription,
     /// Closes the panel when the window loses activation.
     _deactivation: Subscription,
@@ -558,10 +561,22 @@ impl LauncherWindow {
             above: Vec::new(),
             keep_selection: None,
             restore,
+            on_root: matches!(screen, Screen::Root { .. }),
             _filtering: filtering,
             _deactivation: deactivation,
         });
         cx.notify();
+    }
+
+    /// Whether an open Actions panel still belongs on `screen`: the kind of
+    /// screen it opened over (root search, or a command's list) is still
+    /// shown. A background change that leaves it there (a web image
+    /// arriving, #142) keeps the panel open; a screen that replaced it (a
+    /// hotkey pressed, a change from Settings) does not.
+    pub(crate) fn actions_belong_to(&self, screen: &Screen) -> bool {
+        self.actions.as_ref().is_some_and(|panel| {
+            item_list(screen) && panel.on_root == matches!(screen, Screen::Root { .. })
+        })
     }
 
     /// Closes the Actions panel, if it is open, from whatever level it
