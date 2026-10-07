@@ -1981,9 +1981,12 @@ for await (const line of process.lines()) toast.update({ style: "animated", titl
 A program belongs to the call that started it: Pane ends it, and every
 process it started (a Job Object on Windows, a process group elsewhere),
 when the call returns or is dropped, when the package is disabled,
-reloaded, updated, paused or uninstalled, and when Pane quits; what a
-program leaves running also ends when it exits. Open a program with the
-system instead to have it outlive the command. A `run` keeps at most 16 MiB
+reloaded, updated, paused or uninstalled, and when Pane quits. What a
+program leaves running when it exits runs on, in its tree, until then, not
+just until the program's exit; Pane stops reading the program's output
+once it exited (after two seconds for what is still in its pipes), so a
+process it left holding its output does not hold up the answer. Open a
+program with the system instead to have it outlive the command. A `run` keeps at most 16 MiB
 of each stream; a program writing more is ended and the run fails
 (`too-much-output`). Read a spawned program's streams as it writes: one
 that writes much more than the command reads waits. A component that

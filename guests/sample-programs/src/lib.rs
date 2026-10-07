@@ -22,6 +22,10 @@
 //! - "Give up after a second" races a run whose program starts a
 //!   descendant against a one-second timer, and drops the run when the
 //!   timer wins: Pane ends both.
+//! - "Leave a descendant" runs one that starts a program of its own and
+//!   exits; the run answers, notes in its settings that it ran, and the
+//!   call goes on for a second and a half: the descendant runs on until
+//!   the call ends, then Pane ends it.
 //! - "Run until stopped" notes in its settings that it started, runs a
 //!   program with a descendant for a minute, then notes that it finished:
 //!   disabling, reloading, updating or uninstalling the package meanwhile,
@@ -53,6 +57,8 @@ use pane_guest::{Command, Item, LaunchRecord, List, NoCustomView, settings};
 const ECHO: &str = "pane-echo";
 /// The settings key where "Run until stopped" notes how far it got.
 const LONG: &str = "programs-long";
+/// The settings key where "Leave a descendant" notes that its run answered.
+const LEFT: &str = "programs-left";
 /// How long "Give up after a second" lets its program run, in nanoseconds.
 const LIMIT: u64 = 1_000_000_000;
 /// The arguments "Run by its path" passes, which no shell reads.
@@ -235,6 +241,17 @@ async fn outcome(item_id: &str) -> Result<String, String> {
                 Err(()) => Ok("Gave up after a second".into()),
             }
         }
+        "leave" => {
+            let output = echo(&["--leave", "30"], b"", Options::default()).await?;
+            settings::set(LEFT, "ran")?;
+            // The call goes on a while: what the program left runs on
+            // meanwhile, and ends with the call.
+            wasip3::clocks::monotonic_clock::wait_for(LIMIT + LIMIT / 2).await;
+            Ok(format!(
+                "It said \"{}\"; the call went on",
+                output.stdout_text().trim()
+            ))
+        }
         "long" => {
             settings::set(LONG, "started")?;
             // If Pane stops the call meanwhile, the program and its
@@ -334,6 +351,11 @@ impl Command for ProgramsSample {
                 "give-up",
                 "Give up after a second",
                 "Drops the run when a timer wins",
+            ),
+            item(
+                "leave",
+                "Leave a descendant",
+                "Its program exits; the one it started runs until the call ends",
             ),
             item(
                 "long",

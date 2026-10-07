@@ -33,6 +33,8 @@
 //!   `pane-echo.release`), and removes the file when it finishes;
 //! - `--parent <seconds>`: starts `pane-echo --hold <seconds> descendant`,
 //!   writes `started a descendant`, then holds itself as `parent`;
+//! - `--leave <seconds>`: starts `pane-echo --hold <seconds> descendant`,
+//!   which keeps its output open, writes `left a descendant` and exits;
 //! - `--flood-mib <n>`: writes `<n>` MiB to standard output;
 //! - `--context <name>`: writes `in <folder>; <name>=<value>`, the name of
 //!   its working folder and the variable's value (`(unset)` without one).
@@ -75,6 +77,7 @@ fn main() -> ExitCode {
             };
         }
         ["--parent", seconds] => return parent(seconds),
+        ["--leave", seconds] => return leave(seconds),
         ["--flood-mib", count] => return flood_mib(count),
         ["--context", name] => return context(name),
         _ => {}
@@ -206,6 +209,27 @@ fn parent(seconds: &str) -> ExitCode {
     let Ok(held) = seconds.parse::<u64>() else {
         return usage(&format!("--parent needs whole seconds, not {seconds}"));
     };
+    if let Err(code) = descendant(seconds, "started a descendant") {
+        return code;
+    }
+    hold(Duration::from_secs(held), "parent");
+    ExitCode::SUCCESS
+}
+
+/// `--leave <seconds>`: what it starts outlives it.
+fn leave(seconds: &str) -> ExitCode {
+    if seconds.parse::<u64>().is_err() {
+        return usage(&format!("--leave needs whole seconds, not {seconds}"));
+    }
+    match descendant(seconds, "left a descendant") {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(code) => code,
+    }
+}
+
+/// Starts `pane-echo --hold <seconds> descendant`, which keeps this
+/// program's output open, and writes `said` once it beats.
+fn descendant(seconds: &str, said: &str) -> Result<(), ExitCode> {
     let alive = own_folder().join("pane-echo.descendant.alive");
     let length = || std::fs::metadata(&alive).map_or(0, |metadata| metadata.len());
     let before = length();
@@ -216,7 +240,7 @@ fn parent(seconds: &str) -> ExitCode {
         .stdin(Stdio::null())
         .spawn();
     if let Err(error) = started {
-        return usage(&format!("could not start a descendant: {error}"));
+        return Err(usage(&format!("could not start a descendant: {error}")));
     }
     // It says so once the descendant runs: once it has beaten.
     let waiting = Instant::now();
@@ -224,15 +248,10 @@ fn parent(seconds: &str) -> ExitCode {
         thread::sleep(Duration::from_millis(5));
     }
     let mut out = io::stdout().lock();
-    if writeln!(out, "started a descendant")
-        .and_then(|()| out.flush())
-        .is_err()
-    {
-        return ExitCode::from(2);
+    if writeln!(out, "{said}").and_then(|()| out.flush()).is_err() {
+        return Err(ExitCode::from(2));
     }
-    drop(out);
-    hold(Duration::from_secs(held), "parent");
-    ExitCode::SUCCESS
+    Ok(())
 }
 
 /// `--flood-mib <n>`.

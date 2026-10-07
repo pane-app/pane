@@ -21,6 +21,8 @@ import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
 const ECHO = "pane-echo";
 /** The settings key where "Run until stopped" notes how far it got. */
 const LONG = "programs-long";
+/** The settings key where "Leave a descendant" notes that its run answered. */
+const LEFT = "programs-left";
 /** How long "Give up after a second" lets its program run, in nanoseconds. */
 const LIMIT = 1_000_000_000;
 /** The arguments "Run by its path" passes, which no shell reads. */
@@ -146,6 +148,14 @@ async function outcome(itemId) {
       // descendant.
       return answer ?? "Gave up after a second";
     }
+    case "leave": {
+      const output = await echo(["--leave", "30"]);
+      set(LEFT, "ran");
+      // The call goes on a while: what the program left runs on
+      // meanwhile, and ends with the call.
+      await waitFor(LIMIT + LIMIT / 2);
+      return `It said "${output.stdoutText().trim()}"; the call went on`;
+    }
     case "long": {
       set(LONG, "started");
       // If Pane stops the call meanwhile, the program and its descendant
@@ -215,6 +225,7 @@ export const command = {
         item("timeout", "Run with a timeout", "Ends the program after half a second"),
         item("descendant", "Start a descendant", "Returns while the program and the one it started run"),
         item("give-up", "Give up after a second", "Drops the run when a timer wins"),
+        item("leave", "Leave a descendant", "Its program exits; the one it started runs until the call ends"),
         item("long", "Run until stopped", "Runs for a minute; disabling or reloading ends it"),
         item("flood", "Write too much", "The program writes more than Pane keeps"),
         item("elevated", "Run elevated", "Asks Windows to run it as an administrator"),

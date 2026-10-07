@@ -11,7 +11,8 @@
 //! A program belongs to the call that started it: it ends, with every
 //! process it started in turn, when the call returns or is dropped, when
 //! the package is disabled, reloaded, updated or uninstalled, and when Pane
-//! quits. A check that a program ended does not trust a process id: Pane
+//! quits. What a program leaves running when it exits runs on until then,
+//! not just until the program's exit. A check that a program ended does not trust a process id: Pane
 //! must list no running program, and the files `pane-echo --hold` beats in
 //! (beside the program) every 20 ms, one for the program and one for the
 //! descendant it starts, must stop growing.
@@ -280,9 +281,18 @@ impl Installed {
         }
     }
 
-    /// Checks that Pane runs no program, and that neither the program nor
-    /// its descendant beats any more.
-    fn assert_ended(&self, alive: &[PathBuf], since: Instant) {
+    /// Whether "Leave a descendant" noted that its run answered.
+    fn left(&self) -> bool {
+        let path = self.data.path().join("extensions/settings.json");
+        fs::read_to_string(path)
+            .unwrap_or_default()
+            .contains("\"programs-left\": \"ran\"")
+    }
+
+    /// Checks that Pane runs no program, now that the call that ran one
+    /// ended: what a program left running is ended with its call, by the
+    /// thread holding it, at once.
+    fn assert_none_runs(&self, since: Instant) {
         while !self.runtime.program_processes().is_empty() {
             assert!(
                 since.elapsed() < STOPPED_WITHIN,
@@ -291,6 +301,12 @@ impl Installed {
             );
             thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    /// Checks that Pane runs no program, and that neither the program nor
+    /// its descendant beats any more.
+    fn assert_ended(&self, alive: &[PathBuf], since: Instant) {
+        self.assert_none_runs(since);
         let last: Vec<Option<u64>> = alive.iter().map(|path| beats(path)).collect();
         thread::sleep(Duration::from_millis(300));
         let now: Vec<Option<u64>> = alive.iter().map(|path| beats(path)).collect();
@@ -349,7 +365,7 @@ fn a_program_answers_its_exit_code_output_and_errors(sample: &Sample) {
         installed.run("Run a program"),
         result("Exit code 3, output \"out: hello\", errors \"err: hello\"")
     );
-    assert_eq!(installed.runtime.program_processes(), Vec::<u32>::new());
+    installed.assert_none_runs(Instant::now());
 }
 
 fn a_bare_name_is_found_on_the_search_path_at_the_time_of_the_call(sample: &Sample) {
@@ -386,7 +402,7 @@ fn a_spawned_program_streams_its_output_and_is_waited_for(sample: &Sample) {
         installed.run("Stream progress"),
         result("Streamed progress 1/3, progress 2/3, progress 3/3; exit code 0")
     );
-    assert_eq!(installed.runtime.program_processes(), Vec::<u32>::new());
+    installed.assert_none_runs(Instant::now());
 }
 
 fn a_spawned_program_takes_input(sample: &Sample) {
@@ -434,7 +450,7 @@ fn output_over_the_bound_ends_the_program_and_fails_the_run(sample: &Sample) {
              output; Pane ended it and every process it started"
         )
     );
-    assert_eq!(installed.runtime.program_processes(), Vec::<u32>::new());
+    installed.assert_none_runs(Instant::now());
 }
 
 fn a_missing_program_is_explained(sample: &Sample) {
@@ -485,6 +501,45 @@ fn descendants_end_when_the_call_returns(sample: &Sample) {
 
     assert!(beats(&descendant).is_some(), "the descendant never ran");
     installed.assert_ended(&[installed.alive("parent"), descendant], since);
+}
+
+/// The program exits at once, leaving a descendant that holds its output
+/// open: the run answers all the same, and the descendant runs on, held by
+/// Pane, until the call that started the program ends, not just until the
+/// program's exit; then it ends.
+fn what_a_program_leaves_runs_until_its_call_ends(sample: &Sample) {
+    let installed = Installed::new(sample);
+    let descendant = installed.alive("descendant");
+    open_sample_at(&installed.launcher, "Leave a descendant");
+    let running = installed.launcher.activate_selected();
+    let started = Instant::now();
+    let call = thread::spawn(move || block_on(running));
+
+    // The run answered: its program exited.
+    while !installed.left() {
+        assert!(
+            started.elapsed() < PROMPTLY,
+            "the run never answered: {:?}",
+            shown(&installed.launcher)
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!call.is_finished(), "the call goes on after the run");
+    // What it left runs on, held as the call's.
+    let before = beats(&descendant);
+    thread::sleep(Duration::from_millis(300));
+    assert!(
+        beats(&descendant) > before,
+        "the descendant ended with the program, before its call"
+    );
+    assert_eq!(installed.runtime.program_processes().len(), 1);
+
+    call.join().unwrap();
+    assert_eq!(
+        shown(&installed.launcher),
+        result("It said \"left a descendant\"; the call went on")
+    );
+    installed.assert_ended(&[descendant], started);
 }
 
 /// The run is dropped when a timer wins the race with it (in JavaScript the
@@ -594,7 +649,7 @@ fn a_long_run_finishes_when_its_program_does(sample: &Sample) {
         shown(&installed.launcher),
         result("Ran to the end, with exit code 0")
     );
-    assert_eq!(installed.runtime.program_processes(), Vec::<u32>::new());
+    installed.assert_none_runs(Instant::now());
 }
 
 /// A no-view command keeps its call, and so its program, for as long as the
@@ -627,7 +682,7 @@ fn an_elevated_run_is_not_available_here_yet(sample: &Sample) {
             "unavailable: running a program elevated is not available on {here} yet"
         ))
     );
-    assert_eq!(installed.runtime.program_processes(), Vec::<u32>::new());
+    installed.assert_none_runs(Instant::now());
 }
 
 #[cfg(not(windows))]
@@ -693,6 +748,7 @@ contract!(
     the_folder_and_environment_reach_the_program,
     descendants_end_when_the_call_returns,
     descendants_end_when_the_call_is_dropped,
+    what_a_program_leaves_runs_until_its_call_ends,
     disabling_while_a_program_runs_ends_it_and_its_descendant,
     reloading_while_a_program_runs_ends_it_and_its_descendant,
     updating_while_a_program_runs_ends_it_and_its_descendant,

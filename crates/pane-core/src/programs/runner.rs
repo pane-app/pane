@@ -14,9 +14,13 @@
 //! dropped, when its instance goes, when its package's generation ends
 //! (each program is on the generation's undo list while it runs), when Pane
 //! quits and when its runtime thread is given up on. Ending a program ends
-//! every process it started (its tree), and so does its own exit: what it
-//! leaves running ends with it, so that its output ends too. A command
-//! that wants a program to outlive it opens it with the system instead.
+//! every process it started (its tree). What a program leaves running when
+//! it exits stays in its tree, and runs on, until one of those: the call
+//! that started it ends (ADR 0033), not the program's exit. Pane stops
+//! reading the program's output once it exited (after [`DRAIN`] for what
+//! is still in its pipes), so a descendant holding the output open does
+//! not hold up a `run`'s answer or a `spawn`'s reads. A command that wants
+//! a program to outlive its call opens it with the system instead.
 //!
 //! **Limits.** No fixed time limit: the command's own timeout and the
 //! ownership rules bound a run. A `run` keeps at most
@@ -62,6 +66,11 @@ const MAX_ENVIRONMENT: usize = 1024;
 /// How often a supervising thread checks its program when nothing wakes it.
 const TICK: Duration = Duration::from_millis(10);
 
+/// How often the thread of a program that exited checks whether what the
+/// program left running must end, when nothing wakes it (an end of its
+/// call wakes it).
+const LINGER_TICK: Duration = Duration::from_millis(100);
+
 /// How much of a stream a `spawn` passes on at a time.
 const CHUNK: usize = 64 << 10;
 
@@ -69,8 +78,9 @@ const CHUNK: usize = 64 << 10;
 /// program waits too.
 const BUFFERED_CHUNKS: usize = 16;
 
-/// How long a run waits, once its program ended, for the rest of its output
-/// (a process that left its tree may still hold its streams).
+/// How long a run waits, once its program ended, for the rest of its output:
+/// a process it left running may still hold its streams, which Pane then
+/// stops reading.
 const DRAIN: Duration = Duration::from_secs(2);
 
 /// Where programs named by a bare name are found: the search path, as the
@@ -375,24 +385,32 @@ pub(crate) fn run(
             .name("pane-program".into())
             .spawn(move || {
                 let _ = control.supervisor.set(thread::current());
-                let outcome = if request.elevated {
-                    elevated::run(&request, &owner, Watching::from(&*control))
-                } else {
-                    run_here(&request, input, &owner, &control)
-                };
+                if request.elevated {
+                    let _ = reply.send(elevated::run(&request, &owner, Watching::from(&*control)));
+                    return;
+                }
+                let (outcome, left) = run_here(&request, input, &owner, &control);
                 let _ = reply.send(outcome);
+                // What the program left running runs on until its call
+                // ends.
+                if let Some(left) = left {
+                    left.linger(&owner, &control, &request);
+                }
             })
     };
     let abandon = Abandon(Some(control));
     async move {
-        let _abandon = abandon;
         started.map_err(unavailable_thread)?;
-        answer.await.unwrap_or_else(|_| {
+        let answer = answer.await.unwrap_or_else(|_| {
             Err(ProgramError::new(
                 ErrorKind::Failed,
                 "Pane's thread running the program stopped",
             ))
-        })
+        });
+        // Answered: what the program left running is the call's now, and
+        // ends with it, not with this future.
+        drop(abandon.disarm());
+        answer
     }
 }
 
@@ -635,6 +653,32 @@ struct Supervised {
     _registered: Registered,
 }
 
+/// A program that exited, with its tree, which holds what it left running
+/// until its call ends.
+struct Exited {
+    supervised: Supervised,
+    run: Arc<Run>,
+    deadline: Option<Instant>,
+}
+
+impl Exited {
+    /// Waits until what the program left running must end — its call ended
+    /// or was dropped, its instance went, its generation ended, Pane quits,
+    /// the command killed it or its time is up — then ends its tree and
+    /// reaps it. Until then its descendants run on, contained.
+    fn linger(mut self, owner: &Owner, control: &Control, request: &Request) {
+        while must_end(owner, &self.run, control, self.deadline, request, || None).is_none()
+            && !control.killed.load(Ordering::SeqCst)
+            // Nothing is left to hold, where the system says so (Windows).
+            && !self.supervised.process.tree.none_running()
+        {
+            thread::park_timeout(LINGER_TICK);
+        }
+        self.supervised.process.end();
+        self.supervised.process.reap();
+    }
+}
+
 /// Registers `process`, which runs `launch`'s file for `owner`; ends it if
 /// it may not run on.
 fn registered(
@@ -742,41 +786,39 @@ fn must_end(
     None
 }
 
-/// Supervises `process` until it exits or must end, ending its tree either
-/// way, then reaps it.
+/// Supervises `process` until it exits or must end (by `deadline`, its
+/// time), and answers why with its exit code (`None` inside when the
+/// system ended it). One that must end is ended with its tree and reaped;
+/// one that exited is not reaped, and its tree, with what it left running,
+/// is left for its call (see [`Exited::linger`]).
 fn supervise(
     process: &mut Process,
     owner: &Owner,
     run: &Run,
     control: &Control,
     request: &Request,
+    deadline: Option<Instant>,
     too_much: impl Fn() -> Option<&'static str>,
-) -> (Ended, Option<ExitStatus>) {
-    let deadline = request.timeout.map(|timeout| Instant::now() + timeout);
-    let ended = loop {
+) -> (Ended, Option<Option<i32>>) {
+    loop {
         if let Some(ended) = must_end(owner, run, control, deadline, request, &too_much) {
             process.end();
-            break ended;
+            return (ended, process.reap().map(exit_code));
         }
         if control.killed.load(Ordering::SeqCst) {
-            // The command's kill: the program exits, and its exit is the
-            // answer.
+            // The command's kill: the program exits with everything it
+            // started, and its exit is the answer.
             process.end();
         }
-        match process_tree::has_exited(&mut process.child) {
-            // What it left running ends with it, so its streams end too.
-            Ok(true) => {
-                process.tree.kill();
-                break Ended::Exited;
-            }
-            Ok(false) => thread::park_timeout(TICK),
+        match process_tree::exit_code(&mut process.child) {
+            Ok(Some(code)) => return (Ended::Exited, Some(code)),
+            Ok(None) => thread::park_timeout(TICK),
             Err(_) => {
                 process.end();
-                break Ended::Stopped;
+                return (Ended::Stopped, process.reap().map(exit_code));
             }
         }
-    };
-    (ended, process.reap())
+    }
 }
 
 /// A stream a `run` keeps, read by a thread of its own.
@@ -850,12 +892,27 @@ fn feed(mut stdin: impl Write + Send + 'static, input: Vec<u8>) -> io::Result<()
         .map(|_| ())
 }
 
-/// Starts and supervises a `run` on the calling thread, its supervisor.
+/// Starts and supervises a `run` on the calling thread, its supervisor:
+/// its answer, and, once the program exited, the program with what it left
+/// running, for the caller to hold until the call ends.
 fn run_here(
     request: &Request,
     input: Vec<u8>,
     owner: &Owner,
     control: &Control,
+) -> (Result<Output, ProgramError>, Option<Exited>) {
+    let mut left = None;
+    let answer = run_supervised(request, input, owner, control, &mut left);
+    (answer, left)
+}
+
+/// [`run_here`]'s run: `left` holds the program once it exited.
+fn run_supervised(
+    request: &Request,
+    input: Vec<u8>,
+    owner: &Owner,
+    control: &Control,
+    left: &mut Option<Exited>,
 ) -> Result<Output, ProgramError> {
     let early = |control: &Control| {
         if let Some(end) = owner.stopped() {
@@ -874,6 +931,7 @@ fn run_here(
     // Stopped since it asked: nothing starts.
     early(control)?;
     let process = Process::start(&launch, request)?;
+    let deadline = request.timeout.map(|timeout| Instant::now() + timeout);
     let (run, mut supervised) = registered(request, owner, process, &launch)?;
     let _ = control.run.set(run.clone());
     let process = &mut supervised.process;
@@ -901,17 +959,25 @@ fn run_here(
             None
         }
     };
-    let (ended, status) = supervise(process, owner, &run, control, request, too_much);
+    let (ended, code) = supervise(process, owner, &run, control, request, deadline, too_much);
     if let Some(error) = ended.into_error(request) {
         return Err(error);
     }
-    let Some(status) = status else {
+    let Some(code) = code else {
         return Err(ProgramError::new(
             ErrorKind::Failed,
             format!("Pane lost track of {}", request.shown()),
         ));
     };
-    // A program may exit before its reader saw it write too much.
+    // It exited: what it left running stays until its call ends.
+    *left = Some(Exited {
+        supervised,
+        run,
+        deadline,
+    });
+    // A program may exit before its reader saw it write too much. What it
+    // left running may hold its streams: Pane reads them for [`DRAIN`] more
+    // at most.
     let (stdout, out_over) = out.finish();
     let (stderr, err_over) = err.finish();
     let over = match (out_over, err_over) {
@@ -923,7 +989,7 @@ fn run_here(
         return Err(error);
     }
     Ok(Output {
-        exit_code: exit_code(status),
+        exit_code: code,
         stdout,
         stderr,
     })
@@ -941,6 +1007,9 @@ pub(crate) struct Spawned {
     output: Arc<tokio::sync::Mutex<mpsc::Receiver<Vec<u8>>>>,
     errors: Arc<tokio::sync::Mutex<mpsc::Receiver<Vec<u8>>>>,
     status: watch::Receiver<Status>,
+    /// Set once the program exited and [`DRAIN`] passed: its streams are
+    /// read no more, though what it left running may still hold them.
+    closed: watch::Receiver<bool>,
     control: Arc<Control>,
 }
 
@@ -970,6 +1039,7 @@ struct Ends {
     output: mpsc::Receiver<Vec<u8>>,
     errors: mpsc::Receiver<Vec<u8>>,
     status: watch::Receiver<Status>,
+    closed: watch::Receiver<bool>,
 }
 
 /// Starts the program `request` names for `owner`, answering once it runs
@@ -1008,6 +1078,7 @@ pub(crate) fn spawn(
             output: Arc::new(tokio::sync::Mutex::new(ends.output)),
             errors: Arc::new(tokio::sync::Mutex::new(ends.errors)),
             status: ends.status,
+            closed: ends.closed,
             control,
         })
     }
@@ -1073,6 +1144,7 @@ fn spawn_here(
         let process = Process::start(&launch, request)?;
         Ok((launch, process))
     })();
+    let deadline = request.timeout.map(|timeout| Instant::now() + timeout);
     let (run, mut supervised) =
         match started.and_then(|(launch, process)| registered(request, owner, process, &launch)) {
             Ok(registered) => registered,
@@ -1111,18 +1183,21 @@ fn spawn_here(
         }
     };
     let (status_sender, status) = watch::channel::<Status>(None);
+    let (closed_sender, closed) = watch::channel(false);
     // A caller gone by now is seen by the supervision: it ends the program.
     let _ = reply.send(Ok(Ends {
         input,
         output,
         errors,
         status,
+        closed,
     }));
-    let (ended, exit) = supervise(process, owner, &run, control, request, || None);
+    let (ended, exit) = supervise(process, owner, &run, control, request, deadline, || None);
+    let exited = matches!(ended, Ended::Exited);
     let answer = match ended.into_error(request) {
         Some(error) => Err(error),
         None => match exit {
-            Some(status) => Ok(exit_code(status)),
+            Some(code) => Ok(code),
             None => Err(ProgramError::new(
                 ErrorKind::Failed,
                 format!("Pane lost track of {}", request.shown()),
@@ -1130,6 +1205,26 @@ fn spawn_here(
         },
     };
     let _ = status_sender.send_replace(Some(answer));
+    if !exited {
+        let _ = closed_sender.send_replace(true);
+        return;
+    }
+    // It exited: its streams are read for [`DRAIN`] more at most (what it
+    // left running may hold them), and what it left runs on until its call
+    // ends.
+    let drained = Instant::now() + DRAIN;
+    while Instant::now() < drained
+        && must_end(owner, &run, control, deadline, request, || None).is_none()
+    {
+        thread::park_timeout(drained.saturating_duration_since(Instant::now()));
+    }
+    let _ = closed_sender.send_replace(true);
+    Exited {
+        supervised,
+        run,
+        deadline,
+    }
+    .linger(owner, control, request);
 }
 
 impl Spawned {
@@ -1179,7 +1274,25 @@ impl Spawned {
             Stream::Output => self.output.clone(),
             Stream::Errors => self.errors.clone(),
         };
-        async move { chunks.lock().await.recv().await }
+        let mut closed = self.closed.clone();
+        async move {
+            let mut chunks = chunks.lock().await;
+            let mut closing = std::pin::pin!(async move {
+                let _ = closed.wait_for(|closed| *closed).await;
+            });
+            // What the program wrote comes first; once its streams are
+            // read no more, what is left of it, then nothing.
+            std::future::poll_fn(|context| {
+                if let std::task::Poll::Ready(chunk) = chunks.poll_recv(context) {
+                    return std::task::Poll::Ready(chunk);
+                }
+                match closing.as_mut().poll(context) {
+                    std::task::Poll::Ready(()) => std::task::Poll::Ready(chunks.try_recv().ok()),
+                    std::task::Poll::Pending => std::task::Poll::Pending,
+                }
+            })
+            .await
+        }
     }
 
     /// How the program ended, once it did: its exit code (`None` when the

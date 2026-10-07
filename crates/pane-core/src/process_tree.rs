@@ -89,6 +89,23 @@ impl ProcessTree {
         }
     }
 
+    /// Whether nothing of the tree runs any more, as far as the system
+    /// tells: on Windows its Job Object holds no running process; elsewhere
+    /// `false`, as a process group is not told apart from its exited,
+    /// unreaped leader.
+    pub(crate) fn none_running(&self) -> bool {
+        #[cfg(windows)]
+        {
+            self.job
+                .as_ref()
+                .is_some_and(|job| job.active_processes() == Some(0))
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    }
+
     /// Whether the tree's processes are in a Job Object (Windows), which a
     /// system may refuse; elsewhere, always (a process group).
     #[allow(dead_code)]
@@ -142,10 +159,12 @@ fn prepare_with(command: &mut Command, suspended: bool, console: bool) {
     }
 }
 
-/// Whether `child` has exited, without reaping it on Unix: its process
-/// group keeps its id until it is reaped, so [`ProcessTree::kill`] after
-/// this never reaches a group that took the id since.
-pub(crate) fn has_exited(child: &mut Child) -> io::Result<bool> {
+/// How `child` exited, if it has: `Some` with its exit code, itself `None`
+/// when the system ended it (a signal on Unix). It is not reaped on Unix:
+/// its process group keeps its id until it is, so [`ProcessTree::kill`]
+/// after this never reaches a group that took the id since, and what the
+/// program left running in its group stays reachable until it is reaped.
+pub(crate) fn exit_code(child: &mut Child) -> io::Result<Option<Option<i32>>> {
     #[cfg(unix)]
     {
         // SAFETY: a zeroed siginfo_t is a valid value for waitid to fill;
@@ -164,12 +183,20 @@ pub(crate) fn has_exited(child: &mut Child) -> io::Result<bool> {
         }
         // SAFETY: waitid filled the fields of a child's state change, or
         // left them zero when none happened.
-        Ok(unsafe { info.si_pid() } != 0)
+        if unsafe { info.si_pid() } == 0 {
+            return Ok(None);
+        }
+        // An exit's status is its code; a signal's is the signal.
+        let code = (info.si_code == libc::CLD_EXITED).then(|| unsafe { info.si_status() });
+        Ok(Some(code))
     }
     #[cfg(not(unix))]
     {
-        // Windows: the child's handle keeps its status; nothing is reaped.
-        child.try_wait().map(|status| status.is_some())
+        // Windows: the child's handle keeps its status; nothing is reaped,
+        // and the Job Object holds what it left running.
+        child
+            .try_wait()
+            .map(|status| status.map(|status| status.code()))
     }
 }
 
@@ -183,8 +210,9 @@ pub(crate) mod windows_job {
     };
     use windows::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-        SetInformationJobObject, TerminateJobObject,
+        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
+        QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
     };
     use windows::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
 
@@ -223,6 +251,25 @@ pub(crate) mod windows_job {
             unsafe {
                 let _ = TerminateJobObject(self.0, 1);
             }
+        }
+
+        /// How many processes of the job run now; `None` if the system
+        /// does not say.
+        pub fn active_processes(&self) -> Option<u32> {
+            let mut info = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+            // SAFETY: the handle is open until drop, and `info` is sized
+            // as the call requires.
+            unsafe {
+                QueryInformationJobObject(
+                    Some(self.0),
+                    JobObjectBasicAccountingInformation,
+                    &mut info as *mut _ as *mut core::ffi::c_void,
+                    size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+                    None,
+                )
+                .ok()?;
+            }
+            Some(info.ActiveProcesses)
         }
     }
 

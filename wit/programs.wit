@@ -23,9 +23,11 @@ package pane:extension@0.1.0;
 /// and Linux a process group), when that call returns or is dropped, when
 /// the package's code stops (it is disabled, reloaded, updated, paused or
 /// uninstalled), and when Pane quits; a process that `spawn` started cannot
-/// outlive its call. When the program exits, what it left running ends
-/// too. A command that wants a program to keep running on its own opens it
-/// with the system instead. A no-view command may keep its call, and so
+/// outlive its call. What the program left running when it exits runs on,
+/// contained, until then; once it exited, Pane reads its output no more
+/// than two seconds longer, so a process it left holding the output open
+/// does not hold up `run`'s answer or `read-output`. A command that wants a
+/// program to keep running on its own opens it with the system instead. A no-view command may keep its call, and so
 /// its program, for as long as the work takes, reporting through a toast.
 interface programs {
   /// Why a program did not run or answer. `message` explains it for
