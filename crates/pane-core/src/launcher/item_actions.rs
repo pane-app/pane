@@ -31,10 +31,17 @@
 //! An action may open a submenu instead of calling the command back (#140,
 //! see `submenus`): Enter, a chord or its shortcut then open the Actions
 //! panel at that submenu, which the window does; the launcher runs nothing.
+//!
+//! The rows Pane lists itself with actions of its own (#150: a file of a
+//! granted folder, in root search or Search Files, and a computed answer)
+//! have them as an item has, on root search too, and Pane performs them
+//! instead of calling a command (see `own_actions`).
 
+use std::borrow::Cow;
 use std::future::Future;
+use std::pin::Pin;
 
-use super::{Entry, Launcher, Screen, State, Status, looks, owner};
+use super::{Entry, Launcher, Screen, State, Status, looks, own_actions, owner};
 use crate::icons::Icon;
 use crate::keyboard::{Binding, PaneKeys};
 use crate::runtime::{Action, ActionStyle, SubmenuEntries};
@@ -165,11 +172,13 @@ impl Launcher {
     /// their shortcuts as Pane binds them now; `None` off a command's list,
     /// with nothing selected, or for a row that has no actions of its own
     /// (an item with none, a form, a custom view, a search result, a
-    /// folder row).
+    /// folder row). A row Pane lists with actions of its own (a file of a
+    /// granted folder, a computed answer; see `own_actions`) has them on
+    /// root search too.
     pub fn item_actions(&self) -> Option<ItemActions> {
         let state = self.lock();
         let listed = selected_listed(&state)?;
-        let mut actions = item_actions(listed, &state.pane_keys);
+        let mut actions = item_actions(&listed, &state.pane_keys);
         actions.actions = looks::with_action_icons(&state, &listed.actions, actions.actions);
         Some(actions)
     }
@@ -192,12 +201,10 @@ impl Launcher {
         index: usize,
     ) -> impl Future<Output = ()> + Send + 'static {
         let state = self.lock();
-        let callback = selected_listed(&state)
+        let chosen = selected_listed(&state)
             .filter(|listed| listed.id == target)
-            .and_then(|listed| listed.actions.get(index))
-            .and_then(Action::callback)
-            .map(str::to_owned);
-        self.run_callback(state, callback)
+            .and_then(|listed| callback_of(listed.actions.get(index)?));
+        self.run_chosen(state, chosen)
     }
 
     /// Runs the action at `index` of the selected item: 1 for Ctrl+Enter
@@ -208,11 +215,35 @@ impl Launcher {
     /// [`Launcher::activate_selected`]'s, as Enter's.)
     pub fn run_selected_action(&self, index: usize) -> impl Future<Output = ()> + Send + 'static {
         let state = self.lock();
-        let callback = selected_listed(&state)
-            .and_then(|listed| listed.actions.get(index))
-            .and_then(Action::callback)
-            .map(str::to_owned);
-        self.run_callback(state, callback)
+        let chosen =
+            selected_listed(&state).and_then(|listed| callback_of(listed.actions.get(index)?));
+        self.run_chosen(state, chosen)
+    }
+
+    /// Runs `chosen`, an action's callback and title, of the selected row:
+    /// one of Pane's own on a row Pane acts on itself (see `own_actions`),
+    /// else the open command's, as [`Launcher::run_callback`] does.
+    pub(super) fn run_chosen(
+        &self,
+        mut state: std::sync::MutexGuard<'_, State>,
+        chosen: Option<(String, String)>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+        if let Some(own) = own_actions::selected(&state) {
+            let work =
+                chosen.and_then(|(callback, title)| own_actions::work(own, &callback, &title));
+            if let Some(work) = &work {
+                own_actions::begin(&mut state, work);
+            }
+            let epoch = state.screen_epoch;
+            drop(state);
+            let launcher = self.clone();
+            return Box::pin(async move {
+                if let Some(work) = work {
+                    launcher.do_own(epoch, work).await;
+                }
+            });
+        }
+        Box::pin(self.run_callback(state, chosen.map(|(callback, _)| callback)))
     }
 
     /// Has the open command handle `callback`, if there is one, the way
@@ -256,16 +287,28 @@ impl Launcher {
     }
 }
 
-/// The selected row's item with its actions, on an open command's list.
-pub(super) fn selected_listed(state: &State) -> Option<&Listed> {
+/// The callback and the title of `action`, when it calls back rather than
+/// open a submenu.
+fn callback_of(action: &Action) -> Option<(String, String)> {
+    Some((action.callback()?.to_owned(), title(action)))
+}
+
+/// The selected row's item with its actions: an item of an open command's
+/// list, or a row Pane lists with actions of its own (see `own_actions`),
+/// on root search too.
+pub(super) fn selected_listed(state: &State) -> Option<Cow<'_, Listed>> {
+    let index = state.view.selected?;
+    if let Some(own) = own_actions::listed(state, index) {
+        return Some(Cow::Owned(own));
+    }
     if !matches!(
         state.view.screen,
         Screen::Command | Screen::CommandSearch { .. }
     ) {
         return None;
     }
-    match state.entries.get(state.view.selected?)? {
-        Entry::Actions(listed) => Some(listed),
+    match state.entries.get(index)? {
+        Entry::Actions(listed) => Some(Cow::Borrowed(listed)),
         _ => None,
     }
 }

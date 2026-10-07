@@ -524,9 +524,22 @@ impl Launcher {
         self.changed();
     }
 
+    /// Closes the window after one of Pane's own actions acted (see
+    /// `own_actions`), as a standard action closes it: its next showing
+    /// follows the Launcher setting.
+    pub(super) fn close_after_acting(&self) {
+        {
+            let mut state = self.lock();
+            let state = &mut *state;
+            state.feedback.next_showing = NextShowing::BySetting;
+            hide_window(state);
+        }
+        self.changed();
+    }
+
     /// `feedback.show-hud`: closes the window, if it is shown, and shows
-    /// `hud` in its own.
-    fn show_hud(&self, hud: Hud) {
+    /// `hud` in its own. Pane's own actions say what they did with it too.
+    pub(super) fn show_hud(&self, hud: Hud) {
         {
             let mut state = self.lock();
             let state = &mut *state;

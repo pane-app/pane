@@ -200,6 +200,8 @@ impl pane_guest::search::Guest for Packages {
                 id: format!("package:{}", package.name),
                 title: package.name,
                 subtitle: Some(package.summary),
+                // A package, not a file of a granted folder.
+                file: None,
             })
             .collect())
     }

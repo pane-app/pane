@@ -19,7 +19,9 @@
 //! wherever they are drawn.
 //!
 //! The operations are the history's existing ones — copy a record again,
-//! delete it, turn capture on, pause or resume it — and each revalidates
+//! delete it, turn capture on, pause or resume it — and pasting a record
+//! into the application that was in front (#150: Enter), which copies it
+//! instead where Pane cannot paste yet; each revalidates
 //! the [reading](ClipboardHistoryView) it was made from first: the same
 //! screen, the same verified command, the same generation of the package's
 //! code, and a record still kept. A reading the user left, of a package
@@ -29,6 +31,7 @@
 //! stays the command's own list, which the window routes to.
 
 use std::fmt;
+use std::future::Future;
 
 use super::{Launcher, Screen, State, Status, owner};
 use crate::clipboard::history::PackageHistory;
@@ -258,6 +261,58 @@ impl Launcher {
                 .copy(id)
                 .map(|()| "Copied to the clipboard".to_owned())
         })
+    }
+
+    /// Pastes the record `id` of `view` into the application that was in
+    /// front before Pane, once `view` is revalidated, closing Pane's window
+    /// first; where Pane cannot paste on this system yet (#125), copies it
+    /// through the history's existing copy instead, and a HUD says so
+    /// ([`crate::system::PASTE_FALLBACK`]). Await the returned future for
+    /// the paste, which the system makes off the calling thread. A stale
+    /// reading or a record no longer kept pastes nothing and says why in
+    /// the status.
+    pub fn paste_clipboard_record(
+        &self,
+        view: &ClipboardHistoryView,
+        id: &str,
+    ) -> impl Future<Output = ()> + Send + 'static {
+        let epoch = view.reading.epoch;
+        // Read again: the record must still be kept, on the screen read.
+        let now = self
+            .clipboard_history()
+            .filter(|now| now.reading.epoch == epoch && now.owner == view.owner);
+        let text = match &now {
+            None => Err("That clipboard history is no longer shown".to_owned()),
+            Some(now) => now
+                .record(id)
+                .map(|record| record.text.clone())
+                .ok_or_else(|| "That item is no longer kept".to_owned()),
+        };
+        if let Err(why) = &text {
+            let mut state = self.lock();
+            if state.screen_epoch == epoch {
+                state.view.status = Status::Error(why.clone());
+            }
+        }
+        let data = view.reading.data.clone();
+        let capture = self.clipboard.clone();
+        let id = id.to_owned();
+        let launcher = self.clone();
+        async move {
+            let Ok(text) = text else {
+                return;
+            };
+            let copy = move || {
+                Commands {
+                    data: &data,
+                    capture,
+                }
+                .copy(&id)
+            };
+            launcher
+                .paste_or_copy(epoch, crate::system::Clip::Text(text), Box::new(copy))
+                .await;
+        }
     }
 
     /// Deletes the record `id` of `view` through the history's existing

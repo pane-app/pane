@@ -36,10 +36,16 @@ mod artifacts;
 
 use artifacts::Artifacts;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/guests.rs"]
 mod guests;
+#[path = "support/system.rs"]
+mod system;
 
+use feedback::RecordingWindow;
 use guests::guests;
+use system::{Done, RecordingSystem};
 
 const HOUR: i64 = 3_600_000;
 /// UTC+7, a local time a day ahead of UTC for part of the day.
@@ -580,6 +586,60 @@ fn copy_and_delete_run_the_existing_operations_on_a_record_still_kept() {
     assert_eq!(launcher.view().status, Status::Error(error));
     assert!(launcher.delete_clipboard_record(&view, &newest).is_err());
     assert_eq!(pane.clipboard.written(), ["keep me"]);
+}
+
+/// Enter in the split view (#150): Paste, through the recording system,
+/// closing the window first; where Pane cannot paste yet, the history's own
+/// copy, with a HUD saying so.
+#[test]
+fn paste_pastes_a_record_or_copies_it_where_paste_is_not_available() {
+    let pane = Pane::new();
+    let system = Arc::new(RecordingSystem::default());
+    let launcher = pane.start().with_system(system.clone());
+    let window = RecordingWindow::attach(&launcher);
+    open(&launcher, COMMAND);
+    let view = launcher.clipboard_history().unwrap();
+    launcher
+        .set_clipboard_capture(&view, CaptureState::On)
+        .unwrap();
+    pane.clipboard.copy("older", None);
+    pane.clipboard.copy("newer", None);
+    let view = launcher.clipboard_history().unwrap();
+    let oldest = view.records[1].id.clone();
+
+    // Not available here yet: copied through the history, and said so.
+    block_on(launcher.paste_clipboard_record(&view, &oldest));
+    assert_eq!(pane.clipboard.written(), ["older"]);
+    assert!(system.take().is_empty(), "nothing was pasted");
+    let huds: Vec<String> = window.huds().into_iter().map(|hud| hud.title).collect();
+    assert_eq!(huds, ["Copied — paste is not available here yet"]);
+    window.take();
+
+    // Where it can, the window closes and the record is pasted, its copy
+    // concealed: the history keeps nothing new.
+    system.support_paste();
+    launcher.set_window_presence(pane_core::WindowPresence::Shown);
+    let view = launcher.clipboard_history().unwrap();
+    let newest = view.records[0].id.clone();
+    let text = view.records[0].text.clone();
+    block_on(launcher.paste_clipboard_record(&view, &newest));
+    assert_eq!(
+        system.take(),
+        [
+            Done::Copied {
+                clip: pane_core::system::Clip::Text(text.clone()),
+                concealed: true,
+            },
+            Done::Pasted(Some(pane_core::system::Clip::Text(text))),
+        ]
+    );
+    assert_eq!(window.hides(), 1);
+    assert_eq!(pane.clipboard.written(), ["older"]);
+
+    // A record no longer kept pastes nothing, and says why.
+    launcher.delete_clipboard_record(&view, &newest).unwrap();
+    block_on(launcher.paste_clipboard_record(&view, &newest));
+    assert!(system.take().is_empty());
 }
 
 #[test]

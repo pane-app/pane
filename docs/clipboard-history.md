@@ -4,7 +4,8 @@ Added for [#35](https://github.com/hoangvu12/pane/issues/35) (Windows):
 US65, US66, US70, US71; T10, T21, T22; contributions to G5 and G7, not
 claims that they pass. Once the user turns it on, Pane keeps the text they
 copy on this computer, and the **Clipboard History** default extension lists
-it, newest first; Enter on an item copies it again or deletes it. It starts
+it, newest first; Enter on an item pastes it, and its other actions copy
+or delete it (#150). It starts
 off, can be paused, resumed and turned off again, and disabling the
 extension stops it too.
 [#36](https://github.com/hoangvu12/pane/issues/36) added expiry and the
@@ -73,11 +74,22 @@ The command's rows, in order:
 | "Clear clipboard history", while items are kept | deletes every kept item; whether history is kept does not change |
 | "Turn off and delete clipboard history", while items are kept and history is on or paused | turns history off and deletes every kept item at once ("Clipboard history is off; deleted 2 kept items"): the spec's **Disable and delete history** |
 | "Delete recent items", while items are kept | a form choosing the last 15 minutes, hour or day; deletes the items copied then ("Deleted 2 kept items") |
-| One row per kept item, newest first: its first line with content (at most 80 characters), subtitled "5 min ago · from notepad.exe · 2 lines · Enter copies or deletes it" | a form, titled with the item, choosing "Copy it again" (first, so Enter twice copies) or "Delete it": copying puts its text on the clipboard again ("Copied to the clipboard"), and the copy is a change like any other, so it moves to the front; deleting deletes that item alone ("Deleted the kept item"), or says "That item is no longer kept" |
+| One row per kept item, newest first: its first line with content (at most 80 characters), subtitled "5 min ago · from notepad.exe · 2 lines · Enter pastes it" | its actions (#150), in place of #36's "Copy it again / Delete it" form: **Paste** (Enter) pastes it into the application that was in front before Pane, which closes the window, or, where Pane cannot paste yet (#125), copies it again instead, closes the window and shows "Copied — paste is not available here yet" in a HUD; **Copy** (Ctrl+Enter) puts its text on the clipboard again, closes the window and shows "Copied to Clipboard" (the copy is a change like any other, so it moves to the front); **Delete** (Ctrl+Shift+Enter), destructive and last, deletes that item alone ("Deleted the kept item"), or says "That item is no longer kept" |
 | "Nothing kept yet", while on and empty | nothing |
 
 The rows are the command's view when it opens: after an action the status
 line answers, and the rows change the next time the command is opened.
+
+Pane's own Clipboard History opens in its split view (#102), the records
+beside a preview; its keys are the kept items' actions (#150): **Enter**
+(the footer's Paste) pastes the selected record into the application in
+front through Pane's system, closing the window, or where Pane cannot
+paste yet copies it through the history's own copy and shows "Copied —
+paste is not available here yet"; **Ctrl+Enter** (Copy) copies it again
+and keeps the view; **Ctrl+D** (Delete) deletes it. Each revalidates the
+reading first (`Launcher::paste_clipboard_record`,
+`copy_clipboard_record`, `delete_clipboard_record`). Manage (Ctrl+K)
+shows the rows above.
 
 - **Off until turned on.** A new package, and one never turned on, keeps
   nothing and Pane does not watch the clipboard at all: no listener is
@@ -459,8 +471,9 @@ capture stays local by default all the same.
 - The retention's default (7 days) and choices are provisional. Expiry
   follows the system's time: an item copied while the time was set far
   ahead is kept until then, and setting the time back keeps items longer.
-- There is no action panel, so deleting one item is a choice in the
-  item's form, and Enter twice (not once) copies an item again.
+- Paste is not available on any system yet (#125 brings it to Windows),
+  so Enter copies the item and says so; the native smokes still drive
+  #36's form and need updating to the actions (#150 did not run them).
 - A disabled package's history cannot be deleted without enabling it
   (uninstalling, or its expiry, can); a retained one has Delete retained
   data.

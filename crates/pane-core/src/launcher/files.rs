@@ -1,5 +1,6 @@
 //! The folder a package is granted, through Pane's own rows in its
-//! commands, and opening the files its listing found (see `crate::files`).
+//! commands, and the rows of the files its listing found (see
+//! `crate::files`), whose actions Pane performs (see `own_actions`).
 //!
 //! A package whose manifest sets `"folderAccess": true` has Pane's "Choose
 //! folder…" row first in each of its commands, and "Stop sharing …" once a
@@ -11,8 +12,55 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 
 use super::{Entry, Launcher, Row, State, Status, off_thread, owner};
+use crate::files::FileAccess;
 use crate::links;
 use crate::packages::PackageIdentity;
+
+/// A file of a package's granted folder, as a row lists it: root search's
+/// file results and Search Files' results. Pane performs its actions itself
+/// (see `own_actions`), checking it again first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct FileRow {
+    /// The identity key of the package whose listing found it.
+    pub(super) owner: String,
+    /// The id Pane gave it in that listing.
+    pub(super) id: String,
+    /// Its own name, as Pane found it.
+    pub(super) name: String,
+    /// Whether it is a program or script, as listed: Enter reveals it
+    /// instead of opening it.
+    pub(super) program: bool,
+    /// The component of the command that found it.
+    pub(super) component: PathBuf,
+}
+
+/// The row for the file with id `id` of the latest listing of the package
+/// with identity key `owner`, as Pane names it (its own name, and "File in"
+/// its folder), with `row_id`, found by the command in `component`; `None`
+/// for an id Pane did not give.
+pub(super) fn file_row(
+    files: &FileAccess,
+    owner: &str,
+    component: &Path,
+    id: String,
+    row_id: String,
+) -> Option<(Row, FileRow)> {
+    let known = files.known(owner, &id)?;
+    let row = Row {
+        id: row_id,
+        title: known.name.clone(),
+        subtitle: Some(format!("File in {}", known.within)),
+        unavailable: None,
+    };
+    let file = FileRow {
+        owner: owner.to_owned(),
+        id,
+        name: known.name,
+        program: known.program,
+        component: component.to_path_buf(),
+    };
+    Some((row, file))
+}
 
 /// Pane's rows at the top of a command of the package with `identity`,
 /// which asks for access to a folder: choosing it, and taking it back once
@@ -151,28 +199,5 @@ impl Launcher {
             Err(problem) => Status::Error(problem),
         };
         refresh_folder_rows(&mut state, &identity);
-    }
-
-    /// Opens the file with id `id` from the latest listing of the package
-    /// with identity key `owner`, named `name`, once the host has checked it
-    /// again, off the calling thread, and reports the outcome while the
-    /// screen is the one it was opened from. The status names the file the
-    /// host found, not what the extension called it.
-    pub(super) async fn open_file(&self, epoch: u64, owner: String, id: String, name: String) {
-        let links = self.links.clone();
-        let files = self.lock().files.clone();
-        let opened = off_thread(move || {
-            let files = files.ok_or("Pane's extension runtime is unavailable")?;
-            let path = files.checked_file(&owner, &id)?;
-            links.open_file(&path)
-        })
-        .await;
-        let Some(mut state) = self.lock_if_current(epoch) else {
-            return;
-        };
-        state.view.status = match opened {
-            Ok(()) => Status::Result(format!("Opened {name}")),
-            Err(reason) => Status::Error(format!("Could not open {name}: {reason}")),
-        };
     }
 }

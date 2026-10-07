@@ -37,7 +37,7 @@ use std::future::Future;
 use std::path::PathBuf;
 
 use super::item_actions::{self, ItemAction, selected_listed};
-use super::{Launcher, State, looks, stopped};
+use super::{Launcher, State, looks, own_actions, stopped};
 use crate::extension_data::PackageData;
 use crate::keyboard::Binding;
 use crate::runtime::{Action, CallError, SubmenuEntries};
@@ -82,16 +82,27 @@ enum Entries {
     Listed(Vec<Action>),
 }
 
-/// What to ask the command for a submenu's entries with.
+/// What to ask for a submenu's entries.
 struct Ask {
     opening: u64,
     target: String,
-    component: PathBuf,
-    /// The open command's manifest id, which the host functions the call
-    /// makes act for.
-    command: Option<String>,
-    callback: String,
-    data: Option<PackageData>,
+    from: AskFrom,
+}
+
+/// Who gives a submenu's entries when it opens.
+enum AskFrom {
+    /// The open command, through its `handle-event`.
+    Command {
+        component: PathBuf,
+        /// The open command's manifest id, which the host functions the
+        /// call makes act for.
+        command: Option<String>,
+        callback: String,
+        data: Option<PackageData>,
+    },
+    /// Pane itself, for a row whose actions it performs (a file's Open
+    /// With…, see `own_actions`).
+    Pane,
 }
 
 /// The submenu the Actions panel shows over the selected item: the
@@ -217,20 +228,22 @@ impl Launcher {
         index: usize,
     ) -> impl Future<Output = ()> + Send + 'static {
         let mut state = self.lock();
-        let callback = current(&state)
+        let chosen = current(&state)
             .filter(|level| level.target == target)
             .and_then(|level| match &level.entries {
                 Entries::Listed(entries) => entries.get(index),
                 Entries::Loading | Entries::Failed(_) => None,
             })
-            .and_then(Action::callback)
-            .map(str::to_owned);
-        if callback.is_some() {
+            .and_then(|entry| {
+                let callback = entry.callback()?.to_owned();
+                Some((callback, item_actions::title(entry)))
+            });
+        if chosen.is_some() {
             // Chosen: the panel closes with its submenus, and a repeat of
             // the choice finds nothing to run.
             state.submenus.close_all();
         }
-        self.run_callback(state, callback)
+        self.run_chosen(state, chosen)
     }
 
     /// Opens the submenu (see [`Launcher::open_submenu`]) while the
@@ -250,23 +263,34 @@ impl Launcher {
         if !selected {
             return None;
         }
-        let submenu = {
-            let shown: &[Action] = match state.submenus.levels.last() {
-                None => &selected_listed(state)?.actions,
-                Some(level) => match &level.entries {
-                    Entries::Listed(entries) => entries,
-                    Entries::Loading | Entries::Failed(_) => return None,
-                },
-            };
-            shown.get(index)?.submenu()?.clone()
+        let submenu = match state.submenus.levels.last() {
+            None => selected_listed(state)?
+                .actions
+                .get(index)?
+                .submenu()?
+                .clone(),
+            Some(level) => match &level.entries {
+                Entries::Listed(entries) => entries.get(index)?.submenu()?.clone(),
+                Entries::Loading | Entries::Failed(_) => return None,
+            },
         };
         let (entries, ask) = match submenu.entries {
             SubmenuEntries::Given(entries) => (Entries::Listed(entries), None),
+            // A row whose actions Pane performs: Pane gives the entries.
+            SubmenuEntries::Asked(_) if own_actions::selected(state).is_some() => {
+                (Entries::Loading, Some(AskFrom::Pane))
+            }
             SubmenuEntries::Asked(callback) => {
                 let component = state.open.clone()?;
                 let data = self.data_in(state, &component);
                 let command = state.open_command.clone();
-                (Entries::Loading, Some((component, command, callback, data)))
+                let from = AskFrom::Command {
+                    component,
+                    command,
+                    callback,
+                    data,
+                };
+                (Entries::Loading, Some(from))
             }
         };
         state.submenus.openings += 1;
@@ -277,13 +301,10 @@ impl Launcher {
             title: submenu.title,
             entries,
         });
-        ask.map(|(component, command, callback, data)| Ask {
+        ask.map(|from| Ask {
             opening,
             target: target.to_owned(),
-            component,
-            command,
-            callback,
-            data,
+            from,
         })
     }
 
@@ -294,29 +315,47 @@ impl Launcher {
         let Ask {
             opening,
             target,
-            component,
-            command,
-            callback,
-            data,
+            from,
         } = ask;
-        let answer = match self.updating(&component) {
-            // Its package's code is being replaced (an update Pane applies
-            // by itself), which would stop the call: refused, as an action
-            // is.
-            Some(problem) => Err(problem),
-            None => match self.runtime() {
-                Ok(runtime) => runtime
-                    .handle_event_with(
-                        &component,
-                        command.as_deref(),
-                        &callback,
-                        "{}",
-                        data.clone(),
-                    )
-                    .await
-                    .map_err(|error| error.to_string()),
-                Err(error) => Err(error.to_string()),
-            },
+        // The entries, or why there are none; and the command asked, whose
+        // generation may end meanwhile.
+        let (answer, asked) = match from {
+            AskFrom::Pane => (own_actions::open_with_entries(self).await, None),
+            AskFrom::Command {
+                component,
+                command,
+                callback,
+                data,
+            } => {
+                let answer = match self.updating(&component) {
+                    // Its package's code is being replaced (an update Pane
+                    // applies by itself), which would stop the call:
+                    // refused, as an action is.
+                    Some(problem) => Err(problem),
+                    None => match self.runtime() {
+                        Ok(runtime) => runtime
+                            .handle_event_with(
+                                &component,
+                                command.as_deref(),
+                                &callback,
+                                "{}",
+                                data.clone(),
+                            )
+                            .await
+                            .map_err(|error| error.to_string())
+                            .and_then(|answer| {
+                                answer.entries.ok_or_else(|| {
+                                    CallError::Unreadable(
+                                        "its answer to opening a submenu has no `entries`".into(),
+                                    )
+                                    .to_string()
+                                })
+                            }),
+                        Err(error) => Err(error.to_string()),
+                    },
+                };
+                (answer, Some((component, data)))
+            }
         };
         let mut state = self.lock();
         let state = &mut *state;
@@ -336,24 +375,19 @@ impl Launcher {
             state.submenus.close_all();
             return;
         }
-        let entries = match (stopped(state, &component, &data), answer) {
+        let ended = asked
+            .as_ref()
+            .and_then(|(component, data)| stopped(state, component, data));
+        let entries = match (ended, answer) {
             // Stopped while it was asked (disabled, reloaded, paused): its
             // answer is not shown.
             (Some(problem), _) => Entries::Failed(problem),
-            (None, Ok(answer)) => match answer.entries {
-                Some(entries) => {
-                    // Their web images and system icons start loading, as
-                    // the list's do (#142).
-                    looks::want_action_icons(state, &entries);
-                    Entries::Listed(entries)
-                }
-                None => Entries::Failed(
-                    CallError::Unreadable(
-                        "its answer to opening a submenu has no `entries`".into(),
-                    )
-                    .to_string(),
-                ),
-            },
+            (None, Ok(entries)) => {
+                // Their web images and system icons start loading, as the
+                // list's do (#142).
+                looks::want_action_icons(state, &entries);
+                Entries::Listed(entries)
+            }
             (None, Err(why)) => Entries::Failed(why),
         };
         state.submenus.levels[position].entries = entries;

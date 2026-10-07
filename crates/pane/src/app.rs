@@ -415,10 +415,14 @@ impl LauncherWindow {
             cx.propagate();
             return;
         }
-        // An item of a command's list runs its primary action once per
-        // press: the key is handed on to [`LauncherWindow::item_action_keys`],
-        // which sees whether it is a held key's repeat (an action cannot).
-        if actions_panel::commands_list(&self.launcher.view().screen)
+        // An item of a command's list (or a row of root search with actions
+        // of its own, #150) runs its primary action once per press: the key
+        // is handed on to [`LauncherWindow::item_action_keys`], which sees
+        // whether it is a held key's repeat (an action cannot).
+        let focused = self.query_field().focus_handle(cx).is_focused(window)
+            || self.focus_handle.is_focused(window);
+        if actions_panel::item_list(&self.launcher.view().screen)
+            && focused
             && self.launcher.item_actions().is_some()
         {
             cx.propagate();
@@ -431,7 +435,7 @@ impl LauncherWindow {
     /// opens the Actions panel at the submenu an item's primary action
     /// opens (#140), or activates the row.
     fn invoke_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let primary_submenu = actions_panel::commands_list(&self.launcher.view().screen)
+        let primary_submenu = actions_panel::item_list(&self.launcher.view().screen)
             && self
                 .launcher
                 .item_actions()
@@ -463,7 +467,7 @@ impl LauncherWindow {
     ) {
         if self.actions.is_some()
             || self.menu.is_some()
-            || !actions_panel::commands_list(&self.launcher.view().screen)
+            || !actions_panel::item_list(&self.launcher.view().screen)
         {
             return;
         }

@@ -213,7 +213,14 @@ pub(crate) struct ResultListing {
 }
 
 /// One thing a command's search found, listed as a row of the command.
-pub(crate) type SearchResult = ResultListing;
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SearchResult {
+    pub listing: ResultListing,
+    /// The id of the file of the package's granted folder the result is,
+    /// when it is one (Search Files): Pane lists it as that file, with its
+    /// own actions.
+    pub file: Option<String>,
+}
 
 /// Stops a search that is no longer needed: when it is stopped or dropped,
 /// the search is not started if it has not been, and stopped where its guest
@@ -3632,10 +3639,13 @@ impl Host {
         let results = self.settle(path, result, CallError::Guest)?;
         Ok(results
             .into_iter()
-            .map(|result| ResultListing {
-                id: result.id,
-                title: result.title,
-                subtitle: result.subtitle,
+            .map(|result| SearchResult {
+                listing: ResultListing {
+                    id: result.id,
+                    title: result.title,
+                    subtitle: result.subtitle,
+                },
+                file: result.file,
             })
             .collect())
     }

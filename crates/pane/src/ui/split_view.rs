@@ -471,15 +471,16 @@ pub(crate) fn footer_lead(text: impl Into<SharedString>, color: Hsla, theme: &Th
 }
 
 /// The footer's buttons, left to right, as the reference orders them:
-/// `primary` (the selected record's, with the accent key) and `secondary`,
-/// the rule, then `more`; the rule only with a button before it.
+/// `primary` (the selected record's, with the accent key) and `secondary`
+/// (its other actions, in order), the rule, then `more`; the rule only with
+/// a button before it.
 pub(crate) fn footer_buttons(
     primary: Option<AnyElement>,
-    secondary: Option<AnyElement>,
+    secondary: Vec<AnyElement>,
     more: AnyElement,
     theme: &Theme,
 ) -> Vec<AnyElement> {
-    let rule = (primary.is_some() || secondary.is_some())
+    let rule = (primary.is_some() || !secondary.is_empty())
         .then(|| crate::ui::footer::divider(theme).into_any_element());
     primary
         .into_iter()

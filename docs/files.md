@@ -4,9 +4,10 @@ Added for [#29](https://github.com/hoangvu12/pane/issues/29) (US03, US08,
 US12, US40, US44, US57; T01, T03, T09, T22; G3, G7, as contributions, not
 claims that they pass), and reworked after its security review. A user
 grants one folder, finds its files by typing their names into
-[root search](root-search.md), and opens one with the system's handler for
-its type. The feature is a **default extension**, Files, which the user can
-disable like any package.
+[root search](root-search.md) or into its command, **Search Files** (#150),
+and opens, reveals, copies or recycles one through the file actions Pane
+performs itself. The feature is a **default extension**, Files, which the
+user can disable like any package.
 
 ## Where it lives
 
@@ -23,13 +24,17 @@ that decides what is reached, as recorded (proposed) in
 - **The listing**, in the core: `pane:extension/files`
   ([`wit/files.wit`](../wit/files.wit)), `list-folder()` without a path,
   answered at once from the listing Pane makes on the package's own worker.
-- **Opening**, in the core: a computed root result's action `open-file(id)`
-  ([`wit/root-results.wit`](../wit/root-results.wit)), naming a file by the
-  id Pane gave it; Pane shows its own name for it, checks it again and opens
-  it with the system's handler.
+- **The file actions**, in the core: a computed root result's action
+  `open-file(id)` ([`wit/root-results.wit`](../wit/root-results.wit)), or a
+  command search result's `file` ([`wit/search.wit`](../wit/search.wit)),
+  names a file by the id Pane gave it; Pane shows its own name for it,
+  gives it its own actions, and checks it again before each
+  ([`launcher/own_actions.rs`](../crates/pane-core/src/launcher/own_actions.rs)).
 - **Default extension**, [`guests/files`](../guests/files) (Rust), package
-  [`guests/packages/files`](../guests/packages/files): it only matches the
-  listing Pane gives it against the query and answers `open-file` results.
+  [`guests/packages/files`](../guests/packages/files): its one command,
+  Search Files (id `files`, `"search": true` and `"rootResults": true`),
+  only matches the listing Pane gives it against the text typed and answers
+  with the files' ids.
 
 Acquiring the package automatically at setup is
 [#51](https://github.com/hoangvu12/pane/issues/51) to
@@ -142,10 +147,63 @@ File results are listed **after the results found by title** (commands and
 applications), unlike other computed results. A blank query lists no files,
 and none are listed while no folder is granted.
 
-## Opening a file
+## Search Files
 
-Enter (or a click) shows "Running…" and, off the window's thread, has the
-host check the file again (`FileAccess::checked_file`):
+Search Files (#150) is a view command whose search field is the
+launcher's own ([command search](command-search.md)): Enter on its row in
+root search opens it with the field empty above its own list (Pane's
+folder rows, then "What is searched"), and typing lists the granted
+folder's files as root search does (by name, then by folder, at most 20),
+each titled with its own name and "File in <folder>". A newer text stops
+the search before it. Opening the command is a new visit, so the folder is
+listed again then; a search answered while it is still being listed shows
+"Running…" and is asked again once the listing ends, unless a newer text
+(or leaving the command) stopped it first.
+
+A command may set both `"search"` and `"rootResults"` (#150): root search
+asks it, and so does its own field. Root search still never asks a
+command that searches unless it says `rootResults` too.
+
+## The file actions
+
+Each file, in Search Files and in root search's file results alike, has
+actions Pane performs itself, without calling the extension, as an item of
+a command's list has them: Enter runs the first, Ctrl+Enter the second,
+Ctrl+Shift+Enter the third, and the Actions panel (Ctrl+K) lists them all.
+
+| A document | A program or script |
+| --- | --- |
+| **Open** (Enter): the system's handler for its type | **Reveal in Explorer** (Enter) |
+| **Reveal in Explorer** (Ctrl+Enter): selected in the file manager | **Open With…** (Ctrl+Enter) |
+| **Open With…**: a submenu of the installed applications, by name | **Run** (Ctrl+Shift+Enter): the system's handler, which runs it |
+| **Copy Path**: its path, as text | **Copy Path** |
+| **Copy File**: the file, as the file manager copies it | **Copy File** |
+| **Move to Recycle Bin** (destructive): after a confirmation | **Move to Recycle Bin** |
+
+File search's own Enter never runs a program by accident (ADR 0037's
+exception, keeping ADR 0017's intent): a file that would run a program
+when opened (below) is revealed, and only its explicit **Run** runs it.
+Whether a file is one is told on the listing's worker, with the listing, so
+a row knows at once what Enter does. (On macOS the file manager is Finder,
+elsewhere "File Manager"; the Recycle Bin is the Trash outside Windows.)
+
+Each action closes the window after it acts, as the standard actions do:
+Open, Reveal, Open With… and Run say what they did in the status line
+("Opened plan.md", "Revealed run.bat in Explorer", "Opened plan.md with
+Notepad", "Ran run.bat"), Copy Path and Copy File show "Copied to
+Clipboard" in a HUD, and Move to Recycle Bin, once the user confirmed
+"Move “plan.md” to the Recycle Bin?" (never remembered), shows "Moved to
+Recycle Bin". What fails stays on screen in the status line ("Could not
+open todo.txt: it no longer exists"). Opening and running go through the
+launcher's link opener (`LinkOpener::open_file`), the others through its
+system ([`crate::system`](../crates/pane-core/src/system.rs): reveal, open
+with an application, the clipboard, the Recycle Bin), so tests record
+them all.
+
+## Checking a file again
+
+Before every action, off the window's thread, the host checks the file
+again (`FileAccess::checked_file`):
 
 1. The id is in the package's latest listing, and that listing's folder is
    still the package's grant.
@@ -155,17 +213,19 @@ host check the file again (`FileAccess::checked_file`):
 4. Its canonical path is inside the grant's canonical path (a folder above
    it replaced by a link outside: "it is no longer inside the granted
    folder").
-5. It is not a program or script ([`files::runs_as_program`](../crates/pane-core/src/files.rs)),
-   refused on every system: the Windows types `exe bat cmd com lnk js jse
-   vbs vbe wsf wsh hta msi msp scr pif ps1 cpl reg url`, the macOS types
-   `app command tool terminal workflow` and anything inside an `.app`
-   bundle, `.desktop` files, and on macOS and Linux any file with an
-   executable bit ("it is a program or script, which opening would run").
+5. For Open (Enter on a document) only: it is not a program or script
+   ([`files::runs_as_program`](../crates/pane-core/src/files.rs)), on
+   every system: the Windows types `exe bat cmd com lnk js jse vbs vbe
+   wsf wsh hta msi msp scr pif ps1 cpl reg url`, the macOS types `app
+   command tool terminal workflow` and anything inside an `.app` bundle,
+   `.desktop` files, and on macOS and Linux any file with an executable
+   bit ("it is a program or script, which opening would run"). A document
+   that became a program since it was listed is refused so. Run, Reveal,
+   Open With…, the copies and the Recycle Bin act on a program as on any
+   file.
 
-Only then is the checked canonical path handed to the launcher's
-`LinkOpener::open_file`. The status reads "Opened <file name>" or "Could not
-open <file name>: <reason>", with the host's name for the file; root search
-keeps its query.
+Only then is the checked canonical path acted on, with the host's name for
+the file in what the status says; root search keeps its query.
 
 The window's opener, `pane::SystemLinks`, runs the handler the `open` crate
 (5.4.4) names for the system, without a shell:
@@ -184,7 +244,9 @@ opener says "this Pane has no handler for files".
 
 A package that lists a granted folder sets `"folderAccess": true` in
 `pane.json`, and its commands call `list-folder()` and answer `open-file`
-results with the ids, in Rust, JavaScript and TypeScript alike
+results with the ids, or command search results whose `file` is the id
+(`SearchResult { file: Some(id), .. }` in Rust, `{ id, title, file }` in
+JavaScript and TypeScript), in Rust, JavaScript and TypeScript alike
 ([author guide](../guests/README.md#files-of-a-granted-folder)):
 `pane_guest::files::list_folder()` and `RootAction::OpenFile(id)` in Rust;
 `listFolder()` from `"pane:extension/files@0.1.0"` and
@@ -193,7 +255,8 @@ results with the ids, in Rust, JavaScript and TypeScript alike
 component imports the interface. The samples
 [`guests/sample-files-js`](../guests/sample-files-js) and
 [`guests/sample-files-ts`](../guests/sample-files-ts) do what Files does,
-with a simpler match (every word in the name).
+in root search and in their own field (`"pane": { "search": true }`), with
+a simpler match (every word in the name), and give the same answers.
 
 ## Checks
 
@@ -210,7 +273,7 @@ with a simpler match (every word in the name).
   (the opener's path and the fixture's, both resolved); file results after
   a command whose title matches; a folder gone since it was granted
   explained as a row; at Enter, a `.bat` file and an executable script
-  refused, a removed file, a file replaced by a link and a folder above it
+  revealed (through a recording system) rather than opened, a removed file, a file replaced by a link and a folder above it
   replaced by a link outside the grant each refused, and nothing reaching
   the opener; the grant kept across a restart, hidden while disabled, and
   forgotten by uninstalling; the JavaScript and TypeScript samples; and
@@ -239,6 +302,19 @@ with a simpler match (every word in the name).
   end must not end that wait), and let a listing end before the wait for it
   is made (the wait must end at once); each race failed a run of the tests
   above once (#29).
+- Search Files and the file actions (#150), through the launcher
+  ([`crates/pane-core/tests/file_actions.rs`](../crates/pane-core/tests/file_actions.rs)),
+  for Files and the JavaScript and TypeScript samples alike, with a
+  recording opener, system and window: the files listed in the command's
+  own field, a newer text stopping the search waiting for the listing; a
+  document's six actions, each acting through the fakes and closing the
+  window (Copy Path and Copy File with their HUD), Open With… listing the
+  installed applications by name, Move to Recycle Bin confirmed first; a
+  program revealed by Enter, Ctrl+Enter its Open With… submenu, only Run
+  running it, in Search Files and in root search; the command keeping its
+  id. In the window
+  ([`crates/pane/tests/file_actions.rs`](../crates/pane/tests/file_actions.rs)),
+  with real keys: Enter and Ctrl+Enter on a document and on a program.
 - Native GUI smokes, one phase per system (screenshots 220 to 223), with a
   data folder of its own and a fixture folder "Pane smoke files" (spaces)
   holding "Résumé plan ü.txt" (non-ASCII) and an executable script or batch
@@ -267,8 +343,9 @@ with a simpler match (every word in the name).
   found.
 - Mapped network drives (Windows) and network mounts (macOS, Linux) are not
   refused; a hung one holds up only its package's worker.
-- Programs and scripts are refused outright; there is no confirmation to
-  open one deliberately.
+- Programs and scripts are revealed by Enter; only their Run action runs
+  them, and it asks nothing more ("Instant file search", #126, settles the
+  rest).
 - A handler slow to fail (over three seconds) is reported as having opened
   the file.
 - The positive native open ran only on Linux X11 (xdg-open with a recording

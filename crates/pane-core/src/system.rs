@@ -166,6 +166,11 @@ pub struct FrontApplication {
 
 /// What pasting is called where it is not available.
 const PASTE: &str = "Pasting into another application";
+
+/// What Pane's own Paste says in a HUD when it copied instead, where it
+/// cannot paste yet: Clipboard History's and a computed answer's (#150), the
+/// same words as the SDKs' standard Paste.
+pub const PASTE_FALLBACK: &str = "Copied — paste is not available here yet";
 /// What reading the front application is called there.
 const FRONT_APPLICATION: &str = "Reading the application in front";
 /// What reading the selected text is called there.

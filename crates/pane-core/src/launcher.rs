@@ -51,6 +51,7 @@ mod indexed;
 mod item_actions;
 mod launching;
 mod network;
+mod own_actions;
 mod presentation;
 mod quick_slots;
 mod submenus;
@@ -1026,13 +1027,10 @@ enum Entry {
     Copy(String),
     /// Open this web address with the link opener (root).
     OpenUrl(String),
-    /// Open the file with id `id` in the latest listing of the package with
-    /// identity key `owner`, named `name` (root).
-    OpenFile {
-        owner: String,
-        id: String,
-        name: String,
-    },
+    /// A file of a package's granted folder (root search's file results,
+    /// Search Files' results): Pane performs its actions itself, Enter
+    /// opening a document and revealing a program (see `own_actions`).
+    File(files::FileRow),
     /// Nothing in the launcher: the window asks for the folder to grant
     /// this package, then calls [`Launcher::grant_folder`] (command view).
     ChooseFolder(PackageIdentity),
@@ -1177,11 +1175,8 @@ enum Pending {
     Run(String),
     CustomView(String, CustomViewInfo),
     OpenUrl(String),
-    OpenFile {
-        owner: String,
-        id: String,
-        name: String,
-    },
+    /// One of Pane's own actions on a row (see `own_actions`).
+    Own(own_actions::Work),
     ClearCache(PackageIdentity),
     Develop(PackageIdentity, developing::DevelopStart),
     Change(Change),
@@ -2304,9 +2299,7 @@ impl Launcher {
                     }
                 }
                 Pending::OpenUrl(url) => launcher.open_url(epoch, url).await,
-                Pending::OpenFile { owner, id, name } => {
-                    launcher.open_file(epoch, owner, id, name).await
-                }
+                Pending::Own(work) => launcher.do_own(epoch, work).await,
                 Pending::ClearCache(identity) => launcher.clear_cache(epoch, identity).await,
                 Pending::CustomView(item_id, info) => {
                     if let Some(component) = open {
@@ -2546,9 +2539,12 @@ impl Launcher {
                 state.view.status = Status::Running;
                 Pending::OpenApplication { id, name }
             }
-            Entry::OpenFile { owner, id, name } => {
-                state.view.status = Status::Running;
-                Pending::OpenFile { owner, id, name }
+            // A document opens, a program or script is revealed: file
+            // search's Enter never runs one (ADR 0037).
+            Entry::File(file) => {
+                let work = own_actions::primary(file);
+                own_actions::begin(state, &work);
+                Pending::Own(work)
             }
             Entry::ClearCache(identity) => {
                 state.view.status = Status::Running;
@@ -4202,7 +4198,7 @@ fn root_rows(state: &State, query: &str) -> (Vec<Row>, Vec<Entry>) {
     let (files, computed): (Vec<&Computed>, Vec<&Computed>) = state
         .computed
         .iter()
-        .partition(|computed| matches!(computed.entry, Entry::OpenFile { .. }));
+        .partition(|computed| matches!(computed.entry, Entry::File(_)));
     let computed_row = |computed: &Computed| (computed.row.clone(), computed.entry.clone());
     // What the user's alias names comes first, even before computed
     // results; files found for the query follow what is found by title,
@@ -4264,19 +4260,10 @@ fn computed_results(
                     RootAction::Copy(text) => (listing, Entry::Copy(text)),
                     RootAction::OpenUrl(url) => (listing, Entry::OpenUrl(url)),
                     RootAction::OpenFile(id) => {
-                        let owner = owner?;
-                        let known = files?.known(owner, &id)?;
-                        let entry = Entry::OpenFile {
-                            owner: owner.to_owned(),
-                            id,
-                            name: known.name.clone(),
-                        };
-                        let listing = ResultListing {
-                            id: listing.id,
-                            title: known.name.clone(),
-                            subtitle: Some(format!("File in {}", known.within)),
-                        };
-                        (listing, entry)
+                        let row_id = format!("{}:{}", command.id, listing.id);
+                        let (row, file) =
+                            files::file_row(files?, owner?, &command.component, id, row_id)?;
+                        return Some(computed(row, Entry::File(file)));
                     }
                 };
                 Some(computed(Row::listed(listing, Some(&command.id)), entry))

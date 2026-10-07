@@ -1,7 +1,10 @@
 //! Pane's clipboard history, a default extension: once the user turns it
 //! on in its command, Pane keeps the text they copy on this computer, and
-//! the command lists it, newest first; Enter on an item copies it again or
-//! deletes it. It starts off, and can be paused, resumed and turned off
+//! the command lists it, newest first. Each kept item has three actions:
+//! Paste (Enter) pastes it into the application that was in front, or,
+//! where Pane cannot paste yet, copies it and says so in a HUD; Copy copies
+//! it again; Delete, destructive and last, deletes it. It starts off, and
+//! can be paused, resumed and turned off
 //! again; disabling the extension stops it too. Programs can be excluded by
 //! their file name. Items are kept for 7 days unless the user chooses
 //! another time, and Pane deletes them then, whether this command runs or
@@ -13,6 +16,7 @@
 //! of it runs while the clipboard changes.
 #![no_std]
 
+use pane_guest::actions::PASTE_FALLBACK;
 use pane_guest::alloc::{
     format,
     string::{String, ToString},
@@ -20,9 +24,11 @@ use pane_guest::alloc::{
     vec::Vec,
 };
 use pane_guest::clipboard_history::{self as history, Capture, Entry, HistoryStatus};
-use pane_guest::feedback::{Toast, show_toast};
+use pane_guest::feedback::{Toast, ToastStyle, show_hud, show_toast};
+use pane_guest::system::{self, Clip, SystemError};
+use pane_guest::window::{PopToRootType, close};
 use pane_guest::{
-    Choice, Command, CustomView, Field, FieldKind, FieldValue, Form, FormError, Item, List,
+    Action, Choice, Command, CustomView, Field, FieldKind, FieldValue, Form, FormError, Item, List,
     NoCustomView, TextField,
 };
 
@@ -120,23 +126,6 @@ fn recent_form() -> Form {
             ),
         }],
         submit_label: "Delete".into(),
-    }
-}
-
-/// The form an item opens: copy it again (first, so Enter twice copies)
-/// or delete it.
-fn entry_form(title: String) -> Form {
-    Form {
-        title,
-        fields: vec![Field {
-            id: "action".into(),
-            label: "What to do with it".into(),
-            kind: FieldKind::Choice(vec![
-                choice("copy".into(), "Copy it again".into()),
-                choice("delete".into(), "Delete it".into()),
-            ]),
-        }],
-        submit_label: "OK".into(),
     }
 }
 
@@ -243,10 +232,52 @@ fn entry_item(entry: &Entry) -> Item {
     if lines > 1 {
         about.push(format!("{lines} lines"));
     }
-    about.push("Enter copies or deletes it".into());
+    about.push("Enter pastes it".into());
     let title = title_of(&entry.text);
-    let form = entry_form(title.clone());
-    item(&format!("{ENTRY}{}", entry.id), title, about.join(" · ")).form(form)
+    let (id, text) = (entry.id.clone(), entry.text.clone());
+    let (copied, deleted) = (id.clone(), id.clone());
+    item(&format!("{ENTRY}{}", entry.id), title, about.join(" · ")).actions([
+        Action::new("Paste", move || paste(id, text)),
+        Action::new("Copy", move || copy(copied)),
+        Action::new("Delete", move || delete(deleted)).destructive(),
+    ])
+}
+
+/// Paste: pastes the kept item `id`, whose text is `text`, into the
+/// application that was in front before Pane, which closes the window;
+/// where Pane cannot paste yet, copies it again instead (as Copy does),
+/// closes the window and says so in a HUD.
+async fn paste(id: String, text: String) -> Result<(), String> {
+    match system::paste(&Clip::Text(text)) {
+        Ok(()) => Ok(()),
+        Err(SystemError::NotAvailable(_)) => {
+            history::copy(&id)?;
+            close(false, PopToRootType::Default);
+            show_hud(PASTE_FALLBACK, ToastStyle::Success);
+            Ok(())
+        }
+        Err(SystemError::Failed(why)) => Err(why),
+    }
+}
+
+/// Copy: puts the kept item `id` on the clipboard again, closes the window
+/// and says so in a HUD, as the standard Copy does.
+async fn copy(id: String) -> Result<(), String> {
+    history::copy(&id)?;
+    close(false, PopToRootType::Default);
+    show_hud("Copied to Clipboard", ToastStyle::Success);
+    Ok(())
+}
+
+/// Delete: deletes the kept item `id`; one no longer kept is an error.
+async fn delete(id: String) -> Result<(), String> {
+    match history::delete_items(&[id])? {
+        0 => Err("That item is no longer kept".into()),
+        _ => {
+            show_toast(Toast::success("Deleted the kept item"));
+            Ok(())
+        }
+    }
 }
 
 fn form_error(message: String) -> FormError {
@@ -299,10 +330,6 @@ fn run_item(item_id: String) -> Result<String, String> {
         excluded.retain(|excluded| excluded != program);
         history::set_excluded(&excluded)?;
         return Ok(format!("Text copied from {program} is kept again"));
-    }
-    if let Some(id) = item_id.strip_prefix(ENTRY) {
-        history::copy(id)?;
-        return Ok("Copied to the clipboard".into());
     }
     Err(format!("unknown item: {item_id}"))
 }
@@ -389,8 +416,8 @@ impl Command for ClipboardHistory {
         Ok(List::new("Clipboard History").items(items))
     }
 
-    /// A callback no item's action names runs as the action of that id, so
-    /// a kept item's id (whose item opens a form) still copies it again.
+    /// A callback no item's action names: an item's action of a list
+    /// drawn before, whose item is gone now.
     async fn run_search_result(id: String) -> Result<(), String> {
         act(id).await
     }
@@ -402,16 +429,6 @@ impl Command for ClipboardHistory {
                 .find(|value| value.id == id)
                 .map_or("", |value| value.value.trim())
         };
-        if let Some(id) = item_id.strip_prefix(ENTRY) {
-            if value("action") == "delete" {
-                return match history::delete_items(&[id.into()]).map_err(form_error)? {
-                    0 => Err(form_error("That item is no longer kept".into())),
-                    _ => Ok("Deleted the kept item".into()),
-                };
-            }
-            history::copy(id).map_err(form_error)?;
-            return Ok("Copied to the clipboard".into());
-        }
         if item_id == RETENTION {
             let seconds: u64 = value("retention")
                 .parse()
