@@ -759,15 +759,34 @@ command never names or sees a path: `list-folder()` answers that no folder
 is granted, that Pane is listing it (Pane asks the command again once it is
 done, so answer no files for now), or the listing Pane keeps for this visit
 of root search, whose files have an `id` and a `relative` path. An
-`open-file` result gives the `id`; Pane shows the file's own name and folder
-in the row, whatever the result's title says, drops an id it did not give,
-checks the file again when it is invoked and refuses programs and scripts.
+`open-file` result gives the `id`, and so does a command search result's
+`file` (a command that sets `"search": true` too, as Search Files does);
+Pane shows the file's own name and folder in the row, whatever the result's
+title says, drops an id it did not give, and gives the file its own
+[file actions](../docs/files.md#the-file-actions): Open (Enter), Reveal in
+Explorer (Ctrl+Enter), Open With…, Copy Path, Copy File and Move to Recycle
+Bin (confirmed), each checking it again first; for a program or script,
+Enter reveals it and only Run runs it. The command is never called for
+them.
 Pane lists the folder under its [scan policy](../docs/files.md#the-scan-policy)
 (`files.limits()` gives its limits); file results are listed after the
 results root search finds by title. The [Files](files) default extension,
-in Rust, works this way; [`sample-files-js`](sample-files-js) and
+in Rust, works this way (its command, Search Files, answers both root
+search and its own field); [`sample-files-js`](sample-files-js) and
 [`sample-files-ts`](sample-files-ts) do the same in JavaScript and
 TypeScript.
+
+In a command's own search field, the result names the file in `file`:
+
+```rust
+use pane_guest::search::SearchResult;
+
+SearchResult { id: file.relative.clone(), title: file.relative, subtitle: None, file: Some(file.id) }
+```
+
+```ts
+({ id: file.relative, title: file.relative, file: file.id })
+```
 
 Rust (`pane_guest::files`):
 
@@ -1056,7 +1075,10 @@ history.deleteItems(["7"]); // `delete-items`: `delete` is a JavaScript keyword
 
 [`sample-clipboard-js`](sample-clipboard-js) and
 [`sample-clipboard-ts`](sample-clipboard-ts) implement the Clipboard History
-command in JavaScript and TypeScript.
+command in JavaScript and TypeScript. Each kept item has the actions Paste
+(Enter: [`system::paste`](#paste-the-front-application-and-selected-text),
+copying it with `copy(id)` and the HUD "Copied — paste is not available
+here yet" where Pane cannot paste), Copy and Delete (destructive, last).
 
 ## No-view commands and the launch record
 
@@ -1556,9 +1578,11 @@ longer needs (the text changed, the user left) where it waits, dropping the
 instance with its web request: code after that `await` never runs and
 in-memory state is lost, so make result ids say which result they are. An
 error it answers with (a service down or unreachable) is shown in place of
-results and never pauses the extension. A command cannot set both
-`"search"` and `"rootResults"`. See
-[docs/command-search.md](../docs/command-search.md).
+results and never pauses the extension. A result may name a file of the
+package's [granted folder](#files-of-a-granted-folder) by its id instead
+(`file`, #150): Pane then lists that file and performs its file actions
+itself. A command may set both `"search"` and `"rootResults"`; root search
+then asks it too. See [docs/command-search.md](../docs/command-search.md).
 
 **Web requests** go through `wasi:http@0.3.0`'s client, which Pane links for
 every command and sends from the host (`http` and `https` over HTTP/1.1,

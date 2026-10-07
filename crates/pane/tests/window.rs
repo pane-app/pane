@@ -3215,8 +3215,23 @@ mod clipboard_split {
         cx.simulate_click(bounds.center(), Modifiers::none());
     }
 
+    /// Runs the window until the launcher no longer runs an action: a
+    /// hidden window draws nothing, so this does not wait for a frame.
+    fn done(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            cx.run_until_parked();
+            let status = cx.read_entity(window, |window, _| window.launcher().view().status);
+            if status != pane_core::Status::Running {
+                return;
+            }
+            assert!(std::time::Instant::now() < deadline, "timed out");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
     #[gpui::test]
-    fn a_click_selects_a_record_without_copying_it_and_enter_copies_it(cx: &mut TestAppContext) {
+    fn a_click_selects_a_record_without_pasting_it_and_enter_pastes_it(cx: &mut TestAppContext) {
         let world = World::new();
         let launcher = world.launcher(cx, &["first", "second", "third"]);
         let (window, cx) = open_history(cx, launcher);
@@ -3231,15 +3246,22 @@ mod clipboard_split {
         click(cx, "clip-first");
         settle(&window, cx);
         assert!(world.clipboard.written().is_empty(), "a click only selects");
+        // Paste is the primary action, beside Copy and Delete.
+        for button in ["clipboard-paste", "clipboard-copy", "clipboard-delete"] {
+            assert!(cx.debug_bounds(button).is_some(), "{button} is drawn");
+        }
 
+        // Enter pastes it; where Pane cannot paste yet (this launcher
+        // reaches no system), it copies it instead, closes the window and
+        // says so in the HUD.
         cx.simulate_keystrokes("enter");
-        settle(&window, cx);
+        done(&window, cx);
         assert_eq!(world.clipboard.written(), ["first"]);
-        assert!(
-            cx.debug_bounds("status-result").is_some(),
-            "the outcome shows"
+        assert!(cx.read_entity(&window, |window, _| window.hidden()));
+        assert_eq!(
+            cx.read_entity(&window, |window, _| window.hud()).as_deref(),
+            Some(pane_core::system::PASTE_FALLBACK)
         );
-        assert!(split_shown(&window, cx), "copying keeps the view");
     }
 
     #[gpui::test]
@@ -3259,9 +3281,12 @@ mod clipboard_split {
         cx.simulate_keystrokes("up ctrl-d");
         settle(&window, cx);
         assert_eq!(listed(&window, cx), ["third", "first"]);
-        cx.simulate_keystrokes("enter");
+        // Ctrl+Enter, the secondary action, copies it again and keeps the
+        // view.
+        cx.simulate_keystrokes("ctrl-enter");
         settle(&window, cx);
         assert_eq!(world.clipboard.written(), ["first", "third"]);
+        assert!(split_shown(&window, cx), "copying keeps the view");
 
         // The footer's Delete does the same.
         click(cx, "clipboard-delete");

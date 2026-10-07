@@ -28,6 +28,17 @@ interface command-search {
     id: string,
     title: string,
     subtitle: option<string>,
+    /// A file of the folder granted to the command's package (wit/files.wit),
+    /// by the id `files.list-folder` gave it in the package's latest
+    /// listing, when the result is that file (Search Files). Pane then
+    /// lists it with the file's own name and folder, whatever `title` and
+    /// `subtitle` say, and gives it Pane's own file actions (Open, Reveal,
+    /// Open With…, Copy Path, Copy File, Move to Recycle Bin; for a program
+    /// or script Enter reveals it and only Run runs it), which Pane
+    /// performs without calling the command. A file id Pane did not give
+    /// is not listed. `none` for any other result, which the command's
+    /// `handle-event` runs as before.
+    file: option<string>,
   }
 
   /// Searches for `query`, the text in the search field of the command

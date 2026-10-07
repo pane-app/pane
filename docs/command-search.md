@@ -90,10 +90,20 @@ exports `pane:extension/command-search` ([wit/search.wit](../wit/search.wit)):
 result has an `id` (passed to `handle-event` as the callback id when
 activated, which the SDKs hand to the command's `run_search_result` /
 `runSearchResult`), a `title` and
-an optional `subtitle`, the fields of a root result without its action.
-Installing checks the export, as for the other optional exports. A command
-cannot set both `"search"` and `"rootResults"`: root search never asks a
-command that searches inside itself, so the manifest is refused. Rust:
+an optional `subtitle`, the fields of a root result without its action,
+and an optional `file` (#150): the id of a file of the folder granted to
+the command's package, as `list-folder` gave it, when the result is that
+file. Pane then lists it with the file's own name and folder and gives it
+its own [file actions](files.md#the-file-actions) (Open, Reveal, Open
+With…, Copy Path, Copy File, Move to Recycle Bin; for a program, Enter
+reveals it and only Run runs it), which Pane performs without calling the
+command; an id Pane did not give is not listed. A search answered while
+that folder was still being listed is asked again once it is, unless a
+newer text stopped it. Installing checks the export, as for the other
+optional exports. A command may set both `"search"` and `"rootResults"`
+(Search Files does): root search then asks it as well, so it declares that
+what is typed there reaches it; a command that searches without saying
+`rootResults` is still never asked by root search. Rust:
 `pane_guest::search::Guest` and `pane_guest::search::export!`; JS/TS:
 export `commandSearch` with `"pane": { "search": true }` in `package.json`.
 
@@ -149,8 +159,9 @@ details Enter shows. Texts and names starting with `huge`, `stall` or
   first); an untrusted
   certificate is "not trusted"; Manage extensions says which package uses
   the network and lists the address it reached; a manifest saying
-  `"search": true` for a component without the export, or with
-  `"rootResults": true`, is refused at install.
+  `"search": true` for a component without the export, or
+  `"rootResults": true` too for one without that export, is refused at
+  install. Search Files' results naming files are `file_actions.rs`'s.
 - `crates/pane-core/src/http.rs`'s unit tests: code whose generation ended
   sends nothing, and a package's connections are capped.
 - `crates/pane/tests/command_search.rs`: the same through the window with

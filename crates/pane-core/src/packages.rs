@@ -857,15 +857,10 @@ impl Manifest {
                 .map(|icon| icons::parse_manifest_icon(icon, &format!("command `{}`", command.id)))
                 .transpose()
                 .map_err(invalid)?;
-            // Root search never asks a command that searches inside itself:
-            // results it computed for root search would never be shown.
-            if command.search && command.root_results {
-                return Err(invalid(format!(
-                    "command `{}` sets both `search` and `rootResults`: a command that \
-                     searches inside itself is never asked by root search",
-                    command.id
-                )));
-            }
+            // A command may both search inside itself and answer root
+            // search (Search Files, #150): root search still never asks one
+            // that searches unless its manifest says `rootResults` too, so
+            // what is typed there reaches only a command that asks for it.
             let mode = match command.mode.as_deref() {
                 None | Some("view") => CommandMode::View,
                 Some("no-view") => CommandMode::NoView,

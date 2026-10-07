@@ -356,7 +356,8 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         },
         (_, Some(Entry::Copy(_))) => acting("Copy answer"),
         (_, Some(Entry::OpenUrl(_))) => acting("Open link"),
-        (_, Some(Entry::OpenFile { .. })) => acting("Open file"),
+        // A file: Open for a document, Reveal for a program (#150).
+        (_, Some(Entry::File(file))) => acting(&super::own_actions::primary_title(file)),
         (_, Some(Entry::OpenApplication { .. })) => acting("Open application"),
         (_, Some(Entry::OpenTarget { .. })) => acting("Open link"),
         (_, Some(Entry::Broken(_) | Entry::Unavailable(_))) => unusable("Unavailable"),

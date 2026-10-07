@@ -28,6 +28,7 @@ mod develop_builds;
 mod disable;
 mod disable_dependents;
 mod feedback;
+mod file_actions;
 mod files;
 mod helpers;
 mod hotkeys;

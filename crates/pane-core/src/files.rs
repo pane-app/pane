@@ -352,7 +352,8 @@ pub fn check_grant(folder: &Path) -> Result<PathBuf, String> {
 }
 
 /// The file types that run a program when the system opens them, on any of
-/// the systems Pane runs on: Pane refuses them everywhere.
+/// the systems Pane runs on: file search's Enter never opens them, anywhere
+/// (it reveals them; only the explicit Run action runs them).
 const PROGRAM_EXTENSIONS: &[&str] = &[
     // Windows
     "exe", "bat", "cmd", "com", "lnk", "js", "jse", "vbs", "vbe", "wsf", "wsh", "hta", "msi", "msp",
@@ -366,6 +367,25 @@ const PROGRAM_EXTENSIONS: &[&str] = &[
 /// macOS application bundle (`.app`), or on macOS and Linux it has an
 /// executable bit.
 pub fn runs_as_program(path: &Path, metadata: &fs::Metadata) -> bool {
+    if program_named(path) {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o111 != 0 {
+            return true;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = metadata;
+    false
+}
+
+/// Whether `path`'s name alone says that opening it runs a program: its
+/// type is one of [`PROGRAM_EXTENSIONS`], or a folder above it is a macOS
+/// application bundle.
+fn program_named(path: &Path) -> bool {
     let program_type = |name: &std::ffi::OsStr| {
         Path::new(name)
             .extension()
@@ -384,19 +404,17 @@ pub fn runs_as_program(path: &Path, metadata: &fs::Metadata) -> bool {
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("app"))
     });
-    if in_bundle {
-        return true;
+    in_bundle
+}
+
+/// Whether the file a listing found at `path` runs as a program
+/// ([`runs_as_program`]), as it is now; by its name alone when it cannot be
+/// read.
+fn program_at(path: &Path) -> bool {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => runs_as_program(path, &metadata),
+        Err(_) => program_named(path),
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if metadata.permissions().mode() & 0o111 != 0 {
-            return true;
-        }
-    }
-    #[cfg(not(unix))]
-    let _ = metadata;
-    false
 }
 
 /// Where a package's granted folder's listing is, as its commands see it.
@@ -419,6 +437,10 @@ pub(crate) struct KnownFile {
     /// Its folder, for people: the granted folder's name and the
     /// subfolders below it.
     pub within: String,
+    /// Whether it is a program or script ([`runs_as_program`]), as it was
+    /// when it was listed: file search's Enter reveals it rather than open
+    /// it.
+    pub program: bool,
 }
 
 /// The granted folders, the listings kept for them and the workers making
@@ -480,6 +502,9 @@ struct Kept {
     version: u64,
     folder: PathBuf,
     result: Result<FolderListing, String>,
+    /// Whether each listed file is a program or script, in the listing's
+    /// order, looked at on the worker with the listing.
+    programs: Vec<bool>,
 }
 
 /// A listing a package's worker is asked to make.
@@ -670,7 +695,7 @@ impl FileAccess {
     /// The file with id `id` in the latest listing of the package with
     /// identity key `owner`, as the host names it.
     pub(crate) fn known(&self, owner: &str, id: &str) -> Option<KnownFile> {
-        let (_, relative, folder) = self.lookup(owner, id)?;
+        let (_, relative, folder, program) = self.lookup(owner, id)?;
         let name = relative.rsplit('/').next().unwrap_or(&relative).to_owned();
         let folder_name = folder
             .file_name()
@@ -680,11 +705,16 @@ impl FileAccess {
             Some((parent, _)) => format!("{folder_name}/{parent}"),
             None => folder_name,
         };
-        Some(KnownFile { name, within })
+        Some(KnownFile {
+            name,
+            within,
+            program,
+        })
     }
 
-    /// The path, path below the folder and folder of the file with id `id`.
-    fn lookup(&self, owner: &str, id: &str) -> Option<(PathBuf, String, PathBuf)> {
+    /// The path, path below the folder and folder of the file with id `id`,
+    /// and whether it was a program or script when it was listed.
+    fn lookup(&self, owner: &str, id: &str) -> Option<(PathBuf, String, PathBuf, bool)> {
         let state = self.state();
         let kept = state.packages.get(owner)?.kept.as_ref()?;
         let listing = kept.result.as_ref().ok()?;
@@ -694,17 +724,25 @@ impl FileAccess {
             file.path.clone(),
             file.relative.clone(),
             kept.folder.clone(),
+            kept.programs.get(index).copied().unwrap_or(false),
         ))
     }
 
     /// The file with id `id` of the package with identity key `owner`,
-    /// checked again now that it is to be opened: it is in the package's
+    /// checked again now that Pane is to act on it: it is in the package's
     /// latest listing, its folder is still the package's grant, it is not a
-    /// network path, it is a regular file and not a link, its canonical
-    /// path is inside the grant's, and opening it would not run a program.
-    /// Blocking.
-    pub(crate) fn checked_file(&self, owner: &str, id: &str) -> Result<PathBuf, String> {
-        let (path, _, folder) = self
+    /// network path, it is a regular file and not a link, and its canonical
+    /// path is inside the grant's. Unless `programs`, opening it must not
+    /// run a program either: what file search's Open (and Enter) checks,
+    /// where Run, Reveal, Open With…, the copies and the Recycle Bin act on
+    /// a program as on any file. Blocking.
+    pub(crate) fn checked_file(
+        &self,
+        owner: &str,
+        id: &str,
+        programs: bool,
+    ) -> Result<PathBuf, String> {
+        let (path, _, folder, _) = self
             .lookup(owner, id)
             .ok_or("it is not in the extension's latest listing; search again")?;
         if self.granted(owner).as_ref() != Some(&folder) {
@@ -732,7 +770,7 @@ impl FileAccess {
         if within != folder || !resolved.starts_with(&within) {
             return Err("it is no longer inside the granted folder".into());
         }
-        if runs_as_program(&resolved, &metadata) {
+        if !programs && runs_as_program(&resolved, &metadata) {
             return Err("it is a program or script, which opening would run".into());
         }
         Ok(resolved)
@@ -781,7 +819,19 @@ impl FileAccess {
         } else {
             let folders = self.folders();
             let cancelled = || self.stale(&job);
-            Some(folders.list(&job.folder, &Limits::default(), &cancelled))
+            let result = folders.list(&job.folder, &Limits::default(), &cancelled);
+            // Which files are programs, looked at here, off every caller's
+            // thread, so a row knows what Enter does without reading the
+            // disk.
+            let programs = match &result {
+                Ok(listing) => listing
+                    .files
+                    .iter()
+                    .map(|file| program_at(&file.path))
+                    .collect(),
+                Err(_) => Vec::new(),
+            };
+            Some((result, programs))
         };
         let mut state = self.state();
         let current = (state.visit, state.version);
@@ -789,7 +839,7 @@ impl FileAccess {
         if package.running == Some((job.visit, job.version)) {
             package.running = None;
         }
-        if let Some(result) = result
+        if let Some((result, programs)) = result
             && current == (job.visit, job.version)
             && !job.generation.as_ref().is_some_and(|g| g.ended().is_some())
         {
@@ -798,6 +848,7 @@ impl FileAccess {
                 version: job.version,
                 folder: job.folder,
                 result,
+                programs,
             });
         }
         let ended = (job.visit, job.version);

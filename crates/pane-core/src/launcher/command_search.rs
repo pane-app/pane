@@ -14,12 +14,22 @@
 //! as a service that is down, is shown in place of results, and counts
 //! against the extension no more than any error it answers with: it is not
 //! paused for it.
+//!
+//! A result may be a file of the folder granted to the command's package,
+//! by the id Pane gave it (Search Files, #150): Pane lists it with the
+//! file's own name and folder and gives it its own file actions (see
+//! `own_actions`). A search answered while Pane was still listing that
+//! folder is asked again once the listing ends, unless a newer text (or
+//! leaving the command) stopped it first.
 
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 
-use super::{CommandList, Entry, Launcher, Row, Screen, State, Status, stopped};
+use super::{
+    CommandList, Entry, Launcher, Row, Screen, State, Status, files, owner, stopped,
+    until_cancelled,
+};
 use crate::extension_data::PackageData;
 use crate::runtime::{CallError, SearchResult, StopSearch, View};
 
@@ -32,6 +42,10 @@ pub(super) struct Searching {
     list: Option<CommandList>,
     /// Stops the search in progress, if one is; dropping it stops it.
     in_progress: Option<StopSearch>,
+    /// Kept while a search waits for the granted folder's listing before it
+    /// is asked again: dropping it (a newer text, the command left) ends
+    /// that wait.
+    waiting: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl Searching {
@@ -40,6 +54,7 @@ impl Searching {
             command,
             list: None,
             in_progress: None,
+            waiting: None,
         }
     }
 
@@ -94,13 +109,46 @@ impl Launcher {
                 launcher.show_listed_again(epoch, search, component, data, answer);
             }));
         }
-        let (stop, answer) = runtime.search_with(&component, &command, query.trim(), data.clone());
+        let query = query.trim().to_owned();
+        let (stop, answer) = runtime.search_with(&component, &command, &query, data.clone());
         if let Some(searching) = state.searching.as_mut() {
             searching.in_progress = Some(stop);
         }
         Some(Box::pin(async move {
             let answer = answer.await;
-            launcher.show_search_results(epoch, search, component, data, answer);
+            let listing = launcher.show_search_results(epoch, search, component, data, answer);
+            // Answered while the granted folder was still being listed:
+            // asked again once it is, unless a newer text stopped it.
+            if let Some((listed, mut ended)) = listing
+                && until_cancelled(listed, &mut ended).await.is_some()
+                && let Some(again) = launcher.search_again(epoch, search, &query)
+            {
+                again.await;
+            }
+        }))
+    }
+
+    /// Asks the open command again for `query`, the text of the search
+    /// `search` on the screen of `epoch`, once the granted folder its
+    /// answer waited for is listed; `None` when that text or screen is
+    /// gone, or the command can no longer be asked.
+    fn search_again(&self, epoch: u64, search: u64, query: &str) -> Option<Pending> {
+        let mut state = self.lock_if_current(epoch)?;
+        if state.search_epoch != search {
+            return None;
+        }
+        let component = state.open.clone()?;
+        let command = state.searching.as_ref()?.command.clone();
+        let data = self.data_in(&state, &component);
+        let runtime = self.runtime().ok()?.clone();
+        let (stop, answer) = runtime.search_with(&component, &command, query, data.clone());
+        state.searching.as_mut()?.in_progress = Some(stop);
+        drop(state);
+        let launcher = self.clone();
+        Some(Box::pin(async move {
+            let answer = answer.await;
+            // Asked once more at most: the listing is kept now.
+            let _ = launcher.show_search_results(epoch, search, component, data, answer);
         }))
     }
 
@@ -117,8 +165,10 @@ impl Launcher {
     /// searches.
     fn set_search_text(&self, state: &mut State, query: &str) -> Option<String> {
         let searching = state.searching.as_mut()?;
-        // Stopped at once: its answer, if it still comes, is not shown.
+        // Stopped at once: its answer, if it still comes, is not shown, and
+        // a wait for the folder's listing ends.
         searching.in_progress = None;
+        searching.waiting = None;
         state.search_epoch += 1;
         if matches!(&state.view.screen, Screen::CommandSearch { query } if query.trim().is_empty())
         {
@@ -189,7 +239,11 @@ impl Launcher {
     }
 
     /// Lists the open command's `answer` to the search `search`, unless the
-    /// screen or its text has changed since.
+    /// screen or its text has changed since. When the command was told that
+    /// its package's granted folder is still being listed, answers what
+    /// resolves once it is, and what resolves once a newer text (or leaving
+    /// the command) makes that wait pointless; the status says it runs
+    /// until then.
     fn show_search_results(
         &self,
         epoch: u64,
@@ -197,34 +251,65 @@ impl Launcher {
         component: PathBuf,
         data: Option<PackageData>,
         answer: Result<Vec<SearchResult>, CallError>,
-    ) {
-        let Some(mut state) = self.lock_if_current(epoch) else {
-            return;
-        };
+    ) -> Option<(ListedWait, tokio::sync::oneshot::Receiver<()>)> {
+        let mut state = self.lock_if_current(epoch)?;
         if state.search_epoch != search {
-            return;
+            return None;
         }
         let state = &mut *state;
         if let Some(searching) = state.searching.as_mut() {
             searching.in_progress = None;
         }
+        let owner = owner(&state.packages, &component).map(|package| package.identity.key());
+        let access = state.files.clone();
         let (list, status) = match (stopped(state, &component, &data), answer) {
             // Stopped while it was running: its answer is not shown.
             (Some(problem), _) => (CommandList::default(), Status::Error(problem)),
             // Replaced by a newer search, whose answer is shown instead.
-            (None, Err(CallError::Cancelled)) => return,
+            (None, Err(CallError::Cancelled)) => return None,
             (None, Ok(results)) => {
                 let (rows, entries) = results
                     .into_iter()
-                    .map(|result| {
-                        let entry = Entry::Run(result.id.clone());
-                        (Row::listed(result, None), entry)
+                    .filter_map(|result| match result.file {
+                        None => {
+                            let entry = Entry::Run(result.listing.id.clone());
+                            Some((Row::listed(result.listing, None), entry))
+                        }
+                        // A file Pane listed, by the name Pane found; one
+                        // it did not list is left out.
+                        Some(file) => {
+                            let (row, file) = files::file_row(
+                                access.as_ref()?,
+                                owner.as_deref()?,
+                                &component,
+                                file,
+                                result.listing.id,
+                            )?;
+                            Some((row, Entry::File(file)))
+                        }
                     })
                     .unzip();
                 (CommandList { rows, entries }, Status::Idle)
             }
             (None, Err(error)) => (CommandList::default(), Status::Error(error.to_string())),
         };
+        // Told the folder is still being listed: asked again once it is.
+        let listed = match (&status, &owner, &access) {
+            (Status::Idle, Some(owner), Some(access)) => access.listed(owner),
+            _ => None,
+        };
+        let status = if listed.is_some() {
+            Status::Running
+        } else {
+            status
+        };
         self.show_command_list(state, list, status);
+        let listed: ListedWait = Box::pin(listed?);
+        let (waiting, ended) = tokio::sync::oneshot::channel();
+        state.searching.as_mut()?.waiting = Some(waiting);
+        Some((listed, ended))
     }
 }
+
+/// What resolves once a granted folder's listing ends.
+type ListedWait = Pin<Box<dyn Future<Output = ()> + Send>>;

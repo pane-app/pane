@@ -440,7 +440,12 @@ impl LauncherWindow {
             self.open_slot_actions(slot, window, cx);
             return;
         }
-        if commands_list(&self.launcher.view().screen) {
+        // A command's list, or a row of root search whose actions Pane
+        // performs itself (a file, a computed answer: #150).
+        let screen = self.launcher.view().screen;
+        let own_row =
+            matches!(screen, Screen::Root { .. }) && self.launcher.item_actions().is_some();
+        if commands_list(&screen) || own_row {
             let invoke = invoke_keys(cx);
             let opened = self.launcher.item_actions().map(|actions| Opened {
                 target: actions.target.clone(),
@@ -813,6 +818,12 @@ impl LauncherWindow {
         match entry.kind {
             EntryKind::Item(index) | EntryKind::Entry(index) if entry.submenu => {
                 self.enter_submenu(target, index, window, cx);
+            }
+            // On root search, a row's first action is Enter's: the window
+            // copies a computed answer itself (#150), as Enter does.
+            EntryKind::Item(0) if matches!(self.launcher.view().screen, Screen::Root { .. }) => {
+                self.close_actions(window, cx);
+                self.press_primary_action(window, cx);
             }
             EntryKind::Item(index) => {
                 // The core runs it only on the item the panel opened for,
@@ -1460,6 +1471,13 @@ pub(crate) fn dimmer(theme: &Theme) -> Div {
 /// Whether `screen` is an open command's list, whose items have actions.
 pub(crate) fn commands_list(screen: &Screen) -> bool {
     matches!(screen, Screen::Command | Screen::CommandSearch { .. })
+}
+
+/// Whether the selected row of `screen` may have actions of its own, which
+/// Enter, the action chords and shortcuts run: an open command's list, or
+/// root search, whose files and computed answers have Pane's own (#150).
+pub(crate) fn item_list(screen: &Screen) -> bool {
+    commands_list(screen) || matches!(screen, Screen::Root { .. })
 }
 
 /// The invoke binding's keys as they are bound now: the primary action's.

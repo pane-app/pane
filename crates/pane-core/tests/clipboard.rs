@@ -12,7 +12,10 @@
 //! set, also while the package is disabled or uninstalled and while Pane is
 //! stopped; they can be deleted one at a time, the recent ones together,
 //! all of them (Clear, which keeps history on) or all of them with history
-//! turned off. The packages are the ones `cargo xtask guests` assembles in
+//! turned off. A kept item's actions are Paste (Enter), which pastes it
+//! into the application in front through a recording system, or copies it
+//! again with a HUD where Pane cannot paste yet, Copy and Delete
+//! (destructive, last). The packages are the ones `cargo xtask guests` assembles in
 //! `target/guests/packages`; the tests give Pane a fake system clipboard
 //! and install a copy whose manifest declares every system, so the same
 //! checks run everywhere (the real adapters are checked by
@@ -31,7 +34,8 @@ use pane_core::clipboard::{
     ClipboardSystem, Clock, Content, MAX_ITEMS, MAX_TEXT_BYTES, ManualClock, Markers, Observation,
     Sink, SystemClock, Ticket, Watch,
 };
-use pane_core::{Launcher, Runtime, Screen, Status};
+use pane_core::system::Clip;
+use pane_core::{Launcher, Runtime, Screen, Status, WindowPresence};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -39,9 +43,15 @@ use tempfile::TempDir;
 mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
+#[path = "support/system.rs"]
+mod system;
 
-use feedback::shown;
+use feedback::{RecordingWindow, shown};
 use rows::{select_title, titles};
+use system::{Done, RecordingSystem};
+
+/// What a kept item's row says last.
+const ENTER_PASTES: &str = "Enter pastes it";
 
 const MANAGE_ROW: &str = "Manage extensions…";
 const TURN_ON: &str = "Turn on clipboard history";
@@ -233,6 +243,8 @@ struct Pane {
     /// advances it. It starts a year ahead of the system's, which the
     /// launcher uses before it is given this one.
     clock: Arc<ManualClock>,
+    /// The system Paste pastes through; it cannot paste until told to.
+    system: Arc<RecordingSystem>,
 }
 
 impl Pane {
@@ -249,6 +261,7 @@ impl Pane {
             source,
             clipboard,
             clock: ManualClock::at(SystemClock.now() + 365 * 86_400_000),
+            system: Arc::new(RecordingSystem::default()),
         }
     }
 
@@ -265,6 +278,7 @@ impl Pane {
         )
         .with_clock(self.clock.clone())
         .with_clipboard(Arc::new(self.clipboard.clone()))
+        .with_system(self.system.clone())
     }
 
     /// Starts Pane with the package installed.
@@ -312,6 +326,9 @@ impl Pane {
 
     /// Opens the command from root search, showing its view as it is now.
     fn open(&self, launcher: &Launcher) {
+        // Shown again, as the user brings it back after an action closed
+        // it: a toast shows in the footer, not as a HUD.
+        launcher.set_window_presence(WindowPresence::Shown);
         launcher.back();
         launcher.back();
         block_on(launcher.set_query("clipboard"));
@@ -336,7 +353,7 @@ impl Pane {
             .filter(|row| {
                 row.subtitle
                     .as_deref()
-                    .is_some_and(|subtitle| subtitle.ends_with("Enter copies or deletes it"))
+                    .is_some_and(|subtitle| subtitle.ends_with(ENTER_PASTES))
             })
             .map(|row| row.title)
             .collect()
@@ -511,11 +528,11 @@ fn nothing_is_watched_or_kept_until_history_is_turned_on(fixture: &'static Fixtu
     );
     assert_eq!(
         subtitle(&launcher, "hello"),
-        "just now · from notepad.exe · Enter copies or deletes it"
+        "just now · from notepad.exe · Enter pastes it"
     );
     assert_eq!(
         subtitle(&launcher, "second line"),
-        "just now · 2 lines · Enter copies or deletes it"
+        "just now · 2 lines · Enter pastes it"
     );
     assert_eq!(
         subtitle(&launcher, PAUSE),
@@ -747,21 +764,90 @@ fn a_read_begun_before_clearing_is_not_kept_after_it(fixture: &'static Fixture) 
     assert_eq!(pane.listed(&launcher), ["after clearing"]);
 }
 
-fn enter_copies_an_item_again_and_it_moves_to_the_front(fixture: &'static Fixture) {
+/// The titles of the selected row's actions, and which are destructive.
+fn actions(launcher: &Launcher) -> Vec<(String, bool)> {
+    launcher
+        .item_actions()
+        .expect("the row has actions")
+        .actions
+        .into_iter()
+        .map(|action| (action.title, action.destructive))
+        .collect()
+}
+
+/// The titles of the HUDs `window` was asked to show, forgotten once read.
+fn huds(window: &RecordingWindow) -> Vec<String> {
+    let huds = window.huds().into_iter().map(|hud| hud.title).collect();
+    window.take();
+    huds
+}
+
+fn enter_pastes_an_item_or_copies_it_where_paste_is_not_available(fixture: &'static Fixture) {
     let pane = Pane::new(fixture);
     let launcher = pane.installed();
+    let window = RecordingWindow::attach(&launcher);
     pane.turn_on(&launcher);
     pane.clipboard.copy("first", None);
     pane.clipboard.copy("second", None);
     assert_eq!(pane.listed(&launcher), ["second", "first"]);
 
-    // Enter opens the item's choice, which copies it again unless
-    // deleting is chosen.
+    // Paste first, Copy, then Delete, destructive and last; no form.
+    select_title(&launcher, "first");
     assert_eq!(
-        submit(&launcher, "first", &[]),
-        result("Copied to the clipboard")
+        actions(&launcher),
+        [
+            ("Paste".to_owned(), false),
+            ("Copy".to_owned(), false),
+            ("Delete".to_owned(), true),
+        ]
     );
+    assert_eq!(launcher.selected_action().label, "Paste");
+
+    // Where Pane cannot paste yet, Enter copies it again and says so.
+    window.take();
+    block_on(launcher.activate_selected());
+    assert!(launcher.view().form().is_none(), "no form opens");
     assert_eq!(pane.clipboard.written(), ["first"]);
+    assert_eq!(huds(&window), ["Copied — paste is not available here yet"]);
+    assert!(pane.system.take().is_empty(), "nothing was pasted");
+    assert_eq!(pane.listed(&launcher), ["first", "second"]);
+    assert_eq!(pane.kept_on_disk(), ["first", "second"]);
+
+    // Where it can, Enter pastes it into the application in front, which
+    // closes the window, and copies nothing the history keeps.
+    pane.system.support_paste();
+    select_title(&launcher, "second");
+    window.take();
+    block_on(launcher.activate_selected());
+    assert_eq!(
+        pane.system.take(),
+        [
+            Done::Copied {
+                clip: Clip::Text("second".into()),
+                concealed: true,
+            },
+            Done::Pasted(Some(Clip::Text("second".into()))),
+        ]
+    );
+    assert!(window.hides() > 0, "the window closed");
+    assert_eq!(pane.clipboard.written(), ["first"]);
+    assert_eq!(pane.listed(&launcher), ["first", "second"]);
+}
+
+fn copy_puts_an_item_on_the_clipboard_again_and_closes_the_window(fixture: &'static Fixture) {
+    let pane = Pane::new(fixture);
+    let launcher = pane.installed();
+    let window = RecordingWindow::attach(&launcher);
+    pane.turn_on(&launcher);
+    pane.clipboard.copy("first", None);
+    pane.clipboard.copy("second", None);
+    pane.open(&launcher);
+    select_title(&launcher, "first");
+    window.take();
+    block_on(launcher.run_selected_action(1));
+    assert_eq!(pane.clipboard.written(), ["first"]);
+    assert_eq!(huds(&window), ["Copied to Clipboard"]);
+    // Copied again, it moves to the front.
     assert_eq!(pane.listed(&launcher), ["first", "second"]);
     assert_eq!(pane.kept_on_disk(), ["first", "second"]);
 }
@@ -1031,24 +1117,16 @@ fn an_item_can_be_deleted_on_its_own(fixture: &'static Fixture) {
     pane.clipboard.copy("delete me", None);
     pane.clipboard.copy("keep me too", None);
     let reading = pane.clipboard.begin_read().unwrap();
-    assert_eq!(
-        pane.submit(&launcher, "delete me", &[("action", "delete")]),
-        result("Deleted the kept item")
-    );
+    pane.open(&launcher);
+    select_title(&launcher, "delete me");
+    // Delete is the item's third action, destructive and last.
+    block_on(launcher.run_selected_action(2));
+    assert_eq!(shown(&launcher), result("Deleted the kept item"));
     // A read begun before the deletion does not bring anything back.
     reading.finish("delete me");
     assert_eq!(pane.kept_on_disk(), ["keep me too", "keep me"]);
-    // Its row, until the command is opened again, deletes nothing more.
-    launcher.back();
-    assert_eq!(
-        submit(&launcher, "delete me", &[("action", "delete")]),
-        Status::Error("That item is no longer kept".into())
-    );
-    launcher.back();
-    assert_eq!(
-        submit(&launcher, "delete me", &[]),
-        Status::Error("That item is no longer kept".into())
-    );
+    // The list is drawn again without it.
+    assert!(!titles(&launcher).contains(&"delete me".to_owned()));
     assert_eq!(pane.listed(&launcher), ["keep me too", "keep me"]);
     // Deleting never touches the system's clipboard.
     assert!(pane.clipboard.written().is_empty());
@@ -1161,7 +1239,8 @@ contract!(
     disabling_stops_the_watch_and_a_restart_watches_only_while_enabled,
     a_slow_read_never_delays_stopping_and_is_not_kept_after_it,
     a_read_begun_before_clearing_is_not_kept_after_it,
-    enter_copies_an_item_again_and_it_moves_to_the_front,
+    enter_pastes_an_item_or_copies_it_where_paste_is_not_available,
+    copy_puts_an_item_on_the_clipboard_again_and_closes_the_window,
     at_most_the_newest_items_are_kept_and_clear_deletes_them_all,
     uninstalling_stops_the_watch_and_deletes_the_history_if_asked,
     uninstalling_and_keeping_the_history_keeps_it_for_a_reinstall,

@@ -15,10 +15,13 @@
 //!   Text, the kinds Pane keeps.
 //! - Up and Down move the selection and keep it in view; a click selects
 //!   (it never copies).
-//! - Enter, or the footer's Copy, copies the selected record again;
-//!   Ctrl+D (as Explorer deletes), or the footer's Delete, deletes it —
-//!   never Delete alone, which edits the search. Both are the
-//!   history's existing operations, which the core revalidates first.
+//! - Enter, or the footer's Paste, pastes the selected record into the
+//!   application that was in front, closing the window (#150); where Pane
+//!   cannot paste yet, it copies the record instead and a HUD says so.
+//!   Ctrl+Enter, or the footer's Copy, copies it again; Ctrl+D (as
+//!   Explorer deletes), or the footer's Delete, deletes it — never Delete
+//!   alone, which edits the search. Copy and Delete are the history's
+//!   existing operations; the core revalidates all three first.
 //! - The header's button turns capture on, pauses or resumes it, and says
 //!   which is in force; the caption under it says what is kept, as it is.
 //! - Ctrl+K (the Open actions binding), or the footer's Manage, routes to
@@ -55,7 +58,7 @@ use crate::ui::shell::{self, SectionLabel};
 use crate::ui::split_view::{self, ClipRow};
 use crate::{Back, Confirm, OpenActions, SelectNext, SelectPrevious};
 
-actions!(clipboard_history, [DeleteRecord]);
+actions!(clipboard_history, [DeleteRecord, CopyRecord]);
 
 /// The split view's key context, under the launcher's.
 pub(crate) const CONTEXT: &str = "ClipboardHistory";
@@ -66,7 +69,8 @@ pub(crate) const DELETE_BINDING: &str = "ctrl-d";
 
 /// Registers the view's keys: the previous and next result bindings in
 /// its search field, above the field's own caret keys (as root search's
-/// field has them), and Ctrl+D in the view.
+/// field has them), and Ctrl+D and the secondary action's chord (Copy,
+/// Ctrl+Enter) in the view.
 pub(crate) fn bind_keys(cx: &mut App, _: &TextEditingKeys, keyboard: &Keyboard) {
     let field = format!("{CONTEXT} > {DEFAULT_INPUT_CONTEXT}");
     cx.bind_keys([
@@ -81,7 +85,19 @@ pub(crate) fn bind_keys(cx: &mut App, _: &TextEditingKeys, keyboard: &Keyboard) 
             Some(&field),
         ),
         KeyBinding::new(DELETE_BINDING, DeleteRecord, Some(CONTEXT)),
+        KeyBinding::new(&copy_binding().id(), CopyRecord, Some(CONTEXT)),
     ]);
+}
+
+/// The keys that copy the selected record: the secondary action's chord,
+/// as an item's second action has it (Ctrl+Enter).
+fn copy_binding() -> Binding {
+    pane_core::keyboard::action_key(1).expect("the secondary action has a chord")
+}
+
+/// The keys [`copy_binding`] shows as.
+pub(crate) fn copy_keys() -> KeySequence {
+    crate::keyboard::binding_keys(&copy_binding())
 }
 
 /// The keys [`DELETE_BINDING`] shows as.
@@ -333,7 +349,11 @@ impl LauncherWindow {
         }
     }
 
-    fn clipboard_confirm(&mut self, _: &Confirm, _: &mut Window, cx: &mut Context<Self>) {
+    fn clipboard_confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
+        self.paste_selected_record(window, cx);
+    }
+
+    fn clipboard_copy(&mut self, _: &CopyRecord, _: &mut Window, cx: &mut Context<Self>) {
         self.copy_selected_record(cx);
     }
 
@@ -376,6 +396,18 @@ impl LauncherWindow {
             .id
             .clone();
         Some((view, id))
+    }
+
+    /// Pastes the selected record into the application that was in front,
+    /// through the core's revalidated operation, which closes the window
+    /// (or copies it, saying so in a HUD, where Pane cannot paste yet);
+    /// nothing with none selected.
+    pub(crate) fn paste_selected_record(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((view, id)) = self.selected_record() {
+            let pending = self.launcher.paste_clipboard_record(&view, &id);
+            self.note_outcome(cx);
+            self.show_until_done(pending, window, cx);
+        }
     }
 
     /// Copies the selected record again, through the core's revalidated
@@ -626,21 +658,40 @@ impl LauncherWindow {
             crate::keyboard::binding_keys(keyboard.binding(KeyboardAction::InvokeSelectedAction));
         let manage_keys =
             crate::keyboard::binding_keys(keyboard.binding(KeyboardAction::OpenActions));
-        // Copy (Enter) and Delete act on the selected record: with none,
-        // there is no primary action at all.
+        // Paste (Enter), Copy and Delete act on the selected record: with
+        // none, there is no primary action at all.
         let copyable = history.copy_unavailable.is_none();
-        let copy = selected.map(|_| {
+        let paste = selected.map(|_| {
             footer::footer_button(
-                "clipboard-copy",
-                "Copy",
+                "clipboard-paste",
+                "Paste",
                 &invoke,
                 CapStyle::Accent,
                 ButtonWash::Hover,
                 &theme,
             )
             .role(Role::Button)
-            .aria_label("Copy")
+            .aria_label("Paste")
             .aria_keyshortcuts(invoke.name())
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                this.paste_selected_record(window, cx);
+            }))
+            .into_any_element()
+        });
+        let copy_caps = copy_keys();
+        let copy = selected.map(|_| {
+            footer::footer_button(
+                "clipboard-copy",
+                "Copy",
+                &copy_caps,
+                CapStyle::Regular,
+                ButtonWash::Hover,
+                &theme,
+            )
+            .role(Role::Button)
+            .aria_label("Copy")
+            .aria_keyshortcuts(copy_caps.name())
             // Where this Pane cannot write the clipboard the button is
             // dimmed and inert, as the launcher's own unavailable primary
             // action is; Enter still asks, and the core says why not.
@@ -691,7 +742,12 @@ impl LauncherWindow {
             this.open_clipboard_controls(window, cx);
         }))
         .into_any_element();
-        let buttons = split_view::footer_buttons(copy, delete, manage, &theme);
+        let buttons = split_view::footer_buttons(
+            paste,
+            copy.into_iter().chain(delete).collect(),
+            manage,
+            &theme,
+        );
         let footer = split_view::footer(lead, buttons, &theme)
             .id("status")
             .role(Role::Status)
@@ -709,7 +765,8 @@ impl LauncherWindow {
             &theme,
         )
         .key_context(CONTEXT)
-        .on_action(cx.listener(Self::clipboard_delete));
+        .on_action(cx.listener(Self::clipboard_delete))
+        .on_action(cx.listener(Self::clipboard_copy));
         let root = div()
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(Self::clipboard_next))

@@ -16,6 +16,7 @@ mod compact_pins;
 mod confirmations;
 mod develop;
 mod feedback;
+mod file_actions;
 mod hotkeys;
 mod icons;
 mod install;

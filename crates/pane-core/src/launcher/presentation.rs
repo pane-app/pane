@@ -268,7 +268,7 @@ pub(super) fn kind(entry: &Entry) -> Option<RowKind> {
         }) => Some(RowKind::Command),
         Entry::OpenApplication { .. } => Some(RowKind::Application),
         Entry::OpenTarget { .. } => Some(RowKind::Link),
-        Entry::OpenFile { .. } => Some(RowKind::File),
+        Entry::File(_) => Some(RowKind::File),
         Entry::OpenUrl(_) => Some(RowKind::Link),
         // Pane's own rows are its commands.
         Entry::InstallFromFolder

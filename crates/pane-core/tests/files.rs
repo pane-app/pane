@@ -3,7 +3,8 @@
 //! host's grant, checked and recorded in Pane's data), the files root search
 //! finds in it, shown by the host's own names, opening one after the host
 //! checks it again (a recording fake stands in for the system's handler, so
-//! nothing opens), the bounded scan policy on controlled folder fixtures,
+//! nothing opens; a program or script is revealed instead, by a recording
+//! system), the bounded scan policy on controlled folder fixtures,
 //! and the listing: made once per visit of root search on the package's
 //! worker, never holding up other results, and stopped when root search is
 //! left, the grant changes or the extension is disabled (with a fake folder
@@ -24,8 +25,15 @@ use tempfile::TempDir;
 
 #[path = "support/rows.rs"]
 mod rows;
+#[path = "support/system.rs"]
+mod system;
 
 use rows::titles;
+use system::{Done, RecordingSystem};
+
+/// The Files default extension's command, which searches as the user types
+/// and computes root search's file results.
+const SEARCH_FILES: &str = "Search Files";
 
 fn built(path: &str) -> PathBuf {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -72,6 +80,8 @@ struct Pane {
     data: TempDir,
     sources: TempDir,
     opener: FakeOpener,
+    /// Reveals what Enter does not open: a program or script.
+    system: Arc<RecordingSystem>,
     folders: Option<Arc<dyn Folders>>,
     applications: Option<Arc<dyn Applications>>,
 }
@@ -82,6 +92,7 @@ impl Pane {
             data: tempfile::tempdir().unwrap(),
             sources: tempfile::tempdir().unwrap(),
             opener: FakeOpener::default(),
+            system: Arc::new(RecordingSystem::default()),
             folders: None,
             applications: None,
         }
@@ -109,7 +120,8 @@ impl Pane {
             runtime.set_applications(applications.clone());
         }
         let launcher = Launcher::with_packages(Ok(runtime.clone()), vec![], self.extensions())
-            .with_link_opener(Arc::new(self.opener.clone()));
+            .with_link_opener(Arc::new(self.opener.clone()))
+            .with_system(self.system.clone());
         (launcher, runtime)
     }
 
@@ -145,8 +157,10 @@ fn identity(launcher: &Launcher, title: &str) -> PackageIdentity {
         .identity
 }
 
-/// Opens the command titled `title` from root search.
+/// Opens the command titled `title` from root search: a command's list,
+/// or the field of one that searches as the user types (Search Files).
 fn open_command(launcher: &Launcher, title: &str) {
+    launcher.back();
     launcher.back();
     search(launcher, title);
     let index = titles(launcher)
@@ -155,7 +169,14 @@ fn open_command(launcher: &Launcher, title: &str) {
         .unwrap_or_else(|| panic!("{title} is not listed: {:?}", titles(launcher)));
     launcher.select(index);
     block_on(launcher.activate_selected());
-    assert_eq!(launcher.view().screen, Screen::Command);
+    assert!(
+        matches!(
+            launcher.view().screen,
+            Screen::Command | Screen::CommandSearch { .. }
+        ),
+        "{:?}",
+        launcher.view().screen
+    );
 }
 
 /// Grants the package of the command titled `title` the folder `folder`
@@ -467,7 +488,7 @@ fn a_granted_folder_is_searched_and_a_found_file_opened() {
     search(&launcher, "plan");
     assert_eq!(titles(&launcher), Vec::<String>::new());
 
-    let status = grant(&launcher, "Files", &fixture.root);
+    let status = grant(&launcher, SEARCH_FILES, &fixture.root);
     assert_eq!(
         status,
         Status::Result("Files may now list “Pane files — ñ”".into())
@@ -507,7 +528,7 @@ fn the_grant_is_pane_s_own_record_not_the_extension_s_data() {
     let fixture = Fixture::new();
     let pane = Pane::new();
     let (launcher, _runtime) = pane.with("files");
-    grant(&launcher, "Files", &fixture.root);
+    grant(&launcher, SEARCH_FILES, &fixture.root);
 
     let record: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(pane.extensions().join("folders.json")).unwrap())
@@ -527,7 +548,7 @@ fn the_grant_is_pane_s_own_record_not_the_extension_s_data() {
     }
 
     // A refused folder changes nothing.
-    let status = grant(&launcher, "Files", &fixture.root.join(".git"));
+    let status = grant(&launcher, SEARCH_FILES, &fixture.root.join(".git"));
     assert!(
         matches!(&status, Status::Error(message)
             if message.starts_with("Pane did not grant the folder:") && message.contains("hidden")),
@@ -542,8 +563,8 @@ fn stopping_to_share_the_folder_removes_the_files() {
     let fixture = Fixture::new();
     let pane = Pane::new();
     let (launcher, _runtime) = pane.with("files");
-    grant(&launcher, "Files", &fixture.root);
-    open_command(&launcher, "Files");
+    grant(&launcher, SEARCH_FILES, &fixture.root);
+    open_command(&launcher, SEARCH_FILES);
     assert_eq!(titles(&launcher)[1], "Stop sharing the folder with Files");
     launcher.select(1);
     block_on(launcher.activate_selected());
@@ -616,7 +637,7 @@ fn a_file_is_checked_again_when_it_is_opened() {
         fs::write(&script, "#!/bin/sh\n").unwrap();
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
     }
-    grant(&launcher, "Files", &fixture.root);
+    grant(&launcher, SEARCH_FILES, &fixture.root);
     let open = |query: &str, title: &str| {
         search(&launcher, query);
         let index = titles(&launcher)
@@ -628,21 +649,28 @@ fn a_file_is_checked_again_when_it_is_opened() {
         launcher.view().status
     };
 
-    // Programs and scripts are found, but not opened.
+    // Programs and scripts are found, but Enter reveals them rather than
+    // open them (only their Run action runs them: `file_actions.rs`).
+    let manager = if cfg!(target_os = "windows") {
+        "Explorer"
+    } else if cfg!(target_os = "macos") {
+        "Finder"
+    } else {
+        "File Manager"
+    };
     assert_eq!(
         open("run plan", "run plan.bat"),
-        Status::Error(
-            "Could not open run plan.bat: it is a program or script, which opening would run"
-                .into()
-        )
+        Status::Result(format!("Revealed run plan.bat in {manager}"))
     );
+    assert!(matches!(pane.system.take().as_slice(), [Done::Revealed(_)]));
     #[cfg(unix)]
-    assert_eq!(
-        open("plan script", "plan script"),
-        Status::Error(
-            "Could not open plan script: it is a program or script, which opening would run".into()
-        )
-    );
+    {
+        assert_eq!(
+            open("plan script", "plan script"),
+            Status::Result(format!("Revealed plan script in {manager}"))
+        );
+        assert!(matches!(pane.system.take().as_slice(), [Done::Revealed(_)]));
+    }
 
     // Removed since it was found.
     search(&launcher, "todo");
@@ -691,12 +719,12 @@ fn a_folder_gone_since_it_was_granted_is_explained_in_root_search() {
     let fixture = Fixture::new();
     let pane = Pane::new();
     let (launcher, _runtime) = pane.with("files");
-    grant(&launcher, "Files", &fixture.root);
+    grant(&launcher, SEARCH_FILES, &fixture.root);
     fs::remove_dir_all(&fixture.root).unwrap();
 
     search(&launcher, "plan");
     let view = launcher.view();
-    assert_eq!(titles(&launcher), ["Files"]);
+    assert_eq!(titles(&launcher), [SEARCH_FILES]);
     let subtitle = view.rows[0].subtitle.clone().unwrap();
     assert!(
         subtitle.starts_with("Could not answer:") && subtitle.ends_with("does not exist"),
@@ -709,9 +737,9 @@ fn files_are_listed_after_the_results_found_by_title() {
     let fixture = Fixture::new();
     let pane = Pane::new();
     let (launcher, _runtime) = pane.with("files");
-    grant(&launcher, "Files", &fixture.root);
+    grant(&launcher, SEARCH_FILES, &fixture.root);
     search(&launcher, "files");
-    assert_eq!(titles(&launcher), ["Files", "files index.txt"]);
+    assert_eq!(titles(&launcher), [SEARCH_FILES, "files index.txt"]);
     assert_eq!(launcher.view().selected, Some(0));
 }
 
@@ -720,7 +748,7 @@ fn the_grant_is_kept_across_a_restart_disabling_hides_it_and_uninstalling_forget
     let fixture = Fixture::new();
     let pane = Pane::new();
     let (launcher, _runtime) = pane.with("files");
-    grant(&launcher, "Files", &fixture.root);
+    grant(&launcher, SEARCH_FILES, &fixture.root);
     drop(launcher);
 
     let (launcher, _runtime) = pane.start();

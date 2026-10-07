@@ -1032,7 +1032,10 @@ fn a_crash_of_the_runtime_ends_a_search_with_an_error_not_its_results() {
 }
 
 #[test]
-fn a_command_cannot_both_search_inside_itself_and_answer_root_search() {
+fn a_command_that_searches_inside_itself_and_answers_root_search_needs_both_exports() {
+    // A command may do both (Search Files does, #150), as long as its
+    // component exports both interfaces: the search sample exports no root
+    // results, so saying it computes them is refused for that alone.
     let sources = tempfile::tempdir().unwrap();
     let data = tempfile::tempdir().unwrap();
     let folder = package(RUST.package, &sources.path().join("both"));
@@ -1048,12 +1051,10 @@ fn a_command_cannot_both_search_inside_itself_and_answer_root_search() {
         panic!("installed: {:?}", launcher.view().status);
     };
     assert!(
-        message.contains(
-            "command `packages` sets both `search` and `rootResults`: a command that \
-             searches inside itself is never asked by root search"
-        ),
+        message.contains("its manifest says it computes root results, but it does not export"),
         "{message}"
     );
+    assert!(!message.contains("sets both"), "{message}");
 }
 
 #[test]

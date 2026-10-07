@@ -486,6 +486,15 @@ export interface SearchResult {
   id: string;
   title: string;
   subtitle?: string;
+  /**
+   * A file of the folder granted to the command's package, by the `id`
+   * `listFolder()` gave it, when the result is that file (as Search Files'
+   * are): Pane lists it with the file's own name and folder, and gives it
+   * Pane's own file actions (Open, Reveal, Open With…, Copy Path, Copy
+   * File, Move to Recycle Bin; for a program, Enter reveals it and only
+   * Run runs it), which Pane performs without calling the command.
+   */
+  file?: string;
 }
 
 /**
