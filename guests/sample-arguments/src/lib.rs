@@ -4,23 +4,26 @@
 //! optional argument left empty is absent.
 //!
 //! - "Greet" has three arguments: a required text (`name`), an optional
-//!   password (`secret`) and a dropdown (`tone`). It answers which values it
-//!   was given (only the length of the secret, which it never shows or
-//!   keeps), where it was launched from and the fallback text, counting its
-//!   runs. Its first argument is text and the others are optional, so it
-//!   may be a fallback: text sent to it fills `name`.
+//!   password (`secret`) and a dropdown (`tone`). It shows in a toast which
+//!   values it was given (only the length of the secret, which it never
+//!   shows or keeps), where it was launched from and the fallback text,
+//!   counting its runs. Its first argument is text and the others are
+//!   optional, so it may be a fallback: text sent to it fills `name`.
 //! - "Stamp" has one required text argument (`label`), for launches with
-//!   no fields of their own (a global hotkey, a quick slot). It answers the
-//!   label and keeps it, with how it was launched, for "Relay last".
+//!   no fields of their own (a global hotkey, a quick slot). It shows the
+//!   label in a toast and keeps it, with how it was launched, for "Relay
+//!   last".
 //! - "Relay" launches the command of this package its text names, with the
 //!   arguments it lists: `stamp label=x`, or `background stamp label=x` in
-//!   the background. Sent `last`, it answers what "Stamp" last kept.
+//!   the background. Sent `last`, it shows what "Stamp" last kept.
 //!
-//! The JavaScript and TypeScript arguments samples answer the same.
+//! A command launched in the background does its work but shows no toast.
+//! The JavaScript and TypeScript arguments samples show the same.
 #![no_std]
 
 use pane_guest::alloc::{format, string::String, vec::Vec};
 use pane_guest::commands::{self, ArgumentValue, CommandRef, launch_type_name, source_name};
+use pane_guest::feedback::{Toast, show_toast};
 use pane_guest::{Command, LaunchRecord, LaunchType, NoCustomView, settings};
 
 /// The settings key holding how many times "Greet" ran.
@@ -31,7 +34,7 @@ const STAMP: &str = "stamp";
 struct Arguments;
 pane_guest::export!(Arguments);
 
-/// What "Greet" answers for `launch`, counting the run.
+/// What "Greet" shows for `launch`, counting the run.
 fn greet(launch: &LaunchRecord) -> Result<String, String> {
     let runs = settings::get(RUNS)?
         .and_then(|runs| runs.parse::<u64>().ok())
@@ -61,7 +64,7 @@ fn greet(launch: &LaunchRecord) -> Result<String, String> {
     ))
 }
 
-/// What "Stamp" answers for `launch`, keeping what it stamped.
+/// What "Stamp" shows for `launch`, keeping what it stamped.
 fn stamp(launch: &LaunchRecord) -> Result<String, String> {
     let label = launch.argument("label").ok_or("Stamp has no label")?;
     let source = source_name(launch.source);
@@ -71,7 +74,8 @@ fn stamp(launch: &LaunchRecord) -> Result<String, String> {
 }
 
 /// Launches the command `text` names with the arguments it lists, as
-/// "Relay" does, or answers what "Stamp" last kept.
+/// "Relay" does, answering what it shows, or answers what "Stamp" last
+/// kept.
 fn relay(text: Option<&str>) -> Result<String, String> {
     let text = text.ok_or(
         "Relay needs what to do: `last`, or a command and its arguments, such as \
@@ -112,12 +116,17 @@ fn relay(text: Option<&str>) -> Result<String, String> {
 impl Command for Arguments {
     type CustomView = NoCustomView;
 
-    async fn run(command: String, launch: LaunchRecord) -> Result<String, String> {
-        match command.as_str() {
+    async fn run(command: String, launch: LaunchRecord) -> Result<(), String> {
+        let done = match command.as_str() {
             "greet" => greet(&launch),
             "stamp" => stamp(&launch),
             "relay" => relay(launch.fallback_text.as_deref()),
             other => Err(format!("unknown command: {other}")),
+        }?;
+        // Nobody is there to see a background launch's toast.
+        if launch.launch_type != LaunchType::Background {
+            show_toast(Toast::success(done));
         }
+        Ok(())
     }
 }

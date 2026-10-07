@@ -9,8 +9,12 @@
 // as milliseconds here (as a `Date` in the JavaScript sample). The web
 // images come from the server the `imageServer` setting names, and the
 // system icons are of the file and the application the `iconFile` and
-// `iconApplication` settings name, as in the Rust sample (#142).
-import type { Accessory, Command, CustomView, Item, List } from "@pane/extension";
+// `iconApplication` settings name, as in the Rust sample (#142). "Built-in
+// icon" has two more actions with icons in the Actions panel, "Copy Name"
+// and "Open Image", and every row's action and each of these tells the
+// user "Chose <title>" in a toast.
+import type { Accessory, Action, Command, CustomView, Icon, Item, List } from "@pane/extension";
+import { showToast } from "@pane/extension/feedback";
 import { avatar, favicon, fileIcon, progressRing } from "@pane/extension/icons";
 import { get } from "pane:extension/settings@0.1.0";
 
@@ -34,9 +38,22 @@ function setting(key: string, fallback: string): string {
   }
 }
 
-/** The row `id` titled `title`, whose action answers "Chose <title>". */
+/** Tells the user they chose `title`, in a toast: "Chose <title>". */
+async function chose(title: string): Promise<void> {
+  showToast({ title: `Chose ${title}` });
+}
+
+/** The row `id` titled `title`, whose action tells the user "Chose <title>". */
 function row(id: string, title: string, more: Partial<Item>): Item {
-  return { id, title, onAction: async () => `Chose ${title}`, ...more };
+  return { id, title, onAction: () => chose(title), ...more };
+}
+
+/**
+ * The action titled `title` with `icon` beside it in the Actions panel,
+ * which tells the user "Chose <title>".
+ */
+function action(title: string, icon: Icon): Action {
+  return { title, icon, onAction: () => chose(title) };
 }
 
 const crowded: Accessory[] = ["1", "2", "3", "4", "5"].map((text) => ({ text }));
@@ -53,6 +70,10 @@ export const command: Command = {
           icon: { builtin: "star" },
           titleTooltip: "A built-in icon from the whole reicon set",
           accessories: [{ text: "3", tooltip: "Unread" }],
+          actions: [
+            action("Copy Name", { builtin: "copy" }),
+            action("Open Image", { url: slow, fallback: { builtin: "clock", tint: "secondary" } }),
+          ],
         }),
         row("packaged", "Packaged image", {
           subtitle: "Its @light and @dark variants follow the theme",

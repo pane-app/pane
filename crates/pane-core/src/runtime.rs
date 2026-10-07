@@ -77,11 +77,11 @@ pub(crate) use supervisor::CRASH_WINDOW;
 use supervisor::{NotSent, Shared};
 pub use supervisor::{RuntimeFailure, RuntimeStatus};
 pub(crate) use tree::read_shortcut;
+pub use tree::{Accessory, AccessoryContent, ItemLook, MAX_ACCESSORIES};
 pub use tree::{
     Action, ActionKind, ActionStyle, ActionSubmenu, Answer, Item, SubmenuEntries, TREE_VERSION,
     View,
 };
-pub use tree::{Accessory, AccessoryContent, ItemLook, MAX_ACCESSORIES};
 
 pub(crate) mod bindings {
     wasmtime::component::bindgen!({

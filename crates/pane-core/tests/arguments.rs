@@ -10,7 +10,9 @@
 //! passes that are not the target's; text sent through an alias or as a
 //! fallback fills the first text argument; the last dropdown value is
 //! remembered across a restart; and a password's value is in none of
-//! Pane's records. The manifest's mistakes are refused at install.
+//! Pane's records. The manifest's mistakes are refused at install. The
+//! sample tells what it ran with in a toast; the form's refusals are Pane's
+//! own, in the status line.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -25,9 +27,12 @@ use pane_core::{
 };
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use rows::{manage, select_title, titles};
 
 /// One language's arguments sample package.
@@ -62,7 +67,7 @@ const MISSING: &str = "Enter a value to run the command";
 /// A password typed into the form, which no record of Pane's may hold.
 const SECRET: &str = "hunter2-Zq9-never-kept";
 
-/// An error the sample answered with, as Pane shows it.
+/// An error the sample answered with, as Pane shows it (a failure toast).
 fn answered_error(message: &str) -> Status {
     Status::Error(format!("The extension reported an error: {message}"))
 }
@@ -175,21 +180,23 @@ impl Pane {
     }
 
     /// Types `query` in root search, chooses the row titled `title` and
-    /// waits for what it does; the status line.
+    /// waits for what it does; what it showed: its toast, or the status
+    /// line.
     fn run(&self, query: &str, title: &str) -> Status {
         self.search(query);
         select_title(&self.launcher, title);
         block_on(self.launcher.activate_selected());
-        self.launcher.view().status
+        shown(&self.launcher)
     }
 
     /// Types `query` in root search, which the alias it starts with makes
-    /// select its command's row, and presses Enter; the status line.
+    /// select its command's row, and presses Enter; what it showed: its
+    /// toast, or the status line.
     fn send(&self, query: &str) -> Status {
         self.search(query);
         assert_eq!(self.launcher.view().selected, Some(0), "{query}");
         block_on(self.launcher.activate_selected());
-        self.launcher.view().status
+        shown(&self.launcher)
     }
 
     /// The argument form on screen, titled `title`.
@@ -200,13 +207,14 @@ impl Pane {
     }
 
     /// Sets the form's fields as `values` says, then submits it and waits
-    /// for what it runs; the status line.
+    /// for what it runs; what was shown: the command's toast, or the status
+    /// line (the form's refusal).
     fn submit(&self, values: &[(&str, &str)]) -> Status {
         for (field, value) in values {
             self.launcher.set_field_value(field, value);
         }
         block_on(self.launcher.submit_form());
-        self.launcher.view().status
+        shown(&self.launcher)
     }
 
     /// Gives the command with manifest id `command` of the package from
@@ -505,7 +513,7 @@ fn alias_and_fallback_text_fill_the_first_text_argument(fixture: &Fixture) {
     launcher.move_selection(1);
     block_on(launcher.activate_selected());
     assert_eq!(
-        launcher.view().status,
+        shown(launcher),
         Status::Result(
             "Greet run 2 from fallback: name=zqx  words; fallback text: zqx  words".into()
         )

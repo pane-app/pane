@@ -22,7 +22,7 @@ use tempfile::TempDir;
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::settle;
+use settle::{settle, settle_shown};
 
 #[path = "support/packages.rs"]
 mod packages;
@@ -207,7 +207,12 @@ fn escape_leaves_the_setup_screen_and_launches_nothing(cx: &mut TestAppContext) 
             query: "report preferences".into()
         }
     );
-    assert_eq!(view.status, Status::Idle, "nothing ran");
+    // "Report preferences" would have shown a toast.
+    assert_eq!(
+        settle_shown(&opened.window, opened.cx),
+        Status::Idle,
+        "nothing ran"
+    );
     assert!(opened.cx.debug_bounds("setup").is_none());
 }
 

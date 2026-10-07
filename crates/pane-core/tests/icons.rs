@@ -10,8 +10,10 @@
 //! `@light` and `@dark` variants, a pair, tinted, masked, failing with a
 //! fallback, the SDKs' avatar and progress ring), tooltips and at most
 //! three accessories, a date shown relative to the launcher's clock and
-//! kept current, more accessories reported while the package is developed.
-//! The drawing is the window's (`crates/pane/tests/icons.rs`).
+//! kept current, more accessories reported while the package is developed;
+//! and an item's actions with their icons, as the Actions panel lists them.
+//! What an action does is told in a toast (#141). The drawing is the
+//! window's (`crates/pane/tests/icons.rs`).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -29,6 +31,8 @@ use pane_core::{
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
 
@@ -37,6 +41,7 @@ mod guests;
 #[path = "support/npm_registry.rs"]
 mod npm_registry;
 
+use feedback::shown;
 use npm_registry::{Registry, greeter_files, pack};
 use rows::{select_title, titles};
 
@@ -546,6 +551,58 @@ fn the_rows_draw_their_icons_accessories_and_tooltips() {
 }
 
 #[test]
+fn an_items_actions_show_their_icons_in_the_actions_panel() {
+    for fixture in ALL {
+        let pane = Pane::new();
+        pane.install(fixture.package, fixture.title);
+        pane.open(fixture.command);
+        select_title(&pane.launcher, "Built-in icon");
+        let actions = pane.launcher.item_actions().expect("its actions");
+        assert_eq!(
+            actions
+                .actions
+                .iter()
+                .map(|action| action.title.as_str())
+                .collect::<Vec<_>>(),
+            ["Run item", "Copy Name", "Open Image"],
+            "{}",
+            fixture.title
+        );
+        // Its own action has no icon: the panel draws Pane's glyph.
+        assert_eq!(actions.actions[0].icon, None);
+        let copy = actions.actions[1].icon.as_ref().expect("an icon");
+        assert_eq!((&copy.source, copy.tint), (&builtin("copy"), None));
+        assert!(copy.is_decorative());
+        // A web image shows its fallback until it arrives
+        // (`web_icons.rs`).
+        let image = actions.actions[2].icon.as_ref().expect("an icon");
+        assert_eq!(
+            (&image.source, image.tint),
+            (
+                &builtin("clock"),
+                Some(Tint::Same(Color::Tone(Tone::Secondary)))
+            )
+        );
+
+        // Choosing one tells the user what it did in a toast, and the list
+        // drawn again keeps the icons.
+        block_on(pane.launcher.run_item_action(&actions.target, 1));
+        assert_eq!(
+            shown(&pane.launcher),
+            Status::Result("Chose Copy Name".into())
+        );
+        let again = pane.launcher.item_actions().expect("its actions");
+        assert_eq!(again.actions[1].icon, actions.actions[1].icon);
+
+        // A row whose action has no icon of its own.
+        select_title(&pane.launcher, "Tinted icon");
+        let actions = pane.launcher.item_actions().expect("its action");
+        assert_eq!(actions.actions.len(), 1);
+        assert_eq!(actions.actions[0].icon, None);
+    }
+}
+
+#[test]
 fn a_date_stays_current_while_the_list_is_open() {
     for fixture in ALL {
         let pane = Pane::new();
@@ -565,7 +622,7 @@ fn a_date_stays_current_while_the_list_is_open() {
         select_title(&pane.launcher, "Packaged image");
         block_on(pane.launcher.activate_selected());
         assert_eq!(
-            pane.launcher.view().status,
+            shown(&pane.launcher),
             Status::Result("Chose Packaged image".into())
         );
         assert_eq!(pane.row("Packaged image").accessories[0].text, "3d");
@@ -592,11 +649,12 @@ fn development_mode_reports_rows_with_more_accessories_than_drawn() {
         assert!(report.contains("a row shows at most 3"), "{report}");
         assert!(report.contains("“Crowded row” has 5"), "{report}");
 
-        // The same list drawn again after an action is not reported again.
+        // The same list drawn again after an action is not reported again:
+        // the action's toast shows, not the report.
         select_title(&pane.launcher, "Built-in icon");
         block_on(pane.launcher.activate_selected());
         assert_eq!(
-            pane.launcher.view().status,
+            shown(&pane.launcher),
             Status::Result("Chose Built-in icon".into())
         );
         pane.launcher.stop_developing(&identity);

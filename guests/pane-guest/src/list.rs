@@ -188,13 +188,14 @@ impl Shortcut {
 }
 
 /// One of an item's actions, or an entry of a [`Submenu`]: what it is
-/// called, where the Actions panel lists it, how it is drawn, its shortcut,
-/// and the closure it runs or the submenu it opens.
+/// called, where the Actions panel lists it, how it is drawn (its icon, its
+/// style), its shortcut, and the closure it runs or the submenu it opens.
 pub struct Action {
     title: Option<String>,
     section: Option<String>,
     destructive: bool,
     shortcut: Option<Shortcut>,
+    icon: Option<crate::icon::Icon>,
     does: Does,
 }
 
@@ -277,6 +278,7 @@ impl Action {
             section: None,
             destructive: false,
             shortcut: None,
+            icon: None,
             does: Does::Run(Box::new(move || Box::pin(run()) as Answer)),
         }
     }
@@ -291,6 +293,7 @@ impl Action {
             section: None,
             destructive: false,
             shortcut: None,
+            icon: None,
             does: Does::Open(submenu),
         }
     }
@@ -312,6 +315,14 @@ impl Action {
     /// This action run by `shortcut` from the list.
     pub fn shortcut(mut self, shortcut: Shortcut) -> Action {
         self.shortcut = Some(shortcut);
+        self
+    }
+
+    /// This action with `icon` beside it in the Actions panel (#139), in
+    /// place of Pane's glyph: drawn as an item's icon is, a web image or a
+    /// system icon showing its fallback until it loaded.
+    pub fn icon(mut self, icon: crate::icon::Icon) -> Action {
+        self.icon = Some(icon);
         self
     }
 }
@@ -399,6 +410,7 @@ impl Item {
             section: None,
             destructive: false,
             shortcut: None,
+            icon: None,
             does: Does::Run(Box::new(move || Box::pin(action()) as Answer)),
         });
         self
@@ -737,6 +749,7 @@ fn write_actions(
             section,
             destructive,
             shortcut,
+            icon,
             does,
         } = action;
         tree.push('{');
@@ -783,6 +796,10 @@ fn write_actions(
         if let Some(shortcut) = &shortcut {
             tree.push_str(",\"shortcut\":");
             write_shortcut(tree, shortcut);
+        }
+        if let Some(icon) = &icon {
+            tree.push_str(",\"icon\":");
+            crate::icon::write_icon(tree, icon);
         }
         tree.push('}');
     }

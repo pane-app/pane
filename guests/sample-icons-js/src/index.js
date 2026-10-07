@@ -10,8 +10,11 @@
 // adapter writes as milliseconds. The web images come from the server the
 // `imageServer` setting names, and the system icons are of the file and
 // the application the `iconFile` and `iconApplication` settings name, as
-// in the Rust sample (#142).
+// in the Rust sample (#142). "Built-in icon" has two more actions with
+// icons in the Actions panel, "Copy Name" and "Open Image", and every row's
+// action and each of these tells the user "Chose <title>" in a toast.
 // @ts-check
+import { showToast } from "@pane/extension/feedback";
 import { avatar, favicon, fileIcon, progressRing } from "@pane/extension/icons";
 import { get } from "pane:extension/settings@0.1.0";
 
@@ -38,14 +41,34 @@ function setting(key, fallback) {
 }
 
 /**
- * The row `id` titled `title`, whose action answers "Chose <title>".
+ * Tells the user they chose `title`, in a toast: "Chose <title>".
+ * @param {string} title
+ * @returns {Promise<void>}
+ */
+async function chose(title) {
+  showToast({ title: `Chose ${title}` });
+}
+
+/**
+ * The row `id` titled `title`, whose action tells the user "Chose <title>".
  * @param {string} id
  * @param {string} title
  * @param {Partial<import("@pane/extension").Item>} more
  * @returns {import("@pane/extension").Item}
  */
 function row(id, title, more) {
-  return { id, title, onAction: async () => `Chose ${title}`, ...more };
+  return { id, title, onAction: () => chose(title), ...more };
+}
+
+/**
+ * The action titled `title` with `icon` beside it in the Actions panel,
+ * which tells the user "Chose <title>".
+ * @param {string} title
+ * @param {import("@pane/extension").Icon} icon
+ * @returns {import("@pane/extension").Action}
+ */
+function action(title, icon) {
+  return { title, icon, onAction: () => chose(title) };
 }
 
 /** @type {import("@pane/extension").Command} */
@@ -61,6 +84,10 @@ export const command = {
           icon: "star",
           titleTooltip: "A built-in icon from the whole reicon set",
           accessories: [{ text: "3", tooltip: "Unread" }],
+          actions: [
+            action("Copy Name", "copy"),
+            action("Open Image", { url: slow, fallback: { builtin: "clock", tint: "secondary" } }),
+          ],
         }),
         row("packaged", "Packaged image", {
           subtitle: "Its @light and @dark variants follow the theme",

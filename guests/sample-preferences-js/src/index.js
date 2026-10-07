@@ -4,7 +4,7 @@
 // preferences of every type in `pane.json`, for the whole extension and for
 // single commands, and commands that read their effective values with
 // `getPreferenceValues` from `@pane/extension/preferences`. Commands and
-// answers match the Rust preferences sample (guests/sample-preferences) and
+// toasts match the Rust preferences sample (guests/sample-preferences) and
 // the TypeScript one.
 //
 // - The package declares an API key (a password, required, no default),
@@ -16,11 +16,16 @@
 //   (a folder, required), a notes file (a file) and an editor (an
 //   application): its list shows every value it received.
 // - "Report preferences" is a no-view command that also declares "Loud" (a
-//   checkbox): it answers where it was launched from and its values,
-//   shouted when Loud is on.
+//   checkbox): it shows in a toast where it was launched from and its
+//   values, shouted when Loud is on.
 // - "Tick" runs every minute on its own schedule, in the background, once
-//   the package is set up, counting its runs; "Last tick" answers the count.
+//   the package is set up, counting its runs; "Last tick" shows the count
+//   in a toast.
+//
+// A command launched in the background (a schedule's run) does its work but
+// shows no toast.
 // @ts-check
+import { showToast } from "@pane/extension/feedback";
 import { getPreferenceValues } from "@pane/extension/preferences";
 import { get, set } from "pane:extension/settings@0.1.0";
 
@@ -46,7 +51,7 @@ function characters(text) {
 }
 
 /**
- * What "Report preferences" answers, launched as `record` says.
+ * What "Report preferences" shows, launched as `record` says.
  * @param {import("@pane/extension").LaunchRecord} record
  * @returns {string}
  */
@@ -59,7 +64,7 @@ function report(record) {
 }
 
 /**
- * What "Tick" answers, counting the run.
+ * What "Tick" would show, counting the run.
  * @returns {string}
  */
 function tick() {
@@ -71,7 +76,7 @@ function tick() {
 }
 
 /**
- * What "Last tick" answers: how many times "Tick" ran.
+ * What "Last tick" shows: how many times "Tick" ran.
  * @returns {string}
  */
 function last() {
@@ -96,15 +101,22 @@ export const command = {
     };
   },
   async run(id, record) {
+    /** @type {string} */
+    let done;
     switch (id) {
       case "report":
-        return report(record);
+        done = report(record);
+        break;
       case "tick":
-        return tick();
+        done = tick();
+        break;
       case "last":
-        return last();
+        done = last();
+        break;
       default:
         throw new Error(`unknown command: ${id}`);
     }
+    // Nobody is there to see a background launch's toast.
+    if (record.launchType !== "background") showToast({ title: done });
   },
 };

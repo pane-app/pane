@@ -5,7 +5,8 @@
 //! Pane's own rows keep their tiles; an open command's rows draw their
 //! icons by theme (a packaged image's `@light` or `@dark` variant, a light
 //! and dark pair), tinted, masked and failing to their fallback, and up to
-//! three accessories, a relative date advancing as the clock does; hovering
+//! three accessories, a relative date advancing as the clock does; the
+//! Actions panel draws an action's icon in place of Pane's glyph; hovering
 //! a title, a subtitle or an accessory shows its tooltip; assistive
 //! technology reads the accessories with the row and skips icons without a
 //! tooltip. The core's rules and the other languages are `pane-core`'s
@@ -25,10 +26,17 @@ use tempfile::TempDir;
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::settle;
+use settle::{settle, settle_shown};
 
 /// 2026-01-01T00:00:00Z, the "Packaged image" row's date.
 const NEW_YEAR: u64 = 1_767_225_600_000;
+
+/// Open actions' default binding on this system.
+const OPEN_ACTIONS: &str = if cfg!(target_os = "macos") {
+    "cmd-k"
+} else {
+    "ctrl-k"
+};
 
 /// How long the pointer rests before a tooltip shows, with a margin.
 const TOOLTIP_DELAY: Duration = Duration::from_millis(700);
@@ -232,6 +240,37 @@ fn icons_draw_for_the_light_theme(cx: &mut TestAppContext) {
     assert!(!drawn(cx, "icon-Packaged image-image-logo@dark.png"));
     assert!(drawn(cx, "icon-Light and dark pair-image-sun.svg"));
     assert!(drawn(cx, "icon-Tinted icon-glyph-heart"));
+}
+
+/// The Actions panel draws an action's own icon in place of Pane's glyph
+/// (a web image's fallback until the image arrives), and Pane's glyph for
+/// an action without one; the action chosen there tells the user what it
+/// did in a toast.
+#[gpui::test]
+fn the_actions_panel_draws_the_actions_icons(cx: &mut TestAppContext) {
+    let (window, cx, _fixture) = window(cx, "dark");
+    open_icons(&window, cx);
+    let at = view(&window, cx)
+        .rows
+        .iter()
+        .position(|row| row.title == "Built-in icon")
+        .expect("the row");
+    cx.read_entity(&window, |window, _| window.launcher().select(at));
+    cx.simulate_keystrokes(OPEN_ACTIONS);
+    settle(&window, cx);
+    assert!(cx.read_entity(&window, |window, _| window.actions_open()));
+    assert!(drawn(cx, "action-Run item"));
+    assert!(!drawn(cx, "icon-action-Run item"), "Pane's glyph");
+    assert!(drawn(cx, "icon-action-Copy Name-glyph-copy"));
+    assert!(drawn(cx, "icon-action-Open Image-glyph-clock"));
+
+    cx.simulate_input("copy");
+    settle(&window, cx);
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        settle_shown(&window, cx),
+        Status::Result("Chose Copy Name".into())
+    );
 }
 
 /// Up to three accessories per row, a tag among them, and a relative date

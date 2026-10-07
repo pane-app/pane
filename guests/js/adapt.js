@@ -156,6 +156,8 @@ function wireActions(given, name, callbacks) {
     if (action?.section != null) wire.section = action.section;
     if (action?.style != null) wire.style = action.style;
     if (action?.shortcut != null) wire.shortcut = action.shortcut;
+    // Its icon in the Actions panel (#139), written as an item's is.
+    if (action?.icon != null) wire.icon = action.icon;
     return wire;
   });
 }

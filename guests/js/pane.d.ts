@@ -163,6 +163,12 @@ export interface ActionBase {
    * or `null` for none.
    */
   shortcut?: Shortcut | null;
+  /**
+   * The icon the Actions panel draws beside it in place of Pane's glyph,
+   * as an item's icon is drawn (a web image or a system icon shows its
+   * fallback until it loaded). Omitted or `null` for Pane's glyph.
+   */
+  icon?: Icon | null;
 }
 
 /**

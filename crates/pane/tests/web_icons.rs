@@ -2,8 +2,9 @@
 //! pointed at the image server, a local test server
 //! (`pane-core/tests/support/image_server.rs`): the list draws each web
 //! image's fallback at once, and, once Pane downloaded the image, the
-//! window draws it by itself, told by the launcher that it changed; an
-//! address without an image keeps its fallback. The rules (limits,
+//! window draws it by itself, told by the launcher that it changed, in a
+//! row as in an action's icon in the Actions panel; an address without an
+//! image keeps its fallback. The rules (limits,
 //! de-duplication, the cache, system icons) are `pane-core`'s
 //! `web_icons.rs`.
 
@@ -29,6 +30,13 @@ use tempfile::TempDir;
 
 /// How long a download may take on a slow machine.
 const LOADED: Duration = Duration::from_secs(30);
+
+/// Open actions' default binding on this system.
+const OPEN_ACTIONS: &str = if cfg!(target_os = "macos") {
+    "cmd-k"
+} else {
+    "ctrl-k"
+};
 
 /// The assembled sample package `name` under `target/guests/packages`.
 fn assembled(name: &str) -> PathBuf {
@@ -188,4 +196,37 @@ fn a_web_image_draws_its_fallback_while_it_loads_then_the_image(cx: &mut TestApp
     assert_eq!(server.count("/images/slow.png"), 1);
     let view = cx.read_entity(&window, |window, _| window.launcher().view());
     assert_eq!(view.screen, Screen::Command);
+}
+
+/// The Actions panel draws an action's web image alike: its fallback while
+/// the server holds the image back, then the image once it arrives, by
+/// itself while the panel stays open.
+#[gpui::test]
+fn an_actions_web_image_draws_its_fallback_then_the_image_in_the_panel(cx: &mut TestAppContext) {
+    let server = ImageServer::start();
+    let (window, cx, _folders) = window(cx, &server);
+    open_icons(&window, cx);
+    let view = cx.read_entity(&window, |window, _| window.launcher().view());
+    let at = view
+        .rows
+        .iter()
+        .position(|row| row.title == "Built-in icon")
+        .expect("the row");
+    cx.read_entity(&window, |window, _| window.launcher().select(at));
+    cx.simulate_keystrokes(OPEN_ACTIONS);
+    settle(&window, cx);
+    assert!(cx.read_entity(&window, |window, _| window.actions_open()));
+    assert!(drawn(cx, "icon-action-Open Image-glyph-clock"));
+
+    server.release();
+    until_drawn(
+        cx,
+        &format!(
+            "icon-action-Open Image-image-{}.png",
+            web_image_stem(&format!("{}/images/slow.png", server.url()))
+        ),
+    );
+    assert!(!drawn(cx, "icon-action-Open Image-glyph-clock"));
+    assert!(cx.read_entity(&window, |window, _| window.actions_open()));
+    assert_eq!(server.count("/images/slow.png"), 1);
 }

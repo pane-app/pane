@@ -1,14 +1,15 @@
-//! Web images and system icons in rows (#142), through the launcher's
-//! public interface, with the icons sample in Rust, JavaScript and
-//! TypeScript (real guests `cargo xtask guests` assembles) and the image
-//! server (`support/image_server.rs`), a local test server the sample is
-//! pointed at through its `imageServer` setting: nothing reaches beyond
-//! this computer.
+//! Web images and system icons in rows and in actions' icons (#142),
+//! through the launcher's public interface, with the icons sample in Rust,
+//! JavaScript and TypeScript (real guests `cargo xtask guests` assembles)
+//! and the image server (`support/image_server.rs`), a local test server
+//! the sample is pointed at through its `imageServer` setting: nothing
+//! reaches beyond this computer.
 //!
 //! A web image shows its fallback at once and its image once Pane
 //! downloaded it; the list never waits. Downloads keep to the ceilings of
 //! the extension's own web requests (ADR 0018), and one that fails or is
-//! over them leaves the fallback. Rows naming one URL share one download.
+//! over them leaves the fallback. Rows and actions naming one URL share
+//! one download.
 //! Downloaded images are the package's extension cache: found again after
 //! a restart without a download, and removed by "Clear cache". A system
 //! icon by path shows the icon the host extracted (a stand-in for the
@@ -230,6 +231,17 @@ impl Pane {
             .unwrap_or_else(|| panic!("{title} has no icon"))
     }
 
+    /// The icon of the action at `index` of the item titled `item`, as the
+    /// Actions panel draws it now; the item is selected after.
+    fn action_icon(&self, item: &str, index: usize) -> Icon {
+        select_title(&self.launcher, item);
+        let actions = self.launcher.item_actions().expect("its actions");
+        actions.actions[index]
+            .icon
+            .clone()
+            .unwrap_or_else(|| panic!("{item}'s action {index} has no icon"))
+    }
+
     /// Waits until the row titled `title` shows an image file, which it
     /// returns.
     fn image_of(&self, title: &str) -> PathBuf {
@@ -320,8 +332,9 @@ fn files_in(dir: &Path) -> Vec<PathBuf> {
 }
 
 /// The list is drawn at once with each web image's fallback; each image
-/// replaces its fallback once downloaded; two rows naming one URL share
-/// one download; an address without an image keeps its fallback. The
+/// replaces its fallback once downloaded, in a row as in an action's icon
+/// in the Actions panel; two rows and an action naming one URL share one
+/// download; an address without an image keeps its fallback. The
 /// favicon helper names the site's `/favicon.ico` with a globe as its
 /// fallback in every language.
 #[test]
@@ -335,6 +348,17 @@ fn a_web_image_shows_its_fallback_at_once_and_the_image_when_it_arrives() {
         assert_eq!(slow.source, builtin("clock"), "{}", fixture.title);
         assert_eq!(slow.tint, Some(Tint::Same(Color::Tone(Tone::Secondary))));
         assert_eq!(pane.icon("Same slow image").source, builtin("clock"));
+        // So does an action's icon in the Actions panel ("Open Image").
+        let action = pane.action_icon("Built-in icon", 2);
+        assert_eq!(
+            (action.source, action.tint),
+            (
+                builtin("clock"),
+                Some(Tint::Same(Color::Tone(Tone::Secondary)))
+            ),
+            "{}",
+            fixture.title
+        );
 
         // While it downloads, it is on its package's undo list.
         assert!(server.wait_for("/images/slow.png", LOADED));
@@ -365,7 +389,22 @@ fn a_web_image_shows_its_fallback_at_once_and_the_image_when_it_arrives() {
         let slow = pane.image_of("Slow web image");
         assert_eq!(pane.image_of("Same slow image"), slow);
         pane.loaded();
-        // One download each, however many rows name it.
+        // The action's icon is the same image, its fallback kept.
+        let action = pane.action_icon("Built-in icon", 2);
+        assert_eq!(
+            action.source,
+            IconSource::Image {
+                light: slow.clone(),
+                dark: slow.clone()
+            },
+            "{}",
+            fixture.title
+        );
+        assert_eq!(
+            action.fallback.map(|clock| clock.source),
+            Some(builtin("clock"))
+        );
+        // One download each, however many rows and actions name it.
         assert_eq!(
             server.count("/images/slow.png"),
             1,

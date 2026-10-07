@@ -8,7 +8,10 @@
 //! The rows, the same in the JavaScript and TypeScript samples:
 //!
 //! - "Built-in icon": reicon's `star`, a text accessory "3" with the
-//!   tooltip "Unread", and a title tooltip;
+//!   tooltip "Unread", and a title tooltip; after its own action, two
+//!   more with icons in the Actions panel: "Copy Name", with reicon's
+//!   `copy`, and "Open Image", with the slow web image below, whose
+//!   fallback, reicon's `clock`, shows until it arrives;
 //! - "Packaged image": `assets/logo.png`, whose `@light` and `@dark`
 //!   variants Pane draws by theme, a date accessory (2026-01-01T00:00:00Z,
 //!   shown relative to now) and a subtitle tooltip;
@@ -45,13 +48,16 @@
 //! The image server is the `imageServer` setting, by default
 //! `http://127.0.0.1:8741`; the tests set it to their own server.
 //!
-//! Every row's action answers "Chose <title>".
+//! Every row's action, and each of "Built-in icon"'s actions, tells the
+//! user "Chose <title>" in a toast, the title being the row's or the
+//! action's.
 #![no_std]
 
 use pane_guest::alloc::{format, string::String, vec::Vec};
+use pane_guest::feedback::{Toast, show_toast};
 use pane_guest::icon::{avatar, favicon, file_icon, progress_ring};
 use pane_guest::{
-    Accessory, Color, Command, CustomView, FieldValue, FormError, Icon, Item, List, Mask,
+    Accessory, Action, Color, Command, CustomView, FieldValue, FormError, Icon, Item, List, Mask,
     NoCustomView, Tint, Tone, settings,
 };
 
@@ -84,9 +90,22 @@ fn setting((key, default): (&str, &str)) -> String {
         .unwrap_or_else(|| default.into())
 }
 
-/// The row `id` titled `title`, whose action answers "Chose <title>".
+/// Tells the user they chose `title`, in a toast: "Chose <title>".
+async fn chose(title: &str) -> Result<(), String> {
+    show_toast(Toast::success(format!("Chose {title}")));
+    Ok(())
+}
+
+/// The row `id` titled `title`, whose action tells the user "Chose
+/// <title>".
 fn row(id: &'static str, title: &'static str) -> Item {
-    Item::new(id, title).on_action(move || async move { Ok(format!("Chose {title}")) })
+    Item::new(id, title).on_action(move || chose(title))
+}
+
+/// The action titled `title` with `icon` beside it in the Actions panel,
+/// which tells the user "Chose <title>".
+fn action(title: &'static str, icon: Icon) -> Action {
+    Action::new(title, move || chose(title)).icon(icon)
 }
 
 impl Command for Icons {
@@ -101,7 +120,15 @@ impl Command for Icons {
                 .subtitle("reicon's star, by name")
                 .icon(Icon::builtin("star"))
                 .title_tooltip("A built-in icon from the whole reicon set")
-                .accessory(Accessory::text("3").tooltip("Unread")),
+                .accessory(Accessory::text("3").tooltip("Unread"))
+                .actions([
+                    action("Copy Name", Icon::builtin("copy")),
+                    action(
+                        "Open Image",
+                        Icon::url(slow.clone())
+                            .fallback(Icon::builtin("clock").tint(Tone::Secondary)),
+                    ),
+                ]),
             row("packaged", "Packaged image")
                 .subtitle("Its @light and @dark variants follow the theme")
                 .icon(Icon::image("assets/logo.png"))

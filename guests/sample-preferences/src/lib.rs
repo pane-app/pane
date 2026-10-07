@@ -12,18 +12,23 @@
 //!   folder (a folder, required), a notes file (a file) and an editor (an
 //!   application): its list shows every value it received.
 //! - "Report preferences" is a no-view command that also declares "Loud"
-//!   (a checkbox): it answers where it was launched from and its values,
-//!   shouted when Loud is on.
+//!   (a checkbox): it shows in a toast where it was launched from and its
+//!   values, shouted when Loud is on.
 //! - "Tick" runs every minute on its own schedule, in the background, once
-//!   the package is set up, counting its runs; "Last tick" answers the
-//!   count.
+//!   the package is set up, counting its runs; "Last tick" shows the count
+//!   in a toast.
 //!
-//! The JavaScript and TypeScript preferences samples answer the same.
+//! A command launched in the background (a schedule's run) does its work
+//! but shows no toast. The JavaScript and TypeScript preferences samples
+//! show the same.
 #![no_std]
 
 use pane_guest::alloc::{format, string::String};
 use pane_guest::commands::source_name;
-use pane_guest::{Command, Item, LaunchRecord, List, NoCustomView, preferences, settings};
+use pane_guest::feedback::{Toast, show_toast};
+use pane_guest::{
+    Command, Item, LaunchRecord, LaunchType, List, NoCustomView, preferences, settings,
+};
 use serde::Deserialize;
 
 /// The settings key holding how many times "Tick" ran.
@@ -63,7 +68,7 @@ fn or_none(value: &Option<String>) -> &str {
     value.as_deref().unwrap_or("none")
 }
 
-/// What "Report preferences" answers, launched as `launch` says.
+/// What "Report preferences" shows, launched as `launch` says.
 fn report(launch: &LaunchRecord) -> Result<String, String> {
     let values: ReportPreferences = preferences::values()?;
     let report = format!(
@@ -81,7 +86,7 @@ fn report(launch: &LaunchRecord) -> Result<String, String> {
     })
 }
 
-/// What "Tick" answers, counting the run.
+/// What "Tick" would show, counting the run.
 fn tick() -> Result<String, String> {
     let ticks = settings::get(TICKS)?
         .and_then(|ticks| ticks.parse::<u64>().ok())
@@ -91,7 +96,7 @@ fn tick() -> Result<String, String> {
     Ok(format!("Ticked {ticks} times"))
 }
 
-/// What "Last tick" answers: how many times "Tick" ran.
+/// What "Last tick" shows: how many times "Tick" ran.
 fn last() -> Result<String, String> {
     let ticks = settings::get(TICKS)?.unwrap_or_else(|| "0".into());
     Ok(format!("Ticks: {ticks}"))
@@ -120,12 +125,17 @@ impl Command for Preferences {
         ]))
     }
 
-    async fn run(command: String, launch: LaunchRecord) -> Result<String, String> {
-        match command.as_str() {
+    async fn run(command: String, launch: LaunchRecord) -> Result<(), String> {
+        let done = match command.as_str() {
             "report" => report(&launch),
             "tick" => tick(),
             "last" => last(),
             other => Err(format!("unknown command: {other}")),
+        }?;
+        // Nobody is there to see a background launch's toast.
+        if launch.launch_type != LaunchType::Background {
+            show_toast(Toast::success(done));
         }
+        Ok(())
     }
 }

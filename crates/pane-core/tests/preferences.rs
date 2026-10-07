@@ -9,10 +9,11 @@
 //! with its original launch record while cancelling launches nothing; every
 //! other way in (a schedule, a background launch) does not run it, says
 //! "Needs setup" and is no failure; the command receives its effective
-//! values typed; and the values follow the rules of extension data: a
-//! password is a local credential, disabling keeps them, an update keeps the
-//! still-declared ones and drops a value whose type changed, and uninstalling
-//! keeps the others when asked while always removing the credentials.
+//! values typed (the samples' no-view commands show them in a toast, #141);
+//! and the values follow the rules of extension data: a password is a local
+//! credential, disabling keeps them, an update keeps the still-declared ones
+//! and drops a value whose type changed, and uninstalling keeps the others
+//! when asked while always removing the credentials.
 //! Prior art: `no_view.rs`, `schedules.rs`, `uninstall.rs`.
 
 use std::fs;
@@ -28,9 +29,12 @@ use pane_core::{
 };
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use rows::{select_title, titles};
 
 /// One language's preferences sample package.
@@ -151,21 +155,38 @@ impl Pane {
     }
 
     /// Types `query` in root search, chooses the row titled `title` and
-    /// waits for what it does; the status line.
-    fn run(&self, query: &str, title: &str) -> Status {
+    /// waits for what it does.
+    fn choose(&self, query: &str, title: &str) {
         self.search(query);
         select_title(&self.launcher, title);
         block_on(self.launcher.activate_selected());
-        self.launcher.view().status
+    }
+
+    /// Types `query` in root search, chooses the row titled `title` and
+    /// waits for what it does; what it showed: its toast, or the status
+    /// line.
+    fn run(&self, query: &str, title: &str) -> Status {
+        self.choose(query, title);
+        shown(&self.launcher)
+    }
+
+    /// Types `query` in root search and chooses the row titled `title`,
+    /// which opens a screen (the command's, or the Setup screen before it)
+    /// and says nothing in the status line. A toast an earlier run showed
+    /// may still be in the footer.
+    fn open(&self, query: &str, title: &str) {
+        self.choose(query, title);
+        assert_eq!(self.launcher.view().status, Status::Idle, "{title}");
     }
 
     /// Types `query` in root search, which the alias it starts with makes
-    /// select its command's row, and presses Enter; the status line.
+    /// select its command's row, and presses Enter; what it showed: its
+    /// toast, or the status line.
     fn send(&self, query: &str) -> Status {
         self.search(query);
         assert_eq!(self.launcher.view().selected, Some(0), "{query}");
         block_on(self.launcher.activate_selected());
-        self.launcher.view().status
+        shown(&self.launcher)
     }
 
     /// Sets the preference kept as `key` of the package from `folder`, as
@@ -176,7 +197,8 @@ impl Pane {
             .unwrap_or_else(|why| panic!("{key} = {value}: {why}"));
     }
 
-    /// What "Last tick" of the package from `folder` answers.
+    /// What "Last tick" of the package from `folder` shows: its toast, or
+    /// the status line.
     fn last(&self, folder: &Path) -> Status {
         self.search("last tick");
         let wanted = id(folder, "last");
@@ -189,7 +211,7 @@ impl Pane {
             .unwrap_or_else(|| panic!("no row {wanted} in {:?}", titles(&self.launcher)));
         self.launcher.select(index);
         block_on(self.launcher.activate_selected());
-        self.launcher.view().status
+        shown(&self.launcher)
     }
 
     /// Whether root search, with `query` typed, says the row titled
@@ -246,8 +268,8 @@ fn field(
     (id.into(), label.into(), Some(description.into()), secret)
 }
 
-/// What "Report preferences" answers, launched from `source`, with an API
-/// key of `key` characters and the rest as given.
+/// What "Report preferences" shows in its toast, launched from `source`,
+/// with an API key of `key` characters and the rest as given.
 fn report(source: &str, key: usize, units: &str, greeting: &str, verbose: bool) -> String {
     format!(
         "Report from {source}: API key of {key} characters; units: {units}; greeting: \
@@ -288,7 +310,7 @@ fn the_setup_screen_asks_only_for_required_unset_values_then_launches(fixture: &
     assert!(launcher.back());
     let view = launcher.view();
     assert_eq!(view.screen, Screen::Root { query: "rp".into() });
-    assert_eq!(view.status, Status::Idle);
+    assert_eq!(shown(launcher), Status::Idle, "nothing ran");
 
     // Submitting saves the value and launches it with its original launch
     // record: from its alias.
@@ -304,15 +326,12 @@ fn the_setup_screen_asks_only_for_required_unset_values_then_launches(fixture: &
     let view = launcher.view();
     assert_eq!(view.screen, Screen::Root { query: "rp".into() });
     assert_eq!(
-        view.status,
+        shown(launcher),
         Status::Result(report("alias", 3, "metric", "none", false))
     );
 
     // Another command asks only for what is still unset: its own folder.
-    assert_eq!(
-        pane.run("show preferences", "Show preferences"),
-        Status::Idle
-    );
+    pane.open("show preferences", "Show preferences");
     assert_eq!(
         pane.setup_fields(),
         [field(
@@ -350,18 +369,12 @@ fn the_setup_screen_asks_only_for_required_unset_values_then_launches(fixture: &
     );
 
     // Once set up, it opens at once.
-    assert_eq!(
-        pane.run("show preferences", "Show preferences"),
-        Status::Idle
-    );
+    pane.open("show preferences", "Show preferences");
     assert_eq!(launcher.view().screen, Screen::Command);
 
     // A stored value that no longer fits counts as unset: the folder went.
     fs::remove_dir_all(&notes).unwrap();
-    assert_eq!(
-        pane.run("show preferences", "Show preferences"),
-        Status::Idle
-    );
+    pane.open("show preferences", "Show preferences");
     assert_eq!(
         pane.setup_fields(),
         [field(
@@ -439,7 +452,7 @@ fn the_command_receives_its_typed_effective_values(fixture: &Fixture) {
     pane.set(&folder, "show#folder", &notes);
     pane.set(&folder, "show#notes", &file);
     pane.set(&folder, "show#editor", "notepad");
-    pane.run("show preferences", "Show preferences");
+    pane.open("show preferences", "Show preferences");
     assert_eq!(launcher.view().screen, Screen::Command);
     assert_eq!(
         titles(launcher),
@@ -470,10 +483,7 @@ fn the_command_receives_its_typed_effective_values(fixture: &Fixture) {
     let card = launcher.preferences_of(&identity).unwrap();
     assert!(card.fields[0].missing);
     assert_eq!(card.fields[0].value, None);
-    assert_eq!(
-        pane.run("report preferences", "Report preferences"),
-        Status::Idle
-    );
+    pane.open("report preferences", "Report preferences");
     assert!(launcher.view().form().is_some(), "the Setup screen");
 }
 

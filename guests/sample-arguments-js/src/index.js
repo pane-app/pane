@@ -3,23 +3,26 @@
 // Pane's arguments sample in JavaScript: no-view commands that ask for typed
 // values before they run (`"arguments"` in `pane.json`), all served by one
 // component. Each receives the values in its launch record, by name; an
-// optional argument left empty is absent. Commands, answers and errors
-// match the Rust arguments sample (guests/sample-arguments) and the
-// TypeScript one.
+// optional argument left empty is absent. Commands, toasts and errors match
+// the Rust arguments sample (guests/sample-arguments) and the TypeScript
+// one.
 //
 // - "Greet" has three arguments: a required text (`name`), an optional
-//   password (`secret`) and a dropdown (`tone`). It answers which values it
-//   was given (only the length of the secret, which it never shows or
-//   keeps), where it was launched from and the fallback text, counting its
-//   runs. Its first argument is text and the others are optional, so it may
-//   be a fallback: text sent to it fills `name`.
+//   password (`secret`) and a dropdown (`tone`). It shows in a toast which
+//   values it was given (only the length of the secret, which it never
+//   shows or keeps), where it was launched from and the fallback text,
+//   counting its runs. Its first argument is text and the others are
+//   optional, so it may be a fallback: text sent to it fills `name`.
 // - "Stamp" has one required text argument (`label`), for launches with no
-//   fields of their own (a global hotkey, a quick slot). It answers the
-//   label and keeps it, with how it was launched, for "Relay last".
+//   fields of their own (a global hotkey, a quick slot). It shows the label
+//   in a toast and keeps it, with how it was launched, for "Relay last".
 // - "Relay" launches the command of this package its text names, with the
 //   arguments it lists: `stamp label=x`, or `background stamp label=x` in
-//   the background. Sent `last`, it answers what "Stamp" last kept.
+//   the background. Sent `last`, it shows what "Stamp" last kept.
+//
+// A command launched in the background does its work but shows no toast.
 // @ts-check
+import { showToast } from "@pane/extension/feedback";
 import { launch } from "pane:extension/commands@0.1.0";
 import { get, set } from "pane:extension/settings@0.1.0";
 
@@ -39,7 +42,7 @@ function argument(record, name) {
 }
 
 /**
- * What "Greet" answers for `record`, counting the run.
+ * What "Greet" shows for `record`, counting the run.
  * @param {import("@pane/extension").LaunchRecord} record
  * @returns {string}
  */
@@ -59,7 +62,7 @@ function greet(record) {
 }
 
 /**
- * What "Stamp" answers for `record`, keeping what it stamped.
+ * What "Stamp" shows for `record`, keeping what it stamped.
  * @param {import("@pane/extension").LaunchRecord} record
  * @returns {string}
  */
@@ -72,7 +75,7 @@ function stamp(record) {
 
 /**
  * Launches the command `text` names with the arguments it lists, as "Relay"
- * does, or answers what "Stamp" last kept.
+ * does, answering what it shows, or answers what "Stamp" last kept.
  * @param {string | null | undefined} text
  * @returns {string}
  */
@@ -106,15 +109,22 @@ function relay(text) {
 /** @type {import("@pane/extension").Command} */
 export const command = {
   async run(id, record) {
+    /** @type {string} */
+    let done;
     switch (id) {
       case "greet":
-        return greet(record);
+        done = greet(record);
+        break;
       case "stamp":
-        return stamp(record);
+        done = stamp(record);
+        break;
       case "relay":
-        return relay(record.fallbackText);
+        done = relay(record.fallbackText);
+        break;
       default:
         throw new Error(`unknown command: ${id}`);
     }
+    // Nobody is there to see a background launch's toast.
+    if (record.launchType !== "background") showToast({ title: done });
   },
 };

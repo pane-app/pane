@@ -6,8 +6,8 @@
 //! and a no-view command's global hotkey shows the hidden window for the
 //! form. The commands are the Rust arguments sample's "Greet" (a required
 //! name, an optional secret, a tone) and "Stamp" (a required label), from
-//! `cargo xtask guests`; the system's hotkeys are a fake that records what
-//! Pane registers.
+//! `cargo xtask guests`, which tell what they ran with in a toast; the
+//! system's hotkeys are a fake that records what Pane registers.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -23,7 +23,7 @@ use pane_core::{Launcher, LauncherView, PackageIdentity, Runtime, Screen, Status
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::settle;
+use settle::{settle, settle_shown};
 
 #[path = "support/packages.rs"]
 mod packages;
@@ -161,12 +161,12 @@ fn enter_with_the_required_field_empty_takes_focus_back_to_it(cx: &mut TestAppCo
     assert!(cx.debug_bounds("field-error-name").is_some());
     assert_eq!(focused_label(cx).as_deref(), Some("Name"));
 
-    // Typed there, Enter runs the command once with the values.
+    // Typed there, Enter runs the command once with the values, which it
+    // tells in a toast.
     cx.simulate_input("Ada");
     cx.simulate_keystrokes("enter");
-    let view = settle(&window, cx);
     assert_eq!(
-        view.status,
+        settle_shown(&window, cx),
         Status::Result(
             "Greet run 1 from root-search: name=Ada, secret (6 characters), tone=warm; \
              fallback text: none"
@@ -174,11 +174,12 @@ fn enter_with_the_required_field_empty_takes_focus_back_to_it(cx: &mut TestAppCo
         )
     );
     assert_eq!(
-        view.screen,
+        settle(&window, cx).screen,
         Screen::Root {
             query: "greet".into()
         }
     );
+    assert!(cx.debug_bounds("toast-success").is_some());
 }
 
 #[gpui::test]
@@ -204,7 +205,7 @@ fn escape_on_the_argument_form_runs_nothing(cx: &mut TestAppContext) {
     cx.simulate_input("Grace");
     cx.simulate_keystrokes("enter");
     assert_eq!(
-        settle(&window, cx).status,
+        settle_shown(&window, cx),
         Status::Result(
             "Greet run 1 from root-search: name=Grace, tone=warm; fallback text: none".into()
         )
@@ -291,7 +292,7 @@ fn a_no_view_hotkey_shows_the_hidden_window_for_the_form(cx: &mut TestAppContext
     cx.simulate_input("x");
     cx.simulate_keystrokes("enter");
     assert_eq!(
-        settle(&window, cx).status,
+        settle_shown(&window, cx),
         Status::Result("Stamped x from hotkey".into())
     );
 }

@@ -151,9 +151,9 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   checkbox), and ships a `HELP.md`; "Show preferences", a view command,
   adds a notes folder (required), a notes file and an editor (an
   application) and lists every value it receives; "Report preferences", a
-  no-view command, adds "Loud" (a checkbox) and answers its values; "Tick"
-  runs every minute once the package is set up, and "Last tick" answers
-  how often. Their packages are `packages/sample-preferences` and its
+  no-view command, adds "Loud" (a checkbox) and shows its values in a
+  toast; "Tick" runs every minute once the package is set up, and "Last
+  tick" toasts how often. Their packages are `packages/sample-preferences` and its
   `-js`/`-ts` copies; held alike by `crates/pane-core/tests/preferences.rs`,
   and the Rust one by `crates/pane/tests/preferences.rs`.
 - `sample-schedule`, `sample-schedule-js`, `sample-schedule-ts`: the
@@ -192,10 +192,10 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   arguments sample in Rust, JavaScript and TypeScript (#144), one component
   serving three no-view commands ([Arguments](#arguments)): "Greet" asks for
   a required name, an optional secret (a password) and a tone (a dropdown)
-  and answers what it was given (only the secret's length), "Stamp" asks
+  and toasts what it was given (only the secret's length), "Stamp" asks
   for a required label, for its hotkey and quick slot, and "Relay"
   launches the command its text names with the arguments it lists
-  (`background stamp label=x`), or answers what "Stamp" last kept
+  (`background stamp label=x`), or toasts what "Stamp" last kept
   (`last`). Their packages are `packages/sample-arguments` and its
   `-js`/`-ts` copies; held alike by `crates/pane-core/tests/arguments.rs`,
   and the Rust one by `crates/pane/tests/arguments.rs`.

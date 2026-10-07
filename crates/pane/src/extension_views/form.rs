@@ -39,9 +39,10 @@ use gpui::{
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
 use pane_core::{FieldKind, FormField, FormView, Screen, SetupHeader, Status};
 
-use crate::app::{LauncherWindow, row_icon};
+use crate::app::LauncherWindow;
 use crate::ui::controls;
-use crate::ui::icon::{TileSize, tile_at};
+use crate::ui::extension_icon::{RowIcon, row_icon_at};
+use crate::ui::icon::TileSize;
 use crate::ui::input::TextEditingKeys;
 use crate::ui::theme::Theme;
 
@@ -265,9 +266,20 @@ impl LauncherWindow {
                 this.submit_form(window, cx);
             }))
             .on_click(cx.listener(|this, _, window, cx| this.submit_form(window, cx)));
-        match &form.setup {
-            Some(setup) => compose_setup(title, setup, fields, submit, theme).into_any_element(),
-            None => compose(title, fields, submit, theme).into_any_element(),
+        match (&form.setup, self.launcher.arguments_asked_for()) {
+            // The extension's icon (#139) over the Setup screen (#143).
+            (Some(setup), _) => {
+                let icon =
+                    crate::features::icons::row_icon_of(&self.launcher, &setup.package, theme);
+                compose_setup(title, setup, &icon, fields, submit, theme).into_any_element()
+            }
+            // Pane's argument form (#144): the command's icon (#139) and
+            // title over its fields.
+            (None, Some(command)) => {
+                let icon = crate::features::icons::row_icon_of(&self.launcher, &command, theme);
+                compose_arguments(title, &icon, fields, submit, theme).into_any_element()
+            }
+            (None, None) => compose(title, fields, submit, theme).into_any_element(),
         }
     }
 
@@ -366,22 +378,28 @@ impl LauncherWindow {
 }
 
 /// The Setup screen's composition (#143): over the form, the extension's
-/// tile and title and the sentence naming the command; then its fields and
+/// icon (`icon`, as its row draws it) and title and the sentence naming the command; then its fields and
 /// `submit` in a column, with the package's help beside them as plain
 /// paragraphs when it ships one.
 pub(crate) fn compose_setup(
     title: String,
     setup: &SetupHeader,
+    icon: &RowIcon,
     fields: Vec<AnyElement>,
     submit: Stateful<Div>,
     theme: &Theme,
 ) -> Stateful<Div> {
-    let (tone, glyph) = row_icon(&setup.package);
     let header = div()
         .flex()
         .items_center()
         .gap(theme.geometry.controls.row_gap)
-        .child(tile_at(TileSize::Row, tone, glyph, theme))
+        .child(row_icon_at(
+            icon,
+            TileSize::Row,
+            "setup-icon",
+            "setup",
+            theme,
+        ))
         .child(
             div()
                 .flex()
@@ -443,6 +461,49 @@ pub(crate) fn compose_setup(
                 .child(column)
                 .children(help),
         )
+}
+
+/// The argument form's composition (#144): over the form's fields, the
+/// command's icon as its row in root search draws it (#139) beside its
+/// title, so the user sees which command asks; then the fields and
+/// `submit`, laid out as [`compose`] lays them out.
+pub(crate) fn compose_arguments(
+    title: String,
+    icon: &RowIcon,
+    fields: Vec<AnyElement>,
+    submit: Stateful<Div>,
+    theme: &Theme,
+) -> Stateful<Div> {
+    let header = div()
+        .flex()
+        .items_center()
+        .gap(theme.geometry.controls.row_gap)
+        .child(row_icon_at(
+            icon,
+            TileSize::Row,
+            "arguments-icon",
+            "arguments",
+            theme,
+        ))
+        .child(
+            controls::field_label(title.clone(), theme).debug_selector(|| "arguments-title".into()),
+        );
+    div()
+        .id("form")
+        .debug_selector(|| "arguments".into())
+        .role(Role::Form)
+        .aria_label(title)
+        .flex_1()
+        .min_h(px(0.))
+        .flex()
+        .flex_col()
+        .gap(theme.geometry.controls.group_gap)
+        .px(theme.geometry.search_padding_x)
+        .py(theme.geometry.screen_padding_y)
+        .overflow_y_scroll()
+        .child(header)
+        .children(fields)
+        .child(div().flex().child(submit))
 }
 
 /// A form screen's composition (#99): the form's field groups, 18px apart in a column that
