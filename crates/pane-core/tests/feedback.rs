@@ -28,13 +28,13 @@ use pane_core::{
 };
 use tempfile::TempDir;
 
-#[path = "support/feedback.rs"]
-mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
+#[path = "support/feedback.rs"]
+mod window_fake;
 
-use feedback::{RecordingWindow, shown};
 use rows::select_title;
+use window_fake::{RecordingWindow, shown};
 
 /// One language's actions sample package.
 struct Fixture {

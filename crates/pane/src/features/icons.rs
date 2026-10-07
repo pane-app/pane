@@ -167,7 +167,9 @@ const EMPTY_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 
 /// The built-in icon `name`'s markup in its Outline weight or, `filled`,
 /// its Filled one, decoded once and kept.
 fn glyph(name: &str, filled: bool) -> Arc<[u8]> {
-    static GLYPHS: OnceLock<Mutex<HashMap<(String, bool), Arc<[u8]>>>> = OnceLock::new();
+    /// Each icon's decoded markup, by its name and whether it is filled.
+    type Glyphs = Mutex<HashMap<(String, bool), Arc<[u8]>>>;
+    static GLYPHS: OnceLock<Glyphs> = OnceLock::new();
     let mut glyphs = GLYPHS
         .get_or_init(Default::default)
         .lock()

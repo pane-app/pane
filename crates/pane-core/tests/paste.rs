@@ -112,7 +112,7 @@ impl Pane {
     /// before the command opens (it titles "Paste to …" as it renders).
     fn with(fixture: &Fixture, arrange: impl FnOnce(&RecordingSystem)) -> Pane {
         let system = Arc::new(RecordingSystem::default());
-        arrange(&*system);
+        arrange(&system);
         Pane::start(fixture, system, true)
     }
 

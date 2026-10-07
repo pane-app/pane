@@ -1003,7 +1003,6 @@ fn render(
         Vec::new()
     };
     // Each card's preferences, and the text fields that edit them.
-    let mut packages = packages;
     for card in &mut packages {
         card.preferences = this
             .launcher
