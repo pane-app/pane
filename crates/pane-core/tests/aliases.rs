@@ -263,9 +263,9 @@ fn an_alias_finds_the_command_first_and_sends_the_text_after_it_only_when_invoke
     assert_eq!(launcher.view().selected, Some(0));
     assert!(!running(&runtime).contains(&echo));
     // Root search presents the row with its alias, as a command.
-    let shown = &launcher.presentation().rows[0];
-    assert_eq!(shown.alias.as_deref(), Some("ec"));
-    assert_eq!(shown.kind, Some(pane_core::RowKind::Command));
+    let presented = &launcher.presentation().rows[0];
+    assert_eq!(presented.alias.as_deref(), Some("ec"));
+    assert_eq!(presented.kind, Some(pane_core::RowKind::Command));
 
     // The alias and text list a row that sends the text; still nothing
     // runs while typing.

@@ -90,6 +90,8 @@ pub(crate) struct ProgramError {
 pub(crate) enum ErrorKind {
     NotFound,
     Unavailable,
+    /// The user declined the elevation prompt, which only Windows shows.
+    #[cfg_attr(not(windows), allow(dead_code))]
     Declined,
     TimedOut,
     TooMuchOutput,
