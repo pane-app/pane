@@ -1464,7 +1464,7 @@ key 53; sleep 1
 type_text 'plan'; sleep 3
 capture 221-files-found.png
 check 221-files-found.png selected 3000   # the selected file row, "Résumé plan ü.txt"
-key 36; sleep 3   # Open: "Opened Résumé plan ü.txt", and the window closes
+key 36; sleep 3   # Open: the window closes, and a HUD says "Opened Résumé plan ü.txt"
 capture 222-files-opened.png   # evidence only: the window is hidden
 [ -f "$out/opened-file.txt" ] || { echo "the handler for files was not asked to open anything"; exit 1; }
 [ "$(cd "$(dirname "$(head -1 "$out/opened-file.txt")")" && pwd -P)/$(basename "$(head -1 "$out/opened-file.txt")")" = "$(cd "$files_folder" && pwd -P)/Résumé plan ü.txt" ] || { echo "the handler for files was not asked to open the found file"; exit 1; }
@@ -1474,7 +1474,7 @@ start_pane
 type_text 'runner'; sleep 3
 capture 223-files-program-found.png
 check 223-files-program-found.png selected 3000   # the script's row
-key 36; sleep 3   # Reveal in Finder
+key 36; sleep 3   # Show in Finder
 capture 224-files-program-revealed.png   # evidence only: Finder, Pane hidden
 [ ! -e "$out/opened-file.txt" ] || { echo "the script was handed to the handler"; exit 1; }
 [ ! -e "$files_fixture/runner-ran" ] || { echo "the script ran"; exit 1; }

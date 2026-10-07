@@ -1549,7 +1549,7 @@ check 220-files-folder-granted.png success   # "Files may now list “Pane smoke
 "$xdotool" type --delay 50 'plan'; sleep 3
 capture 221-files-found.png
 check 221-files-found.png selected 3000   # the selected file row, "Résumé plan ü.txt"
-"$xdotool" key Return; sleep 4   # Open: "Opened Résumé plan ü.txt", and the window closes
+"$xdotool" key Return; sleep 4   # Open: the window closes, and a HUD says "Opened Résumé plan ü.txt"
 capture 222-files-opened.png   # evidence only: the window is hidden
 [ -f "$out/opened-file.txt" ] || { echo "the handler for files was not asked to open anything"; exit 1; }
 # Both sides resolved, as the same file.
@@ -1561,7 +1561,7 @@ start_pane
 "$xdotool" type --delay 50 'runner'; sleep 3
 capture 223-files-program-found.png
 check 223-files-program-found.png selected 3000   # the script's row
-"$xdotool" key Return; sleep 3   # Reveal in File Manager
+"$xdotool" key Return; sleep 3   # Show in File Manager
 capture 224-files-program-revealed.png   # evidence only: the window is hidden
 # What xdg-open was handed, if anything, is the script's folder.
 if [ -e "$out/opened-file.txt" ]; then

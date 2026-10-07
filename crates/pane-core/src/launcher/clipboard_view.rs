@@ -33,10 +33,12 @@
 use std::fmt;
 use std::future::Future;
 
+use super::own_actions::COPIED;
 use super::{Launcher, Screen, State, Status, owner};
 use crate::clipboard::history::PackageHistory;
 use crate::clipboard::{self, CaptureState, Commands};
 use crate::extension_data::PackageData;
+use crate::feedback::{Hud, ToastStyle};
 use crate::packages::PackageIdentity;
 
 /// The id of Pane's Clipboard History default extension, and of its one
@@ -249,18 +251,25 @@ impl Launcher {
 
     /// Puts the record `id` of `view` on the clipboard again, through the
     /// history's existing copy, once `view` is revalidated (see the module
-    /// documentation). The outcome shows as the status; `Err` says why
-    /// nothing was copied.
+    /// documentation), then closes the window and says "Copied to
+    /// Clipboard" in a HUD, as every Copy action does. `Err` says why
+    /// nothing was copied, in the status too; the window then stays.
     pub fn copy_clipboard_record(
         &self,
         view: &ClipboardHistoryView,
         id: &str,
     ) -> Result<(), String> {
         self.clipboard_operation(view, |commands| {
-            commands
-                .copy(id)
-                .map(|()| "Copied to the clipboard".to_owned())
-        })
+            commands.copy(id).map(|()| COPIED.to_owned())
+        })?;
+        if let Some(mut state) = self.lock_if_current(view.reading.epoch) {
+            state.view.status = Status::Idle;
+        }
+        self.show_hud(Hud {
+            title: COPIED.into(),
+            style: ToastStyle::Success,
+        });
+        Ok(())
     }
 
     /// Pastes the record `id` of `view` into the application that was in

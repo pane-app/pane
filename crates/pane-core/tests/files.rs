@@ -23,13 +23,25 @@ use pane_core::files::{self, FolderListing, Folders, Limits, Listed};
 use pane_core::{Launcher, LinkOpener, PackageIdentity, Runtime, Screen, Status};
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
 #[path = "support/system.rs"]
 mod system;
 
+use feedback::RecordingWindow;
 use rows::titles;
 use system::{Done, RecordingSystem};
+
+/// Activates the selected row and answers what the HUD then said, if one
+/// showed: Pane's own file actions close the window and say what they did
+/// in one, as the standard actions do.
+fn activated(launcher: &Launcher) -> Option<String> {
+    let window = RecordingWindow::attach(launcher);
+    block_on(launcher.activate_selected());
+    window.huds().pop().map(|hud| hud.title)
+}
 
 /// The Files default extension's command, which searches as the user types
 /// and computes root search's file results.
@@ -506,10 +518,9 @@ fn a_granted_folder_is_searched_and_a_found_file_opened() {
         Some("File in Pane files — ñ/notes")
     );
     assert_eq!(view.selected, Some(0));
-    block_on(launcher.activate_selected());
     assert_eq!(
-        launcher.view().status,
-        Status::Result("Opened Résumé plan ü.txt".into())
+        activated(&launcher).as_deref(),
+        Some("Opened Résumé plan ü.txt")
     );
     let opened = pane.opener.files();
     assert_eq!(opened.len(), 1);
@@ -617,10 +628,9 @@ fn a_guest_cannot_name_a_file_or_retitle_one() {
         view.rows[2].subtitle.as_deref(),
         Some("File in Pane files — ñ/notes")
     );
-    block_on(launcher.activate_selected());
     assert_eq!(
-        launcher.view().status,
-        Status::Result("Opened Résumé plan ü.txt".into())
+        activated(&launcher).as_deref(),
+        Some("Opened Résumé plan ü.txt")
     );
 }
 
@@ -645,12 +655,12 @@ fn a_file_is_checked_again_when_it_is_opened() {
             .position(|row| row == title)
             .unwrap_or_else(|| panic!("{title} not found: {:?}", titles(&launcher)));
         launcher.select(index);
-        block_on(launcher.activate_selected());
-        launcher.view().status
+        activated(&launcher)
     };
 
-    // Programs and scripts are found, but Enter reveals them rather than
-    // open them (only their Run action runs them: `file_actions.rs`).
+    // Programs and scripts are found, but Enter shows them in the file
+    // manager rather than open them (only their Run action runs them:
+    // `file_actions.rs`), and says so in a HUD.
     let manager = if cfg!(target_os = "windows") {
         "Explorer"
     } else if cfg!(target_os = "macos") {
@@ -660,14 +670,14 @@ fn a_file_is_checked_again_when_it_is_opened() {
     };
     assert_eq!(
         open("run plan", "run plan.bat"),
-        Status::Result(format!("Revealed run plan.bat in {manager}"))
+        Some(format!("Showed run plan.bat in {manager}"))
     );
     assert!(matches!(pane.system.take().as_slice(), [Done::Revealed(_)]));
     #[cfg(unix)]
     {
         assert_eq!(
             open("plan script", "plan script"),
-            Status::Result(format!("Revealed plan script in {manager}"))
+            Some(format!("Showed plan script in {manager}"))
         );
         assert!(matches!(pane.system.take().as_slice(), [Done::Revealed(_)]));
     }
@@ -787,10 +797,9 @@ fn the_javascript_and_typescript_samples_find_and_open_files_too() {
             launcher.view().rows[0].subtitle.as_deref(),
             Some("File in Pane files — ñ")
         );
-        block_on(launcher.activate_selected());
         assert_eq!(
-            launcher.view().status,
-            Status::Result("Opened Résumé plan ü.txt".into())
+            activated(&launcher).as_deref(),
+            Some("Opened Résumé plan ü.txt")
         );
         let opened = pane.opener.files();
         assert_eq!(opened.len(), 1, "{title}");

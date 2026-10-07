@@ -3001,6 +3001,7 @@ mod clipboard_split {
         CaptureState, ClipboardSystem, Content, ManualClock, Markers, Observation, Sink, Watch,
     };
     use pane_core::defaults::ArtifactSource;
+    use pane_core::tray::TrayAction;
     use pane_core::{DefaultExtension, Launcher, PackageIdentity, Runtime, Screen};
     use tempfile::TempDir;
 
@@ -3264,34 +3265,52 @@ mod clipboard_split {
         );
     }
 
+    /// Copying closes the window and says "Copied to Clipboard" in the
+    /// HUD, as every Copy action does.
+    fn copied(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) {
+        cx.run_until_parked();
+        assert!(
+            cx.read_entity(window, |window, _| window.hidden()),
+            "copying closes the window"
+        );
+        assert_eq!(
+            cx.read_entity(window, |window, _| window.hud()).as_deref(),
+            Some("Copied to Clipboard")
+        );
+    }
+
     #[gpui::test]
     fn the_keys_move_the_selection_and_the_footer_copies_and_deletes(cx: &mut TestAppContext) {
         let world = World::new();
         let launcher = world.launcher(cx, &["first", "second", "third"]);
         let (window, cx) = open_history(cx, launcher);
 
-        // Down past the end stays on the last record.
-        cx.simulate_keystrokes("down down down");
-        click(cx, "clipboard-copy");
-        settle(&window, cx);
-        assert_eq!(world.clipboard.written(), ["first"]);
-
-        // Ctrl+D deletes the selected record through the existing delete;
-        // the selection falls back to the first record left.
-        cx.simulate_keystrokes("up ctrl-d");
+        // Down past the end stays on the last record. Ctrl+D deletes the
+        // selected record through the existing delete; the selection falls
+        // back to the first record left.
+        cx.simulate_keystrokes("down down down up ctrl-d");
         settle(&window, cx);
         assert_eq!(listed(&window, cx), ["third", "first"]);
-        // Ctrl+Enter, the secondary action, copies it again and keeps the
-        // view.
-        cx.simulate_keystrokes("ctrl-enter");
-        settle(&window, cx);
-        assert_eq!(world.clipboard.written(), ["first", "third"]);
-        assert!(split_shown(&window, cx), "copying keeps the view");
-
         // The footer's Delete does the same.
         click(cx, "clipboard-delete");
         settle(&window, cx);
         assert_eq!(listed(&window, cx), ["first"]);
+
+        // Ctrl+Enter, the secondary action, copies it again, closes the
+        // window and says so in the HUD.
+        cx.simulate_keystrokes("ctrl-enter");
+        copied(&window, cx);
+        assert_eq!(world.clipboard.written(), ["first"]);
+
+        // Shown again, the view is back; the footer's Copy does the same.
+        window.update_in(cx, |window, w, cx| {
+            window.tray_selected(TrayAction::OpenPane, w, cx)
+        });
+        settle(&window, cx);
+        assert!(split_shown(&window, cx), "the view is restored");
+        click(cx, "clipboard-copy");
+        copied(&window, cx);
+        assert_eq!(world.clipboard.written(), ["first", "first"]);
     }
 
     #[gpui::test]

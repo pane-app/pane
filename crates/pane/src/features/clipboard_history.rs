@@ -18,7 +18,8 @@
 //! - Enter, or the footer's Paste, pastes the selected record into the
 //!   application that was in front, closing the window (#150); where Pane
 //!   cannot paste yet, it copies the record instead and a HUD says so.
-//!   Ctrl+Enter, or the footer's Copy, copies it again; Ctrl+D (as
+//!   Ctrl+Enter, or the footer's Copy, copies it again, closing the window
+//!   with a "Copied to Clipboard" HUD as every Copy action does; Ctrl+D (as
 //!   Explorer deletes), or the footer's Delete, deletes it — never Delete
 //!   alone, which edits the search. Copy and Delete are the history's
 //!   existing operations; the core revalidates all three first.
@@ -411,7 +412,8 @@ impl LauncherWindow {
     }
 
     /// Copies the selected record again, through the core's revalidated
-    /// operation; nothing with none selected.
+    /// operation, which closes the window and says so in a HUD; nothing
+    /// with none selected.
     pub(crate) fn copy_selected_record(&mut self, cx: &mut Context<Self>) {
         if let Some((view, id)) = self.selected_record() {
             self.launcher.copy_clipboard_record(&view, &id).ok();

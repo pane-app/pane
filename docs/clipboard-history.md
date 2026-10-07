@@ -85,8 +85,9 @@ beside a preview; its keys are the kept items' actions (#150): **Enter**
 (the footer's Paste) pastes the selected record into the application in
 front through Pane's system, closing the window, or where Pane cannot
 paste yet copies it through the history's own copy and shows "Copied —
-paste is not available here yet"; **Ctrl+Enter** (Copy) copies it again
-and keeps the view; **Ctrl+D** (Delete) deletes it. Each revalidates the
+paste is not available here yet"; **Ctrl+Enter** (Copy) copies it again,
+closes the window and shows "Copied to Clipboard" in a HUD, as every Copy
+action does; **Ctrl+D** (Delete) deletes it. Each revalidates the
 reading first (`Launcher::paste_clipboard_record`,
 `copy_clipboard_record`, `delete_clipboard_record`). Manage (Ctrl+K)
 shows the rows above.

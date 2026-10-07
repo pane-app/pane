@@ -173,8 +173,8 @@ Ctrl+Shift+Enter the third, and the Actions panel (Ctrl+K) lists them all.
 
 | A document | A program or script |
 | --- | --- |
-| **Open** (Enter): the system's handler for its type | **Reveal in Explorer** (Enter) |
-| **Reveal in Explorer** (Ctrl+Enter): selected in the file manager | **Open With…** (Ctrl+Enter) |
+| **Open** (Enter): the system's handler for its type | **Show in Explorer** (Enter) |
+| **Show in Explorer** (Ctrl+Enter): selected in the file manager | **Open With…** (Ctrl+Enter) |
 | **Open With…**: a submenu of the installed applications, by name | **Run** (Ctrl+Shift+Enter): the system's handler, which runs it |
 | **Copy Path**: its path, as text | **Copy Path** |
 | **Copy File**: the file, as the file manager copies it | **Copy File** |
@@ -182,18 +182,20 @@ Ctrl+Shift+Enter the third, and the Actions panel (Ctrl+K) lists them all.
 
 File search's own Enter never runs a program by accident (ADR 0037's
 exception, keeping ADR 0017's intent): a file that would run a program
-when opened (below) is revealed, and only its explicit **Run** runs it.
+when opened (below) is shown in the file manager, and only its explicit
+**Run** runs it.
 Whether a file is one is told on the listing's worker, with the listing, so
 a row knows at once what Enter does. (On macOS the file manager is Finder,
-elsewhere "File Manager"; the Recycle Bin is the Trash outside Windows.)
+so the action is "Show in Finder", elsewhere "Show in File Manager"; the
+Recycle Bin is the Trash outside Windows.)
 
-Each action closes the window after it acts, as the standard actions do:
-Open, Reveal, Open With… and Run say what they did in the status line
-("Opened plan.md", "Revealed run.bat in Explorer", "Opened plan.md with
-Notepad", "Ran run.bat"), Copy Path and Copy File show "Copied to
-Clipboard" in a HUD, and Move to Recycle Bin, once the user confirmed
-"Move “plan.md” to the Recycle Bin?" (never remembered), shows "Moved to
-Recycle Bin". What fails stays on screen in the status line ("Could not
+Each action closes the window after it acts and says what it did in a
+HUD, as the standard actions do: Open, Show in Explorer, Open With… and
+Run ("Opened plan.md", "Showed run.bat in Explorer", "Opened plan.md with
+Notepad", "Ran run.bat"), Copy Path and Copy File ("Copied to
+Clipboard"), and Move to Recycle Bin, once the user confirmed "Move
+“plan.md” to the Recycle Bin?" (never remembered) ("Moved to Recycle
+Bin"). What fails stays on screen in the status line ("Could not
 open todo.txt: it no longer exists"). Opening and running go through the
 launcher's link opener (`LinkOpener::open_file`), the others through its
 system ([`crate::system`](../crates/pane-core/src/system.rs): reveal, open
@@ -220,7 +222,7 @@ again (`FileAccess::checked_file`):
    command tool terminal workflow` and anything inside an `.app` bundle,
    `.desktop` files, and on macOS and Linux any file with an executable
    bit ("it is a program or script, which opening would run"). A document
-   that became a program since it was listed is refused so. Run, Reveal,
+   that became a program since it was listed is refused so. Run, Show in Explorer,
    Open With…, the copies and the Recycle Bin act on a program as on any
    file.
 

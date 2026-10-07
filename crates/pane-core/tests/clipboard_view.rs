@@ -556,6 +556,7 @@ fn the_projection_lists_kept_records_newest_first_with_their_source_and_the_actu
 fn copy_and_delete_run_the_existing_operations_on_a_record_still_kept() {
     let pane = Pane::new();
     let launcher = pane.start();
+    let window = RecordingWindow::attach(&launcher);
     open(&launcher, COMMAND);
     let view = launcher.clipboard_history().unwrap();
     launcher
@@ -566,12 +567,14 @@ fn copy_and_delete_run_the_existing_operations_on_a_record_still_kept() {
     let view = launcher.clipboard_history().unwrap();
     let (newest, oldest) = (view.records[0].id.clone(), view.records[1].id.clone());
 
+    window.take();
     launcher.copy_clipboard_record(&view, &oldest).unwrap();
     assert_eq!(pane.clipboard.written(), ["keep me"]);
-    assert_eq!(
-        launcher.view().status,
-        Status::Result("Copied to the clipboard".into())
-    );
+    // As every Copy action: the window closes, and a HUD says so.
+    assert_eq!(launcher.view().status, Status::Idle);
+    assert_eq!(window.hides(), 1, "the window closes");
+    let huds: Vec<String> = window.huds().into_iter().map(|hud| hud.title).collect();
+    assert_eq!(huds, ["Copied to Clipboard"]);
 
     launcher.delete_clipboard_record(&view, &newest).unwrap();
     assert_eq!(

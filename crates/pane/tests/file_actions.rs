@@ -179,6 +179,23 @@ fn hidden(window: &Entity<LauncherWindow>, cx: &VisualTestContext) -> bool {
     cx.read_entity(window, |window, _| window.hidden())
 }
 
+/// What the HUD shows, if it shows.
+fn hud(window: &Entity<LauncherWindow>, cx: &VisualTestContext) -> Option<String> {
+    cx.read_entity(window, |window, _| window.hud())
+}
+
+/// What showing a file in the file manager says on this system.
+fn showed(name: &str) -> String {
+    let manager = if cfg!(target_os = "windows") {
+        "Explorer"
+    } else if cfg!(target_os = "macos") {
+        "Finder"
+    } else {
+        "File Manager"
+    };
+    format!("Showed {name} in {manager}")
+}
+
 fn selected_title(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> String {
     let view = cx.read_entity(window, |window, _| window.launcher().view());
     view.rows[view.selected.expect("a row is selected")]
@@ -201,6 +218,7 @@ fn enter_opens_a_document_and_closes_the_window(cx: &mut TestAppContext) {
     assert!(same_file(&opened[0], &world.folder.join("plan.txt")));
     assert!(world.system.take().is_empty());
     assert!(hidden(&window, cx), "the launcher closed");
+    assert_eq!(hud(&window, cx).as_deref(), Some("Opened plan.txt"));
 }
 
 #[gpui::test]
@@ -215,6 +233,7 @@ fn ctrl_enter_reveals_a_document_and_closes_the_window(cx: &mut TestAppContext) 
     }
     assert!(world.opener.take().is_empty());
     assert!(hidden(&window, cx), "the launcher closed");
+    assert_eq!(hud(&window, cx), Some(showed("plan.txt")));
 }
 
 #[gpui::test]
@@ -232,6 +251,7 @@ fn enter_reveals_a_program_and_runs_nothing(cx: &mut TestAppContext) {
     }
     assert!(world.opener.take().is_empty(), "nothing ran it");
     assert!(hidden(&window, cx), "the launcher closed");
+    assert_eq!(hud(&window, cx), Some(showed("run plan.bat")));
 }
 
 #[gpui::test]

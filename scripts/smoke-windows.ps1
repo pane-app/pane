@@ -1636,7 +1636,7 @@ Send "{ESC}"; Start-Sleep -Seconds 1
 Send "plan"; Start-Sleep -Seconds 3
 Capture "221-files-found.png"
 Check "221-files-found.png" "selected" 3000   # the selected file row
-Send "{ENTER}"; Start-Sleep -Seconds 3   # Open: "Opened Resume plan u.txt", and the window closes
+Send "{ENTER}"; Start-Sleep -Seconds 3   # Open: the window closes, and a HUD says "Opened Resume plan u.txt"
 Capture "222-files-opened.png"   # evidence only: the window is hidden
 if (-not (Test-Path $openLog)) { throw "the handler for files was not asked to open anything" }
 if ([Win]::GetForegroundWindow() -eq $process.MainWindowHandle) { throw "Open left Pane's window in front" }
@@ -1649,7 +1649,7 @@ $process = Start-Pane "stderr-files-program.log"
 Send "runner"; Start-Sleep -Seconds 3
 Capture "223-files-program-found.png"
 Check "223-files-program-found.png" "selected" 3000   # the batch file's row
-Send "{ENTER}"; Start-Sleep -Seconds 3   # Reveal in Explorer: "Revealed runner.bat in Explorer"
+Send "{ENTER}"; Start-Sleep -Seconds 3   # Show in Explorer: a HUD says "Showed runner.bat in Explorer"
 Capture "224-files-program-revealed.png"   # evidence only: File Explorer, Pane hidden
 if (Test-Path $openLog) { throw "the batch file was handed to the handler" }
 if (Test-Path (Join-Path $filesFixture "runner-ran")) { throw "the batch file ran" }

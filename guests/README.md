@@ -763,10 +763,11 @@ of root search, whose files have an `id` and a `relative` path. An
 `file` (a command that sets `"search": true` too, as Search Files does);
 Pane shows the file's own name and folder in the row, whatever the result's
 title says, drops an id it did not give, and gives the file its own
-[file actions](../docs/files.md#the-file-actions): Open (Enter), Reveal in
+[file actions](../docs/files.md#the-file-actions): Open (Enter), Show in
 Explorer (Ctrl+Enter), Open With…, Copy Path, Copy File and Move to Recycle
-Bin (confirmed), each checking it again first; for a program or script,
-Enter reveals it and only Run runs it. The command is never called for
+Bin (confirmed), each checking it again first, then closing the window and
+saying what it did in a HUD; for a program or script, Enter shows it in
+Explorer and only Run runs it. The command is never called for
 them.
 Pane lists the folder under its [scan policy](../docs/files.md#the-scan-policy)
 (`files.limits()` gives its limits); file results are listed after the

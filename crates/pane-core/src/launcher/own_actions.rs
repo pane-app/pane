@@ -11,14 +11,15 @@
 //! **A file** (ADR 0017: the extension names it by the id Pane gave it,
 //! never by a path). Pane checks it again before acting, as it always
 //! did before opening one (`crate::files`). A document's actions are
-//! Open (Enter), Reveal in Explorer (Ctrl+Enter), Open With…, Copy Path,
-//! Copy File and Move to Recycle Bin (destructive, confirmed first). File
-//! search's own Enter never runs a program by accident (ADR 0037's
-//! exception, keeping ADR 0017's intent): for a program or script, Enter
-//! reveals it, Ctrl+Enter is Open With…, and only the explicit Run action
-//! runs it. Each closes the window after acting, as the standard actions
-//! do; Copy Path, Copy File and Move to Recycle Bin then say so in a HUD.
-//! What failed stays on screen, in the status line.
+//! Open (Enter), Show in Explorer (Ctrl+Enter; Finder or the File Manager
+//! elsewhere), Open With…, Copy Path, Copy File and Move to Recycle Bin
+//! (destructive, confirmed first). File search's own Enter never runs a
+//! program by accident (ADR 0037's exception, keeping ADR 0017's intent):
+//! for a program or script, Enter shows it in Explorer, Ctrl+Enter is Open
+//! With…, and only the explicit Run action runs it. Each closes the window
+//! after acting, as the standard actions do, and says what it did in a
+//! HUD ("Opened plan.md", "Copied to Clipboard"). What failed stays on
+//! screen, in the status line.
 //!
 //! **A computed answer.** Copy answer (Enter: the window puts the text on
 //! the clipboard, `Launcher::selected_copy`) and Paste answer (Ctrl+Enter):
@@ -49,7 +50,7 @@ const COPY_ANSWER: &str = "pane.copy-answer";
 const PASTE_ANSWER: &str = "pane.paste-answer";
 
 /// What the HUD says once a copy is made.
-const COPIED: &str = "Copied to Clipboard";
+pub(super) const COPIED: &str = "Copied to Clipboard";
 
 /// What the system's file manager is called.
 pub(super) fn file_manager() -> &'static str {
@@ -97,7 +98,7 @@ fn open_with() -> Action {
 
 /// The actions of `file`, in order (see the module docs).
 pub(super) fn file_actions(file: &FileRow) -> Vec<Action> {
-    let reveal = action(format!("Reveal in {}", file_manager()), REVEAL);
+    let reveal = action(format!("Show in {}", file_manager()), REVEAL);
     let mut actions = if file.program {
         vec![reveal, open_with(), action("Run", RUN)]
     } else {
@@ -255,9 +256,8 @@ pub(super) async fn open_with_entries(launcher: &Launcher) -> Result<Vec<Action>
 
 /// How one of Pane's own actions ended.
 enum Ended {
-    /// It acted: the status says `.0`, and the window closes.
-    Said(String),
-    /// It acted: the window closes and a HUD says `.0`.
+    /// It acted: the window closes and a HUD says `.0`, as the standard
+    /// actions' do.
     Hud(String),
     /// It did nothing (the user did not confirm, or the paste closed the
     /// window itself): nothing more is said.
@@ -278,7 +278,7 @@ impl Launcher {
                     .on_file(&file, false, move |path| links.open_file(&path))
                     .await
                 {
-                    Ok(()) => Ended::Said(format!("Opened {name}")),
+                    Ok(()) => Ended::Hud(format!("Opened {name}")),
                     Err(why) => Ended::Failed(format!("Could not open {name}: {why}")),
                 }
             }
@@ -289,7 +289,7 @@ impl Launcher {
                     .on_file(&file, true, move |path| links.open_file(&path))
                     .await
                 {
-                    Ok(()) => Ended::Said(format!("Ran {name}")),
+                    Ok(()) => Ended::Hud(format!("Ran {name}")),
                     Err(why) => Ended::Failed(format!("Could not run {name}: {why}")),
                 }
             }
@@ -301,10 +301,8 @@ impl Launcher {
                     .on_file(&file, true, move |path| system.reveal(&path))
                     .await
                 {
-                    Ok(()) => Ended::Said(format!("Revealed {name} in {manager}")),
-                    Err(why) => {
-                        Ended::Failed(format!("Could not reveal {name} in {manager}: {why}"))
-                    }
+                    Ok(()) => Ended::Hud(format!("Showed {name} in {manager}")),
+                    Err(why) => Ended::Failed(format!("Could not show {name} in {manager}: {why}")),
                 }
             }
             Work::OpenWith {
@@ -320,7 +318,7 @@ impl Launcher {
                     })
                     .await;
                 match opened {
-                    Ok(()) => Ended::Said(format!("Opened {name} with {app}")),
+                    Ok(()) => Ended::Hud(format!("Opened {name} with {app}")),
                     Err(why) => Ended::Failed(format!("Could not open {name} with {app}: {why}")),
                 }
             }
@@ -430,19 +428,17 @@ impl Launcher {
         .await
     }
 
-    /// Says how one of Pane's own actions ended, on the screen of `epoch`
-    /// if it is still on display, and closes the window after one that
-    /// acted.
+    /// Says how one of Pane's own actions ended: after one that acted, the
+    /// window closes and a HUD says what it did; what failed is said on the
+    /// screen of `epoch` if it is still on display.
     fn end_own(&self, epoch: u64, ended: Ended) {
         if let Some(mut state) = self.lock_if_current(epoch) {
             state.view.status = match &ended {
-                Ended::Said(said) => Status::Result(said.clone()),
                 Ended::Failed(why) => Status::Error(why.clone()),
                 Ended::Hud(_) | Ended::Quiet => Status::Idle,
             };
         }
         match ended {
-            Ended::Said(_) => self.close_after_acting(),
             Ended::Hud(title) => self.show_hud(Hud {
                 title,
                 style: ToastStyle::Success,

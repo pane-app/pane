@@ -3,11 +3,12 @@
 //! and the JavaScript and TypeScript files samples, which give the same
 //! answers: the command owns the launcher's search field and lists the
 //! granted folder's files as the user types, a newer text stopping the
-//! search before it; a document's actions are Open (Enter), Reveal in
+//! search before it; a document's actions are Open (Enter), Show in
 //! Explorer (Ctrl+Enter), Open With…, Copy Path, Copy File and Move to
-//! Recycle Bin (destructive, confirmed), each closing the window; for a
-//! program or script, Enter reveals it, Ctrl+Enter is Open With… and only
-//! Run runs it, in Search Files and in root search's file results alike.
+//! Recycle Bin (destructive, confirmed), each closing the window and saying
+//! what it did in a HUD; for a program or script, Enter shows it in
+//! Explorer, Ctrl+Enter is Open With… and only Run runs it, in Search Files
+//! and in root search's file results alike.
 //! Recording fakes stand in for the system's handler of files (the link
 //! opener), the system (reveal, open with an application, the clipboard,
 //! the Recycle Bin and the installed applications) and the window, so
@@ -78,16 +79,21 @@ const TYPESCRIPT: Package = Package {
     command: "Find files (TypeScript)",
 };
 
-/// What revealing a file is called on this system.
-fn reveal() -> String {
-    let manager = if cfg!(target_os = "windows") {
+/// The file manager's name on this system.
+fn manager() -> &'static str {
+    if cfg!(target_os = "windows") {
         "Explorer"
     } else if cfg!(target_os = "macos") {
         "Finder"
     } else {
         "File Manager"
-    };
-    format!("Reveal in {manager}")
+    }
+}
+
+/// What showing a file in the file manager is called on this system:
+/// "Show in Explorer" on Windows.
+fn reveal() -> String {
+    format!("Show in {}", manager())
 }
 
 /// What moving a file to the trash is called on this system.
@@ -303,6 +309,15 @@ impl Pane {
     fn closed(&self) -> bool {
         self.window.hides() > 0
     }
+
+    /// What the HUDs shown since the row was selected said.
+    fn huds(&self) -> Vec<String> {
+        self.window
+            .huds()
+            .into_iter()
+            .map(|hud| hud.title)
+            .collect()
+    }
 }
 
 /// The documents of the fixture folder `query` finds, and their own
@@ -377,19 +392,22 @@ fn a_documents_actions_act_through_the_system_and_close_the_window(fixture: &'st
     let opened = pane.opener.take();
     assert_eq!(opened.len(), 1);
     assert!(same_file(&opened[0], &todo));
+    assert_eq!(pane.huds(), ["Opened todo.txt"]);
     assert_eq!(
         pane.launcher.view().status,
-        Status::Result("Opened todo.txt".into())
+        Status::Idle,
+        "not the status line"
     );
     assert!(pane.closed());
 
-    // Ctrl+Enter reveals it.
+    // Ctrl+Enter shows it in the file manager.
     pane.select("todo.txt");
     block_on(pane.launcher.run_selected_action(1));
     match pane.system.take().as_slice() {
         [Done::Revealed(path)] => assert!(same_file(path, &todo)),
         other => panic!("{other:?}"),
     }
+    assert_eq!(pane.huds(), [format!("Showed todo.txt in {}", manager())]);
     assert!(pane.closed());
 
     // Copy Path and Copy File copy, close the window and say so.
@@ -452,10 +470,7 @@ fn a_documents_actions_act_through_the_system_and_close_the_window(fixture: &'st
         }
         other => panic!("{other:?}"),
     }
-    assert_eq!(
-        pane.launcher.view().status,
-        Status::Result("Opened todo.txt with Notepad".into())
-    );
+    assert_eq!(pane.huds(), ["Opened todo.txt with Notepad"]);
     assert!(pane.closed());
     assert!(pane.opener.take().is_empty());
 }
@@ -560,10 +575,7 @@ fn a_program_runs_only_through_run(pane: &Pane, name: &str, path: &Path) {
     let ran = pane.opener.take();
     assert_eq!(ran.len(), 1);
     assert!(same_file(&ran[0], path));
-    assert_eq!(
-        pane.launcher.view().status,
-        Status::Result(format!("Ran {name}"))
-    );
+    assert_eq!(pane.huds(), [format!("Ran {name}")]);
     assert!(pane.closed());
 }
 
