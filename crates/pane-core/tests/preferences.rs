@@ -24,8 +24,8 @@ use std::time::Duration;
 use futures::executor::block_on;
 use pane_core::clipboard::{Clock, ManualClock, SystemClock};
 use pane_core::{
-    FieldKind, Launcher, PackageIdentity, PreferenceKind, ResultAction, Runtime, SavedData, Screen,
-    Status,
+    FieldKind, Launcher, PackageIdentity, PreferenceKind, PreferencesTarget, ResultAction, Runtime,
+    SavedData, Screen, Status,
 };
 use tempfile::TempDir;
 
@@ -729,7 +729,10 @@ fn configure_entries_appear_only_where_preferences_are_declared() {
     assert!(launcher.result_action_ready(&row, ResultAction::ConfigureCommand));
     assert_eq!(
         launcher.preferences_target(&row),
-        Some((PackageIdentity::local(&folder).unwrap(), "show".into()))
+        Some(PreferencesTarget {
+            identity: PackageIdentity::local(&folder).unwrap(),
+            command: "show".into(),
+        })
     );
     assert_eq!(launcher.preferences_target(&id(&other, "report")), None);
 }

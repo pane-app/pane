@@ -22,6 +22,8 @@
 
 use serde::Deserialize;
 
+use crate::dropdown::{self, DropdownOption, OptionJson};
+
 /// The most arguments a command may declare.
 pub const MAX_ARGUMENTS: usize = 3;
 
@@ -48,15 +50,7 @@ pub enum ArgumentKind {
     Password,
     /// One of these options, the first chosen unless Pane remembers
     /// another (the last one chosen for this command).
-    Dropdown(Vec<ArgumentOption>),
-}
-
-/// An option of a dropdown argument: its `value` reaches the command, its
-/// `title` is what the user sees.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ArgumentOption {
-    pub value: String,
-    pub title: String,
+    Dropdown(Vec<DropdownOption>),
 }
 
 impl ManifestArgument {
@@ -202,19 +196,6 @@ struct ArgumentJson {
     options: Option<Vec<OptionJson>>,
 }
 
-/// A dropdown's option as `pane.json` writes it: its value alone (shown as
-/// it is), or an object with its `value` and an optional `title`.
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum OptionJson {
-    Value(String),
-    Titled {
-        value: String,
-        #[serde(default)]
-        title: Option<String>,
-    },
-}
-
 /// The `arguments` of the command with id `command`, as its `pane.json`
 /// entry writes them, checked: at most [`MAX_ARGUMENTS`], each named, once,
 /// with a known type, and a dropdown with its options. `Err` is the reason,
@@ -259,9 +240,10 @@ pub(crate) fn parse(
                      dropdown has them"
                 ));
             }
-            ("dropdown", options) => {
-                ArgumentKind::Dropdown(dropdown_options(command, &name, options)?)
-            }
+            ("dropdown", options) => ArgumentKind::Dropdown(dropdown::parse(
+                &format!("the argument `{name}` of command `{command}`"),
+                options,
+            )?),
             (other, _) => {
                 return Err(format!(
                     "the argument `{name}` of command `{command}` has the type \"{}\"; an \
@@ -278,48 +260,6 @@ pub(crate) fn parse(
                 .filter(|placeholder| !placeholder.trim().is_empty()),
             required: argument.required,
         });
-    }
-    Ok(parsed)
-}
-
-/// The options of the dropdown argument `name` of `command`: at least one,
-/// each with a value, none repeated.
-fn dropdown_options(
-    command: &str,
-    name: &str,
-    options: Option<Vec<OptionJson>>,
-) -> Result<Vec<ArgumentOption>, String> {
-    let options = options.unwrap_or_default();
-    if options.is_empty() {
-        return Err(format!(
-            "the argument `{name}` of command `{command}` is a dropdown without `options`; list \
-             the choices it offers"
-        ));
-    }
-    let mut parsed: Vec<ArgumentOption> = Vec::new();
-    for option in options {
-        let option = match option {
-            OptionJson::Value(value) => ArgumentOption {
-                title: value.clone(),
-                value,
-            },
-            OptionJson::Titled { value, title } => ArgumentOption {
-                title: title.unwrap_or_else(|| value.clone()),
-                value,
-            },
-        };
-        if option.value.is_empty() {
-            return Err(format!(
-                "the argument `{name}` of command `{command}` has an option with an empty `value`"
-            ));
-        }
-        if parsed.iter().any(|seen| seen.value == option.value) {
-            return Err(format!(
-                "the argument `{name}` of command `{command}` offers the option \"{}\" twice",
-                option.value.escape_debug()
-            ));
-        }
-        parsed.push(option);
     }
     Ok(parsed)
 }
@@ -367,7 +307,7 @@ mod tests {
             kind: ArgumentKind::Dropdown(
                 values
                     .iter()
-                    .map(|value| ArgumentOption {
+                    .map(|value| DropdownOption {
                         value: (*value).into(),
                         title: (*value).into(),
                     })
@@ -403,11 +343,11 @@ mod tests {
                 password("secret"),
                 ManifestArgument {
                     kind: ArgumentKind::Dropdown(vec![
-                        ArgumentOption {
+                        DropdownOption {
                             value: "warm".into(),
                             title: "warm".into()
                         },
-                        ArgumentOption {
+                        DropdownOption {
                             value: "brief".into(),
                             title: "Brief".into()
                         },

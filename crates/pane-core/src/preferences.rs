@@ -25,6 +25,7 @@ use std::path::Path;
 
 use serde::Deserialize;
 
+use crate::dropdown::{self, DropdownOption, OptionJson};
 use crate::packages::Manifest;
 use crate::platform::Platform;
 
@@ -99,15 +100,6 @@ impl PreferenceKind {
     }
 }
 
-/// One option of a dropdown preference.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PreferenceOption {
-    /// What the command receives when it is chosen.
-    pub value: String,
-    /// What the user sees; the value when the manifest gives no title.
-    pub title: String,
-}
-
 /// A preference a manifest declares.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Preference {
@@ -130,7 +122,7 @@ pub struct Preference {
     /// A checkbox's label, beside it.
     pub label: Option<String>,
     /// A dropdown's options, in order.
-    pub options: Vec<PreferenceOption>,
+    pub options: Vec<DropdownOption>,
 }
 
 /// A preference as `pane.json` writes it.
@@ -154,13 +146,6 @@ struct PreferenceJson {
     label: Option<String>,
     #[serde(default)]
     options: Option<Vec<OptionJson>>,
-}
-
-#[derive(Deserialize)]
-struct OptionJson {
-    value: String,
-    #[serde(default)]
-    title: Option<String>,
 }
 
 /// Reads the `preferences` of `whose` ("the package", "command `x`") from
@@ -204,38 +189,18 @@ pub(crate) fn parse(
         if json.title.trim().is_empty() {
             return Err(format!("preference `{name}` of {whose} needs a `title`"));
         }
-        let options: Vec<PreferenceOption> = json
-            .options
-            .unwrap_or_default()
-            .into_iter()
-            .map(|option| PreferenceOption {
-                title: option.title.unwrap_or_else(|| option.value.clone()),
-                value: option.value,
-            })
-            .collect();
-        if kind == PreferenceKind::Dropdown && options.is_empty() {
-            return Err(format!(
-                "dropdown preference `{name}` of {whose} has no `options`; give each its \
-                 `value` and `title`"
-            ));
-        }
-        let mut seen: Vec<&str> = Vec::new();
-        for option in &options {
-            if seen.contains(&option.value.as_str()) {
-                return Err(format!(
-                    "the option \"{}\" of preference `{name}` of {whose} is repeated",
-                    option.value.escape_debug()
-                ));
+        let options = match kind {
+            PreferenceKind::Dropdown => {
+                dropdown::parse(&format!("preference `{name}` of {whose}"), json.options)?
             }
-            seen.push(&option.value);
-        }
+            _ => Vec::new(),
+        };
         let defaults = match json.default {
             None | Some(serde_json::Value::Null) => Defaults::default(),
             Some(serde_json::Value::Object(systems)) => {
                 let mut defaults = Defaults::default();
                 for (system, value) in systems {
-                    let Some(platform) = Platform::ALL.into_iter().find(|p| p.id() == system)
-                    else {
+                    let Some(platform) = Platform::from_id(&system) else {
                         return Err(format!(
                             "the default of preference `{name}` of {whose} names the system \
                              \"{}\"; name windows, macos or linux",
@@ -330,6 +295,16 @@ pub(crate) fn storage_key(command: Option<&str>, name: &str) -> String {
     match command {
         Some(command) => format!("{command}#{name}"),
         None => name.to_owned(),
+    }
+}
+
+/// The command (if any) and the preference name of the storage key `key`
+/// ([`storage_key`]'s inverse). A preference name has no `#`, so the name
+/// is everything after the last one.
+pub(crate) fn split_storage_key(key: &str) -> (Option<&str>, &str) {
+    match key.rsplit_once('#') {
+        Some((command, name)) => (Some(command), name),
+        None => (None, key),
     }
 }
 
@@ -466,10 +441,7 @@ pub(crate) fn values_json(declared: &[Declared<'_>], stored: &BTreeMap<String, S
 /// dropped (`None`): its name is no longer declared, or its type changed so
 /// that it no longer fits.
 pub(crate) fn after_update(manifest: &Manifest, key: &str, value: &str) -> Option<PreferenceKind> {
-    let (command, name) = match key.split_once('#') {
-        Some((command, name)) => (Some(command), name),
-        None => (None, key),
-    };
+    let (command, name) = split_storage_key(key);
     let preference = all_declared(manifest)
         .into_iter()
         .find(|declared| declared.command == command && declared.preference.name == name)?
@@ -535,6 +507,33 @@ mod tests {
                 assert_eq!(read.options[1].title, "b", "a title defaults to the value");
             }
         }
+    }
+
+    #[test]
+    fn a_dropdown_reads_its_options_as_an_argument_does() {
+        let read = one(json!({"name": "p", "type": "dropdown", "title": "P",
+            "options": ["celsius", {"value": "f", "title": "Fahrenheit"}]}))
+        .unwrap();
+        assert_eq!(
+            read.options,
+            [
+                DropdownOption {
+                    value: "celsius".into(),
+                    title: "celsius".into(),
+                },
+                DropdownOption {
+                    value: "f".into(),
+                    title: "Fahrenheit".into(),
+                },
+            ]
+        );
+        let repeated = one(json!({"name": "p", "type": "dropdown", "title": "P",
+            "options": ["a", "a"]}))
+        .unwrap_err();
+        assert!(
+            repeated.contains("preference `p` of the package offers the option \"a\" twice"),
+            "{repeated}"
+        );
     }
 
     #[test]

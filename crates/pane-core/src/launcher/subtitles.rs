@@ -101,7 +101,7 @@ impl Launcher {
         let mut state = self.lock();
         let state = &mut *state;
         let id = match owner(&state.packages, &caller.component) {
-            Some(package) => format!("{}#{command}", package.identity.key()),
+            Some(package) => package.identity.command_id(command),
             None => self
                 .commands
                 .iter()

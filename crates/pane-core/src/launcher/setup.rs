@@ -103,6 +103,32 @@ pub struct PackagePreferences {
     pub commands: Vec<CommandPreferences>,
 }
 
+/// A required preference that is unset, as the setup gate finds it: one
+/// field of the Setup screen.
+pub(super) struct UnsetPreference {
+    /// The command it belongs to, by its id in `pane.json`; `None` for one
+    /// of the package's.
+    command: Option<String>,
+    preference: Preference,
+}
+
+impl UnsetPreference {
+    /// Where its value is kept, which is the id of its Setup screen field.
+    fn key(&self) -> String {
+        preferences::storage_key(self.command.as_deref(), &self.preference.name)
+    }
+}
+
+/// Where "Configure Command…" and "Configure Extension…" take the user:
+/// an installed command's extension card in Settings, at that command's
+/// preferences or its package's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreferencesTarget {
+    pub identity: PackageIdentity,
+    /// The command's id in `pane.json`.
+    pub command: String,
+}
+
 /// What the Setup screen's submission saves, and the launch it releases.
 pub(super) struct SetupSubmit {
     identity: PackageIdentity,
@@ -119,7 +145,7 @@ impl Launcher {
         &self,
         package: &InstalledPackage,
         command: &str,
-    ) -> Vec<(Option<String>, Preference)> {
+    ) -> Vec<UnsetPreference> {
         let (Ok(manifest), Some(installation)) = (&package.manifest, &self.installation) else {
             return Vec::new();
         };
@@ -130,7 +156,10 @@ impl Launcher {
         let stored = installation.data.preference_values(&package.identity);
         preferences::unset(&declared, &stored)
             .into_iter()
-            .map(|unset| (unset.command.map(str::to_owned), unset.preference.clone()))
+            .map(|unset| UnsetPreference {
+                command: unset.command.map(str::to_owned),
+                preference: unset.preference.clone(),
+            })
             .collect()
     }
 
@@ -203,10 +232,7 @@ impl Launcher {
             sentence: format!("Set these up before using {command_title}"),
             help: preferences::help(&location),
         };
-        let fields = unset
-            .iter()
-            .map(|(command, preference)| setup_field(command.as_deref(), preference))
-            .collect();
+        let fields = unset.iter().map(setup_field).collect();
         let form = FormView {
             fields,
             submit_label: "Save and continue".into(),
@@ -303,12 +329,7 @@ impl Launcher {
             };
             let unset = self.unset_preferences(package, &opening.command);
             if !unset.is_empty() {
-                let still: HashSet<String> = unset
-                    .iter()
-                    .map(|(command, preference)| {
-                        preferences::storage_key(command.as_deref(), &preference.name)
-                    })
-                    .collect();
+                let still: HashSet<String> = unset.iter().map(UnsetPreference::key).collect();
                 if let Screen::Form(form) = &mut state.view.screen {
                     for field in &mut form.fields {
                         if still.contains(&field.id) {
@@ -495,7 +516,7 @@ impl Launcher {
     /// root search row is `row`, when it or its package declares
     /// preferences: where "Configure Command…" and "Configure Extension…"
     /// take the user (its extension's card in Settings).
-    pub fn preferences_target(&self, row: &str) -> Option<(PackageIdentity, String)> {
+    pub fn preferences_target(&self, row: &str) -> Option<PreferencesTarget> {
         let state = self.lock();
         let (key, command) = choices::split(row);
         let package = state
@@ -503,8 +524,10 @@ impl Launcher {
             .iter()
             .find(|package| package.identity.key() == key)?;
         let manifest = package.manifest.as_ref().ok()?;
-        preferences::applies(manifest, command)
-            .then(|| (package.identity.clone(), command.to_owned()))
+        preferences::applies(manifest, command).then(|| PreferencesTarget {
+            identity: package.identity.clone(),
+            command: command.to_owned(),
+        })
     }
 
     /// Carries the preference values of the package with `identity` over
@@ -565,10 +588,13 @@ fn refusal(preference: &Preference, value: &str) -> Option<String> {
     }
 }
 
-/// The Setup screen's field for `preference` (of `command`, `None` for the
-/// package's): a choice for a checkbox (off first) and a dropdown, a text
-/// field for every other kind, a password's hidden as it is typed.
-fn setup_field(command: Option<&str>, preference: &Preference) -> FormField {
+/// The Setup screen's field for the unset preference `unset`: a choice for
+/// a checkbox (off first) and a dropdown, a path field with the system's
+/// picker for a file, folder or application (as its extension's card in
+/// Settings has), and a text field for text and a password, a password's
+/// hidden as it is typed.
+fn setup_field(unset: &UnsetPreference) -> FormField {
+    let preference = &unset.preference;
     let choice = |id: &str, label: &str| Choice {
         id: id.to_owned(),
         label: label.to_owned(),
@@ -637,13 +663,11 @@ fn still_unset(kind: Option<PreferenceKind>) -> String {
 impl FormField {
     /// The kind of the preference among `unset` this Setup screen field
     /// edits.
-    fn kind_of(&self, unset: &[(Option<String>, Preference)]) -> Option<PreferenceKind> {
+    fn kind_of(&self, unset: &[UnsetPreference]) -> Option<PreferenceKind> {
         unset
             .iter()
-            .find(|(command, preference)| {
-                preferences::storage_key(command.as_deref(), &preference.name) == self.id
-            })
-            .map(|(_, preference)| preference.kind)
+            .find(|unset| unset.key() == self.id)
+            .map(|unset| unset.preference.kind)
     }
 }
 

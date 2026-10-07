@@ -171,7 +171,7 @@ fn declared(state: &State, opening: &Opening) -> Option<(Vec<ManifestArgument>, 
     }
     Some((
         declared.to_vec(),
-        format!("{}#{}", package.identity.key(), opening.command),
+        package.identity.command_id(&opening.command),
         command_title(package, &opening.command),
     ))
 }

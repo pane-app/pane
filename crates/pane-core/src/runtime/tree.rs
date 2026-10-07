@@ -412,12 +412,7 @@ fn item(item: WireItem) -> Result<Item, String> {
         platforms: item.platforms.map(|names| {
             names
                 .iter()
-                .filter_map(|name| match name.as_str() {
-                    "windows" => Some(Platform::Windows),
-                    "macos" => Some(Platform::Macos),
-                    "linux" => Some(Platform::Linux),
-                    _ => None,
-                })
+                .filter_map(|name| Platform::from_id(name))
                 .collect()
         }),
         custom_view: item.custom_view.map(|view| CustomViewInfo {
@@ -533,13 +528,6 @@ fn submenu(submenu: WireSubmenu) -> Result<ActionSubmenu, String> {
     })
 }
 
-/// The systems a per-system shortcut may name.
-const SHORTCUT_SYSTEMS: [(&str, Platform); 3] = [
-    ("windows", Platform::Windows),
-    ("macos", Platform::Macos),
-    ("linux", Platform::Linux),
-];
-
 /// The binding `shortcut` gives on `here`, the system Pane runs on: a
 /// shortcut is one key with its modifiers for every system (`{"modifiers":
 /// ["ctrl"], "key": "o"}`), or one per system (`{"windows": …, "macos": …,
@@ -553,18 +541,15 @@ fn shortcut_here(shortcut: &Value, here: Option<Platform>) -> Option<Result<Bind
     if fields.contains_key("key") {
         return Some(keys(shortcut));
     }
-    if !SHORTCUT_SYSTEMS
+    if !Platform::ALL
         .iter()
-        .any(|(name, _)| fields.contains_key(*name))
+        .any(|system| fields.contains_key(system.id()))
     {
         return Some(Err(
             "its shortcut names neither a key nor a system's key".into()
         ));
     }
-    let (name, _) = SHORTCUT_SYSTEMS
-        .iter()
-        .find(|(_, system)| Some(*system) == here)?;
-    match fields.get(*name) {
+    match fields.get(here?.id()) {
         None | Some(Value::Null) => None,
         Some(keys_here) => Some(self::keys(keys_here)),
     }

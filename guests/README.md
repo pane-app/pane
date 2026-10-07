@@ -1438,8 +1438,8 @@ command's together; no `#`), a `type` (`text`, `password`, `checkbox`,
 `description`, a `placeholder`, `required` and a `default`: a value, or one
 per system (`{ "windows": …, "macos": …, "linux": … }`). A checkbox may
 have a `label` and its default is `true` or `false`; a dropdown needs its
-`options`, each a `value` and a `title`, and its default must be one of
-them. A duplicate name, an unknown type or a dropdown default not among its
+`options`, each a value, or a `value` with a `title` (as an argument's
+are), and its default must be one of them. A duplicate name, an unknown type or a dropdown default not among its
 options refuses the package at install, with the reason.
 
 A command reads its **effective values**: its package's preferences, then

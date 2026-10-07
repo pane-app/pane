@@ -19,7 +19,7 @@ use gpui::{
     WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, div, point,
     prelude::*, px, size,
 };
-use pane_core::{Hud, ToastStyle};
+use pane_core::Hud;
 
 use crate::app::LauncherWindow;
 
@@ -46,11 +46,7 @@ pub(crate) struct HudView {
 impl Render for HudView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = crate::settings::visuals(cx).theme;
-        let dot = match self.hud.style {
-            ToastStyle::Animated => theme.warning,
-            ToastStyle::Success => theme.success,
-            ToastStyle::Failure => theme.danger,
-        };
+        let (_, dot) = super::toast::style_look(self.hud.style, &theme);
         div()
             .id("hud")
             .debug_selector(|| "hud".into())

@@ -119,7 +119,9 @@ pub use presentation::{
 pub use quick_slots::{PinTarget, QuickSlot, SlotChange};
 use schedules::Schedules;
 use services::Services;
-pub use setup::{CommandPreferences, PackagePreferences, PreferenceField, SetupHeader};
+pub use setup::{
+    CommandPreferences, PackagePreferences, PreferenceField, PreferencesTarget, SetupHeader,
+};
 pub use shortcuts::{ShortcutCatalog, ShortcutCommand, ShortcutGroup};
 pub use submenus::{OpenSubmenu, SubmenuState};
 

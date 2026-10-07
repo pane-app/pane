@@ -908,7 +908,9 @@ impl LauncherWindow {
             // command's preferences or the package's (#143).
             ResultAction::ConfigureCommand | ResultAction::ConfigureExtension => {
                 self.close_actions(window, cx);
-                if let Some((identity, command)) = self.launcher.preferences_target(&target) {
+                if let Some(pane_core::PreferencesTarget { identity, command }) =
+                    self.launcher.preferences_target(&target)
+                {
                     let anchor = match action {
                         ResultAction::ConfigureCommand => {
                             crate::features::settings::extensions::command_preferences_anchor(

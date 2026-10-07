@@ -3,8 +3,8 @@
 //! aliases and fallbacks (`aliases.json`), beside `installed.json`.
 //!
 //! Each is kept by command id, `<package identity key>#<manifest command
-//! id>`; a manifest command id cannot contain `#`, so the package's part is
-//! everything before the last `#` ([`split`]). A record is read once, and
+//! id>` ([`CommandId`]), whose package's part is everything before the
+//! last `#` ([`split`]). A record is read once, and
 //! written atomically, one change at a time, each write holding the choices
 //! as they are when it begins, so the last write holds the latest choices
 //! whatever order changes finish in. A change that cannot be written goes
@@ -20,12 +20,13 @@ use serde_json::{Map, Value};
 
 use super::{Launcher, State};
 use crate::atomic::{Readers, write_atomically};
-use crate::packages::PackageIdentity;
+use crate::packages::{CommandId, PackageIdentity};
 
 /// The package identity key and manifest command id of the command id
-/// `command`.
+/// `command` ([`CommandId::parse`]).
 pub(crate) fn split(command: &str) -> (&str, &str) {
-    command.rsplit_once('#').unwrap_or((command, ""))
+    let CommandId { package, command } = CommandId::parse(command);
+    (package, command)
 }
 
 /// One kind of per-command choices and the file it is recorded in.

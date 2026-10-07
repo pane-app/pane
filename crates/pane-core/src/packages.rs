@@ -61,6 +61,36 @@ enum Source {
     Default { default: String },
 }
 
+/// The id Pane gives an installed package's command, in root search and
+/// in its own records about commands (hotkeys, aliases, quick slots,
+/// subtitles, remembered dropdown values): `<package identity key>#<manifest
+/// command id>`. A manifest command id cannot contain `#`, but an identity
+/// key can (a local package's folder may have one in its path), so the
+/// package's part is everything before the last `#`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CommandId<'a> {
+    /// The package's identity key ([`PackageIdentity::key`]).
+    pub(crate) package: &'a str,
+    /// The command's id in the package's manifest; empty when the id names
+    /// no command.
+    pub(crate) command: &'a str,
+}
+
+impl<'a> CommandId<'a> {
+    /// The parts of the command id `id`. An id without `#` is all package
+    /// and no command.
+    pub(crate) fn parse(id: &'a str) -> CommandId<'a> {
+        let (package, command) = id.rsplit_once('#').unwrap_or((id, ""));
+        CommandId { package, command }
+    }
+}
+
+impl fmt::Display for CommandId<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}#{}", self.package, self.command)
+    }
+}
+
 impl PackageIdentity {
     /// Resolves the identity of the local package folder at `folder`.
     ///
@@ -97,6 +127,16 @@ impl PackageIdentity {
             Source::Git { git } => format!("git:{git}"),
             Source::Default { default } => format!("default:{default}"),
         }
+    }
+
+    /// The id of this package's command whose manifest id is `command`
+    /// (see [`CommandId`]).
+    pub(crate) fn command_id(&self, command: &str) -> String {
+        CommandId {
+            package: &self.key(),
+            command,
+        }
+        .to_string()
     }
 
     /// The identity of the Git repository `repository`, whatever the
@@ -1797,7 +1837,7 @@ impl InstalledPackage {
             .iter()
             .map(|command| {
                 let registration = CommandRegistration {
-                    id: format!("{}#{}", self.identity.key(), command.id),
+                    id: self.identity.command_id(&command.id),
                     title: command.title.clone(),
                     subtitle: command
                         .subtitle
@@ -2851,6 +2891,29 @@ fn write_registry(dir: &Path, registry: &RegistryJson) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_command_id_keeps_a_hash_in_its_package_part() {
+        let identity = PackageIdentity(Source::Local {
+            local: "/home/me/#tools".into(),
+        });
+        let id = identity.command_id("open");
+        assert_eq!(id, "local:/home/me/#tools#open");
+        assert_eq!(
+            CommandId::parse(&id),
+            CommandId {
+                package: "local:/home/me/#tools",
+                command: "open",
+            }
+        );
+        assert_eq!(
+            CommandId::parse("default:files"),
+            CommandId {
+                package: "default:files",
+                command: "",
+            }
+        );
+    }
 
     /// A package folder in `dir` with one command and, for this system, a
     /// helper `tool` whose file holds `helper`.

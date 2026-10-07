@@ -28,8 +28,8 @@
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, App, BoxShadow, ClickEvent, ClipboardItem, Context, Div, FocusHandle, KeyBinding,
-    KeyDownEvent, Role, Stateful, Task, Window, actions, div, prelude::*, px,
+    AnyElement, App, BoxShadow, ClickEvent, ClipboardItem, Context, Div, FocusHandle, Hsla,
+    KeyBinding, KeyDownEvent, Role, Stateful, Task, Window, actions, div, prelude::*, px,
 };
 use pane_core::feedback::TOAST_DURATION;
 use pane_core::{ShownToast, Status, ToastSlot, ToastStyle};
@@ -110,6 +110,18 @@ impl ToastControls {
     /// Whether one of the toast's actions has the focus.
     fn focused(&self, window: &Window) -> bool {
         self.primary.is_focused(window) || self.secondary.is_focused(window)
+    }
+}
+
+/// How a toast or HUD of `style` is drawn: its debug selector
+/// (`toast-animated`, `toast-success`, `toast-failure`) and the colour of
+/// its dot. The footer's toast, Clipboard History's footer lead and the
+/// HUD all draw a style so.
+pub(crate) fn style_look(style: ToastStyle, theme: &Theme) -> (&'static str, Hsla) {
+    match style {
+        ToastStyle::Animated => ("toast-animated", theme.warning),
+        ToastStyle::Success => ("toast-success", theme.success),
+        ToastStyle::Failure => ("toast-failure", theme.danger),
     }
 }
 
@@ -308,11 +320,7 @@ impl LauncherWindow {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        let (style, color) = match shown.toast.style {
-            ToastStyle::Animated => ("toast-animated", theme.warning),
-            ToastStyle::Success => ("toast-success", theme.success),
-            ToastStyle::Failure => ("toast-failure", theme.danger),
-        };
+        let (style, color) = style_look(shown.toast.style, theme);
         let title = shown.toast.title.clone();
         let message = shown.toast.message.clone();
         div()

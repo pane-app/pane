@@ -13,6 +13,7 @@ pub mod defaults;
 mod dependencies;
 pub mod develop;
 pub mod downloads;
+mod dropdown;
 mod extension_data;
 pub mod feedback;
 pub mod files;
@@ -47,8 +48,9 @@ mod threads;
 pub mod tray;
 mod zip;
 
-pub use arguments::{ArgumentKind, ArgumentOption, MAX_ARGUMENTS, ManifestArgument};
+pub use arguments::{ArgumentKind, MAX_ARGUMENTS, ManifestArgument};
 pub use defaults::{ArtifactSource, DefaultExtension};
+pub use dropdown::DropdownOption;
 pub use feedback::{
     ConfirmAnswer, Confirmation, Hud, NextShowing, PopToRoot, ShownToast, Toast, ToastAction,
     ToastSlot, ToastStyle, WindowControl, WindowPresence,
@@ -67,10 +69,10 @@ pub use launcher::{
     AliasOutcome, ApplicationUpdate, BuildFailure, CommandPreferences, CommandRegistration,
     ComputedAnswer, CustomViewSnapshot, Development, FormField, FormView, HotkeyOutcome,
     ItemAction, ItemActions, Launcher, LauncherView, OpenSubmenu, PackagePreferences, PinTarget,
-    PreferenceField, Presentation, Question, QuickSlot, ResultAction, ResultActionItem,
-    ResultActions, Row, RowKind, RowPresentation, Screen, Section, SelectedAction, SetupHeader,
-    ShortcutCatalog, ShortcutCommand, ShortcutGroup, SlotChange, Status, SubmenuState, Unavailable,
-    UnboundShortcut, answer_sections, root_sections,
+    PreferenceField, PreferencesTarget, Presentation, Question, QuickSlot, ResultAction,
+    ResultActionItem, ResultActions, Row, RowKind, RowPresentation, Screen, Section,
+    SelectedAction, SetupHeader, ShortcutCatalog, ShortcutCommand, ShortcutGroup, SlotChange,
+    Status, SubmenuState, Unavailable, UnboundShortcut, answer_sections, root_sections,
 };
 pub use links::LinkOpener;
 pub use operations::{MAX_CALL_DEPTH, MAX_OPERATION_JSON};
@@ -81,7 +83,7 @@ pub use packages::{
 };
 pub use pane_target::{Arch, Target};
 pub use platform::Platform;
-pub use preferences::{HELP_FILE, Preference, PreferenceKind, PreferenceOption};
+pub use preferences::{HELP_FILE, Preference, PreferenceKind};
 pub use programs::runner::{MAX_PROGRAM_OUTPUT, SearchPath};
 #[cfg(debug_assertions)]
 #[doc(hidden)]

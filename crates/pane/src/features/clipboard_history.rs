@@ -620,11 +620,7 @@ impl LauncherWindow {
         // Manage.
         // A toast the command showed speaks where the outcome would (#141).
         let toast = self.footer_toast(&view.status).map(|shown| {
-            let (selector, color) = match shown.toast.style {
-                pane_core::ToastStyle::Animated => ("toast-animated", theme.warning),
-                pane_core::ToastStyle::Success => ("toast-success", theme.success),
-                pane_core::ToastStyle::Failure => ("toast-failure", theme.danger),
-            };
+            let (selector, color) = super::toast::style_look(shown.toast.style, &theme);
             (selector, shown.toast.text(), color)
         });
         let status = match &view.status {
