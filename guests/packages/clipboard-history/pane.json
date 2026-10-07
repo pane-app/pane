@@ -1,8 +1,9 @@
 {
   "manifestVersion": 1,
   "title": "Clipboard History",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "apiVersion": "0.1",
+  "icon": "clipboard-text",
   "commands": [
     {
       "id": "clipboard-history",
