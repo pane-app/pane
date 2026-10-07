@@ -582,6 +582,26 @@ Throwing an `Error` (or a string) from `submitForm` rejects the form as a
 whole with its message. The samples validate with Zod and turn its first
 issue into a `FormError`.
 
+A command's whole screen can be a form instead of a list, as Quicklinks'
+Create Quicklink is (#149): in Rust, `render` returns
+`List::form(id, form)`, its fields filled in with `.value(field, value)`.
+Pane shows it as soon as the command opens, `submit_form` receives `id`, and
+Escape leaves the command. A component serving several view commands tells
+which one is opened from `pane_guest::commands::current().command`, its id
+in `pane.json`:
+
+```rust
+async fn render() -> Result<List, String> {
+    if pane_guest::commands::current().command == "create" {
+        return Ok(List::form("create", form).value("name", "Docs"));
+    }
+    Ok(List::new("Notes").items(items))
+}
+```
+
+The JavaScript SDK does not write form screens yet; its launch record has
+the same `command`.
+
 ## Errors and crashes
 
 An error a command returns (Rust `Err`; in JS/TS, anything a handler
@@ -664,8 +684,7 @@ A command can answer what the user types into root search, as the
 root search finds by title, and Enter on one performs its action:
 copying a text to the clipboard (`copy`) or opening an `http://` or
 `https://` address with the system's handler for web links, normally the
-default browser (`open-url`, as [quicklinks](quicklinks) do; Pane refuses
-any other address). Set `"rootResults": true` on the
+default browser (`open-url`, which opens an address of any scheme). Set `"rootResults": true` on the
 command in `pane.json` and export `pane:extension/root-results`
 ([`wit/root-results.wit`](../wit/root-results.wit)) beside the command.
 Pane asks the command on every change of a query that is not blank, so its
@@ -798,8 +817,10 @@ and ranks them by title like commands, for a query that is not blank. Set
 `"indexedResults": true` on the command in `pane.json` and export
 `pane:extension/indexed-results` ([`wit/applications.wit`](../wit/applications.wit))
 beside the command. Pane asks again after each return to root search; an
-error is listed as a row explaining it. The only action is opening an
-installed application. See [root search](../docs/root-search.md#results-supplied-ahead-of-the-query)
+error is listed as a row explaining it. Its action opens an installed
+application (`IndexedAction::OpenApplication(id)`), or a target of any kind,
+with an application if one is named, as a quicklink does
+(`IndexedAction::Open(OpenTarget { target, application })`). See [root search](../docs/root-search.md#results-supplied-ahead-of-the-query)
 and [applications](../docs/applications.md).
 
 Any Rust command can also find and open the installed applications through

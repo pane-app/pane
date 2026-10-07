@@ -79,8 +79,8 @@ pub use supervisor::{RuntimeFailure, RuntimeStatus};
 pub(crate) use tree::read_shortcut;
 pub use tree::{Accessory, AccessoryContent, ItemLook, MAX_ACCESSORIES};
 pub use tree::{
-    Action, ActionKind, ActionStyle, ActionSubmenu, Answer, Item, SubmenuEntries, TREE_VERSION,
-    View,
+    Action, ActionKind, ActionStyle, ActionSubmenu, Answer, Item, ScreenForm, SubmenuEntries,
+    TREE_VERSION, View,
 };
 
 pub(crate) mod bindings {
@@ -294,6 +294,13 @@ pub(crate) struct IndexedResult {
 pub(crate) enum IndexedAction {
     /// Open the installed application with this id.
     OpenApplication(String),
+    /// Open `target` (a URL of any scheme, a file, a folder or an
+    /// application) with the system's handler, or with `application`, as
+    /// the `system.open` host function does.
+    Open {
+        target: String,
+        application: Option<String>,
+    },
 }
 
 /// What a component exports besides `command`, as its package manifest
@@ -518,12 +525,17 @@ pub struct Field {
     pub id: String,
     pub label: String,
     pub kind: FieldKind,
+    /// What the field starts with: a text field's text, or the id of the
+    /// option chosen first; `None` for an empty text field, or the first
+    /// option.
+    pub value: Option<String>,
 }
 
 /// What a field holds.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FieldKind {
-    /// A single-line text field, which starts empty.
+    /// A single-line text field, which starts with the field's value, else
+    /// empty.
     Text { placeholder: Option<String> },
     /// A single-line text field whose text is concealed while it is typed:
     /// a password argument in Pane's argument form. An extension's form
@@ -2123,8 +2135,9 @@ impl launching::Host for GuestState {
     }
 }
 
-/// `launch` as the guest's bindings carry it.
-fn launch_record(launch: &LaunchRecord) -> launching::LaunchRecord {
+/// `launch`, of the command with manifest id `command` (empty when Pane
+/// does not know it), as the guest's bindings carry it.
+fn launch_record(launch: &LaunchRecord, command: Option<&str>) -> launching::LaunchRecord {
     launching::LaunchRecord {
         launch_type: match launch.launch_type {
             LaunchType::UserInitiated => launching::LaunchType::UserInitiated,
@@ -2149,6 +2162,7 @@ fn launch_record(launch: &LaunchRecord) -> launching::LaunchRecord {
             .collect(),
         fallback_text: launch.fallback_text.clone(),
         context: launch.context.clone(),
+        command: command.unwrap_or_default().to_owned(),
     }
 }
 
@@ -3132,8 +3146,9 @@ impl Host {
         chain: &Chain,
     ) -> Result<View, CallError> {
         self.instance(path, data).await?;
-        self.note_command(path, launch.command.as_deref().or(call.command.as_deref()));
-        let launch = launch_record(launch);
+        let named = launch.command.as_deref().or(call.command.as_deref());
+        self.note_command(path, named);
+        let launch = launch_record(launch, named);
         let result = self
             .run_guest(path, chain, async |instance| {
                 instance.store.data_mut().call = call;
@@ -3164,7 +3179,7 @@ impl Host {
         self.instance(path, data).await?;
         let call = CallFor::launched(Some(command.clone()), launch);
         self.note_command(path, Some(&command));
-        let launch = launch_record(launch);
+        let launch = launch_record(launch, Some(&command));
         let result = self
             .run_guest(path, &chain, async |instance| {
                 instance.store.data_mut().call = call;
@@ -3684,6 +3699,10 @@ impl Host {
                     indexed_results::IndexedAction::OpenApplication(id) => {
                         IndexedAction::OpenApplication(id)
                     }
+                    indexed_results::IndexedAction::Open(open) => IndexedAction::Open {
+                        target: open.target,
+                        application: open.application,
+                    },
                 },
             })
             .collect())

@@ -250,7 +250,12 @@ export function adaptCommand(command) {
    * The launch record the list was last drawn with: a launch by the user
    * from root search before Pane has said.
    */
-  let drawnFor = { launchType: "user-initiated", source: "root-search", arguments: [] };
+  let drawnFor = {
+    launchType: "user-initiated",
+    source: "root-search",
+    arguments: [],
+    command: "",
+  };
   const draw = async (launch) => {
     drawnFor = launch;
     return tree(await render(launch), actions);

@@ -24,11 +24,25 @@ use crate::platform::Platform;
 /// drawn as far as Pane understands it.
 pub const TREE_VERSION: u64 = 1;
 
-/// A command's list view, as its tree describes it.
+/// A command's screen, as its tree describes it: a list view, or a form
+/// (`"type": "form"`, #149), whose `items` are then empty.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct View {
     pub title: String,
     pub items: Vec<Item>,
+    /// When the screen is a form rather than a list: the form, with the id
+    /// Pane passes to `submit-form` when it is submitted.
+    pub form: Option<ScreenForm>,
+}
+
+/// A form that is a command's whole screen, such as Quicklinks' Create
+/// Quicklink: the user fills it in as soon as the command opens, and Back
+/// leaves the command.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScreenForm {
+    /// What `submit-form` receives as the item id.
+    pub id: String,
+    pub form: Form,
 }
 
 /// One entry in a command's list view.
@@ -271,6 +285,23 @@ pub(crate) fn read_view(tree: &str) -> Result<View, String> {
         Some(_) => return Err("its view's `type` is not a string".into()),
         None => return Err("its view has no `type`".into()),
     };
+    if kind == "form" {
+        let screen: WireScreenForm =
+            serde_json::from_value(tree.view).map_err(|error| format!("its form: {error}"))?;
+        let form = Form::from(WireForm {
+            title: screen.title,
+            fields: screen.fields,
+            submit_label: screen.submit_label,
+        });
+        return Ok(View {
+            title: form.title.clone(),
+            items: Vec::new(),
+            form: Some(ScreenForm {
+                id: screen.id,
+                form,
+            }),
+        });
+    }
     if kind != "list" {
         return Err(format!(
             "it shows a `{kind}` view, which this version of Pane cannot show"
@@ -287,6 +318,7 @@ pub(crate) fn read_view(tree: &str) -> Result<View, String> {
     Ok(View {
         title: list.title,
         items,
+        form: None,
     })
 }
 
@@ -582,6 +614,7 @@ impl From<WireForm> for Form {
                 .map(|field| Field {
                     id: field.id,
                     label: field.label,
+                    value: field.value,
                     kind: match field.kind {
                         WireFieldKind::Text { placeholder } => FieldKind::Text { placeholder },
                         WireFieldKind::Choice { choices } => FieldKind::Choice(
@@ -605,8 +638,23 @@ impl From<WireForm> for Form {
 struct WireField {
     id: String,
     label: String,
+    /// What the field starts with: a text field's text, or the id of the
+    /// option chosen first.
+    #[serde(default)]
+    value: Option<String>,
     #[serde(flatten)]
     kind: WireFieldKind,
+}
+
+/// A form that is the command's whole screen: a form's fields with the id
+/// `submit-form` receives.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WireScreenForm {
+    id: String,
+    title: String,
+    fields: Vec<WireField>,
+    submit_label: String,
 }
 
 /// A field's kind, named by its `kind`, with that kind's own fields beside
@@ -695,6 +743,48 @@ mod tests {
             c.custom_view.as_ref().map(|view| view.role),
             Some(CustomViewRole::ColorWell)
         );
+    }
+
+    #[test]
+    fn a_form_screen_reads_with_its_id_and_the_values_its_fields_start_with() {
+        let view = read_view(
+            r#"{"version": 1, "view": {"type": "form", "id": "create",
+                "title": "Create Quicklink", "submitLabel": "Create Quicklink", "fields": [
+                    {"id": "name", "label": "Name", "kind": "text", "value": "Docs"},
+                    {"id": "link", "label": "Link", "kind": "text", "placeholder": "https://"},
+                    {"id": "how", "label": "How", "kind": "choice", "value": "b",
+                     "choices": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}]}]}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(view.title, "Create Quicklink");
+        assert_eq!(view.items, []);
+        let screen = view.form.expect("a form screen");
+        assert_eq!(screen.id, "create");
+        assert_eq!(screen.form.submit_label, "Create Quicklink");
+        let values: Vec<Option<&str>> = screen
+            .form
+            .fields
+            .iter()
+            .map(|field| field.value.as_deref())
+            .collect();
+        assert_eq!(values, [Some("Docs"), None, Some("b")]);
+        assert_eq!(
+            screen.form.fields[1].kind,
+            FieldKind::Text {
+                placeholder: Some("https://".into())
+            }
+        );
+        // A list has no form, and a form screen needs its id.
+        let list =
+            read_view(r#"{"version": 1, "view": {"type": "list", "title": "T", "items": []}}"#);
+        assert_eq!(list.unwrap().form, None);
+        let problem = read_view(
+            r#"{"version": 1, "view": {"type": "form", "title": "T", "submitLabel": "Go",
+                "fields": []}}"#,
+        )
+        .unwrap_err();
+        assert!(problem.contains("missing field `id`"), "{problem}");
     }
 
     #[test]

@@ -68,6 +68,10 @@ interface commands {
     /// The JSON value another command passed when it launched this one,
     /// as JSON text; none otherwise.
     context: option<string>,
+    /// The command launched, by its id in `pane.json`, so that a component
+    /// serving several view commands draws the screen of the one opened
+    /// (`run` also receives it as its first argument).
+    command: string,
   }
 
   /// A command to launch by its id in its package's `pane.json`: one of

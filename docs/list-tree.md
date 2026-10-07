@@ -32,7 +32,12 @@ or an untitled `.on_action(..)`). In JavaScript and TypeScript
 (`@pane/extension`) the exported `command`'s `render` resolves with
 `{ title, items }`, each item with `actions` (objects with a `title` and an
 `onAction` function) or an untitled `onAction` function; the SDK's adapter
-(`guests/js/adapt.js`) writes the tree. Both SDKs name an item's first
+(`guests/js/adapt.js`) writes the tree. A Rust command whose screen is a
+form returns `List::form(id, form)`, its fields filled in with
+`.value(field, value)`; `pane_guest::commands::current().command` says which
+of a component's commands is opened (the launch record's `command`), so one
+component can draw several view commands' screens. The JavaScript SDK does
+not write form screens yet. Both SDKs name an item's first
 action by the item's id and its later ones by the id and their place
 (`<id>#1`, `<id>#2`, ...), so the same action has the same callback in every
 drawing, and an instance that has not drawn the list yet draws it before it
@@ -107,8 +112,16 @@ and a lazy submenu's `onOpen` as the action itself would be named.
 
 - **`version`** (number, at least 1): the version of the component set the
   tree uses. Pane knows version 1.
-- **`view`**: the screen. Its **`type`** is `list`, the only view of
-  version 1; a list has a **`title`** and **`items`**, in order.
+- **`view`**: the screen. Its **`type`** is `list` or `form`. A list has a
+  **`title`** and **`items`**, in order. A form is the command's whole
+  screen (#149, as Quicklinks' Create Quicklink is): it has an **`id`**,
+  which `submit-form` receives as the item id, and a form's **`title`**,
+  **`submitLabel`** and **`fields`** (as an item's `form` below). Pane
+  shows it as soon as the command opens; submitting it calls `submit-form`,
+  and Back (Escape) leaves the command for root search
+  (`{"version": 1, "view": {"type": "form", "id": "create", "title": "Create
+  Quicklink", "submitLabel": "Create Quicklink", "fields": [...]}}`). The
+  "Extension UI you can design" specification (#121) extends it.
 - An item has an **`id`** (Pane keeps the selection on it when the list is
   drawn again, and passes it to `submit-form` and `open-view`), a
   **`title`**, and optionally:
@@ -162,7 +175,10 @@ and a lazy submenu's `onOpen` as the action itself would be named.
       again, as any action does. Enter, an action chord or the shortcut of
       an item's action that opens a submenu open the panel at it;
   - **`form`**: choosing the item opens this form instead (fields of kind
-    `text`, with an optional `placeholder`, or `choice`, with `choices`);
+    `text`, with an optional `placeholder`, or `choice`, with `choices`).
+    A field's optional **`value`** is what it starts with (#149): a text
+    field's text, or the id of the choice chosen first; without one a text
+    field starts empty and a choice with its first option;
   - **`customView`**: choosing the item opens this custom view instead
     (ignored when `form` is set);
   - **`platforms`**: the systems (`windows`, `macos`, `linux`) the item's

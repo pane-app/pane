@@ -15,10 +15,13 @@ Defined in [`wit/extension.wit`](../wit/extension.wit), identically for Rust
 
 - An item may carry a `form` (title, fields, submit label; the WIT record
   `form`, carried in the list's tree, see [list-tree.md](list-tree.md)).
-  Activating such an item opens the form instead of running its action.
+  Activating such an item opens the form instead of running its action. A
+  command's whole screen can be a form too (a `form` view, #149): Pane shows
+  it as soon as the command opens, and Back leaves the command.
 - A `field` has an `id`, a `label` and a `kind`: `text` (single line, starts
   empty, optional placeholder) or `choice` (a list of options, the first
-  starts chosen; the value is the chosen option's id).
+  starts chosen; the value is the chosen option's id). In the tree a field's
+  optional `value` is what it starts with instead (#149).
 - Submitting calls `submit-form(item-id, values)`, with one `field-value` per
   field in form order. The command answers with text, shown as the result, or
   a `form-error { field, message }`. A form error is the command's

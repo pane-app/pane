@@ -525,9 +525,15 @@ export interface CommandSearch {
 /**
  * What invoking an indexed result does; Pane performs it.
  * `{ tag: "open-application", val: id }` opens the installed application
- * with `id`, as `open` in `pane:extension/applications@0.1.0` does.
+ * with `id`, as `open` in `pane:extension/applications@0.1.0` does;
+ * `{ tag: "open", val: { target, application } }` opens `target` (a URL of
+ * any scheme, a file, a folder or an application) with the system's
+ * handler, or with `application`, as `open` in `@pane/extension/system`
+ * does.
  */
-export type IndexedAction = { tag: "open-application"; val: string };
+export type IndexedAction =
+  | { tag: "open-application"; val: string }
+  | { tag: "open"; val: { target: string; application?: string | null } };
 
 /**
  * One root result a command supplies ahead of the query, which root search

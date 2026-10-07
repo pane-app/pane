@@ -498,22 +498,21 @@ python "$PSScriptRoot/check_screenshot.py" --distinct @shots
 if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: opening the application changed nothing" }
 Stop-Pane $process
 
-# Quicklinks, a default extension: installed, its command's form saves a
-# quicklink (Quicklinks is selected once installed, and "Create quicklink" is
-# its first item). After a restart, typing part of its name lists it,
+# Quicklinks, a default extension: installed, its Create Quicklink command,
+# found by typing its name, opens its form, which saves a quicklink and
+# returns to root search. After a restart, typing part of its name lists it,
 # selected. Enter would open the default browser, so this smoke stops there
 # (the Linux smoke opens it through a recording handler).
 $process = Start-Pane "stderr-quicklinks.log" @("--install", "target/guests/packages/quicklinks")
 Send "{ENTER}"; Start-Sleep -Seconds 2   # Install
-Send "{ENTER}"; Start-Sleep -Seconds 3   # open Quicklinks
-Send "{ENTER}"; Start-Sleep -Seconds 1   # Create quicklink
+Send "create quicklink"; Start-Sleep -Seconds 2
+Send "{ENTER}"; Start-Sleep -Seconds 3   # open Create Quicklink's form
 Send "Pane issues"
 Send "{TAB}"
 Send "https://example.com/pane-issues"
 Send "{ENTER}"; Start-Sleep -Seconds 2
 Capture "46-quicklink-saved.png"
-Check "46-quicklink-saved.png" "success"   # "Saved quicklink “Pane issues”"
-Send "{ESC}"; Send "{ESC}"; Start-Sleep -Seconds 1
+Check "46-quicklink-saved.png" "success"   # "Created “Pane issues”"
 Stop-Pane $process
 $process = Start-Pane "stderr-quicklinks-restart.log"
 Send "pane iss"; Start-Sleep -Seconds 2

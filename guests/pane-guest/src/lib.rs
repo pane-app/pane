@@ -170,8 +170,11 @@ pub mod commands {
     /// The launch record of the command's screen being drawn (in
     /// [`Command::render`](crate::Command::render), and in the actions of
     /// the list it drew), or of the run in progress: how the command was
-    /// launched, and with what. A launch by the user from root search with
-    /// nothing more before Pane has said.
+    /// launched, and with what. Its `command` is the id in `pane.json` of
+    /// the command launched, so that a component serving several view
+    /// commands draws the screen of the one opened. A launch by the user
+    /// from root search with nothing more (and no command) before Pane has
+    /// said.
     pub fn current() -> LaunchRecord {
         CURRENT.0.borrow().clone().unwrap_or(LaunchRecord {
             launch_type: LaunchType::UserInitiated,
@@ -179,6 +182,7 @@ pub mod commands {
             arguments: alloc::vec::Vec::new(),
             fallback_text: None,
             context: None,
+            command: alloc::string::String::new(),
         })
     }
 
@@ -385,7 +389,9 @@ pub mod indexed {
         default_bindings_module: "pane_guest::indexed",
     });
 
-    pub use exports::pane::extension::indexed_results::{Guest, IndexedAction, IndexedResult};
+    pub use exports::pane::extension::indexed_results::{
+        Guest, IndexedAction, IndexedResult, OpenTarget,
+    };
 }
 
 /// A command that searches as the user types into its own search field

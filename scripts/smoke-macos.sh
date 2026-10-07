@@ -480,22 +480,21 @@ for _ in $(seq 50); do [ -f "$apps/launched" ] && break; sleep 0.2; done
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{44-application,45-opened}.png
 stop_pane
 
-# Quicklinks, a default extension: installed, its command's form saves a
-# quicklink (Quicklinks is selected once installed, and "Create quicklink" is
-# its first item). After a restart, typing part of its name lists it,
+# Quicklinks, a default extension: installed, its Create Quicklink command,
+# found by typing its name, opens its form, which saves a quicklink and
+# returns to root search. After a restart, typing part of its name lists it,
 # selected. Enter would open the default browser, so this smoke stops there
 # (the Linux smoke opens it through a recording handler).
 start_pane --install target/guests/packages/quicklinks
 key 36; sleep 2   # Install
-key 36; sleep 3   # open Quicklinks
-key 36; sleep 1   # Create quicklink
+type_text 'create quicklink'; sleep 2
+key 36; sleep 3   # open Create Quicklink's form
 type_text 'Pane issues'
 key 48
 type_text 'https://example.com/pane-issues'
 key 36; sleep 2
 capture 46-quicklink-saved.png
-check 46-quicklink-saved.png success   # "Saved quicklink “Pane issues”"
-key 53; key 53; sleep 1
+check 46-quicklink-saved.png success   # "Created “Pane issues”"
 stop_pane
 start_pane
 type_text 'pane iss'; sleep 2

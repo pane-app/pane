@@ -1,15 +1,37 @@
 {
   "manifestVersion": 1,
   "title": "Quicklinks",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "apiVersion": "0.1",
   "commands": [
     {
       "id": "quicklinks",
-      "title": "Quicklinks",
-      "subtitle": "Save web addresses and open them from root search",
+      "title": "Search Quicklinks",
+      "subtitle": "Open, copy, edit or delete the links, files and applications you saved",
       "component": "quicklinks.wasm",
-      "rootResults": true
+      "mode": "view",
+      "indexedResults": true
+    },
+    {
+      "id": "create",
+      "title": "Create Quicklink",
+      "subtitle": "Name a link, file, folder or application to open from root search",
+      "component": "quicklinks.wasm",
+      "mode": "view"
+    },
+    {
+      "id": "import",
+      "title": "Import Quicklinks",
+      "subtitle": "Adds the quicklinks the clipboard holds as JSON",
+      "component": "quicklinks.wasm",
+      "mode": "no-view"
+    },
+    {
+      "id": "export",
+      "title": "Export Quicklinks",
+      "subtitle": "Copies your quicklinks to the clipboard as JSON",
+      "component": "quicklinks.wasm",
+      "mode": "no-view"
     }
   ]
 }
