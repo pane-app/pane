@@ -30,7 +30,14 @@
 //! undoes its work by itself first (a helper that exited, an instance that
 //! was dropped) drops its [`Registration`], which takes it off the list, so
 //! the list holds only what is still set up. The guest never sees it.
+//!
+//! A subsystem that keeps what it set up in state of its own, behind a lock
+//! the thread ending the generation may hold (the launcher's schedules,
+//! services and hotkeys), registers an [`EndMark`] instead: the end marks
+//! the entry ended and wakes the subsystem, which drops it (or sets it up
+//! again for the generation that follows) when it next looks.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, Weak};
 
 use tokio::sync::watch;
@@ -253,6 +260,47 @@ impl Drop for Registration {
     }
 }
 
+/// An entry of a subsystem's own state on its generation's undo list, for
+/// a subsystem that cannot undo the entry from whichever thread ends the
+/// generation (see the module docs): the end marks it ended and runs
+/// `then`, which must not block (a worker woken to look again). The
+/// subsystem drops an ended entry, or sets it up again for the current
+/// generation, when it next looks. Dropping the mark takes it off the list.
+#[derive(Debug)]
+pub(crate) struct EndMark {
+    ended: Arc<AtomicBool>,
+    _registration: Option<Registration>,
+}
+
+impl EndMark {
+    /// A mark of `what` on `generation`'s undo list; with no generation
+    /// (a launcher that installs nothing), one that never ends.
+    pub(crate) fn on(
+        generation: Option<&Generation>,
+        what: &'static str,
+        then: impl FnOnce() + Send + 'static,
+    ) -> EndMark {
+        let ended = Arc::new(AtomicBool::new(false));
+        let registration = generation.map(|generation| {
+            let ended = ended.clone();
+            generation.on_end(what, move || {
+                ended.store(true, Ordering::SeqCst);
+                then();
+                Ok(())
+            })
+        });
+        EndMark {
+            ended,
+            _registration: registration,
+        }
+    }
+
+    /// Whether the generation it was marked on has ended.
+    pub(crate) fn ended(&self) -> bool {
+        self.ended.load(Ordering::SeqCst)
+    }
+}
+
 /// The undo list of a generation that just ended, run newest first when
 /// dropped (see [`Generation::end`]).
 #[must_use = "dropping it runs the ended generation's undo list at once: drop it once any lock \
@@ -300,6 +348,27 @@ fn undo_one(what: &'static str, teardown: Teardown) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_end_mark_is_marked_and_woken_at_the_end_and_leaves_the_list_when_dropped() {
+        let generation = Generation::new();
+        let woken = Arc::new(AtomicBool::new(false));
+        let wake = woken.clone();
+        let mark = EndMark::on(Some(&generation), "schedule", move || {
+            wake.store(true, Ordering::SeqCst)
+        });
+        let dropped = EndMark::on(Some(&generation), "service", || {});
+        assert_eq!(generation.undo_list(), ["schedule", "service"]);
+        drop(dropped);
+        assert_eq!(generation.undo_list(), ["schedule"]);
+        assert!(!mark.ended());
+        drop(generation.end(End::Disabled));
+        assert!(mark.ended() && woken.load(Ordering::SeqCst));
+        assert!(generation.undo_list().is_empty());
+        // Marked on an ended generation: ended at once.
+        assert!(EndMark::on(Some(&generation), "hotkey", || {}).ended());
+        assert!(!EndMark::on(None, "hotkey", || {}).ended());
+    }
 
     /// A teardown that notes `name` in `ran` when it runs.
     fn noting(

@@ -21,16 +21,22 @@
 //! `own_actions`). A search answered while Pane was still listing that
 //! folder is asked again once the listing ends, unless a newer text (or
 //! leaving the command) stopped it first.
+//!
+//! A search in progress is on its package's generation's undo list
+//! ("command search", see `generation`): the generation's end stops it,
+//! as a newer text does.
 
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 
 use super::{
     CommandList, Entry, Launcher, Row, Screen, State, Status, files, owner, stopped,
     until_cancelled,
 };
 use crate::extension_data::PackageData;
+use crate::generation::Registration;
 use crate::runtime::{CallError, SearchResult, StopSearch, View};
 
 /// The search of an open command that searches as the user types.
@@ -41,7 +47,7 @@ pub(super) struct Searching {
     /// its search field is blank; `None` until the text is first set.
     list: Option<CommandList>,
     /// Stops the search in progress, if one is; dropping it stops it.
-    in_progress: Option<StopSearch>,
+    in_progress: Option<InProgress>,
     /// Kept while a search waits for the granted folder's listing before it
     /// is asked again: dropping it (a newer text, the command left) ends
     /// that wait.
@@ -62,6 +68,49 @@ impl Searching {
     /// is cleared: the list drawn again while it holds text.
     pub(super) fn keep(&mut self, list: CommandList) {
         self.list = Some(list);
+    }
+}
+
+/// A search in progress: dropping it stops the search, and so does the end
+/// of the generation it runs in, whose undo list holds it meanwhile.
+struct InProgress {
+    /// Stops the search when it is taken and dropped: by this, or by the
+    /// generation's end.
+    stop: Arc<Mutex<Option<StopSearch>>>,
+    /// Its place on its generation's undo list, taken off when this is
+    /// dropped.
+    _undo: Option<Registration>,
+}
+
+impl InProgress {
+    /// The search `stop` stops, running in the generation of `data`.
+    fn new(stop: StopSearch, data: Option<&PackageData>) -> InProgress {
+        let stop = Arc::new(Mutex::new(Some(stop)));
+        let undo = data.map(|data| {
+            let stop = stop.clone();
+            data.generation().on_end("command search", move || {
+                // Dropped here, it stops the search.
+                drop(
+                    stop.lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .take(),
+                );
+                Ok(())
+            })
+        });
+        InProgress { stop, _undo: undo }
+    }
+}
+
+impl Drop for InProgress {
+    fn drop(&mut self) {
+        // Stopped now, whatever still holds the handle.
+        drop(
+            self.stop
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take(),
+        );
     }
 }
 
@@ -112,7 +161,7 @@ impl Launcher {
         let query = query.trim().to_owned();
         let (stop, answer) = runtime.search_with(&component, &command, &query, data.clone());
         if let Some(searching) = state.searching.as_mut() {
-            searching.in_progress = Some(stop);
+            searching.in_progress = Some(InProgress::new(stop, data.as_ref()));
         }
         Some(Box::pin(async move {
             let answer = answer.await;
@@ -142,7 +191,7 @@ impl Launcher {
         let data = self.data_in(&state, &component);
         let runtime = self.runtime().ok()?.clone();
         let (stop, answer) = runtime.search_with(&component, &command, query, data.clone());
-        state.searching.as_mut()?.in_progress = Some(stop);
+        state.searching.as_mut()?.in_progress = Some(InProgress::new(stop, data.as_ref()));
         drop(state);
         let launcher = self.clone();
         Some(Box::pin(async move {

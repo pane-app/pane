@@ -32,7 +32,10 @@
 //! one. A cycle still running is stopped with the generation (the runtime
 //! stops the call, its instance and task go), and its late answer is
 //! discarded, never shown and never paced from; work is not replayed for
-//! the time the code could not run. At most one cycle of a service is
+//! the time the code could not run. Each service is on its generation's
+//! undo list ("service", see `generation`): the end marks it ended and
+//! wakes the services thread, which drops it, or keeps it on the next
+//! generation's list. At most one cycle of a service is
 //! asked for at a time: time that passes while one runs is served by the
 //! next cycle, at the cadence the answer gives from when it lands.
 //!
@@ -52,10 +55,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
-use super::schedules::Wake;
+use super::schedules::{Wake, marked};
 use super::{Launcher, Screen, Status, WeakLauncher, stopped};
 use crate::clipboard::Clock;
 use crate::extension_data::PackageData;
+use crate::generation::EndMark;
 use crate::runtime::{CallError, Cycle};
 
 /// The longest the services thread waits before it looks again, so that a
@@ -91,7 +95,7 @@ pub(super) struct Services {
     /// launcher's state held, never the other way round.
     state: Mutex<Serving>,
     /// Wakes the services thread, and tells when it settled.
-    wake: Wake,
+    wake: Arc<Wake>,
 }
 
 /// What the services thread keeps: the clock it follows and one entry per
@@ -125,19 +129,31 @@ struct Entry {
     /// a service that begins again (its code was replaced) is not held up
     /// by the dead code's cycle.
     in_flight: Option<u64>,
+    /// Its place on its package's generation's undo list: the
+    /// generation's end marks it, and the next look begins it again for
+    /// the generation then current, or drops it.
+    generation: EndMark,
 }
 
 impl Entry {
-    /// A service of the command in `component` that begins `now`: its
-    /// first cycle is due at once, at the cadence every service begins
-    /// with until its own first answer says another.
-    fn begins(component: PathBuf, command: String, now: u64) -> Entry {
+    /// A service of the command in `component` that begins `now`, for the
+    /// generation of `data`: its first cycle is due at once, at the
+    /// cadence every service begins with until its own first answer says
+    /// another.
+    fn begins(
+        component: PathBuf,
+        command: String,
+        now: u64,
+        data: Option<&PackageData>,
+        wake: &Arc<Wake>,
+    ) -> Entry {
         Entry {
             component,
             command,
             every_ms: MIN_SERVICE_SECONDS * 1000,
             next: now,
             in_flight: None,
+            generation: marked("service", data, wake),
         }
     }
 }
@@ -170,7 +186,7 @@ impl Services {
                 entries: HashMap::new(),
                 dispatched: 0,
             }),
-            wake: Wake::default(),
+            wake: Arc::default(),
         });
         // The clock tells when it is set other than by time passing, and
         // the data when a generation begins or ends (installing, enabling,
@@ -279,17 +295,37 @@ impl Services {
             // before the entry is borrowed below.
             let token = serving.dispatched + 1;
             serving.dispatched = token;
-            let entry = serving
-                .entries
-                .entry(key.clone())
-                .or_insert_with(|| Entry::begins(component.clone(), command.clone(), now));
+            // The package's current generation, which a service that
+            // begins now belongs to.
+            let current = launcher.data_in(&state, &component);
+            let wake = &self.wake;
+            let entry = serving.entries.entry(key.clone()).or_insert_with(|| {
+                Entry::begins(
+                    component.clone(),
+                    command.clone(),
+                    now,
+                    current.as_ref(),
+                    wake,
+                )
+            });
             if entry.component != component {
                 // The service is another one now (its package's code was
                 // replaced): it begins again, at once. A cycle of the old
                 // code still running answers soon (its generation ended)
                 // and its report is ignored, so it holds nothing up: the
                 // new code need not wait for it.
-                *entry = Entry::begins(component.clone(), command.clone(), now);
+                *entry = Entry::begins(
+                    component.clone(),
+                    command.clone(),
+                    now,
+                    current.as_ref(),
+                    wake,
+                );
+            } else if entry.generation.ended() {
+                // Its generation ended and the code runs in the next one (a
+                // pause it came back from): the same service, on the
+                // current generation's undo list.
+                entry.generation = marked("service", current.as_ref(), wake);
             }
             // While a cycle runs, its entry's `next` may lie in the past
             // (it is set when the answer lands, from when the next cycle

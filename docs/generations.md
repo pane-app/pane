@@ -49,8 +49,11 @@ Every guest call has two owners, with different powers:
 The runtime serves guest calls on its own thread, many at once: while one
 waits on something outside its guest, the others run, and each instance's
 own calls run one after another (#136). When a generation ends, it runs its
-undo list, newest first (what it set up: its instances, its helpers' runs,
-its web requests), and:
+undo list, newest first (what it set up: its instances, its helpers' and
+system programs' runs, its web requests and web images, a command search
+in progress, and its schedules, services and command hotkeys, which the
+end marks for the scheduler, the services thread and the next hotkey sync
+to drop or carry over to the next generation), and:
 
 1. **Queued calls** of it (asked for but not started) are not started; they
    answer "The extension is disabled" or "The extension was reloaded or

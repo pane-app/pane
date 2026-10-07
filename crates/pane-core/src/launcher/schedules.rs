@@ -28,7 +28,9 @@
 //! the interval restarts when the code may run again, and the first run is
 //! one full interval after that. The declaration is the manifest, so a
 //! restart schedules again whatever it declares for a package still
-//! enabled.
+//! enabled. Each command's schedule is on its generation's undo list
+//! ("schedule", see `generation`): the end marks it ended and wakes the
+//! scheduler, which drops it, or keeps it on the next generation's list.
 //!
 //! Each run is the command's action of the item the schedule names, asked
 //! for as the user asking for it would: through the runtime (the command's
@@ -52,6 +54,7 @@ use std::time::Duration;
 use super::{Launcher, Screen, Status, WeakLauncher, stopped};
 use crate::clipboard::Clock;
 use crate::extension_data::PackageData;
+use crate::generation::EndMark;
 use crate::launch::LaunchRecord;
 use crate::runtime::{Answer, CallError};
 
@@ -67,7 +70,7 @@ pub(super) struct Schedules {
     /// with the launcher's state held, never the other way round.
     state: Mutex<Scheduling>,
     /// Wakes the scheduler thread, and tells when it settled.
-    wake: Wake,
+    wake: Arc<Wake>,
 }
 
 /// What the scheduler keeps: the clock it follows and one entry per
@@ -104,20 +107,43 @@ struct Entry {
     /// Whether a run has been asked for and has not answered: no second
     /// one is asked for meanwhile.
     in_flight: bool,
+    /// Its place on its package's generation's undo list: the
+    /// generation's end marks it, and the next look begins it again for
+    /// the generation then current, or drops it.
+    generation: EndMark,
 }
 
 impl Entry {
-    /// A schedule running `runs` that begins `now`: its first run is due
-    /// one interval later.
-    fn begins(runs: Scheduled, now: u64) -> Entry {
+    /// A schedule running `runs` that begins `now`, for the generation of
+    /// `data`: its first run is due one interval later.
+    fn begins(runs: Scheduled, now: u64, data: Option<&PackageData>, wake: &Arc<Wake>) -> Entry {
         let every_ms = runs.every_ms;
         Entry {
             runs,
             started: now,
             next: now.saturating_add(every_ms),
             in_flight: false,
+            generation: marked("schedule", data, wake),
         }
     }
+
+    /// Restarts its interval at `now`, as if it began then.
+    fn restart(&mut self, now: u64) {
+        self.started = now;
+        self.next = now.saturating_add(self.runs.every_ms);
+    }
+}
+
+/// A mark of `what` on the undo list of `data`'s generation, whose end
+/// wakes the worker `wake` is of, which then looks again (see
+/// [`EndMark`]).
+pub(super) fn marked(what: &'static str, data: Option<&PackageData>, wake: &Arc<Wake>) -> EndMark {
+    let wake = Arc::downgrade(wake);
+    EndMark::on(data.map(PackageData::generation), what, move || {
+        if let Some(wake) = wake.upgrade() {
+            wake.poke();
+        }
+    })
 }
 
 /// The next tick of a schedule that began at `started` and runs every
@@ -162,7 +188,7 @@ impl Schedules {
                 clock: clock.clone(),
                 entries: HashMap::new(),
             }),
-            wake: Wake::default(),
+            wake: Arc::default(),
         });
         // The clock tells when it is set other than by time passing, and
         // the data when a generation begins or ends (installing, enabling,
@@ -197,9 +223,7 @@ impl Schedules {
                 // The phase restarts under the new clock, as if every
                 // schedule began now: a phase is meaningful only under the
                 // clock it began under. A run still in flight stays marked.
-                let in_flight = entry.in_flight;
-                *entry = Entry::begins(entry.runs.clone(), now);
-                entry.in_flight = in_flight;
+                entry.restart(now);
             }
         }
         clock.on_change(Box::new(waking(Arc::downgrade(self))));
@@ -270,18 +294,26 @@ impl Schedules {
         scheduling.entries.retain(|key, _| wanted.contains_key(key));
         let mut due = Vec::new();
         for (key, runs) in wanted {
+            // The package's current generation, which a schedule that
+            // begins now belongs to.
+            let current = launcher.data_in(&state, &runs.component);
             let entry = scheduling
                 .entries
                 .entry(key.clone())
-                .or_insert_with(|| Entry::begins(runs.clone(), now));
+                .or_insert_with(|| Entry::begins(runs.clone(), now, current.as_ref(), &self.wake));
             if entry.runs != runs {
                 // The schedule is another one now (its package's code was
                 // replaced): the interval restarts with it, while a run
                 // still in flight stays marked, so a second is not asked
                 // for before it answers.
                 let in_flight = entry.in_flight;
-                *entry = Entry::begins(runs.clone(), now);
+                *entry = Entry::begins(runs.clone(), now, current.as_ref(), &self.wake);
                 entry.in_flight = in_flight;
+            } else if entry.generation.ended() {
+                // Its generation ended and the code runs in the next one
+                // (a pause it came back from): the same schedule, on the
+                // current generation's undo list.
+                entry.generation = marked("schedule", current.as_ref(), &self.wake);
             }
             if entry.in_flight || now < entry.next {
                 continue;

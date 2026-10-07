@@ -25,9 +25,11 @@ use std::time::{Duration, Instant};
 
 use feedback::shown;
 use futures::executor::block_on;
+use pane_core::hotkeys::{HotkeyError, Hotkeys, Shortcut};
 use pane_core::{
     Fault, HttpLimits, Launcher, PackageIdentity, Runtime, RuntimeStatus, SavedData, Screen, Status,
 };
+use serde_json::{Value, json};
 use service::Service;
 use tempfile::TempDir;
 
@@ -956,6 +958,114 @@ fn quitting_while_a_call_waits_on_the_network_ends_the_wait() {
     );
     waiting.join().unwrap();
     assert!(block_on(pane.runtime.running()).is_empty());
+}
+
+/// A system whose global hotkeys always register.
+#[derive(Default)]
+struct FakeHotkeys;
+
+impl Hotkeys for FakeHotkeys {
+    fn unavailable(&self) -> Option<String> {
+        None
+    }
+
+    fn register(&self, _shortcut: &Shortcut) -> Result<(), HotkeyError> {
+        Ok(())
+    }
+
+    fn unregister(&self, _shortcut: &Shortcut) {}
+}
+
+/// Every subsystem that sets something up for a package's generation puts
+/// it on the generation's undo list (#136): with one package whose
+/// commands search, run on a schedule and run a continuing service, one of
+/// them with a hotkey, the list holds the instances, the schedule, the
+/// service, the hotkey, a search in progress and its web request; the
+/// generation's end runs the list, which is empty after it.
+#[cfg(debug_assertions)]
+#[test]
+fn a_generation_s_undo_list_holds_every_subsystem_and_is_empty_after_its_end() {
+    let service = Service::start();
+    let sources = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    // The search sample, with the schedule and service samples' commands.
+    let folder = package("sample-search", &sources.path().join("everything"));
+    for (assembled, component) in [
+        ("sample-schedule", "sample_schedule.wasm"),
+        ("sample-service", "sample_service.wasm"),
+    ] {
+        let from = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/guests/packages")
+            .join(assembled)
+            .join(component);
+        fs::copy(&from, folder.join(component)).unwrap();
+    }
+    let mut manifest: Value =
+        serde_json::from_str(&fs::read_to_string(folder.join("pane.json")).unwrap()).unwrap();
+    manifest["commands"].as_array_mut().unwrap().extend([
+        json!({
+            "id": "counting",
+            "title": "Counting",
+            "component": "sample_schedule.wasm",
+            "schedule": { "everySeconds": 60, "item": "count" }
+        }),
+        json!({
+            "id": "watching",
+            "title": "Watching",
+            "component": "sample_service.wasm",
+            "service": true
+        }),
+    ]);
+    fs::write(folder.join("pane.json"), manifest.to_string()).unwrap();
+    let runtime = Runtime::start().unwrap();
+    let launcher =
+        Launcher::with_packages(Ok(runtime.clone()), vec![], data.path().join("extensions"))
+            .with_hotkeys(Arc::new(FakeHotkeys));
+    block_on(launcher.install_package(&folder));
+    assert!(
+        matches!(launcher.view().status, Status::Result(_)),
+        "{:?}",
+        launcher.view().status
+    );
+    let pane = Pane {
+        launcher,
+        runtime,
+        _sources: sources,
+        _data: data,
+    };
+    let identity = pane.identity();
+    let counting = format!("{}#counting", identity.key());
+    let hotkey = pane
+        .launcher
+        .set_hotkey(&counting, Some(Shortcut::parse("ctrl+alt+g").unwrap()))
+        .unwrap();
+    block_on(hotkey);
+    assert!(pane.launcher.wait_for_schedules(Duration::from_secs(10)));
+    assert!(pane.launcher.wait_for_services(Duration::from_secs(10)));
+
+    // A search waits on the service.
+    pane.use_service(&service.url());
+    let slow = pane.launcher.set_query("slow");
+    wait_for_request(&service, "/search?q=slow");
+    let listed = pane.launcher.undo_list(&identity);
+    for what in [
+        "extension instance",
+        "schedule",
+        "service",
+        "hotkey",
+        "command search",
+        "web request",
+    ] {
+        assert!(listed.contains(&what), "no {what} in {listed:?}");
+    }
+
+    block_on(pane.launcher.set_enabled(&identity, false));
+    assert!(
+        service.wait_for_abandoned(Duration::from_secs(5)),
+        "the search was not stopped"
+    );
+    block_on(slow);
+    assert_eq!(pane.launcher.undo_list(&identity), Vec::<&str>::new());
 }
 
 #[test]
