@@ -1,12 +1,16 @@
 //! The guest's side of the `system` host functions (`wit/system.wit`): the
 //! clipboard, opening things, revealing them and moving them to the
-//! Recycle Bin. Each takes the launcher's [`System`] (through its
+//! Recycle Bin, pasting into the application that was in front before
+//! Pane, that application and the text selected in it. Each takes the
+//! launcher's [`System`] (through its
 //! `HostFunctions`), checks what the command gave (a path must be
 //! absolute), and has the system do the work on a thread of its own: the
 //! runtime thread awaits it, serving other packages' calls meanwhile, and
 //! the wait is Pane's time, never the guest's computing (#18, #136). None
-//! closes the window or tells the user anything, and none is a reason to
-//! pause the extension: a refusal is an answer.
+//! closes the window or tells the user anything but `paste`, which closes
+//! it (as `window.close` does) once the system says it can paste, and none
+//! is a reason to pause the extension: a refusal is an answer, and "not
+//! available on this system yet" is one too, distinct from a failure.
 //!
 //! Stopped code does nothing more: each function answers that the code
 //! was stopped. A runtime no launcher drives (tests of the runtime alone)
@@ -15,8 +19,11 @@
 use std::sync::Arc;
 
 use super::{GuestState, lock, stopped_code, system_host};
+use crate::feedback::PopToRoot;
 use crate::platform::Platform;
-use crate::system::{self as host_system, Clip, NotTrashed, System};
+use crate::system::{
+    self as host_system, Clip, MAX_CLIPBOARD_TEXT, NotTrashed, System, SystemError,
+};
 
 impl GuestState {
     /// The launcher's system, unless the instance's code is stopped (then
@@ -31,6 +38,43 @@ impl GuestState {
         let host = lock(&self.host_functions).clone();
         Ok(host.map_or_else(host_system::none, |host| host.system()))
     }
+
+    /// Closes the window for a paste, as `window.close` does: in a call a
+    /// window was shown for, with the next showing as the user's Launcher
+    /// setting says. Why not, if the code was stopped meanwhile.
+    fn close_for_paste(&self) -> Result<(), SystemError> {
+        let _host = self.host();
+        if let Some(end) = self.stopped() {
+            return Err(SystemError::Failed(stopped_code(end)));
+        }
+        let host = lock(&self.host_functions).clone();
+        if let Some(host) = host {
+            host.close(&self.caller(), false, PopToRoot::Default);
+        }
+        Ok(())
+    }
+}
+
+/// `error` as the WIT carries it.
+fn wire_error(error: SystemError) -> system_host::SystemError {
+    match error {
+        SystemError::NotAvailable(why) => system_host::SystemError::NotAvailable(why),
+        SystemError::Failed(why) => system_host::SystemError::Failed(why),
+    }
+}
+
+/// A command's clip as Pane's: a file's path must be absolute.
+fn clip_from(content: system_host::Clip) -> Result<Clip, String> {
+    Ok(match content {
+        system_host::Clip::Text(text) => Clip::Text(text),
+        system_host::Clip::File(path) => Clip::File(host_system::absolute(&path)?),
+    })
+}
+
+/// What the system's thread failing is, for the functions answering a
+/// [`SystemError`].
+fn failed_error() -> SystemError {
+    SystemError::Failed(failed())
 }
 
 /// Runs `work` on a thread of its own, since the system may block (a
@@ -70,10 +114,7 @@ impl system_host::Host for GuestState {
 
     async fn copy(&mut self, content: system_host::Clip, concealed: bool) -> Result<(), String> {
         let system = self.system()?;
-        let clip = match content {
-            system_host::Clip::Text(text) => Clip::Text(text),
-            system_host::Clip::File(path) => Clip::File(host_system::absolute(&path)?),
-        };
+        let clip = clip_from(content)?;
         self.hosted(off_thread(
             move || system.copy(&clip, concealed),
             || Err(failed()),
@@ -155,6 +196,68 @@ impl system_host::Host for GuestState {
             Ok(())
         } else {
             Err(refused.into_iter().map(wire).collect())
+        }
+    }
+
+    async fn paste(&mut self, content: system_host::Clip) -> Result<(), system_host::SystemError> {
+        let system = self.system().map_err(system_host::SystemError::Failed)?;
+        let clip = clip_from(content).map_err(system_host::SystemError::Failed)?;
+        // Asked first, so that a paste this system cannot make leaves the
+        // window and the clipboard as they were.
+        let asked = system.clone();
+        self.hosted(off_thread(
+            move || asked.can_paste(),
+            || Err(failed_error()),
+        ))
+        .await
+        .map_err(wire_error)?;
+        // The application that was in front can only come back once
+        // Pane's window has gone.
+        self.close_for_paste().map_err(wire_error)?;
+        self.hosted(off_thread(
+            move || host_system::paste(system.as_ref(), &clip),
+            || Err(failed_error()),
+        ))
+        .await
+        .map_err(wire_error)
+    }
+
+    async fn front_application(
+        &mut self,
+    ) -> Result<Option<system_host::FrontApp>, system_host::SystemError> {
+        let system = self.system().map_err(system_host::SystemError::Failed)?;
+        let front = self
+            .hosted(off_thread(
+                move || system.front_application(),
+                || Err(failed_error()),
+            ))
+            .await
+            .map_err(wire_error)?;
+        Ok(front.map(|front| system_host::FrontApp {
+            name: front.name,
+            icon: front.icon,
+        }))
+    }
+
+    async fn selected_text(&mut self) -> Result<Option<String>, system_host::SystemError> {
+        let system = self.system().map_err(system_host::SystemError::Failed)?;
+        let selected = self
+            .hosted(off_thread(
+                move || system.selected_text(),
+                || Err(failed_error()),
+            ))
+            .await
+            .map_err(wire_error)?;
+        match selected {
+            // An empty selection is no selection.
+            Some(text) if text.is_empty() => Ok(None),
+            Some(text) if text.len() > MAX_CLIPBOARD_TEXT => {
+                Err(system_host::SystemError::Failed(format!(
+                    "The selected text is longer than the {} MiB Pane gives a command",
+                    MAX_CLIPBOARD_TEXT / (1024 * 1024)
+                )))
+            }
+            selected => Ok(selected),
         }
     }
 }

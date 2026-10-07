@@ -41,6 +41,7 @@ mod no_view;
 mod npm;
 mod operations;
 mod packages;
+mod paste;
 mod pausing;
 mod preferences;
 mod programs;

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
 // Declarations for `pane:extension/system` in wit/system.wit: the
-// clipboard, opening anything, revealing a path in the file manager and
-// moving paths to the Recycle Bin. Most commands use them through
+// clipboard, opening anything, revealing a path in the file manager,
+// moving paths to the Recycle Bin, pasting into the application in front,
+// that application and its selected text. Most commands use them through
 // `@pane/extension/system` (system.d.ts), which also has the standard
 // actions built from them.
 
@@ -20,8 +21,45 @@ declare module "pane:extension/system@0.1.0" {
     reason: string;
   }
 
+  /**
+   * Why `paste`, `frontApplication` or `selectedText` did not answer:
+   * `not-available` where Pane cannot do it on this system yet (not a
+   * failure), `failed` when it went wrong; each with what to tell the user.
+   */
+  export type SystemError =
+    | { tag: "not-available"; val: string }
+    | { tag: "failed"; val: string };
+
+  /** The application that was in front before Pane. */
+  export interface FrontApp {
+    /** Its name, as the system shows it. */
+    name: string;
+    /** The path (or `shell:` name) whose system icon is its icon. */
+    icon?: string;
+  }
+
   /** The system Pane runs on. */
   export function runningOn(): HostSystem;
+
+  /**
+   * Closes the window, pastes `content` into the application that was in
+   * front before Pane and puts back what the clipboard held. Otherwise it
+   * throws an object whose `payload` is a {@link SystemError}.
+   */
+  export function paste(content: Clip): void;
+
+  /**
+   * The application that was in front before Pane, or nothing. Otherwise
+   * it throws an object whose `payload` is a {@link SystemError}.
+   */
+  export function frontApplication(): FrontApp | null | undefined;
+
+  /**
+   * The text selected in the application that was in front before Pane,
+   * or nothing when nothing is selected. Otherwise it throws an object
+   * whose `payload` is a {@link SystemError}.
+   */
+  export function selectedText(): string | null | undefined;
 
   /**
    * Puts `content` on the clipboard; with `concealed`, marked so that

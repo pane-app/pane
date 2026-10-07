@@ -1,9 +1,11 @@
-//! The standard actions, as Raycast's built-in ones behave: Copy, Open,
-//! Open With…, Show in Explorer (named for the system) and Move to Recycle
-//! Bin. Each does its work through [`crate::system`], then closes the
-//! window, as Raycast's do; Copy and Move to Recycle Bin then say what they
-//! did in a HUD ("Copied to Clipboard"). Asked to keep the window open,
-//! one says it in a toast instead.
+//! The standard actions, as Raycast's built-in ones behave: Copy, Paste,
+//! Open, Open With…, Show in Explorer (named for the system) and Move to
+//! Recycle Bin. Each does its work through [`crate::system`], then closes
+//! the window, as Raycast's do; Copy and Move to Recycle Bin then say what
+//! they did in a HUD ("Copied to Clipboard"). Asked to keep the window
+//! open, one says it in a toast instead. Paste closes the window by nature;
+//! where Pane cannot paste yet, it copies instead and says so in a HUD
+//! ("Copied — paste is not available here yet").
 //!
 //! ```ignore
 //! use pane_guest::actions;
@@ -11,6 +13,7 @@
 //!
 //! Item::new("note", "Note").actions([
 //!     actions::copy(Clip::Text("hunter2".into())).concealed().into(),
+//!     actions::paste(Clip::Text("Kind regards".into())).into(),
 //!     actions::open("https://example.com").into(),
 //!     actions::open_with(r"C:\Notes\todo.txt").into(),
 //!     actions::show_in_file_manager(r"C:\Notes\todo.txt").into(),
@@ -30,7 +33,7 @@ use alloc::vec::Vec;
 
 use crate::feedback::{Toast, ToastStyle, show_hud, show_toast};
 use crate::list::{Action, Submenu};
-use crate::system::{self, Clip};
+use crate::system::{self, Clip, SystemError};
 use crate::window::{PopToRootType, close};
 
 /// A standard action, before it becomes an [`Action`]: what it does, its
@@ -46,6 +49,9 @@ enum Does {
     Copy {
         content: Clip,
         concealed: bool,
+    },
+    Paste {
+        content: Clip,
     },
     Open {
         target: String,
@@ -70,6 +76,20 @@ pub fn copy(content: Clip) -> Standard {
         concealed: false,
     })
 }
+
+/// Paste (titled "Paste"): closes the window and pastes `content` into the
+/// application that was in front before Pane, putting back what the
+/// clipboard held. Where Pane cannot paste yet, it copies `content`
+/// instead, closes the window and says so in a HUD ([`PASTE_FALLBACK`]).
+/// It always closes the window: [`Standard::keep_window_open`] does not
+/// apply.
+pub fn paste(content: Clip) -> Standard {
+    Standard::new(Does::Paste { content })
+}
+
+/// What Paste says in a HUD when it copied instead, where Pane cannot paste
+/// yet.
+pub const PASTE_FALLBACK: &str = "Copied — paste is not available here yet";
 
 /// Open: opens `target` (a URL of any scheme, a file, a folder or an
 /// application) with the system's handler, then closes the window.
@@ -143,7 +163,8 @@ impl Standard {
     }
 
     /// Keeps the window open after the action: what it did is then said in
-    /// a toast instead of a HUD.
+    /// a toast instead of a HUD. Paste ignores it: it closes the window by
+    /// nature.
     pub fn keep_window_open(mut self) -> Standard {
         self.keep_open = true;
         self
@@ -154,6 +175,7 @@ impl Standard {
     fn standard_title(&self) -> String {
         match &self.does {
             Does::Copy { .. } => "Copy to Clipboard".into(),
+            Does::Paste { .. } => "Paste".into(),
             Does::Open { .. } => "Open".into(),
             Does::OpenWith { .. } => "Open With…".into(),
             Does::Reveal { .. } => format!("Show in {}", system::file_manager_name()),
@@ -174,6 +196,17 @@ impl From<Standard> for Action {
                 system::copy(&content, concealed)?;
                 finish(keep_open, "Copied to Clipboard", true);
                 Ok::<(), String>(())
+            }),
+            Does::Paste { content } => Action::new(title, move || async move {
+                match system::paste(&content) {
+                    Ok(()) => Ok(()),
+                    Err(SystemError::NotAvailable(_)) => {
+                        system::copy(&content, false)?;
+                        finish(false, PASTE_FALLBACK, true);
+                        Ok(())
+                    }
+                    Err(SystemError::Failed(why)) => Err(why),
+                }
             }),
             Does::Open {
                 target,

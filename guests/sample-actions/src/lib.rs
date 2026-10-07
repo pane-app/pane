@@ -56,6 +56,16 @@
 //! that command toasts "Not asked" with the reason. Run by the user (or its
 //! hotkey, with the launcher hidden), "Confirm Run" asks "Run it?" and
 //! toasts "Ran" or "Did not run".
+//!
+//! "Paste" (#148) has the standard Paste (it pastes "Pasted by the actions
+//! sample" where Pane can paste, and copies it with a HUD where it cannot
+//! yet), the same Paste titled after the application in front ("Paste to
+//! Notepad"), a paste that says each answer of the host function ("Paste
+//! Directly"), "Front Application", which says that application's name and
+//! icon, or that there is none, and "Search Selection", which searches the
+//! web for the selected text and says when nothing is selected. Where Pane
+//! cannot do one yet, a failure toast says "Not available here yet" with
+//! Pane's reason; a failure is an error the command answers with.
 //! The JavaScript and TypeScript samples do the same.
 #![no_std]
 
@@ -68,7 +78,7 @@ use pane_guest::commands::{CommandRef, LaunchType, launch, set_subtitle};
 use pane_guest::feedback::{
     Confirmation, ShownToast, Toast, ToastAction, ToastStyle, confirm, show_hud, show_toast,
 };
-use pane_guest::system::{self, Clip, HostSystem};
+use pane_guest::system::{self, Clip, HostSystem, SystemError};
 use pane_guest::window::{PopToRootType, clear_search, close, pop_to_root};
 use pane_guest::{
     Action, Command, CustomView, FieldValue, FormError, Item, LaunchRecord, List, Modifier,
@@ -388,6 +398,114 @@ fn standard_item() -> Item {
         ])
 }
 
+/// The text the sample pastes.
+const PASTED_TEXT: &str = "Pasted by the actions sample";
+
+/// Where "Search Selection" searches.
+const SEARCH: &str = "https://www.google.com/search?q=";
+
+/// What the sample says where Pane cannot do something yet: a failure
+/// toast, "Not available here yet: <Pane's reason>", which is not an
+/// error the command answers with.
+fn not_available(why: &str) {
+    show_toast(Toast::failure("Not available here yet").message(why));
+}
+
+/// `text` as a URL's query value, as JavaScript's `encodeURIComponent`
+/// writes it.
+fn encode(text: &str) -> String {
+    let mut encoded = String::new();
+    for byte in text.bytes() {
+        match byte {
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'_'
+            | b'.'
+            | b'!'
+            | b'~'
+            | b'*'
+            | b'\''
+            | b'('
+            | b')' => encoded.push(byte as char),
+            other => encoded.push_str(&format!("%{other:02X}")),
+        }
+    }
+    encoded
+}
+
+/// The title of a Paste to the application in front: "Paste to Notepad",
+/// or "Paste to Active App" when Pane does not know one.
+fn paste_title() -> String {
+    match system::front_application() {
+        Ok(Some(front)) => format!("Paste to {}", front.name),
+        _ => "Paste to Active App".into(),
+    }
+}
+
+/// "Paste": the standard Paste, the front application and the selected
+/// text.
+fn paste_item() -> Item {
+    Item::new("paste", "Paste")
+        .subtitle("Paste, the application in front and the selected text")
+        .actions([
+            actions::paste(Clip::Text(PASTED_TEXT.into())).into(),
+            actions::paste(Clip::Text(PASTED_TEXT.into()))
+                .title(paste_title())
+                .into(),
+            Action::new("Paste Directly", || async {
+                match system::paste(&Clip::Text(PASTED_TEXT.into())) {
+                    Ok(()) => Ok(()),
+                    Err(SystemError::NotAvailable(why)) => {
+                        not_available(&why);
+                        Ok(())
+                    }
+                    Err(SystemError::Failed(why)) => Err(why),
+                }
+            }),
+            Action::new("Front Application", || async {
+                match system::front_application() {
+                    Ok(Some(front)) => {
+                        let icon = front.icon.as_deref().unwrap_or("none");
+                        show_toast(Toast::success(format!(
+                            "Front application: {}, icon {icon}",
+                            front.name
+                        )));
+                        Ok(())
+                    }
+                    Ok(None) => {
+                        show_toast(Toast::success("No application is in front"));
+                        Ok(())
+                    }
+                    Err(SystemError::NotAvailable(why)) => {
+                        not_available(&why);
+                        Ok(())
+                    }
+                    Err(SystemError::Failed(why)) => Err(why),
+                }
+            }),
+            Action::new("Search Selection", || async {
+                match system::selected_text() {
+                    Ok(Some(text)) => {
+                        system::open(&format!("{SEARCH}{}", encode(&text)), None)?;
+                        show_toast(Toast::success(format!("Searched for “{text}”")));
+                        Ok(())
+                    }
+                    Ok(None) => {
+                        show_toast(Toast::failure("Nothing is selected"));
+                        Ok(())
+                    }
+                    Err(SystemError::NotAvailable(why)) => {
+                        not_available(&why);
+                        Ok(())
+                    }
+                    Err(SystemError::Failed(why)) => Err(why),
+                }
+            }),
+        ])
+}
+
 impl Command for Actions {
     type CustomView = NoCustomView;
 
@@ -501,6 +619,7 @@ impl Command for Actions {
                 ]),
             system_item(),
             standard_item(),
+            paste_item(),
         ]))
     }
 
