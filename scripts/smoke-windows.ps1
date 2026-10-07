@@ -1601,11 +1601,16 @@ if ((Test-Path $downloads) -and (Get-ChildItem $downloads)) { throw "a Git downl
 # system's folder picker; the smoke names the folder in
 # PANE_TEST_CHOOSE_FOLDER instead (a debug build's hook). The fixture folder's
 # path has spaces, and a file in it has non-ASCII letters too; typing "plan"
-# lists that file, selected, and Enter hands it to Pane's handler for files,
-# which PANE_TEST_OPEN_FILE_LOG (a debug build's hook) makes record the path
-# instead of running Invoke-Item, which could show the "Open with" dialog or
-# open the user's own program. A batch file in the folder is found but
-# refused.
+# lists that file, selected, and Enter (Open, the file's first action, #150)
+# hands it to Pane's handler for files, which PANE_TEST_OPEN_FILE_LOG (a
+# debug build's hook) makes record the path instead of running Invoke-Item,
+# which could show the "Open with" dialog or open the user's own program.
+# Each file action closes the window after it acts, so Pane is started again
+# (the grant is kept) for the next file. A batch file in the folder is
+# found, and Enter reveals it in File Explorer (ADR 0037: file search's
+# Enter never runs a program; only its explicit Run does): it neither runs
+# nor reaches the handler for files, and the window closes as after any
+# action that worked (one that fails stays on screen).
 $data = Join-Path $OutDir "files-data"
 if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 $env:PANE_DATA_DIR = $data
@@ -1631,22 +1636,32 @@ Send "{ESC}"; Start-Sleep -Seconds 1
 Send "plan"; Start-Sleep -Seconds 3
 Capture "221-files-found.png"
 Check "221-files-found.png" "selected" 3000   # the selected file row
-Send "{ENTER}"; Start-Sleep -Seconds 3
-Capture "222-files-opened.png"
-Check "222-files-opened.png" "success"   # "Opened Resume plan u.txt"
+Send "{ENTER}"; Start-Sleep -Seconds 3   # Open: "Opened Resume plan u.txt", and the window closes
+Capture "222-files-opened.png"   # evidence only: the window is hidden
 if (-not (Test-Path $openLog)) { throw "the handler for files was not asked to open anything" }
+if ([Win]::GetForegroundWindow() -eq $process.MainWindowHandle) { throw "Open left Pane's window in front" }
 $recorded = (Get-Content -Encoding UTF8 -LiteralPath $openLog | Select-Object -First 1)
 $expected = (Resolve-Path -LiteralPath (Join-Path $filesFolder $planName)).Path
 if ((Resolve-Path -LiteralPath $recorded).Path -ne $expected) { throw "the handler for files was not asked to open the found file: $recorded" }
 Remove-Item -Force $openLog
-Send "{ESC}"; Start-Sleep -Seconds 1
+Stop-Pane $process
+$process = Start-Pane "stderr-files-program.log"
 Send "runner"; Start-Sleep -Seconds 3
-Send "{ENTER}"; Start-Sleep -Seconds 2
-Capture "223-files-program-refused.png"
-Check "223-files-program-refused.png" "error"   # "Could not open runner.bat: it is a program or script, ..."
+Capture "223-files-program-found.png"
+Check "223-files-program-found.png" "selected" 3000   # the batch file's row
+Send "{ENTER}"; Start-Sleep -Seconds 3   # Reveal in Explorer: "Revealed runner.bat in Explorer"
+Capture "224-files-program-revealed.png"   # evidence only: File Explorer, Pane hidden
 if (Test-Path $openLog) { throw "the batch file was handed to the handler" }
 if (Test-Path (Join-Path $filesFixture "runner-ran")) { throw "the batch file ran" }
-$shots = "220-files-folder-granted", "221-files-found", "222-files-opened", "223-files-program-refused" | ForEach-Object { Join-Path $OutDir "$_.png" }
+if ([Win]::GetForegroundWindow() -eq $process.MainWindowHandle) { throw "revealing the batch file failed: Pane's window stayed" }
+# Close the File Explorer window the reveal opened, so that it holds no
+# focus the later phases need.
+$notes = (Resolve-Path -LiteralPath (Join-Path $filesFolder "notes")).Path
+foreach ($window in (New-Object -ComObject Shell.Application).Windows()) {
+    try { $path = $window.Document.Folder.Self.Path } catch { continue }
+    if ($path -eq $notes) { $window.Quit() }
+}
+$shots = "220-files-folder-granted", "221-files-found", "223-files-program-found" | ForEach-Object { Join-Path $OutDir "$_.png" }
 python "$PSScriptRoot/check_screenshot.py" --distinct @shots
 if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: file search changed nothing" }
 Stop-Pane $process
@@ -1746,7 +1761,9 @@ try {
 # CanIncludeInClipboardHistory, CanUploadToCloudClipboard); nothing is kept
 # while it is paused or the extension is disabled, also after a restart,
 # and once enabled again it is kept again, also after a restart. Enter on
-# a kept item, then on its first choice, copies it again. The smoke copies only text of its own
+# a kept item runs its first action, Paste (#150): Pane cannot paste on
+# Windows yet, so it copies the item again instead, closes the window and
+# says so in a HUD; Pane is then started again. The smoke copies only text of its own
 # ("pane-smoke-..."), and so replaces what was on the clipboard without
 # reading or putting it back: run it on CI's runner or a desktop given to
 # it, as the rest of the smoke already takes over the keyboard. A data
@@ -1870,14 +1887,15 @@ Wait-For $history '"capture": "on"' $true
 Copy-Text "pane-smoke-resumed" $null
 Wait-For $history "pane-smoke-resumed" $true
 Open-History
-Send "{DOWN 8}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 1   # the second kept item, pane-smoke-second, after Pause, Turn off, Keep items for, Exclude, Clear, Turn off and delete, Delete recent and the first
-Send "{ENTER}"; Start-Sleep -Seconds 2   # Copy it again, the first of its choices (#36)
-Capture "283-clipboard-copied.png"
-Check "283-clipboard-copied.png" "success"   # "Copied to the clipboard"
+Send "{DOWN 8}"; Start-Sleep -Milliseconds 120   # the second kept item, pane-smoke-second, after Pause, Turn off, Keep items for, Exclude, Clear, Turn off and delete, Delete recent and the first
+Send "{ENTER}"; Start-Sleep -Seconds 2   # Paste: not available yet, so it copies it again (#150)
+Capture "283-clipboard-copied.png"   # evidence only: the HUD "Copied — paste is not available here yet", Pane hidden
 if ([PaneClip]::GetText() -ne "pane-smoke-second") { throw "Enter did not copy the item" }
+if ([Win]::GetForegroundWindow() -eq $process.MainWindowHandle) { throw "Paste left Pane's window in front" }
 Start-Sleep -Seconds 1
 if ((Kept-Texts)[0] -ne "pane-smoke-second") { throw "the copied item did not move to the front" }
-Send "{ESC}"   # from the item's form to the command's list
+Stop-Pane $process
+$process = Start-Pane "stderr-clipboard-pasted.log"
 Open-Manage
 Send "{ENTER}"   # disable Clipboard History, the first row
 Wait-For $registry '"disabled": true' $true; Start-Sleep -Seconds 1
@@ -1901,7 +1919,7 @@ Wait-For $history "pane-smoke-after-restart" $true
 Open-History
 Capture "285-clipboard-after-restart.png"
 Check "285-clipboard-after-restart.png" "subtitle"   # kept again after the restart
-$shots = "280-clipboard-off", "281-clipboard-on", "282-clipboard-kept", "283-clipboard-copied", "284-clipboard-disabled", "285-clipboard-after-restart" | ForEach-Object { Join-Path $OutDir "$_.png" }
+$shots = "280-clipboard-off", "281-clipboard-on", "282-clipboard-kept", "284-clipboard-disabled", "285-clipboard-after-restart" | ForEach-Object { Join-Path $OutDir "$_.png" }
 python "$PSScriptRoot/check_screenshot.py" --distinct @shots
 if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: clipboard history changed nothing" }
 Stop-Pane $process
@@ -1916,7 +1934,8 @@ foreach ($never in "before", "secret", "no-history", "no-cloud", "paused", "disa
 # default 7-day retention) and pane-smoke-enabled 2 hours old, as a downtime
 # would: once Pane starts again, before the command shows anything,
 # pane-smoke-kept is gone from the file and the list. Then, in the command:
-# Enter on pane-smoke-second and "Delete it" deletes that item alone; Delete
+# Delete, pane-smoke-second's third action (Ctrl+Shift+Enter, #150), deletes
+# that item alone; Delete
 # recent items (the last hour) deletes the two copied in this smoke's last
 # minutes and keeps pane-smoke-enabled; keeping items for 1 hour deletes
 # pane-smoke-enabled at once; and after one more copy, "Turn off and delete
@@ -1939,14 +1958,13 @@ Open-History
 Capture "400-clipboard-expired.png"
 Check "400-clipboard-expired.png" "subtitle"   # pane-smoke-kept is no longer listed
 $onClipboard = [PaneClip]::GetText()
-Send "{DOWN 9}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 1   # pane-smoke-second: Copy it again or Delete it
-Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"   # Delete it
+Send "{DOWN 9}"; Start-Sleep -Milliseconds 120   # pane-smoke-second: Paste, Copy, Delete
+Send "^+{ENTER}"   # Delete, its third action
 Wait-For $history "pane-smoke-second" $false; Start-Sleep -Seconds 1
 Capture "401-clipboard-item-deleted.png"
 Check "401-clipboard-item-deleted.png" "success"   # "Deleted the kept item"
 if ((Kept-Joined) -ne "pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-resumed") { throw "kept: $(Kept-Joined)" }
 if ([PaneClip]::GetText() -ne $onClipboard) { throw "deleting an item changed the clipboard" }
-Send "{ESC}"   # from the item's form to the command's list
 Open-History
 Send "{DOWN 6}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 1   # Delete recent items: 15 minutes, hour or day
 Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"   # the last hour

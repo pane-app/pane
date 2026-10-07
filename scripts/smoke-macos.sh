@@ -1436,7 +1436,11 @@ python3 "$(dirname "$0")/check_git_record.py" --ref refs/heads/release --unpinne
 # lists that file, selected, and Enter hands it to Pane's handler for files,
 # which PANE_TEST_OPEN_FILE_LOG (a debug build's hook) makes record the path
 # instead of asking /usr/bin/open, since any application that opened it would
-# be the user's own. An executable script in the folder is found but refused.
+# be the user's own. Each file action closes the window after it acts
+# (#150), so Pane is started again (the grant is kept) for the next file.
+# An executable script in the folder is found, and Enter reveals it in
+# Finder (ADR 0037: file search's Enter never runs a program; only its
+# explicit Run does): it neither runs nor reaches the handler for files.
 # The fixture is in the system's temporary folder, so no screenshot shows a
 # home path.
 export PANE_DATA_DIR=$out/files-data
@@ -1460,20 +1464,22 @@ key 53; sleep 1
 type_text 'plan'; sleep 3
 capture 221-files-found.png
 check 221-files-found.png selected 3000   # the selected file row, "Résumé plan ü.txt"
-key 36; sleep 3
-capture 222-files-opened.png
-check 222-files-opened.png success   # "Opened Résumé plan ü.txt"
+key 36; sleep 3   # Open: "Opened Résumé plan ü.txt", and the window closes
+capture 222-files-opened.png   # evidence only: the window is hidden
 [ -f "$out/opened-file.txt" ] || { echo "the handler for files was not asked to open anything"; exit 1; }
 [ "$(cd "$(dirname "$(head -1 "$out/opened-file.txt")")" && pwd -P)/$(basename "$(head -1 "$out/opened-file.txt")")" = "$(cd "$files_folder" && pwd -P)/Résumé plan ü.txt" ] || { echo "the handler for files was not asked to open the found file"; exit 1; }
 rm -f "$out/opened-file.txt"
-key 53; sleep 1
+stop_pane
+start_pane
 type_text 'runner'; sleep 3
-key 36; sleep 2
-capture 223-files-program-refused.png
-check 223-files-program-refused.png error   # "Could not open runner.sh: it is a program or script, ..."
+capture 223-files-program-found.png
+check 223-files-program-found.png selected 3000   # the script's row
+key 36; sleep 3   # Reveal in Finder
+capture 224-files-program-revealed.png   # evidence only: Finder, Pane hidden
 [ ! -e "$out/opened-file.txt" ] || { echo "the script was handed to the handler"; exit 1; }
 [ ! -e "$files_fixture/runner-ran" ] || { echo "the script ran"; exit 1; }
-python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{220-files-folder-granted,221-files-found,222-files-opened,223-files-program-refused}.png
+osascript -e 'tell application "Finder" to close every window' || true
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{220-files-folder-granted,221-files-found,223-files-program-found}.png
 stop_pane
 unset PANE_TEST_CHOOSE_FOLDER PANE_TEST_OPEN_FILE_LOG
 rm -rf "$files_fixture"
@@ -1563,8 +1569,10 @@ stop_service
 # keeps nothing until it is turned on in its command (its first item); then
 # the text this smoke copies is kept; nothing is kept while it is paused or
 # the extension is disabled, also after a restart, and once enabled again
-# it is kept again, also after a restart. Enter on a kept item, then on its
-# first choice, copies it again, and the copy really is on the pasteboard:
+# it is kept again, also after a restart. Enter on a kept item runs its
+# first action, Paste (#150): Pane cannot paste on macOS yet, so it copies
+# the item again instead, closes the window and says so in a HUD; the copy
+# really is on the pasteboard:
 # pbpaste prints it, and pasting it into root search shows exactly what
 # typing it shows. The smoke copies only text of its own
 # ("pane-smoke-..."), with AppleScript's "set the clipboard to", which
@@ -1631,14 +1639,17 @@ wait_for "$history" '"capture": "on"' present
 copy pane-smoke-resumed
 wait_for "$history" pane-smoke-resumed present
 open_history
-key 125; key 125; key 125; key 125; key 125; key 125; key 125; key 125; key 36; sleep 1   # the second kept item, pane-smoke-second, after Pause, Turn off, Keep items for, Exclude, Clear, Turn off and delete, Delete recent and the first
-key 36; sleep 2   # Copy it again, the first of its choices (#36)
-capture 283-clipboard-copied.png
-check 283-clipboard-copied.png success   # "Copied to the clipboard"
+key 125; key 125; key 125; key 125; key 125; key 125; key 125; key 125; sleep 1   # the second kept item, pane-smoke-second, after Pause, Turn off, Keep items for, Exclude, Clear, Turn off and delete, Delete recent and the first
+key 36; sleep 2   # Paste: not available yet, so it copies it again (#150)
+capture 283-clipboard-copied.png   # evidence only: the HUD "Copied — paste is not available here yet", Pane hidden
 [ "$(first_kept)" = pane-smoke-second ] || { echo "the copied item did not move to the front: $(kept_texts)"; exit 1; }
-# The pasteboard really holds the item again: pbpaste prints it, and
-# pasting it over root search shows exactly what typing it shows.
+# The pasteboard really holds the item again: pbpaste prints it, and, with
+# Pane started again (Paste closed its window; the pasteboard keeps what
+# was copied), pasting it over root search shows exactly what typing it
+# shows.
 [ "$(pbpaste)" = pane-smoke-second ] || { echo "the pasteboard holds: $(pbpaste)"; exit 1; }
+stop_pane
+start_pane
 to_root
 command_key a; command_key v; sleep 1
 capture 284-clipboard-pasted.png
@@ -1672,7 +1683,7 @@ wait_for "$history" pane-smoke-after-restart present
 open_history
 capture 287-clipboard-after-restart.png
 check 287-clipboard-after-restart.png subtitle   # kept again after the restart
-python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{280-clipboard-off,281-clipboard-on,282-clipboard-kept,283-clipboard-copied,284-clipboard-pasted,286-clipboard-disabled,287-clipboard-after-restart}.png
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{280-clipboard-off,281-clipboard-on,282-clipboard-kept,284-clipboard-pasted,286-clipboard-disabled,287-clipboard-after-restart}.png
 stop_pane
 [ "$(kept_texts)" = pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-second,pane-smoke-resumed,pane-smoke-kept ] || { echo "kept: $(kept_texts)"; exit 1; }
 for never in before paused disabled restarted-disabled; do
@@ -1684,7 +1695,8 @@ done
 # default 7-day retention) and pane-smoke-enabled 2 hours old, as a
 # downtime would: once Pane starts again, before the command shows
 # anything, pane-smoke-kept is gone from the file and the list. Then, in
-# the command: Enter on pane-smoke-second and "Delete it" deletes that
+# the command: Delete, pane-smoke-second's third action (Ctrl+Shift+Enter,
+# #150), deletes that
 # item alone; Delete recent items (the last hour) deletes the two copied
 # in this smoke's last minutes and keeps pane-smoke-enabled; keeping items
 # for 1 hour deletes pane-smoke-enabled at once; and after one more copy,
@@ -1704,13 +1716,12 @@ sleep 1
 open_history
 capture 400-clipboard-expired.png
 check 400-clipboard-expired.png subtitle   # pane-smoke-kept is no longer listed
-key 125; key 125; key 125; key 125; key 125; key 125; key 125; key 125; key 125; key 36; sleep 1   # pane-smoke-second: Copy it again or Delete it
-key 125; key 36; sleep 1   # Delete it
+key 125; key 125; key 125; key 125; key 125; key 125; key 125; key 125; key 125; sleep 1   # pane-smoke-second: Paste, Copy, Delete
+osascript -e 'tell application "System Events" to key code 36 using {control down, shift down}'; sleep 1   # Delete, its third action
 wait_for "$history" pane-smoke-second absent; sleep 1
 capture 401-clipboard-item-deleted.png
 check 401-clipboard-item-deleted.png success   # "Deleted the kept item"
 [ "$(kept_texts)" = pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-resumed ] || { echo "kept: $(kept_texts)"; exit 1; }
-key 53; sleep 1   # from the item's form to the command's list
 open_history
 key 125; key 125; key 125; key 125; key 125; key 125; key 36; sleep 1   # Delete recent items: 15 minutes, hour or day
 key 125; key 36; sleep 1   # the last hour
