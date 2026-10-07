@@ -29,15 +29,17 @@
 //! command's required, unset preferences before it runs. Over its fields
 //! it shows the extension's tile and title and "Set these up before using
 //! <command>"; each field's description is under it, a password's text is
-//! hidden as it is typed, and the package's `HELP.md` is beside the
-//! fields, as plain paragraphs.
+//! hidden as it is typed, a file, folder or application preference is a
+//! path field with the "Choose…" button of its extension's card in
+//! Settings, which opens the system's picker and fills the field, and the
+//! package's `HELP.md` is beside the fields, as plain paragraphs.
 
 use gpui::{
-    AnyElement, App, Context, Div, Entity, FocusHandle, Focusable, KeyBinding, Role, Stateful,
-    Subscription, Toggled, Window, actions, div, prelude::*, px, transparent_black,
+    AnyElement, App, Context, Div, Entity, FocusHandle, Focusable, KeyBinding, Role, SharedString,
+    Stateful, Subscription, Toggled, Window, actions, div, prelude::*, px, transparent_black,
 };
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
-use pane_core::{FieldKind, FormField, FormView, Screen, SetupHeader, Status};
+use pane_core::{FieldKind, FormField, FormView, PathKind, Screen, SetupHeader, Status};
 
 use crate::app::LauncherWindow;
 use crate::ui::controls;
@@ -179,7 +181,7 @@ impl LauncherWindow {
             .fields
             .iter()
             .map(|field| match &field.kind {
-                FieldKind::Text { .. } | FieldKind::Password { .. } => {
+                FieldKind::Text { .. } | FieldKind::Password { .. } | FieldKind::Path { .. } => {
                     let input = cx.new(|cx| EditableTextState::new(StringStorage::default(), cx));
                     input.focus_handle(cx).tab_stop(true);
                     // An extension's text field starts empty; Pane's own
@@ -212,6 +214,40 @@ impl LauncherWindow {
     pub(crate) fn submit_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let pending = self.launcher.submit_form();
         self.show_until_done(pending, window, cx);
+    }
+
+    /// Opens the system's picker for the path field `field_id` (a `pick`),
+    /// as the Settings card's "Choose…" does; the path chosen fills the
+    /// field, which sets its value.
+    fn choose_path(
+        &mut self,
+        field_id: &str,
+        pick: PathKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let picked = cx.prompt_for_paths(crate::features::settings::extensions::path_prompt(pick));
+        let field_id = field_id.to_owned();
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = picked.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let path = path.to_string_lossy().into_owned();
+            this.update(cx, |this, cx| {
+                let Some(input) = this.text_field(&field_id) else {
+                    return;
+                };
+                // The field's subscription sets the value, as typing does.
+                input.update(cx, |input, cx| input.emplace(&path, cx));
+                this.launcher.set_field_value(&field_id, &path);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Chooses the option `delta` places from the current one in the choice
@@ -323,6 +359,43 @@ impl LauncherWindow {
                 theme,
             )
             .into_any_element(),
+            (Control::Text(input), FieldKind::Path { placeholder, pick }) => {
+                let well = text_control(
+                    TextControl {
+                        index,
+                        id: &field.id,
+                        label: &field.label,
+                        value: &field.value,
+                        placeholder: placeholder.as_deref().unwrap_or_default(),
+                        error: error.as_deref(),
+                    },
+                    input,
+                    &input.focus_handle(cx),
+                    theme,
+                )
+                .flex_1();
+                let selector = format!("field-choose-{}", field.id);
+                let (field_id, pick) = (field.id.clone(), *pick);
+                let choose = controls::ghost_button(
+                    SharedString::from(selector.clone()),
+                    "Choose…",
+                    true,
+                    theme,
+                )
+                .debug_selector(move || selector)
+                .role(Role::Button)
+                .aria_label(format!("Choose {}", field.label))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.choose_path(&field_id, pick, window, cx);
+                }));
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(theme.geometry.controls.button_gap)
+                    .child(well)
+                    .child(choose)
+                    .into_any_element()
+            }
             (Control::Choice(handle), FieldKind::Choice(choices)) => {
                 let segments = choices
                     .iter()

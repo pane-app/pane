@@ -553,6 +553,23 @@ pub enum FieldKind {
     Password { placeholder: Option<String> },
     /// Exactly one of these options; the first starts chosen.
     Choice(Vec<Choice>),
+    /// A path, typed or chosen with the system's picker for `pick`: a
+    /// file, folder or application preference on Pane's Setup screen, as
+    /// its extension's card in Settings has them. An extension's form has
+    /// none yet.
+    Path {
+        placeholder: Option<String>,
+        pick: PathKind,
+    },
+}
+
+/// What a path field's picker chooses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PathKind {
+    File,
+    Folder,
+    /// An application: a program's file, or on macOS its bundle (a folder).
+    Application,
 }
 
 /// An option of a choice field.

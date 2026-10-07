@@ -55,7 +55,8 @@ use gpui::{
 };
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
 use pane_core::{
-    Launcher, PackageIdentity, PackagePreferences, PreferenceField, PreferenceKind, Screen, Status,
+    Launcher, PackageIdentity, PackagePreferences, PathKind, PreferenceField, PreferenceKind,
+    Screen, Status,
 };
 
 use super::{Page, SettingsWindow, search};
@@ -1205,14 +1206,12 @@ fn choose_path(
     window: &mut Window,
     cx: &mut Context<SettingsWindow>,
 ) {
-    let picked = cx.prompt_for_paths(PathPromptOptions {
-        files: kind != PreferenceKind::Folder,
-        // A macOS application is a folder (its bundle).
-        directories: kind == PreferenceKind::Folder
-            || (kind == PreferenceKind::Application && cfg!(target_os = "macos")),
-        multiple: false,
-        prompt: Some("Choose".into()),
-    });
+    let pick = match kind {
+        PreferenceKind::Folder => PathKind::Folder,
+        PreferenceKind::Application => PathKind::Application,
+        _ => PathKind::File,
+    };
+    let picked = cx.prompt_for_paths(path_prompt(pick));
     let (package, key) = (package.to_owned(), key.to_owned());
     cx.spawn_in(window, async move |this, cx| {
         let Ok(Ok(Some(paths))) = picked.await else {
@@ -1232,6 +1231,20 @@ fn choose_path(
         .ok();
     })
     .detach();
+}
+
+/// The system's picker for a path of `kind`, as a file, folder or
+/// application preference's "Choose…" opens it, here and on the launcher's
+/// Setup screen.
+pub(crate) fn path_prompt(kind: PathKind) -> PathPromptOptions {
+    PathPromptOptions {
+        files: kind != PathKind::Folder,
+        // A macOS application is a folder (its bundle).
+        directories: kind == PathKind::Folder
+            || (kind == PathKind::Application && cfg!(target_os = "macos")),
+        multiple: false,
+        prompt: Some("Choose".into()),
+    }
 }
 
 /// The installed package whose identity key is `key`.

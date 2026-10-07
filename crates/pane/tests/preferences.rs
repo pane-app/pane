@@ -191,6 +191,43 @@ fn the_setup_screen_asks_for_what_is_unset_and_launches_on_enter(cx: &mut TestAp
     assert_eq!(opened.value("apiKey").as_deref(), Some("abc"));
 }
 
+/// A folder preference on the Setup screen has the Settings card's
+/// "Choose…": it opens the system's folder picker, and the folder chosen
+/// fills the field.
+#[gpui::test]
+fn the_setup_screen_chooses_a_folder_with_the_systems_picker(cx: &mut TestAppContext) {
+    let mut opened = opened(cx);
+    launch(&mut opened, "show preferences");
+    let notes = opened.notes();
+    let cx = &mut *opened.cx;
+    let choose = cx
+        .debug_bounds(selector("field-choose-show#folder"))
+        .expect("the folder's Choose… is drawn");
+    assert!(
+        cx.debug_bounds("field-choose-apiKey").is_none(),
+        "a password is typed"
+    );
+    cx.simulate_mouse_move(choose.center(), None::<MouseButton>, Modifiers::none());
+    cx.simulate_click(choose.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(cx.did_prompt_for_paths(), "a folder picker opened");
+    let chosen = PathBuf::from(&notes);
+    cx.simulate_path_prompt_response(move |options| {
+        assert!(options.directories && !options.files && !options.multiple);
+        Some(vec![chosen])
+    });
+    let view = settle(&opened.window, cx);
+    let form = view.form().expect("the Setup screen stays");
+    let folder = form
+        .fields
+        .iter()
+        .find(|field| field.id == "show#folder")
+        .expect("the folder field");
+    assert_eq!(folder.value, notes);
+    let field = node(&nodes(cx), "TextInput", &folder.label);
+    assert_eq!(field["value"], notes.as_str());
+}
+
 #[gpui::test]
 fn escape_leaves_the_setup_screen_and_launches_nothing(cx: &mut TestAppContext) {
     let mut opened = opened(cx);

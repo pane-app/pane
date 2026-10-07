@@ -41,7 +41,7 @@ use super::{
 use crate::extension_data::DataKind;
 use crate::packages::{InstalledPackage, Manifest, PackageIdentity};
 use crate::preferences::{self, Declared, Preference, PreferenceKind};
-use crate::runtime::{Choice, FieldKind};
+use crate::runtime::{Choice, FieldKind, PathKind};
 
 /// What the Setup screen shows above and beside its fields.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -616,36 +616,48 @@ fn setup_field(unset: &UnsetPreference) -> FormField {
         PreferenceKind::Password => FieldKind::Password {
             placeholder: preference.placeholder.clone(),
         },
-        PreferenceKind::Text
-        | PreferenceKind::File
-        | PreferenceKind::Folder
-        | PreferenceKind::Application => FieldKind::Text {
-            placeholder: preference
-                .placeholder
-                .clone()
-                .or_else(|| match preference.kind {
-                    PreferenceKind::File => Some("The path of a file".into()),
-                    PreferenceKind::Folder => Some("The path of a folder".into()),
-                    PreferenceKind::Application => Some("The path of an application".into()),
-                    _ => None,
-                }),
+        PreferenceKind::Text => FieldKind::Text {
+            placeholder: preference.placeholder.clone(),
         },
+        PreferenceKind::File => path_field(preference, PathKind::File, "The path of a file"),
+        PreferenceKind::Folder => path_field(preference, PathKind::Folder, "The path of a folder"),
+        PreferenceKind::Application => path_field(
+            preference,
+            PathKind::Application,
+            "The path of an application",
+        ),
     };
     let value = match &kind {
         FieldKind::Choice(choices) => choices
             .first()
             .map(|choice| choice.id.clone())
             .unwrap_or_default(),
-        FieldKind::Text { .. } | FieldKind::Password { .. } => String::new(),
+        FieldKind::Text { .. } | FieldKind::Password { .. } | FieldKind::Path { .. } => {
+            String::new()
+        }
     };
     FormField {
-        id: preferences::storage_key(command, &preference.name),
+        id: unset.key(),
         label: preference.title.clone(),
         kind,
         value,
         error: None,
         description: preference.description.clone(),
         required: true,
+    }
+}
+
+/// A path field choosing a `pick` for `preference`, its placeholder
+/// `placeholder` unless the manifest gives one.
+fn path_field(preference: &Preference, pick: PathKind, placeholder: &str) -> FieldKind {
+    FieldKind::Path {
+        placeholder: Some(
+            preference
+                .placeholder
+                .clone()
+                .unwrap_or_else(|| placeholder.to_owned()),
+        ),
+        pick,
     }
 }
 

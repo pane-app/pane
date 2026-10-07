@@ -96,9 +96,9 @@ pub use runtime::memory_peak;
 pub use runtime::{
     Action, ActionKind, ActionStyle, ActionSubmenu, Answer, COMPUTE_LIMIT, CallError, Choice,
     CustomViewInfo, CustomViewRole, Field, FieldKind, FieldValue, Form, FormError, Frame,
-    GUEST_MEMORY, Item, Key, MAX_FRAME_SHAPES, MAX_FRAME_SIZE, MAX_TEXT_CHARS, Point, Rgb, Runtime,
-    RuntimeFailure, RuntimeStatus, Shape, SubmenuEntries, TREE_VERSION, UNRESPONSIVE_LIMIT, View,
-    ViewEvent, ViewId, WARN_AFTER,
+    GUEST_MEMORY, Item, Key, MAX_FRAME_SHAPES, MAX_FRAME_SIZE, MAX_TEXT_CHARS, PathKind, Point,
+    Rgb, Runtime, RuntimeFailure, RuntimeStatus, Shape, SubmenuEntries, TREE_VERSION,
+    UNRESPONSIVE_LIMIT, View, ViewEvent, ViewId, WARN_AFTER,
 };
 pub use search::{SettingsEntry, settings_matches, title_matches};
 // Icons, accessories and tooltips (#139).

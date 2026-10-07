@@ -4241,7 +4241,7 @@ fn open_form_for(state: &mut State, purpose: FormPurpose, form: Form) {
         .into_iter()
         .map(|field| {
             let value = match &field.kind {
-                FieldKind::Text { .. } | FieldKind::Password { .. } => {
+                FieldKind::Text { .. } | FieldKind::Password { .. } | FieldKind::Path { .. } => {
                     field.value.clone().unwrap_or_default()
                 }
                 FieldKind::Choice(choices) => field

@@ -1455,7 +1455,10 @@ which answers the values as JSON.
 A **required** preference with no value and no default is unset. Before a
 launch by the user, Pane checks: with any unset, it shows the **Setup
 screen** instead, the extension's title, "Set these up before using
-<command>", only the unset fields with their descriptions, and the
+<command>", only the unset fields with their descriptions, each with the
+control its extension's card in Settings has (a checkbox and a dropdown a
+choice, a password hidden as it is typed, a file, folder or application
+a path with "Choose…", which opens the system's picker), and the
 package's `HELP.md` beside them. Submitting saves the values and launches
 the command as it was launched; Escape launches nothing. A stored value
 that no longer fits counts as unset: a dropdown value no longer among the
