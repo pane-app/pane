@@ -510,9 +510,6 @@ fn ci_tests() -> Result<(), String> {
         "--workspace",
         "--retries",
         "2",
-        // TEMPORARY (#120 final fixer): every failure in one run; removed
-        // before the final verify run.
-        "--no-fail-fast",
     ]))
 }
 
