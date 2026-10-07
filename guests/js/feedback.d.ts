@@ -79,11 +79,12 @@ export interface ConfirmOptions {
   /** The dismiss button: Escape chooses it. Its title is "Cancel" when omitted. */
   dismissAction?: { title?: string } | null;
   /**
-   * Offers "Don't ask again": once the user ticks it and answers with a
-   * button, Pane remembers the answer under this key for the command's
-   * package, and later confirmations with the same key resolve with it at
-   * once, showing nothing, until the user resets the package's
-   * confirmations in Settings › Extensions.
+   * Offers "Don't ask again": once the user ticks it and confirms with the
+   * primary button, Pane remembers that under this key for the command's
+   * package, and later confirmations with the same key resolve with `true`
+   * at once, showing nothing, until the user resets the package's
+   * confirmations in Settings › Extensions. A dismissal is never
+   * remembered, ticked or not, so the user is asked again.
    */
   remember?: string | null;
 }

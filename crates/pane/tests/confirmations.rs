@@ -280,7 +280,7 @@ fn a_destructive_confirmation_remembers_its_answer_once_ticked(cx: &mut TestAppC
 }
 
 /// A click on "Don't ask again" ticks it too; a click on the dismiss button
-/// dismisses, and that answer is remembered.
+/// dismisses, and a dismissal is not remembered even ticked.
 #[gpui::test]
 fn clicking_the_box_and_the_dismiss_button(cx: &mut TestAppContext) {
     let (window, cx, folders) = opened(cx);
@@ -304,7 +304,10 @@ fn clicking_the_box_and_the_dismiss_button(cx: &mut TestAppContext) {
     cx.simulate_mouse_move(dismiss, None::<MouseButton>, Modifiers::none());
     cx.simulate_click(dismiss, Modifiers::none());
     assert_eq!(answered(&window, cx), Status::Result("Kept".into()));
-    assert_eq!(remembered(&window, cx, &folders.identity), ["delete-note"]);
+    assert!(
+        remembered(&window, cx, &folders.identity).is_empty(),
+        "a dismissal is never remembered, ticked or not"
+    );
 }
 
 /// "Close and Ask" closes the window, then asks: the window shows itself

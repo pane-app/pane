@@ -120,8 +120,9 @@ export function setSubtitle(subtitle) {
  * Asks the user to confirm before something that cannot be undone, over
  * the launcher's screen (shown first if it is hidden), and resolves with
  * whether they chose the primary button. With `remember`, the confirmation
- * offers "Don't ask again", and the answer the user gives with it ticked is
- * given at once from then on. Rejects with an Error saying why Pane asked
+ * offers "Don't ask again": confirmed with it ticked, later confirmations
+ * with that key resolve with `true` at once (a dismissal is never
+ * remembered). Rejects with an Error saying why Pane asked
  * nothing (a background launch, a schedule or a service has no window).
  */
 export async function confirmAlert(options) {

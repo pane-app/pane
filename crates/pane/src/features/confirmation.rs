@@ -8,9 +8,9 @@
 //! button (Enter; drawn in the destructive color when the command asks) and
 //! the dismiss button (Escape; "Cancel" unless the command named another).
 //! When the command gave a key to remember the answer by, it offers "Don't
-//! ask again", which Space ticks (or a click): answered with a button while
-//! it is ticked, the answer is remembered and later confirmations with the
-//! same key are answered without asking.
+//! ask again", which Space ticks (or a click): confirmed with the primary
+//! button while it is ticked, later confirmations with the same key are
+//! confirmed without asking. A dismissal is never remembered.
 //!
 //! The dialog takes the focus while it is shown and gives it back once it
 //! is answered; Tab does not leave it. A click outside it answers that the

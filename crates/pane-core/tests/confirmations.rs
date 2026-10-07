@@ -6,10 +6,10 @@
 //! primary button (the dismiss button, a click outside it and the window
 //! losing the focus answer false); a hidden launcher is shown for it, and a
 //! background launch is answered that none is available there; "Don't ask
-//! again" remembers a button's answer per package and key, across a
-//! restart, a disable and an update, until "Reset confirmations" on the
-//! package's card or uninstalling forgets it; and while a confirmation
-//! waits, another package's calls complete.
+//! again" remembers a confirmed answer (never a dismissal) per package and
+//! key, across a restart, a disable and an update, until "Reset
+//! confirmations" on the package's card or uninstalling forgets it; and
+//! while a confirmation waits, another package's calls complete.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -480,7 +480,7 @@ fn dont_ask_again_answers_at_once_across_a_restart_a_disable_and_an_update(fixtu
     assert_eq!(delete_at_once(&restarted).as_deref(), Some("Deleted"));
 }
 
-fn a_dismissal_with_dont_ask_again_is_remembered_too_but_a_click_outside_never(fixture: &Fixture) {
+fn a_dismissal_with_dont_ask_again_is_never_remembered(fixture: &Fixture) {
     let pane = Pane::with(fixture);
     open(&pane.launcher, fixture);
     // A click outside it, ticked: nothing is remembered.
@@ -497,14 +497,22 @@ fn a_dismissal_with_dont_ask_again_is_remembered_too_but_a_click_outside_never(f
     );
     assert!(pane.remembered().is_empty());
 
-    // The dismiss button, ticked: "Kept" from then on.
+    // The dismiss button, ticked: kept this time, and asked again next
+    // time, which the user may confirm.
     let running = act(&pane.launcher, DELETE);
     let delete = asked(&pane.launcher);
     pane.launcher
         .answer_confirmation(delete.id, ConfirmAnswer::Dismissed, true);
     running.ended();
-    assert_eq!(pane.remembered(), ["delete-note"]);
-    assert_eq!(delete_at_once(&pane.launcher).as_deref(), Some("Kept"));
+    assert_eq!(toast(&pane.launcher).as_deref(), Some("Kept"));
+    assert!(pane.remembered().is_empty());
+    assert_eq!(
+        delete_confirming(&pane.launcher, false).as_deref(),
+        Some("Deleted"),
+        "{}",
+        fixture.title
+    );
+    assert!(pane.remembered().is_empty());
 }
 
 fn reset_confirmations_on_the_card_and_uninstalling_forget_the_answers(fixture: &Fixture) {
@@ -635,7 +643,7 @@ contract!(
     a_hidden_launcher_is_shown_for_the_confirmation,
     a_background_launch_is_answered_that_no_confirmation_is_available,
     dont_ask_again_answers_at_once_across_a_restart_a_disable_and_an_update,
-    a_dismissal_with_dont_ask_again_is_remembered_too_but_a_click_outside_never,
+    a_dismissal_with_dont_ask_again_is_never_remembered,
     reset_confirmations_on_the_card_and_uninstalling_forget_the_answers,
     another_packages_call_completes_while_a_confirmation_waits,
 );

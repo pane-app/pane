@@ -124,10 +124,11 @@ interface feedback {
     destructive: bool,
     /// The dismiss button's label: Escape chooses it. "Cancel" when none.
     dismiss: option<string>,
-    /// Offers "Don't ask again". Once the user ticks it and answers with a
-    /// button, Pane remembers that answer under this key for the command's
-    /// package (its identity), and `confirm` with the same key answers it
-    /// at once from then on, without showing anything: across restarts,
+    /// Offers "Don't ask again". Once the user ticks it and confirms with
+    /// the primary button, Pane remembers that under this key for the
+    /// command's package (its identity), and `confirm` with the same key
+    /// answers true at once from then on, without showing anything (a
+    /// dismissal is never remembered, ticked or not): across restarts,
     /// disabling and updates, until the user resets the package's
     /// confirmations on its card in Settings › Extensions, or uninstalls
     /// it. A command built into Pane is offered no "Don't ask again".

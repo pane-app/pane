@@ -259,10 +259,11 @@ pub enum ConfirmAnswer {
     /// The primary button, or Enter: the command is told the user
     /// confirmed.
     Confirmed,
-    /// The dismiss button, or Escape.
+    /// The dismiss button, or Escape. Never remembered, even with "Don't
+    /// ask again" ticked.
     Dismissed,
     /// Neither button: a click outside the confirmation. It answers as
-    /// [`ConfirmAnswer::Dismissed`] does, but is never remembered. (The
+    /// [`ConfirmAnswer::Dismissed`] does, and is never remembered either. (The
     /// window losing the focus or hiding answers so too, through
     /// [`crate::Launcher::window_deactivated`] and
     /// [`crate::Launcher::set_window_presence`].)

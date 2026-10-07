@@ -45,7 +45,7 @@ declare module "pane:extension/feedback@0.1.0" {
     destructive: boolean;
     /** The dismiss button's label ("Cancel" when none): Escape chooses it. */
     dismiss?: string | null;
-    /** Offers "Don't ask again", remembering the answer under this key. */
+    /** Offers "Don't ask again", remembering a confirmed answer (never a dismissal) under this key. */
     remember?: string | null;
   }
   /**

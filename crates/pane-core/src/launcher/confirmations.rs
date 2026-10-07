@@ -17,16 +17,17 @@
 //! ended, it was cancelled), the confirmation leaves the screen.
 //!
 //! **Remembering.** A confirmation with a `remember` key, of an installed
-//! package, offers "Don't ask again". Answered with a button while it is
-//! ticked, the answer (confirmed or not) is Pane's own record per package
+//! package, offers "Don't ask again". Confirmed with the primary button
+//! while it is ticked, the confirmation is Pane's own record per package
 //! identity and key (`confirmations.json` beside `installed.json`, see
-//! `choices`), and the next confirmation with that key is answered with it
-//! at once, showing nothing. The record survives restarts, disabling and
+//! `choices`), and the next confirmation with that key is confirmed at
+//! once, showing nothing. A dismissal is never remembered, ticked or not:
+//! remembering one would have the action answer "no" silently for ever. The record survives restarts, disabling and
 //! updates (the identity stays the same); the package's card in Settings ›
 //! Extensions offers "Reset confirmations" (an extension-list row,
 //! [`RESET_ROW`]), which forgets them all, and uninstalling forgets them.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 use tokio::sync::oneshot;
@@ -57,34 +58,37 @@ pub(super) const RESET_ROW: &str = "reset-confirmations";
 const MAX_KEY_CHARS: usize = 200;
 const MAX_TEXT_CHARS: usize = 2000;
 
-/// The answers the user told Pane to remember, recorded in
+/// The confirmations the user told Pane not to ask again, recorded in
 /// `confirmations.json` as `{ "version": 1, "confirmations": { "<identity
-/// key>": { "<key>": true } } }`.
+/// key>": { "<key>": true } } }`. Only a confirmed answer is remembered; a
+/// `false` an earlier Pane recorded is not read.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct Confirmations {
-    by_package: BTreeMap<String, BTreeMap<String, bool>>,
+    by_package: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl Confirmations {
-    /// The answer remembered for the package with identity key `package`
-    /// under `key`, if one is.
-    fn answer(&self, package: &str, key: &str) -> Option<bool> {
-        self.by_package.get(package)?.get(key).copied()
+    /// Whether the package with identity key `package` is not asked again
+    /// under `key`: its confirmation is remembered as confirmed.
+    fn confirmed(&self, package: &str, key: &str) -> bool {
+        self.by_package
+            .get(package)
+            .is_some_and(|keys| keys.contains(key))
     }
 
-    /// Remembers `answer` for `package` under `key`.
-    fn remember(&mut self, package: &str, key: &str, answer: bool) {
+    /// Remembers that `package` confirmed under `key`.
+    fn remember(&mut self, package: &str, key: &str) {
         self.by_package
             .entry(package.to_owned())
             .or_default()
-            .insert(key.to_owned(), answer);
+            .insert(key.to_owned());
     }
 
     /// The keys remembered for `package`, in order.
     fn keys_of(&self, package: &str) -> Vec<String> {
         self.by_package
             .get(package)
-            .map(|answers| answers.keys().cloned().collect())
+            .map(|keys| keys.iter().cloned().collect())
             .unwrap_or_default()
     }
 
@@ -114,8 +118,8 @@ impl Choices for Confirmations {
                 continue;
             };
             for (key, answer) in answers {
-                if let Some(answer) = answer.as_bool() {
-                    confirmations.remember(package, key, answer);
+                if answer.as_bool() == Some(true) {
+                    confirmations.remember(package, key);
                 }
             }
         }
@@ -126,11 +130,11 @@ impl Choices for Confirmations {
         let by_package = self
             .by_package
             .iter()
-            .filter(|(_, answers)| !answers.is_empty())
-            .map(|(package, answers)| {
-                let answers = answers
+            .filter(|(_, keys)| !keys.is_empty())
+            .map(|(package, keys)| {
+                let answers = keys
                     .iter()
-                    .map(|(key, answer)| (key.clone(), Value::Bool(*answer)))
+                    .map(|key| (key.clone(), Value::Bool(true)))
                     .collect();
                 (package.clone(), Value::Object(answers))
             })
@@ -238,8 +242,8 @@ fn cut(text: String, limit: usize) -> String {
 }
 
 impl Launcher {
-    /// `feedback.confirm` for `caller`: answers at once from a remembered
-    /// answer, or refuses (no window for the call, another confirmation
+    /// `feedback.confirm` for `caller`: confirms at once where the user said
+    /// not to ask again, or refuses (no window for the call, another confirmation
     /// shown); else shows `given`, having the window show itself first if
     /// it is hidden, and answers what the user chooses.
     pub(super) fn ask_to_confirm(&self, caller: &Caller, given: GivenConfirmation) -> Asking {
@@ -260,9 +264,9 @@ impl Launcher {
                 .map(|key| cut(key, MAX_KEY_CHARS));
             let remember = package.zip(key);
             if let Some((package, key)) = &remember
-                && let Some(answer) = state.confirmations.chosen.answer(package, key)
+                && state.confirmations.chosen.confirmed(package, key)
             {
-                return answered(Ok(answer));
+                return answered(Ok(true));
             }
             if state.feedback.confirming.is_some() {
                 return answered(Err(ANOTHER_SHOWN.into()));
@@ -324,10 +328,11 @@ impl Launcher {
     }
 
     /// Answers the confirmation `id` with `answer`, while it still waits.
-    /// With `dont_ask_again` ticked (where it offers "Don't ask again") and
-    /// a button's answer, the answer is remembered for its package and key,
-    /// recorded off the calling thread. A click outside it
-    /// ([`ConfirmAnswer::Left`]) is never remembered.
+    /// Confirmed ([`ConfirmAnswer::Confirmed`]) with `dont_ask_again`
+    /// ticked (where it offers "Don't ask again"), it is remembered for its
+    /// package and key, recorded off the calling thread, and not asked
+    /// again. A dismissal ([`ConfirmAnswer::Dismissed`],
+    /// [`ConfirmAnswer::Left`]) is never remembered, ticked or not.
     pub fn answer_confirmation(&self, id: u64, answer: ConfirmAnswer, dont_ask_again: bool) {
         {
             let mut state = self.lock();
@@ -344,11 +349,9 @@ impl Launcher {
                 return;
             };
             let confirmed = answer == ConfirmAnswer::Confirmed;
-            let remembered = match (&confirming.remember, answer) {
-                (Some((package, key)), ConfirmAnswer::Confirmed | ConfirmAnswer::Dismissed)
-                    if dont_ask_again =>
-                {
-                    state.confirmations.chosen.remember(package, key, confirmed);
+            let remembered = match &confirming.remember {
+                Some((package, key)) if confirmed && dont_ask_again => {
+                    state.confirmations.chosen.remember(package, key);
                     true
                 }
                 _ => false,
@@ -516,36 +519,37 @@ mod tests {
     #[test]
     fn remembered_answers_round_trip_through_their_record() {
         let mut confirmations = Confirmations::default();
-        confirmations.remember("local:abc", "delete-note", true);
-        confirmations.remember("local:abc", "empty#trash", false);
-        confirmations.remember("npm:other", "delete-note", false);
+        confirmations.remember("local:abc", "delete-note");
+        confirmations.remember("local:abc", "empty#trash");
+        confirmations.remember("npm:other", "delete-note");
         let read = Confirmations::read(&confirmations.write()).unwrap();
         assert_eq!(read, confirmations);
-        assert_eq!(read.answer("local:abc", "delete-note"), Some(true));
-        assert_eq!(read.answer("local:abc", "empty#trash"), Some(false));
-        assert_eq!(read.answer("local:abc", "other"), None);
+        assert!(read.confirmed("local:abc", "delete-note"));
+        assert!(read.confirmed("local:abc", "empty#trash"));
+        assert!(!read.confirmed("local:abc", "other"));
         assert_eq!(read.keys_of("local:abc"), ["delete-note", "empty#trash"]);
     }
 
     #[test]
     fn a_package_is_forgotten_whole_and_only_it() {
         let mut confirmations = Confirmations::default();
-        confirmations.remember("local:a#b", "x", true);
-        confirmations.remember("local:a", "y", true);
+        confirmations.remember("local:a#b", "x");
+        confirmations.remember("local:a", "y");
         // As `Record::forget` asks: by the package's own identity key, even
         // one holding a `#`.
         let gone = confirmations.retain(&|command| split(command).0 != "local:a#b");
         assert!(gone);
-        assert_eq!(confirmations.answer("local:a#b", "x"), None);
-        assert_eq!(confirmations.answer("local:a", "y"), Some(true));
+        assert!(!confirmations.confirmed("local:a#b", "x"));
+        assert!(confirmations.confirmed("local:a", "y"));
         assert!(confirmations.forget_package("local:a"));
         assert!(!confirmations.forget_package("local:a"));
     }
 
     #[test]
-    fn an_unusable_answer_is_left_out_when_read() {
+    fn an_unusable_or_dismissed_answer_is_left_out_when_read() {
         let fields: Map<String, Value> = serde_json::from_str(
-            r#"{ "confirmations": { "local:a": { "x": true, "y": "yes" }, "local:b": 3 } }"#,
+            r#"{ "confirmations": { "local:a": { "x": true, "y": "yes", "z": false },
+                 "local:b": 3 } }"#,
         )
         .unwrap();
         let read = Confirmations::read(&fields).unwrap();

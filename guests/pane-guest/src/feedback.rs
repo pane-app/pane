@@ -224,10 +224,11 @@ impl Confirmation {
     }
 
     /// This confirmation offering "Don't ask again": once the user ticks it
-    /// and answers with a button, Pane remembers the answer under `key` for
-    /// the command's package and answers [`confirm`] with it at once from
-    /// then on, until the user resets the package's confirmations in
-    /// Settings › Extensions.
+    /// and confirms with the primary button, Pane remembers that under `key`
+    /// for the command's package and answers [`confirm`] with `true` at once
+    /// from then on, until the user resets the package's confirmations in
+    /// Settings › Extensions. A dismissal is never remembered, ticked or
+    /// not, so the user is asked again.
     pub fn remember(mut self, key: impl Into<String>) -> Confirmation {
         self.remember = Some(key.into());
         self

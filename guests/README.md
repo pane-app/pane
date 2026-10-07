@@ -1210,10 +1210,11 @@ command has, whatever its mode ([wit/feedback.wit](../wit/feedback.wit), ADR
   is hidden, and answers true only for the primary button (Escape, a click
   outside it or the window losing the focus answer false). Other packages'
   calls are served while it waits. Given a `remember` key, it offers "Don't
-  ask again" (Space or a click ticks it): the answer given with a button
-  while it is ticked is remembered per package and key, across restarts,
-  disabling and updates, and later confirmations with that key answer at
-  once; "Reset confirmations" on the extension's card in Settings ›
+  ask again" (Space or a click ticks it): confirmed with the primary
+  button while it is ticked, it is remembered per package and key, across
+  restarts, disabling and updates, and later confirmations with that key
+  answer true at once (a dismissal is never remembered, so the user is
+  asked again); "Reset confirmations" on the extension's card in Settings ›
   Extensions forgets them, as uninstalling does. In a call no window was
   shown for (a background launch, a schedule, a service) it answers an error
   saying a confirmation is not available there.
