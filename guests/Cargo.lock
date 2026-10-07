@@ -295,6 +295,7 @@ name = "quicklinks"
 version = "0.1.0"
 dependencies = [
  "pane-guest",
+ "serde_json",
 ]
 
 [[package]]

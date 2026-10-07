@@ -507,24 +507,23 @@ for _ in $(seq 50); do [ -f "$apps/launched" ] && break; sleep 0.2; done
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{44-application,45-opened}.png
 stop_pane
 
-# Quicklinks, a default extension: installed, its command's form saves a
-# quicklink (Quicklinks is selected once installed, and "Create quicklink" is
-# its first item). After a restart, typing part of its name lists it,
+# Quicklinks, a default extension: installed, its Create Quicklink command,
+# found by typing its name, opens its form, which saves a quicklink and
+# returns to root search. After a restart, typing part of its name lists it,
 # selected, and Enter opens its address with the system's link handler:
 # xdg-open, with no desktop session and a script that records the address,
 # instead of starting a browser, as the only handler for web links.
 start_pane --install target/guests/packages/quicklinks
 "$xdotool" windowfocus --sync "$window"
 "$xdotool" key Return; sleep 2   # Install
-"$xdotool" key Return; sleep 3   # open Quicklinks
-"$xdotool" key Return; sleep 1   # Create quicklink
+"$xdotool" type --delay 50 'create quicklink'; sleep 2
+"$xdotool" key Return; sleep 3   # open Create Quicklink's form
 "$xdotool" type --delay 50 'Pane issues'
 "$xdotool" key Tab
 "$xdotool" type --delay 50 'https://example.com/pane-issues'
 "$xdotool" key Return; sleep 2
 capture 46-quicklink-saved.png
-check 46-quicklink-saved.png success   # "Saved quicklink “Pane issues”"
-"$xdotool" key Escape key Escape; sleep 1
+check 46-quicklink-saved.png success   # "Created “Pane issues”"
 stop_pane
 printf '#!/bin/sh\necho "$1" >"%s/opened-link.txt"\n' "$out" >"$out/browser.sh"
 chmod +x "$out/browser.sh"
@@ -565,7 +564,7 @@ capture 47-quicklink-found.png
 check 47-quicklink-found.png selected 3000   # the selected quicklink row
 "$xdotool" key Return; sleep 3
 capture 48-quicklink-opened.png
-check 48-quicklink-opened.png success   # "Opened https://example.com/pane-issues"
+check 48-quicklink-opened.png success   # "Opened Pane issues"
 [ "$(cat "$out/opened-link.txt")" = https://example.com/pane-issues ] || { echo "the link handler was not asked to open the quicklink"; exit 1; }
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{46-quicklink-saved,47-quicklink-found,48-quicklink-opened}.png
 stop_pane

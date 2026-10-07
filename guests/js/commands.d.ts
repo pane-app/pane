@@ -44,6 +44,11 @@ declare module "pane:extension/commands@0.1.0" {
     fallbackText?: string | null;
     /** The JSON value, as text, another command passed when it launched this one. */
     context?: string | null;
+    /**
+     * The command launched, by its id in `pane.json`, so that a component
+     * serving several view commands draws the screen of the one opened.
+     */
+    command: string;
   }
 
   /**

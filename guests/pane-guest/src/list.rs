@@ -327,10 +327,20 @@ impl Action {
     }
 }
 
-/// A command's list view: its title and items, in order.
+/// A command's screen: a list view, its title and items in order, or a
+/// form that is the whole screen ([`List::form`]).
 pub struct List {
     title: String,
     items: Vec<Item>,
+    form: Option<ScreenForm>,
+}
+
+/// A form that is a command's whole screen, with the values its fields
+/// start with.
+struct ScreenForm {
+    id: String,
+    form: Form,
+    values: Vec<(String, String)>,
 }
 
 impl List {
@@ -339,7 +349,36 @@ impl List {
         List {
             title: title.into(),
             items: Vec::new(),
+            form: None,
         }
+    }
+
+    /// A screen that is `form` rather than a list, as a command such as
+    /// "Create Quicklink" opens: the user fills it in at once, submitting
+    /// it calls [`Command::submit_form`] with `id`, and Back (Escape)
+    /// leaves the command. Its fields start empty (a choice with its first
+    /// option), or with the values [`List::value`] gives them. A list's
+    /// items given to it are ignored.
+    pub fn form(id: impl Into<String>, form: Form) -> List {
+        List {
+            title: form.title.clone(),
+            items: Vec::new(),
+            form: Some(ScreenForm {
+                id: id.into(),
+                form,
+                values: Vec::new(),
+            }),
+        }
+    }
+
+    /// For a form screen ([`List::form`]): the field `field` starts with
+    /// `value`, a text field's text or the id of the option chosen first.
+    /// A list ignores it.
+    pub fn value(mut self, field: impl Into<String>, value: impl Into<String>) -> List {
+        if let Some(screen) = &mut self.form {
+            screen.values.push((field.into(), value.into()));
+        }
+        self
     }
 
     /// This list with `item` after its items.
@@ -653,6 +692,14 @@ fn take(callback: &str) -> Option<Callback> {
 fn remember(list: List) -> String {
     let mut actions = ACTIONS.0.borrow_mut();
     actions.clear();
+    if let Some(screen) = list.form {
+        let mut tree = format!("{{\"version\":{TREE_VERSION},\"view\":{{\"type\":\"form\",\"id\":");
+        string(&mut tree, &screen.id);
+        tree.push(',');
+        write_form_fields(&mut tree, &screen.form, &screen.values);
+        tree.push_str("}}");
+        return tree;
+    }
     let mut tree = format!("{{\"version\":{TREE_VERSION},\"view\":{{\"type\":\"list\",\"title\":");
     string(&mut tree, &list.title);
     tree.push_str(",\"items\":[");
@@ -850,7 +897,15 @@ fn write_keys(tree: &mut String, keys: &Keys) {
 
 /// Writes `form` as the tree's JSON.
 fn write_form(tree: &mut String, form: &Form) {
-    tree.push_str("{\"title\":");
+    tree.push('{');
+    write_form_fields(tree, form, &[]);
+    tree.push('}');
+}
+
+/// Writes `form`'s title, submit label and fields as members of a JSON
+/// object, each field with the value `values` gives it, if any.
+fn write_form_fields(tree: &mut String, form: &Form, values: &[(String, String)]) {
+    tree.push_str("\"title\":");
     string(tree, &form.title);
     tree.push_str(",\"submitLabel\":");
     string(tree, &form.submit_label);
@@ -863,6 +918,10 @@ fn write_form(tree: &mut String, form: &Form) {
         string(tree, &field.id);
         tree.push_str(",\"label\":");
         string(tree, &field.label);
+        if let Some((_, value)) = values.iter().find(|(id, _)| *id == field.id) {
+            tree.push_str(",\"value\":");
+            string(tree, value);
+        }
         match &field.kind {
             FieldKind::Text(text) => {
                 tree.push_str(",\"kind\":\"text\"");
@@ -888,7 +947,7 @@ fn write_form(tree: &mut String, form: &Form) {
         }
         tree.push('}');
     }
-    tree.push_str("]}");
+    tree.push(']');
 }
 
 /// Writes `text` as a JSON string.

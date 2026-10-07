@@ -2,152 +2,185 @@
 
 Added for [#28](https://github.com/hoangvu12/pane/issues/28) (US03, US07,
 US12, US59; T01, T03, T10, T22; G2, G5, G7, as contributions, not claims that
-they pass). A user saves a named web address, finds it by typing into
-[root search](root-search.md), also after restarting Pane, and opens it in
-the default browser.
+they pass) and reworked in Raycast's shape for
+[#149](https://github.com/hoangvu12/pane/issues/149) (part of #120). A user
+saves a named link, file, folder or application, finds it by typing into
+[root search](root-search.md), also after restarting Pane, and opens it.
 
 ## The Quicklinks extension
 
 Quicklinks is a default extension in Rust
 ([`guests/quicklinks`](../guests/quicklinks), package
-`guests/packages/quicklinks`), like [the calculator](root-search.md#the-calculator):
-not part of the core, disabled like any package, and installed from its
-folder until setup acquires default extensions (#51 to #53):
-`pane --install target/guests/packages/quicklinks`.
+`guests/packages/quicklinks`, version 0.3.0), like
+[the calculator](root-search.md#the-calculator): not part of the core,
+disabled like any package, and acquired at first setup (#53). Its four
+commands share one component:
 
-Its command, **Quicklinks**, lists:
+| Command | Id | Mode | Does |
+| --- | --- | --- | --- |
+| **Search Quicklinks** | `quicklinks` | view | lists the quicklinks with their actions; supplies them to root search |
+| **Create Quicklink** | `create` | view | the form |
+| **Import Quicklinks** | `import` | no-view | adds the quicklinks the clipboard holds as JSON |
+| **Export Quicklinks** | `export` | no-view | copies the quicklinks to the clipboard as JSON |
 
-- **Create quicklink**, a [form](forms.md) with *Name* and *URL* and a
-  "Save quicklink" button;
-- one item per saved quicklink, titled with its name, opening its edit form:
-  *Name* and *URL*, each showing the current value while empty, and *On
-  submit*, "Save changes" or "Remove this quicklink". An empty field keeps
-  its value, so the user changes only what they type (forms have no initial
-  values yet).
+Search Quicklinks keeps the first version's command id, so a quick slot or
+alias given to the old **Quicklinks** command now reaches Search
+Quicklinks.
 
-The list shows the quicklinks as they were when the command opened: after
-saving, Esc returns to that list; reopening the command shows the change
-(forms do not refresh the list they return to).
+### Search Quicklinks
 
-### The URL format
+Each quicklink is an item titled with its name, its target as the
+subtitle, and its icon: the site's favicon for an `http:` or `https:` link
+(a globe while it loads and when the site has none, #142), the system's
+icon of the file, folder or application for a path, and a link glyph for
+any other scheme. One that opens with an application names it as an
+accessory. Its actions, in order:
 
-A quicklink opens one kind of target: an **absolute `http://` or `https://`
-URL** with a host, as the user would paste it from a browser, for example
-`https://github.com/hoangvu12/pane/issues?q=is%3Aopen`. The scheme's letter
-case does not matter; the address is saved and opened as typed (trimmed),
-with no encoding or normalization. Placeholders and query arguments
-(`{query}`), other schemes (`file:`, `mailto:`, app links), files, folders
-and applications are not quicklinks; each would need its own slice.
-
-The extension validates what is submitted and marks the field, keeping the
-form open; none of these is an extension error:
-
-| Field | Rejected | Message |
+| Action | Keys | Does |
 | --- | --- | --- |
-| Name | empty (on create) | Enter a name |
+| Open | Enter | opens the target (with its application, if it has one), then closes the window |
+| Open With… | Ctrl+Enter opens it in the panel | a submenu of the installed applications; the one chosen opens the target, then the window closes |
+| Copy Link | Ctrl+Shift+C | copies the target, closes the window and shows "Copied to Clipboard" |
+| Edit | Ctrl+E | opens Create Quicklink's form filled in with the quicklink |
+| Duplicate | | opens the form filled in as a copy ("Docs copy", "Docs copy 2", …) |
+| Delete | | destructive: asks "Delete “Docs”?" first, then deletes it and toasts "Deleted “Docs”" |
+
+Open, Open With… and Copy Link are the SDK's standard actions (#145). Edit
+and Duplicate launch Create Quicklink with the quicklink's id in their
+context (`{"edit": "3"}`, `{"duplicate": "3"}`). With no quicklink saved,
+the list has one item, "Create Quicklink", which opens the form.
+
+### Create Quicklink
+
+The command's screen is a form (a `form` view, `docs/list-tree.md`): *Name*,
+*Link* and *Open With*, starting empty, or filled in for Edit and
+Duplicate. Saving a new one toasts "Created “Docs”" and returns to root
+search; saving an edit toasts "Saved “Docs”" and opens Search Quicklinks
+again. Escape leaves the command for root search.
+
+A quicklink's target is any of what the `open` host function opens
+(ADR 0037): a **link of any scheme** (`https:`, `mailto:`, `ms-settings:`,
+an application's own scheme), or the **absolute path** of a file, a folder
+or an application (`C:\…`, `\\server\…`, `/…`). *Open With* is optional:
+the name of an installed application as Pane lists it (any letter case),
+or an application's absolute path; empty opens with the system's handler.
+Targets are saved as typed (trimmed). Whether a path exists is for the
+system to say when it is opened.
+
+The form marks what it refuses on its field and stays open:
+
+| Field | Refused | Message |
+| --- | --- | --- |
+| Name | empty | Enter a name |
 | Name | a tab or line break | The name cannot contain line breaks or tabs |
 | Name | over 80 characters | Use at most 80 characters |
 | Name | another quicklink's name, in any letter case | A quicklink named “…” already exists |
-| URL | no `http://` or `https://` scheme | Enter a web address starting with http:// or https:// |
-| URL | a space or control character | The address cannot contain spaces |
-| URL | over 2048 characters | Use at most 2048 characters |
-| URL | nothing before the first `/`, `?` or `#` after the scheme | The address has no host |
+| Link | empty | Enter a link, or the path of a file, folder or application |
+| Link | neither a scheme nor an absolute path (`example.com`, `docs/a.txt`) | Enter a link with its scheme, such as https:// or mailto:, or the full path of a file, folder or application |
+| Link | a tab or line break | The link cannot contain line breaks or tabs |
+| Link | over 2048 characters | Use at most 2048 characters |
+| Link | a space in a link (paths may have spaces) | A link cannot contain spaces |
+| Link | nothing after the scheme (`mailto:`) | Enter what the link opens after “mailto:” |
+| Link | an `http(s)` link without a host | The address has no host |
+| Open With | not an installed application's name or an absolute path | No installed application is named “…”; enter its name as Pane lists it, or its full path |
+
+### Import and export
+
+Export Quicklinks copies every quicklink to the clipboard as a JSON array
+and shows a HUD: "Copied 2 quicklinks as JSON".
+
+```json
+[
+  { "link": "https://github.com/hoangvu12/pane/issues", "name": "Pane issues" },
+  { "link": "C:\\Notes", "name": "Notes", "openWith": "C:\\Program Files\\Zed\\zed.exe" }
+]
+```
+
+`openWith` is the application's id (or path) as saved. Import Quicklinks
+reads such an array from the clipboard, adds each entry whose name no
+quicklink has yet and whose name and link the form would accept, skips the
+others, and toasts "Added 2 quicklinks, skipped 1". An `openWith` naming an
+installed application (by name, id or path) is taken as that one; one this
+system lacks is kept as given, and opening says why it cannot be used.
+Clipboard text that is not a JSON array, or no text at all, answers a
+failure toast "Could not import quicklinks" saying why. Both go through the
+clipboard until forms gain file fields (#121).
 
 ### Storage
 
 The quicklinks are the package's **content**, its durable
 [extension data](extension-data.md) (`pane_guest::content`): one value,
-`quicklinks`, holding one line per quicklink (`name`, a tab, the URL), in
-creation order, in Pane's `content.json`. So they belong to the package's
-identity, survive restarts and updates, are kept while the package is
-disabled, and are not removed when its cache is cleared.
+`quicklinks`, holding one line per quicklink in creation order: its name,
+target, id, application id and application name, separated by tabs (none of
+them can hold a control character). The first version's lines hold only a
+name and an address; they are read as quicklinks with no application, each
+given the next free id, the same on every start until the quicklinks are
+saved again, so the upgrade keeps every saved quicklink. The id stays
+through a rename: it is what root search and a quick slot know the
+quicklink by.
 
 ## In root search
 
-The command declares `"rootResults": true`: for every query that is not
-blank, it lists the quicklinks whose name contains every word of the query,
-then those where each word is in the name or the URL, ignoring letter case.
-Each is a [computed result](root-search.md#results-computed-from-the-query)
-titled with the name, with subtitle "Quicklink · <URL>", and like every
-computed result it is listed above the title matches, in the extension's
-order, not ranked against them. A blank query lists no quicklinks.
+Search Quicklinks declares `"indexedResults": true`: it supplies one
+[indexed result](root-search.md) per quicklink, titled with its name and
+with its target as the subtitle, which root search keeps and matches by
+title and subtitle and ranks with the commands (current decisions item 10),
+rather than listing them above every title match as the first version's
+computed results did. They are asked for again on the first query after
+root search is shown and after a no-view command ran (an import adds some).
+A blank query lists none. Their further ranking belongs to "Root search
+like Raycast" (#122).
 
-Its action is **open-url**, the second root action beside copy
-(`wit/root-results.wit`): Pane, not the extension, opens the URL.
-Disabled, the package is not asked, so its quicklinks leave root search at
-once, together with its command; enabled again, they are back from the next
-change of the query.
-
-## Opening a link
-
-`Launcher::activate_selected` on an open-url result opens an address of
-any scheme (`https:`, `mailto:`, `ms-settings:`, `file:`, an application's
-own), as Raycast does (ADR 0037, #145): the extension is trusted and can
-open anything through the `system` host functions anyway. It shows
-"Running…" and hands the URL, off the window's thread, to the launcher's
-`LinkOpener` (`Launcher::with_link_opener`). The status then
-reads "Opened <URL>" or "Could not open <URL>: <reason>"; root search keeps
-its query. A launcher given no opener explains that it has none, which is
-what every test uses unless it passes a recording fake: no test opens a
-browser.
-
-The window's opener, `pane::SystemLinks`, runs the handler the `open` crate
-names for the system, without a shell:
-
-| System | Handler | A missing handler |
-| --- | --- | --- |
-| Linux | `xdg-open`, else `gio open`, `gnome-open`, `kde-open` | none installed: "no program to open web links is installed"; xdg-open finding no browser (status 3): "no program to open web links is set up"; the browser failing (status 4): "the browser or link handler refused or failed to open it" |
-| macOS | `/usr/bin/open -- <URL>` | its failure status |
-| Windows | PowerShell `Start-Process` (ShellExecute), else `explorer.exe` | its failure status |
-
-A handler still running after three seconds counts as having opened the
-link and is left to finish: outside a desktop session, `xdg-open` runs the
-browser itself and returns only when the browser exits.
+Its action is **open** (`wit/applications.wit`, `indexed-action.open`):
+Pane, not the extension, opens the target with the system's `open` (the
+same the `system.open` host function uses), with the quicklink's
+application if it has one, and the status reads "Opened Docs" or "Could
+not open Docs: <reason>"; root search keeps its query. A quick slot holds a
+quicklink by its id under Search Quicklinks (`{"command": "<key>#quicklinks",
+"result": "3"}`), so it survives a restart and a rename; a deleted one keeps
+its slot and says "Search Quicklinks no longer lists it". Disabled, the
+package's quicklinks leave root search with its commands; enabled again,
+they are back from the next query.
 
 ## Checks
 
-Through the launcher's public interface, with the real guest and a
-recording link opener
+Through the launcher's public interface, with the real package, a recording
+system for opening and the clipboard and a recording window
 ([`crates/pane-core/tests/quicklinks.rs`](../crates/pane-core/tests/quicklinks.rs)):
-creating a quicklink in the form, finding it by part of its name or its
-address, and Enter opening it; each rejected input above on its field with
-the form still open, then the corrected form saving; editing the address
-only, renaming, a rename onto another name refused, and removing; a restart
-finding and opening it; disabling hiding both the quicklinks and the
-command, still disabled after a restart, and enabling bringing them back;
-a handler that fails explained; a `file:` address refused without calling
-the handler (the `faulty` fixture offers one); and a launcher without a
-handler. The open-url action in Rust, JavaScript and TypeScript: each
-sample answers "pane website" with a result that opens
-`https://github.com/hoangvu12/pane`
-([`samples.rs`](../crates/pane-core/tests/samples.rs)).
+the four commands and their modes; the form saving and returning to root
+search, and each refusal above on its field; each row's icon, title, target
+and accessory, and its actions with their shortcuts, Delete destructive;
+Open, Open With… and Copy Link closing the window, Copy Link with its HUD;
+Edit and Duplicate filling the form in; Delete dismissed and confirmed; a
+`mailto:` link, an `ms-settings:` link, a file, a folder and an application,
+with and without an application, each opened through the system; ranking
+with commands; a pinned quicklink through a restart, a rename and its
+deletion; export and import, between two Panes and with entries skipped;
+import's failure toasts; the first version's content and quick slot after
+the upgrade; disabling.
 
-Window check through GPUI's test platform with real key events
-([`crates/pane/tests/window.rs`](../crates/pane/tests/window.rs)): opening
-Quicklinks and its form with Enter, typing a name, Tab, an address without
-a scheme rejected on its field, fixing it and saving, then Esc Esc, typing
-"pane iss" and Enter opening the link through a recording opener.
+Window checks through GPUI's test platform with real key events
+([`crates/pane/tests/quicklinks.rs`](../crates/pane/tests/quicklinks.rs)):
+Create Quicklink's form from root search, a link refused on its field, fixed
+and saved, found and opened from root search, Escape leaving the form;
+Search Quicklinks' Actions panel listing every action, Ctrl+E opening the
+form filled in, Ctrl+Shift+C copying with the HUD, Delete asking and Enter
+confirming, Open With… opening with Zed, Enter opening.
 
-Native: the GUI smoke scripts' last phase installs Quicklinks, creates "Pane
-issues" through the form with real key events, restarts Pane and types
-"pane iss", which must list it selected. On Linux it also presses Enter:
-`xdg-open` runs outside any desktop session, with `BROWSER` set to a script
-that records the address and every XDG location pointing into the smoke's
-output, so the user's browser never starts; the script must have received
-the URL and the status must show "Opened …". It ran on Linux X11 on
-2026-09-28 ([evidence](platforms/linux.md#quicklinks-28)). On macOS and
-Windows the phase stops before Enter, which would open a real browser; it
-is written but has not run yet, and opening a link there is so far only
-checked through the tests' recording opener, not natively.
+Native: the GUI smoke scripts' quicklinks phase installs Quicklinks,
+creates "Pane issues" through Create Quicklink with real key events,
+restarts Pane and types "pane iss", which must list it selected. On Linux
+it also presses Enter, and `xdg-open`, with `BROWSER` set to a recording
+script, must receive the URL.
 
 ## Limits
 
-- No placeholders or query arguments, no other target types, no icons,
-  aliases, keywords or hotkeys (#31 and later).
-- Quicklinks are computed results: listed above title matches rather than
-  ranked with them, and not listed for a blank query.
-- The edit form cannot show current values in its fields; empty keeps them.
-- The command's list is not refreshed after saving until it is reopened.
-- A handler that is slow to fail (over three seconds) is reported as having
-  opened the link.
-- Screen reader behaviour is unverified, as for all of root search.
+- No placeholders or query arguments (`{query}`), aliases or keywords per
+  quicklink; no file-based import or export until forms gain file fields
+  (#121); no tags or folders.
+- Open With in the form is a text field (the application's name or path),
+  not a list to choose from.
+- Root search's rows of quicklinks show the row kind's tile, not the
+  favicon.
+- Back from the form opened by Edit returns to root search, not to the
+  list.

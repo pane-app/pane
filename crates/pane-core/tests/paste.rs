@@ -124,9 +124,9 @@ impl Pane {
     fn start(fixture: &Fixture, system: Arc<RecordingSystem>, recording: bool) -> Pane {
         let sources = tempfile::tempdir().unwrap();
         let data = tempfile::tempdir().unwrap();
-        let runtime = Runtime::start();
+        let runtime = Runtime::start().unwrap();
         runtime.set_applications(system.clone());
-        let launcher = Launcher::with_packages(runtime, vec![], data.path().join("extensions"));
+        let launcher = Launcher::with_packages(Ok(runtime), vec![], data.path().join("extensions"));
         let launcher = if recording {
             launcher.with_system(system.clone())
         } else {

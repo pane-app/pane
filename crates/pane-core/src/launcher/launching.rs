@@ -183,6 +183,10 @@ impl Launcher {
         let state = &mut *guard;
         // Nothing will finish a toast the run left in progress.
         self.clear_animated_toast(state, &component);
+        // The run may have changed what its package supplies ahead of the
+        // query (Import Quicklinks adds quicklinks): the next query asks
+        // for it again.
+        state.indexes.stale();
         let ended = stopped(state, &component, &data);
         // A toast is not about a screen: an error the command answered with
         // is shown wherever the user is now, unless it ran in the

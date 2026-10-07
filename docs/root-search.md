@@ -13,8 +13,8 @@ with [the calculator](#the-calculator) as a default extension.
 query](#results-supplied-ahead-of-the-query), with the installed
 applications as a default extension.
 [#28](https://github.com/hoangvu12/pane/issues/28) adds
-[quicklinks](quicklinks.md), computed results that open a saved web
-address. [#31](https://github.com/hoangvu12/pane/issues/31) adds
+[quicklinks](quicklinks.md), which open a saved link, file, folder or
+application; #149 made them indexed results ranked with commands. [#31](https://github.com/hoangvu12/pane/issues/31) adds
 [aliases and fallbacks](aliases.md), which the user gives installed
 commands; [global hotkeys](hotkeys.md) (#32 to #34) open a command from any
 application. [#29](https://github.com/hoangvu12/pane/issues/29) adds
@@ -291,9 +291,8 @@ comes from the extension, through the same guest boundary as its command:
   again. **copy**: Enter copies the text to the
   clipboard, which the window writes (`Launcher::selected_copy`), and the
   status says "Copied … to the clipboard". **open-url** (since #28): Enter
-  opens an `http://` or `https://` address with the launcher's link opener,
-  the system's handler in the window; any other address is refused
-  ([opening a link](quicklinks.md#opening-a-link)). **open-file** (since
+  opens an address of any scheme (ADR 0037, #145) with the launcher's link
+  opener, the system's handler in the window. **open-file** (since
   #29): Enter opens a file of the package's granted folder, named by the id
   the host gave it, with the system's handler for its type, once the host
   has checked it again; the row shows the host's name for the file
@@ -333,9 +332,12 @@ extension, through the same guest boundary as its command:
   after commands.
 - An indexed result has an id (`<command id>:<result id>`), title, optional
   subtitle and an **action** Pane performs without calling the extension
-  again. The only action is **open-application**: Pane opens the application
-  through the host's [applications adapter](applications.md) and says
-  "Opened …" or "Could not open …: <why>".
+  again: **open-application**, which opens the application through the
+  host's [applications adapter](applications.md), or **open** (#149), which
+  opens a target (a URL of any scheme, a file, a folder or an application),
+  with an application when one is named, through the system the `system`
+  host functions act on, as [quicklinks](quicklinks.md#in-root-search) do.
+  Pane says "Opened …" or "Could not open …: <why>".
 - An error or crash of the extension is listed as a row titled with the
   command and "Could not list: …" for every query that is not blank; Enter
   on it shows the whole error.

@@ -358,6 +358,7 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         (_, Some(Entry::OpenUrl(_))) => acting("Open link"),
         (_, Some(Entry::OpenFile { .. })) => acting("Open file"),
         (_, Some(Entry::OpenApplication { .. })) => acting("Open application"),
+        (_, Some(Entry::OpenTarget { .. })) => acting("Open link"),
         (_, Some(Entry::Broken(_) | Entry::Unavailable(_))) => unusable("Unavailable"),
         (_, Some(Entry::InstallFromFolder)) => acting("Install from folder"),
         (_, Some(Entry::AskNpm)) => acting("Install from npm"),

@@ -149,7 +149,7 @@ A program the operating system lists as installed where Pane looks for it (Start
 _Avoid_: App (ambiguous with Pane itself), program
 
 **Quicklink**:
-A named web address the user saves through the Quicklinks default extension's form and finds in root search, where invoking it opens the address with the system's handler for web links; it is kept in that extension's content.
+A named target the user saves through the Quicklinks default extension's Create Quicklink form: a link of any scheme, or a file, a folder or an application, with an optional application to open it with. Root search finds it as an indexed result, ranked with commands, and invoking it opens the target through the system's open, with that application if it has one; Search Quicklinks lists it with its actions. It is kept in that extension's content.
 _Avoid_: Bookmark, shortcut, alias
 
 **Clipboard history**:

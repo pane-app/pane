@@ -189,9 +189,10 @@ impl Pane {
         let sources = tempfile::tempdir().unwrap();
         let data = tempfile::tempdir().unwrap();
         let system = Arc::new(RecordingSystem::default());
-        let runtime = Runtime::start();
+        let runtime = Runtime::start().unwrap();
         runtime.set_applications(system.clone());
-        let mut launcher = Launcher::with_packages(runtime, vec![], data.path().join("extensions"));
+        let mut launcher =
+            Launcher::with_packages(Ok(runtime), vec![], data.path().join("extensions"));
         if with_system {
             launcher = launcher.with_system(system.clone());
         }

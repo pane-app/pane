@@ -73,8 +73,8 @@ use crate::packages::{
 use crate::platform;
 use crate::runtime::{
     CallError, CustomViewInfo, CustomViewRole, FieldKind, FieldValue, Form, Frame, Item, Point,
-    ResultListing, RootAction, RootResult as ComputedResult, Runtime, View, ViewEvent, ViewId,
-    WeakRuntime,
+    ResultListing, RootAction, RootResult as ComputedResult, Runtime, ScreenForm, View, ViewEvent,
+    ViewId, WeakRuntime,
 };
 use crate::search::{self, Keys, Query};
 
@@ -943,6 +943,10 @@ struct OpenForm {
 enum FormPurpose {
     /// Sends it to the open command, for its item with this id.
     Item(String),
+    /// Sends it to the open command with this id: the form is the
+    /// command's whole screen (`"type": "form"`), so Back leaves the
+    /// command for root search.
+    Screen(String),
     /// Sets the alias of the installed command with this id (Pane's own).
     Alias(String),
     /// Previews the npm package it names (Pane's own).
@@ -1048,6 +1052,15 @@ enum Entry {
     StopSharingFolder(PackageIdentity),
     /// Open the installed application `id`, named `name` (root).
     OpenApplication { id: String, name: String },
+    /// Open `target` (a URL of any scheme, a file, a folder or an
+    /// application), named `name`, with the system's handler or with
+    /// `application`, as the `system.open` host function does: an indexed
+    /// result such as a quicklink (root).
+    OpenTarget {
+        target: String,
+        application: Option<String>,
+        name: String,
+    },
     /// Launch this command: open its screen, or run it if it is no-view
     /// (root).
     Open(Opening),
@@ -1183,6 +1196,11 @@ enum Pending {
     Send(aliases::Sending),
     OpenApplication {
         id: String,
+        name: String,
+    },
+    OpenTarget {
+        target: String,
+        application: Option<String>,
         name: String,
     },
     Run(String),
@@ -1956,6 +1974,30 @@ impl Launcher {
         };
     }
 
+    /// Opens `target`, named `name`, with `application` or the system's
+    /// handler, through the system the `system.open` host function acts
+    /// on, off the calling thread, and reports whether it opened.
+    async fn open_target(
+        &self,
+        epoch: u64,
+        target: String,
+        application: Option<String>,
+        name: String,
+    ) {
+        let system = self.system();
+        let opened = off_thread(move || {
+            crate::system::System::open(system.as_ref(), &target, application.as_deref())
+        })
+        .await;
+        let Some(mut state) = self.lock_if_current(epoch) else {
+            return;
+        };
+        state.view.status = match opened {
+            Ok(()) => Status::Result(format!("Opened {name}")),
+            Err(problem) => Status::Error(format!("Could not open {name}: {problem}")),
+        };
+    }
+
     /// Shows the root results matching `query` from metadata alone; results
     /// computed for an earlier query are gone, and the calls still asking
     /// for them are cancelled. Returns what resolves once this search is
@@ -2180,6 +2222,18 @@ impl Launcher {
     pub fn back(&self) -> bool {
         let mut state = self.lock();
         match &state.view.screen {
+            Screen::Form(_)
+                if matches!(
+                    state.form,
+                    Some(OpenForm {
+                        purpose: FormPurpose::Screen(_),
+                        ..
+                    })
+                ) =>
+            {
+                // The command's own screen: leaving it leaves the command.
+                self.show_root(&mut state, None);
+            }
             Screen::Form(_) => {
                 let form = state.form.take().expect("a form is open");
                 if !self.return_from_actions_flow(&mut state) {
@@ -2316,6 +2370,11 @@ impl Launcher {
                 Pending::OpenApplication { id, name } => {
                     launcher.open_application(epoch, id, name).await
                 }
+                Pending::OpenTarget {
+                    target,
+                    application,
+                    name,
+                } => launcher.open_target(epoch, target, application, name).await,
                 Pending::Run(callback) => {
                     if let Some(component) = open {
                         launcher.run_action(epoch, component, callback, data).await
@@ -2567,6 +2626,18 @@ impl Launcher {
             Entry::OpenApplication { id, name } => {
                 state.view.status = Status::Running;
                 Pending::OpenApplication { id, name }
+            }
+            Entry::OpenTarget {
+                target,
+                application,
+                name,
+            } => {
+                state.view.status = Status::Running;
+                Pending::OpenTarget {
+                    target,
+                    application,
+                    name,
+                }
             }
             Entry::OpenFile { owner, id, name } => {
                 state.view.status = Status::Running;
@@ -3289,13 +3360,14 @@ impl Launcher {
                 Screen::Form(form),
                 Some(
                     open @ OpenForm {
-                        purpose: FormPurpose::Item(_),
+                        purpose: FormPurpose::Item(_) | FormPurpose::Screen(_),
                         ..
                     },
                 ),
                 Some(component),
             ) if !open.submitting => {
-                let FormPurpose::Item(item_id) = &open.purpose else {
+                let (FormPurpose::Item(item_id) | FormPurpose::Screen(item_id)) = &open.purpose
+                else {
                     unreachable!("matched above");
                 };
                 let item_id = item_id.clone();
@@ -4039,6 +4111,11 @@ impl Launcher {
                 state.reported_unbound = Vec::new();
                 self.report_unbound(state);
                 self.report_extra_accessories(state, extra, true);
+                // A command whose screen is a form (#149) shows it at once;
+                // Back from it leaves the command.
+                if let Some(ScreenForm { id, form }) = view.form {
+                    open_form_for(state, FormPurpose::Screen(id), form);
+                }
             }
             Err(error) => state.view.status = Status::Error(error.to_string()),
         }
@@ -4154,15 +4231,27 @@ fn disabled(state: &State, component: &Path) -> String {
 /// Replaces the command view with `form`, which belongs to item `item_id`.
 /// The command's row entries stay, for when the form closes.
 fn open_form(state: &mut State, item_id: String, form: Form) {
+    open_form_for(state, FormPurpose::Item(item_id), form);
+}
+
+/// Replaces the command view with `form`, which `purpose` submits: each
+/// field starts with the value the tree gives it (a text field's text, a
+/// choice's option), else empty or with the first option.
+fn open_form_for(state: &mut State, purpose: FormPurpose, form: Form) {
     let fields = form
         .fields
         .into_iter()
         .map(|field| {
             let value = match &field.kind {
-                FieldKind::Text { .. } | FieldKind::Password { .. } => String::new(),
-                FieldKind::Choice(choices) => choices
-                    .first()
-                    .map(|choice| choice.id.clone())
+                FieldKind::Text { .. } | FieldKind::Password { .. } => {
+                    field.value.clone().unwrap_or_default()
+                }
+                FieldKind::Choice(choices) => field
+                    .value
+                    .as_ref()
+                    .filter(|value| choices.iter().any(|choice| &choice.id == *value))
+                    .or_else(|| choices.first().map(|choice| &choice.id))
+                    .cloned()
                     .unwrap_or_default(),
             };
             FormField {
@@ -4186,7 +4275,7 @@ fn open_form(state: &mut State, item_id: String, form: Form) {
     );
     let return_to = std::mem::replace(&mut state.view, form_view);
     state.form = Some(OpenForm {
-        purpose: FormPurpose::Item(item_id),
+        purpose,
         return_to,
         submitting: false,
     });
