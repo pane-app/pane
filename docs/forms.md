@@ -13,11 +13,15 @@ Defined in [`wit/extension.wit`](../wit/extension.wit), identically for Rust
 ([`pane-guest`](../guests/pane-guest/src/lib.rs)) and JavaScript/TypeScript
 ([`@pane/extension`](../guests/js/pane.d.ts)):
 
-- An `item` may carry a `form` (title, fields, submit label). Activating such
-  an item opens the form instead of calling `run-action`.
+- An item may carry a `form` (title, fields, submit label; the WIT record
+  `form`, carried in the list's tree, see [list-tree.md](list-tree.md)).
+  Activating such an item opens the form instead of running its action. A
+  command's whole screen can be a form too (a `form` view, #149): Pane shows
+  it as soon as the command opens, and Back leaves the command.
 - A `field` has an `id`, a `label` and a `kind`: `text` (single line, starts
   empty, optional placeholder) or `choice` (a list of options, the first
-  starts chosen; the value is the chosen option's id).
+  starts chosen; the value is the chosen option's id). In the tree a field's
+  optional `value` is what it starts with instead (#149).
 - Submitting calls `submit-form(item-id, values)`, with one `field-value` per
   field in form order. The command answers with text, shown as the result, or
   a `form-error { field, message }`. A form error is the command's
@@ -25,7 +29,7 @@ Defined in [`wit/extension.wit`](../wit/extension.wit), identically for Rust
   with a `field` that names one of the form's fields, the message is shown
   under that field and the status line reads `<label>: <message>`; without
   one (or with an unknown field), the status line is the message itself.
-  Only failures, an `Err` from `get-view`/`run-action` or a trap, are
+  Only failures, an `Err` from `render`/`handle-event` or a trap, are
   prefixed ("The extension reported an error: ...", "The extension crashed:
   ...").
 - The launcher submits only choices the form offers; validating text (empty,

@@ -196,6 +196,14 @@ fn indexed_result(command: &CommandRegistration, result: IndexedResult) -> RootR
             id,
             name: result.listing.title.clone(),
         },
+        IndexedAction::Open {
+            target,
+            application,
+        } => Entry::OpenTarget {
+            target,
+            application,
+            name: result.listing.title.clone(),
+        },
     };
     let row = Row::listed(result.listing, Some(&command.id));
     let keys = Keys::new(&row.title, row.subtitle.as_deref(), None);

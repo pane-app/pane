@@ -433,7 +433,12 @@ pub(super) fn pin_of_selected(state: &State) -> Option<PinTarget> {
     let row = state.view.rows.get(index)?;
     if !matches!(
         state.entries.get(index),
-        Some(Entry::Open(_) | Entry::Unavailable(_) | Entry::OpenApplication { .. })
+        Some(
+            Entry::Open(_)
+                | Entry::Unavailable(_)
+                | Entry::OpenApplication { .. }
+                | Entry::OpenTarget { .. }
+        )
     ) {
         return None;
     }
@@ -505,7 +510,11 @@ fn change(
     let refused = (SlotChange::Refused, String::new());
     let quick_slot_action = !matches!(
         action,
-        ResultAction::Invoke | ResultAction::Hotkey | ResultAction::Alias
+        ResultAction::Invoke
+            | ResultAction::Hotkey
+            | ResultAction::Alias
+            | ResultAction::ConfigureCommand
+            | ResultAction::ConfigureExtension
     );
     if !quick_slot_action || !matches!(state.view.screen, Screen::Root { .. }) {
         return refused;
@@ -554,7 +563,11 @@ fn change(
                 format!("Moved {title} to place {}", moved_to + 1),
             )
         }
-        ResultAction::Invoke | ResultAction::Hotkey | ResultAction::Alias => refused,
+        ResultAction::Invoke
+        | ResultAction::Hotkey
+        | ResultAction::Alias
+        | ResultAction::ConfigureCommand
+        | ResultAction::ConfigureExtension => refused,
     }
 }
 
@@ -666,15 +679,25 @@ impl Launcher {
             },
             None => None,
         };
-        // Only a command or an indexed result is ever pinned.
+        // Only a command or an indexed result is ever pinned. A command is
+        // launched from its quick slot.
         let entry = match entry {
-            Some(entry @ (Entry::Open(_) | Entry::OpenApplication { .. })) => Some(entry),
+            Some(Entry::Open(mut opening)) => {
+                opening.launch.source = crate::launch::LaunchSource::QuickSlot;
+                Some(Entry::Open(opening))
+            }
+            Some(entry @ (Entry::OpenApplication { .. } | Entry::OpenTarget { .. })) => Some(entry),
             _ => None,
         };
-        if entry.is_some() {
-            // The status line is about this action from now on.
-            state.sent_from = None;
-            state.view.status = Status::Running;
+        match &entry {
+            // Root search stays while a no-view command runs.
+            Some(Entry::Open(opening)) if opening.no_view => Launcher::begin_run(state),
+            Some(_) => {
+                // The status line is about this action from now on.
+                state.sent_from = None;
+                state.view.status = Status::Running;
+            }
+            None => {}
         }
         let data = match &entry {
             // A call into the package belongs to its generation as of now.
@@ -686,10 +709,15 @@ impl Launcher {
         let launcher = self.clone();
         async move {
             match entry {
-                Some(Entry::Open(opening)) => launcher.open_command(epoch, opening, data).await,
+                Some(Entry::Open(opening)) => launcher.launch_opening(epoch, opening, data).await,
                 Some(Entry::OpenApplication { id, name }) => {
                     launcher.open_application(epoch, id, name).await
                 }
+                Some(Entry::OpenTarget {
+                    target,
+                    application,
+                    name,
+                }) => launcher.open_target(epoch, target, application, name).await,
                 _ => {}
             }
         }
@@ -718,6 +746,7 @@ impl Launcher {
         // Named as the footer names the same row's primary action.
         let primary = match shown.kind {
             Some(RowKind::Application) => "Open application",
+            Some(RowKind::Link) => "Open link",
             _ => "Open command",
         };
         let mut items = vec![ResultActionItem {

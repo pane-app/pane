@@ -17,9 +17,12 @@ use pane_core::applications::{Application, Applications};
 use pane_core::{Launcher, PackageIdentity, Runtime, Screen, Status};
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use rows::titles;
 
 fn built(path: &str) -> PathBuf {
@@ -370,10 +373,7 @@ fn the_applications_command_lists_them_by_name_and_opens_one() {
     assert_eq!(titles(&launcher), ["Files", "Firefox", "terminal"]);
     assert_eq!(view.rows[0].subtitle.as_deref(), Some("/apps"));
     block_on(launcher.activate_selected());
-    assert_eq!(
-        launcher.view().status,
-        Status::Result("Opened Files".into())
-    );
+    assert_eq!(shown(&launcher), Status::Result("Opened Files".into()));
     assert_eq!(system.opened(), ["/apps/Files.app"]);
 }
 
@@ -436,16 +436,13 @@ fn a_js_command_finds_and_opens_applications(package: &str, language: &str) {
     block_on(launcher.activate_selected());
     assert_eq!(titles(&launcher), ["Files", "Firefox"]);
     block_on(launcher.activate_selected());
-    assert_eq!(
-        launcher.view().status,
-        Status::Result("Opened Files".into())
-    );
+    assert_eq!(shown(&launcher), Status::Result("Opened Files".into()));
 
     // A failure the system reports reaches the command as an error.
     *system.opening_fails.lock().unwrap() = Some("permission denied".into());
     block_on(launcher.activate_selected());
     assert_eq!(
-        launcher.view().status,
+        shown(&launcher),
         Status::Error("The extension reported an error: permission denied".into())
     );
 }

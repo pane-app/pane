@@ -42,11 +42,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use std::path::PathBuf;
+
 use objc2::rc::autoreleasepool;
 use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
-use objc2_foundation::{NSData, NSString};
+use objc2_foundation::{NSData, NSString, NSURL};
 
 use super::{ClipboardSystem, Content, Markers, Observation, Sink, Watch};
+use crate::system::Clip;
 use crate::threads::Joinable;
 
 // Links AppKit, whose constants the adapter reads: the bindings crate
@@ -60,6 +63,10 @@ unsafe extern "C" {}
 /// manager made: `org.nspasteboard.ConcealedType`, whose presence alone
 /// says the copy must not be kept. 1Password, Strongbox and others set it.
 const CONCEALED_TYPE: &str = "org.nspasteboard.ConcealedType";
+
+/// The pasteboard type of a file URL, which Finder puts there when it
+/// copies a file: `public.file-url` (`NSPasteboardTypeFileURL`).
+const FILE_URL_TYPE: &str = "public.file-url";
 
 /// How often the watcher looks at the pasteboard's change count, and so
 /// the longest a copy takes to be reported: one integer read per look,
@@ -118,6 +125,59 @@ fn put_text(text: &str, conceal: bool) -> Result<(), String> {
             }
         }
         Ok(())
+    })
+}
+
+/// Puts `clip` on the pasteboard for a command (`crate::system`): text, or a
+/// file as Finder copies one (its file URL), with the concealed type
+/// beside it if `concealed`.
+pub(crate) fn put_clip(clip: &Clip, concealed: bool) -> Result<(), String> {
+    match clip {
+        Clip::Text(text) => put_text(text, concealed),
+        Clip::File(path) => autoreleasepool(|_| {
+            let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+            let Some(address) = url.absoluteString() else {
+                return Err(format!("{} has no file URL", path.display()));
+            };
+            let pasteboard = NSPasteboard::generalPasteboard();
+            pasteboard.clearContents();
+            if !pasteboard.setString_forType(&address, &NSString::from_str(FILE_URL_TYPE)) {
+                return Err("the pasteboard would not take the file".into());
+            }
+            if concealed {
+                let empty = NSData::with_bytes(&[]);
+                let concealed = NSString::from_str(CONCEALED_TYPE);
+                if !pasteboard.setData_forType(Some(&empty), &concealed) {
+                    return Err("the pasteboard would not take the concealed type".into());
+                }
+            }
+            Ok(())
+        }),
+    }
+}
+
+/// What the pasteboard holds for a command (`crate::system`): the file
+/// Finder copied (the first, when several were), else its text, else
+/// nothing. Text longer than `limit` bytes of UTF-8 is refused.
+pub(crate) fn read_clip(limit: usize) -> Result<Option<Clip>, String> {
+    autoreleasepool(|_| {
+        let pasteboard = NSPasteboard::generalPasteboard();
+        if type_names().iter().any(|kind| kind == FILE_URL_TYPE)
+            && let Some(address) = pasteboard.stringForType(&NSString::from_str(FILE_URL_TYPE))
+            && let Some(url) = NSURL::URLWithString(&address)
+            && url.isFileURL()
+            && let Some(path) = url.path()
+        {
+            return Ok(Some(Clip::File(PathBuf::from(path.to_string()))));
+        }
+        match text() {
+            Some(text) if text.len() > limit => Err(format!(
+                "The clipboard holds more text than Pane reads for a command ({} MiB)",
+                limit / (1024 * 1024)
+            )),
+            Some(text) => Ok(Some(Clip::Text(text))),
+            None => Ok(None),
+        }
     })
 }
 

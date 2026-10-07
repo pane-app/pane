@@ -48,7 +48,7 @@ fn compiled_code_is_cached_and_reused_by_a_later_runtime() {
     let cache = empty_dir("compiled-code-cache");
 
     let first = Runtime::start_with_cache(cache.clone()).unwrap();
-    let view = block_on(first.get_view(&sample())).unwrap();
+    let view = block_on(first.render(&sample())).unwrap();
     assert!(
         files_in(&cache) > 0,
         "compiled code was written to {}",
@@ -56,7 +56,7 @@ fn compiled_code_is_cached_and_reused_by_a_later_runtime() {
     );
 
     let second = Runtime::start_with_cache(cache.clone()).unwrap();
-    assert_eq!(block_on(second.get_view(&sample())).unwrap(), view);
+    assert_eq!(block_on(second.render(&sample())).unwrap(), view);
 }
 
 fn guest(name: &str) -> PathBuf {
@@ -71,7 +71,7 @@ fn a_forgotten_component_is_loaded_again_from_its_file() {
     std::fs::copy(guest("sample_rust"), &component).unwrap();
     let runtime = Runtime::start().unwrap();
     assert_eq!(
-        block_on(runtime.get_view(&component)).unwrap().title,
+        block_on(runtime.render(&component)).unwrap().title,
         "Rust sample"
     );
 
@@ -79,7 +79,7 @@ fn a_forgotten_component_is_loaded_again_from_its_file() {
     runtime.forget([component.clone()]);
 
     assert_eq!(
-        block_on(runtime.get_view(&component)).unwrap().title,
+        block_on(runtime.render(&component)).unwrap().title,
         "JavaScript sample"
     );
 }

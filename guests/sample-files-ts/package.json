@@ -8,6 +8,7 @@
   "main": "src/index.ts",
   "pane": {
     "rootResults": true,
+    "search": true,
     "files": true
   },
   "devDependencies": {

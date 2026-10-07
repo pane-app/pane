@@ -16,11 +16,14 @@ use futures::executor::block_on;
 use pane_core::{Launcher, PackageIdentity, Question, Runtime, Screen, Status};
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/guests.rs"]
 mod guests;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use guests::guest_file as guest;
 use rows::{select_title, titles};
 
@@ -172,12 +175,14 @@ fn toggle(launcher: &Launcher, title: &str) -> Status {
     press(launcher, title)
 }
 
-/// Opens the Greeting command and runs its item `item`.
+/// Opens the Greeting command and runs its item `item`, returning what it
+/// showed: its toast, or the status line.
 fn greet(launcher: &Launcher, item: &str) -> Status {
     to_root(launcher);
     press(launcher, "Greeting");
     assert_eq!(launcher.view().screen, Screen::Command);
-    press(launcher, item)
+    press(launcher, item);
+    shown(launcher)
 }
 
 /// Each installed package's title with whether it is enabled.
@@ -328,7 +333,9 @@ fn disable_all_disables_the_shown_set_stops_it_and_keeps_its_settings() {
         ("Package d".to_string(), true),
     ];
     assert_eq!(enabled(&restarted), alone);
-    assert_eq!(enabled(&dirs.launcher()), alone);
+    // Read by a launcher of its own: one on the same runtime would take
+    // the toasts `restarted`'s calls show.
+    assert_eq!(enabled(&dirs.restarted()), alone);
 
     // Settings b kept its settings.
     assert_eq!(

@@ -1,12 +1,15 @@
 //! Keeping Pane's extension runtime responsive when a guest stops
 //! cooperating (#18).
 //!
-//! The runtime thread serves one guest call at a time, so a call that never
-//! finishes holds every other extension's calls behind it. Pane bounds the
+//! The runtime thread serves many guest calls at once, so a call waiting on
+//! something outside its guest holds no other extension's calls (#136); a
+//! call computing still holds its own instance's next calls. Pane bounds the
 //! ways a call fails to finish that it can tell apart, and never charges a
-//! guest for work that is not its own. Not bounded yet: a guest waiting on a
-//! clock or looping on Pane's host calls (charged only its computing between
-//! them), and a host call that never returns (see `docs/pausing.md`).
+//! guest for work that is not its own. Not bounded: a guest waiting on a
+//! clock, a helper, the network or another extension (waiting is not
+//! computing, and its own timeout or the ownership rules end it), a guest
+//! looping on Pane's host calls (charged only its computing between them),
+//! and a host call that never returns (see `docs/pausing.md`).
 //!
 //! - **An unresponsive call**: a guest computing without waiting (a busy
 //!   loop). The engine counts epochs ([`TICK`] apart) and every store yields
@@ -22,10 +25,10 @@
 //!   operation, a save) is not computing, nor is a slow host call, nor time
 //!   the system gave to other threads. Starting an instance is never
 //!   counted.
-//! - **A native helper that does not exit**: its supervising thread ends it
-//!   after `helpers::runner::HELPER_TIME_LIMIT`, and the run answers an
-//!   error the guest handles like any other failure of its helper: an
-//!   expected slow operation, not a crash.
+//! - **A native helper that does not exit** holds only its own call, which
+//!   the command's timeout (dropping the run), the call's end, the
+//!   instance's, the generation's or Pane quitting ends (#136 removed #18's
+//!   provisional 30 seconds).
 //! - **A runtime hang**: the shared thread itself makes no progress. Its
 //!   progress is a heartbeat ([`Watch`]): a count bumped at each poll of its
 //!   work, at each epoch yield of a guest and as each host call starts and
@@ -578,8 +581,7 @@ pub(crate) fn seconds(duration: Duration) -> String {
 /// Why a guest call was stopped as unresponsive, for its error.
 pub(super) fn computed_too_long(limit: Duration) -> String {
     format!(
-        "it computed for {} without finishing, so Pane stopped it; other extensions' calls \
-         waited meanwhile",
+        "it computed for {} without finishing, so Pane stopped it",
         seconds(limit)
     )
 }

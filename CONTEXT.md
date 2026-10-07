@@ -149,7 +149,7 @@ A program the operating system lists as installed where Pane looks for it (Start
 _Avoid_: App (ambiguous with Pane itself), program
 
 **Quicklink**:
-A named web address the user saves through the Quicklinks default extension's form and finds in root search, where invoking it opens the address with the system's handler for web links; it is kept in that extension's content.
+A named target the user saves through the Quicklinks default extension's Create Quicklink form: a link of any scheme, or a file, a folder or an application, with an optional application to open it with. Root search finds it as an indexed result, ranked with commands, and invoking it opens the target through the system's open, with that application if it has one; Search Quicklinks lists it with its actions. It is kept in that extension's content.
 _Avoid_: Bookmark, shortcut, alias
 
 **Clipboard history**:
@@ -329,7 +329,7 @@ The operation calls waiting on one another at one moment, from the command that 
 _Avoid_: Call stack (of one guest), workflow
 
 **Native helper**:
-A prebuilt program an installed package ships for each target (operating system and processor) it supports, which its commands run through Pane for what a WASI guest cannot do; Pane runs this system's file, never compiles one, and ends its process when the command cancels the run, the call that started it returns, the package's generation ends, it has run for thirty seconds (an error the command handles) or Pane quits. Processes the helper starts itself are its own.
+A prebuilt program an installed package ships for each target (operating system and processor) it supports, which its commands run through Pane for what a WASI guest cannot do; Pane runs this system's file, never compiles one, and ends its process when the command cancels the run (its own timeout), the call that started it returns, the package's generation ends or Pane quits; otherwise it runs for as long as its work takes, since Pane serves other extensions' calls while one waits on it. Processes the helper starts itself are its own.
 _Avoid_: Plugin binary, native extension (the extension's entry point stays a WASI component), sidecar
 
 **Helper target**:

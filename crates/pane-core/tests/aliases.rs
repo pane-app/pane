@@ -1,9 +1,10 @@
 //! Aliases and fallbacks through the launcher's public interface: the user
 //! gives an installed command an alias, or makes it a fallback, in Manage
 //! extensions, and reaches it from root search, where the text typed is sent
-//! to a command that takes a query only when the user invokes it. The
-//! command is a real guest: Echo, the query sample from `cargo xtask
-//! guests`, in Rust, JavaScript and TypeScript alike.
+//! to a command that takes a query only when the user invokes it, as its
+//! launch record's fallback text. The command is a real guest: Echo, the
+//! query sample from `cargo xtask guests`, a no-view command, in Rust,
+//! JavaScript and TypeScript alike.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -12,9 +13,12 @@ use futures::executor::block_on;
 use pane_core::{Launcher, PackageIdentity, Runtime, Screen, Status};
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use rows::titles;
 
 const MANAGE_ROW: &str = "Manage extensions…";
@@ -259,9 +263,9 @@ fn an_alias_finds_the_command_first_and_sends_the_text_after_it_only_when_invoke
     assert_eq!(launcher.view().selected, Some(0));
     assert!(!running(&runtime).contains(&echo));
     // Root search presents the row with its alias, as a command.
-    let shown = &launcher.presentation().rows[0];
-    assert_eq!(shown.alias.as_deref(), Some("ec"));
-    assert_eq!(shown.kind, Some(pane_core::RowKind::Command));
+    let presented = &launcher.presentation().rows[0];
+    assert_eq!(presented.alias.as_deref(), Some("ec"));
+    assert_eq!(presented.kind, Some(pane_core::RowKind::Command));
 
     // The alias and text list a row that sends the text; still nothing
     // runs while typing.
@@ -271,19 +275,20 @@ fn an_alias_finds_the_command_first_and_sends_the_text_after_it_only_when_invoke
     assert_eq!(launcher.view().selected, Some(0));
     assert!(!running(&runtime).contains(&echo));
 
-    // Invoking it sends the text and shows the answer; root search stays.
+    // Invoking it sends the text and its toast shows the answer; root
+    // search stays.
     block_on(launcher.activate_selected());
     assert_eq!(
-        launcher.view().status,
+        shown(&launcher),
         Status::Result("Echo heard “hello  world”".into())
     );
     assert_eq!(launcher.view().query(), Some("ec hello  world "));
 
-    // An error is shown as the failure.
+    // An error is shown as a failure toast.
     search(&launcher, "ec fail");
     block_on(launcher.activate_selected());
     assert_eq!(
-        launcher.view().status,
+        shown(&launcher),
         Status::Error(
             "The extension reported an error: Echo refuses “fail”, to show how an error looks"
                 .into()
@@ -296,7 +301,7 @@ fn an_alias_finds_the_command_first_and_sends_the_text_after_it_only_when_invoke
     search(&launcher, "ec again");
     block_on(launcher.activate_selected());
     assert_eq!(
-        launcher.view().status,
+        shown(&launcher),
         Status::Result("Echo heard “again”".into())
     );
 
@@ -342,14 +347,14 @@ fn a_fallback_is_listed_last_for_any_text_and_is_never_chosen_by_itself(fixture:
     assert_eq!(subtitle(&launcher, 0), "Send “zqx words” · fallback");
     assert_eq!(launcher.view().selected, None);
     block_on(launcher.activate_selected());
-    assert_eq!(launcher.view().status, Status::Idle);
+    assert_eq!(shown(&launcher), Status::Idle);
     assert_eq!(running(&runtime), Vec::<PathBuf>::new());
 
     // Choosing it sends the whole query.
     launcher.move_selection(1);
     block_on(launcher.activate_selected());
     assert_eq!(
-        launcher.view().status,
+        shown(&launcher),
         Status::Result("Echo heard “zqx words”".into())
     );
 
@@ -388,14 +393,12 @@ fn an_answer_is_cleared_once_the_query_changes(fixture: &Fixture) {
 
     search(&launcher, "ec one");
     block_on(launcher.activate_selected());
-    assert_eq!(
-        launcher.view().status,
-        Status::Result("Echo heard “one”".into())
-    );
+    assert_eq!(shown(&launcher), Status::Result("Echo heard “one”".into()));
     block_on(launcher.set_query("ec one more"));
     assert_eq!(launcher.view().status, Status::Idle);
 
-    // An answer that arrives once the query has changed is not shown.
+    // An answer that arrives once the query has changed is not shown in
+    // the status line.
     search(&launcher, "ec two");
     let answer = launcher.activate_selected();
     assert_eq!(launcher.view().status, Status::Running);
@@ -821,20 +824,27 @@ fn a_change_that_cannot_be_kept_never_brings_back_an_uninstalled_packages_choice
     assert_eq!(titles(&launcher), Vec::<String>::new());
 }
 
+/// Echo opened from its row, with no text sent: it runs without a screen
+/// and says how to send it text.
 #[test]
-fn a_command_declaring_a_query_without_the_interface_is_refused_at_install() {
+fn enter_on_echo_runs_it_without_text_and_opens_no_screen() {
     let dirs = Dirs::new();
     let (launcher, _runtime) = dirs.launcher();
-    let folder = dirs.source("sample-settings", "settings");
-    let manifest = fs::read_to_string(folder.join("pane.json")).unwrap();
-    let manifest = manifest.replacen("\"component\"", "\"takesQuery\": true, \"component\"", 1);
-    fs::write(folder.join("pane.json"), manifest).unwrap();
-    block_on(launcher.install_package(&folder));
-    let Status::Error(error) = launcher.view().status else {
-        panic!("{:?}", launcher.view().status);
-    };
-    assert!(
-        error.contains("its manifest says it takes a query, but it does not export pane:extension/query-command@0.1.0"),
-        "{error}"
+    dirs.install(&launcher, "sample-query", "query");
+    search(&launcher, "echo");
+    activate(&launcher, "Echo");
+    assert_eq!(
+        shown(&launcher),
+        Status::Result(
+            "Echo heard nothing: give it an alias or make it a fallback in Manage extensions, \
+             then send it text from root search"
+                .into()
+        )
+    );
+    assert_eq!(
+        launcher.view().screen,
+        Screen::Root {
+            query: "echo".into()
+        }
     );
 }

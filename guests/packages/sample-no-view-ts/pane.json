@@ -1,0 +1,48 @@
+{
+  "manifestVersion": 1,
+  "title": "TypeScript no-view sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "report",
+      "title": "Report launch",
+      "subtitle": "A TypeScript command that runs without a screen and answers how it was launched",
+      "component": "sample_no_view_ts.wasm",
+      "mode": "no-view",
+      "takesQuery": true
+    },
+    {
+      "id": "tick",
+      "title": "Tick",
+      "subtitle": "A TypeScript command that runs every minute in the background, counting its runs",
+      "component": "sample_no_view_ts.wasm",
+      "mode": "no-view",
+      "schedule": {
+        "everySeconds": 60
+      }
+    },
+    {
+      "id": "last",
+      "title": "Last launches",
+      "subtitle": "A TypeScript command that answers what Report launch and Tick last ran with",
+      "component": "sample_no_view_ts.wasm",
+      "mode": "no-view"
+    },
+    {
+      "id": "launch",
+      "title": "Launch",
+      "subtitle": "A TypeScript command that launches the command its text names, passing it context",
+      "component": "sample_no_view_ts.wasm",
+      "mode": "no-view",
+      "takesQuery": true
+    },
+    {
+      "id": "show",
+      "title": "Show launch",
+      "subtitle": "A TypeScript command that opens a list showing how it was launched",
+      "component": "sample_no_view_ts.wasm",
+      "takesQuery": true
+    }
+  ]
+}

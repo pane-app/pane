@@ -236,8 +236,8 @@ and a host call that never returns (see the limits below):
 
 | What does not finish | Limit | What Pane does | Whose failure |
 | --- | --- | --- | --- |
-| A guest **computing without waiting** (a busy loop in Rust, JavaScript or TypeScript): an **unresponsive call** | 5 seconds of the guest's own computing in one call, in all (`COMPUTE_LIMIT`) | Stops the call where the guest yields and drops its instance, as for a stopped call; the answer is "The extension stopped responding: it computed for 5 seconds without finishing, so Pane stopped it; other extensions' calls waited meanwhile" | The package's own: Wasmtime was running its code. Counted with its crashes (3 within 5 minutes pause it) |
-| A guest **waiting on a native helper** that does not exit | 30 seconds of the helper running (`HELPER_TIME_LIMIT`, provisional, see [helpers](helpers.md#limits)) | Ends the helper; the guest's `run` fails with "helper `echo` did not finish within 30 seconds; Pane ended it", an error it handles | No one's: an expected slow-operation error, never counted |
+| A guest **computing without waiting** (a busy loop in Rust, JavaScript or TypeScript): an **unresponsive call** | 5 seconds of the guest's own computing in one call, in all (`COMPUTE_LIMIT`) | Stops the call where the guest yields and drops its instance, as for a stopped call; the answer is "The extension stopped responding: it computed for 5 seconds without finishing, so Pane stopped it" | The package's own: Wasmtime was running its code. Counted with its crashes (3 within 5 minutes pause it) |
+| A guest **waiting on a native helper** that does not exit | None since #136 (#18's provisional 30 seconds is gone, see [helpers](helpers.md#limits)) | Nothing: other extensions' calls are served meanwhile; the command's own timeout, the end of its call or of its generation, or Pane quitting ends the helper | — |
 | The **runtime thread itself** making no progress (a **runtime hang**): inside one poll of its work, outside any host call, with its heartbeat still | Says "not responding yet" after 10 seconds (`WARN_AFTER`), gives up after 30 seconds (`UNRESPONSIVE_LIMIT`) | Gives up on the thread, as on a [runtime crash](#when-the-extension-runtime-itself-crashes) | Unknown: no extension is named or paused |
 | A guest **waiting** on anything else (a clock, a save, an operation of another extension, a web request) | None | Nothing: waiting is not computing, and the call ends when its generation does | — |
 | A **slow host call** (Pane reading or saving a value, listing applications, answering a folder's listing, reading or changing clipboard history) | None | Nothing: its time is Pane's, not the guest's, and the thread inside it is not stuck | — |
@@ -347,7 +347,7 @@ How it works:
   the abandoned thread, as after a crash.
 
 **Provisional, pending user confirmation:** the limits (5 seconds of a
-guest's computing, 30 seconds of a helper, 10 then 30 seconds of a thread
+guest's computing, 10 then 30 seconds of a thread
 making no progress) and the 10 ms tick; an unresponsive call counts as a
 crash towards pausing (not a pause at once, and not free); a start is
 never metered; the operation error kind for a target that stops
@@ -466,8 +466,8 @@ Limits:
   host call nor time the thread did not run; `extension_data.rs` that no
   save or clipboard history change lands after the fence closes and
   fenced code reads no clipboard history; `http.rs` that fenced code sends
-  nothing; `launcher/pausing.rs` counting unresponsive calls with crashes;
-  and `helpers/runner.rs` a helper past its time limit.
+  nothing; and `launcher/pausing.rs` counting unresponsive calls with
+  crashes.
   [`crates/pane/tests/unresponsive.rs`](../crates/pane/tests/unresponsive.rs):
   in the window, keys are answered while the guest computes, and the error,
   the pause toast, the paused command's reason and Retry render. The

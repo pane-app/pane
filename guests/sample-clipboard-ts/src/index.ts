@@ -8,11 +8,16 @@
 // `"pane": { "clipboardHistory": true }`); the command only shows the
 // history and the user's controls: turn on, pause, resume, turn off, how
 // long items are kept (Pane deletes them then, whether the command runs or
-// not), exclude a program, clear, turn off and delete, delete recent items,
-// and Enter on an item copies it again or deletes it.
+// not), exclude a program, clear, turn off and delete, delete recent items.
+// Each kept item has three actions: Paste (Enter) pastes it into the
+// application that was in front, or, where Pane cannot paste yet, copies it
+// and says so in a HUD; Copy copies it again; Delete, destructive and last,
+// deletes it.
 import * as history from "pane:extension/clipboard-history@0.1.0";
 import type { Capture, Entry, HistoryStatus } from "pane:extension/clipboard-history@0.1.0";
-import type { Command, CustomView, FieldValue, Form, Item, View } from "@pane/extension";
+import type { Command, CustomView, FieldValue, Form, Item, List } from "@pane/extension";
+import { closeMainWindow, showHUD, showToast } from "@pane/extension/feedback";
+import { NotAvailableError, PASTE_FALLBACK, paste } from "@pane/extension/system";
 
 /** The longest title of a kept item, in characters. */
 const TITLE_CHARS = 80;
@@ -49,6 +54,12 @@ function host<T>(call: () => T): T {
 }
 
 const item = (id: string, title: string, subtitle: string): Item => ({ id, title, subtitle });
+
+/** An item whose action is `act` with its id. */
+const action = (id: string, title: string, subtitle: string): Item => ({
+  ...item(id, title, subtitle),
+  onAction: () => act(id),
+});
 
 const plural = (count: number, one: string, many: string): string =>
   count === 1 ? `1 ${one}` : `${count} ${many}`;
@@ -92,7 +103,7 @@ function toggle(status: HistoryStatus): Item {
             "Resume clipboard history",
             `Paused · ${kept} kept · Nothing you copy is kept until you resume`,
           ];
-  return item(id, title, status.problem ? `${status.problem} · ${subtitle}` : subtitle);
+  return action(id, title, status.problem ? `${status.problem} · ${subtitle}` : subtitle);
 }
 
 /** The first line of `text` with content, trimmed and at most `TITLE_CHARS` long. */
@@ -115,30 +126,54 @@ function entryItem(entry: Entry): Item {
   if (entry.source) about.push(`from ${entry.source}`);
   const lines = entry.text.split(/\r?\n/).length - (entry.text.endsWith("\n") ? 1 : 0);
   if (lines > 1) about.push(`${lines} lines`);
-  about.push("Enter copies or deletes it");
+  about.push("Enter pastes it");
   const title = titleOf(entry.text);
   return {
     ...item(`${ENTRY}${entry.id}`, title, about.join(" · ")),
-    // Copying again comes first, so Enter twice copies.
-    form: choiceForm(
-      title,
-      "action",
-      "What to do with it",
-      [
-        ["copy", "Copy it again"],
-        ["delete", "Delete it"],
-      ],
-      "OK",
-    ),
+    actions: [
+      { title: "Paste", onAction: () => pasteEntry(entry.id, entry.text) },
+      { title: "Copy", onAction: () => copyEntry(entry.id) },
+      { title: "Delete", style: "destructive", onAction: () => deleteEntry(entry.id) },
+    ],
   };
 }
 
-async function getView(): Promise<View> {
+/**
+ * Paste: pastes the kept item `id`, whose text is `text`, into the
+ * application that was in front before Pane, which closes the window; where
+ * Pane cannot paste yet, copies it again instead (as Copy does), closes the
+ * window and says so in a HUD.
+ */
+async function pasteEntry(id: string, text: string): Promise<void> {
+  try {
+    paste(text);
+  } catch (error) {
+    if (!(error instanceof NotAvailableError)) throw error;
+    host(() => history.copy(id));
+    closeMainWindow();
+    showHUD(PASTE_FALLBACK);
+  }
+}
+
+/** Copy: puts the kept item `id` on the clipboard again, closes the window and says so in a HUD. */
+async function copyEntry(id: string): Promise<void> {
+  host(() => history.copy(id));
+  closeMainWindow();
+  showHUD("Copied to Clipboard");
+}
+
+/** Delete: deletes the kept item `id`; one no longer kept is an error. */
+async function deleteEntry(id: string): Promise<void> {
+  if (host(() => history.deleteItems([id])) === 0) throw new Error("That item is no longer kept");
+  showToast({ title: "Deleted the kept item" });
+}
+
+async function render(): Promise<List> {
   const status = host(history.status);
   const items: Item[] = [toggle(status)];
   if (status.capture !== "off") {
     items.push(
-      item(
+      action(
         "turn-off",
         "Turn off clipboard history",
         "Stops keeping what you copy; the kept items stay until you clear them",
@@ -180,13 +215,13 @@ async function getView(): Promise<View> {
   });
   for (const program of status.excluded) {
     items.push(
-      item(`${INCLUDE}${program}`, `Stop excluding ${program}`, `Text copied from ${program} is not kept`),
+      action(`${INCLUDE}${program}`, `Stop excluding ${program}`, `Text copied from ${program} is not kept`),
     );
   }
   const entries = host(history.entries);
   if (entries.length > 0) {
     items.push(
-      item(
+      action(
         "clear",
         "Clear clipboard history",
         `Deletes the ${plural(status.items, "item", "items")} kept; whether history is kept does not change`,
@@ -194,7 +229,7 @@ async function getView(): Promise<View> {
     );
     if (status.capture !== "off") {
       items.push(
-        item(
+        action(
           "turn-off-and-clear",
           "Turn off and delete clipboard history",
           `Deletes the ${plural(status.items, "item", "items")} kept and keeps nothing you copy from now on`,
@@ -214,12 +249,18 @@ async function getView(): Promise<View> {
   }
   items.push(...entries.map(entryItem));
   if (entries.length === 0 && status.capture === "on") {
-    items.push(item("empty", "Nothing kept yet", "Text you copy from now on is listed here"));
+    items.push(action("empty", "Nothing kept yet", "Text you copy from now on is listed here"));
   }
   return { title: "Clipboard history (TypeScript)", items };
 }
 
-async function runAction(itemId: string): Promise<string> {
+/** Runs the action of the item `itemId`, showing a toast with what it did. */
+async function act(itemId: string): Promise<void> {
+  showToast({ title: await outcome(itemId) });
+}
+
+/** Does what the item `itemId`'s action does; the text its toast shows. */
+async function outcome(itemId: string): Promise<string> {
   const wanted = CAPTURES[itemId];
   if (wanted) {
     host(() => history.setCapture(wanted[0]));
@@ -238,10 +279,6 @@ async function runAction(itemId: string): Promise<string> {
     host(() => history.setExcluded(excluded));
     return `Text copied from ${program} is kept again`;
   }
-  if (itemId.startsWith(ENTRY)) {
-    host(() => history.copy(itemId.slice(ENTRY.length)));
-    return "Copied to the clipboard";
-  }
   throw new Error(`unknown item: ${itemId}`);
 }
 
@@ -256,15 +293,6 @@ function forForm<T>(call: () => T): T {
 
 async function submitForm(itemId: string, values: FieldValue[]): Promise<string> {
   const value = (id: string): string => (values.find((value) => value.id === id)?.value ?? "").trim();
-  if (itemId.startsWith(ENTRY)) {
-    const id = itemId.slice(ENTRY.length);
-    if (value("action") === "delete") {
-      if (forForm(() => history.deleteItems([id])) === 0) throw { message: "That item is no longer kept" };
-      return "Deleted the kept item";
-    }
-    forForm(() => history.copy(id));
-    return "Copied to the clipboard";
-  }
   if (itemId === "retention") {
     const seconds = Number(value("retention"));
     const before = forForm(history.status).items;
@@ -295,4 +323,12 @@ async function openView(itemId: string): Promise<CustomView> {
   throw new Error(`unknown view: ${itemId}`);
 }
 
-export const command: Command = { getView, runAction, submitForm, openView };
+/**
+ * A callback no item's action names: an action of a list drawn before,
+ * whose item is gone now.
+ */
+async function runSearchResult(id: string): Promise<void> {
+  await act(id);
+}
+
+export const command: Command = { render, runSearchResult, submitForm, openView };

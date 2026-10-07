@@ -21,11 +21,14 @@ use pane_core::develop::{Build, BuildJob, BuildOutcome, Builder};
 use pane_core::{Development, Launcher, PackageIdentity, Runtime, SavedData, Screen, Status};
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/guests.rs"]
 mod guests;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use guests::guest;
 use rows::{select_title, titles};
 
@@ -295,14 +298,14 @@ fn to_root(launcher: &Launcher) {
 }
 
 /// From root search, opens the command titled `command` and runs its item
-/// titled `item`, returning the outcome.
+/// titled `item`, returning the outcome: its toast, or the status line.
 fn run(launcher: &Launcher, command: &str, item: &str) -> Status {
     to_root(launcher);
     select_title(launcher, command);
     block_on(launcher.activate_selected());
     select_title(launcher, item);
     block_on(launcher.activate_selected());
-    launcher.view().status
+    shown(launcher)
 }
 
 fn manage(launcher: &Launcher) {
@@ -697,7 +700,7 @@ fn a_build_status_does_not_replace_what_another_screen_says() {
     save(&folder, "sample_ts");
     dev.finished(&identity, 1);
     assert!(matches!(dev.launcher.view().screen, Screen::Command));
-    assert_eq!(dev.launcher.view().status, answer);
+    assert_eq!(shown(&dev.launcher), answer);
     // Back at root search, it is shown.
     to_root(&dev.launcher);
     assert_eq!(
@@ -813,7 +816,7 @@ fn a_published_copy_keeps_its_own_identity_and_code() {
             block_on(dev.launcher.activate_selected());
             select_title(&dev.launcher, "Say hello");
             block_on(dev.launcher.activate_selected());
-            dev.launcher.view().status
+            shown(&dev.launcher)
         })
         .collect();
     assert_eq!(

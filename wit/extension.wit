@@ -1,43 +1,33 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
-// Host/guest contract for one extension command. Intentionally minimal: one
-// list view, one action per item, forms with a text field and a choice, the
-// operating systems an item's action supports, and custom views the extension
-// draws from rectangles and text. This is not the full Pane SDK.
+// Host/guest contract for one extension command. Intentionally minimal: the
+// command's screen, a list view described as a versioned JSON tree (ADR
+// 0036's envelope: `render` and `handle-event`, see docs/list-tree.md),
+// forms with a text field and a choice, the operating systems an item's
+// action supports, and custom views the extension draws from rectangles and
+// text; and the run entry point of a command that opens no screen (ADR
+// 0037). Both receive the command's launch record (wit/commands.wit), and
+// every command may close the window and show toasts and HUDs
+// (wit/feedback.wit), and use the clipboard, open things, reveal and
+// recycle them (wit/system.wit). This
+// is not the full Pane SDK: the SDKs (`pane-guest`, `@pane/extension`) hide
+// the JSON and the callback ids.
 package pane:extension@0.1.0;
 
 interface command {
-  record item {
-    id: string,
-    title: string,
-    subtitle: option<string>,
-    /// When set, activating the item opens this form instead of running the
-    /// item's action, and submitting the form calls `submit-form`.
-    form: option<form>,
-    /// The operating systems the item's action (or form) works on; none for
-    /// every system Pane runs on. Elsewhere Pane still lists the item but
-    /// shows it as unavailable with the reason, and never calls the command
-    /// for it.
-    platforms: option<list<platform>>,
-    /// When set, activating the item opens this custom view instead of
-    /// running the item's action: Pane calls `open-view` and shows what the
-    /// view draws. Ignored when `form` is set.
-    custom-view: option<custom-view-info>,
-  }
+  use commands.{launch-record};
 
-  /// An operating system Pane runs on.
+  /// An operating system Pane runs on. In the tree, an item's `platforms`
+  /// names these as strings.
   enum platform {
     windows,
     macos,
     linux,
   }
 
-  record view {
-    title: string,
-    items: list<item>,
-  }
-
-  /// A form the user fills in and submits to the command.
+  /// A form the user fills in and submits to the command. In the tree, an
+  /// item's `form` carries it as JSON (docs/list-tree.md); submitting it
+  /// calls `submit-form` with the item's id.
   record form {
     title: string,
     fields: list<field>,
@@ -85,7 +75,9 @@ interface command {
     message: string,
   }
 
-  /// What Pane shows of an item's custom view besides the view's drawing.
+  /// What Pane shows of an item's custom view besides the view's drawing. In
+  /// the tree, an item's `customView` carries it as JSON; choosing the item
+  /// calls `open-view` with the item's id.
   record custom-view-info {
     /// The screen's title.
     title: string,
@@ -176,12 +168,46 @@ interface command {
     handle-event: async func(event: view-event) -> result<_, string>;
   }
 
-  /// Produce the command's list view.
-  get-view: async func() -> result<view, string>;
+  /// Draws the command's screen: a JSON tree that names its version, such
+  /// as `{"version": 1, "view": {"type": "list", "title": "Notes", "items":
+  /// [...]}}` (docs/list-tree.md describes every field). An item's action
+  /// names a callback id, which Pane passes to `handle-event` when the user
+  /// chooses it. Pane ignores a field it does not know, and draws what it
+  /// understands of a tree naming a newer version than it knows; a tree it
+  /// cannot read is the command's failure, shown as an error the extension
+  /// answered with is, never a crash. An error is shown to the user.
+  ///
+  /// `launch` is how the command's screen was opened: Pane passes the same
+  /// record each time it asks for the screen again while it is open. A
+  /// scheduled item's run (`"schedule"` with an `item`) draws the list
+  /// with a `background` record from its `schedule`.
+  render: async func(launch: launch-record) -> result<string, string>;
 
-  /// Run the action of the item with `item-id`; the returned text is shown to
-  /// the user as the action's result.
-  run-action: async func(item-id: string) -> result<string, string>;
+  /// Runs the no-view command `command` (its id in `pane.json`, so one
+  /// component can serve several commands): one whose `pane.json` entry
+  /// says `"mode": "no-view"`. Pane calls it, never `render`, each time the
+  /// command is launched (Enter on its row, its alias, a fallback, its
+  /// global hotkey, its quick slot, another command, or its schedule), and
+  /// opens no screen. The answer is a JSON object, as `handle-event`'s is
+  /// (`{}`); Pane shows nothing of it: the command tells the user what
+  /// happened with a toast or a HUD (wit/feedback.wit). An error is shown
+  /// to the user as a failure toast with a "Copy Error" action; it is an
+  /// operation error, which never counts towards pausing the extension (a
+  /// crash does). Once the run ends, a toast it left in the animated style
+  /// is hidden. A component that serves no no-view command answers with an
+  /// error; Pane never calls it then.
+  run: async func(command: string, launch: launch-record) -> result<string, string>;
+
+  /// Handles the user's choice of the callback `callback`, an id the
+  /// command's tree named (such as an item's action's), or a search
+  /// result's id (wit/search.wit). `details` is a JSON object with the
+  /// event's details, `{}` when it has none. The answer is a JSON object
+  /// (docs/list-tree.md), `{}` for now; Pane shows nothing of it: the
+  /// command tells the user what happened with a toast or a HUD
+  /// (wit/feedback.wit). Pane then calls `render` again and keeps the
+  /// selection on the same item. An error is shown to the user as a failure
+  /// toast.
+  handle-event: async func(callback: string, details: string) -> result<string, string>;
 
   /// Handle the submitted form of the item with `item-id`. `values` holds
   /// every field of the form, in order. The returned text is shown to the
@@ -194,5 +220,9 @@ interface command {
 }
 
 world extension {
+  import commands;
+  import window;
+  import feedback;
+  import system;
   export command;
 }

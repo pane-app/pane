@@ -421,8 +421,11 @@ impl Launcher {
                 },
                 value: String::new(),
                 error: None,
+                description: None,
+                required: false,
             }],
             submit_label: "Show package".into(),
+            setup: None,
         };
         let view = LauncherView::new(Screen::Form(form), "Install extension from npm");
         let return_to = std::mem::replace(&mut state.view, view);
@@ -447,8 +450,11 @@ impl Launcher {
                 },
                 value: String::new(),
                 error: None,
+                description: None,
+                required: false,
             }],
             submit_label: "Show package".into(),
+            setup: None,
         };
         let view = LauncherView::new(Screen::Form(form), "Install extension from Git");
         let return_to = std::mem::replace(&mut state.view, view);
@@ -701,8 +707,8 @@ impl Launcher {
         for dependency in &mut plan.install {
             match self.check_components(dependency).await {
                 // Recorded as the package's own is: whether it can make web
-                // requests.
-                Ok(network) => dependency.network = network,
+                // requests and run system programs.
+                Ok(checked) => dependency.note_imports(checked),
                 Err(error) => {
                     let required = plan
                         .required
@@ -796,6 +802,13 @@ fn preview_view(
             .and_then(|installed| installed.git.as_ref());
         details.extend(git_lines(git, installed));
     }
+    // A published package has its own 512×512 icon (#139); one from npm or
+    // Git without it is installed anyway, with a caution.
+    if (package.npm.is_some() || package.git.is_some())
+        && let Some(caution) = crate::icons::caution(&package.folder, manifest.icon.as_ref())
+    {
+        details.push(format!("Caution: {caution}"));
+    }
     let titles: Vec<&str> = manifest.commands.iter().map(|c| c.title.as_str()).collect();
     if !titles.is_empty() {
         details.push(format!("Commands: {}", titles.join(", ")));
@@ -805,6 +818,9 @@ fn preview_view(
     }
     if let Some(helpers) = helpers::describe(&manifest.helpers) {
         details.push(helpers);
+    }
+    if package.programs {
+        details.push(super::programs::PREVIEW_NOTE.into());
     }
     details.push(format!(
         "Compatible: needs extension API {}, and its components import only WASI 0.3",

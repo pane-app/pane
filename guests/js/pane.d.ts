@@ -3,47 +3,198 @@
 // Types for Pane's extension contract, `pane:extension/command` in
 // wit/extension.wit, as JavaScript and TypeScript commands see it. They
 // describe plain values only; nothing here is specific to the JS engine.
+// A command's list reaches Pane as the versioned JSON tree of ADR 0036's
+// envelope (`render` and `handle-event`, docs/list-tree.md); the SDK's
+// adapter (adapt.js) writes the tree and runs the actions, so a command
+// never sees the JSON or the callback ids.
 /// <reference path="./wasi.d.ts" />
+/// <reference path="./commands.d.ts" />
+/// <reference path="./feedback-host.d.ts" />
+/// <reference path="./system-host.d.ts" />
 /// <reference path="./data.d.ts" />
 /// <reference path="./operations.d.ts" />
 /// <reference path="./applications.d.ts" />
 /// <reference path="./helpers.d.ts" />
+/// <reference path="./programs-host.d.ts" />
 /// <reference path="./files.d.ts" />
 /// <reference path="./clipboard.d.ts" />
 
-/** One entry in a command's list view. */
+import type { LaunchRecord } from "pane:extension/commands@0.1.0";
+
+export type {
+  ArgumentValue,
+  CommandRef,
+  LaunchRecord,
+  LaunchSource,
+  LaunchType,
+} from "pane:extension/commands@0.1.0";
+
+/**
+ * One entry in a command's list. Choosing it opens its form, else its
+ * custom view, else runs its primary action (its first); an item with none
+ * of them cannot be activated, and Pane says so.
+ */
 export interface Item {
-  /** Passed back to `runAction` or `submitForm` when the user uses the item. */
+  /**
+   * Identifies the item among the list's items: Pane keeps the selection on
+   * it when the list is drawn again, and passes it to `submitForm` and
+   * `openView`.
+   */
   id: string;
   title: string;
   /** A second line under the title; omitted or `null` for none. */
   subtitle?: string | null;
   /**
-   * When set, activating the item opens this form instead of running
-   * `runAction`, and submitting it calls `submitForm`. Omitted or `null` for
+   * Runs when the user chooses the item: an untitled action before the
+   * item's `actions`, which Pane names "Run item". Pane shows nothing of
+   * what it resolves with: it tells the user what happened itself, with a
+   * toast or a HUD (`@pane/extension/feedback`); throwing shows the error
+   * as a failure toast. Pane then asks for the list again (`render`).
+   * Omitted or `null` for none.
+   */
+  onAction?: (() => Promise<void>) | null;
+  /**
+   * The item's actions, in order (after `onAction`, if it is given): the
+   * first is its primary action (Enter), the second its secondary action
+   * (Ctrl+Enter), the third runs with Ctrl+Shift+Enter, and the Actions
+   * panel (Ctrl+K) lists them all. Omitted or `null` for none.
+   */
+  actions?: Action[] | null;
+  /**
+   * When set, choosing the item opens this form instead of running its
+   * action, and submitting it calls `submitForm`. Omitted or `null` for
    * none.
    */
   form?: Form | null;
   /**
    * The operating systems the item's action (or form) works on; omitted or
    * `null` for every system Pane runs on. Elsewhere Pane still lists the
-   * item but shows it as unavailable with the reason, and never calls
-   * `runAction` or opens the form for it.
+   * item but shows it as unavailable with the reason, and never runs its
+   * action or opens the form for it.
    */
   platforms?: Platform[] | null;
   /**
-   * When set, activating the item opens this custom view instead of running
-   * `runAction`: Pane calls `openView` and shows what the view draws. Ignored
+   * When set, choosing the item opens this custom view instead of running
+   * its action: Pane calls `openView` and shows what the view draws. Ignored
    * when `form` is set. Omitted or `null` for none.
    */
   customView?: CustomViewInfo | null;
+  /** Drawn before the title (#139); omitted or `null` for none. */
+  icon?: Icon | null;
+  /** Shown while the pointer rests on the title: all of it, say. */
+  titleTooltip?: string | null;
+  /** Shown while the pointer rests on the subtitle. */
+  subtitleTooltip?: string | null;
+  /**
+   * On the right of the row, in order: text, a relative date, a coloured
+   * tag (#139). A row shows the first three.
+   */
+  accessories?: Accessory[] | null;
 }
+
+import type { Accessory, Icon } from "./icons";
+export type {
+  Accessory,
+  AccessoryOptions,
+  Color,
+  Icon,
+  IconObject,
+  IconOptions,
+  Tint,
+  Tone,
+} from "./icons";
 
 /** An operating system Pane runs on. */
 export type Platform = "windows" | "macos" | "linux";
 
-/** A command's list view. */
-export interface View {
+/**
+ * One of an item's actions, or an entry of a submenu. Choosing it runs
+ * `onAction`, which tells the user what happened itself, with a toast or a
+ * HUD (`@pane/extension/feedback`); throwing shows the error as a failure
+ * toast. Pane then asks for the list again (`render`). An action with a
+ * `submenu` instead opens that submenu in the Actions panel.
+ */
+export type Action = CallbackAction | SubmenuAction;
+
+/** An action that runs `onAction` when the user chooses it. */
+export interface CallbackAction extends ActionBase {
+  onAction: () => Promise<void>;
+  submenu?: never;
+}
+
+/**
+ * An action that opens `submenu` in place in the Actions panel ("Open
+ * With…"). As one of an item's actions, Enter, its chord or its shortcut
+ * open the panel at it.
+ */
+export interface SubmenuAction extends ActionBase {
+  submenu: Submenu;
+  onAction?: never;
+}
+
+/**
+ * Further choices an action opens in the Actions panel: a title, which the
+ * panel shows while it is open, and its entries, each an action of its own.
+ * The entries are given with the list (`entries`), or `onOpen` resolves with
+ * them each time the user opens the submenu: Pane shows it loading until
+ * then, and what `onOpen` throws as its one entry. The panel filters the
+ * entries as the user types, and an entry's shortcut works while its
+ * submenu is shown.
+ */
+export type Submenu =
+  | { title: string; entries: Action[]; onOpen?: never }
+  | { title: string; onOpen: () => Promise<Action[]>; entries?: never };
+
+/** What every action has, whatever choosing it does. */
+export interface ActionBase {
+  /** What the footer and the Actions panel call it. */
+  title: string;
+  /**
+   * The title of its section in the Actions panel; consecutive actions with
+   * the same section are one section. Omitted or `null` for an untitled one.
+   */
+  section?: string | null;
+  /** `"destructive"` draws it in the destructive style. Omitted or `null` for the default. */
+  style?: "default" | "destructive" | null;
+  /**
+   * The keys that run it from the list without opening the Actions panel.
+   * Pane matches the modifiers exactly, and never binds one of its own keys
+   * (Escape, Ctrl+K, the arrows, Ctrl and a digit, the keys the user gave
+   * Pane's actions): the action then stays in the panel without it. Omitted
+   * or `null` for none.
+   */
+  shortcut?: Shortcut | null;
+  /**
+   * The icon the Actions panel draws beside it in place of Pane's glyph,
+   * as an item's icon is drawn (a web image or a system icon shows its
+   * fallback until it loaded). Omitted or `null` for Pane's glyph.
+   */
+  icon?: Icon | null;
+}
+
+/**
+ * A modifier held with a shortcut's key: `"cmd"` is Command on macOS, the
+ * Windows key on Windows and Super on Linux.
+ */
+export type Modifier = "ctrl" | "alt" | "shift" | "cmd";
+
+/**
+ * One key with the modifiers held with it. Keys are named as Pane names
+ * them: a letter or digit, a character such as `","`, or `"enter"`,
+ * `"delete"`, `"backspace"`, `"up"`, `"f5"` and the like.
+ */
+export interface ShortcutKeys {
+  modifiers: Modifier[];
+  key: string;
+}
+
+/** One key for every system, or one per system (a system left out binds none). */
+export type Shortcut =
+  | ShortcutKeys
+  | { windows?: ShortcutKeys | null; macos?: ShortcutKeys | null; linux?: ShortcutKeys | null };
+
+/** A command's list view: its title and items, in order. */
+export interface List {
   title: string;
   items: Item[];
 }
@@ -187,42 +338,87 @@ export interface CustomView {
 }
 
 /**
- * An extension command. The module exports it as `command`:
+ * An extension command, or the commands one component serves. The module
+ * exports it as `command`:
  *
  * ```ts
  * export const command: Command = {
- *   async getView() { ... },
- *   async runAction(id) { ... },
+ *   async render(launch) {
+ *     return {
+ *       title: "Hello",
+ *       items: [{ id: "greet", title: "Say hello", onAction: async () => { showToast({ title: "Hello" }); } }],
+ *     };
+ *   },
  *   async submitForm(id, values) { ... },
  *   async openView(id) { return new MyView(); },
  * };
  * ```
  *
+ * A no-view command (`"mode": "no-view"` in `pane.json`) has `run` instead
+ * of `render`:
+ *
+ * ```ts
+ * export const command: Command = {
+ *   async run(id, launch) { showHUD(`Launched from ${launch.source}`); },
+ * };
+ * ```
+ *
  * Resolving gives Pane the value. Throwing (rejecting) reports an error to the
- * user, never a crash: from `getView`, `runAction`, `openView` and a view's
- * `handleEvent` an `Error`'s message, or a thrown string as is; from
- * `submitForm` a {@link FormError} object as is, and an `Error` or string as a
- * message about the whole form. Resolving with a value of the wrong type, such
- * as `undefined` instead of a string, is a crash: Pane reports it and starts a
- * fresh instance for the next call, and repeated crashes pause the extension.
+ * user, never a crash: from `render`, `run`, an item's `onAction`,
+ * `runSearchResult`, `openView` and a view's `handleEvent` an `Error`'s
+ * message, or a thrown string as is; from `submitForm` a {@link FormError}
+ * object as is, and an `Error` or string as a message about the whole form.
+ * An action, `run` and `runSearchResult` resolve with nothing: Pane shows
+ * nothing of what they resolve with (text is let through and ignored).
+ * Resolving with a value of the wrong type, such as an action resolving
+ * with `null` or a number, or a provider's `results` resolving with a
+ * string, is a crash: Pane reports it and starts a fresh instance for the
+ * next call, and repeated crashes pause the extension.
  * A crash closes any open custom view, whose state was in the old instance.
+ * A list Pane cannot read, such as one whose title is not a string, is the
+ * command's failure, which Pane reports, not a crash.
  */
 export interface Command {
-  /** Produce the command's list view. */
-  getView(): Promise<View>;
-  /** Run the action of the item with `itemId`; the text is shown as the result. */
-  runAction(itemId: string): Promise<string>;
+  /**
+   * The command's list, as it is now. Pane asks for it when the command
+   * opens and again after each action, with `launch`, the launch record the
+   * screen was opened with. Without it, opening the command is an error: a
+   * no-view command has no list.
+   */
+  render?(launch: LaunchRecord): Promise<List>;
+  /**
+   * Runs the no-view command with id `command` (its id in `pane.json`, so
+   * one component can serve several commands), launched as `launch` says:
+   * how (by the user or in the background, and from where), with any text
+   * sent through its alias or as a fallback, and any context another
+   * command passed. Pane shows nothing of what it resolves with: it tells
+   * the user what happened with a toast or a HUD
+   * (`@pane/extension/feedback`). Throwing shows the error as a failure
+   * toast with a "Copy Error" action, which never counts towards pausing
+   * the extension, and a toast left animated is hidden once it ends. Pane
+   * calls it only for a command whose `pane.json` entry says `"mode":
+   * "no-view"`; without it, that is an error.
+   */
+  run?(command: string, launch: LaunchRecord): Promise<void>;
+  /**
+   * Runs the search result with id `id` the user chose, for a command that
+   * searches as the user types ({@link CommandSearch}); throwing shows the
+   * error as a failure toast. Without it, choosing a result is an error.
+   */
+  runSearchResult?(id: string): Promise<void>;
   /**
    * Handle the submitted form of the item with `itemId`. `values` holds every
    * field of the form, in order. The text is shown as the result; a thrown
-   * {@link FormError} is shown next to its field.
+   * {@link FormError} is shown next to its field. Without it, a submitted
+   * form is refused.
    */
-  submitForm(itemId: string, values: FieldValue[]): Promise<string>;
+  submitForm?(itemId: string, values: FieldValue[]): Promise<string>;
   /**
    * Open the custom view of the item with `itemId`: a new {@link CustomView}
-   * with its own state. Throwing reports an error and opens nothing.
+   * with its own state. Throwing reports an error and opens nothing. Without
+   * it, opening one is an error.
    */
-  openView(itemId: string): Promise<CustomView>;
+  openView?(itemId: string): Promise<CustomView>;
 }
 
 /** What invoking a root result does; Pane performs it. */
@@ -279,40 +475,26 @@ export interface RootResults {
   resultsFor(query: string): Promise<RootResult[]>;
 }
 
-/**
- * A command that takes a query (`pane:extension/query-command` in
- * wit/query.wit): text the user typed into root search, which Pane sends
- * only when the user invokes the command through its alias ("ec hello") or
- * chooses it as a fallback. A command that takes one sets
- * `"takesQuery": true` on its entry in `pane.json`, and
- * `"pane": { "takesQuery": true }` in its `package.json` so that it is built
- * with the interface; its module exports it as `queryCommand`:
- *
- * ```ts
- * export const queryCommand: QueryCommand = {
- *   async runQuery(command, query) { return `Echo heard “${query}”`; },
- * };
- * ```
- */
-export interface QueryCommand {
-  /**
-   * Runs the command with id `command` (its id in `pane.json`) with `query`,
-   * trimmed and never empty. The text it resolves with is shown to the user
-   * as the result; throwing shows the error as the failure.
-   */
-  runQuery(command: string, query: string): Promise<string>;
-}
 
 /** One thing a command's search found, listed as a row of the command. */
 export interface SearchResult {
   /**
-   * Passed to the command's `runAction` when the user activates the row, so
-   * it should say which result it is (the instance may have been replaced
-   * meanwhile).
+   * Passed to the command's `runSearchResult` when the user activates the
+   * row, so it should say which result it is (the instance may have been
+   * replaced meanwhile).
    */
   id: string;
   title: string;
   subtitle?: string;
+  /**
+   * A file of the folder granted to the command's package, by the `id`
+   * `listFolder()` gave it, when the result is that file (as Search Files'
+   * are): Pane lists it with the file's own name and folder, and gives it
+   * Pane's own file actions (Open, Reveal, Open With…, Copy Path, Copy
+   * File, Move to Recycle Bin; for a program, Enter reveals it and only
+   * Run runs it), which Pane performs without calling the command.
+   */
+  file?: string;
 }
 
 /**
@@ -340,7 +522,7 @@ export interface CommandSearch {
    * Searches for `query`, the text in the search field of the command with
    * id `command` (its id in `pane.json`), trimmed and never empty. The
    * results replace the command's list while the text stays; activating one
-   * calls `runAction` with its id. Throwing shows the error in place of
+   * calls the command's `runSearchResult` with its id. Throwing shows the error in place of
    * results; it does not count against the extension, so a service that is
    * down or unreachable is an expected error. Pane stops a search it no
    * longer needs (the text changed again, the user left) where it waits,
@@ -353,9 +535,15 @@ export interface CommandSearch {
 /**
  * What invoking an indexed result does; Pane performs it.
  * `{ tag: "open-application", val: id }` opens the installed application
- * with `id`, as `open` in `pane:extension/applications@0.1.0` does.
+ * with `id`, as `open` in `pane:extension/applications@0.1.0` does;
+ * `{ tag: "open", val: { target, application } }` opens `target` (a URL of
+ * any scheme, a file, a folder or an application) with the system's
+ * handler, or with `application`, as `open` in `@pane/extension/system`
+ * does.
  */
-export type IndexedAction = { tag: "open-application"; val: string };
+export type IndexedAction =
+  | { tag: "open-application"; val: string }
+  | { tag: "open"; val: { target: string; application?: string | null } };
 
 /**
  * One root result a command supplies ahead of the query, which root search

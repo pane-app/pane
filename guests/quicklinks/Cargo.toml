@@ -10,3 +10,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pane-guest.workspace = true
+# Import and Export Quicklinks read and write JSON; the edit and duplicate
+# launch contexts are JSON too.
+serde_json = { version = "1", default-features = false, features = ["alloc"] }

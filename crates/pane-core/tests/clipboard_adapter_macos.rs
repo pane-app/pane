@@ -17,17 +17,33 @@
 //! source is unknown and no excluded program ever matches. The command's
 //! availability per system is checked in `clipboard.rs`'s tests, and the
 //! marker decision in `macos.rs`'s unit tests.
+//!
+//! A command's copies through Pane's system functions (#145) are checked
+//! here too: a concealed one carries the concealed type that keeps it out
+//! of Pane's own clipboard history and other clipboard managers, a plain
+//! one none, and what was copied, a file included, reads back. The tests
+//! replace the same pasteboard, so they run one at a time (`SERIAL`).
 #![cfg(target_os = "macos")]
 
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use pane_core::clipboard::{
     Content, Markers, Observation, ProgramName, Sink, Skip, Ticket, accept, testing,
 };
+use pane_core::system::Clip;
+
+/// Held by each test while it uses the pasteboard.
+static SERIAL: Mutex<()> = Mutex::new(());
+
+fn serial() -> MutexGuard<'static, ()> {
+    SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// How long a change may take to be reported: the watcher looks at the
 /// pasteboard's change count only now and then.
@@ -73,6 +89,7 @@ fn the_watcher_reports_this_tests_changes_until_dropped() {
         eprintln!("skipped: set PANE_TEST_REAL_CLIPBOARD=1 to let it replace the pasteboard");
         return;
     }
+    let _serial = serial();
     let clipboard = pane_core::clipboard::native();
     assert_eq!(
         clipboard.unavailable(),
@@ -165,4 +182,99 @@ fn the_watcher_reports_this_tests_changes_until_dropped() {
         reports.recv_timeout(Duration::from_secs(2)),
         Err(mpsc::RecvTimeoutError::Disconnected)
     ));
+}
+
+/// Passes on the reports of text starting with `prefix`, and of copies
+/// whose text is withheld: on this quiet runner's pasteboard, only this
+/// test's own concealed copy is.
+struct Prefixed {
+    prefix: String,
+    reports: Mutex<mpsc::Sender<Observation>>,
+}
+
+impl Sink for Prefixed {
+    fn reading(&self) -> Ticket {
+        Ticket::default()
+    }
+
+    fn observed(&self, _: Ticket, observation: Observation) {
+        let ours = match &observation.content {
+            Content::Text(text) => text.starts_with(&self.prefix),
+            Content::Withheld => true,
+            Content::Other => false,
+        };
+        if ours {
+            let _ = self.reports.lock().unwrap().send(observation);
+        }
+    }
+}
+
+#[test]
+fn a_commands_concealed_copy_is_marked_and_skipped_and_what_it_copied_reads_back() {
+    if std::env::var("PANE_TEST_REAL_CLIPBOARD").as_deref() != Ok("1") {
+        eprintln!("skipped: set PANE_TEST_REAL_CLIPBOARD=1 to let it replace the pasteboard");
+        return;
+    }
+    let _serial = serial();
+    let system = pane_core::system::native();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let prefix = format!("pane-system-test-{}-{nanos}-", std::process::id());
+    let (sender, reports) = mpsc::channel::<Observation>();
+    let watch = pane_core::clipboard::native()
+        .watch(Arc::new(Prefixed {
+            prefix: prefix.clone(),
+            reports: Mutex::new(sender),
+        }))
+        .expect("macOS can watch the pasteboard");
+    let next = |what: &str, wanted: &dyn Fn(&Observation) -> bool| loop {
+        let report = reports
+            .recv_timeout(REPORTED)
+            .unwrap_or_else(|_| panic!("{what} is reported"));
+        if wanted(&report) {
+            return report;
+        }
+    };
+
+    // Concealed: the concealed type rides along, so Pane's history
+    // withholds it, its text never read.
+    let secret = format!("{prefix}secret");
+    system
+        .copy(&Clip::Text(secret.clone()), true)
+        .expect("the concealed copy is made");
+    let concealed = next("the concealed copy", &|report| {
+        report.content == Content::Withheld
+    });
+    assert_eq!(
+        concealed.markers,
+        Markers {
+            exclude_from_monitoring: true,
+            ..Markers::default()
+        }
+    );
+    assert_eq!(accept(&concealed, &[]), Err(Skip::Marked));
+    // It is on the pasteboard all the same, for pasting.
+    assert_eq!(system.read_clipboard(), Ok(Some(Clip::Text(secret))));
+
+    // Plain: no marker, and kept.
+    let plain = format!("{prefix}plain ✓");
+    system
+        .copy(&Clip::Text(plain.clone()), false)
+        .expect("the plain copy is made");
+    let copied = next("the plain copy", &|report| {
+        report.content == Content::Text(plain.clone())
+    });
+    assert_eq!(copied.markers, Markers::default());
+    assert_eq!(accept(&copied, &[]), Ok(plain.as_str()));
+    assert_eq!(system.read_clipboard(), Ok(Some(Clip::Text(plain))));
+
+    // A file, as Finder copies one (its file URL), reads back as the file.
+    let file = std::env::current_exe().unwrap();
+    system
+        .copy(&Clip::File(file.clone()), false)
+        .expect("the file is copied");
+    assert_eq!(system.read_clipboard(), Ok(Some(Clip::File(file))));
+    drop(watch);
 }

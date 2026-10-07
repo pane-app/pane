@@ -2,7 +2,7 @@
 //! window, on GPUI's test platform, then reaching it from root search with
 //! real key events: the alias and some text, and a fallback the user moves
 //! to. The command is Echo, the query sample from `cargo xtask guests`,
-//! which answers the text it is sent.
+//! which shows a toast with the text it is sent.
 
 use futures::executor::block_on;
 use gpui::{Entity, TestAppContext, VisualTestContext, prelude::*};
@@ -12,7 +12,7 @@ use pane_core::{Launcher, LauncherView, Runtime, Screen, Status};
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::settle;
+use settle::{settle, settle_shown};
 
 #[path = "support/packages.rs"]
 mod packages;
@@ -101,9 +101,11 @@ fn an_alias_and_a_fallback_set_in_the_window_send_the_typed_text_to_the_command(
         Some("Send “hello” · alias ec")
     );
     cx.simulate_keystrokes("enter");
-    let view = settle(&window, cx);
-    assert_eq!(view.status, Status::Result("Echo heard “hello”".into()));
-    assert!(cx.debug_bounds("status-result").is_some());
+    assert_eq!(
+        settle_shown(&window, cx),
+        Status::Result("Echo heard “hello”".into())
+    );
+    assert!(cx.debug_bounds("toast-success").is_some());
 
     // Text nothing matches: "No results", then the fallback, which Enter
     // does not choose by itself; Down does. Nothing was sent to Echo: it
@@ -135,8 +137,11 @@ fn an_alias_and_a_fallback_set_in_the_window_send_the_typed_text_to_the_command(
     let fallback = cx.debug_bounds("row-Echo").expect("the fallback is drawn");
     assert!(fallback.top() > notice.bottom(), "the fallback is below it");
     cx.simulate_keystrokes("enter");
+    assert_eq!(
+        settle_shown(&window, cx),
+        Status::Result("Echo heard “zqx”".into())
+    );
     let view = settle(&window, cx);
-    assert_eq!(view.status, Status::Result("Echo heard “zqx”".into()));
     assert_eq!(view.query(), Some("zqx"));
     assert!(block_on(runtime.running()).contains(&echo));
 }

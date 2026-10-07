@@ -1,0 +1,48 @@
+{
+  "manifestVersion": 1,
+  "title": "No-view sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "report",
+      "title": "Report launch",
+      "subtitle": "Runs without a screen and answers how it was launched",
+      "component": "sample_no_view.wasm",
+      "mode": "no-view",
+      "takesQuery": true
+    },
+    {
+      "id": "tick",
+      "title": "Tick",
+      "subtitle": "Runs every minute in the background, counting its runs",
+      "component": "sample_no_view.wasm",
+      "mode": "no-view",
+      "schedule": {
+        "everySeconds": 60
+      }
+    },
+    {
+      "id": "last",
+      "title": "Last launches",
+      "subtitle": "Answers what Report launch and Tick last ran with",
+      "component": "sample_no_view.wasm",
+      "mode": "no-view"
+    },
+    {
+      "id": "launch",
+      "title": "Launch",
+      "subtitle": "Launches the command its text names, passing it context",
+      "component": "sample_no_view.wasm",
+      "mode": "no-view",
+      "takesQuery": true
+    },
+    {
+      "id": "show",
+      "title": "Show launch",
+      "subtitle": "Opens a list showing how it was launched",
+      "component": "sample_no_view.wasm",
+      "takesQuery": true
+    }
+  ]
+}

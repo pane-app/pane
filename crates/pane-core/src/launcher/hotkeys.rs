@@ -34,6 +34,17 @@
 //! Registering can fail when another application uses the shortcut; that is
 //! explained on the hotkey's row ("Not active: ...") and tried again with
 //! each change to the installed packages and at the next start.
+//!
+//! A command's registration is on its package's generation's undo list
+//! ("hotkey", see `generation`). The system's hotkeys are registered and
+//! released on the window's thread (macOS's run loop), so the generation's
+//! end marks the registration ended rather than releasing it from
+//! whichever thread ended the generation; the next sync, which every path
+//! that ends a generation and changes what is offered runs (disabling,
+//! updating, reloading, uninstalling), releases it if its command is no
+//! longer offered, or keeps it for the generation then current. A paused
+//! package stays enabled, so its hotkeys stay registered and explain the
+//! pause when pressed, as before.
 
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
@@ -45,9 +56,11 @@ use super::choices::{Choices, Record};
 use super::{
     Entry, Launcher, LauncherView, Opening, Row, Screen, State, Status, Unavailable, off_thread,
 };
+use crate::generation::EndMark;
 use crate::hotkeys::Shortcut;
+use crate::launch::LaunchSource;
 use crate::launcher::CommandRegistration;
-use crate::packages::{InstalledPackage, PackageIdentity};
+use crate::packages::{CommandId, CommandMode, InstalledPackage, PackageIdentity};
 
 /// Each command's hotkey by command id, recorded in `hotkeys.json` as
 /// `{ "version": 1, "hotkeys": { "<command id>": "ctrl+alt+g" } }`.
@@ -104,7 +117,7 @@ pub(super) struct Bindings {
     /// The user's choices by command id, and their record.
     record: Record<HotkeyChoices>,
     /// The hotkeys registered with the system, by command id.
-    registered: HashMap<String, Shortcut>,
+    registered: HashMap<String, Registered>,
     /// Why a chosen hotkey that should be registered is not.
     problems: HashMap<String, String>,
 }
@@ -133,7 +146,9 @@ impl Bindings {
     /// The hotkey registered with the system for `command`: the one that
     /// actually opens it now, which root search shows beside its row.
     pub(super) fn registered_of(&self, command: &str) -> Option<Shortcut> {
-        self.registered.get(command).cloned()
+        self.registered
+            .get(command)
+            .map(|registered| registered.shortcut.clone())
     }
 
     /// The hotkey recorded for `command`, for the Shortcuts catalog.
@@ -152,6 +167,13 @@ impl Bindings {
     pub(super) fn recorded(&self) -> Vec<&str> {
         self.chosen().keys().map(String::as_str).collect()
     }
+}
+
+/// A command's hotkey registered with the system, and its place on its
+/// package's generation's undo list (see the module docs).
+struct Registered {
+    shortcut: Shortcut,
+    generation: EndMark,
 }
 
 /// The Open Pane hotkey: the application-owned binding that summons the
@@ -207,31 +229,47 @@ impl Launcher {
                 })
                 .collect()
         };
+        // Each wanted command's mark on its package's current generation.
+        let mut marks: HashMap<String, EndMark> = wanted
+            .iter()
+            .map(|(command, _)| (command.clone(), self.hotkey_mark(state, command)))
+            .collect();
         let bindings = &mut state.bindings;
         let open_pane = state.open_pane.registered.clone();
         let stale: Vec<String> = bindings
             .registered
             .iter()
-            .filter(|(command, shortcut)| {
+            .filter(|(command, registered)| {
                 !wanted
                     .iter()
-                    .any(|(id, wanted)| id == *command && wanted == *shortcut)
+                    .any(|(id, wanted)| id == *command && *wanted == registered.shortcut)
             })
             .map(|(command, _)| command.clone())
             .collect();
         for command in stale {
-            if let Some(shortcut) = bindings.registered.remove(&command) {
-                self.hotkeys.unregister(&shortcut);
+            if let Some(registered) = bindings.registered.remove(&command) {
+                self.hotkeys.unregister(&registered.shortcut);
             }
         }
         bindings
             .problems
             .retain(|command, _| wanted.iter().any(|(id, _)| id == command));
         for (command, shortcut) in wanted {
-            if bindings.registered.contains_key(&command) {
+            if let Some(registered) = bindings.registered.get_mut(&command) {
+                // Still offered: its generation ended (a reload, an
+                // update), and the registration is the current one's now.
+                if registered.generation.ended()
+                    && let Some(mark) = marks.remove(&command)
+                {
+                    registered.generation = mark;
+                }
                 continue;
             }
-            if bindings.registered.values().any(|done| *done == shortcut) {
+            if bindings
+                .registered
+                .values()
+                .any(|done| done.shortcut == shortcut)
+            {
                 // Only in a record edited by hand: one shortcut, one command.
                 bindings
                     .problems
@@ -250,13 +288,41 @@ impl Launcher {
             match self.hotkeys.register(&shortcut) {
                 Ok(()) => {
                     bindings.problems.remove(&command);
-                    bindings.registered.insert(command, shortcut);
+                    let generation = marks
+                        .remove(&command)
+                        .unwrap_or_else(|| EndMark::on(None, "hotkey", || {}));
+                    bindings.registered.insert(
+                        command,
+                        Registered {
+                            shortcut,
+                            generation,
+                        },
+                    );
                 }
                 Err(error) => {
                     bindings.problems.insert(command, error.to_string());
                 }
             }
         }
+    }
+
+    /// The mark of the hotkey of the command `command` on its package's
+    /// current generation's undo list.
+    fn hotkey_mark(&self, state: &State, command: &str) -> EndMark {
+        let package = CommandId::parse(command).package;
+        let data = state
+            .packages
+            .iter()
+            .find(|installed| installed.identity.key() == package)
+            .and_then(|installed| {
+                Some(
+                    self.installation
+                        .as_ref()?
+                        .data
+                        .owned_by(&installed.identity),
+                )
+            });
+        EndMark::on(data.as_ref().map(|data| data.generation()), "hotkey", || {})
     }
 
     /// Forgets the hotkeys of the uninstalled package with `identity`
@@ -276,36 +342,59 @@ impl Launcher {
         Some(move || launcher.save::<HotkeyChoices>(None))
     }
 
-    /// Opens the command whose hotkey `shortcut` is, as the system reported
-    /// it pressed, leaving whatever Pane shows (an open command, form or
-    /// view closes); await the returned future to show the command. A
-    /// shortcut that opens nothing now, such as one released meanwhile,
-    /// changes nothing and returns `None`, so the window is not raised for
-    /// it.
+    /// What the hotkey `shortcut` launches now, if anything: the offered,
+    /// available command it is registered for.
+    pub(super) fn hotkey_opening(&self, state: &State, shortcut: &Shortcut) -> Option<Opening> {
+        let command = state
+            .bindings
+            .registered
+            .iter()
+            .find(|(_, registered)| registered.shortcut == *shortcut)
+            .map(|(command, _)| command.as_str())?;
+        state
+            .packages
+            .iter()
+            .filter(|package| package.enabled)
+            .find_map(|package| {
+                let (offered, _) =
+                    package
+                        .available_commands()
+                        .into_iter()
+                        .find(|(offered, unavailable)| {
+                            offered.id == command && unavailable.is_none()
+                        })?;
+                let no_view = package.mode_of(offered.manifest_id()) == CommandMode::NoView;
+                Some(Opening::of(&offered, no_view, LaunchSource::Hotkey))
+            })
+    }
+
+    /// Launches the command whose hotkey `shortcut` is, as the system
+    /// reported it pressed; await the returned future to show the command
+    /// or its answer. A view command opens, leaving whatever Pane shows (an
+    /// open command, form or view closes). A no-view command runs without
+    /// changing what Pane shows, and without Pane's window
+    /// ([`Launcher::hotkey_shows_window`]). A shortcut that launches
+    /// nothing now, such as one released meanwhile, changes nothing and
+    /// returns `None`, so the window is not raised for it.
     pub fn press_hotkey(
         &self,
         shortcut: &Shortcut,
     ) -> Option<impl Future<Output = ()> + Send + 'static> {
         let mut state = self.lock();
-        let command = state
-            .bindings
-            .registered
-            .iter()
-            .find(|(_, registered)| *registered == shortcut)
-            .map(|(command, _)| command.clone())?;
-        let opening = offered(&state.packages)
-            .into_iter()
-            .find(|(offered, unavailable)| offered.id == command && unavailable.is_none())
-            .map(|(offered, _)| Opening::of(&offered))?;
-        self.show_root(&mut state, Some(opening.component.clone()));
-        state.view.status = Status::Running;
+        let opening = self.hotkey_opening(&state, shortcut)?;
+        if opening.no_view {
+            Launcher::begin_run(&mut state);
+        } else {
+            self.show_root(&mut state, Some(opening.component.clone()));
+            state.view.status = Status::Running;
+        }
         // Its data as the package is now, so a disable or reload meanwhile
         // stops the opening.
         let data = self.data_in(&state, &opening.component);
         let epoch = state.screen_epoch;
         drop(state);
         let launcher = self.clone();
-        Some(async move { launcher.open_command(epoch, opening, data).await })
+        Some(async move { launcher.launch_opening(epoch, opening, data).await })
     }
 
     /// The hotkey rows of the extension list: one per command of each
@@ -495,7 +584,7 @@ impl Launcher {
             // a command whose package is disabled keeps the release and the
             // forgetting just the same.
             if let Some(old) = state.bindings.registered.remove(command) {
-                self.hotkeys.unregister(&old);
+                self.hotkeys.unregister(&old.shortcut);
             }
             state.bindings.problems.remove(command);
             let recorded = state.bindings.record.chosen.remove(command).is_some();
@@ -556,12 +645,16 @@ impl Launcher {
                 "{shortcut} cannot be used: {error}. Press another shortcut."
             ));
         }
+        let generation = self.hotkey_mark(state, command);
         let bindings = &mut state.bindings;
-        if let Some(old) = bindings
-            .registered
-            .insert(command.to_owned(), shortcut.clone())
-        {
-            self.hotkeys.unregister(&old);
+        if let Some(old) = bindings.registered.insert(
+            command.to_owned(),
+            Registered {
+                shortcut: shortcut.clone(),
+                generation,
+            },
+        ) {
+            self.hotkeys.unregister(&old.shortcut);
         }
         bindings.problems.remove(command);
         bindings
@@ -718,11 +811,9 @@ impl Launcher {
     /// but a quit that ends the process may never run a destructor.
     pub fn release_hotkeys(&self) {
         let mut state = self.lock();
-        let registered: Vec<Shortcut> = state.bindings.registered.values().cloned().collect();
-        for shortcut in registered {
-            self.hotkeys.unregister(&shortcut);
+        for (_, registered) in state.bindings.registered.drain() {
+            self.hotkeys.unregister(&registered.shortcut);
         }
-        state.bindings.registered.clear();
         if let Some(open) = state.open_pane.registered.take() {
             self.hotkeys.unregister(&open);
         }

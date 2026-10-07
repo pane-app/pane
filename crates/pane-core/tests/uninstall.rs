@@ -18,9 +18,12 @@ use pane_core::{
 };
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use rows::{select_title, titles};
 
 const MANAGE_ROW: &str = "Manage extensions…";
@@ -147,7 +150,7 @@ impl Dirs {
 }
 
 /// From root search, opens the command titled `command` and runs its item
-/// titled `item`, returning the outcome.
+/// titled `item`, returning the outcome: its toast, or the status line.
 fn run(launcher: &Launcher, command: &str, item: &str) -> Status {
     launcher.back();
     launcher.back();
@@ -156,7 +159,7 @@ fn run(launcher: &Launcher, command: &str, item: &str) -> Status {
     assert_eq!(launcher.view().screen, Screen::Command, "{command} opened");
     select_title(launcher, item);
     block_on(launcher.activate_selected());
-    launcher.view().status
+    shown(launcher)
 }
 
 /// Saves one value of each kind with the Greeting command of the `copy`th
@@ -187,7 +190,8 @@ fn kept(launcher: &Launcher) -> Status {
 }
 
 /// From root search, runs `item` of the Greeting command of the `copy`th
-/// installed package (root lists each package's Greeting in install order).
+/// installed package (root lists each package's Greeting in install order),
+/// returning the outcome: its toast, or the status line.
 fn run_in_copy(launcher: &Launcher, copy: usize, item: &str) -> Status {
     launcher.back();
     launcher.back();
@@ -202,7 +206,7 @@ fn run_in_copy(launcher: &Launcher, copy: usize, item: &str) -> Status {
     block_on(launcher.activate_selected());
     select_title(launcher, item);
     block_on(launcher.activate_selected());
-    launcher.view().status
+    shown(launcher)
 }
 
 /// Opens the extension manager from root search.

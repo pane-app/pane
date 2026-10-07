@@ -260,6 +260,8 @@ name = "pane-guest"
 version = "0.1.0"
 dependencies = [
  "dlmalloc",
+ "serde",
+ "serde_json",
  "wit-bindgen",
 ]
 
@@ -293,6 +295,7 @@ name = "quicklinks"
 version = "0.1.0"
 dependencies = [
  "pane-guest",
+ "serde_json",
 ]
 
 [[package]]
@@ -306,6 +309,20 @@ dependencies = [
 
 [[package]]
 name = "refusing-view"
+version = "0.1.0"
+dependencies = [
+ "pane-guest",
+]
+
+[[package]]
+name = "sample-actions"
+version = "0.1.0"
+dependencies = [
+ "pane-guest",
+]
+
+[[package]]
+name = "sample-arguments"
 version = "0.1.0"
 dependencies = [
  "pane-guest",
@@ -328,12 +345,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "sample-icons"
+version = "0.1.0"
+dependencies = [
+ "pane-guest",
+]
+
+[[package]]
+name = "sample-no-view"
+version = "0.1.0"
+dependencies = [
+ "pane-guest",
+]
+
+[[package]]
 name = "sample-operations"
 version = "0.1.0"
 dependencies = [
  "futures",
  "pane-guest",
  "serde_json",
+ "wasip3",
+]
+
+[[package]]
+name = "sample-preferences"
+version = "0.1.0"
+dependencies = [
+ "pane-guest",
+ "serde",
+]
+
+[[package]]
+name = "sample-programs"
+version = "0.1.0"
+dependencies = [
+ "pane-guest",
  "wasip3",
 ]
 
@@ -443,6 +490,14 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "tree-fixture"
+version = "0.1.0"
+dependencies = [
+ "dlmalloc",
+ "wit-bindgen",
 ]
 
 [[package]]

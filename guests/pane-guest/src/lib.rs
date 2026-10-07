@@ -1,16 +1,26 @@
 //! Guest-side bindings for Pane's `pane:extension` contract.
 //!
-//! An extension implements [`Guest`] and calls [`export!`]. It may keep
+//! An extension implements [`Command`] and calls [`export!`]: its screen is
+//! a [`List`] of [`Item`]s whose actions are closures, which the SDK hands
+//! Pane as the versioned JSON tree of ADR 0036's envelope (`render` and
+//! `handle-event`) and runs when the user chooses them; its items may have
+//! icons, accessories and tooltips ([`icon`]). Or, for a no-view
+//! command, [`Command::run`] runs each time it is launched. Every command
+//! receives its launch record and may launch another command with
+//! [`commands`]. It tells the user what happened with a toast or a HUD
+//! ([`feedback`]), and may close Pane's window or pop back to root search
+//! ([`window`]); Pane shows nothing of an action's answer. It may keep
 //! values between runs with [`settings`], and its own records, disposable
-//! values and secrets with [`content`], [`cache`] and [`credentials`]. It
-//! may compute results from root search's query with [`root`], take a query
-//! the user sends it from root search with [`query`], run a continuing
+//! values and secrets with [`content`], [`cache`] and [`credentials`], and
+//! read the preferences its package declares with [`preferences`]. It
+//! may compute results from root search's query with [`root`], run a continuing
 //! service while its package's code may run with [`service`], call
 //! operations other packages publish with [`operations::call`], serve those
 //! its own package publishes with [`publish`], find and open installed
 //! applications with [`applications`], supply root results ahead of the
 //! query with [`indexed`], run its package's native helpers with
-//! [`helpers`], list the files of a folder with [`files`], search as the
+//! [`helpers`] and the system's own programs with [`programs`], list the
+//! files of a folder with [`files`], search as the
 //! user types into its own search field with [`search`], make web
 //! requests with [`http`] and keep clipboard history with
 //! [`clipboard_history`]. The crate is
@@ -34,14 +44,187 @@ wit_bindgen::generate!({
     world: "extension-with-data",
     pub_export_macro: true,
     default_bindings_module: "pane_guest",
+    // No function names the form and custom-view records any more: the tree
+    // carries them as JSON. Authors still build them as these types.
+    generate_unused_types: true,
 });
 
 pub use exports::pane::extension::command::{
     Choice, CustomView, CustomViewInfo, CustomViewRole, Field, FieldKind, FieldValue, Form,
-    FormError, Frame, Guest, GuestCustomView, Item, Key, Platform, Point, Rect, Shape, Text,
-    TextField, View, ViewEvent,
+    FormError, Frame, GuestCustomView, Key, Platform, Point, Rect, Shape, Text, TextField,
+    ViewEvent,
 };
+pub use list::{Action, Command, Item, List, Modifier, Shortcut, Submenu};
+pub use pane::extension::commands::{LaunchRecord, LaunchSource, LaunchType};
+
+pub mod actions;
+pub mod feedback;
+pub mod icon;
+mod list;
+pub mod system;
+pub use icon::{Accessory, Color, Icon, Mask, Tint, Tone};
 pub use pane::extension::{cache, content, credentials, operations, settings};
+
+/// Pane's launcher window, as the command that runs in it sees it
+/// (`pane:extension/window`): [`window::close`] hides it, choosing what its
+/// next showing shows ([`window::PopToRootType`]) and whether root search's
+/// query is emptied; [`window::pop_to_root`] returns to root search with
+/// the window open; [`window::clear_search`] empties the search field on
+/// screen. Each answers whether a window was shown for the call: in a
+/// background launch, a schedule or a service, it does nothing and answers
+/// false.
+///
+/// ```ignore
+/// use pane_guest::window::{PopToRootType, close};
+///
+/// close(true, PopToRootType::Immediate);
+/// ```
+pub mod window {
+    pub use crate::pane::extension::window::{PopToRootType, clear_search, close, pop_to_root};
+}
+
+/// The preferences the command's package declares in `pane.json` under
+/// `preferences`, for the whole extension or for one command, as the user
+/// set them in Pane (`pane:extension/preferences`): on the Setup screen
+/// before the command's first run, and on the extension's card in
+/// Settings. Pane stores them; a command only reads them, as a type of its
+/// own that serde deserializes. A checkbox's value is a `bool`, every other
+/// kind's a `String`; a preference with no value and no default is absent,
+/// so declare an optional one as an `Option`:
+///
+/// ```ignore
+/// #[derive(serde::Deserialize)]
+/// #[serde(rename_all = "camelCase")]
+/// struct Preferences {
+///     api_key: String,
+///     units: String,
+///     greeting: Option<String>,
+///     verbose: bool,
+/// }
+///
+/// let preferences: Preferences = pane_guest::preferences::values()?;
+/// ```
+pub mod preferences {
+    use alloc::string::String;
+    use serde::de::DeserializeOwned;
+
+    /// The effective preference values of the command Pane is running:
+    /// its package's preferences, then its own, each the value the user set
+    /// or else its declared default. An error says why Pane refused, or
+    /// why they do not deserialize into `T`.
+    pub fn values<T: DeserializeOwned>() -> Result<T, String> {
+        read(None)
+    }
+
+    /// Like [`values`], for the command with id `command` (in `pane.json`)
+    /// of the same package: for a component serving several commands, in a
+    /// call Pane makes for no command in particular (its root results).
+    pub fn values_of<T: DeserializeOwned>(command: &str) -> Result<T, String> {
+        read(Some(command))
+    }
+
+    /// The effective values as Pane sends them, a JSON object's text.
+    pub fn json(command: Option<&str>) -> Result<String, String> {
+        crate::pane::extension::preferences::values(command)
+    }
+
+    fn read<T: DeserializeOwned>(command: Option<&str>) -> Result<T, String> {
+        let text = json(command)?;
+        serde_json::from_str(&text)
+            .map_err(|error| alloc::format!("the preferences do not fit their type: {error}"))
+    }
+}
+
+/// How the command was launched, and launching another command
+/// (`pane:extension/commands`). A no-view command's [`Command::run`]
+/// receives its [`LaunchRecord`]; a view command's [`Command::render`]
+/// reads it with [`commands::current`]. [`commands::launch`] opens or runs
+/// another command of the package (by its id in `pane.json`) or of another
+/// installed package (by its package identity), passing JSON context:
+///
+/// ```ignore
+/// use pane_guest::commands::{CommandRef, LaunchType, launch};
+///
+/// let own = CommandRef { source: None, command: "report".into() };
+/// launch(&own, LaunchType::Background, &[], Some(r#"{"from":"launch"}"#))?;
+/// ```
+///
+/// [`commands::set_subtitle`] replaces the subtitle the command's own row
+/// shows in root search (`Some("3 unread")`), until it is set again; `None`
+/// gives back the one its `pane.json` entry declares.
+pub mod commands {
+    use core::cell::RefCell;
+
+    pub use crate::pane::extension::commands::{
+        ArgumentValue, CommandRef, LaunchRecord, LaunchSource, LaunchType, launch, set_subtitle,
+    };
+
+    /// The launch record of the call in progress.
+    struct Current(RefCell<Option<LaunchRecord>>);
+
+    // SAFETY: a component's code runs on one thread, and no borrow is held
+    // across an `await`.
+    unsafe impl Sync for Current {}
+
+    static CURRENT: Current = Current(RefCell::new(None));
+
+    /// The launch record of the command's screen being drawn (in
+    /// [`Command::render`](crate::Command::render), and in the actions of
+    /// the list it drew), or of the run in progress: how the command was
+    /// launched, and with what. Its `command` is the id in `pane.json` of
+    /// the command launched, so that a component serving several view
+    /// commands draws the screen of the one opened. A launch by the user
+    /// from root search with nothing more (and no command) before Pane has
+    /// said.
+    pub fn current() -> LaunchRecord {
+        CURRENT.0.borrow().clone().unwrap_or(LaunchRecord {
+            launch_type: LaunchType::UserInitiated,
+            source: LaunchSource::RootSearch,
+            arguments: alloc::vec::Vec::new(),
+            fallback_text: None,
+            context: None,
+            command: alloc::string::String::new(),
+        })
+    }
+
+    /// Notes the record Pane passed to the call in progress.
+    pub(crate) fn set_current(launch: LaunchRecord) {
+        *CURRENT.0.borrow_mut() = Some(launch);
+    }
+
+    /// `launch`'s type in words, such as "by the user", for reporting it.
+    pub fn launch_type_name(launch_type: LaunchType) -> &'static str {
+        match launch_type {
+            LaunchType::UserInitiated => "user-initiated",
+            LaunchType::Background => "background",
+        }
+    }
+
+    /// `source` as `wit/commands.wit` names it, such as "root-search".
+    pub fn source_name(source: LaunchSource) -> &'static str {
+        match source {
+            LaunchSource::RootSearch => "root-search",
+            LaunchSource::Alias => "alias",
+            LaunchSource::Fallback => "fallback",
+            LaunchSource::Hotkey => "hotkey",
+            LaunchSource::QuickSlot => "quick-slot",
+            LaunchSource::Command => "command",
+            LaunchSource::Schedule => "schedule",
+        }
+    }
+}
+
+impl LaunchRecord {
+    /// The value of the command's argument `name` (`"arguments"` in its
+    /// `pane.json` entry), if it has one: an optional argument left empty
+    /// is absent.
+    pub fn argument(&self, name: &str) -> Option<&str> {
+        self.arguments
+            .iter()
+            .find(|argument| argument.name == name)
+            .map(|argument| argument.value.as_str())
+    }
+}
 
 impl operations::CallErrorKind {
     /// The kind's WIT name, such as `not-found`, as JavaScript sees it too.
@@ -106,28 +289,6 @@ pub mod root {
     });
 
     pub use exports::pane::extension::root_results::{Guest, RootAction, RootResult};
-}
-
-/// A command that takes a query (`pane:extension/query-command`): text the
-/// user typed into root search, which Pane sends only when the user invokes
-/// the command through its alias ("ec hello") or chooses it as a fallback.
-/// A command whose `pane.json` entry sets `"takesQuery": true` implements
-/// [`query::Guest`] too and calls [`query::export!`](crate::query::export)
-/// beside [`export!`]:
-///
-/// ```ignore
-/// pane_guest::export!(Echo);
-/// pane_guest::query::export!(Echo);
-/// ```
-pub mod query {
-    wit_bindgen::generate!({
-        path: "../../wit",
-        world: "query-command-provider",
-        pub_export_macro: true,
-        default_bindings_module: "pane_guest::query",
-    });
-
-    pub use exports::pane::extension::query_command::Guest;
 }
 
 /// The applications installed on the system (`pane:extension/applications`),
@@ -229,7 +390,9 @@ pub mod indexed {
         default_bindings_module: "pane_guest::indexed",
     });
 
-    pub use exports::pane::extension::indexed_results::{Guest, IndexedAction, IndexedResult};
+    pub use exports::pane::extension::indexed_results::{
+        Guest, IndexedAction, IndexedResult, OpenTarget,
+    };
 }
 
 /// A command that searches as the user types into its own search field
@@ -237,7 +400,9 @@ pub mod indexed {
 /// service. Pane asks it only once the user has opened it, never while they
 /// type in root search. A command whose `pane.json` entry sets
 /// `"search": true` implements [`search::Guest`] too and calls
-/// [`search::export!`](crate::search::export) beside [`export!`]:
+/// [`search::export!`](crate::search::export) beside [`export!`]. Choosing
+/// a result calls [`crate::Command::run_search_result`] with its id, so the id
+/// should say which result it is:
 ///
 /// ```ignore
 /// pane_guest::export!(Packages);
@@ -280,10 +445,11 @@ pub mod service {
 }
 
 pub mod http;
+pub mod programs;
 
 /// The custom view type of a command that has none: `type CustomView =
-/// NoCustomView;` in its `Guest` implementation, with an `open_view` that
-/// returns `Err`. It has no values, so no view of it can be opened.
+/// NoCustomView;` in its [`Command`] implementation, with an `open_view`
+/// that returns `Err`. It has no values, so no view of it can be opened.
 pub enum NoCustomView {}
 
 impl GuestCustomView for NoCustomView {

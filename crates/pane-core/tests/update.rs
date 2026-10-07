@@ -43,6 +43,8 @@ use pane_core::npm::Registry as NpmRegistry;
 use pane_core::{Launcher, PackageIdentity, Runtime, Screen, Status};
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/npm_registry.rs"]
 mod npm_registry;
 #[path = "support/repo_server.rs"]
@@ -50,6 +52,7 @@ mod repo_server;
 #[path = "support/unreachable.rs"]
 mod unreachable;
 
+use feedback::shown;
 use npm_registry::{Registry, pack};
 use repo_server::{Repo, Server, greeter_files};
 
@@ -389,12 +392,13 @@ fn activate(launcher: &Launcher, title: &str) {
     block_on(launcher.activate_selected());
 }
 
-/// Runs the item titled `item` of the Greeting command, returning the
-/// status; the command's screen stays open, as it does for a user.
+/// Runs the item titled `item` of the Greeting command, returning what it
+/// showed (its toast, or the status line); the command's screen stays
+/// open, as it does for a user.
 fn run(launcher: &Launcher, item: &str) -> Status {
     open_greeting(launcher);
     activate(launcher, item);
-    launcher.view().status
+    shown(launcher)
 }
 
 /// Opens the Greeting command from root search.
@@ -858,7 +862,7 @@ fn a_local_folder_package_is_never_updated_automatically() {
     assert_eq!(launcher.view().screen, Screen::Command);
     activate(&launcher, "Use a casual greeting");
     assert_eq!(
-        launcher.view().status,
+        shown(&launcher),
         Status::Result("Saved the casual greeting".into())
     );
 }
@@ -1009,22 +1013,22 @@ fn a_new_version_that_fails_to_start_is_not_rolled_back() {
     open_greeting(&launcher);
     assert_eq!(launcher.view().title, "Started");
     activate(&launcher, "Started on a later attempt");
-    assert_eq!(launcher.view().status, Status::Result("ran started".into()));
+    assert_eq!(shown(&launcher), Status::Result("ran started".into()));
     assert_eq!(dirs.installed_version(), "0.2.0");
 }
 
-/// What the Greeter from Git command's "Say hello" answers.
+/// What the Greeter from Git command's "Say hello" shows in its toast.
 const GIT_HELLO: &str = "Hello from the Git repository";
 
 /// Opens the Greeter from Git command from root search and runs `item`,
-/// returning the status; the command's screen stays open, as it does for
-/// a user.
+/// returning what it showed (its toast, or the status line); the
+/// command's screen stays open, as it does for a user.
 fn run_greeter(launcher: &Launcher, item: &str) -> Status {
     to_root(launcher);
     activate(launcher, "Greeter from Git");
     assert_eq!(launcher.view().screen, Screen::Command);
     activate(launcher, item);
-    launcher.view().status
+    shown(launcher)
 }
 
 #[test]

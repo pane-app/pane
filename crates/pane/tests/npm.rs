@@ -19,7 +19,7 @@ use npm_registry::{Registry, greeter_files, pack};
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::settle;
+use settle::{settle, settle_shown};
 
 fn titles(view: &LauncherView) -> Vec<&str> {
     view.rows.iter().map(|row| row.title.as_str()).collect()
@@ -113,10 +113,10 @@ fn a_package_named_in_the_npm_form_is_previewed_installed_and_run(cx: &mut TestA
     );
     cx.simulate_keystrokes("enter");
     settle(&window, cx);
-    let view = press_enter_on(&window, cx, "Say hello");
+    press_enter_on(&window, cx, "Say hello");
     assert_eq!(
-        view.status,
+        settle_shown(&window, cx),
         Status::Result("Hello from the npm package".into())
     );
-    assert!(cx.debug_bounds("status-result").is_some());
+    assert!(cx.debug_bounds("toast-success").is_some());
 }

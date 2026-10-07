@@ -29,13 +29,17 @@
 //! <https://github.com/vercel/geist-font>, SIL Open Font License 1.1).
 //! Icons: `crates/pane/assets/icons/<set>/*.svg` (reicon 1.2.5,
 //! <https://reicon.dev>, MIT, or Pane's own set), embedded the same way
-//! (see [`icon`]).
+//! (see [`icon`]). Extensions' icons (#139) — the whole reicon set by name,
+//! their packaged images — are drawn by [`extension_icon`] from what the
+//! caller resolved.
 
 use std::borrow::Cow;
 
 use gpui::App;
 
+pub(crate) mod contrast;
 pub(crate) mod controls;
+pub(crate) mod extension_icon;
 pub(crate) mod footer;
 pub(crate) mod icon;
 pub(crate) mod input;
@@ -50,6 +54,7 @@ pub(crate) mod settings_shell;
 pub(crate) mod shell;
 pub(crate) mod split_view;
 pub(crate) mod theme;
+pub(crate) mod tooltip;
 
 use material::Material;
 use theme::Theme;

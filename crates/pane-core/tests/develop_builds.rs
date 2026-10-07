@@ -22,6 +22,11 @@ use futures::executor::block_on;
 use pane_core::develop::{BuildJob, BuildOutcome, Builder, Toolchains};
 use pane_core::{Launcher, PackageIdentity, Runtime, Status};
 
+#[path = "support/feedback.rs"]
+mod feedback;
+
+use feedback::shown;
+
 fn repository() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -167,7 +172,8 @@ fn launcher(data: &Path) -> Launcher {
     .with_development(Arc::new(toolchains()), changes)
 }
 
-/// Opens the sample's command from root search and runs "Say hello".
+/// Opens the sample's command from root search and runs "Say hello",
+/// returning what it showed: its toast, or the status line.
 fn say_hello(launcher: &Launcher, title: &str) -> Status {
     for _ in 0..3 {
         launcher.back();
@@ -188,7 +194,7 @@ fn say_hello(launcher: &Launcher, title: &str) -> Status {
         .unwrap();
     launcher.select(index);
     block_on(launcher.activate_selected());
-    launcher.view().status
+    shown(launcher)
 }
 
 /// Builds the sample once, installs it, develops it, and saves a change,

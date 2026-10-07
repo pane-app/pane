@@ -73,6 +73,29 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   calling each by its dependency id; installing it installs the JavaScript
   sample too ([Dependencies](#dependencies-on-other-extensions)); held by
   `crates/pane-core/tests/dependencies.rs`.
+- `sample-icons`, `sample-icons-js`, `sample-icons-ts`: the icons sample in
+  Rust, JavaScript and TypeScript (#139): rows with a built-in icon, a
+  packaged image with `@light` and `@dark` variants, a light and dark pair,
+  a tinted icon, a masked image, an image that fails and draws its
+  fallback, the SDK's avatar and progress ring, and every accessory (text,
+  a relative date, a tag, an icon alone) with tooltips; one row has five
+  accessories, of which a row draws three
+  ([icons and accessories](../docs/list-tree.md#icons)). Their packages,
+  `packages/sample-icons` and its `-js`/`-ts` copies, have an icon of their
+  own (`icon.png`, 512×512) and their "Icons" command another
+  (`command.svg`); their second command has none, so it shows the
+  package's. `packages/sample-icons-plain` and its `-js`/`-ts` copies run
+  the same components with no icon, so they show a first-letter tile. Held
+  alike by `crates/pane-core/tests/icons.rs`, and the Rust ones by
+  `crates/pane/tests/icons.rs`. The same list also has the icons Pane
+  loads for it (#142): the SDK's favicon of a site, a web image the test
+  server holds back (and a second row naming it, downloaded once), a web
+  image the server does not have, the SDK's file icon of a file and of an
+  application. The images come from the server the `imageServer` setting
+  names (by default `http://127.0.0.1:8741`), the files from the
+  `iconFile` (by default `~`) and `iconApplication` (by default Windows'
+  Notepad) settings; held by `crates/pane-core/tests/web_icons.rs` and
+  `crates/pane/tests/web_icons.rs`, whose image server sets them.
 - `npm/greeter`: `@pane-samples/greeter`, the npm-distributed sample: an
   npm package holding a `pane.json` and one JavaScript component,
   `sample_npm_js.wasm` (from `sample-npm-js`, prebuilt like the other
@@ -101,14 +124,38 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   `crates/pane/tests/repositories.rs`, from a repository served on
   127.0.0.1.
 - `sample-query`, `sample-query-js`, `sample-query-ts`: Echo, the smallest
-  command that takes a query, in Rust, JavaScript and TypeScript:
-  it answers the text the user sends it from root search through its alias
-  or as a fallback ([A command that takes a query](#a-command-that-takes-a-query),
+  command that takes a query, in Rust, JavaScript and TypeScript, a no-view
+  command: it answers the text the user sends it from root search through
+  its alias or as a fallback ([A command that takes a query](#a-command-that-takes-a-query),
   [aliases and fallbacks](../docs/aliases.md)); "fail" is refused and
   "crash" crashes on purpose. Their packages are `packages/sample-query`,
   `packages/sample-query-js` and `packages/sample-query-ts`; held alike by
   `crates/pane-core/tests/aliases.rs`, and the Rust one by
   `crates/pane/tests/aliases.rs`.
+- `sample-no-view`, `sample-no-view-js`, `sample-no-view-ts`: the no-view
+  sample in Rust, JavaScript and TypeScript, one component serving five
+  commands ([No-view commands and the launch record](#no-view-commands-and-the-launch-record)):
+  "Report launch" answers its launch record ("fail" answers an error,
+  "crash" crashes), "Tick" runs every minute on its own schedule in the
+  background, "Last launches" answers what those two last ran with,
+  "Launch" launches the command its text names with context, and "Show
+  launch", a view command, lists its launch record. Their packages are
+  `packages/sample-no-view` and its `-js`/`-ts` copies; held alike by
+  `crates/pane-core/tests/no_view.rs`, and the Rust one by
+  `crates/pane/tests/no_view.rs`.
+- `sample-preferences`, `sample-preferences-js`, `sample-preferences-ts`:
+  the preferences sample in Rust, JavaScript and TypeScript
+  ([Preferences and the Setup screen](#preferences-and-the-setup-screen)):
+  its package declares an API key (a password, required), units (a
+  dropdown, required, with a default), a greeting (text) and "Verbose" (a
+  checkbox), and ships a `HELP.md`; "Show preferences", a view command,
+  adds a notes folder (required), a notes file and an editor (an
+  application) and lists every value it receives; "Report preferences", a
+  no-view command, adds "Loud" (a checkbox) and shows its values in a
+  toast; "Tick" runs every minute once the package is set up, and "Last
+  tick" toasts how often. Their packages are `packages/sample-preferences` and its
+  `-js`/`-ts` copies; held alike by `crates/pane-core/tests/preferences.rs`,
+  and the Rust one by `crates/pane/tests/preferences.rs`.
 - `sample-schedule`, `sample-schedule-js`, `sample-schedule-ts`: the
   schedule sample in Rust, JavaScript and TypeScript, whose Counting
   command declares a `schedule`, so Pane runs its "Run now" item every 60
@@ -118,6 +165,40 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   error" answers an error, and "Crash" traps, each for Pane's checks.
   Their packages are `packages/sample-schedule` and its `-js`/`-ts`
   copies; held alike by `crates/pane-core/tests/schedules.rs`.
+- `sample-actions`, `sample-actions-js`, `sample-actions-ts`: the actions
+  sample in Rust, JavaScript and TypeScript (#137): items with several
+  actions in sections, a destructive one, shortcuts for every system and
+  one per system, one shortcut that is Pane's own Ctrl+K and one that
+  collides once the user gives a Pane key Ctrl+Shift+Y, an item with one
+  action and one with none ([several actions per item](../docs/list-tree.md));
+  an item with submenus (#140): one given at once, one given when it opens
+  and one whose opening fails; (#141) a "Window" item closing the window
+  each way, popping to root search and clearing the search, a "Feedback"
+  item showing HUDs, a toast updated from animated to success with Open and
+  Retry actions, a failure, and the command's row subtitle, and the no-view
+  commands "Window functions", "Spin" and "Stumble"
+  ([what a command does after it acts](#what-a-command-does-after-it-acts));
+  (#146) a "Confirm" item asking before it acts (a destructive "Delete"
+  remembered with "Don't ask again", "Ask" with its own buttons, "Close and
+  Ask" while the launcher is hidden, "Ask in the Background") and the
+  no-view "Confirm Run"; and (#145) a "System" item calling each system
+  function and a "Standard actions" item.
+  Their packages are `packages/sample-actions` and its `-js`/`-ts`
+  copies; held alike by `crates/pane-core/tests/item_actions.rs`,
+  `submenus.rs`, `feedback.rs`, `confirmations.rs` and `system.rs`, and
+  the Rust one by `crates/pane/tests/item_actions.rs`, `submenus.rs`,
+  `feedback.rs`, `confirmations.rs` and `system.rs`.
+- `sample-arguments`, `sample-arguments-js`, `sample-arguments-ts`: the
+  arguments sample in Rust, JavaScript and TypeScript (#144), one component
+  serving three no-view commands ([Arguments](#arguments)): "Greet" asks for
+  a required name, an optional secret (a password) and a tone (a dropdown)
+  and toasts what it was given (only the secret's length), "Stamp" asks
+  for a required label, for its hotkey and quick slot, and "Relay"
+  launches the command its text names with the arguments it lists
+  (`background stamp label=x`), or toasts what "Stamp" last kept
+  (`last`). Their packages are `packages/sample-arguments` and its
+  `-js`/`-ts` copies; held alike by `crates/pane-core/tests/arguments.rs`,
+  and the Rust one by `crates/pane/tests/arguments.rs`.
 - `hello-rust`, `hello-js`, `hello-ts`: one "Say hello" command each, a
   package built in its own folder, as an author's would be, for
   [development mode](../docs/development-mode.md): Pane builds and reloads
@@ -133,7 +214,8 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   guests` puts each one with its built component in
   `target/guests/packages/<name>/`, a ready-to-install package.
 - `fixtures/faulty`: test fixture whose actions, form, custom view and root
-  results return an error or trap.
+  results return an error or trap, and whose actions grow its memory to
+  just under the 128 MiB cap or past it.
 - `fixtures/failing-start`: test fixture that builds and installs but traps
   the first time it is asked for its view (after saving a setting), so a
   reload to it fails to start and Retry then starts it.
@@ -146,42 +228,42 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   was before `item` gained `platforms` and custom views, with its own copy of
   that WIT; Pane's type check refuses it at install and when it loads.
 - `fixtures/mismatched-api`: negative control whose exports all have the
-  names Pane looks for while `item` lacks one field, so only the type check
-  can refuse it.
+  names Pane looks for while `form-error` lacks one field, so only the type
+  check can refuse it.
+- `fixtures/trees`: test fixture whose list tree and answers are JSON
+  written by hand, not by `pane-guest`, with fields Pane does not know, a
+  newer version, a view Pane cannot show and trees and answers it cannot
+  read ([list-tree.md](../docs/list-tree.md)).
 
 ## Writing a Rust command
 
 The [sample](sample-rust/src/lib.rs) is the complete example. A command is a
-`cdylib` crate depending on `pane-guest` that implements four async
-functions and names its custom view type (see [Forms](#forms) and
-[Custom views](#custom-views) for the last two):
+`cdylib` crate depending on `pane-guest` that implements `pane_guest::Command`:
+`render`, its list, whose items' actions are closures, and two functions
+for forms and custom views (see [Forms](#forms) and
+[Custom views](#custom-views)), and names its custom view type. The SDK hands
+Pane the list as a versioned JSON tree and runs an item's closure when the
+user chooses it, then Pane asks for the list again
+([list-tree.md](../docs/list-tree.md)):
 
 ```rust
 #![no_std]
 
-use pane_guest::alloc::{string::String, vec, vec::Vec};
-use pane_guest::{CustomView, FieldValue, FormError, Guest, Item, NoCustomView, View};
+use pane_guest::alloc::{string::String, vec::Vec};
+use pane_guest::feedback::{Toast, show_toast};
+use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
 
 struct Hello;
 pane_guest::export!(Hello);
 
-impl Guest for Hello {
+impl Command for Hello {
     type CustomView = NoCustomView;
 
-    async fn get_view() -> Result<View, String> {
-        let item = Item {
-            id: "hi".into(),
-            title: "Say hi".into(),
-            subtitle: None,
-            form: None,
-            platforms: None,
-            custom_view: None,
-        };
-        Ok(View { title: "Hello".into(), items: vec![item] })
-    }
-
-    async fn run_action(_item_id: String) -> Result<String, String> {
-        Ok("hi!".into())
+    async fn render() -> Result<List, String> {
+        Ok(List::new("Hello").item(Item::new("hi", "Say hi").on_action(|| async {
+            show_toast(Toast::success("hi!"));
+            Ok(())
+        })))
     }
 
     async fn submit_form(_item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {
@@ -194,8 +276,14 @@ impl Guest for Hello {
 }
 ```
 
-Returning `Err` shows the message as an error; a panic traps the guest, which
-Pane reports and recovers from by starting a fresh instance on the next call.
+Pane shows nothing of an action's success: the action tells the user what
+happened itself, with a toast in the launcher's footer or a HUD over other
+applications once the launcher closes (`pane_guest::feedback`: `show_toast`
+with `Toast::success`, `Toast::failure` or `Toast::animated`, which it can
+update or hide, and `show_hud`), and may close the window or return to root
+search (`pane_guest::window`). Returning `Err` shows the message as a failure
+toast; a panic traps the guest, which Pane reports and recovers from by
+starting a fresh instance on the next call.
 WASI 0.3 interfaces are available through the
 [`wasip3`](https://docs.rs/wasip3/0.9.0/wasip3/) crate with
 `default-features = false`; the sample awaits `wasi:clocks` this way.
@@ -306,24 +394,36 @@ cache.set("last-greeting", greeting);
 
 The [JavaScript](sample-js/src/index.js) and
 [TypeScript](sample-ts/src/index.ts) samples are complete examples. A command
-is an npm package whose `main` module exports `command` with four async
-functions (see [Forms](#forms) and [Custom views](#custom-views) for the last
-two). Pane's types come from
+is an npm package whose `main` module exports `command` with `render`, its
+list, whose items' actions are functions (`onAction`), and two functions for
+forms and custom views (see [Forms](#forms) and
+[Custom views](#custom-views)). The SDK hands Pane the list as a versioned
+JSON tree and runs an item's `onAction` when the user chooses it, then Pane
+asks for the list again ([list-tree.md](../docs/list-tree.md)). Pane's types
+come from
 `@pane/extension` (a `file:../js` development dependency); they describe plain
 values, not engine objects:
 
 ```ts
 import type { Command } from "@pane/extension";
+import { showToast } from "@pane/extension/feedback";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
 
 export const command: Command = {
-  async getView() {
-    return { title: "Hello", items: [{ id: "hi", title: "Say hi" }] };
-  },
-  async runAction(itemId) {
-    if (itemId !== "hi") throw new Error(`unknown item: ${itemId}`);
-    await waitFor(10_000_000); // 10 ms; the command suspends meanwhile
-    return "hi!";
+  async render() {
+    return {
+      title: "Hello",
+      items: [
+        {
+          id: "hi",
+          title: "Say hi",
+          async onAction() {
+            await waitFor(10_000_000); // 10 ms; the command suspends meanwhile
+            showToast({ title: "hi!" });
+          },
+        },
+      ],
+    };
   },
   async submitForm() {
     throw { message: "this command has no forms" };
@@ -334,10 +434,15 @@ export const command: Command = {
 };
 ```
 
-Throwing (a rejected promise) shows the error's message, or a thrown string,
-as an error. Returning a value of the wrong type, such as `undefined` from
-`runAction`, traps the guest, which Pane reports and recovers from as for
-Rust. npm dependencies are bundled into the component; the samples use
+Pane shows nothing of what an `onAction` resolves with: it tells the user
+what happened with `@pane/extension/feedback` (`showToast`, `showHUD`), or
+closes the window (`closeMainWindow`, `popToRoot`, `clearSearchBar`); see
+[What a command does after it acts](#what-a-command-does-after-it-acts).
+Throwing (a rejected promise) shows the error's message, or a thrown
+string, as a failure toast. Resolving with a value, such as `null` from an
+`onAction`, traps the guest, which Pane reports and recovers from as for
+Rust; a list Pane cannot read (a title that is not text, say) is the
+command's failure, not a crash. npm dependencies are bundled into the component; the samples use
 [Zod](https://zod.dev) 4.6.5 (`zod/mini`) and show its validation failure as a
 normal error. Only ECMAScript built-ins are available, not Node.js or browser
 APIs; WASI 0.3 imports declared by [the world](js/wit/world.wit) (currently
@@ -352,7 +457,7 @@ snapshotting the engine, so module top-level code runs at build time, on the
 build machine, and every instance starts from its result. Keep top-level code
 to pure setup such as schemas and constants: secrets, IDs, timestamps, random
 values or anything else meant to differ per instance belong inside
-`getView`/`runAction`. For the same reason, rebuilt components are never
+`render` and the actions. For the same reason, rebuilt components are never
 byte-identical.
 
 Build commands, from the repository root:
@@ -437,9 +542,9 @@ let form = Form {
     ],
     submit_label: "Greet".into(),
 };
-let item = Item { id: "form".into(), title: "Greet someone".into(), subtitle: None, form: Some(form), platforms: None };
+let item = Item::new("form", "Greet someone").form(form);
 
-// In `impl Guest`:
+// In `impl Command`:
 async fn submit_form(item_id: String, values: Vec<FieldValue>) -> Result<String, FormError> {
     let name = values.iter().find(|v| v.id == "name").map_or("", |v| v.value.trim());
     if name.is_empty() {
@@ -477,6 +582,26 @@ Throwing an `Error` (or a string) from `submitForm` rejects the form as a
 whole with its message. The samples validate with Zod and turn its first
 issue into a `FormError`.
 
+A command's whole screen can be a form instead of a list, as Quicklinks'
+Create Quicklink is (#149): in Rust, `render` returns
+`List::form(id, form)`, its fields filled in with `.value(field, value)`.
+Pane shows it as soon as the command opens, `submit_form` receives `id`, and
+Escape leaves the command. A component serving several view commands tells
+which one is opened from `pane_guest::commands::current().command`, its id
+in `pane.json`:
+
+```rust
+async fn render() -> Result<List, String> {
+    if pane_guest::commands::current().command == "create" {
+        return Ok(List::form("create", form).value("name", "Docs"));
+    }
+    Ok(List::new("Notes").items(items))
+}
+```
+
+The JavaScript SDK does not write form screens yet; its launch record has
+the same `command`.
+
 ## Errors and crashes
 
 An error a command returns (Rust `Err`; in JS/TS, anything a handler
@@ -494,6 +619,13 @@ So report expected failures, such as a missing sign-in, as errors, never by
 crashing. The settings samples' **Crash** item shows a crash in each
 language.
 
+Each instance's memory may grow to **128 MiB**. Pane refuses it more: the
+allocation fails, which traps the guest, and the user sees "The extension
+crashed: it ran out of memory: an extension may use at most 128 MiB". It
+counts towards pausing the package as any crash does. A web response's
+body (at most 4 MiB) fits many times over; keep large data in files or
+the cache rather than in memory.
+
 Pane's extension runtime itself can crash too (a fault in Pane, not in any
 extension). Pane then stops every call in progress and never runs one again
 by itself, so an action that did its work (saving, sending a request) may
@@ -501,8 +633,8 @@ have lost only its answer: the user sees that the runtime stopped and runs
 it again only if they want it done again
 ([runtime crashes](../docs/pausing.md#when-the-extension-runtime-itself-crashes)).
 Write an action whose repetition matters so the user can tell whether it
-ran, as the Rust settings sample's **Count** does by answering the count it
-saved.
+ran, as the Rust settings sample's **Count** does by showing the count it
+saved in a toast.
 
 Every call Pane makes into a command (opening it, an action, a form, a
 search, a view event) may **compute for 5 seconds in all** (the compute
@@ -518,9 +650,9 @@ does
 ([extensions that stop responding](../docs/pausing.md#when-an-extension-stops-responding)).
 So keep each call's own computing well under 5 seconds: split long work
 into several calls (an action that does one part and saves where it got
-to), or run it in a [native helper](#native-helpers), which runs for at
-most 30 seconds. The settings samples' **Stop responding** item shows the
-limit in each language.
+to), or run it in a [native helper](#native-helpers), which runs for as long
+as its work takes while other extensions' calls are served. The settings
+samples' **Stop responding** item shows the limit in each language.
 
 ## Actions for some operating systems only
 
@@ -552,8 +684,7 @@ A command can answer what the user types into root search, as the
 root search finds by title, and Enter on one performs its action:
 copying a text to the clipboard (`copy`) or opening an `http://` or
 `https://` address with the system's handler for web links, normally the
-default browser (`open-url`, as [quicklinks](quicklinks) do; Pane refuses
-any other address). Set `"rootResults": true` on the
+default browser (`open-url`, which opens an address of any scheme). Set `"rootResults": true` on the
 command in `pane.json` and export `pane:extension/root-results`
 ([`wit/root-results.wit`](../wit/root-results.wit)) beside the command.
 Pane asks the command on every change of a query that is not blank, so its
@@ -628,15 +759,35 @@ command never names or sees a path: `list-folder()` answers that no folder
 is granted, that Pane is listing it (Pane asks the command again once it is
 done, so answer no files for now), or the listing Pane keeps for this visit
 of root search, whose files have an `id` and a `relative` path. An
-`open-file` result gives the `id`; Pane shows the file's own name and folder
-in the row, whatever the result's title says, drops an id it did not give,
-checks the file again when it is invoked and refuses programs and scripts.
+`open-file` result gives the `id`, and so does a command search result's
+`file` (a command that sets `"search": true` too, as Search Files does);
+Pane shows the file's own name and folder in the row, whatever the result's
+title says, drops an id it did not give, and gives the file its own
+[file actions](../docs/files.md#the-file-actions): Open (Enter), Show in
+Explorer (Ctrl+Enter), Open With…, Copy Path, Copy File and Move to Recycle
+Bin (confirmed), each checking it again first, then closing the window and
+saying what it did in a HUD; for a program or script, Enter shows it in
+Explorer and only Run runs it. The command is never called for
+them.
 Pane lists the folder under its [scan policy](../docs/files.md#the-scan-policy)
 (`files.limits()` gives its limits); file results are listed after the
 results root search finds by title. The [Files](files) default extension,
-in Rust, works this way; [`sample-files-js`](sample-files-js) and
+in Rust, works this way (its command, Search Files, answers both root
+search and its own field); [`sample-files-js`](sample-files-js) and
 [`sample-files-ts`](sample-files-ts) do the same in JavaScript and
 TypeScript.
+
+In a command's own search field, the result names the file in `file`:
+
+```rust
+use pane_guest::search::SearchResult;
+
+SearchResult { id: file.relative.clone(), title: file.relative, subtitle: None, file: Some(file.id) }
+```
+
+```ts
+({ id: file.relative, title: file.relative, file: file.id })
+```
 
 Rust (`pane_guest::files`):
 
@@ -686,8 +837,10 @@ and ranks them by title like commands, for a query that is not blank. Set
 `"indexedResults": true` on the command in `pane.json` and export
 `pane:extension/indexed-results` ([`wit/applications.wit`](../wit/applications.wit))
 beside the command. Pane asks again after each return to root search; an
-error is listed as a row explaining it. The only action is opening an
-installed application. See [root search](../docs/root-search.md#results-supplied-ahead-of-the-query)
+error is listed as a row explaining it. Its action opens an installed
+application (`IndexedAction::OpenApplication(id)`), or a target of any kind,
+with an application if one is named, as a quicklink does
+(`IndexedAction::Open(OpenTarget { target, application })`). See [root search](../docs/root-search.md#results-supplied-ahead-of-the-query)
 and [applications](../docs/applications.md).
 
 Any Rust command can also find and open the installed applications through
@@ -765,11 +918,13 @@ entry naming how often to run and which item's action to run.
   previewed or installed, before anything is installed.
 - `item` (required): the id of the item whose action runs, the same
   action Enter runs from the command's list, at most 256 characters. The
-  command usually lists the item, so the user can run it too, and its
-  answer is what Pane shows: the returned text on the command's screen
-  while it is open, an error the action answers with as an error, and a
-  trap as a crash of the package (three within five minutes pause it, as
-  for any action).
+  command usually lists the item, so the user can run it too. Pane shows
+  nothing of the run's success: a toast or HUD the action shows itself
+  (`pane_guest::feedback`) is shown as when the user runs it, as a HUD
+  while the launcher is hidden. An error the action answers with is shown
+  as a failure toast while the command's screen is open, and a trap counts
+  as a crash of the package (three within five minutes pause it, as for
+  any action).
 
 The schedule runs only while the package's code may run — it is enabled
 and not paused: installation alone schedules nothing that is not enabled,
@@ -783,7 +938,9 @@ due meanwhile. At most one run of a command is asked for at a time; ticks
 that fall due while one runs are coalesced into the next run after it
 answers.
 
-The scheduled run is an ordinary `run-action` call: the guest needs no
+The scheduled run is the item's ordinary action (Pane asks for the
+command's list, then runs the item's action, as choosing it would): the
+guest needs no
 new interface, and everything an action may do — read and save data, call
 helpers, make requests, wait — works the same. See
 [scheduled work](../docs/schedules.md) for the full contract, and the
@@ -839,8 +996,8 @@ impl pane_guest::service::Guest for Watching {
   outside is clamped (provisional bounds, as scheduled work's). Time
   that passes while a cycle runs is not replayed: the next cycle runs
   one cadence after its answer lands.
-- The status shows on the command's screen while it is open, as an
-  action's answer does, and the cycle runs whether or not it is.
+- The status shows on the command's screen while it is open, and the
+  cycle runs whether or not it is.
 
 A JavaScript or TypeScript command sets `"pane": { "service": true }`
 in its `package.json` so that it is built with the interface, and
@@ -919,7 +1076,454 @@ history.deleteItems(["7"]); // `delete-items`: `delete` is a JavaScript keyword
 
 [`sample-clipboard-js`](sample-clipboard-js) and
 [`sample-clipboard-ts`](sample-clipboard-ts) implement the Clipboard History
-command in JavaScript and TypeScript.
+command in JavaScript and TypeScript. Each kept item has the actions Paste
+(Enter: [`system::paste`](#paste-the-front-application-and-selected-text),
+copying it with `copy(id)` and the HUD "Copied — paste is not available
+here yet" where Pane cannot paste), Copy and Delete (destructive, last).
+
+## No-view commands and the launch record
+
+A command's entry in `pane.json` declares its **mode** (ADR 0037):
+`"mode": "view"`, the default when it says nothing, opens a screen, its
+list; `"mode": "no-view"` runs and opens none. Any other value is refused
+at install with the reason. Pane reads the mode from the manifest, so it
+knows at Enter what to do without running the command.
+
+A **no-view command** runs each time it is launched: Enter on its row in
+root search, its alias, a fallback, its global hotkey (which runs it
+without showing Pane's window), its quick slot, another command, or its
+own schedule. Root search, or whatever Pane shows, stays as it is, and
+Pane shows nothing of a success: the command tells the user what happened
+itself, with a toast or a HUD (`pane_guest::feedback` in Rust), and may
+close the window (`pane_guest::window`). An error it answers is shown as
+a failure toast with a "Copy Error" action, and a toast it left in
+progress (the animated style) is hidden once the run ends. A run launched
+in the background has no one watching, so a command usually shows nothing
+then, as the samples do. An error it answers never counts towards
+[pausing](../docs/pausing.md); a crash does, as any call's. A `schedule` without an `item` makes Pane run the
+command itself every interval, in the background, showing nothing:
+
+```json
+{ "id": "tick", "title": "Tick", "component": "tick.wasm",
+  "mode": "no-view", "schedule": { "everySeconds": 60 } }
+```
+
+Every command receives its **launch record** on every way in: whether the
+user launched it or Pane did in the background, from where (root search,
+an alias, a fallback, a hotkey, a quick slot, another command, a
+schedule), its [arguments](#arguments), the text sent through its alias or as
+a fallback, and the JSON context another command passed
+([`wit/commands.wit`](../wit/commands.wit)).
+
+Rust: implement `run` in `pane_guest::Command` (one component may serve
+several commands, told apart by their id in `pane.json`); a view command's
+`render` reads its record with `pane_guest::commands::current()`.
+`render`, `submit_form` and `open_view` have defaults, so a no-view command
+needs none of them:
+
+```rust
+use pane_guest::alloc::{format, string::String};
+use pane_guest::feedback::{Toast, show_toast};
+use pane_guest::{Command, LaunchRecord, LaunchType, NoCustomView};
+
+struct Toggle;
+pane_guest::export!(Toggle);
+
+impl Command for Toggle {
+    type CustomView = NoCustomView;
+
+    async fn run(command: String, launch: LaunchRecord) -> Result<(), String> {
+        // A background launch, such as a schedule's, shows nothing.
+        if launch.launch_type != LaunchType::Background {
+            let source = pane_guest::commands::source_name(launch.source);
+            show_toast(Toast::success(format!("{command} ran from {source}")));
+        }
+        Ok(())
+    }
+}
+```
+
+JavaScript or TypeScript: give the exported `command` a `run(id, launch)`;
+a view command's `render(launch)` receives the record too:
+
+```ts
+import type { Command } from "@pane/extension";
+import { showHUD } from "@pane/extension/feedback";
+
+export const command: Command = {
+  async run(id, launch) {
+    showHUD(`${id} ran from ${launch.source}`);
+  },
+};
+```
+
+A command **launches another** with `pane:extension/commands`'s `launch`
+(`pane_guest::commands::launch` in Rust, an import of
+`pane:extension/commands@0.1.0` in JavaScript and TypeScript): one of its
+own package by its id in `pane.json`, or one of another installed package
+by that package's identity (`local:` and the absolute folder Pane shows,
+`npm:` and its name, `git:` and its repository), passing JSON context and
+asking nothing. `user-initiated` opens it as if the user had invoked it;
+`background` runs a no-view command without a window and is refused for a
+view command. A target that is not installed, has no such command, or is
+disabled, paused or unavailable on this system is refused with the
+reason, which the caller receives as an error. `launch` answers once the
+launch has started, not when the target has run. The
+[no-view sample](sample-no-view) does all of this in Rust, and its
+[JavaScript](sample-no-view-js) and [TypeScript](sample-no-view-ts) copies
+do the same.
+
+## What a command does after it acts
+
+Pane shows nothing of what an action, a no-view `run` or a search result
+answers: the command says what happened itself, through host functions every
+command has, whatever its mode ([wit/feedback.wit](../wit/feedback.wit), ADR
+0037):
+
+- **A toast** in the launcher's footer, where the status line is: animated
+  (work in progress), success or failure, with an optional message and up to
+  two actions with shortcuts. One shows at a time: a new toast replaces the
+  one shown, whose handle then does nothing; the command can update or hide
+  its own. Success and failure leave after 3 seconds (paused while the pointer
+  is over the toast); an animated one stays until updated or hidden, or the
+  window deactivates, and Pane hides one a no-view run left once the run ends.
+  Ctrl+T (Command+T on macOS) moves the focus to its actions; choosing one
+  calls the command back, as an item's action does. While the launcher is
+  hidden or collapsed, a toast is shown as a HUD.
+- **A HUD**: Pane closes the window, then shows a short message near the
+  bottom of the screen, over other applications, for 1.2 seconds (3 for a
+  failure).
+- **The window**: `close` hides it, choosing what its next showing shows
+  (`default`: the user's Launcher setting; `immediate`: root search now;
+  `suspended`: the screen left on display) and whether root search's query is
+  emptied; `pop-to-root` returns to root search with the window open;
+  `clear-search` empties the search field. In a call no window was shown for
+  (a background launch, a schedule, a service) they do nothing and answer
+  false.
+- **The row's subtitle**: `set-subtitle` replaces the subtitle the command's
+  root search row shows (and matches), such as "3 unread", until set again;
+  Pane keeps it across restarts and forgets it on uninstall.
+- **A confirmation** (#146), before something that cannot be undone:
+  `confirm` shows a title, an optional message, the primary button (Enter;
+  drawn destructive when asked) and the dismiss button (Escape; "Cancel"
+  unless named) over the launcher's screen, showing the launcher first if it
+  is hidden, and answers true only for the primary button (Escape, a click
+  outside it or the window losing the focus answer false). Other packages'
+  calls are served while it waits. Given a `remember` key, it offers "Don't
+  ask again" (Space or a click ticks it): confirmed with the primary
+  button while it is ticked, it is remembered per package and key, across
+  restarts, disabling and updates, and later confirmations with that key
+  answer true at once (a dismissal is never remembered, so the user is
+  asked again); "Reset confirmations" on the extension's card in Settings ›
+  Extensions forgets them, as uninstalling does. In a call no window was
+  shown for (a background launch, a schedule, a service) it answers an error
+  saying a confirmation is not available there.
+
+An error an action or a run answers is shown as a failure toast with a "Copy
+Error" action.
+
+Rust (`pane_guest::feedback`, `pane_guest::window`,
+`pane_guest::commands::set_subtitle`):
+
+```rust
+use pane_guest::feedback::{Toast, ToastAction, ToastStyle, show_hud, show_toast};
+use pane_guest::window::{PopToRootType, close};
+
+let shown = show_toast(Toast::animated("Uploading…"));
+// ... the work ...
+shown.update(Toast::success("Uploaded").primary(ToastAction::new("Open", || async {
+    show_toast(Toast::success("Opened"));
+    Ok(())
+})));
+show_hud("Copied to Clipboard", ToastStyle::Success); // closes the window first
+close(true, PopToRootType::Immediate);
+
+// In an async action or run:
+use pane_guest::feedback::{Confirmation, confirm};
+let asked = Confirmation::new("Delete the note?")
+    .primary("Delete")
+    .destructive()
+    .remember("delete-note");
+if confirm(asked).await? {
+    // ... delete it ...
+}
+```
+
+JavaScript or TypeScript (`@pane/extension/feedback`):
+
+```ts
+import { closeMainWindow, setSubtitle, showHUD, showToast } from "@pane/extension/feedback";
+
+const toast = showToast({ style: "animated", title: "Uploading…" });
+// ... the work ...
+toast.update({
+  style: "success",
+  title: "Uploaded",
+  primaryAction: { title: "Open", onAction: async () => showToast({ title: "Opened" }) },
+});
+showHUD("Copied to Clipboard");
+closeMainWindow({ clearRootSearch: true, popToRootType: "immediate" });
+setSubtitle("3 unread");
+
+// import { confirmAlert } from "@pane/extension/feedback";
+const deleting = await confirmAlert({
+  title: "Delete the note?",
+  primaryAction: { title: "Delete", style: "destructive" },
+  remember: "delete-note",
+});
+```
+
+The [actions sample](sample-actions) and its
+[JavaScript](sample-actions-js) and [TypeScript](sample-actions-ts) copies
+use every one of them: its "Window", "Feedback" and "Confirm" items, and
+its no-view commands "Window functions", "Spin", "Stumble" and "Confirm
+Run".
+
+### The clipboard, opening, revealing and recycling
+
+Every command also reaches the system through Pane
+([wit/system.wit](../wit/system.wit), ADR 0037), each function doing only
+what it names (none closes the window or says anything):
+
+- **copy** puts text or a file (by its absolute path) on the clipboard. A
+  concealed copy carries the system's "do not record" marker (on Windows
+  `ExcludeClipboardContentFromMonitorProcessing`, with
+  `CanIncludeInClipboardHistory` and `CanUploadToCloudClipboard` 0; on macOS
+  `org.nspasteboard.ConcealedType`), so clipboard managers, Pane's own
+  clipboard history among them, do not keep it. Linux (X11) has no such
+  marker, and copies text only for now.
+- **read-clipboard** answers the clipboard's text, the file copied in the
+  file manager, or nothing (not available on Linux yet).
+- **open** opens anything, unfiltered: a URL of any scheme (`https:`,
+  `mailto:`, `ms-settings:`, an application's own), a file, a folder or an
+  application, with the system's handler or with an application named by
+  its path or its installed-application id.
+- **reveal** shows a path selected in File Explorer (Finder, or the file
+  manager elsewhere); **trash** moves paths to the Recycle Bin (the trash
+  elsewhere) and answers those it could not move, each with why.
+
+A refusal is an answer, never a reason to pause the package. The SDKs'
+**standard actions** compose them as Raycast's built-in actions behave:
+Copy ("Copy to Clipboard", then the window closes and a "Copied to
+Clipboard" HUD shows), Open, Open With… (a submenu of the installed
+applications), Show in Explorer (named for the system) and Move to Recycle
+Bin (destructive, with a HUD). Each closes the window after it acts; asked
+to keep it open, it says what it did in a toast instead.
+
+Rust (`pane_guest::system`, `pane_guest::actions`):
+
+```rust
+use pane_guest::actions;
+use pane_guest::system::{self, Clip};
+
+system::copy(&Clip::Text("hunter2".into()), true)?; // concealed
+system::open("mailto:someone@example.com", None)?;
+Item::new("note", "Note").actions([
+    actions::copy(Clip::Text("Some text".into())).into(),
+    actions::copy(Clip::Text("Some text".into())).keep_window_open().into(),
+    actions::open_with(r"C:\Notes\todo.txt").into(),
+    actions::show_in_file_manager(r"C:\Notes\todo.txt").into(),
+    actions::move_to_trash([r"C:\Notes\todo.txt"]).into(),
+]);
+```
+
+JavaScript or TypeScript (`@pane/extension/system`):
+
+```ts
+import { copy, copyAction, moveToTrashAction, open, openWithAction } from "@pane/extension/system";
+
+copy("hunter2", { concealed: true });
+open("C:\\Notes\\todo.txt", "C:\\Windows\\System32\\notepad.exe");
+const actions = [
+  copyAction("Some text"),
+  copyAction("Some text", { keepWindowOpen: true }),
+  openWithAction("C:\\Notes\\todo.txt"),
+  moveToTrashAction(["C:\\Notes\\todo.txt"]),
+];
+```
+
+The actions sample's "System" item calls each function on its own, and its
+"Standard actions" item has every standard action.
+
+### Paste, the front application and selected text
+
+Three more system functions reach the application that was in front before
+Pane:
+
+- **paste** closes the window, brings that application back to the front,
+  pastes text or a file into it through the clipboard, then puts back what
+  the clipboard held, unless something else was copied meanwhile. The
+  pasted content and what is put back are both copied concealed, so
+  clipboard managers keep neither.
+- **front-application** answers that application's name and icon (the path
+  or `shell:` name whose system icon it is), or none. In Rust
+  `front.icon()` is that system icon as an `Icon` for an item or an
+  action; in JavaScript and TypeScript `front.icon` already is one
+  (`{ file }`).
+- **selected-text** answers the text selected in it, or none when nothing is
+  selected, which is not a failure.
+
+Each answers either "not available on this system yet" or a failure, and
+the two are different. Until Pane's Windows power features land, and on
+macOS and Linux (X11 included) for now, all three answer "not available".
+That answer is never a reason to pause the package. Where paste is not
+available, the window stays open and the clipboard is left alone. The
+standard **Paste** action then copies the content instead, closes the
+window and shows "Copied — paste is not available here yet" in a HUD.
+
+Rust (`SystemError::NotAvailable` / `SystemError::Failed`):
+
+```rust
+use pane_guest::actions;
+use pane_guest::system::{self, Clip, SystemError};
+
+let title = match system::front_application() {
+    Ok(Some(front)) => format!("Paste to {}", front.name),
+    _ => "Paste to Active App".into(),
+};
+Item::new("snippet", "Snippet").actions([
+    actions::paste(Clip::Text("Kind regards".into())).into(),
+    actions::paste(Clip::Text("Kind regards".into())).title(title).into(),
+]);
+match system::selected_text() {
+    Ok(Some(text)) => { /* use it */ }
+    Ok(None) => { /* nothing is selected */ }
+    Err(SystemError::NotAvailable(why)) => { /* do something else */ }
+    Err(SystemError::Failed(why)) => return Err(why),
+}
+```
+
+JavaScript or TypeScript (a `NotAvailableError`, or an `Error` for a
+failure):
+
+```ts
+import { frontApplication, NotAvailableError, pasteAction, selectedText } from "@pane/extension/system";
+
+const front = frontApplication(); // { name, icon: { file } | null } or null
+const actions = [pasteAction("Kind regards"), pasteAction("Kind regards", { title: `Paste to ${front?.name}` })];
+try {
+  const text = selectedText(); // null when nothing is selected
+} catch (error) {
+  if (!(error instanceof NotAvailableError)) throw error;
+}
+```
+
+The actions sample's "Paste" item has the standard Paste, a "Paste to …"
+titled from the front application, a paste that reports each answer, the
+front application's name and icon, and "Search Selection", which handles
+each answer of selected-text.
+
+## Preferences and the Setup screen
+
+A package that needs something from the user (an API key, a folder) does
+not build a settings screen: it declares **preferences** in `pane.json`,
+for the whole extension under the package's `preferences`, or for one
+command under that command's. Pane draws, stores and checks them, and
+hands each command its values.
+
+```json
+"preferences": [
+  { "name": "apiKey", "type": "password", "title": "API key",
+    "description": "Where to find it: see the help.", "required": true },
+  { "name": "units", "type": "dropdown", "title": "Units", "required": true,
+    "default": "metric",
+    "options": [{ "value": "metric", "title": "Metric" },
+                { "value": "imperial", "title": "Imperial" }] },
+  { "name": "verbose", "type": "checkbox", "title": "Verbose",
+    "label": "Say more", "default": false }
+]
+```
+
+A preference has a `name` (unique among the package's preferences and each
+command's together; no `#`), a `type` (`text`, `password`, `checkbox`,
+`dropdown`, `file`, `folder` or `application`), a `title`, and optionally a
+`description`, a `placeholder`, `required` and a `default`: a value, or one
+per system (`{ "windows": …, "macos": …, "linux": … }`). A checkbox may
+have a `label` and its default is `true` or `false`; a dropdown needs its
+`options`, each a value, or a `value` with a `title` (as an argument's
+are), and its default must be one of them. A duplicate name, an unknown type or a dropdown default not among its
+options refuses the package at install, with the reason.
+
+A command reads its **effective values**: its package's preferences, then
+its own, each the value the user set or else its default, a checkbox's as
+a boolean and every other kind's as text; one with neither is absent. Rust
+deserializes them into a type of its own with serde
+(`pane_guest::preferences::values::<T>()`); JavaScript and TypeScript call
+`getPreferenceValues()` from `@pane/extension/preferences`, TypeScript
+naming its interface (`getPreferenceValues<Preferences>()`). Underneath is
+`pane:extension/preferences` ([`wit/preferences.wit`](../wit/preferences.wit)),
+which answers the values as JSON.
+
+A **required** preference with no value and no default is unset. Before a
+launch by the user, Pane checks: with any unset, it shows the **Setup
+screen** instead, the extension's title, "Set these up before using
+<command>", only the unset fields with their descriptions, each with the
+control its extension's card in Settings has (a checkbox and a dropdown a
+choice, a password hidden as it is typed, a file, folder or application
+a path with "Choose…", which opens the system's picker), and the
+package's `HELP.md` beside them. Submitting saves the values and launches
+the command as it was launched; Escape launches nothing. A stored value
+that no longer fits counts as unset: a dropdown value no longer among the
+options, a file or folder that no longer exists. Every other way in (a
+background launch, root results, a schedule, a service) does not run a
+command that needs setup; its row in root search says "Needs setup", and
+none of this counts as a failure.
+
+The user changes the values later on the extension's card in Settings ›
+Extensions, saved as they change; "Configure Command…" and "Configure
+Extension…" in root search's Actions panel open it there. Values are the
+package's [extension data](../docs/extension-data.md): a password is a
+local credential, every other value an extension setting, so disabling
+keeps them, an update keeps those whose names are still declared (and
+drops one whose type changed so that it no longer fits), and uninstalling
+keeps the settings when asked while always removing the credentials. The
+[preferences sample](sample-preferences) declares every type, and its
+[JavaScript](sample-preferences-js) and [TypeScript](sample-preferences-ts)
+copies answer the same.
+
+## Arguments
+
+A command may ask for up to three typed values before each run: its
+`pane.json` entry declares `arguments`, each with a `name`, a `type`
+(`text`, `password` or `dropdown`), an optional `placeholder`, `required`
+(false unless it says) and, for a dropdown, its `options` (a value, or a
+`value` with a `title`):
+
+```json
+{ "id": "greet", "title": "Greet", "component": "greet.wasm", "mode": "no-view",
+  "arguments": [
+    { "name": "name", "type": "text", "placeholder": "Name", "required": true },
+    { "name": "secret", "type": "password", "placeholder": "Secret" },
+    { "name": "tone", "type": "dropdown", "placeholder": "Tone",
+      "options": [{ "value": "warm", "title": "Warm" }, "brief"] }
+  ] }
+```
+
+A fourth argument, a repeated name, an unknown type, a dropdown without
+options, and a required argument on a command with a `schedule` are
+refused at install with the reason.
+
+The values reach the command in its launch record's `arguments`, by name,
+in the order it declares them; an optional argument left empty is absent
+(`launch.argument("name")` in Rust, `launch.arguments.find(...)` in
+JavaScript and TypeScript). When a launch the user started leaves a
+required argument without a value, Pane first shows its argument form:
+the command's title and one field per argument, focus on the first empty
+required one; Enter with a required field still empty takes focus to it,
+and Escape launches nothing. This is how a global hotkey, a quick slot or
+another command's launch without values asks; root search's own inline
+fields come later. A background launch with a required argument missing
+is refused.
+
+Text sent through the command's alias or to it as a fallback fills its
+first text or password argument unless that has a value, and stays the
+launch record's fallback text. A command may be a fallback when it takes
+a query, or when its first argument is text and every other is optional.
+Pane remembers the last value of each dropdown per command and chooses it
+next time; it never records a password's value anywhere. The
+[arguments sample](sample-arguments) does all of this in Rust, and its
+[JavaScript](sample-arguments-js) and [TypeScript](sample-arguments-ts)
+copies answer the same.
 
 ## A command that takes a query
 
@@ -928,43 +1532,37 @@ typing it in root search lists the command first; nothing is needed of the
 command for that. A command that **takes a query** can also be sent text
 from root search: the user types its alias, a space and the text ("ec
 hello"), or makes it a fallback, which is listed below the results for any
-text typed, and invokes that row. Pane calls the command only then, never
-while the user types, and shows its answer as the result (an error as the
-failure); root search stays as it was. Set `"takesQuery": true` on the
-command in `pane.json` and export `pane:extension/query-command`
-([`wit/query.wit`](../wit/query.wit)) beside the command; Pane checks it at
-install without running it. Pane passes the command's id in `pane.json`, so
-one component can serve several such commands, and the text, trimmed and
-never empty. A trap counts towards [pausing](../docs/pausing.md) as any
-call's does. See [aliases and fallbacks](../docs/aliases.md).
+text typed, and invokes that row. Pane launches the command only then,
+never while the user types, with the text, trimmed and never empty, as its
+launch record's **fallback text**. Set `"takesQuery": true` on the command
+in `pane.json`. A no-view command runs with the text and tells the user
+what it did with a toast (an error it answers is shown as a failure toast)
+while root search stays as it was; a view command opens its screen with
+it. See
+[aliases and fallbacks](../docs/aliases.md).
 
-Rust (`pane_guest::query`; the component then exports both interfaces), as
-[`sample-query`](sample-query) does:
+Rust, as [`sample-query`](sample-query) does, Echo being a no-view command:
 
 ```rust
-use pane_guest::alloc::{format, string::String};
-
-pane_guest::export!(Echo);
-pane_guest::query::export!(Echo);
-
-impl pane_guest::query::Guest for Echo {
-    async fn run_query(command: String, query: String) -> Result<String, String> {
-        Ok(format!("Echo heard “{query}”"))
-    }
+async fn run(command: String, launch: LaunchRecord) -> Result<(), String> {
+    let heard = match launch.fallback_text {
+        Some(text) => format!("Echo heard “{text}”"),
+        None => "Echo heard nothing".into(),
+    };
+    show_toast(Toast::success(heard));
+    Ok(())
 }
 ```
 
-JavaScript or TypeScript: add `"pane": { "takesQuery": true }` to
-`package.json`, so the build exports the interface, and export
-`queryCommand` from the module, as the [JavaScript](sample-query-js) and
+JavaScript or TypeScript, as the [JavaScript](sample-query-js) and
 [TypeScript](sample-query-ts) query samples do:
 
 ```ts
-import type { QueryCommand } from "@pane/extension";
-
-export const queryCommand: QueryCommand = {
-  async runQuery(command, query) {
-    return `Echo heard “${query}”`;
+export const command: Command = {
+  async run(id, launch) {
+    showToast({
+      title: launch.fallbackText == null ? "Echo heard nothing" : `Echo heard “${launch.fallbackText}”`,
+    });
   },
 };
 ```
@@ -977,16 +1575,19 @@ A command that searches an online service as the user types sets
 `command`. Pane gives it a search field of its own once the user opens it
 and calls `search(command, query)` with the text typed there (trimmed,
 never empty); the results (`id`, `title`, optional `subtitle`) replace the
-command's list, and activating one calls `run-action` with its id. Root
+command's list, and activating one runs it by its id: the SDKs call the
+command's `run_search_result` (Rust) or `runSearchResult` (JS/TS). Root
 search never calls it, so nothing typed there reaches the command or its
 service. Pane waits 150 ms before it starts a search, and stops one it no
 longer needs (the text changed, the user left) where it waits, dropping the
 instance with its web request: code after that `await` never runs and
 in-memory state is lost, so make result ids say which result they are. An
 error it answers with (a service down or unreachable) is shown in place of
-results and never pauses the extension. A command cannot set both
-`"search"` and `"rootResults"`. See
-[docs/command-search.md](../docs/command-search.md).
+results and never pauses the extension. A result may name a file of the
+package's [granted folder](#files-of-a-granted-folder) by its id instead
+(`file`, #150): Pane then lists that file and performs its file actions
+itself. A command may set both `"search"` and `"rootResults"`; root search
+then asks it too. See [docs/command-search.md](../docs/command-search.md).
 
 **Web requests** go through `wasi:http@0.3.0`'s client, which Pane links for
 every command and sends from the host (`http` and `https` over HTTP/1.1,
@@ -1080,8 +1681,9 @@ impl GuestCustomView for Picker {
     }
 }
 
-// The item: `custom_view: Some(CustomViewInfo { title: "Pick".into(), label:
-// "Column".into(), role: CustomViewRole::ColorWell })`. In `impl Guest`:
+// The item: `Item::new("pick", "Pick").custom_view(CustomViewInfo { title:
+// "Pick".into(), label: "Column".into(), role: CustomViewRole::ColorWell })`.
+// In `impl Command`:
 type CustomView = Picker;
 
 async fn open_view(_item_id: String) -> Result<CustomView, String> {
@@ -1316,9 +1918,12 @@ are a [Rust](sample-helper/src/lib.rs), a
 
    Dropping the future before it resolves cancels the run, and Pane ends
    the process; the sample's "Echo within a second" races it against
-   `wasip3::clocks::monotonic_clock::wait_for`. A helper also ends when the
-   call that started it returns and when the package is disabled, reloaded,
-   updated, paused or uninstalled, and when Pane quits.
+   `wasip3::clocks::monotonic_clock::wait_for`: that is the command's own
+   timeout, as Pane sets none. A helper also ends when the call that
+   started it returns and when the package is disabled, reloaded, updated,
+   paused or uninstalled, and when Pane quits. Otherwise it runs for as
+   long as its work takes (the sample's "Echo after a long wait" runs for
+   40 seconds), and other extensions' calls are served meanwhile.
 
    In JavaScript or TypeScript, import `run` from
    `pane:extension/helpers@0.1.0` (declared in
@@ -1339,6 +1944,60 @@ are a [Rust](sample-helper/src/lib.rs), a
    A promise cannot be cancelled: a run the command stops awaiting (the
    samples' `Promise.race` against `waitFor`) keeps its helper until the
    Pane call returns, which ends it.
+
+## System programs
+
+A command may also run programs installed on the system, such as
+PowerShell, winget or git ([ADR 0033](../docs/adr/0033-extensions-may-run-system-programs.md),
+`pane:extension/programs` in [wit/programs.wit](../wit/programs.wit)). Name
+a program by an absolute path, or by a bare name Pane finds on the user's
+search path at the time of the call (on Windows read from the registry, so
+a tool installed after Pane started is found). Arguments are a list no shell
+reads. `run` waits for the program and answers its exit code, standard
+output and standard error (bytes, with text helpers); `spawn` answers a
+process to write to, read from as it writes, wait for and kill. Options:
+the working folder (the user's home folder by default), environment
+changes, a timeout, a console window on Windows (none by default) and
+elevated (Windows' elevation prompt; the run answers only the exit code, or
+`declined`; elsewhere `unavailable` for now).
+
+```rust
+use pane_guest::programs::{self, Options};
+
+let output = programs::run("git", &["status", "--short"], b"", Options::default().timeout(10_000))
+    .await
+    .map_err(|error| error.explain())?;
+let changes = output.stdout_text();
+```
+
+```ts
+import { run, spawn, powershell } from "@pane/extension/programs";
+
+const output = await run("git", ["status", "--short"], { timeoutMs: 10_000 });
+const process = await spawn("winget", ["upgrade", "--all"]);
+for await (const line of process.lines()) toast.update({ style: "animated", title: line });
+```
+
+A program belongs to the call that started it: Pane ends it, and every
+process it started (a Job Object on Windows, a process group elsewhere),
+when the call returns or is dropped, when the package is disabled,
+reloaded, updated, paused or uninstalled, and when Pane quits. What a
+program leaves running when it exits runs on, in its tree, until then, not
+just until the program's exit; Pane stops reading the program's output
+once it exited (after two seconds for what is still in its pipes), so a
+process it left holding its output does not hold up the answer. Open a
+program with the system instead to have it outlive the command. A `run` keeps at most 16 MiB
+of each stream; a program writing more is ended and the run fails
+(`too-much-output`). Read a spawned program's streams as it writes: one
+that writes much more than the command reads waits. A component that
+imports the interface is noted at install, update and reload, and the
+extension list says "Runs system programs" with a row listing the programs
+it ran this session. A JavaScript or TypeScript command imports it only if
+its bundle uses it. The programs samples are a
+[Rust](sample-programs/src/lib.rs), a
+[JavaScript](sample-programs-js/src/index.js) and a
+[TypeScript](sample-programs-ts/src/index.ts) command running `pane-echo`
+by its bare name, which must be on the search path.
 
 ## Packaging and installing a local extension
 
@@ -1367,6 +2026,20 @@ and TypeScript: Pane sees only components.
   number is refused with "a newer Pane is needed".
 - `title` (required): the display title. It is not the package's identity.
 - `version` (optional): shown before installing and after an update.
+- `icon` (optional): the package's icon, shown in root search, quick slots,
+  Settings and Shortcuts: a PNG or SVG image in the package by its path
+  (`"icon.png"`; `icon@dark.png` and `icon@light.png` beside it are drawn
+  in the dark and light themes), a light and dark pair (`{"light":
+  "icon-light.png", "dark": "icon-dark.png"}`) or a built-in icon by name
+  (`"star"`, reicon's names in kebab case), with an optional `tint`,
+  `mask` and `fallback` as in [a list's icons](../docs/list-tree.md#icons).
+  Without one Pane shows a tile with the title's first letter. An unknown
+  built-in name or an image the package does not ship is refused at
+  install, with the reason; a package from npm or Git without its own
+  512×512 icon is installed with a caution. Each command may have an
+  `icon` of its own; one without shows its package's. A list's own
+  images live under the package's `assets` folder, which Pane copies with
+  the package.
 - `apiVersion` (required): the `pane:extension` contract the components are
   built against, `MAJOR.MINOR` (this Pane provides `0.1`, from
   [`wit/extension.wit`](../wit/extension.wit)). Before 1.0 the minor version
@@ -1409,8 +2082,8 @@ function Pane calls with the types it calls it with, and for a command with
 A component built against an older shape of the same `apiVersion` (the
 pre-release API 0.1 changes between slices) is therefore refused at install,
 naming the first mismatch ("it was built for an older extension API shape:
-rebuild it against Pane's current extension API 0.1 (`get-view`: type
-mismatch for field items: expected record of 6 fields, found 4 fields)");
+rebuild it against Pane's current extension API 0.1 (it has no function
+`render`)");
 rebuild it against the current [`wit/extension.wit`](../wit/extension.wit).
 
 Where the component comes from is up to your build. A standalone Rust crate
@@ -1508,11 +2181,11 @@ two stages, and a failure in each is reported differently:
    instances are stopped (an open command, form or custom view of the
    package closes; root search then selects its command), and the new code
    starts: Pane starts each of the package's commands available on this
-   system and asks it for its view (`get-view`). Success shows "Reloaded
+   system and asks it for its view (`render`). Success shows "Reloaded
    Dev". If a command fails to initialize (it traps, or its component
    cannot load or be instantiated), its instances are stopped again and the
    package is reported as failed to start. An error the command returns
-   from `get-view` itself, such as asking the user to sign in first, is an
+   from `render` itself, such as asking the user to sign in first, is an
    ordinary answer and not a failure to start. On a failure to start: the package's row says "Failed to start", a **Retry
    starting <title>** row appears under its Reload row with the diagnostics
    (for a trap, the guest backtrace), which Pane also writes to its standard
@@ -1702,7 +2375,8 @@ Known limits of local packages so far:
   unresponsive, which counts towards pausing its package like a crash
   (#18, [pausing](../docs/pausing.md#when-an-extension-stops-responding)):
   waiting does not count, but awaiting does not reset the count either, so
-  split long work into calls. A native helper runs for at most 30 seconds.
+  split long work into calls. A native helper has no time limit of Pane's
+  own; the command's own timeout (dropping the run) ends it.
 - Background services, timers and hotkeys are not part of the extension
   API yet and come with their own tickets. Disabling does not yet consider
   packages that depend on the disabled one (#43).

@@ -3,7 +3,8 @@
 //! through the launcher's public interface, a native WASI 0.3 async wait,
 //! fresh state per instance, a form the guest validates, a color picker the
 //! guest draws and changes on keys and pointer input, a root result
-//! computed from the query, and WASI 0.3-only imports.
+//! computed from the query, WASI 0.3-only imports, and memory within the
+//! cap Pane puts on each guest.
 //!
 //! Components come from `cargo xtask guests`; the JavaScript and TypeScript
 //! ones are the prebuilt components in `guests/prebuilt/`.
@@ -13,7 +14,8 @@ use std::path::PathBuf;
 use futures::executor::block_on;
 use pane_core::{
     CallError, Choice, CommandRegistration, CustomViewRole, FieldKind, FieldValue, FormError,
-    FormField, Key, Launcher, Point, Rgb, Runtime, Screen, Shape, Status, Unavailable, ViewEvent,
+    FormField, GUEST_MEMORY, Key, Launcher, Point, Rgb, Runtime, Screen, Shape, Status,
+    Unavailable, ViewEvent,
 };
 use wasmtime::component::Component;
 use wasmtime::{Config, Engine};
@@ -21,9 +23,12 @@ use wasmtime::{Config, Engine};
 #[path = "support/platforms.rs"]
 mod platforms;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/guests.rs"]
 mod guests;
 
+use feedback::shown;
 use guests::guest;
 
 struct Sample {
@@ -79,7 +84,8 @@ impl Sample {
         launcher
     }
 
-    /// Runs the item `id` in an opened launcher and returns the status.
+    /// Runs the item `id` in an opened launcher and returns what it showed:
+    /// its toast, or the status line.
     fn run(&self, launcher: &Launcher, id: &str) -> Status {
         let index = launcher
             .view()
@@ -89,7 +95,7 @@ impl Sample {
             .unwrap_or_else(|| panic!("the {} sample has no {id} item", self.language));
         launcher.select(index);
         block_on(launcher.activate_selected());
-        launcher.view().status
+        shown(launcher)
     }
 
     /// A launcher with this sample's form opened.
@@ -124,11 +130,13 @@ impl Sample {
         launcher
     }
 
-    /// The random item's answer in a runtime of its own.
+    /// The number the random item's toast shows, in a runtime of its own.
     fn fresh_random(&self) -> f64 {
-        let answer = block_on(Runtime::start().unwrap().run_action(&self.path(), "random"))
-            .expect("the random item answers");
-        let value: f64 = answer.parse().expect("the answer is a number");
+        let launcher = self.open();
+        let value: f64 = match self.run(&launcher, "random") {
+            Status::Result(text) => text.parse().expect("the toast shows a number"),
+            other => panic!("the random item shows no number: {other:?}"),
+        };
         assert!((0.0..1.0).contains(&value), "{value} is not in [0, 1)");
         value
     }
@@ -165,7 +173,7 @@ fn an_async_wasi_wait_shows_running_until_it_answers(sample: &Sample) {
     block_on(pending);
 
     assert_eq!(
-        launcher.view().status,
+        shown(&launcher),
         Status::Result(format!("Waited 50 ms inside the {} guest", sample.language))
     );
 }
@@ -184,13 +192,19 @@ fn a_validation_failure_is_shown_as_an_error(sample: &Sample) {
     assert!(matches!(sample.run(&launcher, "greet"), Status::Result(_)));
 }
 
-fn an_unknown_item_is_a_guest_error(sample: &Sample) {
+/// A callback the sample's list does not name is the guest's error, the
+/// same in each SDK; asking to run an item the list lacks is one too.
+fn an_unknown_action_is_a_guest_error(sample: &Sample) {
     let runtime = Runtime::start().unwrap();
 
-    let answer = block_on(runtime.run_action(&sample.path(), "missing"));
+    let answer = block_on(runtime.handle_event(&sample.path(), "missing", "{}"));
 
     assert_eq!(
         answer,
+        Err(CallError::Guest("unknown action: missing".into()))
+    );
+    assert_eq!(
+        block_on(runtime.run_item(&sample.path(), "missing")),
         Err(CallError::Guest("unknown item: missing".into()))
     );
 }
@@ -246,6 +260,8 @@ fn opening_the_form_shows_its_fields(sample: &Sample) {
                 },
                 value: String::new(),
                 error: None,
+                description: None,
+                required: false,
             },
             FormField {
                 id: "greeting".into(),
@@ -257,6 +273,8 @@ fn opening_the_form_shows_its_fields(sample: &Sample) {
                 ]),
                 value: "hello".into(),
                 error: None,
+                description: None,
+                required: false,
             },
         ]
     );
@@ -602,6 +620,33 @@ fn a_root_result_opens_a_web_link(sample: &Sample) {
     );
 }
 
+/// The commands, forms, views and root results of the sample, one after
+/// another in this process, stay under the cap on a guest's memory; the
+/// largest memory its instances had is printed for a verify run's log
+/// (`.config/nextest.toml` shows it on success).
+fn the_guest_stays_under_the_memory_cap(sample: &Sample) {
+    greeting_shows_the_guests_answer(sample);
+    an_async_wasi_wait_shows_running_until_it_answers(sample);
+    one_instance_rolls_a_new_number_each_time(sample);
+    a_valid_form_shows_the_guests_answer(sample);
+    an_unknown_choice_is_a_field_error_from_the_guest(sample);
+    keys_move_the_chosen_color(sample);
+    pressing_and_dragging_the_pointer_chooses_swatches(sample);
+    views_open_at_once_keep_their_own_state(sample);
+    reverse_typed_into_root_search_lists_the_reversed_text_to_copy(sample);
+    a_root_result_opens_a_web_link(sample);
+
+    let peak =
+        pane_core::memory_peak(&format!("{}.wasm", sample.component)).expect("the sample ran");
+    println!(
+        "memory peak of the {} sample through its contract: {:.1} MiB of {} MiB",
+        sample.language,
+        peak as f64 / (1024.0 * 1024.0),
+        GUEST_MEMORY / (1024 * 1024)
+    );
+    assert!(peak <= GUEST_MEMORY, "{peak} bytes");
+}
+
 /// Declares one test per check for each sample.
 macro_rules! contract {
     ($($check:ident),* $(,)?) => {
@@ -622,7 +667,7 @@ contract!(
     greeting_shows_the_guests_answer,
     an_async_wasi_wait_shows_running_until_it_answers,
     a_validation_failure_is_shown_as_an_error,
-    an_unknown_item_is_a_guest_error,
+    an_unknown_action_is_a_guest_error,
     separately_started_runtimes_roll_different_numbers,
     one_instance_rolls_a_new_number_each_time,
     the_component_imports_only_wasi_0_3,
@@ -640,6 +685,7 @@ contract!(
     an_unknown_view_is_a_guest_error,
     reverse_typed_into_root_search_lists_the_reversed_text_to_copy,
     a_root_result_opens_a_web_link,
+    the_guest_stays_under_the_memory_cap,
 );
 
 /// The names of the component's imports.

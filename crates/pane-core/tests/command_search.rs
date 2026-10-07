@@ -6,7 +6,12 @@
 //! service is the fixture service, a made-up package registry each test
 //! serves on a free port of 127.0.0.1: nothing here reaches the network
 //! beyond this computer.
+//!
+//! While a command's call waits on the service, Pane serves other calls
+//! (#136): the calculator, another package, answers root search meanwhile.
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/service.rs"]
 mod service;
 #[path = "support/unreachable.rs"]
@@ -18,10 +23,13 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::task::{Poll, Waker};
 use std::time::{Duration, Instant};
 
+use feedback::shown;
 use futures::executor::block_on;
+use pane_core::hotkeys::{HotkeyError, Hotkeys, Shortcut};
 use pane_core::{
     Fault, HttpLimits, Launcher, PackageIdentity, Runtime, RuntimeStatus, SavedData, Screen, Status,
 };
+use serde_json::{Value, json};
 use service::Service;
 use tempfile::TempDir;
 
@@ -146,13 +154,35 @@ impl Pane {
     }
 
     fn activate(&self, title: &str) {
+        self.select(title);
+        block_on(self.launcher.activate_selected());
+    }
+
+    fn select(&self, title: &str) {
         let index = self
             .titles()
             .iter()
             .position(|row| row == title)
             .unwrap_or_else(|| panic!("no row {title:?} in {:?}", self.titles()));
         self.launcher.select(index);
-        block_on(self.launcher.activate_selected());
+    }
+
+    /// Activates the row titled `title` on another thread, returning the
+    /// thread, which ends once the activation does.
+    fn activate_in_background(&self, title: &str) -> std::thread::JoinHandle<()> {
+        self.select(title);
+        let activating = self.launcher.activate_selected();
+        std::thread::spawn(move || block_on(activating))
+    }
+
+    /// The identity of the installed package titled `title`.
+    fn identity_of(&self, title: &str) -> PackageIdentity {
+        self.launcher
+            .packages()
+            .into_iter()
+            .find(|package| package.title() == title)
+            .unwrap_or_else(|| panic!("{title} is not installed"))
+            .identity
     }
 
     fn to_root(&self) {
@@ -207,8 +237,10 @@ impl Pane {
         block_on(self.launcher.set_query(text));
     }
 
+    /// The error shown: a search's in the status line, or an action's
+    /// failure toast.
     fn error(&self) -> String {
-        match self.view().status {
+        match shown(&self.launcher) {
             Status::Error(message) => message,
             other => panic!("expected an error, found {other:?}"),
         }
@@ -305,7 +337,7 @@ fn the_service_results_are_listed_and_open_their_details() {
         // Enter asks the service for the package's details.
         pane.activate("aurora-cli");
         assert_eq!(
-            pane.view().status,
+            shown(&pane.launcher),
             Status::Result(
                 "aurora-cli 0.9.3 (Apache-2.0): Command-line parsing with subcommands".into()
             ),
@@ -844,6 +876,198 @@ fn stopped_while_it_waits(fixture: &Fixture, happen: impl FnOnce(&Pane)) -> (Pan
     (pane, service)
 }
 
+/// Activates the details of `stall-details`, whose answer the service
+/// starts and never finishes, and returns the activation's thread once the
+/// command waits on it.
+fn waiting_on_the_service(pane: &Pane, service: &Service) -> std::thread::JoinHandle<()> {
+    pane.use_service(&service.url());
+    pane.search("misbehaving");
+    let waiting = pane.activate_in_background("stall-details");
+    wait_for_request(service, "/packages/stall-details");
+    waiting
+}
+
+/// While a command's call waits on a slow web request, another package's
+/// calls are served: the calculator answers root search. What the waiting
+/// call set up is on its generation's undo list, and disabling the package
+/// runs the list: the request is dropped (the service sees Pane hang up)
+/// and the list is empty.
+#[test]
+fn other_extensions_answer_while_a_call_waits_on_the_network() {
+    for fixture in &ALL {
+        let service = Service::start();
+        let pane = Pane::with(fixture);
+        pane.install("calculator");
+        let identity = pane.identity_of(fixture.title);
+        let waiting = waiting_on_the_service(&pane, &service);
+        #[cfg(debug_assertions)]
+        {
+            let listed = pane.launcher.undo_list(&identity);
+            assert!(
+                listed.contains(&"extension instance") && listed.contains(&"web request"),
+                "{}: {listed:?}",
+                fixture.package
+            );
+        }
+
+        pane.to_root();
+        pane.search("1 + 1");
+
+        assert_eq!(
+            pane.titles().first().map(String::as_str),
+            Some("2"),
+            "{}",
+            fixture.package
+        );
+        assert!(
+            !waiting.is_finished(),
+            "{}: the waiting call ended first",
+            fixture.package
+        );
+        assert!(service.abandoned().is_empty(), "{:?}", service.abandoned());
+        block_on(pane.launcher.set_enabled(&identity, false));
+        assert!(
+            service.wait_for_abandoned(Duration::from_secs(5)),
+            "{}: the request was not dropped",
+            fixture.package
+        );
+        waiting.join().unwrap();
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            pane.launcher.undo_list(&identity),
+            Vec::<&str>::new(),
+            "{}",
+            fixture.package
+        );
+    }
+}
+
+/// Pane quitting while a call waits on the network ends the wait at once:
+/// the request is dropped, and the call answers.
+#[test]
+fn quitting_while_a_call_waits_on_the_network_ends_the_wait() {
+    let service = Service::start();
+    let pane = Pane::with(&RUST);
+    let waiting = waiting_on_the_service(&pane, &service);
+
+    pane.runtime.quit();
+
+    assert!(
+        service.wait_for_abandoned(Duration::from_secs(5)),
+        "the request was not dropped"
+    );
+    waiting.join().unwrap();
+    assert!(block_on(pane.runtime.running()).is_empty());
+}
+
+/// A system whose global hotkeys always register.
+#[derive(Default)]
+struct FakeHotkeys;
+
+impl Hotkeys for FakeHotkeys {
+    fn unavailable(&self) -> Option<String> {
+        None
+    }
+
+    fn register(&self, _shortcut: &Shortcut) -> Result<(), HotkeyError> {
+        Ok(())
+    }
+
+    fn unregister(&self, _shortcut: &Shortcut) {}
+}
+
+/// Every subsystem that sets something up for a package's generation puts
+/// it on the generation's undo list (#136): with one package whose
+/// commands search, run on a schedule and run a continuing service, one of
+/// them with a hotkey, the list holds the instances, the schedule, the
+/// service, the hotkey, a search in progress and its web request; the
+/// generation's end runs the list, which is empty after it.
+#[cfg(debug_assertions)]
+#[test]
+fn a_generation_s_undo_list_holds_every_subsystem_and_is_empty_after_its_end() {
+    let service = Service::start();
+    let sources = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    // The search sample, with the schedule and service samples' commands.
+    let folder = package("sample-search", &sources.path().join("everything"));
+    for (assembled, component) in [
+        ("sample-schedule", "sample_schedule.wasm"),
+        ("sample-service", "sample_service.wasm"),
+    ] {
+        let from = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/guests/packages")
+            .join(assembled)
+            .join(component);
+        fs::copy(&from, folder.join(component)).unwrap();
+    }
+    let mut manifest: Value =
+        serde_json::from_str(&fs::read_to_string(folder.join("pane.json")).unwrap()).unwrap();
+    manifest["commands"].as_array_mut().unwrap().extend([
+        json!({
+            "id": "counting",
+            "title": "Counting",
+            "component": "sample_schedule.wasm",
+            "schedule": { "everySeconds": 60, "item": "count" }
+        }),
+        json!({
+            "id": "watching",
+            "title": "Watching",
+            "component": "sample_service.wasm",
+            "service": true
+        }),
+    ]);
+    fs::write(folder.join("pane.json"), manifest.to_string()).unwrap();
+    let runtime = Runtime::start().unwrap();
+    let launcher =
+        Launcher::with_packages(Ok(runtime.clone()), vec![], data.path().join("extensions"))
+            .with_hotkeys(Arc::new(FakeHotkeys));
+    block_on(launcher.install_package(&folder));
+    assert!(
+        matches!(launcher.view().status, Status::Result(_)),
+        "{:?}",
+        launcher.view().status
+    );
+    let pane = Pane {
+        launcher,
+        runtime,
+        _sources: sources,
+        _data: data,
+    };
+    let identity = pane.identity();
+    let counting = format!("{}#counting", identity.key());
+    let hotkey = pane
+        .launcher
+        .set_hotkey(&counting, Some(Shortcut::parse("ctrl+alt+g").unwrap()))
+        .unwrap();
+    block_on(hotkey);
+    assert!(pane.launcher.wait_for_schedules(Duration::from_secs(10)));
+    assert!(pane.launcher.wait_for_services(Duration::from_secs(10)));
+
+    // A search waits on the service.
+    pane.use_service(&service.url());
+    let slow = pane.launcher.set_query("slow");
+    wait_for_request(&service, "/search?q=slow");
+    let listed = pane.launcher.undo_list(&identity);
+    for what in [
+        "extension instance",
+        "schedule",
+        "service",
+        "hotkey",
+        "command search",
+        "web request",
+    ] {
+        assert!(listed.contains(&what), "no {what} in {listed:?}");
+    }
+
+    block_on(pane.launcher.set_enabled(&identity, false));
+    assert!(
+        service.wait_for_abandoned(Duration::from_secs(5)),
+        "the search was not stopped"
+    );
+    block_on(slow);
+    assert_eq!(pane.launcher.undo_list(&identity), Vec::<&str>::new());
+}
+
 #[test]
 fn disabling_the_package_stops_its_search() {
     for fixture in &ALL {
@@ -918,7 +1142,10 @@ fn a_crash_of_the_runtime_ends_a_search_with_an_error_not_its_results() {
 }
 
 #[test]
-fn a_command_cannot_both_search_inside_itself_and_answer_root_search() {
+fn a_command_that_searches_inside_itself_and_answers_root_search_needs_both_exports() {
+    // A command may do both (Search Files does, #150), as long as its
+    // component exports both interfaces: the search sample exports no root
+    // results, so saying it computes them is refused for that alone.
     let sources = tempfile::tempdir().unwrap();
     let data = tempfile::tempdir().unwrap();
     let folder = package(RUST.package, &sources.path().join("both"));
@@ -934,12 +1161,10 @@ fn a_command_cannot_both_search_inside_itself_and_answer_root_search() {
         panic!("installed: {:?}", launcher.view().status);
     };
     assert!(
-        message.contains(
-            "command `packages` sets both `search` and `rootResults`: a command that \
-             searches inside itself is never asked by root search"
-        ),
+        message.contains("its manifest says it computes root results, but it does not export"),
         "{message}"
     );
+    assert!(!message.contains("sets both"), "{message}");
 }
 
 #[test]

@@ -24,8 +24,8 @@ import type {
   FieldValue,
   Form,
   FormError,
+  List,
   PublishedOperations,
-  View,
 } from "@pane/extension";
 import { call, type CallError } from "pane:extension/operations@0.1.0";
 import { set } from "pane:extension/settings@0.1.0";
@@ -95,7 +95,7 @@ const waitForm: Form = {
   submitLabel: "Wait",
 };
 
-async function getView(): Promise<View> {
+async function render(): Promise<List> {
   return {
     title: "Call from TypeScript",
     items: [
@@ -113,10 +113,6 @@ async function getView(): Promise<View> {
       },
     ],
   };
-}
-
-async function runAction(itemId: string): Promise<string> {
-  throw new Error(`unknown item: ${itemId}`);
 }
 
 async function submitForm(itemId: string, values: FieldValue[]): Promise<string> {
@@ -173,6 +169,6 @@ async function runOperation(operation: string, input: string): Promise<string> {
   return JSON.stringify(result);
 }
 
-export const command: Command = { getView, runAction, submitForm, openView };
+export const command: Command = { render, submitForm, openView };
 
 export const publishedOperations: PublishedOperations = { runOperation };

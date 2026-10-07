@@ -25,7 +25,10 @@
 //! listener goes on listening.
 
 use std::cell::RefCell;
+use std::ffi::OsString;
 use std::io::Write;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -43,16 +46,26 @@ use ::windows::Win32::System::Memory::{
 use ::windows::Win32::System::Threading::{
     OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
+use ::windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
 use ::windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, GetWindowThreadProcessId, KillTimer, SetTimer, WM_CLIPBOARDUPDATE, WM_TIMER,
 };
 use ::windows::core::{PCWSTR, PWSTR, w};
 
 use super::{ClipboardSystem, Content, MAX_TEXT_BYTES, Markers, Observation, Sink, Watch};
+use crate::system::{CONCEALED_MARKERS, Clip};
 use crate::threads::windows::{MessageThread, Window, WindowClass, stop_sent};
 
 /// `CF_UNICODETEXT`: text as UTF-16, ending with a NUL.
 const CF_UNICODETEXT: u32 = 13;
+
+/// `CF_HDROP`: the files copied in File Explorer, as a `DROPFILES` header
+/// and a list of paths.
+const CF_HDROP: u32 = 15;
+
+/// The registered format that tells File Explorer what pasting files does,
+/// and its value for copying them (`DROPEFFECT_COPY`) rather than moving.
+const PREFERRED_DROP_EFFECT: (&str, u32) = ("Preferred DropEffect", 1);
 
 /// The listener's window, which receives the clipboard's changes.
 static LISTENER_CLASS: WindowClass = WindowClass::new("PaneClipboardListener", listener_procedure);
@@ -417,19 +430,27 @@ fn owner_program() -> Option<String> {
 /// `markers` (a registered format's name and its DWORD value), owned by
 /// `owner`, a window of this thread.
 fn write(owner: &Window, text: &str, markers: &[(&str, u32)]) -> Result<(), String> {
+    let mut units: Vec<u16> = text.encode_utf16().collect();
+    units.push(0);
+    let text: Vec<u8> = units.iter().flat_map(|unit| unit.to_le_bytes()).collect();
+    write_formats(owner, &[(CF_UNICODETEXT, text)], markers)
+}
+
+/// Puts each of `formats` (a format and its bytes) on the clipboard,
+/// replacing what was there, with each of `markers` as [`write`] does,
+/// owned by `owner`, a window of this thread.
+fn write_formats(
+    owner: &Window,
+    formats: &[(u32, Vec<u8>)],
+    markers: &[(&str, u32)],
+) -> Result<(), String> {
     let _open = OpenedClipboard::by(owner.handle())?;
     // SAFETY: the clipboard is open by this thread; emptying it makes
     // `owner` its owner.
     unsafe { EmptyClipboard() }.map_err(|error| error.message())?;
-    let mut units: Vec<u16> = text.encode_utf16().collect();
-    units.push(0);
-    put(
-        CF_UNICODETEXT,
-        &units
-            .iter()
-            .flat_map(|unit| unit.to_le_bytes())
-            .collect::<Vec<u8>>(),
-    )?;
+    for (format, bytes) in formats {
+        put(*format, bytes)?;
+    }
     for (name, value) in markers {
         let mut wide: Vec<u16> = name.encode_utf16().collect();
         wide.push(0);
@@ -463,6 +484,88 @@ fn put(format: u32, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// Puts `clip` on the clipboard for a command (`crate::system`): text, or a
+/// file as File Explorer copies one, with the markers of a concealed copy
+/// when `concealed`. Owned by a window of the calling thread, destroyed
+/// once the clipboard is closed: what was put stays there.
+pub(crate) fn put_clip(clip: &Clip, concealed: bool) -> Result<(), String> {
+    let owner = WRITER_CLASS.message_window()?;
+    let mut markers: Vec<(&str, u32)> = if concealed {
+        CONCEALED_MARKERS.to_vec()
+    } else {
+        Vec::new()
+    };
+    match clip {
+        Clip::Text(text) => write(&owner, text, &markers),
+        Clip::File(path) => {
+            markers.push(PREFERRED_DROP_EFFECT);
+            write_formats(&owner, &[(CF_HDROP, drop_files(path))], &markers)
+        }
+    }
+}
+
+/// `path` as `CF_HDROP` carries it: a `DROPFILES` header (the offset of
+/// the list, a point, whether it is in the non-client area, and that the
+/// paths are UTF-16), then the path, its NUL and the list's closing NUL.
+fn drop_files(path: &Path) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    // pFiles: the list follows the 20-byte header.
+    bytes.extend_from_slice(&20u32.to_le_bytes());
+    // pt.x, pt.y, fNC.
+    for _ in 0..3 {
+        bytes.extend_from_slice(&0i32.to_le_bytes());
+    }
+    // fWide.
+    bytes.extend_from_slice(&1i32.to_le_bytes());
+    for unit in path.as_os_str().encode_wide() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    bytes.extend_from_slice(&[0, 0, 0, 0]);
+    bytes
+}
+
+/// What the clipboard holds for a command (`crate::system`): the first file
+/// copied in File Explorer, else its text, else nothing. Text longer than
+/// `limit` bytes of UTF-8 is refused rather than read whole.
+pub(crate) fn read_clip(limit: usize) -> Result<Option<Clip>, String> {
+    let owner = WRITER_CLASS.message_window()?;
+    let _open = OpenedClipboard::by(owner.handle())?;
+    if available(CF_HDROP)
+        // SAFETY: the clipboard is open; the handle stays the clipboard's.
+        && let Ok(handle) = unsafe { GetClipboardData(CF_HDROP) }
+    {
+        let files = HDROP(handle.0);
+        // SAFETY: `files` is the clipboard's drop list; asking for a
+        // length passes no buffer.
+        let length = unsafe { DragQueryFileW(files, 0, None) } as usize;
+        if length > 0 {
+            let mut name = vec![0u16; length + 1];
+            // SAFETY: `name` is writable for its length, NUL included.
+            let copied = unsafe { DragQueryFileW(files, 0, Some(&mut name)) } as usize;
+            let path = OsString::from_wide(&name[..copied.min(length)]);
+            return Ok(Some(Clip::File(PathBuf::from(path))));
+        }
+    }
+    let Some(bytes) = bytes(CF_UNICODETEXT, (limit + 1) * 2) else {
+        return Ok(None);
+    };
+    let units: Vec<u16> = bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u16::from_le_bytes(*pair))
+        .take_while(|unit| *unit != 0)
+        .collect();
+    let text = String::from_utf16_lossy(&units);
+    if text.len() > limit {
+        return Err(format!(
+            "The clipboard holds more text than Pane reads for a command ({} MiB)",
+            limit / (1024 * 1024)
+        ));
+    }
+    Ok(Some(Clip::Text(text)))
+}
+
 /// For the Windows adapter's test: putting text with markers on the
 /// clipboard, as a password manager does, owned by a window of this
 /// process. It replaces what was on the clipboard, which is not saved.
@@ -481,5 +584,34 @@ pub mod testing {
         let owner = WRITER_CLASS.message_window()?;
         write(&owner, text, markers)?;
         Ok(Owner(owner))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_copied_file_is_a_drop_list_of_one_wide_path() {
+        let bytes = drop_files(Path::new(r"C:\Notes\a.txt"));
+        assert_eq!(
+            &bytes[..4],
+            &20u32.to_le_bytes(),
+            "the list after the header"
+        );
+        assert_eq!(&bytes[16..20], &1i32.to_le_bytes(), "wide paths");
+        let units: Vec<u16> = bytes[20..]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
+            .collect();
+        let path: Vec<u16> = r"C:\Notes\a.txt".encode_utf16().collect();
+        assert_eq!(&units[..path.len()], path.as_slice());
+        assert_eq!(
+            &units[path.len()..],
+            &[0, 0],
+            "the path's NUL, then the list's"
+        );
     }
 }

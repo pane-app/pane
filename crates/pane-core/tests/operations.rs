@@ -18,11 +18,14 @@ use tempfile::TempDir;
 #[path = "support/platforms.rs"]
 mod platforms;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/guests.rs"]
 mod guests;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use guests::guest_file as guest;
 use rows::{select_title, titles};
 
@@ -357,10 +360,11 @@ impl Dirs {
     }
 }
 
-/// Runs the fixture command's item `item` from package `a`.
+/// Runs the fixture command's item `item` from package `a`, returning
+/// what it showed: its toast, or the status line.
 fn fixture_run(launcher: &Launcher, item: &str) -> Status {
     open_item(launcher, "Operations fixture", item);
-    launcher.view().status
+    shown(launcher)
 }
 
 fn error(text: &str) -> Status {
@@ -959,7 +963,7 @@ fn disabling_a_target_stops_the_call_it_serves_and_its_caller_is_told() {
     );
     // The caller carries on with the error and answers at once.
     assert_eq!(
-        launcher.view().status,
+        shown(&launcher),
         error(
             "disabled: Package b is disabled; Pane does not enable it for a call, enable it \
              in Manage extensions"
@@ -1039,9 +1043,10 @@ fn reloading_a_target_stops_the_call_it_serves_and_its_caller_is_told() {
         "{:?}",
         started.elapsed()
     );
-    // The caller's answer and the reload's own both go to the status line,
-    // in whichever order they finish; either is the last one shown.
-    let status = launcher.view().status;
+    // The caller's answer (a failure toast) and the reload's own (in the
+    // status line) are both shown, in whichever order they finish; either
+    // is the last one shown.
+    let status = shown(&launcher);
     assert!(
         status
             == error(

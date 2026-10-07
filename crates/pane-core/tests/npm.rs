@@ -31,11 +31,14 @@ mod unreachable;
 
 use npm_registry::{Registry, greeter_files, integrity, pack, pack_raw};
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/guests.rs"]
 mod guests;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use guests::{guest_file as guest, guests};
 use rows::{select_title, titles};
 
@@ -153,7 +156,7 @@ fn installed(launcher: &Launcher) -> Vec<String> {
 }
 
 /// Opens the command titled `command` from root search and runs its item
-/// titled `item`, returning the status.
+/// titled `item`, returning what it showed: its toast, or the status line.
 fn run(launcher: &Launcher, command: &str, item: &str) -> Status {
     for _ in 0..3 {
         launcher.back();
@@ -162,7 +165,7 @@ fn run(launcher: &Launcher, command: &str, item: &str) -> Status {
     block_on(launcher.activate_selected());
     select_title(launcher, item);
     block_on(launcher.activate_selected());
-    launcher.view().status
+    shown(launcher)
 }
 
 fn error_of(launcher: &Launcher) -> String {

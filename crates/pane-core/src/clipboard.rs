@@ -49,11 +49,11 @@ use crate::extension_data::{ExtensionData, PackageData};
 
 pub(crate) mod history;
 #[cfg(target_os = "linux")]
-mod linux;
+pub(crate) mod linux;
 #[cfg(target_os = "macos")]
-mod macos;
+pub(crate) mod macos;
 #[cfg(target_os = "windows")]
-mod windows;
+pub(crate) mod windows;
 
 pub use history::Item;
 #[cfg(target_os = "linux")]

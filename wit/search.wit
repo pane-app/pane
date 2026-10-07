@@ -22,19 +22,31 @@ package pane:extension@0.1.0;
 interface command-search {
   /// One thing the search found, listed as a row of the command.
   record search-result {
-    /// Passed to the command's `run-action` when the user activates the
-    /// row, so it should say which result it is (the command's instance
-    /// may have been replaced meanwhile).
+    /// Passed to the command's `handle-event` as the callback id when the
+    /// user activates the row, so it should say which result it is (the
+    /// command's instance may have been replaced meanwhile).
     id: string,
     title: string,
     subtitle: option<string>,
+    /// A file of the folder granted to the command's package (wit/files.wit),
+    /// by the id `files.list-folder` gave it in the package's latest
+    /// listing, when the result is that file (Search Files). Pane then
+    /// lists it with the file's own name and folder, whatever `title` and
+    /// `subtitle` say, and gives it Pane's own file actions (Open, Reveal,
+    /// Open With…, Copy Path, Copy File, Move to Recycle Bin; for a program
+    /// or script Enter reveals it and only Run runs it), which Pane
+    /// performs without calling the command. A file id Pane did not give
+    /// is not listed. `none` for any other result, which the command's
+    /// `handle-event` runs as before.
+    file: option<string>,
   }
 
   /// Searches for `query`, the text in the search field of the command
   /// `command` (its id in `pane.json`, so one component can serve several
   /// commands), trimmed and never empty. The results replace the command's
-  /// list while the text stays; activating one runs `run-action` with its
-  /// id, whose answer is shown as an item's is. An error is shown to the
+  /// list while the text stays; activating one calls `handle-event` with
+  /// its id as the callback, whose answer is shown as an item's action's
+  /// is. An error is shown to the
   /// user in place of results, and does not count against the extension: a
   /// service that is down or unreachable is an expected error, not a
   /// crash.

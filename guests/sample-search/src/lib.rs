@@ -14,16 +14,17 @@
 //! stopped where it waits for the service; an unreachable or failing
 //! service is an error shown in place of results, not a crash, so it never
 //! pauses the extension. Activating a result fetches that package's
-//! details. Items, answers and errors match the JavaScript and TypeScript
-//! samples.
+//! details and shows them in a toast. Items, toasts and errors match the
+//! JavaScript and TypeScript samples.
 #![no_std]
 
 use pane_guest::alloc::{borrow::ToOwned, format, string::String, vec, vec::Vec};
+use pane_guest::feedback::{Toast, show_toast};
 use pane_guest::http;
 use pane_guest::search::SearchResult;
 use pane_guest::{
-    CustomView, Field, FieldKind, FieldValue, Form, FormError, Guest, Item, NoCustomView,
-    TextField, View, settings,
+    Command, CustomView, Field, FieldKind, FieldValue, Form, FormError, Item, List, NoCustomView,
+    TextField, settings,
 };
 use serde::Deserialize;
 
@@ -100,57 +101,60 @@ fn encode(text: &str) -> String {
     encoded
 }
 
-impl Guest for Packages {
+/// Runs the action `id` and shows a toast with what [`outcome`] answers.
+async fn act(id: &str) -> Result<(), String> {
+    let done = outcome(id).await?;
+    show_toast(Toast::success(done));
+    Ok(())
+}
+
+/// What the action `id` answers: the "about" item's, or a search result's
+/// ("package:<name>"), which fetches that package's details.
+async fn outcome(id: &str) -> Result<String, String> {
+    if id == "about" {
+        return Ok("Type in the search field to search the package registry".into());
+    }
+    let Some(name) = id.strip_prefix("package:") else {
+        return Err(format!("unknown item: {id}"));
+    };
+    let details: Details = fetch(&format!("/packages/{}", encode(name))).await?;
+    Ok(format!(
+        "{} {} ({}): {}",
+        details.name, details.version, details.license, details.summary
+    ))
+}
+
+impl Command for Packages {
     type CustomView = NoCustomView;
 
-    async fn get_view() -> Result<View, String> {
-        let item = |id: &str, title: &str, subtitle: String| Item {
-            id: id.into(),
-            title: title.into(),
-            subtitle: Some(subtitle),
-            form: None,
-            platforms: None,
-            custom_view: None,
-        };
-        Ok(View {
-            title: "Package search".into(),
-            items: vec![
-                item(
-                    "about",
-                    "Type to search the package registry",
-                    "Results come from the service as you type; Enter shows a package's details"
-                        .into(),
-                ),
-                Item {
-                    form: Some(Form {
-                        title: "Service address".into(),
-                        fields: vec![Field {
-                            id: "address".into(),
-                            label: "Address".into(),
-                            kind: FieldKind::Text(TextField {
-                                placeholder: Some(DEFAULT_SERVICE.into()),
-                            }),
-                        }],
-                        submit_label: "Save".into(),
+    async fn render() -> Result<List, String> {
+        let item =
+            |id: &str, title: &str, subtitle: String| Item::new(id, title).subtitle(subtitle);
+        Ok(List::new("Package search").items([
+            item(
+                "about",
+                "Type to search the package registry",
+                "Results come from the service as you type; Enter shows a package's details".into(),
+            )
+            .on_action(|| act("about")),
+            item("service", "Service address", service()?).form(Form {
+                title: "Service address".into(),
+                fields: vec![Field {
+                    id: "address".into(),
+                    label: "Address".into(),
+                    kind: FieldKind::Text(TextField {
+                        placeholder: Some(DEFAULT_SERVICE.into()),
                     }),
-                    ..item("service", "Service address", service()?)
-                },
-            ],
-        })
+                }],
+                submit_label: "Save".into(),
+            }),
+        ]))
     }
 
-    async fn run_action(item_id: String) -> Result<String, String> {
-        if item_id == "about" {
-            return Ok("Type in the search field to search the package registry".into());
-        }
-        let Some(name) = item_id.strip_prefix("package:") else {
-            return Err(format!("unknown item: {item_id}"));
-        };
-        let details: Details = fetch(&format!("/packages/{}", encode(name))).await?;
-        Ok(format!(
-            "{} {} ({}): {}",
-            details.name, details.version, details.license, details.summary
-        ))
+    /// Runs the search result the user chose, by its id
+    /// ("package:<name>"): fetches that package's details and shows them.
+    async fn run_search_result(id: String) -> Result<(), String> {
+        act(&id).await
     }
 
     async fn submit_form(item_id: String, values: Vec<FieldValue>) -> Result<String, FormError> {
@@ -196,6 +200,8 @@ impl pane_guest::search::Guest for Packages {
                 id: format!("package:{}", package.name),
                 title: package.name,
                 subtitle: Some(package.summary),
+                // A package, not a file of a granted folder.
+                file: None,
             })
             .collect())
     }

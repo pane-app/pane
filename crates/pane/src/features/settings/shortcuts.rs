@@ -61,7 +61,8 @@ use pane_core::{
 
 use super::{Page, SettingsWindow, search};
 use crate::ui::controls;
-use crate::ui::icon::{Glyph, glyph_rotated};
+use crate::ui::extension_icon::row_icon_at;
+use crate::ui::icon::{Glyph, TileSize, glyph_rotated};
 use crate::ui::motion;
 use crate::ui::theme::Theme;
 
@@ -1043,6 +1044,23 @@ fn group_element(
         theme.nav_icon,
         gpui::radians(angle),
     );
+    // The extension's own icon after the chevron (#139).
+    let icon = group.identity.as_ref().map(|_| {
+        row_icon_at(
+            &crate::features::icons::row_icon_of(&this.launcher, &key, theme),
+            TileSize::Mini,
+            "group-icon",
+            &format!("shortcut-group-{key}"),
+            theme,
+        )
+    });
+    let chevron = div()
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap(theme.geometry.settings.item_gap)
+        .child(chevron)
+        .children(icon);
     let ring = controls::focus_ring(theme);
     let header = controls::group_header(key.clone(), chevron, group.title.clone(), lines, theme)
         .debug_selector(|| format!("shortcut-group-{key}"))
@@ -1166,9 +1184,22 @@ fn row_element(
         alias_cell(this, command, theme, cx)
     };
     let hotkey = hotkey_cell(this, command, theme, cx);
+    // The command's own icon, or its extension's, before its name (#139).
+    let label = div()
+        .flex()
+        .items_center()
+        .gap(theme.geometry.settings.item_gap)
+        .child(row_icon_at(
+            &crate::features::icons::row_icon_of(&this.launcher, &id, theme),
+            TileSize::Mini,
+            "command-icon",
+            &format!("shortcut-row-{id}"),
+            theme,
+        ))
+        .child(controls::field_label(command.title.clone(), theme));
     // The row's parts align at their tops, padded as a described row is,
     // so a note growing under a cell never moves the others.
-    controls::setting_row(command.title.clone(), lines, theme)
+    controls::setting_row_with(label, lines, theme)
         .items_start()
         .py(theme.geometry.controls.row_padding_y)
         .id(format!("row-{id}"))

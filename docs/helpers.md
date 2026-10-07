@@ -54,7 +54,7 @@ component; Pane never compiles a helper.
   | --- | --- |
   | `not-found` | The package's `pane.json` declares no helper by that name ("Helper sample declares no helper `absent` in its pane.json; it declares `echo`"). |
   | `unavailable` | No file for this target ("Not available on Linux arm64: helper `echo` is built only for Linux x86-64, macOS arm64 and Windows x86-64"), the file is missing or is a program for another system, or the system would not start it. |
-  | `failed` | The helper exited unsuccessfully ("helper `echo` failed (exit code 3): pane-echo was asked to fail", with the last 2 KB of its standard error), its output is not UTF-8 text, or it ran past Pane's time limit and was ended ("helper `echo` did not finish within 30 seconds; Pane ended it", #18). |
+  | `failed` | The helper exited unsuccessfully ("helper `echo` failed (exit code 3): pane-echo was asked to fail", with the last 2 KB of its standard error), or its output is not UTF-8 text. |
   | `refused` | The command's code was stopped (disabled, reloaded, updated, paused, uninstalled), the command is built into Pane rather than an installed package's, the input (1 MiB), arguments (64, 64 KiB) or output (1 MiB) are over Pane's limits, or Pane stopped the run. |
 
 ## Installing and choosing the file
@@ -109,11 +109,10 @@ for all.
 | --- | --- |
 | The command **cancels** the run: it drops the call's future, for example when a timer wins a race with it | Wasmtime cancels the host task (`subtask.cancel`) and drops its future; dropping ends the process. |
 | The **Pane call** that started it returns while it still runs | The runtime ends the helpers the instance started when the call ends: a helper runs no longer than the call that started it. |
-| It has run for **30 seconds** (`HELPER_TIME_LIMIT`, #18) | The supervising thread ends it; the run fails with `failed`, an error the command handles like any other failure of its helper (never a crash, so it does not count towards [pausing](pausing.md#when-an-extension-stops-responding)). |
-| The package is **disabled, reloaded, updated, paused or uninstalled** | Its [generation](generations.md) ends. The supervising thread checks the generation itself, every 10 ms, so this holds even while the runtime thread is busy in another guest that does not yield; the call is also stopped and its instance dropped as for any call. |
+| The package is **disabled, reloaded, updated, paused or uninstalled** | Its [generation](generations.md) ends, and runs its undo list, on which every run is recorded while it runs: that asks the supervising thread to end the process at once. The supervising thread also checks the generation itself, every 10 ms, so this holds even while the runtime thread is busy in another guest that does not yield; the call is also stopped and its instance dropped as for any call. |
 | The guest **instance** goes (it crashed, was forgotten, the runtime stopped) | Dropping the instance's state ends the helpers it started. |
 | The **runtime thread crashes** (#17) | Unwinding drops its instances, which ask their helpers to end; then the crashed thread ends and reaps every helper still running, before Pane restarts the runtime or reports it stopped ([runtime crashes](pausing.md#when-the-extension-runtime-itself-crashes)). |
-| **Pane quits** | The app's quit handler ends every helper and waits for each to be reaped; from then on no helper starts ("Pane is quitting; helper `echo` does not start"), even one whose call was already under way. Dropping the last runtime handle does the same. |
+| **Pane quits** | The app's quit handler (`Runtime::quit`) ends every helper and waits for each to be reaped, then stops the runtime thread, dropping every call still waiting; from then on no helper starts ("Pane is quitting; helper `echo` does not start"). Dropping the last runtime handle does the same. |
 
 A helper that writes more than 1 MiB of output is ended too. Saved data is
 untouched: what the command saved before the helper was stopped is kept
@@ -137,16 +136,15 @@ untouched: what the command saved before the helper was stopped is kept
   folder is removed, so Windows can remove the program's folder. If a
   removal still fails, the folder is left over and removed at the next
   start, as for any folder in use.
-- **A 30-second limit** (a **provisional decision** of #18 that changes
-  #15's contract, which had no limit: pending the user's confirmation, see
-  [current decisions](current-decisions.md) item 11): a helper runs until it exits,
-  the command cancels it, the package stops or it has run for 30 seconds,
-  when Pane ends it. Pane serves extension calls one at a time, so a helper
-  that runs that long holds every other command's calls behind it
-  meanwhile; disabling its package ends it at once. The limit is Pane's,
-  the same for every helper: a helper cannot ask for more, and a longer
-  job must be split by the command. No user-facing cancel of a running
-  action exists yet
+- **No time limit of Pane's own** (#136, which replaced #18's provisional
+  30 seconds; [current decisions](current-decisions.md) item 11): a helper
+  runs until it exits, the command cancels it (its own timeout: the
+  samples' "Echo within a second" races the run against a timer and drops
+  it), the call that started it returns or the package stops. While a
+  command waits on its helper, Pane serves every other extension's calls;
+  only the command's own instance waits, since its calls run one after
+  another. The samples' "Echo after a long wait" runs a helper for 40
+  seconds. No user-facing cancel of a running action exists yet
   (generations: [no user cancellation](generations.md#what-stopping-cannot-do-yet)).
 - Text only: input and output are UTF-8 strings, not binary data or
   streams, and a run answers once, when the helper exits. The helper's

@@ -8,7 +8,8 @@
   "patches": [
     "0001-wasip3-runtime-port.patch",
     "0002-reseed-snapshot-random-state.patch",
-    "0003-stub-async-host-imports.patch"
+    "0003-stub-async-host-imports.patch",
+    "0004-task-context-stack-pointer.patch"
   ],
   "rust_nightly": "nightly-2026-09-27",
   "wasi_sdk": {

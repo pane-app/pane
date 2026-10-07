@@ -6,9 +6,6 @@
   "license": "Apache-2.0 OR MIT",
   "type": "module",
   "main": "src/index.ts",
-  "pane": {
-    "takesQuery": true
-  },
   "devDependencies": {
     "@pane/extension": "file:../js"
   }

@@ -1,0 +1,70 @@
+{
+  "manifestVersion": 1,
+  "title": "JavaScript arguments sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "greet",
+      "title": "Greet",
+      "subtitle": "A JavaScript command that asks for a name, a secret and a tone, then answers what it was given",
+      "component": "sample_arguments_js.wasm",
+      "mode": "no-view",
+      "arguments": [
+        {
+          "name": "name",
+          "type": "text",
+          "placeholder": "Name",
+          "required": true
+        },
+        {
+          "name": "secret",
+          "type": "password",
+          "placeholder": "Secret"
+        },
+        {
+          "name": "tone",
+          "type": "dropdown",
+          "placeholder": "Tone",
+          "options": [
+            {
+              "value": "warm",
+              "title": "Warm"
+            },
+            {
+              "value": "brief",
+              "title": "Brief"
+            },
+            {
+              "value": "formal",
+              "title": "Formal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "stamp",
+      "title": "Stamp",
+      "subtitle": "A JavaScript command that asks for a label, then stamps it",
+      "component": "sample_arguments_js.wasm",
+      "mode": "no-view",
+      "arguments": [
+        {
+          "name": "label",
+          "type": "text",
+          "placeholder": "Label",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "relay",
+      "title": "Relay",
+      "subtitle": "A JavaScript command that launches the command its text names with the arguments it lists",
+      "component": "sample_arguments_js.wasm",
+      "mode": "no-view",
+      "takesQuery": true
+    }
+  ]
+}

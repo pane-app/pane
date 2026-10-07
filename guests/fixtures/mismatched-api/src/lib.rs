@@ -1,5 +1,5 @@
 //! Test fixture: a guest built against `wit/extension.wit` here, Pane's
-//! contract with `item` lacking its `custom-view` field. Every export has
+//! contract with `form-error` lacking its `field` field. Every export has
 //! the name Pane looks for; only a type differs. Pane's type check must
 //! refuse it before any of its code runs.
 //!
@@ -10,13 +10,12 @@
 extern crate alloc;
 
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
 
 wit_bindgen::generate!({ path: "wit", world: "extension" });
 
 use exports::pane::extension::command::{
-    CustomView, FieldValue, FormError, Frame, Guest, GuestCustomView, Item, View, ViewEvent,
+    CustomView, FieldValue, FormError, Frame, Guest, GuestCustomView, ViewEvent,
 };
 
 #[global_allocator]
@@ -78,21 +77,15 @@ impl GuestCustomView for NoView {
 impl Guest for Mismatched {
     type CustomView = NoView;
 
-    async fn get_view() -> Result<View, String> {
-        Ok(View {
-            title: "Mismatched".into(),
-            items: vec![Item {
-                id: "x".into(),
-                title: "x".into(),
-                subtitle: None,
-                form: None,
-                platforms: None,
-            }],
-        })
+    async fn render() -> Result<String, String> {
+        Ok(
+            "{\"version\":1,\"view\":{\"type\":\"list\",\"title\":\"Mismatched\",\"items\":[]}}"
+                .into(),
+        )
     }
 
-    async fn run_action(item_id: String) -> Result<String, String> {
-        Ok(item_id)
+    async fn handle_event(callback: String, _details: String) -> Result<String, String> {
+        Err(callback)
     }
 
     async fn submit_form(item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {

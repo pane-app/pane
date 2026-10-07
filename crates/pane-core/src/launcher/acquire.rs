@@ -322,7 +322,7 @@ impl Launcher {
             Err(error) => return failed(self, error.to_string()),
         };
         match self.check_components(&package).await {
-            Ok(network) => package.network = network,
+            Ok(checked) => package.note_imports(checked),
             Err(error) => return failed(self, error.to_string()),
         }
         let (package, plan) = self.plan_dependencies(package).await;

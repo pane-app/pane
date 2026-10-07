@@ -26,7 +26,8 @@
 import { get, set } from "pane:extension/settings@0.1.0";
 import * as content from "pane:extension/content@0.1.0";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
-import type { Cycle, Item, Service, View } from "@pane/extension";
+import type { Cycle, Item, List, Service } from "@pane/extension";
+import { showToast } from "@pane/extension/feedback";
 
 /** The content key holding how many cycles the service has run, ever. */
 const CYCLES = "cycles";
@@ -65,10 +66,52 @@ function counted(key: string): number {
   return count;
 }
 
-const item = (id: string, title: string, subtitle: string): Item => ({ id, title, subtitle });
+/** Runs the action of the item `itemId`, showing a toast with what it did. */
+async function act(itemId: string): Promise<void> {
+  showToast({ title: await outcome(itemId) });
+}
+
+/** Does what the item `itemId`'s action does; the text its toast shows. */
+async function outcome(itemId: string): Promise<string> {
+  switch (itemId) {
+    case "add": {
+      const events = counted(EVENTS) + 1;
+      content.set(EVENTS, String(events));
+      return `Added event ${events}; the next cycle reports it`;
+    }
+    case "slow":
+      set(MODE, "slow");
+      return "The next cycle will wait 10 seconds";
+    case "fail":
+      set(MODE, "fail");
+      return "The next cycle will answer an error";
+    case "crash":
+      set(MODE, "crash");
+      return "The next cycle will crash";
+    case "busy":
+      set(MODE, "busy");
+      return "The next cycle will stop responding";
+    case "fast":
+      set(MODE, "fast");
+      return "The next cycle will answer 0 seconds";
+    case "far":
+      set(MODE, "far");
+      return "The next cycle will answer 31 days";
+    default:
+      throw new Error(`unknown item: ${itemId}`);
+  }
+}
+
+/** An item whose action is `act` with its id. */
+const item = (id: string, title: string, subtitle: string): Item => ({
+  id,
+  title,
+  subtitle,
+  onAction: () => act(id),
+});
 
 export const command = {
-  async getView(): Promise<View> {
+  async render(): Promise<List> {
     return {
       title: `Watching: ${counted(EVENTS)} events (${counted(CYCLES)} cycles)`,
       items: [
@@ -81,36 +124,6 @@ export const command = {
         item("far", "Ask for a 31-day cadence", "The next cycle answers 31 days; Pane clamps it to its 30-day maximum"),
       ],
     };
-  },
-
-  async runAction(itemId: string): Promise<string> {
-    switch (itemId) {
-      case "add": {
-        const events = counted(EVENTS) + 1;
-        content.set(EVENTS, String(events));
-        return `Added event ${events}; the next cycle reports it`;
-      }
-      case "slow":
-        set(MODE, "slow");
-        return "The next cycle will wait 10 seconds";
-      case "fail":
-        set(MODE, "fail");
-        return "The next cycle will answer an error";
-      case "crash":
-        set(MODE, "crash");
-        return "The next cycle will crash";
-      case "busy":
-        set(MODE, "busy");
-        return "The next cycle will stop responding";
-      case "fast":
-        set(MODE, "fast");
-        return "The next cycle will answer 0 seconds";
-      case "far":
-        set(MODE, "far");
-        return "The next cycle will answer 31 days";
-      default:
-        throw new Error(`unknown item: ${itemId}`);
-    }
   },
 
   async submitForm(itemId: string): Promise<string> {

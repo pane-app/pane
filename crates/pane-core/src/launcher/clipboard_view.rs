@@ -19,7 +19,9 @@
 //! wherever they are drawn.
 //!
 //! The operations are the history's existing ones — copy a record again,
-//! delete it, turn capture on, pause or resume it — and each revalidates
+//! delete it, turn capture on, pause or resume it — and pasting a record
+//! into the application that was in front (#150: Enter), which copies it
+//! instead where Pane cannot paste yet; each revalidates
 //! the [reading](ClipboardHistoryView) it was made from first: the same
 //! screen, the same verified command, the same generation of the package's
 //! code, and a record still kept. A reading the user left, of a package
@@ -29,11 +31,14 @@
 //! stays the command's own list, which the window routes to.
 
 use std::fmt;
+use std::future::Future;
 
+use super::own_actions::COPIED;
 use super::{Launcher, Screen, State, Status, owner};
 use crate::clipboard::history::PackageHistory;
 use crate::clipboard::{self, CaptureState, Commands};
 use crate::extension_data::PackageData;
+use crate::feedback::{Hud, ToastStyle};
 use crate::packages::PackageIdentity;
 
 /// The id of Pane's Clipboard History default extension, and of its one
@@ -246,18 +251,81 @@ impl Launcher {
 
     /// Puts the record `id` of `view` on the clipboard again, through the
     /// history's existing copy, once `view` is revalidated (see the module
-    /// documentation). The outcome shows as the status; `Err` says why
-    /// nothing was copied.
+    /// documentation), then closes the window and says "Copied to
+    /// Clipboard" in a HUD, as every Copy action does. `Err` says why
+    /// nothing was copied, in the status too; the window then stays.
     pub fn copy_clipboard_record(
         &self,
         view: &ClipboardHistoryView,
         id: &str,
     ) -> Result<(), String> {
         self.clipboard_operation(view, |commands| {
-            commands
-                .copy(id)
-                .map(|()| "Copied to the clipboard".to_owned())
-        })
+            commands.copy(id).map(|()| COPIED.to_owned())
+        })?;
+        if let Some(mut state) = self.lock_if_current(view.reading.epoch) {
+            state.view.status = Status::Idle;
+        }
+        self.show_hud(Hud {
+            title: COPIED.into(),
+            style: ToastStyle::Success,
+        });
+        Ok(())
+    }
+
+    /// Pastes the record `id` of `view` into the application that was in
+    /// front before Pane, once `view` is revalidated, closing Pane's window
+    /// first; where Pane cannot paste on this system yet (#125), copies it
+    /// through the history's existing copy instead, and a HUD says so
+    /// ([`crate::system::PASTE_FALLBACK`]). Await the returned future for
+    /// the paste, which the system makes off the calling thread. A stale
+    /// reading or a record no longer kept pastes nothing and says why in
+    /// the status.
+    pub fn paste_clipboard_record(
+        &self,
+        view: &ClipboardHistoryView,
+        id: &str,
+    ) -> impl Future<Output = ()> + Send + 'static {
+        let epoch = view.reading.epoch;
+        // Read again: the record must still be kept, on the screen read.
+        let now = self
+            .clipboard_history()
+            .filter(|now| now.reading.epoch == epoch && now.owner == view.owner);
+        let text = match &now {
+            None => Err("That clipboard history is no longer shown".to_owned()),
+            Some(now) => now
+                .record(id)
+                .map(|record| record.text.clone())
+                .ok_or_else(|| "That item is no longer kept".to_owned()),
+        };
+        {
+            let mut state = self.lock();
+            if state.screen_epoch == epoch {
+                state.view.status = match &text {
+                    Err(why) => Status::Error(why.clone()),
+                    // Running until it is pasted, or copied instead.
+                    Ok(_) => Status::Running,
+                };
+            }
+        }
+        let data = view.reading.data.clone();
+        let capture = self.clipboard.clone();
+        let id = id.to_owned();
+        let launcher = self.clone();
+        async move {
+            let Ok(text) = text else {
+                return;
+            };
+            let copy = move || {
+                Commands {
+                    data: &data,
+                    capture,
+                }
+                .copy(&id)
+            };
+            launcher
+                .paste_or_copy(epoch, crate::system::Clip::Text(text), Box::new(copy))
+                .await;
+        }
     }
 
     /// Deletes the record `id` of `view` through the history's existing
@@ -526,7 +594,7 @@ const DAY_MS: i64 = 86_400_000;
 
 /// The local day number of `at` (milliseconds since the Unix epoch) at
 /// `offset_ms` from UTC: days since 1970-01-01, local.
-fn local_day(at: u64, offset_ms: i64) -> i64 {
+pub(crate) fn local_day(at: u64, offset_ms: i64) -> i64 {
     local_ms(at, offset_ms).div_euclid(DAY_MS)
 }
 
@@ -546,7 +614,7 @@ pub fn day_of(copied_at: u64, now: u64, offset_ms: i64) -> ClipboardDay {
 }
 
 /// The local time of day of `at`, "14:02".
-fn clock_time(at: u64, offset_ms: i64) -> String {
+pub(crate) fn clock_time(at: u64, offset_ms: i64) -> String {
     let minutes = local_ms(at, offset_ms).rem_euclid(DAY_MS) / 60_000;
     format!("{:02}:{:02}", minutes / 60, minutes % 60)
 }
@@ -583,6 +651,13 @@ fn civil(day: i64) -> (i64, usize, i64) {
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + i64::from(month <= 2);
     (year, usize::try_from(month).unwrap_or(1), date)
+}
+
+/// The month's short name, the day of the month and the year of local
+/// day `day`: ("Sep", 28, 2026).
+pub(crate) fn month_and_day(day: i64) -> (&'static str, i64, i64) {
+    let (year, month, date) = civil(day);
+    (MONTHS[month - 1], date, year)
 }
 
 /// "Sep 28", or "Dec 31, 2025" for another year than `now`'s.

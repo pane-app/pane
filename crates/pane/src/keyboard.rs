@@ -152,20 +152,13 @@ pub(crate) fn escape_keys() -> KeySequence {
 /// Keyboard page rebinds — so the hints the slots show are always the
 /// chords that work.
 pub(crate) fn quick_slot_binding(number: usize) -> Binding {
-    Binding::parse(&format!("ctrl-{number}")).expect("a digit chord is a binding")
+    pane_core::keyboard::number_key(number)
 }
 
 /// The caps of quick slot `number`'s chord ([`quick_slot_binding`]).
 pub(crate) fn quick_slot_keys(number: usize) -> KeySequence {
     binding_keys(&quick_slot_binding(number))
 }
-
-/// The modifier the pin keys hold: Command on macOS, Ctrl elsewhere.
-const PIN_MODIFIER: &str = if cfg!(target_os = "macos") {
-    "cmd"
-} else {
-    "ctrl"
-};
 
 /// The launcher's key that toggles a pin: Ctrl+Shift+F (Command+Shift+F
 /// on macOS) pins root search's selected result, or unpins it once it is
@@ -174,7 +167,7 @@ const PIN_MODIFIER: &str = if cfg!(target_os = "macos") {
 /// Keyboard page rebinds — so the Actions panel's caps and the pin hint
 /// always name a key that works.
 pub(crate) fn toggle_pin_binding() -> Binding {
-    Binding::parse(&format!("{PIN_MODIFIER}-shift-f")).expect("the pin key is a binding")
+    pane_core::keyboard::pin_key()
 }
 
 /// The launcher's keys that move a focused quick slot one place among the
@@ -183,14 +176,7 @@ pub(crate) fn toggle_pin_binding() -> Binding {
 /// is ([`toggle_pin_binding`]). Up or Down comes first, the vertical
 /// layout's direction; Left or Right second, the strip's.
 pub(crate) fn move_pin_bindings(earlier: bool) -> [Binding; 2] {
-    let (vertical, horizontal) = if earlier {
-        ("up", "left")
-    } else {
-        ("down", "right")
-    };
-    [vertical, horizontal].map(|arrow| {
-        Binding::parse(&format!("{PIN_MODIFIER}-alt-{arrow}")).expect("a move key is a binding")
-    })
+    pane_core::keyboard::move_pin_keys(earlier)
 }
 
 /// The keys `binding` is pressed with, as keycaps show them on this

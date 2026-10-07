@@ -10,23 +10,35 @@
 #![allow(clippy::duplicate_mod)]
 
 mod aliases;
+mod arguments;
 mod command_search;
 mod compact_pins;
+mod confirmations;
 mod develop;
+mod feedback;
+mod file_actions;
 mod hotkeys;
+mod icons;
 mod install;
+mod item_actions;
 mod keyboard;
 mod launcher_settings;
+mod no_view;
 mod npm;
 mod open_pane;
+mod preferences;
+mod quicklinks;
 mod repositories;
 mod runtime_crash;
 mod settings;
 mod settings_search;
 mod shortcuts;
+mod submenus;
+mod system;
 mod tray;
 mod unresponsive;
 mod update;
+mod web_icons;
 mod window;
 
 /// Cargo no longer finds the files under `tests/` itself (`autotests =

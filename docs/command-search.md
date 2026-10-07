@@ -14,7 +14,8 @@ proposed). The same on every system.
 
 Root search lists the command by its title like any other. Enter opens it:
 the query field stays on screen, empty and focused (placeholder "Search"),
-above the command's own list (its `get-view` items). Typing sends the text,
+above the command's own list (the items of its tree, see
+[list-tree.md](list-tree.md)). Typing sends the text,
 trimmed, to the command; while it answers the status says "Running…" and
 the rows listed stay; its results then replace the rows, the first
 selected. Enter on a result runs the command's action for it, whose answer
@@ -86,11 +87,23 @@ any call.
 In `pane.json`, a command sets `"search": true`; its component then also
 exports `pane:extension/command-search` ([wit/search.wit](../wit/search.wit)):
 `search(command, query) -> result<list<search-result>, string>`, where a
-result has an `id` (passed to `run-action` when activated), a `title` and
-an optional `subtitle`, the fields of a root result without its action.
-Installing checks the export, as for the other optional exports. A command
-cannot set both `"search"` and `"rootResults"`: root search never asks a
-command that searches inside itself, so the manifest is refused. Rust:
+result has an `id` (passed to `handle-event` as the callback id when
+activated, which the SDKs hand to the command's `run_search_result` /
+`runSearchResult`), a `title` and
+an optional `subtitle`, the fields of a root result without its action,
+and an optional `file` (#150): the id of a file of the folder granted to
+the command's package, as `list-folder` gave it, when the result is that
+file. Pane then lists it with the file's own name and folder and gives it
+its own [file actions](files.md#the-file-actions) (Open, Reveal, Open
+With…, Copy Path, Copy File, Move to Recycle Bin; for a program, Enter
+reveals it and only Run runs it), which Pane performs without calling the
+command; an id Pane did not give is not listed. A search answered while
+that folder was still being listed is asked again once it is, unless a
+newer text stopped it. Installing checks the export, as for the other
+optional exports. A command may set both `"search"` and `"rootResults"`
+(Search Files does): root search then asks it as well, so it declares that
+what is typed there reaches it; a command that searches without saying
+`rootResults` is still never asked by root search. Rust:
 `pane_guest::search::Guest` and `pane_guest::search::export!`; JS/TS:
 export `commandSearch` with `"pane": { "search": true }` in `package.json`.
 
@@ -146,8 +159,9 @@ details Enter shows. Texts and names starting with `huge`, `stall` or
   first); an untrusted
   certificate is "not trusted"; Manage extensions says which package uses
   the network and lists the address it reached; a manifest saying
-  `"search": true` for a component without the export, or with
-  `"rootResults": true`, is refused at install.
+  `"search": true` for a component without the export, or
+  `"rootResults": true` too for one without that export, is refused at
+  install. Search Files' results naming files are `file_actions.rs`'s.
 - `crates/pane-core/src/http.rs`'s unit tests: code whose generation ended
   sends nothing, and a package's connections are capped.
 - `crates/pane/tests/command_search.rs`: the same through the window with
@@ -163,15 +177,17 @@ No test or smoke reaches beyond 127.0.0.1.
 
 - **Provisional, pending user confirmation:** the manifest key
   `"search": true` and interface name `command-search`; results are plain
-  rows whose action is `run-action` (no forms, custom views, platforms or
+  rows whose action is `handle-event` with the result's id (no forms,
+  custom views, platforms or
   Pane-performed actions such as opening a link); the 150 ms wait, and each
   stop of a started search dropping the instance; rows stay listed while a
   search runs; errors clear the rows; the error text keeps the "The
   extension reported an error:" prefix; the request limits above.
-- The runtime still serves calls one at a time: while one extension's
-  search waits for its service, or its 150 ms, other extensions' calls wait
-  too (#18). Only the outermost call watches the stop: an operation a
-  searching guest waits for runs to its end first.
+- While one extension's search waits for its service, or its 150 ms,
+  other extensions' calls are served (#136); the command's own next calls
+  (its next search, an action) wait for it, one call into an instance at a
+  time. Only the outermost call watches the stop: an operation a searching
+  guest waits for runs to its end first.
 - Network access is not gated: extensions are trusted code (ADR 0002), and
   any extension may use `wasi:http`, from any call, including root-results
   providers. Only this command kind is kept out of root search. The

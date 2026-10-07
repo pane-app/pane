@@ -23,9 +23,11 @@ pub enum Fault {
     /// operation).
     Crash,
     /// The runtime thread panics once the action `item` (of any command)
-    /// has run, before its answer is sent: what the action did (saving
-    /// data, say) is done, but its answer is lost. Other calls, such as
-    /// root search's, answer as usual meanwhile.
+    /// has run, before its answer is sent: an event whose callback is
+    /// `item` (the SDKs name an item's action's callback by the item's id),
+    /// or a run of the item `item`. What the action did (saving data, say)
+    /// is done, but its answer is lost. Other calls, such as root search's,
+    /// answer as usual meanwhile.
     CrashBeforeAnswer { item: String },
     /// The runtime thread stops responding: it blocks wherever it is, as a
     /// thread stuck in Pane's host code would (waiting for the next

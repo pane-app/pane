@@ -1,0 +1,110 @@
+{
+  "manifestVersion": 1,
+  "title": "JavaScript preferences sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "preferences": [
+    {
+      "name": "apiKey",
+      "type": "password",
+      "title": "API key",
+      "description": "The key the sample's service gives you; the help beside says where to find it.",
+      "placeholder": "such as sk-123",
+      "required": true
+    },
+    {
+      "name": "units",
+      "type": "dropdown",
+      "title": "Units",
+      "description": "How the sample shows measurements.",
+      "required": true,
+      "default": "metric",
+      "options": [
+        {
+          "value": "metric",
+          "title": "Metric"
+        },
+        {
+          "value": "imperial",
+          "title": "Imperial"
+        }
+      ]
+    },
+    {
+      "name": "greeting",
+      "type": "text",
+      "title": "Greeting",
+      "description": "What the sample says first.",
+      "placeholder": "such as Hello"
+    },
+    {
+      "name": "verbose",
+      "type": "checkbox",
+      "title": "Verbose",
+      "label": "Say more",
+      "default": false
+    }
+  ],
+  "commands": [
+    {
+      "id": "show",
+      "title": "Show preferences",
+      "subtitle": "A JavaScript command that lists the preferences it received",
+      "component": "sample_preferences_js.wasm",
+      "preferences": [
+        {
+          "name": "folder",
+          "type": "folder",
+          "title": "Notes folder",
+          "description": "Where the notes are kept.",
+          "required": true
+        },
+        {
+          "name": "notes",
+          "type": "file",
+          "title": "Notes file",
+          "description": "One file of notes, if any."
+        },
+        {
+          "name": "editor",
+          "type": "application",
+          "title": "Editor",
+          "description": "The application notes open in, if any."
+        }
+      ]
+    },
+    {
+      "id": "report",
+      "title": "Report preferences",
+      "subtitle": "A JavaScript command that runs without a screen and answers its preferences",
+      "component": "sample_preferences_js.wasm",
+      "mode": "no-view",
+      "preferences": [
+        {
+          "name": "loud",
+          "type": "checkbox",
+          "title": "Loud",
+          "label": "Shout the report",
+          "default": false
+        }
+      ]
+    },
+    {
+      "id": "tick",
+      "title": "Tick",
+      "subtitle": "A JavaScript command that runs every minute in the background once set up",
+      "component": "sample_preferences_js.wasm",
+      "mode": "no-view",
+      "schedule": {
+        "everySeconds": 60
+      }
+    },
+    {
+      "id": "last",
+      "title": "Last tick",
+      "subtitle": "A JavaScript command that answers how many times Tick ran",
+      "component": "sample_preferences_js.wasm",
+      "mode": "no-view"
+    }
+  ]
+}

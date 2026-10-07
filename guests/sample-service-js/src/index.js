@@ -24,6 +24,7 @@
 // 31-day cadence" make the next cycle answer cadences beyond Pane's
 // bounds, which it clamps to its 1-second minimum and 30-day maximum.
 // @ts-check
+import { showToast } from "@pane/extension/feedback";
 import { get, set } from "pane:extension/settings@0.1.0";
 import * as content from "pane:extension/content@0.1.0";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
@@ -71,16 +72,62 @@ function counted(key) {
 }
 
 /**
+ * Runs the action of the item `itemId`, showing a toast with what it did.
+ * @param {string} itemId
+ * @returns {Promise<void>}
+ */
+async function act(itemId) {
+  showToast({ title: await outcome(itemId) });
+}
+
+/**
+ * Does what the item `itemId`'s action does, and resolves with the text
+ * its toast shows.
+ * @param {string} itemId
+ * @returns {Promise<string>}
+ */
+async function outcome(itemId) {
+  switch (itemId) {
+    case "add": {
+      const events = counted(EVENTS) + 1;
+      content.set(EVENTS, String(events));
+      return `Added event ${events}; the next cycle reports it`;
+    }
+    case "slow":
+      set(MODE, "slow");
+      return "The next cycle will wait 10 seconds";
+    case "fail":
+      set(MODE, "fail");
+      return "The next cycle will answer an error";
+    case "crash":
+      set(MODE, "crash");
+      return "The next cycle will crash";
+    case "busy":
+      set(MODE, "busy");
+      return "The next cycle will stop responding";
+    case "fast":
+      set(MODE, "fast");
+      return "The next cycle will answer 0 seconds";
+    case "far":
+      set(MODE, "far");
+      return "The next cycle will answer 31 days";
+    default:
+      throw new Error(`unknown item: ${itemId}`);
+  }
+}
+
+/**
+ * An item whose action is `act` with its id.
  * @param {string} id
  * @param {string} title
  * @param {string} subtitle
  * @returns {import("@pane/extension").Item}
  */
-const item = (id, title, subtitle) => ({ id, title, subtitle });
+const item = (id, title, subtitle) => ({ id, title, subtitle, onAction: () => act(id) });
 
 /** @type {import("@pane/extension").Command} */
 export const command = {
-  async getView() {
+  async render() {
     return {
       title: `Watching: ${counted(EVENTS)} events (${counted(CYCLES)} cycles)`,
       items: [
@@ -93,36 +140,6 @@ export const command = {
         item("far", "Ask for a 31-day cadence", "The next cycle answers 31 days; Pane clamps it to its 30-day maximum"),
       ],
     };
-  },
-
-  async runAction(itemId) {
-    switch (itemId) {
-      case "add": {
-        const events = counted(EVENTS) + 1;
-        content.set(EVENTS, String(events));
-        return `Added event ${events}; the next cycle reports it`;
-      }
-      case "slow":
-        set(MODE, "slow");
-        return "The next cycle will wait 10 seconds";
-      case "fail":
-        set(MODE, "fail");
-        return "The next cycle will answer an error";
-      case "crash":
-        set(MODE, "crash");
-        return "The next cycle will crash";
-      case "busy":
-        set(MODE, "busy");
-        return "The next cycle will stop responding";
-      case "fast":
-        set(MODE, "fast");
-        return "The next cycle will answer 0 seconds";
-      case "far":
-        set(MODE, "far");
-        return "The next cycle will answer 31 days";
-      default:
-        throw new Error(`unknown item: ${itemId}`);
-    }
   },
 
   async submitForm(itemId) {

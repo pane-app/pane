@@ -30,7 +30,7 @@ recorded in [ADR 0025](adr/0025-a-continuing-service-cycles-at-its-own-cadence.m
   serve several commands' services), and it answers one `cycle` record —
   the status to show and `next-seconds`, how long to wait before the next
   cycle. This is a new guest-facing surface, the smallest that can carry
-  the cadence: an ordinary `run-action` answer is a string shown to the
+  the cadence: an ordinary action's answer is a string shown to the
   user, with no room for "when next", and Pane refuses to pace a service
   at an interval of its own choosing, which would make it a schedule. A
   command whose manifest entry sets `"service": true` exports the

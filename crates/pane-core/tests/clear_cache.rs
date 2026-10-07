@@ -14,9 +14,12 @@ use futures::executor::block_on;
 use pane_core::{CallError, Launcher, PackageIdentity, Runtime, Screen, Status};
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use rows::{select_title, titles};
 
 const MANAGE_ROW: &str = "Manage extensions…";
@@ -107,7 +110,7 @@ impl Dirs {
 }
 
 /// From root search, opens the command titled `command` and runs its item
-/// titled `item`, returning the outcome.
+/// titled `item`, returning the outcome: its toast, or the status line.
 fn run(launcher: &Launcher, command: &str, item: &str) -> Status {
     launcher.back();
     select_title(launcher, command);
@@ -115,7 +118,7 @@ fn run(launcher: &Launcher, command: &str, item: &str) -> Status {
     assert_eq!(launcher.view().screen, Screen::Command, "{command} opened");
     select_title(launcher, item);
     block_on(launcher.activate_selected());
-    launcher.view().status
+    shown(launcher)
 }
 
 /// Saves one value of each kind with the Greeting command: the formal style
@@ -287,7 +290,7 @@ fn clearing_one_copy_keeps_the_other_identity_and_external_files(fixture: &Fixtu
             block_on(launcher.activate_selected());
             select_title(&launcher, item);
             block_on(launcher.activate_selected());
-            assert!(matches!(launcher.view().status, Status::Result(_)));
+            assert!(matches!(shown(&launcher), Status::Result(_)));
         }
     }
     let sources = files(dirs.sources.path());
@@ -319,7 +322,7 @@ fn clearing_one_copy_keeps_the_other_identity_and_external_files(fixture: &Fixtu
             block_on(launcher.activate_selected());
             select_title(&launcher, "Show what Pane keeps");
             block_on(launcher.activate_selected());
-            launcher.view().status
+            shown(&launcher)
         })
         .collect();
     assert_eq!(
@@ -405,7 +408,8 @@ fn an_unreadable_cache_is_explained_and_nothing_is_deleted(fixture: &Fixture) {
 }
 
 /// From root search, runs `item` of the Greeting command of the `copy`th
-/// installed package (root lists each package's Greeting in install order).
+/// installed package (root lists each package's Greeting in install order),
+/// returning the outcome: its toast, or the status line.
 fn run_in_copy(launcher: &Launcher, copy: usize, item: &str) -> Status {
     launcher.back();
     launcher.back();
@@ -420,7 +424,7 @@ fn run_in_copy(launcher: &Launcher, copy: usize, item: &str) -> Status {
     block_on(launcher.activate_selected());
     select_title(launcher, item);
     block_on(launcher.activate_selected());
-    launcher.view().status
+    shown(launcher)
 }
 
 fn clearing_keeps_a_cache_another_pane_saved_meanwhile(fixture: &Fixture) {

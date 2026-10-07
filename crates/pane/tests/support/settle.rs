@@ -24,6 +24,33 @@ pub fn settle(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> La
     until(window, cx, |view| view.status != Status::Running)
 }
 
+/// Runs the window, as [`settle`] does, until its last frame also drew
+/// nothing over the launcher: no Actions panel, no confirmation. Keys go
+/// where the last frame put them, so after Enter chose an action in the
+/// panel, or answered a confirmation, a test waits for this before it
+/// presses the next keys.
+pub fn settle_bare(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> LauncherView {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        cx.run_until_parked();
+        let (view, drawn, over) = cx.read_entity(window, |window, _| {
+            (
+                window.launcher().view(),
+                window.drawn_view().cloned(),
+                window.drawn_over(),
+            )
+        });
+        if view.status != Status::Running && drawn.as_ref() == Some(&view) && !over {
+            return view;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out: the launcher shows {view:?}, the window last drew {drawn:?} (over it: {over})"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 /// Runs the window until `done` holds for the launcher's view and the
 /// window's last frame drew that view.
 pub fn until(
@@ -47,5 +74,27 @@ pub fn until(
             "timed out: the launcher shows {view:?}, the window last drew {drawn:?}"
         );
         std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Runs the window until the launcher is no longer running an action, as
+/// [`settle`] does, and answers what the user reads of the outcome, as the
+/// status line said it before toasts (#141): the toast in the footer while
+/// the status line is idle (a success as [`Status::Result`] with its
+/// title, a failure as [`Status::Error`] with its title and message, work
+/// in progress as [`Status::Progress`]), and the status line otherwise.
+pub fn settle_shown(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> Status {
+    let view = settle(window, cx);
+    if view.status != Status::Idle {
+        return view.status;
+    }
+    let toast = cx.read_entity(window, |window, _| window.launcher().toast());
+    match toast {
+        None => Status::Idle,
+        Some(shown) => match shown.toast.style {
+            pane_core::ToastStyle::Success => Status::Result(shown.toast.text()),
+            pane_core::ToastStyle::Failure => Status::Error(shown.toast.text()),
+            pane_core::ToastStyle::Animated => Status::Progress(shown.toast.text()),
+        },
     }
 }

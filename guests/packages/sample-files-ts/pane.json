@@ -1,15 +1,16 @@
 {
   "manifestVersion": 1,
   "title": "TypeScript files sample",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "apiVersion": "0.1",
   "commands": [
     {
       "id": "find-files",
       "title": "Find files (TypeScript)",
-      "subtitle": "A TypeScript command that finds and opens the files of a folder you grant it",
+      "subtitle": "A TypeScript command that finds the files of a folder you grant it as you type, with Pane's file actions",
       "component": "sample_files_ts.wasm",
-      "rootResults": true
+      "rootResults": true,
+      "search": true
     }
   ],
   "folderAccess": true

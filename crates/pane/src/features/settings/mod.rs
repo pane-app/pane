@@ -187,6 +187,9 @@ pub struct SettingsWindow {
     shortcuts: shortcuts::State,
     /// The Keyboard page's state, owned by its module.
     keyboard: keyboard::State,
+    /// The Extensions page's state (its preferences' text fields), owned
+    /// by its module.
+    extensions: extensions::State,
     /// The sidebar's search, owned by its module.
     search: search::State,
 }
@@ -262,6 +265,7 @@ impl SettingsWindow {
             launcher_page: launcher::State::new(window, cx),
             shortcuts: shortcuts::State::new(launcher, cx),
             keyboard: keyboard::State::new(window, cx),
+            extensions: extensions::State::default(),
             search: search::State::new(cx),
         }
     }
@@ -738,6 +742,20 @@ pub(crate) fn open(launcher: &Launcher, cx: &mut App) -> WindowHandle<SettingsWi
         Ok(window)
     })
     .expect("failed to open Pane's Settings window")
+}
+
+/// Opens Pane's Settings window, or focuses the one already open, at the
+/// page titled `page`, scrolled to the control `target` names (a search
+/// anchor's id): the Actions panel's "Configure Command…" and "Configure
+/// Extension…" open an extension's card on the Extensions page this way
+/// (#143).
+pub(crate) fn open_at(launcher: &Launcher, page: &str, target: &str, cx: &mut App) {
+    let window = open(launcher, cx);
+    window
+        .update(cx, |settings, window, cx| {
+            settings.show_at(page, target, window, cx);
+        })
+        .ok();
 }
 
 /// A select of a few fixed choices at a settings row's end: the shared

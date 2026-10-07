@@ -3,7 +3,7 @@
 // Pane's settings sample in JavaScript: a command whose chosen greeting style
 // Pane keeps between runs, saved with `pane:extension/settings`, and one value
 // of each other kind of data: a note (content), the last greeting (cache) and
-// a sign-in token (credentials). Items, titles, results and errors match the
+// a sign-in token (credentials). Items, titles, toasts and errors match the
 // Rust settings sample (guests/sample-settings) and the TypeScript one.
 // "Save after waiting" notes in its settings that it started, waits ten
 // seconds, then notes that it finished: disabling or reloading the package
@@ -15,6 +15,7 @@
 // so it never finishes, and it counts towards pausing the package as a
 // crash does.
 // @ts-check
+import { showToast } from "@pane/extension/feedback";
 import { get, set } from "pane:extension/settings@0.1.0";
 import * as cache from "pane:extension/cache@0.1.0";
 import * as content from "pane:extension/content@0.1.0";
@@ -39,12 +40,13 @@ const BUSY = "busy";
 const BUSY_FOR = 60_000;
 
 /**
+ * An item whose action is `act` with its id.
  * @param {string} id
  * @param {string} title
  * @param {string} subtitle
  * @returns {import("@pane/extension").Item}
  */
-const item = (id, title, subtitle) => ({ id, title, subtitle });
+const item = (id, title, subtitle) => ({ id, title, subtitle, onAction: () => act(id) });
 
 /**
  * The greeting in the saved `style`; throws if no style is saved.
@@ -62,9 +64,79 @@ function greetingIn(style) {
   }
 }
 
+/**
+ * Runs the action of the item `itemId`, showing a toast with what it did.
+ * @param {string} itemId
+ * @returns {Promise<void>}
+ */
+async function act(itemId) {
+  const done = await outcome(itemId);
+  if (done === null) {
+    // Resolving with a value, where an action resolves with nothing, is a
+    // crash, unlike throwing, which is an error the extension answers with.
+    return /** @type {void} */ (/** @type {unknown} */ (null));
+  }
+  showToast({ title: done });
+}
+
+/**
+ * Does what the item `itemId`'s action does, and resolves with the text
+ * its toast shows, or with `null` for "Crash", which crashes.
+ * @param {string} itemId
+ * @returns {Promise<string | null>}
+ */
+async function outcome(itemId) {
+  switch (itemId) {
+    case "formal":
+    case "casual":
+      set(STYLE, itemId);
+      return `Saved the ${itemId} greeting`;
+    case "greet": {
+      const greeting = greetingIn(get(STYLE));
+      cache.set(LAST_GREETING, greeting);
+      return greeting;
+    }
+    case "note":
+      content.set(NOTE, "Water the plants");
+      return "Saved a note";
+    case "sign-in":
+      credentials.set(TOKEN, "sample-token");
+      return "Signed in on this computer";
+    case "kept":
+      return [
+        `Style: ${get(STYLE) ?? "none"}`,
+        `Note: ${content.get(NOTE) ?? "none"}`,
+        `Signed in: ${credentials.get(TOKEN) === null ? "no" : "yes"}`,
+        `Cached greeting: ${cache.get(LAST_GREETING) ?? "none"}`,
+      ].join(" · ");
+    case "slow":
+      set(SLOW_SAVE, "started");
+      // The command suspends here; if Pane stops the call meanwhile,
+      // nothing after this line runs.
+      await waitFor(SLOW_WAIT);
+      set(SLOW_SAVE, "finished");
+      return "Saved after waiting 10 seconds";
+    case "busy": {
+      set(BUSY, "started");
+      // Computes without awaiting anything: the guest never yields to
+      // Pane by itself.
+      const end = Date.now() + BUSY_FOR;
+      while (Date.now() < end) {
+        // busy
+      }
+      set(BUSY, "finished");
+      return "Finished computing after a minute";
+    }
+    case "crash":
+      return null;
+    default:
+      throw new Error(`unknown item: ${itemId}`);
+  }
+}
+
 /** @type {import("@pane/extension").Command} */
 export const command = {
-  async getView() {
+  async render() {
     // A settings error (get throws) is shown to the user as the command's error.
     const style = get(STYLE);
     return {
@@ -81,57 +153,6 @@ export const command = {
         item("busy", "Stop responding", "Computes without waiting for up to a minute; Pane stops it after 5 seconds"),
       ],
     };
-  },
-
-  async runAction(itemId) {
-    switch (itemId) {
-      case "formal":
-      case "casual":
-        set(STYLE, itemId);
-        return `Saved the ${itemId} greeting`;
-      case "greet": {
-        const greeting = greetingIn(get(STYLE));
-        cache.set(LAST_GREETING, greeting);
-        return greeting;
-      }
-      case "note":
-        content.set(NOTE, "Water the plants");
-        return "Saved a note";
-      case "sign-in":
-        credentials.set(TOKEN, "sample-token");
-        return "Signed in on this computer";
-      case "kept":
-        return [
-          `Style: ${get(STYLE) ?? "none"}`,
-          `Note: ${content.get(NOTE) ?? "none"}`,
-          `Signed in: ${credentials.get(TOKEN) === null ? "no" : "yes"}`,
-          `Cached greeting: ${cache.get(LAST_GREETING) ?? "none"}`,
-        ].join(" · ");
-      case "slow":
-        set(SLOW_SAVE, "started");
-        // The command suspends here; if Pane stops the call meanwhile,
-        // nothing after this line runs.
-        await waitFor(SLOW_WAIT);
-        set(SLOW_SAVE, "finished");
-        return "Saved after waiting 10 seconds";
-      case "busy": {
-        set(BUSY, "started");
-        // Computes without awaiting anything: the guest never yields to
-        // Pane by itself.
-        const end = Date.now() + BUSY_FOR;
-        while (Date.now() < end) {
-          // busy
-        }
-        set(BUSY, "finished");
-        return "Finished computing after a minute";
-      }
-      case "crash":
-        // Resolving with something other than a string is a crash, unlike
-        // throwing, which is an error the extension answers with.
-        return /** @type {string} */ (/** @type {unknown} */ (undefined));
-      default:
-        throw new Error(`unknown item: ${itemId}`);
-    }
   },
 
   async submitForm(itemId) {

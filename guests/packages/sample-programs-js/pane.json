@@ -1,0 +1,21 @@
+{
+  "manifestVersion": 1,
+  "title": "JavaScript programs sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "programs",
+      "title": "JavaScript programs sample",
+      "subtitle": "Runs programs installed on the system",
+      "component": "sample_programs_js.wasm"
+    },
+    {
+      "id": "progress",
+      "title": "Report progress",
+      "subtitle": "Runs a program without a screen, reporting its progress in a toast",
+      "mode": "no-view",
+      "component": "sample_programs_js.wasm"
+    }
+  ]
+}

@@ -3,16 +3,25 @@
 //!
 //! - An **alias** is one word the user gives a command in Manage extensions.
 //!   Typing it in root search lists the command first, above everything
-//!   else. For a command that takes a query (`"takesQuery": true`), typing
-//!   the alias, a space and more text lists a row that sends that text to
-//!   the command when the user invokes it.
+//!   else. For a command that takes a query (`"takesQuery": true`, or a
+//!   first argument that is text with every other optional; see
+//!   `arguments`), typing the alias, a space and more text lists a row that
+//!   sends that text to the command when the user invokes it.
 //! - A **fallback** is a command that takes a query, which the user chose to
 //!   have offered for any text typed in root search: it is listed below every
 //!   other result and never selected by itself, so the text reaches it only
 //!   when the user chooses it.
 //!
+//! The text sent also fills the command's first text or password argument
+//! when it has one without a value (see `argument_form`).
+//!
 //! Nothing runs while the user types: the text is sent to the command only
-//! when its row is invoked. Both are Pane's own records (see `choices`):
+//! when its row is invoked, as its launch record's fallback text, trimmed
+//! (see `launching`). A no-view command, such as the query samples' Echo,
+//! runs with it and its answer is shown while root search stays as it was;
+//! a view command opens its screen with it.
+//!
+//! Both are Pane's own records (see `choices`):
 //! `aliases.json` beside `installed.json`, by command id, so copies of a
 //! package from other sources, even with the same titles, are distinct, and
 //! a reinstalled or updated package keeps them. A disabled package's
@@ -24,15 +33,15 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::path::PathBuf;
 
 use serde_json::{Map, Value};
 
 use super::choices::{Choices, Record, split};
 use super::{
     CommandRegistration, Entry, FormField, FormPurpose, FormView, Launcher, LauncherView, OpenForm,
-    Row, Screen, State, Status, Unavailable, off_thread,
+    Opening, Row, Screen, State, Status, Unavailable, off_thread,
 };
+use crate::launch::{LaunchRecord, LaunchSource};
 use crate::packages::{PackageIdentity, paused_reason};
 use crate::runtime::FieldKind;
 use crate::search::same_text;
@@ -174,6 +183,9 @@ pub(super) struct Target {
     pub(super) identity: PackageIdentity,
     /// Why it cannot run now: paused, or unavailable on this system.
     pub(super) unavailable: Option<Unavailable>,
+    /// Whether it is a no-view command, which runs with the text sent
+    /// rather than opening a screen.
+    pub(super) no_view: bool,
 }
 
 /// How a row sends the query to its command.
@@ -186,12 +198,11 @@ pub(super) enum Via {
 }
 
 /// A root search row's query, to send to a command that takes one.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(super) struct Sending {
-    pub(super) component: PathBuf,
-    /// The command's id in its manifest.
-    pub(super) command: String,
-    pub(super) query: String,
+    /// The command, launched from its alias or as a fallback with the
+    /// text as its launch record's fallback text.
+    pub(super) opening: Opening,
     pub(super) via: Via,
     /// Why the command cannot run now; invoking the row shows it.
     pub(super) unavailable: Option<String>,
@@ -228,10 +239,14 @@ fn send_row(state: &State, target: &Target, text: &str, via: Via, how: &str) -> 
         subtitle: Some(format!("Send “{text}” · {how}{source}")),
         unavailable: target.unavailable.clone(),
     };
+    let from = match via {
+        Via::Alias => LaunchSource::Alias,
+        Via::Fallback => LaunchSource::Fallback,
+    };
+    let mut opening = Opening::of(registration, target.no_view, from);
+    opening.launch = LaunchRecord::sending(from, text);
     let entry = Entry::Send(Sending {
-        component: registration.component.clone(),
-        command: registration.manifest_id().to_owned(),
-        query: text.to_owned(),
+        opening,
         via,
         unavailable: target.unavailable.as_ref().map(|u| u.reason().to_owned()),
     });
@@ -330,7 +345,7 @@ impl Launcher {
                     configured.push(Configured {
                         id: registration.id,
                         title: registration.title,
-                        takes_query: command.takes_query,
+                        takes_query: command.accepts_fallback_text(),
                         identity: &package.identity,
                         inactive: package_inactive.clone().or(unavailable),
                     });
@@ -458,8 +473,11 @@ impl Launcher {
                 },
                 value: current,
                 error: None,
+                description: None,
+                required: false,
             }],
             submit_label: "Save alias".into(),
+            setup: None,
         };
         let view = LauncherView::new(Screen::Form(form), format!("Alias for {title}"));
         let return_to = std::mem::replace(&mut state.view, view);

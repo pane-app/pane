@@ -46,8 +46,14 @@ Every guest call has two owners, with different powers:
 
 ## What stopping does
 
-The runtime serves guest calls one at a time on its own thread. When a
-generation ends:
+The runtime serves guest calls on its own thread, many at once: while one
+waits on something outside its guest, the others run, and each instance's
+own calls run one after another (#136). When a generation ends, it runs its
+undo list, newest first (what it set up: its instances, its helpers' and
+system programs' runs, its web requests and web images, a command search
+in progress, and its schedules, services and command hotkeys, which the
+end marks for the scheduler, the services thread and the next hotkey sync
+to drop or carry over to the next generation), and:
 
 1. **Queued calls** of it (asked for but not started) are not started; they
    answer "The extension is disabled" or "The extension was reloaded or
@@ -122,8 +128,8 @@ resume in the store. So:
 - **No time limit on waiting, and no user cancellation** of an action: a
   call waiting on a clock or another extension's operation ends when the
   guest answers, or when a generation in its chain ends; only computing
-  (5 seconds of the guest's own) and a native helper's run (30 seconds)
-  are limited.
+  (5 seconds of the guest's own) is limited. A native helper's run has had
+  no limit of Pane's own since #136.
 - **External side effects are not undone**: what the guest did before the
   stop (a file written through WASI, a request sent) stays done; only what
   it would have done afterwards is prevented. Data it saved before the stop

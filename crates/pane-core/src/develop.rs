@@ -28,13 +28,14 @@ use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::packages::{MANIFEST_FILE, Manifest};
+use crate::process_tree::ProcessTree;
 
 /// Decides how a package is built on save. [`Toolchains`] is Pane's; tests
 /// supply their own.
@@ -754,145 +755,6 @@ fn read_lines(
         }
         let _ = lines.send(Piped::Closed);
     });
-}
-
-/// A build command and every process it starts, killed together.
-///
-/// - Unix: a process group of its own, killed with `SIGKILL`. On Linux the
-///   command also gets `SIGKILL` if Pane dies (`PR_SET_PDEATHSIG`); macOS
-///   has no such signal, so there a build outlives a Pane that dies
-///   without quitting.
-/// - Windows: a Job Object that kills its processes when it is closed
-///   (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`), so they go with Pane however it
-///   ends; the command runs in a new process group, without a console
-///   window. Processes it starts before it is assigned to the job, in the
-///   moment after it starts, escape it.
-struct ProcessTree {
-    #[cfg(unix)]
-    group: i32,
-    #[cfg(windows)]
-    job: Option<windows_job::Job>,
-}
-
-impl ProcessTree {
-    fn prepare(command: &mut Command) {
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            command.process_group(0);
-            #[cfg(target_os = "linux")]
-            // SAFETY: prctl is async-signal-safe and touches only the child.
-            unsafe {
-                command.pre_exec(|| {
-                    libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
-                    Ok(())
-                });
-            }
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(windows_job::CREATION_FLAGS);
-        }
-    }
-
-    fn adopt(child: &Child) -> ProcessTree {
-        #[cfg(unix)]
-        {
-            // The group `prepare` made has the child's id.
-            ProcessTree {
-                group: i32::try_from(child.id()).unwrap_or(0),
-            }
-        }
-        #[cfg(windows)]
-        {
-            ProcessTree {
-                job: windows_job::Job::adopt(child),
-            }
-        }
-        #[cfg(not(any(unix, windows)))]
-        {
-            let _ = child;
-            ProcessTree {}
-        }
-    }
-
-    fn kill(&self) {
-        #[cfg(unix)]
-        if self.group > 0 {
-            // SAFETY: kill(2) with a negative id signals that process group;
-            // it has no memory effects.
-            unsafe {
-                libc::kill(-self.group, libc::SIGKILL);
-            }
-        }
-        #[cfg(windows)]
-        if let Some(job) = &self.job {
-            job.terminate();
-        }
-    }
-}
-
-#[cfg(windows)]
-mod windows_job {
-    use std::os::windows::io::AsRawHandle;
-    use std::process::Child;
-
-    use windows::Win32::Foundation::{CloseHandle, HANDLE};
-    use windows::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-        SetInformationJobObject, TerminateJobObject,
-    };
-    use windows::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW};
-
-    /// A build command's creation flags: no console window, and a process
-    /// group of its own.
-    pub const CREATION_FLAGS: u32 = CREATE_NO_WINDOW.0 | CREATE_NEW_PROCESS_GROUP.0;
-
-    /// A Job Object killing its processes when closed.
-    pub struct Job(HANDLE);
-
-    // SAFETY: a job handle may be used and closed from any thread.
-    unsafe impl Send for Job {}
-    unsafe impl Sync for Job {}
-
-    impl Job {
-        pub fn adopt(child: &Child) -> Option<Job> {
-            // SAFETY: plain Win32 calls on a handle this owns and the child's
-            // process handle, which lives as long as `child`.
-            unsafe {
-                let job = Job(CreateJobObjectW(None, windows::core::PCWSTR::null()).ok()?);
-                let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-                SetInformationJobObject(
-                    job.0,
-                    JobObjectExtendedLimitInformation,
-                    &limits as *const _ as *const core::ffi::c_void,
-                    size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-                )
-                .ok()?;
-                AssignProcessToJobObject(job.0, HANDLE(child.as_raw_handle())).ok()?;
-                Some(job)
-            }
-        }
-
-        pub fn terminate(&self) {
-            // SAFETY: the handle is open until drop.
-            unsafe {
-                let _ = TerminateJobObject(self.0, 1);
-            }
-        }
-    }
-
-    impl Drop for Job {
-        fn drop(&mut self) {
-            // SAFETY: closes the handle this owns once.
-            unsafe {
-                let _ = CloseHandle(self.0);
-            }
-        }
-    }
 }
 
 /// The line of a build's output to show first: the first reporting an

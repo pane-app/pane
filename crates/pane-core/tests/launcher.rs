@@ -12,11 +12,14 @@ use pane_core::{
 #[path = "support/platforms.rs"]
 mod platforms;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/guests.rs"]
 mod guests;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use guests::guest;
 use rows::titles;
 
@@ -44,8 +47,9 @@ fn open_faulty_item(launcher: &Launcher, item: &str) {
     launcher.move_selection(index as isize);
 }
 
+/// The error shown: in the status line, or an action's failure toast.
 fn error(launcher: &Launcher) -> String {
-    match launcher.view().status {
+    match shown(launcher) {
         Status::Error(message) => message,
         other => panic!("expected an error, got {other:?}"),
     }
@@ -113,7 +117,7 @@ fn a_guest_trap_is_shown_and_the_command_keeps_working() {
 
     launcher.move_selection(-2);
     block_on(launcher.activate_selected());
-    assert_eq!(launcher.view().status, Status::Result("fine".into()));
+    assert_eq!(shown(&launcher), Status::Result("fine".into()));
 }
 
 #[test]
@@ -339,7 +343,7 @@ fn an_unavailable_form_explains_itself_instead_of_opening() {
     );
     launcher.select(0);
     block_on(launcher.activate_selected());
-    assert_eq!(launcher.view().status, Status::Result("fine".into()));
+    assert_eq!(shown(&launcher), Status::Result("fine".into()));
 }
 
 /// A launcher over `runtime` with the Rust sample's color picker opened.
@@ -610,15 +614,16 @@ fn a_crash_in_a_view_closes_it_and_the_command_keeps_working() {
     assert_eq!(block_on(runtime.view_count()), 0);
     launcher.select(0);
     block_on(launcher.activate_selected());
-    assert_eq!(launcher.view().status, Status::Result("fine".into()));
+    assert_eq!(shown(&launcher), Status::Result("fine".into()));
 }
 
 /// The pre-release extension API 0.1 changes shape between slices without a
-/// version bump: `item` gained `platforms` in #19, and the command gained
-/// custom views in #21. A component built against an older shape declares
-/// the same API version; its exports' types are checked when it loads, here
-/// for a command built into Pane (installing checks the same, see
-/// `packages.rs`), and the first mismatch is named.
+/// version bump: `item` gained `platforms` in #19, the command gained custom
+/// views in #21, and its list moved into ADR 0036's envelope (`render` and
+/// `handle-event`) in #135. A component built against an older shape
+/// declares the same API version; its exports' types are checked when it
+/// loads, here for a command built into Pane (installing checks the same,
+/// see `packages.rs`), and the first mismatch is named.
 #[test]
 fn a_component_of_an_older_api_shape_is_refused_when_it_loads() {
     let launcher = launcher(vec![command("old", guest("old_api"))]);
@@ -638,12 +643,7 @@ fn a_component_of_an_older_api_shape_is_refused_when_it_loads() {
         ),
         "{message}"
     );
-    assert!(
-        message.contains(
-            "`get-view`: type mismatch for field items: expected record of 6 fields, found 4 fields"
-        ),
-        "{message}"
-    );
+    assert!(message.contains("it has no function `render`"), "{message}");
 }
 
 #[test]

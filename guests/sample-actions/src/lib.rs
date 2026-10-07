@@ -1,0 +1,673 @@
+//! Pane's actions sample: a list whose items carry several actions (#137),
+//! and what a command does after it acts (#141).
+//!
+//! "Alpha note" has nine actions, in an untitled section and the "Edit",
+//! "Share" and "Danger" sections: Enter runs "Open", Ctrl+Enter "Copy" and
+//! Ctrl+Shift+Enter "Rename", and Ctrl+K lists them all. Its shortcuts show
+//! the rules Pane binds them by: one per system ("Reveal"), one that is
+//! Pane's own Ctrl+K and so is never bound ("Open Menu"), one that Pane
+//! leaves free until the user gives one of its keys Ctrl+Shift+Y
+//! ("Archive"), and a destructive "Delete". "Beta note" has one action, so
+//! Ctrl+Enter does nothing there, and "Gamma note" has none, so it cannot
+//! be activated. Every one of their actions shows a success toast with its
+//! title and the item's ("Open: Alpha note").
+//!
+//! "Window" closes the window with each way the next showing may go
+//! (`default`, `immediate`, `suspended`, and clearing root search), pops to
+//! root search (clearing its search or not) and clears the search field;
+//! "In the Background" launches the "Window functions" no-view command in
+//! the background, where no window is shown, and that command's toast says
+//! what each function answered there. "Feedback" shows a HUD (and a
+//! failure HUD), shows a toast that is updated from animated ("Uploading…")
+//! to success ("Uploaded") with Open and Retry actions, hides it, fails,
+//! and sets and clears the command's row subtitle ("3 unread"). The no-view
+//! commands "Spin" (it leaves an animated toast, which Pane hides when the
+//! run ends) and "Stumble" (it fails) show what Pane does at a run's end.
+//!
+//! "Delta note" shows submenus (#140): "Open With…" gives its entries at
+//! once, in sections, two with shortcuts and a destructive one; "Move to
+//! List…" gives them when it opens, in a section that counts how many times
+//! it was asked ("Asked 1 time"); and "Tag…" fails when it opens ("The tags
+//! could not be loaded"). An entry shows what it did and the item's
+//! ("Open With Notepad: Delta note", "Move to Later: Delta note").
+//!
+//! "System" calls the system host functions (#145) one by one, each doing
+//! only what it names and then saying so in a toast ("Copy Text: done"):
+//! plain and concealed copies of text and of a file, a clipboard read
+//! ("Clipboard: text “…”"), opens of an `https:`, a `mailto:` and an
+//! `ms-settings:` link, a file, a folder and an application, an open with a
+//! named application, a reveal and a trash of two files ("Delete me.txt"
+//! and "Keep me.txt" in a `pane-sample` folder, which do not exist unless
+//! the user makes them, so a real Recycle Bin reports them both). The
+//! paths are this system's (`places`). "Standard actions" has every
+//! standard action of `pane_guest::actions`: Copy (Enter), a concealed
+//! Copy, a Copy that keeps the window open, a Copy of a file, Open, Open
+//! With… (the installed applications), Show in Explorer and Move to
+//! Recycle Bin; each closes the window after it acts.
+//!
+//! "Confirm" asks before it acts (#146): its destructive "Delete" asks
+//! "Delete the note?" offering "Don't ask again" (remembered under
+//! `delete-note`) and toasts "Deleted" or "Kept"; "Ask" asks "Go on?" with
+//! its own buttons ("Go On", "Stop") and nothing to remember, toasting
+//! "Went on" or "Stopped"; "Close and Ask" closes the window, then asks,
+//! so Pane shows itself again for it ("Confirmed while hidden" or "Not
+//! confirmed while hidden"); "Ask in the Background" launches the no-view
+//! "Confirm Run" in the background, where no confirmation is available, and
+//! that command toasts "Not asked" with the reason. Run by the user (or its
+//! hotkey, with the launcher hidden), "Confirm Run" asks "Run it?" and
+//! toasts "Ran" or "Did not run".
+//!
+//! "Paste" (#148) has the standard Paste (it pastes "Pasted by the actions
+//! sample" where Pane can paste, and copies it with a HUD where it cannot
+//! yet), the same Paste titled after the application in front ("Paste to
+//! Notepad"), a paste that says each answer of the host function ("Paste
+//! Directly"), "Front Application", which says that application's name and
+//! icon, or that there is none, and "Search Selection", which searches the
+//! web for the selected text and says when nothing is selected. Where Pane
+//! cannot do one yet, a failure toast says "Not available here yet" with
+//! Pane's reason; a failure is an error the command answers with.
+//! The JavaScript and TypeScript samples do the same.
+#![no_std]
+
+use core::cell::Cell;
+use core::sync::atomic::{AtomicU32, Ordering};
+
+use pane_guest::actions;
+use pane_guest::alloc::{format, string::String, vec::Vec};
+use pane_guest::commands::{CommandRef, LaunchType, launch, set_subtitle};
+use pane_guest::feedback::{
+    Confirmation, ShownToast, Toast, ToastAction, ToastStyle, confirm, show_hud, show_toast,
+};
+use pane_guest::system::{self, Clip, HostSystem, SystemError};
+use pane_guest::window::{PopToRootType, clear_search, close, pop_to_root};
+use pane_guest::{
+    Action, Command, CustomView, FieldValue, FormError, Item, LaunchRecord, List, Modifier,
+    NoCustomView, Shortcut, Submenu,
+};
+
+use Modifier::{Cmd, Ctrl, Shift};
+
+struct Actions;
+pane_guest::export!(Actions);
+
+/// What the action titled `title` of the item titled `item` shows.
+async fn answer(title: &str, item: &str) -> Result<(), String> {
+    show_toast(Toast::success(format!("{title}: {item}")));
+    Ok(())
+}
+
+/// The action titled `title` of the item titled `item`: it shows both.
+fn action(title: &'static str, item: &'static str) -> Action {
+    Action::new(title, move || answer(title, item))
+}
+
+/// What a window function answered: nothing more when a window was shown
+/// for the call, else the failure that none was.
+fn windowed(shown: bool) -> Result<(), String> {
+    if shown {
+        Ok(())
+    } else {
+        Err("No window was shown".into())
+    }
+}
+
+/// The "Window" item's action titled `title`, which runs `function`.
+fn window_action(title: &'static str, function: fn() -> bool) -> Action {
+    Action::new(title, move || async move { windowed(function()) })
+}
+
+/// The upload toast "Start Upload" showed, which "Finish Upload" and
+/// "Hide Toast" change.
+struct Upload(Cell<Option<ShownToast>>);
+
+// SAFETY: a component's code runs on one thread.
+unsafe impl Sync for Upload {}
+
+static UPLOAD: Upload = Upload(Cell::new(None));
+
+/// Starts the upload: an animated toast, remembered.
+fn start_upload() -> ShownToast {
+    let shown = show_toast(Toast::animated("Uploading…"));
+    UPLOAD.0.set(Some(shown));
+    shown
+}
+
+/// The upload's toast once it is done: a success with Open and Retry.
+fn uploaded() -> Toast {
+    Toast::success("Uploaded")
+        .message("notes.txt")
+        .primary(
+            ToastAction::new("Open", || async {
+                show_toast(Toast::success("Opened the upload"));
+                Ok(())
+            })
+            .shortcut(Shortcut::new([Ctrl, Shift], "o")),
+        )
+        .secondary(
+            ToastAction::new("Retry", || async {
+                start_upload().update(uploaded());
+                Ok(())
+            })
+            .shortcut(Shortcut::new([Ctrl, Shift], "r")),
+        )
+}
+
+/// Toasts `yes` or `no`, as the user answered.
+fn said(answer: bool, yes: &str, no: &str) {
+    show_toast(Toast::success(if answer { yes } else { no }));
+}
+
+/// "Delete": asks first, destructively, offering "Don't ask again".
+async fn delete_note() -> Result<(), String> {
+    let asked = Confirmation::new("Delete the note?")
+        .message("It cannot be brought back.")
+        .primary("Delete")
+        .destructive()
+        .remember("delete-note");
+    said(confirm(asked).await?, "Deleted", "Kept");
+    Ok(())
+}
+
+/// "Ask": asks with its own buttons, remembering nothing.
+async fn ask() -> Result<(), String> {
+    let asked = Confirmation::new("Go on?").primary("Go On").dismiss("Stop");
+    said(confirm(asked).await?, "Went on", "Stopped");
+    Ok(())
+}
+
+/// "Close and Ask": closes the window first, so Pane shows it again to ask.
+async fn close_and_ask() -> Result<(), String> {
+    close(false, PopToRootType::Default);
+    let asked = Confirmation::new("Asked while hidden").primary("Yes");
+    said(
+        confirm(asked).await?,
+        "Confirmed while hidden",
+        "Not confirmed while hidden",
+    );
+    Ok(())
+}
+
+/// The command `command` of this package, for a launch.
+fn own(command: &str) -> CommandRef {
+    CommandRef {
+        source: None,
+        command: command.into(),
+    }
+}
+
+/// The action titled `title` of the item titled `item` that answers `said`
+/// and the item's title.
+fn answering(title: &'static str, said: &'static str, item: &'static str) -> Action {
+    Action::new(title, move || answer(said, item))
+}
+
+/// How many times this instance was asked for "Move to List…"'s entries.
+static LISTS_ASKED: AtomicU32 = AtomicU32::new(0);
+
+/// "Delta note": its submenus.
+fn delta() -> Item {
+    let delta = "Delta note";
+    Item::new("delta", delta)
+        .subtitle("Submenus, given at once or asked for when opened")
+        .actions([
+            action("Open", delta),
+            Action::submenu(
+                "Open With…",
+                Submenu::new("Open With").entries([
+                    answering("Notepad", "Open With Notepad", delta)
+                        .section("Editors")
+                        .shortcut(Shortcut::new([Ctrl, Shift], "n")),
+                    answering("WordPad", "Open With WordPad", delta).section("Editors"),
+                    answering("Browser", "Open With Browser", delta)
+                        .section("Other")
+                        .shortcut(Shortcut::new([Ctrl, Shift], "b")),
+                    action("Forget Applications", delta)
+                        .section("Danger")
+                        .destructive()
+                        .shortcut(Shortcut::new([Ctrl, Shift], "d")),
+                ]),
+            ),
+            Action::submenu(
+                "Move to List…",
+                Submenu::lazy("Move to List", move || async move {
+                    let asked = LISTS_ASKED.fetch_add(1, Ordering::Relaxed) + 1;
+                    let times = if asked == 1 { "time" } else { "times" };
+                    let section = format!("Asked {asked} {times}");
+                    let lists: Vec<Action> = ["Inbox", "Later", "Someday"]
+                        .into_iter()
+                        .map(|list| {
+                            Action::new(list, move || async move {
+                                show_toast(Toast::success(format!("Move to {list}: {delta}")));
+                                Ok::<(), String>(())
+                            })
+                            .section(section.clone())
+                        })
+                        .collect();
+                    Ok::<Vec<Action>, String>(lists)
+                }),
+            )
+            .section("Organize"),
+            Action::submenu(
+                "Tag…",
+                Submenu::lazy("Tags", || async {
+                    Err::<Vec<Action>, String>("The tags could not be loaded".into())
+                }),
+            )
+            .section("Organize"),
+        ])
+}
+
+/// The text the sample copies.
+const COPIED_TEXT: &str = "Copied by the actions sample";
+
+/// The secret the sample copies concealed.
+const SECRET: &str = "hunter2";
+
+/// Where the sample's opens, copies, reveals and trashes point on this
+/// system: a file, a folder and an application every such system has, and
+/// two files to trash that do not exist unless the user makes them.
+struct Places {
+    file: &'static str,
+    folder: &'static str,
+    application: &'static str,
+    trash: [&'static str; 2],
+}
+
+fn places() -> Places {
+    match system::running_on() {
+        HostSystem::Windows => Places {
+            file: r"C:\Windows\win.ini",
+            folder: r"C:\Windows",
+            application: r"C:\Windows\System32\notepad.exe",
+            trash: [
+                r"C:\pane-sample\Delete me.txt",
+                r"C:\pane-sample\Keep me.txt",
+            ],
+        },
+        HostSystem::Macos => Places {
+            file: "/etc/hosts",
+            folder: "/Applications",
+            application: "/System/Applications/TextEdit.app",
+            trash: [
+                "/tmp/pane-sample/Delete me.txt",
+                "/tmp/pane-sample/Keep me.txt",
+            ],
+        },
+        HostSystem::Linux | HostSystem::Other => Places {
+            file: "/etc/hosts",
+            folder: "/tmp",
+            application: "/usr/bin/xdg-open",
+            trash: [
+                "/tmp/pane-sample/Delete me.txt",
+                "/tmp/pane-sample/Keep me.txt",
+            ],
+        },
+    }
+}
+
+/// The "System" item's action titled `title`, which runs `function` and
+/// then says it is done in a toast.
+fn system_action(title: &'static str, function: fn() -> Result<(), String>) -> Action {
+    Action::new(title, move || async move {
+        function()?;
+        show_toast(Toast::success(format!("{title}: done")));
+        Ok::<(), String>(())
+    })
+}
+
+/// What the clipboard holds, as the "Read Clipboard" toast says it.
+fn read_clipboard() -> Result<(), String> {
+    let said = match system::read_clipboard()? {
+        Some(Clip::Text(text)) => format!("Clipboard: text “{text}”"),
+        Some(Clip::File(path)) => format!("Clipboard: file {path}"),
+        None => "Clipboard: empty".into(),
+    };
+    show_toast(Toast::success(said));
+    Ok(())
+}
+
+/// Moves the sample's two files to the Recycle Bin, saying which were not.
+fn trash_files() -> Result<(), String> {
+    let paths = places().trash.map(String::from);
+    system::trash(&paths)
+        .map_err(|not_trashed| system::describe_not_trashed(&not_trashed, paths.len()))
+}
+
+/// "System": each host function on its own.
+fn system_item() -> Item {
+    Item::new("system", "System")
+        .subtitle("The clipboard, opening, revealing and recycling, one by one")
+        .actions([
+            system_action("Copy Text", || {
+                system::copy(&Clip::Text(COPIED_TEXT.into()), false)
+            }),
+            system_action("Copy Text Concealed", || {
+                system::copy(&Clip::Text(SECRET.into()), true)
+            }),
+            system_action("Copy File", || {
+                system::copy(&Clip::File(places().file.into()), false)
+            }),
+            system_action("Copy File Concealed", || {
+                system::copy(&Clip::File(places().file.into()), true)
+            }),
+            Action::new("Read Clipboard", || async { read_clipboard() }),
+            system_action("Open Website", || system::open("https://example.com", None)),
+            system_action("Open Mail", || {
+                system::open("mailto:someone@example.com", None)
+            }),
+            system_action("Open Settings", || {
+                system::open("ms-settings:display", None)
+            }),
+            system_action("Open File", || system::open(places().file, None)),
+            system_action("Open Folder", || system::open(places().folder, None)),
+            system_action("Open Application", || {
+                system::open(places().application, None)
+            }),
+            system_action("Open File With Application", || {
+                let places = places();
+                system::open(places.file, Some(places.application))
+            }),
+            system_action("Reveal File", || system::reveal(places().file)),
+            system_action("Trash Files", trash_files),
+        ])
+}
+
+/// "Standard actions": every standard action, each closing the window
+/// after it acts but the one that keeps it open.
+fn standard_item() -> Item {
+    let places = places();
+    Item::new("standard", "Standard actions")
+        .subtitle("Copy, Open, Open With…, Show in Explorer, Move to Recycle Bin")
+        .actions([
+            actions::copy(Clip::Text(COPIED_TEXT.into())).into(),
+            actions::copy(Clip::Text(SECRET.into()))
+                .concealed()
+                .title("Copy Password")
+                .into(),
+            actions::copy(Clip::Text(COPIED_TEXT.into()))
+                .keep_window_open()
+                .title("Copy and Keep Open")
+                .into(),
+            actions::copy(Clip::File(places.file.into()))
+                .title("Copy File")
+                .into(),
+            actions::open("https://example.com").into(),
+            actions::open_with(places.file).into(),
+            actions::show_in_file_manager(places.file).into(),
+            actions::move_to_trash([places.trash[0]]).into(),
+        ])
+}
+
+/// The text the sample pastes.
+const PASTED_TEXT: &str = "Pasted by the actions sample";
+
+/// Where "Search Selection" searches.
+const SEARCH: &str = "https://www.google.com/search?q=";
+
+/// What the sample says where Pane cannot do something yet: a failure
+/// toast, "Not available here yet: <Pane's reason>", which is not an
+/// error the command answers with.
+fn not_available(why: &str) {
+    show_toast(Toast::failure("Not available here yet").message(why));
+}
+
+/// `text` as a URL's query value, as JavaScript's `encodeURIComponent`
+/// writes it.
+fn encode(text: &str) -> String {
+    let mut encoded = String::new();
+    for byte in text.bytes() {
+        match byte {
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'_'
+            | b'.'
+            | b'!'
+            | b'~'
+            | b'*'
+            | b'\''
+            | b'('
+            | b')' => encoded.push(byte as char),
+            other => encoded.push_str(&format!("%{other:02X}")),
+        }
+    }
+    encoded
+}
+
+/// The title of a Paste to the application in front: "Paste to Notepad",
+/// or "Paste to Active App" when Pane does not know one.
+fn paste_title() -> String {
+    match system::front_application() {
+        Ok(Some(front)) => format!("Paste to {}", front.name),
+        _ => "Paste to Active App".into(),
+    }
+}
+
+/// "Paste": the standard Paste, the front application and the selected
+/// text.
+fn paste_item() -> Item {
+    Item::new("paste", "Paste")
+        .subtitle("Paste, the application in front and the selected text")
+        .actions([
+            actions::paste(Clip::Text(PASTED_TEXT.into())).into(),
+            actions::paste(Clip::Text(PASTED_TEXT.into()))
+                .title(paste_title())
+                .into(),
+            Action::new("Paste Directly", || async {
+                match system::paste(&Clip::Text(PASTED_TEXT.into())) {
+                    Ok(()) => Ok(()),
+                    Err(SystemError::NotAvailable(why)) => {
+                        not_available(&why);
+                        Ok(())
+                    }
+                    Err(SystemError::Failed(why)) => Err(why),
+                }
+            }),
+            Action::new("Front Application", || async {
+                match system::front_application() {
+                    Ok(Some(front)) => {
+                        let icon = front.icon.as_deref().unwrap_or("none");
+                        show_toast(Toast::success(format!(
+                            "Front application: {}, icon {icon}",
+                            front.name
+                        )));
+                        Ok(())
+                    }
+                    Ok(None) => {
+                        show_toast(Toast::success("No application is in front"));
+                        Ok(())
+                    }
+                    Err(SystemError::NotAvailable(why)) => {
+                        not_available(&why);
+                        Ok(())
+                    }
+                    Err(SystemError::Failed(why)) => Err(why),
+                }
+            }),
+            Action::new("Search Selection", || async {
+                match system::selected_text() {
+                    Ok(Some(text)) => {
+                        system::open(&format!("{SEARCH}{}", encode(&text)), None)?;
+                        show_toast(Toast::success(format!("Searched for “{text}”")));
+                        Ok(())
+                    }
+                    Ok(None) => {
+                        show_toast(Toast::failure("Nothing is selected"));
+                        Ok(())
+                    }
+                    Err(SystemError::NotAvailable(why)) => {
+                        not_available(&why);
+                        Ok(())
+                    }
+                    Err(SystemError::Failed(why)) => Err(why),
+                }
+            }),
+        ])
+}
+
+impl Command for Actions {
+    type CustomView = NoCustomView;
+
+    async fn render() -> Result<List, String> {
+        let alpha = "Alpha note";
+        let beta = "Beta note";
+        Ok(List::new("Actions sample").items([
+            Item::new("alpha", alpha)
+                .subtitle("Several actions in sections, with shortcuts")
+                .actions([
+                    action("Open", alpha),
+                    action("Copy", alpha),
+                    action("Rename", alpha)
+                        .section("Edit")
+                        .shortcut(Shortcut::new([Ctrl], "r")),
+                    action("Duplicate", alpha)
+                        .section("Edit")
+                        .shortcut(Shortcut::new([Ctrl], "d")),
+                    action("Archive", alpha)
+                        .section("Edit")
+                        .shortcut(Shortcut::new([Ctrl, Shift], "y")),
+                    action("Copy Link", alpha)
+                        .section("Share")
+                        .shortcut(Shortcut::new([Ctrl, Shift], "c")),
+                    action("Reveal", alpha).section("Share").shortcut(
+                        Shortcut::per_platform()
+                            .windows([Ctrl, Shift], "e")
+                            .macos([Cmd, Shift], "r")
+                            .linux([Ctrl, Shift], "l"),
+                    ),
+                    action("Open Menu", alpha)
+                        .section("Share")
+                        .shortcut(Shortcut::new([Ctrl], "k")),
+                    action("Delete", alpha)
+                        .section("Danger")
+                        .destructive()
+                        .shortcut(Shortcut::new([Ctrl], "x")),
+                ]),
+            Item::new("beta", beta)
+                .subtitle("One action")
+                .action(action("Open", beta)),
+            Item::new("gamma", "Gamma note").subtitle("No actions"),
+            delta(),
+            Item::new("window", "Window")
+                .subtitle("Close, pop to root search, clear the search")
+                .actions([
+                    window_action("Close", || close(false, PopToRootType::Default)),
+                    window_action("Close to Root Search", || {
+                        close(false, PopToRootType::Immediate)
+                    }),
+                    window_action("Close and Keep Screen", || {
+                        close(false, PopToRootType::Suspended)
+                    }),
+                    window_action("Close and Clear Root Search", || {
+                        close(true, PopToRootType::Default)
+                    }),
+                    window_action("Pop to Root", || pop_to_root(false)),
+                    window_action("Pop to Root and Clear Search", || pop_to_root(true)),
+                    window_action("Clear Search", clear_search),
+                    Action::new("In the Background", || async {
+                        launch(&own("window-functions"), LaunchType::Background, &[], None)
+                    }),
+                ]),
+            Item::new("feedback", "Feedback")
+                .subtitle("A HUD, toasts and this command's subtitle")
+                .actions([
+                    Action::new("Show HUD", || async {
+                        show_hud("Copied to Clipboard", ToastStyle::Success);
+                        Ok(())
+                    }),
+                    Action::new("Show Failure HUD", || async {
+                        show_hud("Could not copy", ToastStyle::Failure);
+                        Ok(())
+                    }),
+                    Action::new("Start Upload", || async {
+                        start_upload();
+                        Ok(())
+                    }),
+                    Action::new("Finish Upload", || async {
+                        match UPLOAD.0.get() {
+                            Some(shown) => {
+                                shown.update(uploaded());
+                                Ok(())
+                            }
+                            None => Err("Nothing is uploading".into()),
+                        }
+                    }),
+                    Action::new("Upload", || async {
+                        start_upload().update(uploaded());
+                        Ok(())
+                    }),
+                    Action::new("Hide Toast", || async {
+                        if let Some(shown) = UPLOAD.0.take() {
+                            shown.hide();
+                        }
+                        Ok(())
+                    }),
+                    Action::new("Fail", || async { Err("The upload failed".into()) }),
+                    Action::new("Set Subtitle", || async { set_subtitle(Some("3 unread")) }),
+                    Action::new("Clear Subtitle", || async { set_subtitle(None) }),
+                ]),
+            Item::new("confirm", "Confirm")
+                .subtitle("Asks before it acts, remembering the answer or not")
+                .actions([
+                    Action::new("Delete", delete_note).destructive(),
+                    Action::new("Ask", ask),
+                    Action::new("Close and Ask", close_and_ask),
+                    Action::new("Ask in the Background", || async {
+                        launch(&own("confirm-run"), LaunchType::Background, &[], None)
+                    }),
+                ]),
+            system_item(),
+            standard_item(),
+            paste_item(),
+        ]))
+    }
+
+    async fn run(command: String, _launch: LaunchRecord) -> Result<(), String> {
+        match command.as_str() {
+            // What each window function answers where it runs: in the
+            // background, that no window was shown. Launched from root
+            // search with its query typed, the close empties that query.
+            "window-functions" => {
+                let closed = close(true, PopToRootType::Default);
+                let popped = pop_to_root(false);
+                let cleared = clear_search();
+                show_toast(Toast::success(format!(
+                    "close: {closed}, pop to root: {popped}, clear search: {cleared}"
+                )));
+                Ok(())
+            }
+            // Leaves its toast in progress: Pane hides it once the run
+            // ends.
+            "spin" => {
+                show_toast(Toast::animated("Spinning…"));
+                Ok(())
+            }
+            "stumble" => Err("Stumbled on purpose".into()),
+            // Asks first; in the background, where Pane asks nothing, says
+            // why.
+            "confirm-run" => {
+                let asked = Confirmation::new("Run it?").primary("Run");
+                match confirm(asked).await {
+                    Ok(answer) => said(answer, "Ran", "Did not run"),
+                    Err(error) => {
+                        show_toast(Toast::failure("Not asked").message(error));
+                    }
+                }
+                Ok(())
+            }
+            other => Err(format!("`{other}` opens a screen")),
+        }
+    }
+
+    async fn submit_form(_item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {
+        Err(FormError {
+            field: None,
+            message: "The actions sample has no forms".into(),
+        })
+    }
+
+    async fn open_view(_item_id: String) -> Result<CustomView, String> {
+        Err("The actions sample has no custom views".into())
+    }
+}

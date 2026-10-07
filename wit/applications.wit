@@ -41,11 +41,25 @@ interface applications {
 /// applications. Root search asks for them once it is first used, keeps
 /// them, and matches and ranks them by title like commands.
 interface indexed-results {
+  /// What an `open` result opens, and with what.
+  record open-target {
+    /// A URL of any scheme, or the absolute path of a file, a folder or an
+    /// application.
+    target: string,
+    /// The application to open it with (its path, or an installed
+    /// application's id); none for the system's handler.
+    application: option<string>,
+  }
+
   /// What invoking an indexed result does. Pane performs it; the extension
   /// is not called again.
   variant indexed-action {
     /// Opens the application with this id, as `applications.open` does.
     open-application(string),
+    /// Opens a target as `system.open` does (wit/system.wit): a URL of any
+    /// scheme, a file, a folder or an application, with the system's
+    /// handler or with the application named, as a quicklink does.
+    open(open-target),
   }
 
   record indexed-result {

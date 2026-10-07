@@ -1,0 +1,18 @@
+# Test fixture: a command that answers Pane's `render` and `handle-event`
+# with JSON of its own, written by hand rather than by pane-guest, so that
+# Pane's reading of the tree is checked against trees the SDKs never write:
+# unknown fields, a newer version, a view Pane cannot show, and trees and
+# answers that are not ones Pane can read.
+[package]
+name = "tree-fixture"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { version = "=0.62.0", default-features = false, features = ["macros", "async"] }
+dlmalloc = { version = "0.2", features = ["global"] }

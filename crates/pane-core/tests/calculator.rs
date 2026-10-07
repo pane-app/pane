@@ -6,7 +6,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -14,10 +14,16 @@ use futures::executor::block_on;
 use pane_core::{ComputedAnswer, Launcher, Limits, PackageIdentity, Runtime, Section, Status};
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
+#[path = "support/system.rs"]
+mod system;
 
+use feedback::RecordingWindow;
 use rows::titles;
+use system::{Done, RecordingSystem};
 
 fn built(path: &str) -> PathBuf {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -239,6 +245,60 @@ fn enter_on_the_answer_reports_the_copy_of_its_text() {
     // Other rows copy nothing.
     search(&launcher, "calc");
     assert_eq!(launcher.selected_copy(), None);
+}
+
+/// The answer's actions (#150): Copy, Enter's, and Paste, Ctrl+Enter's,
+/// which pastes it into the application in front, closing the window, or
+/// copies it with a HUD saying so where Pane cannot paste yet.
+#[test]
+fn the_answer_offers_copy_then_paste_which_copies_where_it_cannot_paste() {
+    let dirs = Dirs::new();
+    let system = Arc::new(RecordingSystem::default());
+    let launcher = dirs.launcher(dirs.runtime()).with_system(system.clone());
+    let window = RecordingWindow::attach(&launcher);
+    search(&launcher, "6 * 7");
+    let actions: Vec<String> = launcher
+        .item_actions()
+        .expect("the answer has actions")
+        .actions
+        .into_iter()
+        .map(|action| action.title)
+        .collect();
+    assert_eq!(actions, ["Copy answer", "Paste answer"]);
+    assert_eq!(launcher.selected_action().label, "Copy answer");
+
+    // Not available here yet: it copies the answer and says so.
+    block_on(launcher.run_selected_action(1));
+    assert_eq!(
+        system.take(),
+        [Done::Copied {
+            clip: pane_core::system::Clip::Text("42".into()),
+            concealed: false,
+        }]
+    );
+    let huds: Vec<String> = window.huds().into_iter().map(|hud| hud.title).collect();
+    assert_eq!(huds, ["Copied — paste is not available here yet"]);
+    window.take();
+
+    // Where Pane can paste, it closes the window and pastes the answer
+    // (the clipboard emptied first, so there is nothing to put back).
+    system.support_paste();
+    system.set_clipboard(None);
+    launcher.set_window_presence(pane_core::WindowPresence::Shown);
+    block_on(launcher.run_selected_action(1));
+    assert_eq!(
+        system.take(),
+        [
+            Done::Copied {
+                clip: pane_core::system::Clip::Text("42".into()),
+                concealed: true,
+            },
+            Done::Pasted(Some(pane_core::system::Clip::Text("42".into()))),
+        ]
+    );
+    assert_eq!(window.hides(), 1, "the window closed first");
+    assert!(window.huds().is_empty(), "a paste says nothing more");
+    assert_eq!(launcher.view().query(), Some("6 * 7"), "root search stays");
 }
 
 /// The answer's presentation (#96): what the launcher holds of it — the

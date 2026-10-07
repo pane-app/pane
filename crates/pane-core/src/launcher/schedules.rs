@@ -1,8 +1,13 @@
-//! Scheduled work: Pane runs a command's action on the interval its
-//! package's manifest declares, while the package's code may run.
+//! Scheduled work: Pane runs a command's action, or a no-view command
+//! itself, on the interval its package's manifest declares, while the
+//! package's code may run.
 //!
-//! A command's `pane.json` entry declares a schedule: an interval and the
-//! item whose action runs. The scheduler is a thread of Pane's own, which
+//! A command's `pane.json` entry declares a schedule: an interval and, for
+//! a view command, the item whose action runs. A no-view command's
+//! schedule names no item: each run is the command itself, launched in the
+//! background from its schedule (its `run` with a `background` launch
+//! record, see `launching`), and shows nothing, as no window was shown for
+//! it. The scheduler is a thread of Pane's own, which
 //! looks for due work, and threads of their own run it, so neither the
 //! window nor the scheduler ever waits for a guest. It is driven by the
 //! launcher's clock ([`crate::clipboard::Clock`]): the system's clock, or
@@ -23,10 +28,13 @@
 //! the interval restarts when the code may run again, and the first run is
 //! one full interval after that. The declaration is the manifest, so a
 //! restart schedules again whatever it declares for a package still
-//! enabled.
+//! enabled. Each command's schedule is on its generation's undo list
+//! ("schedule", see `generation`): the end marks it ended and wakes the
+//! scheduler, which drops it, or keeps it on the next generation's list.
 //!
 //! Each run is the command's action of the item the schedule names, asked
-//! for as the user asking for it would: through the runtime, with the
+//! for as the user asking for it would: through the runtime (the command's
+//! tree, then the item's action's callback, see `Runtime::run_item`), with the
 //! extension data of the generation current when the scheduler asked, so
 //! an end of that generation stops a run still pending and discards its
 //! late answer (see `generations`), and a run that traps is a crash of the
@@ -34,8 +42,9 @@
 //! is asked for at a time: ticks that fall due while one runs are coalesced
 //! into the next run, which starts at the next tick after it answers. The
 //! answer is shown on the command's screen, as an action's answer is,
-//! while that screen is the one on display; the run happens whether or not
-//! it is.
+//! while that screen is the one on display, and the command's list is then
+//! asked for again, as after an action the user chose; the run happens
+//! whether or not it is.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -45,7 +54,9 @@ use std::time::Duration;
 use super::{Launcher, Screen, Status, WeakLauncher, stopped};
 use crate::clipboard::Clock;
 use crate::extension_data::PackageData;
-use crate::runtime::CallError;
+use crate::generation::EndMark;
+use crate::launch::LaunchRecord;
+use crate::runtime::{Answer, CallError};
 
 /// The longest the scheduler waits before it looks again, so that a change
 /// of the system's time, or a computer waking from sleep, delays a run by
@@ -59,7 +70,7 @@ pub(super) struct Schedules {
     /// with the launcher's state held, never the other way round.
     state: Mutex<Scheduling>,
     /// Wakes the scheduler thread, and tells when it settled.
-    wake: Wake,
+    wake: Arc<Wake>,
 }
 
 /// What the scheduler keeps: the clock it follows and one entry per
@@ -71,12 +82,14 @@ struct Scheduling {
 }
 
 /// What one command's schedule runs: the command's component, in its
-/// package's managed copy; the item whose action runs; and the interval,
-/// in milliseconds of the clock.
+/// package's managed copy; the item whose action runs, or `None` for a
+/// no-view command, which runs itself; the command's manifest id; and the
+/// interval, in milliseconds of the clock.
 #[derive(Clone, PartialEq, Eq)]
 struct Scheduled {
     component: PathBuf,
-    item: String,
+    item: Option<String>,
+    command: String,
     every_ms: u64,
 }
 
@@ -94,20 +107,43 @@ struct Entry {
     /// Whether a run has been asked for and has not answered: no second
     /// one is asked for meanwhile.
     in_flight: bool,
+    /// Its place on its package's generation's undo list: the
+    /// generation's end marks it, and the next look begins it again for
+    /// the generation then current, or drops it.
+    generation: EndMark,
 }
 
 impl Entry {
-    /// A schedule running `runs` that begins `now`: its first run is due
-    /// one interval later.
-    fn begins(runs: Scheduled, now: u64) -> Entry {
+    /// A schedule running `runs` that begins `now`, for the generation of
+    /// `data`: its first run is due one interval later.
+    fn begins(runs: Scheduled, now: u64, data: Option<&PackageData>, wake: &Arc<Wake>) -> Entry {
         let every_ms = runs.every_ms;
         Entry {
             runs,
             started: now,
             next: now.saturating_add(every_ms),
             in_flight: false,
+            generation: marked("schedule", data, wake),
         }
     }
+
+    /// Restarts its interval at `now`, as if it began then.
+    fn restart(&mut self, now: u64) {
+        self.started = now;
+        self.next = now.saturating_add(self.runs.every_ms);
+    }
+}
+
+/// A mark of `what` on the undo list of `data`'s generation, whose end
+/// wakes the worker `wake` is of, which then looks again (see
+/// [`EndMark`]).
+pub(super) fn marked(what: &'static str, data: Option<&PackageData>, wake: &Arc<Wake>) -> EndMark {
+    let wake = Arc::downgrade(wake);
+    EndMark::on(data.map(PackageData::generation), what, move || {
+        if let Some(wake) = wake.upgrade() {
+            wake.poke();
+        }
+    })
 }
 
 /// The next tick of a schedule that began at `started` and runs every
@@ -129,8 +165,11 @@ fn next_tick(started: u64, every_ms: u64, now: u64) -> u64 {
 struct Run {
     /// The command's component, in the package's managed copy.
     component: PathBuf,
-    /// The item whose action runs.
-    item: String,
+    /// The item whose action runs; `None` for a no-view command, which
+    /// runs itself.
+    item: Option<String>,
+    /// The command's manifest id.
+    command: String,
     /// The extension data of the package's current generation: the run
     /// belongs to it.
     data: Option<PackageData>,
@@ -149,7 +188,7 @@ impl Schedules {
                 clock: clock.clone(),
                 entries: HashMap::new(),
             }),
-            wake: Wake::default(),
+            wake: Arc::default(),
         });
         // The clock tells when it is set other than by time passing, and
         // the data when a generation begins or ends (installing, enabling,
@@ -184,9 +223,7 @@ impl Schedules {
                 // The phase restarts under the new clock, as if every
                 // schedule began now: a phase is meaningful only under the
                 // clock it began under. A run still in flight stays marked.
-                let in_flight = entry.in_flight;
-                *entry = Entry::begins(entry.runs.clone(), now);
-                entry.in_flight = in_flight;
+                entry.restart(now);
             }
         }
         clock.on_change(Box::new(waking(Arc::downgrade(self))));
@@ -237,11 +274,18 @@ impl Schedules {
                 continue;
             }
             for (command, schedule) in package.scheduled_commands() {
+                // Its required preferences are unset: it does not run, and
+                // says "Needs setup" instead (see `setup`); not a failure.
+                if launcher.needs_setup(package, command.manifest_id()) {
+                    continue;
+                }
+                let manifest_id = command.manifest_id().to_owned();
                 wanted.insert(
                     command.id,
                     Scheduled {
                         component: command.component,
                         item: schedule.item,
+                        command: manifest_id,
                         every_ms: schedule.every_seconds * 1000,
                     },
                 );
@@ -250,18 +294,26 @@ impl Schedules {
         scheduling.entries.retain(|key, _| wanted.contains_key(key));
         let mut due = Vec::new();
         for (key, runs) in wanted {
+            // The package's current generation, which a schedule that
+            // begins now belongs to.
+            let current = launcher.data_in(&state, &runs.component);
             let entry = scheduling
                 .entries
                 .entry(key.clone())
-                .or_insert_with(|| Entry::begins(runs.clone(), now));
+                .or_insert_with(|| Entry::begins(runs.clone(), now, current.as_ref(), &self.wake));
             if entry.runs != runs {
                 // The schedule is another one now (its package's code was
                 // replaced): the interval restarts with it, while a run
                 // still in flight stays marked, so a second is not asked
                 // for before it answers.
                 let in_flight = entry.in_flight;
-                *entry = Entry::begins(runs.clone(), now);
+                *entry = Entry::begins(runs.clone(), now, current.as_ref(), &self.wake);
                 entry.in_flight = in_flight;
+            } else if entry.generation.ended() {
+                // Its generation ended and the code runs in the next one
+                // (a pause it came back from): the same schedule, on the
+                // current generation's undo list.
+                entry.generation = marked("schedule", current.as_ref(), &self.wake);
             }
             if entry.in_flight || now < entry.next {
                 continue;
@@ -274,6 +326,7 @@ impl Schedules {
                 Run {
                     component: entry.runs.component.clone(),
                     item: entry.runs.item.clone(),
+                    command: entry.runs.command.clone(),
                     data,
                 },
             ));
@@ -373,64 +426,111 @@ fn start_run(schedules: &Arc<Schedules>, launcher: &WeakLauncher, key: String, r
     }
 }
 
-/// Runs one scheduled command's action and reports its answer. The run
-/// belongs to the generation the scheduler took when it asked for it, so
-/// disabling, reloading, updating, uninstalling or pausing the package
-/// meanwhile stops it, and its answer is not shown.
+/// Runs one scheduled command's action, or the no-view command itself,
+/// and reports the action's answer. The run belongs to the generation the
+/// scheduler took when it asked for it, so disabling, reloading, updating,
+/// uninstalling or pausing the package meanwhile stops it, and its answer
+/// is not shown. A no-view command's run is a background launch, which
+/// shows nothing.
 fn run_once(schedules: Weak<Schedules>, launcher: WeakLauncher, key: String, run: Run) {
     let alive = launcher.upgrade();
-    let answer = match &alive {
-        Some(launcher) => match launcher.runtime() {
-            Ok(runtime) => Some(futures::executor::block_on(runtime.run_action_with(
+    let scheduled = LaunchRecord {
+        command: Some(run.command.clone()),
+        ..LaunchRecord::scheduled()
+    };
+    let answer = match (&alive, &run.item) {
+        (Some(launcher), Some(item)) => match launcher.runtime() {
+            Ok(runtime) => Some(futures::executor::block_on(runtime.run_item_launched_with(
                 &run.component,
-                &run.item,
+                Some(run.command.as_str()),
+                item,
+                &scheduled,
                 run.data.clone(),
             ))),
             Err(error) => Some(Err(error.clone())),
         },
+        (Some(launcher), None) => {
+            if let Ok(runtime) = launcher.runtime() {
+                // Its answer, and an error it answers with, are not shown:
+                // no window was shown for it. A crash still counts towards
+                // pausing it.
+                let _ = futures::executor::block_on(runtime.run_command_with(
+                    &run.component,
+                    &run.command,
+                    &scheduled,
+                    run.data.clone(),
+                ));
+                // Nothing will finish a toast the run left in progress.
+                launcher.clear_animated_toast(&mut launcher.lock(), &run.component);
+                launcher.changed();
+            }
+            None
+        }
         // This Pane stopped: no answer comes, and nothing remains to report
         // one to.
-        None => None,
+        (None, _) => None,
     };
     // The run's answer is shown, then the schedule may run again: a tick
     // that came due meanwhile is looked at now.
-    if let (Some(launcher), Some(answer)) = (alive, answer) {
-        show(&launcher, &run.component, &run.data, answer);
+    if let (Some(launcher), Some(answer)) = (alive, answer)
+        && let Some(epoch) = show(&launcher, &run.component, &run.data, answer)
+    {
+        futures::executor::block_on(launcher.list_again(
+            epoch,
+            run.component.clone(),
+            run.data.clone(),
+        ));
+        launcher.changed();
     }
     if let Some(schedules) = schedules.upgrade() {
         schedules.run_ended(&key);
     }
 }
 
-/// Shows `answer`, of the run of the command in `component`, where its
-/// screen is the one on display, as an action's answer is shown; a
-/// generation that ended while it ran means it is not shown, and the
-/// command's screen having been left means it is not either.
+/// Shows what `answer`, of the run of the command in `component`, calls
+/// for where its screen is the one on display, as an action's answer is
+/// shown: nothing for an answer (the command shows a toast or a HUD if it
+/// has something to say), a failure toast for an error it answered with,
+/// and Pane's own error otherwise; a generation that ended while it ran
+/// means it is not shown, and the command's screen having been left means
+/// it is not either. The screen's epoch, when the command handled the run
+/// and its list is to be asked for again.
 fn show(
     launcher: &Launcher,
     component: &Path,
     data: &Option<PackageData>,
-    answer: Result<String, CallError>,
-) {
-    let shown = {
+    answer: Result<Answer, CallError>,
+) -> Option<u64> {
+    let handled = matches!(
+        answer,
+        Ok(_) | Err(CallError::Guest(_) | CallError::Unreadable(_))
+    );
+    let list_again = {
         let mut state = launcher.lock();
         let shown = state.open.as_ref().is_some_and(|open| open == component)
             && matches!(
                 state.view.screen,
                 Screen::Command | Screen::CommandSearch { .. }
             );
-        if shown {
-            state.view.status = match (stopped(&state, component, data), answer) {
-                (Some(problem), _) => Status::Error(problem),
-                (None, Ok(answer)) => Status::Result(answer),
-                (None, Err(error)) => Status::Error(error.to_string()),
-            };
+        if !shown {
+            return None;
         }
-        shown
+        let state = &mut *state;
+        let ended = stopped(state, component, data);
+        let list_again = (handled && ended.is_none()).then_some(state.screen_epoch);
+        let command = state.open_command.clone();
+        match (ended, answer) {
+            (Some(problem), _) => state.view.status = Status::Error(problem),
+            (None, Ok(_)) => {}
+            (None, Err(CallError::Guest(message))) => {
+                launcher.show_failure(state, component, command.as_deref(), message);
+            }
+            (None, Err(error)) => state.view.status = Status::Error(error.to_string()),
+        }
+        list_again
     };
-    if shown {
-        launcher.changed();
-    }
+    launcher.changed();
+    list_again
 }
 
 /// Wakes a background worker of the launcher's (the scheduler, the

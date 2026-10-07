@@ -9,6 +9,7 @@
       "title": "Echo",
       "subtitle": "Answers the text you send it from root search",
       "component": "sample_query.wasm",
+      "mode": "no-view",
       "takesQuery": true
     }
   ]

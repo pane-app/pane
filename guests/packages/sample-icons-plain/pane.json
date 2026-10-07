@@ -1,0 +1,14 @@
+{
+  "manifestVersion": 1,
+  "title": "Plain icons sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "plain",
+      "title": "Plain icons",
+      "subtitle": "A package without an icon shows its first letter on a tile",
+      "component": "sample_icons.wasm"
+    }
+  ]
+}

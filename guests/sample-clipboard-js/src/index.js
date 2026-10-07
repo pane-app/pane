@@ -8,9 +8,14 @@
 // `"pane": { "clipboardHistory": true }`); the command only shows the
 // history and the user's controls: turn on, pause, resume, turn off, how
 // long items are kept (Pane deletes them then, whether the command runs or
-// not), exclude a program, clear, turn off and delete, delete recent items,
-// and Enter on an item copies it again or deletes it.
+// not), exclude a program, clear, turn off and delete, delete recent items.
+// Each kept item has three actions: Paste (Enter) pastes it into the
+// application that was in front, or, where Pane cannot paste yet, copies it
+// and says so in a HUD; Copy copies it again; Delete, destructive and last,
+// deletes it.
 // @ts-check
+import { closeMainWindow, showHUD, showToast } from "@pane/extension/feedback";
+import { NotAvailableError, PASTE_FALLBACK, paste } from "@pane/extension/system";
 import * as history from "pane:extension/clipboard-history@0.1.0";
 
 /** The longest title of a kept item, in characters. */
@@ -74,6 +79,15 @@ function forForm(call) {
 const item = (id, title, subtitle) => ({ id, title, subtitle });
 
 /**
+ * An item whose action is `act` with its id.
+ * @param {string} id
+ * @param {string} title
+ * @param {string} subtitle
+ * @returns {import("@pane/extension").Item}
+ */
+const action = (id, title, subtitle) => ({ ...item(id, title, subtitle), onAction: () => act(id) });
+
+/**
  * @param {number} count
  * @param {string} one
  * @param {string} many
@@ -133,7 +147,7 @@ function toggle(status) {
             "Resume clipboard history",
             `Paused · ${kept} kept · Nothing you copy is kept until you resume`,
           ];
-  return item(id, title, status.problem ? `${status.problem} · ${subtitle}` : subtitle);
+  return action(id, title, status.problem ? `${status.problem} · ${subtitle}` : subtitle);
 }
 
 /**
@@ -156,38 +170,114 @@ function age(seconds) {
   return `${Math.floor(seconds / 86400)} days ago`;
 }
 
-/** @param {history.Entry} entry */
+/**
+ * @param {history.Entry} entry
+ * @returns {import("@pane/extension").Item}
+ */
 function entryItem(entry) {
   const about = [age(entry.ageSeconds)];
   if (entry.source) about.push(`from ${entry.source}`);
   const lines = entry.text.split(/\r?\n/).length - (entry.text.endsWith("\n") ? 1 : 0);
   if (lines > 1) about.push(`${lines} lines`);
-  about.push("Enter copies or deletes it");
+  about.push("Enter pastes it");
   const title = titleOf(entry.text);
   return {
     ...item(`${ENTRY}${entry.id}`, title, about.join(" · ")),
-    // Copying again comes first, so Enter twice copies.
-    form: choiceForm(
-      title,
-      "action",
-      "What to do with it",
-      [
-        ["copy", "Copy it again"],
-        ["delete", "Delete it"],
-      ],
-      "OK",
-    ),
+    actions: [
+      { title: "Paste", onAction: () => pasteEntry(entry.id, entry.text) },
+      { title: "Copy", onAction: () => copyEntry(entry.id) },
+      { title: "Delete", style: "destructive", onAction: () => deleteEntry(entry.id) },
+    ],
   };
+}
+
+/**
+ * Paste: pastes the kept item `id`, whose text is `text`, into the
+ * application that was in front before Pane, which closes the window; where
+ * Pane cannot paste yet, copies it again instead (as Copy does), closes the
+ * window and says so in a HUD.
+ * @param {string} id
+ * @param {string} text
+ * @returns {Promise<void>}
+ */
+async function pasteEntry(id, text) {
+  try {
+    paste(text);
+  } catch (error) {
+    if (!(error instanceof NotAvailableError)) throw error;
+    host(() => history.copy(id));
+    closeMainWindow();
+    showHUD(PASTE_FALLBACK);
+  }
+}
+
+/**
+ * Copy: puts the kept item `id` on the clipboard again, closes the window
+ * and says so in a HUD.
+ * @param {string} id
+ * @returns {Promise<void>}
+ */
+async function copyEntry(id) {
+  host(() => history.copy(id));
+  closeMainWindow();
+  showHUD("Copied to Clipboard");
+}
+
+/**
+ * Delete: deletes the kept item `id`; one no longer kept is an error.
+ * @param {string} id
+ * @returns {Promise<void>}
+ */
+async function deleteEntry(id) {
+  if (host(() => history.deleteItems([id])) === 0) throw new Error("That item is no longer kept");
+  showToast({ title: "Deleted the kept item" });
+}
+
+/**
+ * Runs the action of the item `itemId`, showing a toast with what it did.
+ * @param {string} itemId
+ * @returns {Promise<void>}
+ */
+async function act(itemId) {
+  showToast({ title: await outcome(itemId) });
+}
+
+/**
+ * Does what the item `itemId`'s action does, and resolves with the text
+ * its toast shows.
+ * @param {string} itemId
+ * @returns {Promise<string>}
+ */
+async function outcome(itemId) {
+  const wanted = CAPTURES[itemId];
+  if (wanted) {
+    host(() => history.setCapture(wanted[0]));
+    return wanted[1];
+  }
+  if (itemId === "clear") {
+    return `Deleted ${plural(host(history.clear), "kept item", "kept items")}`;
+  }
+  if (itemId === "turn-off-and-clear") {
+    return `Clipboard history is off; deleted ${plural(host(history.turnOffAndClear), "kept item", "kept items")}`;
+  }
+  if (itemId === "empty") return "Nothing is kept yet";
+  if (itemId.startsWith(INCLUDE)) {
+    const program = itemId.slice(INCLUDE.length);
+    const excluded = host(history.status).excluded.filter((excluded) => excluded !== program);
+    host(() => history.setExcluded(excluded));
+    return `Text copied from ${program} is kept again`;
+  }
+  throw new Error(`unknown item: ${itemId}`);
 }
 
 /** @type {import("@pane/extension").Command} */
 export const command = {
-  async getView() {
+  async render() {
     const status = host(history.status);
     const items = [toggle(status)];
     if (status.capture !== "off") {
       items.push(
-        item(
+        action(
           "turn-off",
           "Turn off clipboard history",
           "Stops keeping what you copy; the kept items stay until you clear them",
@@ -229,13 +319,13 @@ export const command = {
     });
     for (const program of status.excluded) {
       items.push(
-        item(`${INCLUDE}${program}`, `Stop excluding ${program}`, `Text copied from ${program} is not kept`),
+        action(`${INCLUDE}${program}`, `Stop excluding ${program}`, `Text copied from ${program} is not kept`),
       );
     }
     const entries = host(history.entries);
     if (entries.length > 0) {
       items.push(
-        item(
+        action(
           "clear",
           "Clear clipboard history",
           `Deletes the ${plural(status.items, "item", "items")} kept; whether history is kept does not change`,
@@ -243,7 +333,7 @@ export const command = {
       );
       if (status.capture !== "off") {
         items.push(
-          item(
+          action(
             "turn-off-and-clear",
             "Turn off and delete clipboard history",
             `Deletes the ${plural(status.items, "item", "items")} kept and keeps nothing you copy from now on`,
@@ -263,49 +353,20 @@ export const command = {
     }
     items.push(...entries.map(entryItem));
     if (entries.length === 0 && status.capture === "on") {
-      items.push(item("empty", "Nothing kept yet", "Text you copy from now on is listed here"));
+      items.push(action("empty", "Nothing kept yet", "Text you copy from now on is listed here"));
     }
     return { title: "Clipboard history (JavaScript)", items };
   },
 
-  async runAction(itemId) {
-    const wanted = CAPTURES[itemId];
-    if (wanted) {
-      host(() => history.setCapture(wanted[0]));
-      return wanted[1];
-    }
-    if (itemId === "clear") {
-      return `Deleted ${plural(host(history.clear), "kept item", "kept items")}`;
-    }
-    if (itemId === "turn-off-and-clear") {
-      return `Clipboard history is off; deleted ${plural(host(history.turnOffAndClear), "kept item", "kept items")}`;
-    }
-    if (itemId === "empty") return "Nothing is kept yet";
-    if (itemId.startsWith(INCLUDE)) {
-      const program = itemId.slice(INCLUDE.length);
-      const excluded = host(history.status).excluded.filter((excluded) => excluded !== program);
-      host(() => history.setExcluded(excluded));
-      return `Text copied from ${program} is kept again`;
-    }
-    if (itemId.startsWith(ENTRY)) {
-      host(() => history.copy(itemId.slice(ENTRY.length)));
-      return "Copied to the clipboard";
-    }
-    throw new Error(`unknown item: ${itemId}`);
+  // A callback no item's action names: an action of a list drawn before,
+  // whose item is gone now.
+  async runSearchResult(id) {
+    await act(id);
   },
 
   async submitForm(itemId, values) {
     /** @param {string} id */
     const value = (id) => (values.find((value) => value.id === id)?.value ?? "").trim();
-    if (itemId.startsWith(ENTRY)) {
-      const id = itemId.slice(ENTRY.length);
-      if (value("action") === "delete") {
-        if (forForm(() => history.deleteItems([id])) === 0) throw { message: "That item is no longer kept" };
-        return "Deleted the kept item";
-      }
-      forForm(() => history.copy(id));
-      return "Copied to the clipboard";
-    }
     if (itemId === "retention") {
       const seconds = Number(value("retention"));
       const before = forForm(history.status).items;

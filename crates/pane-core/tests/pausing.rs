@@ -15,9 +15,12 @@ use pane_core::{
 };
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use rows::{manage, select_title, titles, to_root};
 
 const COMMAND: &str = "Greeting";
@@ -95,6 +98,17 @@ impl Dirs {
         )
     }
 
+    /// A second launcher on the same records, with a runtime of its own:
+    /// one on `runtime` would take its window and feedback host functions,
+    /// so later calls' toasts would not reach the launcher a test drives.
+    fn reader(&self) -> Launcher {
+        Launcher::with_packages(
+            Runtime::start(),
+            vec![],
+            self.data.path().join("extensions"),
+        )
+    }
+
     /// A launcher with the settings sample of `fixture` installed, and its
     /// identity and source folder.
     fn installed(&self, fixture: &Fixture) -> (Launcher, PackageIdentity, PathBuf) {
@@ -133,7 +147,7 @@ fn row(launcher: &Launcher, title: &str) -> Row {
 }
 
 /// From root search, opens the command and runs its item titled `item`,
-/// returning the outcome.
+/// returning the outcome: its toast, or the status line.
 fn run(launcher: &Launcher, item: &str) -> Status {
     to_root(launcher);
     select_title(launcher, COMMAND);
@@ -146,7 +160,7 @@ fn run(launcher: &Launcher, item: &str) -> Status {
     );
     select_title(launcher, item);
     block_on(launcher.activate_selected());
-    launcher.view().status
+    shown(launcher)
 }
 
 /// Activates the extension manager's row titled `title`, returning the
@@ -286,7 +300,7 @@ fn three_crashes_pause_the_package_until_retry(fixture: &Fixture) {
     );
     // And it is no longer paused after another restart.
     block_on(restarted.records_written());
-    assert!(!is_paused(&dirs.launcher()));
+    assert!(!is_paused(&dirs.reader()));
 }
 
 #[test]
@@ -363,7 +377,7 @@ fn other_packages_keep_running_while_one_is_paused() {
     select_title(&launcher, "Use a casual greeting");
     block_on(launcher.activate_selected());
     assert_eq!(
-        launcher.view().status,
+        shown(&launcher),
         Status::Result("Saved the casual greeting".into())
     );
 }
@@ -380,7 +394,7 @@ fn disabling_a_paused_package_ends_the_pause() {
     block_on(launcher.set_enabled(&identity, true));
     assert!(!is_paused(&launcher));
     block_on(launcher.records_written());
-    assert!(!is_paused(&dirs.launcher()));
+    assert!(!is_paused(&dirs.reader()));
     assert_eq!(
         run(&launcher, "Use a casual greeting"),
         Status::Result("Saved the casual greeting".into())
@@ -400,7 +414,7 @@ fn reloading_a_paused_package_ends_the_pause() {
     );
     assert!(!is_paused(&launcher));
     block_on(launcher.records_written());
-    assert!(!is_paused(&dirs.launcher()));
+    assert!(!is_paused(&dirs.reader()));
 }
 
 #[test]
@@ -520,7 +534,7 @@ fn enabling_a_package_ends_a_pause_on_record() {
             .unwrap()
             .contains("\"paused\"")
     );
-    assert!(!is_paused(&dirs.launcher()));
+    assert!(!is_paused(&dirs.reader()));
 }
 
 #[test]
@@ -536,7 +550,7 @@ fn a_pause_recorded_for_another_version_does_not_hold() {
         text.replace("\"version\": \"0.1.0\"", "\"version\": \"0.0.9\""),
     )
     .unwrap();
-    assert!(!is_paused(&dirs.launcher()));
+    assert!(!is_paused(&dirs.reader()));
 }
 
 #[test]
@@ -568,7 +582,7 @@ fn retrying_without_a_runtime_keeps_the_pause() {
         "Settings sample crashed 3 times within 5 minutes."
     );
     block_on(unavailable.records_written());
-    assert!(is_paused(&dirs.launcher()));
+    assert!(is_paused(&dirs.reader()));
 }
 
 #[test]
@@ -629,7 +643,7 @@ fn an_uninstall_that_cannot_be_recorded_keeps_the_pause() {
     assert!(is_paused(&launcher));
     fs::remove_dir_all(&registry).unwrap();
     fs::write(&registry, text).unwrap();
-    assert!(is_paused(&dirs.launcher()));
+    assert!(is_paused(&dirs.reader()));
 }
 
 fn an_error_thrown_from_a_form_is_an_error_not_a_crash(fixture: &Fixture) {

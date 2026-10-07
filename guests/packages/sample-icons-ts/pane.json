@@ -1,0 +1,22 @@
+{
+  "manifestVersion": 1,
+  "title": "TypeScript icons sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "icon": "icon.png",
+  "commands": [
+    {
+      "id": "icons",
+      "title": "Icons (TypeScript)",
+      "subtitle": "Rows with icons, accessories and tooltips",
+      "icon": "command.svg",
+      "component": "sample_icons_ts.wasm"
+    },
+    {
+      "id": "inherited",
+      "title": "Icons (TypeScript, package icon)",
+      "subtitle": "A command without an icon of its own shows its package's",
+      "component": "sample_icons_ts.wasm"
+    }
+  ]
+}

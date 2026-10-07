@@ -5,6 +5,13 @@
 //! when it writes too much. Nothing here depends on the extension runtime,
 //! so it is checked for every system on its own.
 //!
+//! Pane sets no time limit on a run (#136, replacing #18's provisional 30
+//! seconds): the runtime serves other calls while one waits for its helper,
+//! so a helper runs for as long as its work takes. The command's own timeout
+//! (dropping the run, which ends the process) and the ownership rules bound
+//! it: the run ends with the call that started it, its instance, its
+//! generation (each run is on the generation's undo list) and Pane.
+//!
 //! The process's standard input, output and error are unnamed scratch
 //! files, not pipes: a process the helper starts that keeps them open
 //! blocks nothing, and no thread waits on them. The supervising thread is
@@ -23,7 +30,7 @@ use std::time::{Duration, Instant};
 use pane_target::{Platform, Target};
 use tokio::sync::oneshot;
 
-use crate::generation::{End, Fence, Generation};
+use crate::generation::{End, Fence, Generation, Registration};
 use crate::platform;
 
 /// The largest input a helper run takes, in bytes.
@@ -47,13 +54,6 @@ const STDERR_KEPT: u64 = 2048;
 
 /// How often a supervising thread checks its process when nothing wakes it.
 const TICK: Duration = Duration::from_millis(10);
-
-/// How long a helper may run before Pane ends it (#18): a helper that
-/// never exits would otherwise hold its command's call, and every other
-/// extension's call behind it, until its package stops. Ending it is an
-/// error the command handles like any other failure of its helper, not a
-/// crash. An explicit choice (provisional).
-pub const HELPER_TIME_LIMIT: Duration = Duration::from_secs(30);
 
 /// How long stopping helpers waits for their supervising threads to reap
 /// them, all together.
@@ -426,12 +426,12 @@ pub(crate) struct Spec {
     pub fence: Option<Fence>,
     /// The guest instance that started it (see [`Helpers::stop_owned_by`]).
     pub owner: u64,
-    /// How long it may run before Pane ends it ([`HELPER_TIME_LIMIT`]).
-    pub limit: Duration,
 }
 
-/// The helper processes of one runtime, for stopping and diagnostics.
-/// Cloning shares them.
+/// The helper processes of one runtime, and the system programs its guests
+/// run ([`crate::programs`]), for stopping and diagnostics: both belong to
+/// the instance that started them, its generation and Pane, and end the
+/// same ways. Cloning shares them.
 #[derive(Clone, Default)]
 pub(crate) struct Helpers {
     state: Arc<Mutex<State>>,
@@ -441,12 +441,37 @@ pub(crate) struct Helpers {
 #[derive(Default)]
 struct State {
     runs: Vec<Arc<Run>>,
-    /// Set once Pane is quitting: no helper starts any more.
+    /// Set once Pane is quitting: no helper or program starts any more.
     quitting: bool,
+    /// The programs each installed package ran this session, by its
+    /// identity key, as the extension list shows them.
+    programs_run: std::collections::HashMap<String, std::collections::BTreeSet<String>>,
+    /// Where a program named by a bare name is found, if a test said;
+    /// otherwise the system's search path at the time of each call.
+    search_path: Option<crate::programs::runner::SearchPath>,
+}
+
+/// What a supervised process is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Kind {
+    /// A native helper its package ships.
+    Helper,
+    /// A program installed on the system ([`crate::programs`]).
+    Program,
+}
+
+/// Why a process may not start, or run on once it started.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Refusal {
+    /// Pane is quitting.
+    Quitting,
+    /// The code that asked for it is stopped.
+    Stopped(End),
 }
 
 /// One helper process and the thread supervising it.
-struct Run {
+pub(crate) struct Run {
+    kind: Kind,
     owner: u64,
     pid: u32,
     /// The file it runs.
@@ -463,11 +488,16 @@ struct Run {
 impl Run {
     /// Asks the supervising thread to end and reap the process, without
     /// waiting for it.
-    fn request_stop(&self) {
+    pub(crate) fn request_stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
         if let Some(supervisor) = self.supervisor.get() {
             supervisor.unpark();
         }
+    }
+
+    /// Whether Pane asked for the process to end ([`Run::request_stop`]).
+    pub(crate) fn stop_requested(&self) -> bool {
+        self.stop.load(Ordering::SeqCst)
     }
 
     /// Waits until the process has been reaped, or `deadline` passes.
@@ -534,7 +564,97 @@ impl Helpers {
     /// The process ids of the helpers running now, not yet reaped. A
     /// diagnostic for tests and logs.
     pub fn running(&self) -> Vec<u32> {
-        self.lock().runs.iter().map(|run| run.pid).collect()
+        self.running_of(Kind::Helper)
+    }
+
+    /// The process ids of the system programs guests run now (not the
+    /// processes those started), not yet reaped. A diagnostic for tests and
+    /// logs.
+    pub fn running_programs(&self) -> Vec<u32> {
+        self.running_of(Kind::Program)
+    }
+
+    fn running_of(&self, kind: Kind) -> Vec<u32> {
+        self.lock()
+            .runs
+            .iter()
+            .filter(|run| run.kind == kind)
+            .map(|run| run.pid)
+            .collect()
+    }
+
+    /// Registers the process `pid` running `program`, started by `owner`'s
+    /// code, supervised by the calling thread, unless Pane is quitting or
+    /// `stopped` says the code is: checked under the lock that quitting and
+    /// ending a runtime thread's processes take, so that either sees it or
+    /// it does not run on (the caller ends it then).
+    pub(crate) fn register(
+        &self,
+        kind: Kind,
+        owner: u64,
+        pid: u32,
+        program: PathBuf,
+        stopped: impl FnOnce() -> Option<End>,
+    ) -> Result<Arc<Run>, Refusal> {
+        let mut state = self.lock();
+        if state.quitting {
+            return Err(Refusal::Quitting);
+        }
+        if let Some(end) = stopped() {
+            return Err(Refusal::Stopped(end));
+        }
+        let run = Arc::new(Run {
+            kind,
+            owner,
+            pid,
+            program,
+            stop: AtomicBool::new(false),
+            supervisor: OnceLock::new(),
+            done: Mutex::new(false),
+            reaped: Condvar::new(),
+        });
+        let _ = run.supervisor.set(thread::current());
+        state.runs.push(run.clone());
+        Ok(run)
+    }
+
+    /// Takes `run` off the processes running, once its supervising thread
+    /// reaped it, and tells those waiting for it.
+    pub(crate) fn unregister(&self, run: &Arc<Run>) {
+        self.lock().runs.retain(|other| !Arc::ptr_eq(other, run));
+        *run.done.lock().unwrap_or_else(|p| p.into_inner()) = true;
+        run.reaped.notify_all();
+    }
+
+    /// Notes that the installed package with the identity key `package` ran
+    /// `program` this session.
+    pub(crate) fn note_program(&self, package: &str, program: String) {
+        self.lock()
+            .programs_run
+            .entry(package.to_owned())
+            .or_default()
+            .insert(program);
+    }
+
+    /// The programs the installed package with the identity key `package`
+    /// ran this session, in order.
+    pub(crate) fn programs_run(&self, package: &str) -> Vec<String> {
+        self.lock()
+            .programs_run
+            .get(package)
+            .map(|programs| programs.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Finds programs named by a bare name on what `search_path` answers
+    /// at each call from now on, instead of the system's search path.
+    pub(crate) fn set_search_path(&self, search_path: crate::programs::runner::SearchPath) {
+        self.lock().search_path = Some(search_path);
+    }
+
+    /// What [`Helpers::set_search_path`] set, if anything.
+    pub(crate) fn search_path(&self) -> Option<crate::programs::runner::SearchPath> {
+        self.lock().search_path.clone()
     }
 
     /// Asks the supervising threads to end every helper process `owner`
@@ -691,6 +811,7 @@ impl Helpers {
             return Err(stopped_code(end));
         }
         let run = Arc::new(Run {
+            kind: Kind::Helper,
             owner: spec.owner,
             pid: child.0.id(),
             program: spec.program.clone(),
@@ -701,6 +822,15 @@ impl Helpers {
         });
         state.runs.push(run.clone());
         drop(state);
+        // On its generation's undo list while it runs: the generation's end
+        // stops it at once. Finished or dropped, the run leaves the list.
+        let undo = spec.generation.as_ref().map(|generation| {
+            let run = run.clone();
+            generation.on_end("native helper", move || {
+                run.request_stop();
+                Ok(())
+            })
+        });
         let (reply, result) = oneshot::channel();
         let supervised = {
             let (helpers, run) = (self.clone(), run.clone());
@@ -736,6 +866,7 @@ impl Helpers {
             run: Some(run),
             result,
             name,
+            _undo: undo,
         })
     }
 }
@@ -823,6 +954,8 @@ pub(crate) struct Running {
     run: Option<Arc<Run>>,
     result: oneshot::Receiver<Result<String, HelperError>>,
     name: String,
+    /// Its entry on its generation's undo list, taken off once it is done.
+    _undo: Option<Registration>,
 }
 
 impl Running {
@@ -855,12 +988,10 @@ enum Ended {
     Generation(End),
     Stopped,
     TooMuchOutput,
-    TimedOut,
 }
 
-/// Ends the process when asked to, when its generation ends, when it
-/// writes too much or runs longer than its limit, reaps it, then reads what
-/// it wrote.
+/// Ends the process when asked to, when its generation ends or when it
+/// writes too much, reaps it, then reads what it wrote.
 fn supervise(
     mut child: Owned,
     spec: &Spec,
@@ -871,16 +1002,15 @@ fn supervise(
     let name = &spec.name;
     let child = &mut child.0;
     let written = |file: &File| file.metadata().map_or(0, |metadata| metadata.len());
-    let started = Instant::now();
     let status: Result<ExitStatus, Ended> = loop {
-        let ended = if run.stop.load(Ordering::SeqCst) {
-            Some(Ended::Stopped)
-        } else if let Some(end) = stopped(spec) {
+        // A generation's end comes first: its undo list also asks for the
+        // stop, and the run says why it was stopped.
+        let ended = if let Some(end) = stopped(spec) {
             Some(Ended::Generation(end))
+        } else if run.stop.load(Ordering::SeqCst) {
+            Some(Ended::Stopped)
         } else if written(&output) > MAX_HELPER_OUTPUT as u64 {
             Some(Ended::TooMuchOutput)
-        } else if started.elapsed() >= spec.limit {
-            Some(Ended::TimedOut)
         } else {
             None
         };
@@ -918,15 +1048,6 @@ fn supervise(
             ));
         }
         Err(Ended::TooMuchOutput) => return Err(too_much()),
-        Err(Ended::TimedOut) => {
-            return Err(HelperError::new(
-                HelperErrorKind::Failed,
-                format!(
-                    "helper `{name}` did not finish within {}; Pane ended it",
-                    crate::runtime::deadlines::seconds(spec.limit)
-                ),
-            ));
-        }
     };
     // What it wrote by the time it exited; a process it started may still
     // write, and is not waited for.
@@ -1263,8 +1384,6 @@ mod tests {
     /// How long a test's waiting helper waits: short, so that one left
     /// behind by a failing test ends soon by itself.
     const WAIT: &str = "5";
-    /// Seconds a helper waits when only Pane's ending it may stop it first.
-    const LONG_WAIT: &str = "120";
 
     /// The runs of one test, whose processes all end with the test, even
     /// when it fails.
@@ -1296,7 +1415,6 @@ mod tests {
             input: "hi".into(),
             generation,
             owner,
-            limit: HELPER_TIME_LIMIT,
         }
     }
 
@@ -1347,31 +1465,20 @@ mod tests {
         until_none_run(&helpers);
     }
 
-    /// A helper that runs past its time limit is ended, and the run fails
-    /// saying so: an error the command handles, not a crash.
+    /// A run is on its generation's undo list while it runs, and leaves it
+    /// once it finished: the list holds only what is still set up.
     #[test]
-    fn a_helper_running_past_its_time_limit_is_ended() {
+    fn a_run_is_on_its_generation_s_undo_list_until_it_finishes() {
         let helpers = runs();
-        // Waits far longer than its limit, so that ending it is told apart
-        // from its own end however slowly processes start.
-        let mut spec = spec(&["--wait", LONG_WAIT], None, 0);
-        spec.limit = Duration::from_secs(1);
-        let started = Instant::now();
+        let generation = Generation::new();
 
-        let running = helpers.start(spec).unwrap();
+        let running = helpers
+            .start(spec(&[], Some(generation.clone()), 0))
+            .unwrap();
 
-        let error = futures::executor::block_on(running.finish()).unwrap_err();
-        assert_eq!(error.kind, HelperErrorKind::Failed);
-        assert_eq!(
-            error.message,
-            "helper `echo` did not finish within 1 second; Pane ended it"
-        );
-        assert!(started.elapsed() >= Duration::from_secs(1));
-        assert!(
-            started.elapsed() < Duration::from_secs(LONG_WAIT.parse().unwrap()),
-            "it ran its wait out"
-        );
-        assert_eq!(helpers.running(), Vec::<u32>::new());
+        assert_eq!(generation.undo_list(), ["native helper"]);
+        futures::executor::block_on(running.finish()).unwrap();
+        assert_eq!(generation.undo_list(), Vec::<&str>::new());
     }
 
     /// No one polls the run: its supervising thread sees the generation end
@@ -1384,7 +1491,7 @@ mod tests {
             .start(spec(&["--wait", WAIT], Some(generation.clone()), 0))
             .unwrap();
 
-        generation.end(End::Disabled);
+        drop(generation.end(End::Disabled));
         until_none_run(&helpers);
 
         assert_eq!(
@@ -1402,7 +1509,7 @@ mod tests {
         let helpers = runs();
         let dir = tempfile::tempdir().unwrap();
         let generation = Generation::new();
-        generation.end(End::Disabled);
+        drop(generation.end(End::Disabled));
         let mut ended = spec(&[], Some(generation), 0);
         ended.program = dir.path().join("never-started");
         let fence = Fence::default();

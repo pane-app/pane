@@ -3,11 +3,14 @@
 //! The row is the reference's `.row`: 44px (a floor — a row whose
 //! unavailable reason wraps grows taller rather than clipping it), radius
 //! 10, 10px side padding and a 12px gap between all of its parts — the
-//! icon tile, the 14px/500 title, the 13px subtitle and, on the right, the
-//! optional alias chip, key sequence and kind. A pale wash marks hover and
-//! selection; selection stays visible while hovering: a selected row keeps
-//! its wash and inset edge and does not switch to the hover wash. Neither
-//! wash fades: the reference's row changes at once.
+//! icon (Pane's tile, or an extension's icon drawn bare, #139), the
+//! 14px/500 title, the 13px subtitle and, on the right, an extension
+//! item's accessories (text, a relative date, a coloured tag; #139), the
+//! optional alias chip, key sequence and kind. A title, subtitle or
+//! accessory with a tooltip shows it while the pointer rests on it. A pale
+//! wash marks hover and selection; selection stays visible while hovering:
+//! a selected row keeps its wash and inset edge and does not switch to the
+//! hover wash. Neither wash fades: the reference's row changes at once.
 //!
 //! This component owns no identity and no behavior. It returns a plain
 //! [`Div`] so the app attaches everything behavioral on top:
@@ -29,21 +32,28 @@
 //! body's width: never truncated, and the row grows past its 44px floor to
 //! fit it. The trailing parts never shrink, so the body gives way first.
 //! The reason element carries the Pane debug convention
-//! `unavailable-reason-<title>` for tests and smokes.
+//! `unavailable-reason-<title>` for tests and smokes, the title and
+//! subtitle `row-title-<title>` and `row-subtitle-<title>`, and each
+//! accessory `accessory-<title>-<n>-<text>`, counting from 0.
 
 use std::ops::Range;
 
 use gpui::prelude::*;
-use gpui::{BoxShadow, Div, ElementId, HighlightStyle, Hsla, SharedString, StyledText, div, px};
+use gpui::{
+    BoxShadow, Div, ElementId, HighlightStyle, Hsla, SharedString, Stateful, StyledText, div, px,
+};
 
-use crate::ui::icon::{self, Glyph, IconTone};
+use crate::ui::extension_icon::{self, DrawnIcon, IconSize, RowIcon};
+use crate::ui::icon::TileSize;
 use crate::ui::keycap::{self, CapStyle, KeySequence};
 use crate::ui::theme::{Theme, pressed};
+use crate::ui::tooltip::{TooltipLook, text_tooltip};
 
 /// What a result row shows — plain presentation values, already resolved
 /// by the caller from whatever the launcher holds. Nothing here derives
 /// presentation from content: the caller maps identities to
-/// [`IconTone`]s (unknown ones use [`IconTone::Command`]).
+/// [`RowIcon`]s (Pane's own tiles, unknown ones the command tile, or an
+/// extension's icon).
 #[derive(Clone, Debug)]
 pub(crate) struct RowContent {
     /// The row's title.
@@ -57,7 +67,7 @@ pub(crate) struct RowContent {
     /// Whether the row is selected. Selection styling wins over hover.
     pub(crate) selected: bool,
     /// The row's icon presentation.
-    pub(crate) icon: Option<(IconTone, Glyph)>,
+    pub(crate) icon: Option<RowIcon>,
 }
 
 /// What a root result row shows beyond its content, when the launcher has
@@ -77,6 +87,27 @@ pub(crate) struct RowMeta {
     /// The row's number and its hint's look (0 hidden, 1 shown) while Ctrl
     /// is held: the cap slides in over the row's right end.
     pub(crate) number: Option<(usize, f32)>,
+    /// Shown while the pointer rests on the title (#139).
+    pub(crate) title_tooltip: Option<SharedString>,
+    /// Shown while the pointer rests on the subtitle (#139).
+    pub(crate) subtitle_tooltip: Option<SharedString>,
+    /// An extension item's accessories, on the right, in order (#139).
+    pub(crate) accessories: Vec<AccessoryLook>,
+}
+
+/// One accessory as a row draws it (#139), resolved by the caller.
+#[derive(Clone, Debug)]
+pub(crate) struct AccessoryLook {
+    /// Its text: a count, a date relative to now, a tag's name; empty for
+    /// an icon alone.
+    pub(crate) text: SharedString,
+    /// Whether it is a tag: its text on a wash of its colour, rounded.
+    pub(crate) tag: bool,
+    /// The colour of its text, already corrected for contrast.
+    pub(crate) color: Hsla,
+    pub(crate) icon: Option<DrawnIcon>,
+    /// Shown while the pointer rests on it.
+    pub(crate) tooltip: Option<SharedString>,
 }
 
 /// A result row showing `content` with `meta`'s parts. See the module docs
@@ -87,10 +118,17 @@ pub(crate) fn result_row_with(content: RowContent, meta: RowMeta, theme: &Theme)
     let typography = &theme.typography;
     let row = row_surface(content.selected, theme).font_family(typography.family.clone());
 
-    let row = match content.icon {
-        Some((tone, glyph)) => row.child(icon::tile(tone, glyph, theme)),
+    let row = match &content.icon {
+        Some(icon) => row.child(extension_icon::row_icon_at(
+            icon,
+            TileSize::Row,
+            "row-icon",
+            &content.title,
+            theme,
+        )),
         None => row,
     };
+    let tooltip = TooltipLook::of(theme);
 
     // The title, its matched parts in the accent.
     let title = StyledText::new(content.title.clone()).with_highlights(
@@ -111,29 +149,41 @@ pub(crate) fn result_row_with(content: RowContent, meta: RowMeta, theme: &Theme)
                 )
             }),
     );
+    let title_selector = format!("row-title-{}", content.title);
+    let subtitle_selector = format!("row-subtitle-{}", content.title);
     let line = div()
         .flex()
         .min_w(px(0.))
         .gap(geometry.row_gap)
         .child(
             div()
+                .id("row-title")
+                .debug_selector(move || title_selector)
                 .flex_initial()
                 .min_w(px(0.))
                 .truncate()
                 .text_size(typography.row_title_size)
                 .font_weight(typography.medium)
                 .text_color(theme.text_title)
-                .child(title),
+                .child(title)
+                .when_some(meta.title_tooltip.clone(), |title, tip| {
+                    title.tooltip(text_tooltip(tip, tooltip.clone()))
+                }),
         )
         .when_some(content.subtitle.clone(), |line, subtitle| {
             line.child(
                 div()
+                    .id("row-subtitle")
+                    .debug_selector(move || subtitle_selector)
                     .flex_1()
                     .min_w(px(0.))
                     .truncate()
                     .text_size(typography.row_subtitle_size)
                     .text_color(theme.text_muted)
-                    .child(subtitle),
+                    .child(subtitle)
+                    .when_some(meta.subtitle_tooltip.clone(), |subtitle, tip| {
+                        subtitle.tooltip(text_tooltip(tip, tooltip.clone()))
+                    }),
             )
         });
 
@@ -160,7 +210,14 @@ pub(crate) fn result_row_with(content: RowContent, meta: RowMeta, theme: &Theme)
             )
         });
 
+    let accessories: Vec<Stateful<Div>> = meta
+        .accessories
+        .iter()
+        .enumerate()
+        .map(|(index, accessory)| accessory_element(index, accessory, &content.title, theme))
+        .collect();
     row.child(body)
+        .children(accessories)
         .when_some(meta.alias, |row, alias| row.child(alias_chip(alias, theme)))
         .when_some(meta.keys, |row, keys| {
             // Its own scope: the key sequence's id is fixed.
@@ -184,6 +241,48 @@ pub(crate) fn result_row_with(content: RowContent, meta: RowMeta, theme: &Theme)
         .when_some(meta.number, |row, (number, look)| {
             with_number_hint(row, number, look, theme)
         })
+}
+
+/// The accessory at `index` of the row titled `row`: its icon and text,
+/// a tag's on a wash of its colour, with its tooltip on hover (#139).
+fn accessory_element(
+    index: usize,
+    accessory: &AccessoryLook,
+    row: &str,
+    theme: &Theme,
+) -> Stateful<Div> {
+    let selector = format!("accessory-{row}-{index}-{}", accessory.text);
+    let scope = format!("{row}-accessory-{index}");
+    let mut element = div()
+        .id(("accessory", index))
+        .debug_selector(move || selector)
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap(px(4.))
+        .text_size(theme.typography.row_kind_size)
+        .text_color(accessory.color);
+    if let Some(icon) = &accessory.icon {
+        element = element.child(extension_icon::draw(
+            icon,
+            IconSize::small(px(14.)),
+            ("accessory-icon", index),
+            &scope,
+            theme,
+        ));
+    }
+    if !accessory.text.is_empty() {
+        element = element.child(accessory.text.clone());
+    }
+    if accessory.tag {
+        element = element.px(px(6.)).py(px(1.)).rounded(px(5.)).bg(Hsla {
+            alpha: 0.16,
+            ..accessory.color
+        });
+    }
+    element.when_some(accessory.tooltip.clone(), |element, tip| {
+        element.tooltip(text_tooltip(tip, TooltipLook::of(theme)))
+    })
 }
 
 /// `row` with `number`'s hint over its right end at `look` (see

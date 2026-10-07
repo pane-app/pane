@@ -1,7 +1,10 @@
 //! Pane's clipboard history, a default extension: once the user turns it
 //! on in its command, Pane keeps the text they copy on this computer, and
-//! the command lists it, newest first; Enter on an item copies it again or
-//! deletes it. It starts off, and can be paused, resumed and turned off
+//! the command lists it, newest first. Each kept item has three actions:
+//! Paste (Enter) pastes it into the application that was in front, or,
+//! where Pane cannot paste yet, copies it and says so in a HUD; Copy copies
+//! it again; Delete, destructive and last, deletes it. It starts off, and
+//! can be paused, resumed and turned off
 //! again; disabling the extension stops it too. Programs can be excluded by
 //! their file name. Items are kept for 7 days unless the user chooses
 //! another time, and Pane deletes them then, whether this command runs or
@@ -13,6 +16,7 @@
 //! of it runs while the clipboard changes.
 #![no_std]
 
+use pane_guest::actions::PASTE_FALLBACK;
 use pane_guest::alloc::{
     format,
     string::{String, ToString},
@@ -20,17 +24,20 @@ use pane_guest::alloc::{
     vec::Vec,
 };
 use pane_guest::clipboard_history::{self as history, Capture, Entry, HistoryStatus};
+use pane_guest::feedback::{Toast, ToastStyle, show_hud, show_toast};
+use pane_guest::system::{self, Clip, SystemError};
+use pane_guest::window::{PopToRootType, close};
 use pane_guest::{
-    Choice, CustomView, Field, FieldKind, FieldValue, Form, FormError, Guest, Item, NoCustomView,
-    TextField, View,
+    Action, Choice, Command, CustomView, Field, FieldKind, FieldValue, Form, FormError, Item, List,
+    NoCustomView, TextField,
 };
 
 struct ClipboardHistory;
 pane_guest::export!(ClipboardHistory);
 
 // The items that turn keeping on, pause it, resume it and turn it off. Each
-// does only that, so pressing one again before the view is shown anew
-// changes nothing more.
+// does only that, so running one again (Pane draws the list again after
+// each, so only a stale callback can) changes nothing more.
 const TURN_ON: &str = "turn-on";
 const PAUSE: &str = "pause";
 const RESUME: &str = "resume";
@@ -122,32 +129,15 @@ fn recent_form() -> Form {
     }
 }
 
-/// The form an item opens: copy it again (first, so Enter twice copies)
-/// or delete it.
-fn entry_form(title: String) -> Form {
-    Form {
-        title,
-        fields: vec![Field {
-            id: "action".into(),
-            label: "What to do with it".into(),
-            kind: FieldKind::Choice(vec![
-                choice("copy".into(), "Copy it again".into()),
-                choice("delete".into(), "Delete it".into()),
-            ]),
-        }],
-        submit_label: "OK".into(),
-    }
+fn item(id: &str, title: String, subtitle: String) -> Item {
+    Item::new(id, title).subtitle(subtitle)
 }
 
-fn item(id: &str, title: String, subtitle: String) -> Item {
-    Item {
-        id: id.into(),
-        title,
-        subtitle: Some(subtitle),
-        form: None,
-        platforms: None,
-        custom_view: None,
-    }
+/// An item whose action is [`act`] with its id.
+fn acting(id: &str, title: String, subtitle: String) -> Item {
+    let id = String::from(id);
+    let listed = item(&id, title, subtitle);
+    listed.on_action(move || act(id))
 }
 
 fn plural(count: u32, one: &str, many: &str) -> String {
@@ -189,7 +179,7 @@ fn toggle(status: &HistoryStatus) -> Item {
         Some(problem) => format!("{problem} · {subtitle}"),
         None => subtitle,
     };
-    item(id, title.into(), subtitle)
+    acting(id, title.into(), subtitle)
 }
 
 fn exclude_form() -> Form {
@@ -242,11 +232,51 @@ fn entry_item(entry: &Entry) -> Item {
     if lines > 1 {
         about.push(format!("{lines} lines"));
     }
-    about.push("Enter copies or deletes it".into());
+    about.push("Enter pastes it".into());
     let title = title_of(&entry.text);
-    Item {
-        form: Some(entry_form(title.clone())),
-        ..item(&format!("{ENTRY}{}", entry.id), title, about.join(" · "))
+    let (id, text) = (entry.id.clone(), entry.text.clone());
+    let (copied, deleted) = (id.clone(), id.clone());
+    item(&format!("{ENTRY}{}", entry.id), title, about.join(" · ")).actions([
+        Action::new("Paste", move || paste(id, text)),
+        Action::new("Copy", move || copy(copied)),
+        Action::new("Delete", move || delete(deleted)).destructive(),
+    ])
+}
+
+/// Paste: pastes the kept item `id`, whose text is `text`, into the
+/// application that was in front before Pane, which closes the window;
+/// where Pane cannot paste yet, copies it again instead (as Copy does),
+/// closes the window and says so in a HUD.
+async fn paste(id: String, text: String) -> Result<(), String> {
+    match system::paste(&Clip::Text(text)) {
+        Ok(()) => Ok(()),
+        Err(SystemError::NotAvailable(_)) => {
+            history::copy(&id)?;
+            close(false, PopToRootType::Default);
+            show_hud(PASTE_FALLBACK, ToastStyle::Success);
+            Ok(())
+        }
+        Err(SystemError::Failed(why)) => Err(why),
+    }
+}
+
+/// Copy: puts the kept item `id` on the clipboard again, closes the window
+/// and says so in a HUD, as the standard Copy does.
+async fn copy(id: String) -> Result<(), String> {
+    history::copy(&id)?;
+    close(false, PopToRootType::Default);
+    show_hud("Copied to Clipboard", ToastStyle::Success);
+    Ok(())
+}
+
+/// Delete: deletes the kept item `id`; one no longer kept is an error.
+async fn delete(id: String) -> Result<(), String> {
+    match history::delete_items(&[id])? {
+        0 => Err("That item is no longer kept".into()),
+        _ => {
+            show_toast(Toast::success("Deleted the kept item"));
+            Ok(())
+        }
     }
 }
 
@@ -257,43 +287,90 @@ fn form_error(message: String) -> FormError {
     }
 }
 
-impl Guest for ClipboardHistory {
+/// Runs the action of the item `item_id` and shows a toast saying what it
+/// did; each item without a form runs this with its id.
+async fn act(item_id: String) -> Result<(), String> {
+    let done = run_item(item_id)?;
+    show_toast(Toast::success(done));
+    Ok(())
+}
+
+/// Does what the item `item_id` does, answering what that was.
+fn run_item(item_id: String) -> Result<String, String> {
+    let wanted = match item_id.as_str() {
+        TURN_ON => Some((Capture::On, "Clipboard history is on")),
+        PAUSE => Some((Capture::Paused, "Clipboard history is paused")),
+        RESUME => Some((Capture::On, "Clipboard history is on again")),
+        TURN_OFF => Some((Capture::Off, "Clipboard history is off")),
+        _ => None,
+    };
+    if let Some((capture, done)) = wanted {
+        history::set_capture(capture)?;
+        return Ok(done.into());
+    }
+    if item_id == CLEAR {
+        let cleared = history::clear()?;
+        return Ok(format!(
+            "Deleted {}",
+            plural(cleared, "kept item", "kept items")
+        ));
+    }
+    if item_id == TURN_OFF_AND_CLEAR {
+        let cleared = history::turn_off_and_clear()?;
+        return Ok(format!(
+            "Clipboard history is off; deleted {}",
+            plural(cleared, "kept item", "kept items")
+        ));
+    }
+    if item_id == EMPTY {
+        return Ok("Nothing is kept yet".into());
+    }
+    if let Some(program) = item_id.strip_prefix(INCLUDE) {
+        let mut excluded = history::status()?.excluded;
+        excluded.retain(|excluded| excluded != program);
+        history::set_excluded(&excluded)?;
+        return Ok(format!("Text copied from {program} is kept again"));
+    }
+    Err(format!("unknown item: {item_id}"))
+}
+
+impl Command for ClipboardHistory {
     type CustomView = NoCustomView;
 
-    async fn get_view() -> Result<View, String> {
+    async fn render() -> Result<List, String> {
         let status = history::status()?;
         let mut items = vec![toggle(&status)];
         if status.capture != Capture::Off {
-            items.push(item(
+            items.push(acting(
                 TURN_OFF,
                 "Turn off clipboard history".into(),
                 "Stops keeping what you copy; the kept items stay until you clear them".into(),
             ));
         }
-        items.push(Item {
-            form: Some(retention_form(status.retention_seconds)),
-            ..item(
+        items.push(
+            item(
                 RETENTION,
                 format!("Keep items for {}", span(status.retention_seconds)),
                 "Older items are deleted, also while Pane is stopped or the extension is \
                  disabled · Enter changes it"
                     .into(),
             )
-        });
+            .form(retention_form(status.retention_seconds)),
+        );
         let excluded = match status.excluded.len() {
             0 => "None excluded".to_string(),
             count => format!("{count} excluded"),
         };
-        items.push(Item {
-            form: Some(exclude_form()),
-            ..item(
+        items.push(
+            item(
                 EXCLUDE,
                 "Exclude a program".into(),
                 format!("Text copied from it is never kept · {excluded}"),
             )
-        });
+            .form(exclude_form()),
+        );
         items.extend(status.excluded.iter().map(|program| {
-            item(
+            acting(
                 &format!("{INCLUDE}{program}"),
                 format!("Stop excluding {program}"),
                 format!("Text copied from {program} is not kept"),
@@ -301,7 +378,7 @@ impl Guest for ClipboardHistory {
         }));
         let entries = history::entries()?;
         if !entries.is_empty() {
-            items.push(item(
+            items.push(acting(
                 CLEAR,
                 "Clear clipboard history".into(),
                 format!(
@@ -310,7 +387,7 @@ impl Guest for ClipboardHistory {
                 ),
             ));
             if status.capture != Capture::Off {
-                items.push(item(
+                items.push(acting(
                     TURN_OFF_AND_CLEAR,
                     "Turn off and delete clipboard history".into(),
                     format!(
@@ -319,69 +396,30 @@ impl Guest for ClipboardHistory {
                     ),
                 ));
             }
-            items.push(Item {
-                form: Some(recent_form()),
-                ..item(
+            items.push(
+                item(
                     DELETE_RECENT,
                     "Delete recent items".into(),
                     "Deletes what you copied in the last 15 minutes, hour or day".into(),
                 )
-            });
+                .form(recent_form()),
+            );
         }
         items.extend(entries.iter().map(entry_item));
         if entries.is_empty() && status.capture == Capture::On {
-            items.push(item(
+            items.push(acting(
                 EMPTY,
                 "Nothing kept yet".into(),
                 "Text you copy from now on is listed here".into(),
             ));
         }
-        Ok(View {
-            title: "Clipboard History".into(),
-            items,
-        })
+        Ok(List::new("Clipboard History").items(items))
     }
 
-    async fn run_action(item_id: String) -> Result<String, String> {
-        let wanted = match item_id.as_str() {
-            TURN_ON => Some((Capture::On, "Clipboard history is on")),
-            PAUSE => Some((Capture::Paused, "Clipboard history is paused")),
-            RESUME => Some((Capture::On, "Clipboard history is on again")),
-            TURN_OFF => Some((Capture::Off, "Clipboard history is off")),
-            _ => None,
-        };
-        if let Some((capture, done)) = wanted {
-            history::set_capture(capture)?;
-            return Ok(done.into());
-        }
-        if item_id == CLEAR {
-            let cleared = history::clear()?;
-            return Ok(format!(
-                "Deleted {}",
-                plural(cleared, "kept item", "kept items")
-            ));
-        }
-        if item_id == TURN_OFF_AND_CLEAR {
-            let cleared = history::turn_off_and_clear()?;
-            return Ok(format!(
-                "Clipboard history is off; deleted {}",
-                plural(cleared, "kept item", "kept items")
-            ));
-        }
-        if item_id == EMPTY {
-            return Ok("Nothing is kept yet".into());
-        }
-        if let Some(program) = item_id.strip_prefix(INCLUDE) {
-            let mut excluded = history::status()?.excluded;
-            excluded.retain(|excluded| excluded != program);
-            history::set_excluded(&excluded)?;
-            return Ok(format!("Text copied from {program} is kept again"));
-        }
-        if let Some(id) = item_id.strip_prefix(ENTRY) {
-            history::copy(id)?;
-            return Ok("Copied to the clipboard".into());
-        }
-        Err(format!("unknown item: {item_id}"))
+    /// A callback no item's action names: an item's action of a list
+    /// drawn before, whose item is gone now.
+    async fn run_search_result(id: String) -> Result<(), String> {
+        act(id).await
     }
 
     async fn submit_form(item_id: String, values: Vec<FieldValue>) -> Result<String, FormError> {
@@ -391,16 +429,6 @@ impl Guest for ClipboardHistory {
                 .find(|value| value.id == id)
                 .map_or("", |value| value.value.trim())
         };
-        if let Some(id) = item_id.strip_prefix(ENTRY) {
-            if value("action") == "delete" {
-                return match history::delete_items(&[id.into()]).map_err(form_error)? {
-                    0 => Err(form_error("That item is no longer kept".into())),
-                    _ => Ok("Deleted the kept item".into()),
-                };
-            }
-            history::copy(id).map_err(form_error)?;
-            return Ok("Copied to the clipboard".into());
-        }
         if item_id == RETENTION {
             let seconds: u64 = value("retention")
                 .parse()

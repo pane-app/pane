@@ -402,11 +402,15 @@ fn payload_files(source: &Path, _id: &str) -> Result<Vec<(String, Vec<u8>)>, Str
     let mut manifest: Value = serde_json::from_slice(&read("pane.json")?)
         .map_err(|error| format!("the payload's pane.json cannot be read: {error}"))?;
     // The files the manifest names, which Pane installs from the payload.
+    // Commands can share a component (Quicklinks' four do), and Pane refuses
+    // a tarball that holds a file twice, so each is named once.
     let mut named: Vec<String> = Vec::new();
     if let Some(commands) = manifest["commands"].as_array() {
         for command in commands {
             let component = command["component"].as_str().expect("a component");
-            named.push(component.to_owned());
+            if !named.iter().any(|name| name == component) {
+                named.push(component.to_owned());
+            }
         }
     }
     let target = target_id()?;
@@ -883,5 +887,26 @@ mod tests {
             manifest.get("helpers").is_none(),
             "the manifest gained a helpers field: {manifest}"
         );
+    }
+
+    /// Commands that share a component pack it once: Pane refuses a payload
+    /// whose tarball holds a file twice, and refused Quicklinks, whose four
+    /// commands share one, until this held.
+    #[test]
+    fn a_component_commands_share_is_packed_once() {
+        let folder = std::env::temp_dir().join("pane-xtask-shared-component-test");
+        let _ = fs::remove_dir_all(&folder);
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join("pane.json"),
+            br#"{"manifestVersion": 1, "title": "T", "version": "0.1.0", "apiVersion": "0.1",
+                "commands": [{"id": "a", "title": "A", "component": "c.wasm"},
+                             {"id": "b", "title": "B", "component": "c.wasm"}]}"#,
+        )
+        .unwrap();
+        fs::write(folder.join("c.wasm"), b"the component").unwrap();
+        let files = payload_files(&folder, "t").expect("the payload assembles");
+        let paths: Vec<&str> = files.iter().map(|(path, _)| path.as_str()).collect();
+        assert_eq!(paths, ["pane.json", "c.wasm"]);
     }
 }

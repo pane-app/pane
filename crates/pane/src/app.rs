@@ -16,27 +16,31 @@ use std::mem::{Discriminant, discriminant};
 use std::path::Path;
 
 use gpui::{
-    App, ClipboardItem, Context, Div, EntityInputHandler, FocusHandle, Hsla, KeyDownEvent,
-    MouseMoveEvent, ObjectFit, PathPromptOptions, Pixels, Point, Role, ScrollHandle, SharedString,
-    Size, Stateful, Window, div, img, prelude::*, px, relative,
+    App, ClipboardItem, Context, Div, EntityInputHandler, FocusHandle, Focusable, Hsla,
+    KeyDownEvent, MouseMoveEvent, ObjectFit, PathPromptOptions, Pixels, Point, Role, ScrollHandle,
+    SharedString, Size, Stateful, Window, div, img, prelude::*, px, relative,
 };
 use pane_core::changes::Changes;
+use pane_core::feedback::WindowRequest;
 use pane_core::hotkeys::Shortcut;
 use pane_core::tray::TrayAction;
 use pane_core::{
-    ComputedAnswer, Launcher, LauncherView, Presentation, Row, RowPresentation, Screen,
-    SelectedAction, Status,
+    ComputedAnswer, Launcher, LauncherView, NextShowing, Presentation, Row, RowPresentation,
+    Screen, SelectedAction, Status, WindowPresence,
 };
 
 use crate::extension_views::{custom_view, form};
 use crate::features::actions_panel;
 use crate::features::clipboard_history;
 use crate::features::compact_pins;
+use crate::features::confirmation;
 use crate::features::footer_menu;
+use crate::features::hud;
 use crate::features::number_hints::row_number;
 use crate::features::quick_slots;
 use crate::features::root_search;
 use crate::features::settings;
+use crate::features::toast;
 use crate::ui::footer;
 use crate::ui::icon::{Glyph, IconTone};
 use crate::ui::keycap::CapStyle;
@@ -77,6 +81,13 @@ pub struct LauncherWindow {
     /// Pane's Clipboard History in the split view, while its command is
     /// open; see [`features::clipboard_history`].
     pub(crate) clipboard: Option<clipboard_history::ClipboardHistory>,
+    /// The footer toast's focus and time; see [`features::toast`].
+    pub(crate) toast: toast::ToastControls,
+    /// The HUD's window, while one shows; see [`features::hud`].
+    pub(crate) hud: hud::HudWindow,
+    /// The confirmation a command asks for: its focus and "Don't ask
+    /// again"; see [`features::confirmation`].
+    pub(crate) confirmation: confirmation::ConfirmationControls,
     /// Root search's pinned home: its slots' focus; see
     /// [`features::quick_slots`].
     pub(crate) home: quick_slots::Home,
@@ -109,10 +120,19 @@ pub struct LauncherWindow {
     /// Whether the next frame scrolls to the selected row again, once the
     /// list changed in this one has been laid out.
     scroll_again: bool,
+    /// Draws the window again now and then while its rows show a date,
+    /// keeping it current (#139; see
+    /// [`LauncherWindow::keep_dates_current`]).
+    pub(crate) dates: Option<gpui::Task<()>>,
     /// The launcher's view as the last frame drew it, for tests (see
     /// [`LauncherWindow::drawn_view`]). Test and debug builds only.
     #[cfg(any(test, debug_assertions))]
     drawn: Option<LauncherView>,
+    /// Whether the last frame drew the Actions panel or a confirmation
+    /// over the launcher, for tests (see [`LauncherWindow::drawn_over`]).
+    /// Test and debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    drawn_over: bool,
 }
 
 /// What the list was last scrolled for. When any of it changes, the list
@@ -170,25 +190,44 @@ impl LauncherWindow {
             pointer_selection_frozen: false,
             scrolled_for: None,
             scroll_again: false,
+            dates: None,
             custom_view: None,
             menu_button,
             menu: None,
             actions: None,
             clipboard: None,
+            toast: toast::ToastControls::new(cx),
+            hud: hud::HudWindow::default(),
+            confirmation: confirmation::ConfirmationControls::new(cx),
             home: quick_slots::Home::default(),
             motion: FrameMotion::new(),
             presence: Presence::default(),
             #[cfg(any(test, debug_assertions))]
             drawn: None,
+            #[cfg(any(test, debug_assertions))]
+            drawn_over: false,
         };
         // The number hints go when the window loses focus: the Ctrl
-        // release would go to another window.
+        // release would go to another window. So does the toast, an
+        // animated one too (#141), and a confirmation it showed is
+        // answered as not confirmed (#146).
         cx.observe_window_activation(window, |this, window, cx| {
-            if !window.is_window_active() {
+            let active = window.is_window_active();
+            // A window that just showed itself for a confirmation may still
+            // hear of the deactivation its own hiding caused (#146).
+            let counts = this.confirmation_sees_activation(active);
+            if !active && counts {
                 this.end_numbers(cx);
+                this.launcher.window_deactivated();
+                this.sync_confirmation(window, cx);
+                cx.notify();
             }
         })
         .detach();
+        // What the launcher asks of the window for the host functions
+        // commands call (#141): hiding it, showing a HUD, drawing a
+        // confirmation (#146).
+        this.follow_window_requests(window, cx);
         // The launcher opens placed on the display the Launcher page's
         // choice resolves to, before the first frame is drawn.
         this.place(window, cx);
@@ -210,6 +249,17 @@ impl LauncherWindow {
     #[doc(hidden)]
     pub fn drawn_view(&self) -> Option<&LauncherView> {
         self.drawn.as_ref()
+    }
+
+    /// Test support: whether the last frame drew the Actions panel or a
+    /// confirmation over the launcher. The keys a test presses go where
+    /// the last frame put them, so one that pressed Enter in the panel
+    /// waits for a frame without it before pressing the next keys. Test
+    /// and debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn drawn_over(&self) -> bool {
+        self.drawn_over
     }
 
     /// Test support: the view transition the last frame drew, as the
@@ -247,7 +297,9 @@ impl LauncherWindow {
     /// Redraws whenever the launcher changes in the background, as
     /// `changes` (the other end of the launcher's
     /// [`with_development`](Launcher::with_development)) reports: a package
-    /// being developed is building, failed to build or was reloaded.
+    /// being developed is building, failed to build or was reloaded, or a
+    /// command another command launched opened. The window is shown when
+    /// such a launch asks for it ([`Launcher::take_window_request`]).
     pub fn follow_changes(
         &mut self,
         mut changes: Changes,
@@ -257,6 +309,11 @@ impl LauncherWindow {
         cx.spawn_in(window, async move |this, cx| {
             while changes.next().await.is_some() {
                 let shown = this.update_in(cx, |this, window, cx| {
+                    if this.launcher.take_window_request() {
+                        this.unhide(window, cx);
+                        window.activate_window();
+                        cx.activate(true);
+                    }
                     this.sync_screen(window, cx);
                     cx.notify();
                 });
@@ -266,6 +323,97 @@ impl LauncherWindow {
             }
         })
         .detach();
+    }
+
+    /// Has the launcher drive this window for the host functions commands
+    /// call (#141): it hides the window and shows HUDs through it, as
+    /// [`LauncherWindow::window_requested`] carries out.
+    fn follow_window_requests(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (control, mut requests) = pane_core::feedback::channel();
+        self.launcher.attach_window(control);
+        cx.spawn_in(window, async move |this, cx| {
+            while let Some(request) = requests.next().await {
+                let done = this.update_in(cx, |this, window, cx| {
+                    this.window_requested(request, window, cx);
+                });
+                if done.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Carries out what the launcher asked of the window for a command's
+    /// host function: hides it (a command closed it, or is about to show a
+    /// HUD), shows a HUD in a window of its own, or draws the confirmation
+    /// a command asks for (showing the window first if it is hidden) or
+    /// takes away one no longer asked.
+    fn window_requested(
+        &mut self,
+        request: WindowRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match request {
+            WindowRequest::Hide => {
+                if !self.presence.hidden() {
+                    self.hide(window, cx);
+                }
+            }
+            WindowRequest::Hud(hud) => self.show_hud(hud, window, cx),
+            WindowRequest::Confirmation => self.sync_confirmation(window, cx),
+        }
+        self.sync_screen(window, cx);
+        cx.notify();
+    }
+
+    /// Shows the window, if it is hidden, for a confirmation a command
+    /// asks for (#146): on the screen it was left on, whatever the
+    /// Launcher page's reopening choice says, and focused.
+    /// Whether it was hidden.
+    pub(crate) fn show_for_confirmation(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.presence.hidden() {
+            return false;
+        }
+        self.unhide(window, cx);
+        window.activate_window();
+        cx.activate(true);
+        self.motion.land_at_once();
+        true
+    }
+
+    /// Development builds only: hides the launcher and shows `title` as a
+    /// failure's HUD (3 seconds), as a command's `show-hud` would, for the
+    /// opt-in native smoke of the HUD's placement
+    /// (scripts/smoke-windows-hud.ps1), which names it in
+    /// `PANE_TEST_SHOW_HUD`.
+    #[cfg(debug_assertions)]
+    #[doc(hidden)]
+    pub fn show_smoke_hud(&mut self, title: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.window_requested(WindowRequest::Hide, window, cx);
+        let hud = pane_core::Hud {
+            title,
+            style: pane_core::ToastStyle::Failure,
+        };
+        self.window_requested(WindowRequest::Hud(hud), window, cx);
+    }
+
+    /// Test support: shows `hud` as the launcher's window seam would.
+    /// Test and debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn request_hud(
+        &mut self,
+        hud: pane_core::Hud,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.window_requested(WindowRequest::Hud(hud), window, cx);
     }
 
     fn select_next(&mut self, _: &SelectNext, _: &mut Window, cx: &mut Context<Self>) {
@@ -279,10 +427,107 @@ impl LauncherWindow {
     }
 
     fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
+        // The open Actions panel takes Enter from the key press itself, once
+        // per press ([`LauncherWindow::panel_keys`]).
+        if self.actions.is_some() {
+            cx.propagate();
+            return;
+        }
+        // An item of a command's list (or a row of root search with actions
+        // of its own, #150) runs its primary action once per press: the key
+        // is handed on to [`LauncherWindow::item_action_keys`], which sees
+        // whether it is a held key's repeat (an action cannot).
+        let focused = self.query_field().focus_handle(cx).is_focused(window)
+            || self.focus_handle.is_focused(window);
+        if actions_panel::item_list(&self.launcher.view().screen)
+            && focused
+            && self.launcher.item_actions().is_some()
+        {
+            cx.propagate();
+            return;
+        }
+        self.invoke_selected(window, cx);
+    }
+
+    /// What the invoke binding does with the selected row: submits a form,
+    /// opens the Actions panel at the submenu an item's primary action
+    /// opens (#140), or activates the row.
+    fn invoke_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let primary_submenu = actions_panel::item_list(&self.launcher.view().screen)
+            && self
+                .launcher
+                .item_actions()
+                .is_some_and(|actions| actions.actions.first().is_some_and(|first| first.submenu));
         if matches!(self.launcher.view().screen, Screen::Form(_)) {
             self.submit_form(window, cx);
+        } else if primary_submenu {
+            self.open_item_submenu(0, window, cx);
         } else {
             self.activate_selected(window, cx);
+        }
+    }
+
+    /// A key pressed in the launcher while an open command's list (or its
+    /// search field) has focus and nothing is open over it, before the
+    /// focused control sees it: the invoke binding (which
+    /// [`LauncherWindow::confirm`] hands on), Ctrl+Enter and
+    /// Ctrl+Shift+Enter run the selected item's first, second and third
+    /// action, and an action's own shortcut runs that action, without the
+    /// Actions panel (#137); an action that opens a submenu opens the panel
+    /// at that submenu instead (#140). A missing action runs nothing, and
+    /// the key goes no further. Once per press: the system's repeats of a
+    /// held key run nothing more.
+    fn item_action_keys(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.actions.is_some()
+            || self.menu.is_some()
+            || !actions_panel::item_list(&self.launcher.view().screen)
+        {
+            return;
+        }
+        let field = self.query_field().focus_handle(cx).is_focused(window);
+        if !field && !self.focus_handle.is_focused(window) {
+            return;
+        }
+        let Ok(pressed) = crate::keyboard::binding_of(&event.keystroke) else {
+            return;
+        };
+        let Some(actions) = self.launcher.item_actions() else {
+            return;
+        };
+        let invoke = crate::settings::keyboard_of(cx)
+            .binding(pane_core::KeyboardAction::InvokeSelectedAction)
+            .clone();
+        let index = if pressed == invoke {
+            Some(0)
+        } else {
+            (1..=2)
+                .find(|index| pane_core::keyboard::action_key(*index).as_ref() == Some(&pressed))
+                .or_else(|| actions.bound_to(&pressed))
+        };
+        let Some(index) = index else {
+            return;
+        };
+        cx.stop_propagation();
+        if event.is_held {
+            return;
+        }
+        if actions
+            .actions
+            .get(index)
+            .is_some_and(|action| action.submenu)
+        {
+            self.open_item_submenu(index, window, cx);
+        } else if index == 0 {
+            self.activate_selected(window, cx);
+        } else {
+            self.motion.land_at_once();
+            let pending = self.launcher.run_selected_action(index);
+            self.show_until_done(pending, window, cx);
         }
     }
 
@@ -493,12 +738,14 @@ impl LauncherWindow {
         .detach();
     }
 
-    /// Opens the command whose global hotkey `shortcut` is, as the system
-    /// reported it pressed while any application had focus: the window
-    /// comes to the front and shows the command. A press that opens nothing
-    /// (a hotkey released meanwhile) leaves the window where it is. The
-    /// Open Pane hotkey is not a command's: its press summons, focuses or
-    /// hides the launcher itself ([`LauncherWindow::open_pane_pressed`]).
+    /// Launches the command whose global hotkey `shortcut` is, as the
+    /// system reported it pressed while any application had focus: the
+    /// window comes to the front and shows a view command. A no-view
+    /// command runs without the window (ADR 0037): a hidden window stays
+    /// hidden, and a shown one stays as it is. A press that launches
+    /// nothing (a hotkey released meanwhile) leaves the window where it is.
+    /// The Open Pane hotkey is not a command's: its press summons, focuses
+    /// or hides the launcher itself ([`LauncherWindow::open_pane_pressed`]).
     pub fn hotkey_pressed(
         &mut self,
         shortcut: &Shortcut,
@@ -509,14 +756,17 @@ impl LauncherWindow {
             self.open_pane_pressed(window, cx);
             return;
         }
+        let shows_window = self.launcher.hotkey_shows_window(shortcut);
         let Some(pending) = self.launcher.press_hotkey(shortcut) else {
             return;
         };
-        self.unhide(window, cx);
-        window.activate_window();
-        cx.activate(true);
-        // A hotkey is a keyboard open: the command's view lands at once.
-        self.motion.land_at_once();
+        if shows_window {
+            self.unhide(window, cx);
+            window.activate_window();
+            cx.activate(true);
+            // A hotkey is a keyboard open: the command's view lands at once.
+            self.motion.land_at_once();
+        }
         self.show_until_done(pending, window, cx);
     }
 
@@ -525,6 +775,7 @@ impl LauncherWindow {
     /// entry point that reaches the launcher from Settings — must find a
     /// visible window, opened on the display the placement resolves.
     fn unhide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.launcher.set_window_presence(WindowPresence::Shown);
         if self.presence.show() {
             window.set_visible(true);
             // The pointer is wherever it is now: the next event records it.
@@ -551,6 +802,10 @@ impl LauncherWindow {
     fn hide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.set_visible(false);
         self.presence.hide(cx.background_executor().now());
+        // A toast shown from now on is a HUD (#141), and a confirmation
+        // shown is answered as not confirmed (#146).
+        self.launcher.set_window_presence(WindowPresence::Hidden);
+        self.sync_confirmation(window, cx);
         self.pointer = None;
         // A hidden launcher keeps nothing armed for whatever shows next.
         self.motion.land_at_once();
@@ -643,9 +898,14 @@ impl LauncherWindow {
         // here (the Settings window's focus is not the launcher's), and
         // nothing is run. Whether it pops counts the time the launcher was
         // hidden, so it is asked before the launcher is shown.
+        // A command that closed the launcher may have asked to keep its
+        // screen whatever the choice says (`suspended`, #141).
         let reopening = crate::settings::shared(cx).read(cx).reopening();
         let now = cx.background_executor().now();
-        let pops = self.presence.pops_to_root(reopening.pops_after(), now);
+        let pops = match self.launcher.take_next_showing() {
+            NextShowing::BySetting => self.presence.pops_to_root(reopening.pops_after(), now),
+            NextShowing::Restore => false,
+        };
         self.unhide(window, cx);
         window.activate_window();
         cx.activate(true);
@@ -939,11 +1199,12 @@ impl LauncherWindow {
     /// is safe wherever the launcher changed, including from another
     /// window's own flow.
     fn sync_screen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // The Actions panel belongs to root search: a screen that replaced
-        // it (a hotkey pressed, a change from Settings) takes the panel
-        // with it, and its own focus with it.
-        if !matches!(self.launcher.view().screen, Screen::Root { .. }) {
-            self.actions = None;
+        // The Actions panel belongs to the screen it opened over, root
+        // search or a command's list: a screen that replaced it (a hotkey
+        // pressed, a change from Settings) takes the panel with it, and
+        // its own focus and submenus with it.
+        if !self.actions_belong_to(&self.launcher.view().screen) && self.actions.take().is_some() {
+            self.launcher.close_submenus();
         }
         self.sync_form(window, cx);
         self.sync_custom_view(window, cx);
@@ -953,6 +1214,9 @@ impl LauncherWindow {
         // After it: the Clipboard History view focuses its own search.
         self.sync_clipboard_history(window, cx);
         self.sync_home(cx);
+        // Last of all: a confirmation a command waits on keeps the focus
+        // over whatever screen is shown (#146).
+        self.sync_confirmation(window, cx);
         cx.refresh_windows();
     }
 
@@ -1047,6 +1311,38 @@ impl LauncherWindow {
             (Some(subtitle), Some(reason)) => Some(format!("{subtitle}. {reason}")),
             (subtitle, reason) => subtitle.clone().or(reason.clone()),
         };
+        // A command whose required preferences are unset says so, in the
+        // kind's place and to assistive technology (#143).
+        let needs_setup = shown.needs_setup;
+        let description = match (description, needs_setup) {
+            (Some(description), true) => Some(format!("{description}. {NEEDS_SETUP}")),
+            (None, true) => Some(NEEDS_SETUP.to_owned()),
+            (description, false) => description,
+        };
+        // An extension item's accessories are read with the row (#139).
+        let spoken: Vec<String> = shown
+            .accessories
+            .iter()
+            .map(pane_core::ShownAccessory::spoken)
+            .filter(|spoken| !spoken.is_empty())
+            .collect();
+        let description = match (description, spoken.is_empty()) {
+            (description, true) => description,
+            (Some(description), false) => Some(format!("{description}. {}", spoken.join(", "))),
+            (None, false) => Some(spoken.join(", ")),
+        };
+        // Its icon: an extension's, drawn bare, or Pane's tile (#139).
+        let icon = match &shown.icon {
+            Some(icon) => crate::ui::extension_icon::RowIcon::Drawn(crate::features::icons::drawn(
+                icon, theme,
+            )),
+            None => row_icon(&row.id).into(),
+        };
+        let accessories = shown
+            .accessories
+            .iter()
+            .map(|accessory| crate::features::icons::accessory_look(accessory, theme))
+            .collect();
         // Root search's rows carry what the launcher knows beyond the
         // title: where the query matched, the alias and the hotkey the
         // user gave the command, and its kind.
@@ -1061,12 +1357,15 @@ impl LauncherWindow {
             // Root search's rows always keep the kind's column, empty
             // where the launcher names no kind, so the alias and keys of
             // every row line up against it, as the reference's do.
-            kind: if root {
-                Some(shown.kind.map_or("", |kind| kind.label()).into())
-            } else {
-                None
+            kind: match (root, needs_setup) {
+                (true, true) => Some(NEEDS_SETUP.into()),
+                (true, false) => Some(shown.kind.map_or("", |kind| kind.label()).into()),
+                (false, _) => None,
             },
             number,
+            title_tooltip: shown.title_tooltip.map(SharedString::from),
+            subtitle_tooltip: shown.subtitle_tooltip.map(SharedString::from),
+            accessories,
         };
         // Presentation only: the shared row paints the chrome, and the
         // identity, accessibility and click behavior are attached here.
@@ -1077,7 +1376,7 @@ impl LauncherWindow {
                 unavailable_reason: reason.map(SharedString::from),
                 selected,
                 unavailable_id: ("unavailable", index).into(),
-                icon: Some(row_icon(&row.id)),
+                icon: Some(icon),
             },
             meta,
             theme,
@@ -1110,15 +1409,18 @@ impl LauncherWindow {
             row.aria_description(description)
         })
         .when_some(shortcut, |row, shortcut| row.aria_keyshortcuts(shortcut))
-        .on_click(cx.listener(move |this, _, window, cx| {
-            if root {
-                this.click_root_row(index, window, cx);
-            } else {
-                this.launcher.select(index);
-                this.activate_selected(window, cx);
-                this.motion.pointer_open();
-            }
-        }))
+        .on_click(
+            cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                if root {
+                    this.click_root_row(index, window, cx);
+                } else if event.click_count() <= 1 {
+                    // A double click's second click runs nothing more.
+                    this.launcher.select(index);
+                    this.activate_selected(window, cx);
+                    this.motion.pointer_open();
+                }
+            }),
+        )
     }
 
     /// Root search's row `index`, a computed answer, drawn as the answer
@@ -1170,13 +1472,14 @@ impl LauncherWindow {
     /// The footer's right-hand buttons: the selected action's button,
     /// when the screen has a primary action at all (a custom view, the
     /// network details screen and a hotkey screen with nothing to remove
-    /// have none) and no status shows, and on root search the Actions
-    /// button. `action` is the launcher's one selected-action definition
-    /// ([`Launcher::selected_action`]).
+    /// have none) and no status shows, and on root search and a command's
+    /// list the Actions button. `action` is the launcher's one
+    /// selected-action definition ([`Launcher::selected_action`]): on a
+    /// command's list it names the selected item's primary action.
     fn footer_buttons(
         &self,
         action: &SelectedAction,
-        root: bool,
+        with_actions: bool,
         status: bool,
         theme: &Theme,
         cx: &mut Context<Self>,
@@ -1185,12 +1488,15 @@ impl LauncherWindow {
         let primary = (!action.label.is_empty() && !status).then(|| {
             let invoke = keyboard.binding(pane_core::KeyboardAction::InvokeSelectedAction);
             action_button(action, invoke, theme)
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.press_primary_action(window, cx);
+                .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
+                    // A double click's second click runs nothing more.
+                    if event.click_count() <= 1 {
+                        this.press_primary_action(window, cx);
+                    }
                 }))
                 .into_any_element()
         });
-        let actions = root.then(|| {
+        let actions = with_actions.then(|| {
             let open = crate::keyboard::binding_keys(
                 keyboard.binding(pane_core::KeyboardAction::OpenActions),
             );
@@ -1203,13 +1509,13 @@ impl LauncherWindow {
         footer::buttons(primary, actions, theme)
     }
 
-    /// The footer's hint while no status shows: on root search with
-    /// Actions open, "Type to filter actions · Esc goes back"; nothing
-    /// elsewhere.
-    fn footer_hint(&self, root: bool, theme: &Theme) -> Option<Div> {
+    /// The footer's hint while no status shows: on root search or a
+    /// command's list with Actions open, "Type to filter actions · Esc goes
+    /// back"; nothing elsewhere.
+    fn footer_hint(&self, with_actions: bool, theme: &Theme) -> Option<Div> {
         // At rest the footer's buttons already show the keys; the hint says
         // only how the open Actions panel is used.
-        if !root || self.actions.is_none() {
+        if !with_actions || self.actions.is_none() {
             return None;
         }
         Some(footer::hint_line(
@@ -1246,7 +1552,7 @@ impl LauncherWindow {
     /// running).
     pub(crate) fn press_primary_action(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.launcher.selected_action().available {
-            self.confirm(&Confirm, window, cx);
+            self.invoke_selected(window, cx);
         }
     }
 
@@ -1265,6 +1571,8 @@ impl LauncherWindow {
             && matches!(view.status, Status::Idle)
             && self.actions.is_none()
             && self.menu.is_none()
+            // A confirmation needs the expanded window to be drawn in.
+            && self.launcher.confirmation().is_none()
     }
 
     /// Fits the window to the window mode as `view` is drawn: collapsing to
@@ -1298,19 +1606,42 @@ impl LauncherWindow {
 
 impl Render for LauncherWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Pane's own keys as they are bound now, which no action shortcut
+        // of a command's list may take (#137).
+        self.launcher.set_pane_keys(pane_core::PaneKeys::new(
+            &crate::settings::keyboard_of(cx),
+            crate::settings::navigation_of(cx),
+        ));
         let (view, presentation) = self.launcher.presented_view();
         #[cfg(any(test, debug_assertions))]
         {
             self.drawn = Some(view.clone());
+            self.drawn_over = self.actions.is_some() || self.launcher.confirmation().is_some();
         }
-        // Pane's Clipboard History draws its own split view (#102).
+        // The toast the footer shows, if any, and its time (#141).
+        let toast = self.footer_toast(&view.status);
+        self.time_toast(toast.as_ref(), window, cx);
+        // Pane's Clipboard History draws its own split view (#102), with a
+        // confirmation its command asks for over it (#146).
         if let Some(split) = self.render_clipboard_history(&view, cx) {
-            return split;
+            let visuals = crate::settings::launcher_visuals(cx);
+            let asked = self.render_confirmation_layer(&visuals.theme, visuals.material, cx);
+            return split.children(asked);
         }
         // The compact window mode shows only the search field until
         // something is typed.
         let collapsed = self.fit_window_mode(&view, window, cx);
+        // Collapsed to its search field, the launcher has no footer for a
+        // toast: one shown is a HUD (#141).
+        if !self.presence.hidden() {
+            self.launcher.set_window_presence(if collapsed {
+                WindowPresence::Compact
+            } else {
+                WindowPresence::Shown
+            });
+        }
         self.keep_selected_visible(&view, &presentation, window, cx);
+        self.keep_dates_current(&presentation, cx);
         // What moves this frame — the arriving content, the footer menu
         // popup's entrance or exit, the number hints' slide — and whether
         // another frame is needed; see [`FrameMotion`] and
@@ -1335,7 +1666,9 @@ impl Render for LauncherWindow {
             Screen::Package { .. } => "Nothing to install.",
             Screen::Form(_) => "",
             Screen::Extensions { .. } => "No extensions are installed.",
-            Screen::CustomView(_) | Screen::NetworkDetails { .. } => "",
+            Screen::CustomView(_)
+            | Screen::NetworkDetails { .. }
+            | Screen::ProgramDetails { .. } => "",
             Screen::Confirm { .. }
             | Screen::Hotkey { .. }
             | Screen::PauseDetails { .. }
@@ -1380,19 +1713,40 @@ impl Render for LauncherWindow {
         // The footer's status: while the launcher runs, works, answers or
         // fails, the strip is that message; `None` while it is idle, when
         // the strip becomes the selected action (below).
+        // Whether an action runs or the status line has something to say:
+        // the primary action steps aside then, toast or not.
+        let status_busy = view.status != Status::Idle;
         let (status_selector, status, status_color): (&str, Option<SharedString>, Hsla) =
             match view.status {
+                // A toast speaks where the status line would (#141).
+                _ if toast.is_some() => ("status-toast", None, theme.text_body),
                 Status::Idle => ("status-idle", None, theme.text_muted),
                 Status::Running => ("status-running", Some("Running…".into()), theme.warning),
                 Status::Progress(work) => ("status-progress", Some(work.into()), theme.warning),
                 Status::Result(answer) => ("status-result", Some(answer.into()), theme.success),
                 Status::Error(message) => ("status-error", Some(message.into()), theme.danger),
             };
+        // The strip's name for assistive technology: the status, or the
+        // toast's title and message.
+        let announced: Option<SharedString> = match &toast {
+            Some(shown) => Some(shown.toast.text().into()),
+            None => status.clone(),
+        };
+        // The toast's actions take the footer's buttons' place.
+        let toast_buttons = match &toast {
+            Some(shown) => self.toast_buttons(shown, &theme, cx),
+            None => Vec::new(),
+        };
+        let toast_middle = toast
+            .as_ref()
+            .map(|shown| self.render_toast(shown, &theme, cx).into_any_element());
         // The selected action: the one definition ([`SelectedAction`])
         // that drives the idle strip's button — its label, its
         // availability — and the dispatch both the button and Enter take.
         let action = self.launcher.selected_action();
         let root = matches!(view.screen, Screen::Root { .. });
+        // Root search and a command's list have the Actions panel.
+        let with_actions = root || actions_panel::commands_list(&view.screen);
         // Root search's notice when nothing but fallbacks is listed for
         // its query (#96).
         let notice = root_search::layouts::nothing_found(&view.screen, &presentation);
@@ -1504,18 +1858,27 @@ impl Render for LauncherWindow {
                 self.render_search(query, root_search::ROOT_PLACEHOLDER, results, cx)
             }
             // The opened command's own search field, the same control.
-            Screen::CommandSearch { query } => self.render_search(
-                query,
-                root_search::COMMAND_PLACEHOLDER,
-                motion::arriving(list, arriving),
-                cx,
-            ),
-            // The list holds keyboard focus; the selected row is its active
-            // descendant, and key actions bubble to the root.
-            _ => {
-                motion::arriving(list.track_focus(&self.focus_handle), arriving).into_any_element()
+            Screen::CommandSearch { query } => {
+                let results = actions_panel::dimmed(
+                    motion::arriving(list, arriving).into_any_element(),
+                    self.actions.is_some(),
+                    &theme,
+                );
+                self.render_search(query, root_search::COMMAND_PLACEHOLDER, results, cx)
             }
+            // The list holds keyboard focus; the selected row is its active
+            // descendant, and key actions bubble to the root. A command's
+            // list is dimmed under its open Actions panel, as root search is.
+            _ => actions_panel::dimmed(
+                motion::arriving(list.track_focus(&self.focus_handle), arriving).into_any_element(),
+                self.actions.is_some(),
+                &theme,
+            ),
         };
+
+        // The confirmation a command waits on, over everything (#146),
+        // added to the panel below.
+        let asked = self.render_confirmation_layer(&theme, material, cx);
 
         // The launcher's content: the shared Geist family and base text
         // color on everything, the heading (or the search header, in
@@ -1530,7 +1893,12 @@ impl Render for LauncherWindow {
             .on_action(cx.listener(Self::dismiss))
             .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(Self::toggle_actions))
+            .on_action(cx.listener(Self::focus_toast))
             .map(|content| Self::on_quick_slot_keys(content, cx))
+            // A toast's actions' shortcuts first: the toast is what was
+            // said last (#141).
+            .capture_key_down(cx.listener(Self::toast_action_keys))
+            .capture_key_down(cx.listener(Self::item_action_keys))
             .on_action(cx.listener(Self::focus_next))
             .on_action(cx.listener(Self::focus_previous))
             .on_modifiers_changed(cx.listener(Self::modifiers_changed))
@@ -1605,28 +1973,38 @@ impl Render for LauncherWindow {
                         // announces it. While idle the strip carries no
                         // message and stays silent.
                         .role(Role::Status)
-                        .when_some(status.clone(), |footer, text| footer.aria_label(text))
+                        .when_some(announced, |footer, text| footer.aria_label(text))
                         .debug_selector(|| status_selector.into())
                         .text_size(theme.typography.footer_size)
                         .text_color(status_color)
                         .child(footer::footer_row(
                             self.render_menu_button(&theme, cx).into_any_element(),
-                            match status.clone() {
+                            match (toast_middle, status.clone()) {
+                                // The toast, in the hint's place (#141).
+                                (Some(toast), _) => toast,
                                 // Past the 35% cap the message scrolls in its
                                 // own viewport, inside the strip, instead of
                                 // being cut. The strip's bounds carry the
                                 // status-* debug selectors.
-                                Some(text) => {
+                                (None, Some(text)) => {
                                     footer::status_message(text, &theme).into_any_element()
                                 }
-                                None => footer::hint_slot(self.footer_hint(root, &theme), &theme)
-                                    .into_any_element(),
+                                (None, None) => footer::hint_slot(
+                                    self.footer_hint(with_actions, &theme),
+                                    &theme,
+                                )
+                                .into_any_element(),
                             },
-                            // While a status shows, the primary action steps
-                            // aside — nothing is dispatched again from a frame
-                            // the status has already overtaken (a double click
-                            // on a quick open) — and Actions stays.
-                            self.footer_buttons(&action, root, status.is_some(), &theme, cx),
+                            // A toast's actions, when it has any. While a
+                            // status shows, the primary action steps aside —
+                            // nothing is dispatched again from a frame the
+                            // status has already overtaken (a double click on
+                            // a quick open) — and Actions stays.
+                            if toast_buttons.is_empty() {
+                                self.footer_buttons(&action, with_actions, status_busy, &theme, cx)
+                            } else {
+                                toast_buttons
+                            },
                             &theme,
                         )),
                 )
@@ -1673,11 +2051,14 @@ impl Render for LauncherWindow {
         });
         // The panel surface: the frost material's L1 glass around the
         // content, with the sheen beneath it — and the background image
-        // between the two, when there is one.
-        match hero {
+        // between the two, when there is one. A confirmation lies over the
+        // content, outside the launcher's key context, so none of the
+        // launcher's keys reach behind it while it has the focus.
+        let panel = match hero {
             Some(hero) => material.panel_over(&theme, hero, content),
             None => material.panel(&theme, content),
-        }
+        };
+        panel.children(asked)
     }
 }
 
@@ -1775,6 +2156,10 @@ pub(crate) fn section_label(section: &pane_core::Section) -> shell::SectionLabel
         note: section.note.clone().map(SharedString::from),
     }
 }
+
+/// What the row of a command whose required preferences are unset says in
+/// its kind's place: only the user, through the Setup screen, runs it.
+pub(crate) const NEEDS_SETUP: &str = "Needs setup";
 
 /// The icon presentation for a row, chosen by the row's stable id: the
 /// built-in rows and this build's sample commands are known identities,

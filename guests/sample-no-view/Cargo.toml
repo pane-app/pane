@@ -1,0 +1,12 @@
+[package]
+name = "sample-no-view"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pane-guest.workspace = true

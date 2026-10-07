@@ -19,11 +19,14 @@ use pane_core::{
 };
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/guests.rs"]
 mod guests;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use guests::guest_file as guest;
 use rows::{select_title, titles};
 
@@ -47,6 +50,13 @@ impl Dirs {
     /// A launcher on this data folder; a new one is a restart of Pane.
     fn launcher(&self) -> Launcher {
         Launcher::with_packages(Ok(self.runtime.clone()), vec![], self.packages_dir())
+    }
+
+    /// A second launcher on the same records, with a runtime of its own:
+    /// one on `runtime` would take its window and feedback host functions,
+    /// so later calls' toasts would not reach the launcher a test drives.
+    fn reader(&self) -> Launcher {
+        Launcher::with_packages(Runtime::start(), vec![], self.packages_dir())
     }
 
     fn packages_dir(&self) -> PathBuf {
@@ -150,12 +160,14 @@ fn manage(launcher: &Launcher) {
     );
 }
 
-/// Opens the Greeting command and runs its item `item`.
+/// Opens the Greeting command and runs its item `item`, returning what it
+/// showed: its toast, or the status line.
 fn greet(launcher: &Launcher, item: &str) -> Status {
     to_root(launcher);
     press(launcher, "Greeting");
     assert_eq!(launcher.view().screen, Screen::Command);
-    press(launcher, item)
+    press(launcher, item);
+    shown(launcher)
 }
 
 /// Installs, in folders a to d: Package a; Package c, which requires a;
@@ -337,7 +349,7 @@ fn uninstall_all_keeping_saved_data_removes_the_shown_set_and_the_dependency_com
     assert_eq!(installed(&restarted), ["Package d"]);
     block_on(restarted.install_package(&dirs.folder("a")));
     assert_eq!(installed(&restarted), ["Package d", "Package a"]);
-    assert_eq!(installed(&dirs.launcher()), ["Package d", "Package a"]);
+    assert_eq!(installed(&dirs.reader()), ["Package d", "Package a"]);
     assert_eq!(restarted.retained_data(), retained);
 
     // Settings b installed again finds its settings.

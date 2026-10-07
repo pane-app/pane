@@ -13,7 +13,7 @@ use tempfile::TempDir;
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::settle;
+use settle::{settle, settle_shown};
 
 #[path = "support/packages.rs"]
 mod packages;
@@ -100,7 +100,7 @@ fn a_chosen_package_is_previewed_installed_and_run(cx: &mut TestAppContext) {
     assert_eq!(settle(&window, cx).screen, Screen::Command);
     cx.simulate_keystrokes("enter");
     assert_eq!(
-        settle(&window, cx).status,
+        settle_shown(&window, cx),
         Status::Result("Hello from the Rust guest".into())
     );
 }
@@ -299,7 +299,7 @@ fn an_installed_package_is_reloaded_from_the_extension_list(cx: &mut TestAppCont
     assert_eq!(settle(&window, cx).title, "JavaScript sample");
     cx.simulate_keystrokes("enter");
     assert_eq!(
-        settle(&window, cx).status,
+        settle_shown(&window, cx),
         Status::Result("Hello from the JavaScript guest".into())
     );
 }

@@ -66,7 +66,7 @@ use super::faults::Faults;
 
 use super::{
     CallError, Code, HealthReport, Host, Request, SharedApplications, SharedClipboard,
-    SharedDirectory, lock, unavailable,
+    SharedDirectory, SharedHostFunctions, SharedLaunches, lock, unavailable,
 };
 use crate::helpers::runner::Helpers;
 
@@ -203,6 +203,9 @@ pub(super) struct Shared {
     pub(super) files: crate::files::FileAccess,
     pub(super) clipboard: SharedClipboard,
     pub(super) directory: SharedDirectory,
+    pub(super) launches: SharedLaunches,
+    /// What the window and feedback host functions do: the launcher's.
+    pub(super) host_functions: SharedHostFunctions,
     pub(super) health: Arc<Mutex<Option<HealthReport>>>,
     /// Custom view ids, never reused, even by a restarted thread: a view
     /// the window still shows from a crashed one must not name a new view.
@@ -331,6 +334,8 @@ impl Shared {
             files: crate::files::FileAccess::default(),
             clipboard: SharedClipboard::default(),
             directory: SharedDirectory::default(),
+            launches: SharedLaunches::default(),
+            host_functions: SharedHostFunctions::default(),
             health: Arc::default(),
             next_view: Arc::default(),
             network: Arc::default(),
@@ -477,7 +482,14 @@ impl Shared {
         let watch = Arc::new(Watch::default());
         // Its epoch ticks, which end with it (see `deadlines::tick`).
         deadlines::tick(&code.engine, watch.clone());
-        let host = Host::new(code, self, number, Arc::clone(&faults), watch.clone());
+        let host = Host::new(
+            code,
+            self,
+            number,
+            Arc::clone(&faults),
+            watch.clone(),
+            requests.downgrade(),
+        );
         let shared = Arc::downgrade(self);
         {
             let (watch, shared) = (watch.clone(), shared.clone());

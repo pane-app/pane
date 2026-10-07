@@ -16,7 +16,7 @@ use tempfile::TempDir;
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::settle;
+use settle::{settle, settle_shown};
 
 #[path = "support/packages.rs"]
 mod packages;
@@ -125,7 +125,7 @@ fn pressing_keys_on_the_hotkey_screen_assigns_them_and_the_hotkey_opens_the_comm
     // The command's list has focus: Enter runs its first item.
     cx.simulate_keystrokes("enter");
     assert_eq!(
-        settle(&window, cx).status,
+        settle_shown(&window, cx),
         Status::Result("Hello from the Rust guest".into())
     );
     // Escape returns to an empty root search.

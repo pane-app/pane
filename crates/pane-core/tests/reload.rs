@@ -13,11 +13,14 @@ use futures::executor::block_on;
 use pane_core::{Key, Launcher, PackageIdentity, Runtime, Screen, Status, ViewEvent};
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/guests.rs"]
 mod guests;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use guests::guest;
 use rows::{select_title, titles};
 
@@ -98,12 +101,12 @@ fn open(launcher: &Launcher, command: &str) -> String {
 }
 
 /// From root search, opens the command titled `command` and runs its item
-/// titled `item`, returning the outcome.
+/// titled `item`, returning the outcome: its toast, or the status line.
 fn run(launcher: &Launcher, command: &str, item: &str) -> Status {
     open(launcher, command);
     select_title(launcher, item);
     block_on(launcher.activate_selected());
-    launcher.view().status
+    shown(launcher)
 }
 
 /// Opens the extension manager from root search.

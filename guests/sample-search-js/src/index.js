@@ -9,9 +9,10 @@
 // `@pane/extension/http` (`wasi:http` underneath) and its address is a
 // setting the command's form changes. A search Pane no longer needs is
 // stopped where it waits; an unreachable or failing service is an error
-// shown in place of results, not a crash. Items, answers and errors match
+// shown in place of results, not a crash. Items, toasts and errors match
 // the Rust sample (guests/sample-search) and the TypeScript one.
 
+import { showToast } from "@pane/extension/feedback";
 import { get as fetchUrl } from "@pane/extension/http";
 import { get, set } from "pane:extension/settings@0.1.0";
 
@@ -78,9 +79,37 @@ const SERVICE_FORM = {
   submitLabel: "Save",
 };
 
+/**
+ * Runs the action `itemId`: the "about" item's, or a search result's
+ * ("package:<name>"), which fetches that package's details; it shows a
+ * toast with what it found.
+ * @param {string} itemId
+ * @returns {Promise<void>}
+ */
+async function act(itemId) {
+  showToast({ title: await outcome(itemId) });
+}
+
+/**
+ * The text the action `itemId`'s toast shows.
+ * @param {string} itemId
+ * @returns {Promise<string>}
+ */
+async function outcome(itemId) {
+  if (itemId === "about") {
+    return "Type in the search field to search the package registry";
+  }
+  if (!itemId.startsWith("package:")) {
+    throw new Error(`unknown item: ${itemId}`);
+  }
+  const name = itemId.slice("package:".length);
+  const details = await fetchJson(`/packages/${encodeURIComponent(name)}`);
+  return `${details.name} ${details.version} (${details.license}): ${details.summary}`;
+}
+
 /** @type {import("@pane/extension").Command} */
 export const command = {
-  async getView() {
+  async render() {
     return {
       title: "Package search",
       items: [
@@ -88,21 +117,15 @@ export const command = {
           id: "about",
           title: "Type to search the package registry",
           subtitle: "Results come from the service as you type; Enter shows a package's details",
+          onAction: () => act("about"),
         },
         { id: "service", title: "Service address", subtitle: service(), form: SERVICE_FORM },
       ],
     };
   },
-  async runAction(itemId) {
-    if (itemId === "about") {
-      return "Type in the search field to search the package registry";
-    }
-    if (!itemId.startsWith("package:")) {
-      throw new Error(`unknown item: ${itemId}`);
-    }
-    const name = itemId.slice("package:".length);
-    const details = await fetchJson(`/packages/${encodeURIComponent(name)}`);
-    return `${details.name} ${details.version} (${details.license}): ${details.summary}`;
+  // A search result's id ("package:<name>") names the package to show.
+  async runSearchResult(id) {
+    await act(id);
   },
   async submitForm(itemId, values) {
     if (itemId !== "service") {

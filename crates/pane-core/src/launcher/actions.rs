@@ -5,7 +5,10 @@
 //! action (the footer's, the same definition and dispatch), then, for a
 //! result a quick slot can hold, pinning it (see `quick_slots`: a slot's
 //! own entries remove and move it), then, for an installed command, the
-//! hotkey and alias configuration Manage extensions already offers.
+//! hotkey and alias configuration Manage extensions already offers, and
+//! "Configure Command…" and "Configure Extension…" when the command or its
+//! package declares preferences (the window opens the extension's card in
+//! Settings for them; see `setup`).
 //! Nothing is listed that has no working operation behind it (#100): no
 //! quit, new window or hide. The same items describe a quick slot's own
 //! entries (see `quick_slots`).
@@ -38,6 +41,13 @@ pub enum ResultAction {
     MovePinUp,
     /// Swaps the result's quick slot with the one after it.
     MovePinDown,
+    /// Opens the command's own preferences on its extension's card in
+    /// Settings › Extensions (the window does; see
+    /// [`Launcher::preferences_target`]).
+    ConfigureCommand,
+    /// Opens the extension's preferences on its card in Settings ›
+    /// Extensions (the window does).
+    ConfigureExtension,
 }
 
 impl ResultAction {
@@ -52,6 +62,8 @@ impl ResultAction {
             ResultAction::Unpin => "unpin",
             ResultAction::MovePinUp => "move-pin-up",
             ResultAction::MovePinDown => "move-pin-down",
+            ResultAction::ConfigureCommand => "configure-command",
+            ResultAction::ConfigureExtension => "configure-extension",
         }
     }
 
@@ -64,13 +76,18 @@ impl ResultAction {
             ResultAction::Unpin => Some("Unpin"),
             ResultAction::MovePinUp => Some("Move Up"),
             ResultAction::MovePinDown => Some("Move Down"),
-            ResultAction::Invoke | ResultAction::Hotkey | ResultAction::Alias => None,
+            ResultAction::Invoke
+            | ResultAction::Hotkey
+            | ResultAction::Alias
+            | ResultAction::ConfigureCommand
+            | ResultAction::ConfigureExtension => None,
         }
     }
 
     /// A configuration entry's label, by whether the command already has
     /// that configuration: "Assign Hotkey…" or "Change Hotkey…", "Add
-    /// Alias…" or "Change Alias…". `None` for [`ResultAction::Invoke`],
+    /// Alias…" or "Change Alias…"; "Configure Command…" and "Configure
+    /// Extension…" whatever is set. `None` for [`ResultAction::Invoke`],
     /// which is named by the result's own action, and for the quick slot
     /// entries (see [`ResultAction::quick_slot_label`]).
     pub fn configuration_label(self, configured: bool) -> Option<&'static str> {
@@ -87,6 +104,8 @@ impl ResultAction {
             (ResultAction::Hotkey, true) => Some("Change Hotkey…"),
             (ResultAction::Alias, false) => Some("Add Alias…"),
             (ResultAction::Alias, true) => Some("Change Alias…"),
+            (ResultAction::ConfigureCommand, _) => Some("Configure Command…"),
+            (ResultAction::ConfigureExtension, _) => Some("Configure Extension…"),
         }
     }
 }
@@ -242,6 +261,25 @@ fn result_actions(launcher: &Launcher, state: &State) -> Option<ResultActions> {
         if command.editable {
             items.push(configuration(ResultAction::Alias, command.alias.is_some()));
         }
+        // Its preferences, and its package's, on the extension's card.
+        let (key, id) = super::choices::split(&row.id);
+        let manifest = state
+            .packages
+            .iter()
+            .find(|package| package.identity.key() == key)
+            .and_then(|package| package.manifest.as_ref().ok());
+        if let Some(manifest) = manifest {
+            let own = manifest
+                .commands
+                .iter()
+                .any(|declared| declared.id == id && !declared.preferences.is_empty());
+            if own {
+                items.push(configuration(ResultAction::ConfigureCommand, false));
+            }
+            if !manifest.preferences.is_empty() {
+                items.push(configuration(ResultAction::ConfigureExtension, false));
+            }
+        }
     }
     Some(ResultActions {
         target: row.id.clone(),
@@ -301,11 +339,16 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         // extension gave it, but Enter — and the footer's button with it —
         // submits the form.
         (Screen::Form(_), _) => acting("Submit"),
-        // A custom view takes the keys itself, and the network details
-        // screen has only Back: Enter does nothing, so there is no primary
-        // action to show.
-        (Screen::CustomView(_) | Screen::NetworkDetails { .. }, _) => unusable(""),
+        // A custom view takes the keys itself, and the network and program
+        // details screens have only Back: Enter does nothing, so there is
+        // no primary action to show.
+        (
+            Screen::CustomView(_) | Screen::NetworkDetails { .. } | Screen::ProgramDetails { .. },
+            _,
+        ) => unusable(""),
         // A row is selected: what activating it does is the action.
+        // A no-view command runs and opens no screen.
+        (_, Some(Entry::Open(opening))) if opening.no_view => acting("Run command"),
         (_, Some(Entry::Open(_))) => acting("Open command"),
         (_, Some(Entry::Send(sending))) => match &sending.unavailable {
             Some(_) => unusable("Unavailable"),
@@ -313,8 +356,10 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         },
         (_, Some(Entry::Copy(_))) => acting("Copy answer"),
         (_, Some(Entry::OpenUrl(_))) => acting("Open link"),
-        (_, Some(Entry::OpenFile { .. })) => acting("Open file"),
+        // A file: Open for a document, Reveal for a program (#150).
+        (_, Some(Entry::File(file))) => acting(&super::own_actions::primary_title(file)),
         (_, Some(Entry::OpenApplication { .. })) => acting("Open application"),
+        (_, Some(Entry::OpenTarget { .. })) => acting("Open link"),
         (_, Some(Entry::Broken(_) | Entry::Unavailable(_))) => unusable("Unavailable"),
         (_, Some(Entry::InstallFromFolder)) => acting("Install from folder"),
         (_, Some(Entry::AskNpm)) => acting("Install from npm"),
@@ -328,6 +373,10 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         // the launcher, acts; see [`Launcher::selected_opens_settings`]).
         (_, Some(Entry::Settings)) => acting("Open settings"),
         (_, Some(Entry::Run(_))) => acting("Run item"),
+        // An item of a command's list: its primary action, by the title the
+        // extension gave it (#137).
+        (_, Some(Entry::Actions(listed))) => acting(&listed.primary()),
+        (_, Some(Entry::NoActions)) => unusable("No actions"),
         (_, Some(Entry::Form(..))) => acting("Open form"),
         (_, Some(Entry::CustomView(..))) => acting("Open view"),
         (_, Some(Entry::ChooseFolder(_))) => acting("Choose folder"),
@@ -359,6 +408,7 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         (_, Some(Entry::Retry(_))) => acting("Retry"),
         (_, Some(Entry::PauseDetails(_))) => acting("Show details"),
         (_, Some(Entry::NetworkDetails(_))) => acting("Show network use"),
+        (_, Some(Entry::ProgramDetails(_))) => acting("Show programs run"),
         (_, Some(Entry::RuntimeDetails)) => acting("Show details"),
         (_, Some(Entry::RestartRuntime)) => acting("Restart runtime"),
         (_, Some(Entry::Develop(_))) => acting("Start developing"),
@@ -366,6 +416,7 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         (_, Some(Entry::BuildDetails(_))) => acting("Show details"),
         (_, Some(Entry::BuildAgain(_))) => acting("Build again"),
         (_, Some(Entry::AskClearCache(_))) => acting("Clear cache"),
+        (_, Some(Entry::ResetConfirmations(_))) => acting("Reset confirmations"),
         (_, Some(Entry::AskHotkey(_))) => acting("Set hotkey"),
         (_, Some(Entry::RemoveHotkey(_))) => acting("Remove hotkey"),
         (_, Some(Entry::AskAlias(_))) => acting("Set alias"),

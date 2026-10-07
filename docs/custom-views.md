@@ -14,9 +14,10 @@ Defined in [`wit/extension.wit`](../wit/extension.wit), identically for Rust
 ([`pane-guest`](../guests/pane-guest/src/lib.rs)) and JavaScript/TypeScript
 ([`@pane/extension`](../guests/js/pane.d.ts)):
 
-- An `item` may carry `custom-view: custom-view-info` (screen title,
-  accessible label, role). Activating it calls `open-view(item-id)` instead of
-  `run-action` (a `form`, if also set, wins).
+- An item may carry a `customView` (screen title, accessible label, role;
+  the WIT record `custom-view-info`, carried in the list's tree, see
+  [list-tree.md](list-tree.md)). Activating it calls `open-view(item-id)`
+  instead of running the item's action (a `form`, if also set, wins).
 - `open-view` returns a `custom-view`, a WIT **resource** the extension
   implements and in which it keeps the view's state. Each call opens a new
   view with its own state. Pane owns the handle: it drops it when the view
@@ -207,9 +208,9 @@ not run yet.
   with "The extension's view is no longer open". Reload does not exist yet.
 - A drag's pointer position is not reported between the last move Pane saw
   and a release it could not see; the release uses the last point.
-- A `render` or `handle-event` that never returns blocks every later
-  extension call, since the runtime handles calls one at a time. One
-  waiting at an `await` is stopped when its package is disabled, reloaded
+- A `render` or `handle-event` that never returns blocks the later calls
+  into its own instance, which runs one call at a time; other extensions'
+  calls are served meanwhile (#136). One waiting at an `await` is stopped when its package is disabled, reloaded
   or updated ([generations](generations.md)); one computing without
   waiting is stopped too, at once then, and after 5 seconds of computing
   otherwise, as unresponsive (#18,

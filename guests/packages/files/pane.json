@@ -1,14 +1,17 @@
 {
   "manifestVersion": 1,
   "title": "Files",
-  "version": "0.1.0",
+  "version": "0.5.0",
   "apiVersion": "0.1",
+  "icon": "folder",
   "commands": [
     {
       "id": "files",
-      "title": "Files",
-      "subtitle": "Finds and opens the files of a folder you grant it",
+      "title": "Search Files",
+      "icon": "files",
+      "subtitle": "Finds the files of a folder you grant it as you type, to open, reveal, copy or recycle them",
       "component": "files.wasm",
+      "search": true,
       "rootResults": true
     }
   ],

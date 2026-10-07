@@ -5,26 +5,29 @@
 // name the npm package, so that what runs is visibly the copy Pane
 // downloaded from npm rather than another sample.
 //
-// Its command's one item, "Say hello", answers "Hello from the npm package".
-// `greet` version 1 takes `{"name": "<name>"}` and answers
+// Its command's one item, "Say hello", shows a toast saying "Hello from the
+// npm package". `greet` version 1 takes `{"name": "<name>"}` and answers
 // `{"greeting": "Hello, <name>, from the npm package"}`, or the error "a
 // name is needed".
 // @ts-check
+import { showToast } from "@pane/extension/feedback";
 
 /** @type {import("@pane/extension").Command} */
 export const command = {
-  async getView() {
+  async render() {
     return {
       title: "Greeter from npm",
-      items: [{ id: "greet", title: "Say hello", subtitle: "Answer from the npm package" }],
+      items: [
+        {
+          id: "greet",
+          title: "Say hello",
+          subtitle: "Answer from the npm package",
+          onAction: async () => {
+            showToast({ title: "Hello from the npm package" });
+          },
+        },
+      ],
     };
-  },
-
-  async runAction(itemId) {
-    if (itemId !== "greet") {
-      throw new Error(`unknown item: ${itemId}`);
-    }
-    return "Hello from the npm package";
   },
 
   async submitForm(itemId) {

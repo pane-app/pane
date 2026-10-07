@@ -1,86 +1,55 @@
 //! A command that takes a query, the smallest runnable example of one:
-//! Echo answers the text the user sends it from root search, through its
-//! alias ("ec hello" when the user gave it the alias "ec") or by choosing it
-//! as a fallback for whatever they typed. Pane sends the text only when the
-//! user invokes it that way, never while they type. Opened from root search
-//! like any command, it lists how to use it.
+//! Echo shows a toast with the text the user sends it from root search,
+//! through its alias ("ec hello" when the user gave it the alias "ec") or by
+//! choosing it as a fallback for whatever they typed. Pane sends the text
+//! only when the user invokes it that way, never while they type, as the
+//! fallback text of its launch record. Echo is a no-view command
+//! (`"mode": "no-view"`): it opens no screen, and root search stays as it
+//! was while its toast shows.
 #![no_std]
 
-use pane_guest::alloc::{format, string::String, vec, vec::Vec};
-use pane_guest::{CustomView, FieldValue, FormError, Guest, Item, NoCustomView, View};
+use pane_guest::alloc::{format, string::String};
+use pane_guest::feedback::{Toast, show_toast};
+use pane_guest::{Command, LaunchRecord, LaunchType, NoCustomView};
 
 struct Echo;
 pane_guest::export!(Echo);
-pane_guest::query::export!(Echo);
 
-/// The query Echo answers with an error, to show how a failure looks.
+/// The text Echo answers with an error, to show how a failure looks.
 const REFUSED: &str = "fail";
 
-/// The query Echo crashes on, to show how Pane pauses a crashing extension.
+/// The text Echo crashes on, to show how Pane pauses a crashing extension.
 const CRASH: &str = "crash";
 
-impl Guest for Echo {
+impl Command for Echo {
     type CustomView = NoCustomView;
 
-    async fn get_view() -> Result<View, String> {
-        let item = |id: &str, title: &str, subtitle: &str| Item {
-            id: id.into(),
-            title: title.into(),
-            subtitle: Some(subtitle.into()),
-            form: None,
-            platforms: None,
-            custom_view: None,
-        };
-        Ok(View {
-            title: "Echo: send it text from root search".into(),
-            items: vec![
-                item(
-                    "alias",
-                    "Give Echo an alias in Manage extensions",
-                    "Then type the alias, a space and your text in root search",
-                ),
-                item(
-                    "fallback",
-                    "Or make Echo a fallback in Manage extensions",
-                    "Then type anything in root search and choose Echo below the results",
-                ),
-            ],
-        })
-    }
-
-    async fn run_action(item_id: String) -> Result<String, String> {
-        match item_id.as_str() {
-            "alias" | "fallback" => Ok("Echo answers the text you send it from root search".into()),
-            other => Err(format!("unknown item: {other}")),
-        }
-    }
-
-    async fn submit_form(_item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {
-        Err(FormError {
-            field: None,
-            message: "Echo has no forms".into(),
-        })
-    }
-
-    async fn open_view(_item_id: String) -> Result<CustomView, String> {
-        Err("Echo has no custom views".into())
-    }
-}
-
-impl pane_guest::query::Guest for Echo {
-    /// Answers with the text it was sent; "fail" is refused, to show how an
-    /// error looks, and "crash" crashes on purpose (three crashes within
-    /// five minutes pause the extension).
-    async fn run_query(command: String, query: String) -> Result<String, String> {
+    /// Shows a toast with the text it was sent; "fail" is refused, to show
+    /// how an error looks, and "crash" crashes on purpose (three crashes
+    /// within five minutes pause the extension). Launched without text
+    /// (Enter on its row), it says how to send it some. Launched in the
+    /// background, it shows nothing.
+    async fn run(command: String, launch: LaunchRecord) -> Result<(), String> {
         if command != "echo" {
             return Err(format!("unknown command: {command}"));
         }
-        match query.as_str() {
-            REFUSED => Err(format!(
-                "Echo refuses “{REFUSED}”, to show how an error looks"
-            )),
-            CRASH => panic!("Echo crashes on purpose"),
-            _ => Ok(format!("Echo heard “{query}”")),
+        let heard = match launch.fallback_text.as_deref() {
+            None => NOTHING.into(),
+            Some(REFUSED) => {
+                return Err(format!(
+                    "Echo refuses “{REFUSED}”, to show how an error looks"
+                ));
+            }
+            Some(CRASH) => panic!("Echo crashes on purpose"),
+            Some(text) => format!("Echo heard “{text}”"),
+        };
+        if launch.launch_type != LaunchType::Background {
+            show_toast(Toast::success(heard));
         }
+        Ok(())
     }
 }
+
+/// What Echo says when it was sent no text.
+const NOTHING: &str = "Echo heard nothing: give it an alias or make it a fallback in Manage \
+                       extensions, then send it text from root search";
