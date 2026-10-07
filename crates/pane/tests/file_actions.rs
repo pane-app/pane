@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
-use gpui::{Entity, TestAppContext, VisualTestContext};
+use gpui::{AppContext, Entity, TestAppContext, VisualTestContext};
 use pane::LauncherWindow;
 use pane_core::{Launcher, LauncherView, LinkOpener, Runtime, Screen, Status};
 use tempfile::TempDir;

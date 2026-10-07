@@ -312,7 +312,7 @@ fn search_quicklinks_actions_work_from_the_keyboard(cx: &mut TestAppContext) {
         "Delete",
     ] {
         assert!(
-            cx.debug_bounds(&format!("action-{action}")).is_some(),
+            cx.debug_bounds(format!("action-{action}").leak()).is_some(),
             "{action} is in the panel"
         );
     }

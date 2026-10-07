@@ -1199,7 +1199,7 @@ fn save_preference(
 /// preference kept as `key` of the extension whose identity key is
 /// `package`, and sets its field to it, which saves it.
 fn choose_path(
-    this: &mut SettingsWindow,
+    _this: &mut SettingsWindow,
     package: &str,
     key: &str,
     kind: PreferenceKind,

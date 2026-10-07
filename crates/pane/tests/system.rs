@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gpui::{Entity, TestAppContext, VisualTestContext};
+use gpui::{AppContext, Entity, TestAppContext, VisualTestContext};
 use pane::LauncherWindow;
 use pane_core::system::Clip;
 use pane_core::tray::TrayAction;
