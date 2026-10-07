@@ -90,6 +90,9 @@ pub(crate) mod bindings {
         imports: {
             "pane:extension/operations": store,
             "pane:extension/helpers": store,
+            // A program's waits run off the runtime thread, which awaits
+            // them without holding the guest (`programs`).
+            "pane:extension/programs": store,
             // Saving waits for the file to be written, off the runtime
             // thread, which awaits it.
             "pane:extension/settings.set": async,
@@ -713,6 +716,17 @@ struct Check {
 pub(crate) struct Checked {
     /// It imports `wasi:http`: its code can make web requests.
     pub network: bool,
+    /// It imports `pane:extension/programs`: its code can run system
+    /// programs.
+    pub programs: bool,
+}
+
+impl std::ops::BitOrAssign for Checked {
+    /// What a package's components can do together.
+    fn bitor_assign(&mut self, other: Checked) {
+        self.network |= other.network;
+        self.programs |= other.programs;
+    }
 }
 
 enum Request {
@@ -1524,6 +1538,29 @@ impl Runtime {
         self.shared.helpers.running()
     }
 
+    /// The process ids of the system programs guests run now (not the
+    /// processes those started), not yet ended and reaped, in no particular
+    /// order. A diagnostic for tests and logs, like
+    /// [`Runtime::helper_processes`].
+    pub fn program_processes(&self) -> Vec<u32> {
+        self.shared.helpers.running_programs()
+    }
+
+    /// The programs the installed package with the identity key `owner`
+    /// ran this session, by path, in order; " (elevated)" follows one run
+    /// elevated.
+    pub(crate) fn programs_run(&self, owner: &str) -> Vec<String> {
+        self.shared.helpers.programs_run(owner)
+    }
+
+    /// Finds the programs guests name by a bare name on what `search_path`
+    /// answers, asked at each call, instead of the system's search path:
+    /// for tests, whose programs are in a folder of their own.
+    #[doc(hidden)]
+    pub fn set_program_search_path(&self, search_path: crate::programs::runner::SearchPath) {
+        self.shared.helpers.set_search_path(search_path);
+    }
+
     /// Ends every native helper process guests started, waiting until each
     /// is reaped, for Pane quitting: its threads stop with it, and nothing
     /// would end them otherwise. The calls that ran them answer that they
@@ -1532,9 +1569,10 @@ impl Runtime {
         self.shared.helpers.stop_all();
     }
 
-    /// Pane is quitting: ends every native helper ([`Runtime::stop_helpers`])
-    /// and stops the runtime thread, dropping every call in progress with
-    /// its instance, so whatever a call waits on (a helper, a web request, a
+    /// Pane is quitting: ends every native helper and system program, with
+    /// the processes each started ([`Runtime::stop_helpers`]), and stops the
+    /// runtime thread, dropping every call in progress with its instance,
+    /// so whatever a call waits on (a helper, a program, a web request, a
     /// clock) ends now rather than with the process. Calls asked for
     /// afterwards answer that the runtime stopped.
     pub fn quit(&self) {
@@ -1877,11 +1915,14 @@ pub(crate) struct GuestState {
     /// What the call the guest runs now is for, as its host functions see
     /// it.
     call: CallFor,
-    /// The runtime's helper processes; those of this instance are ended
-    /// with it.
+    /// The runtime's helper processes and system programs; those of this
+    /// instance are ended with it.
     helpers: Helpers,
-    /// Identifies this instance as the owner of the helpers it starts.
+    /// Identifies this instance as the owner of the helpers and programs it
+    /// starts.
     owner: u64,
+    /// The programs the call running now spawned (`programs`).
+    pub(crate) programs: crate::programs::Processes,
     /// The runtime thread running the instance: its host calls are marked
     /// there, and once Pane gave up on it (a runtime hang), its fence is
     /// closed and the instance is stopped ([`GuestState::stopped`]).
@@ -1946,6 +1987,18 @@ impl GuestState {
                     })
                 })
                 .await
+        }
+    }
+
+    /// Whose a system program the guest runs is: this instance's, its
+    /// generation's and its runtime thread's, noted for its package.
+    pub(crate) fn program_owner(&self) -> crate::programs::runner::Owner {
+        crate::programs::runner::Owner {
+            helpers: self.helpers.clone(),
+            owner: self.owner,
+            generation: self.generation().cloned(),
+            fence: Some(self.watch.fence().clone()),
+            package: self.owner(),
         }
     }
 
@@ -2541,6 +2594,11 @@ impl Code {
             |state| state,
         )
         .expect("registering helpers in a fresh linker cannot conflict");
+        bindings::pane::extension::programs::add_to_linker::<_, crate::programs::Calls>(
+            &mut linker,
+            |state| state,
+        )
+        .expect("registering system programs in a fresh linker cannot conflict");
         bindings::pane::extension::files::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
             &mut linker,
             |state| state,
@@ -2652,10 +2710,13 @@ impl Code {
     /// so no guest code runs.
     fn check(&self, path: &Path, exports: Exports) -> Result<Checked, CallError> {
         let component = self.compile(path)?;
-        let network = component
-            .component_type()
+        let ty = component.component_type();
+        let network = ty
             .imports(&self.engine)
             .any(|(name, _)| name.starts_with("wasi:http/"));
+        let programs = ty
+            .imports(&self.engine)
+            .any(|(name, _)| name.starts_with(crate::programs::PROGRAMS_INTERFACE));
         let interface = |error: wasmtime::Error| CallError::Interface(format!("{error:#}"));
         let pre = self.linker.instantiate_pre(&component).map_err(interface)?;
         if exports.root_results {
@@ -2699,7 +2760,7 @@ impl Code {
             })?;
         }
         bindings::ExtensionWithClipboardPre::new(pre).map_err(interface)?;
-        Ok(Checked { network })
+        Ok(Checked { network, programs })
     }
 }
 
@@ -3831,10 +3892,13 @@ impl Host {
             }
         };
         instance.store.data_mut().serving = false;
-        // A helper runs no longer than the call that started it: one the
-        // guest left running when its call ended is ended too.
-        let state = instance.store.data();
+        // A helper or a program runs no longer than the call that started
+        // it: one the guest left running when its call ended is ended too,
+        // with what it started, and the ids of those it spawned name
+        // nothing more.
+        let state = instance.store.data_mut();
         state.helpers.stop_owned_by(state.owner);
+        state.programs.clear();
         // A call the guest sent but did not wait for before its call ended
         // has no frame to serve it.
         while let Ok(stranded) = calls.try_recv() {
@@ -4146,6 +4210,7 @@ impl Host {
                 host_functions: self.host_functions.clone(),
                 call: CallFor::default(),
                 owner: self.helpers.new_owner(),
+                programs: crate::programs::Processes::default(),
                 helpers: self.helpers.clone(),
                 watch: self.watch.clone(),
                 command: None,

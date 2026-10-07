@@ -93,10 +93,13 @@ SAMPLES = [
     ("sample_arguments_ts.wasm", "guests/sample-arguments-ts"),
     ("sample_icons_js.wasm", "guests/sample-icons-js"),
     ("sample_icons_ts.wasm", "guests/sample-icons-ts"),
+    ("sample_programs_js.wasm", "guests/sample-programs-js"),
+    ("sample_programs_ts.wasm", "guests/sample-programs-ts"),
 ]
 # Pane's WIT, copied beside the world in guests/js/wit.
 PANE_WIT = ["extension.wit", "commands.wit", "feedback.wit", "system.wit", "data.wit", "preferences.wit", "root-results.wit",
-            "operations.wit", "applications.wit", "search.wit", "helpers.wit", "files.wit", "clipboard.wit", "service.wit"]
+            "operations.wit", "applications.wit", "search.wit", "helpers.wit", "files.wit", "clipboard.wit", "service.wit",
+            "programs.wit"]
 # WASI's WIT (clocks, and `wasi:http` with the packages it names), copied from
 # wit/deps into the world's deps/.
 WASI_WIT = sorted((REPO / "wit" / "deps").glob("*.wit"))
@@ -406,7 +409,8 @@ def build(package: Path, out: Path, toolchain: Toolchain) -> dict:
     for path in WASI_WIT:
         shutil.copyfile(path, wit / "deps" / path.name)
     out.parent.mkdir(parents=True, exist_ok=True)
-    world = command_world(manifest.get("pane", {}), uses_http(bundle.read_text(encoding="utf-8")))
+    bundled = bundle.read_text(encoding="utf-8")
+    world = command_world(manifest.get("pane", {}), uses_http(bundled), uses_programs(bundled))
     (wit / "command.wit").write_text(world, encoding="utf-8")
     report = run([toolchain.componentizer, wit, COMMAND_WORLD, bundle, toolchain.runtime, out],
                  env=clean_env(QJS_P3_LIBC=str(toolchain.libc)), capture=True)
@@ -455,9 +459,22 @@ def uses_http(bundle: str) -> bool:
     return re.search(r"""(?:from|import)\s*\(?\s*["']wasi:http/""", bundle) is not None
 
 
-def command_world(options: dict, http: bool) -> str:
+# Pane's system programs (wit/programs.wit), which a command imports only if
+# its bundle uses them (itself, or through `@pane/extension/programs`), as a
+# Rust command's component imports only what its code calls: Pane lists a
+# package whose component imports them as one that runs system programs.
+PROGRAMS_IMPORT = "pane:extension/programs@0.1.0"
+
+
+def uses_programs(bundle: str) -> bool:
+    """Whether the bundled module imports Pane's system programs."""
+    return re.search(r"""(?:from|import)\s*\(?\s*["']pane:extension/programs@""", bundle) is not None
+
+
+def command_world(options: dict, http: bool, programs: bool = False) -> str:
     """The world `js-command`: `js-extension` exporting and importing what
-    `options` name, and importing `wasi:http`'s client if `http`."""
+    `options` name, importing `wasi:http`'s client if `http` and Pane's
+    system programs if `programs`."""
     unknown = sorted(set(options) - set(EXPORT_OPTIONS) - set(IMPORT_OPTIONS))
     if unknown:
         raise SystemExit(f"pane-js: unknown \"pane\" options in package.json: {', '.join(unknown)}")
@@ -467,6 +484,8 @@ def command_world(options: dict, http: bool) -> str:
                       if options.get(option))
     if http:
         imports += f"  import {HTTP_IMPORT};\n"
+    if programs:
+        imports += f"  import {PROGRAMS_IMPORT};\n"
     return (f"package pane:js-guest@0.1.0;\n\nworld {COMMAND_WORLD} {{\n  include {WORLD};\n"
             f"{imports}{exports}}}\n")
 

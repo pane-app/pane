@@ -172,6 +172,7 @@ fn memory_peaks_of_the_samples_and_default_extensions() {
         "sample_preferences",
         "sample_arguments",
         "sample_icons",
+        "sample_programs",
     ]
     .map(String::from)
     .into();

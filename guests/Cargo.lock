@@ -376,6 +376,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sample-programs"
+version = "0.1.0"
+dependencies = [
+ "pane-guest",
+ "wasip3",
+]
+
+[[package]]
 name = "sample-query"
 version = "0.1.0"
 dependencies = [

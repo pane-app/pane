@@ -1392,9 +1392,19 @@ pub(crate) struct SourcePackage {
     /// requests), as checking its components found; `false` until they are
     /// checked.
     pub network: bool,
+    /// Whether a component of it imports `pane:extension/programs` (it can
+    /// run system programs), as checking its components found; `false`
+    /// until they are checked.
+    pub programs: bool,
 }
 
 impl SourcePackage {
+    /// Notes what checking its components found they import.
+    pub(crate) fn note_imports(&mut self, checked: crate::runtime::Checked) {
+        self.network = checked.network;
+        self.programs = checked.programs;
+    }
+
     /// Reads the npm package that Pane downloaded and unpacked, as the
     /// package with its npm identity. Explains, rather than as for a folder,
     /// a tarball without `pane.json` (an ordinary npm package, which Pane
@@ -1444,6 +1454,7 @@ impl SourcePackage {
             default: None,
             _download: Some(std::sync::Arc::new(download)),
             network: false,
+            programs: false,
         })
     }
 
@@ -1503,6 +1514,7 @@ impl SourcePackage {
             default: None,
             _download: Some(std::sync::Arc::new(download)),
             network: false,
+            programs: false,
         })
     }
 
@@ -1537,6 +1549,7 @@ impl SourcePackage {
             default: Some(origin),
             _download: Some(std::sync::Arc::new(download)),
             network: false,
+            programs: false,
         })
     }
 
@@ -1570,6 +1583,7 @@ impl SourcePackage {
             default: None,
             _download: None,
             network: false,
+            programs: false,
         })
     }
 
@@ -1590,6 +1604,7 @@ impl SourcePackage {
             default: None,
             _download: None,
             network: false,
+            programs: false,
         })
     }
 
@@ -1619,6 +1634,10 @@ pub struct InstalledPackage {
     /// Whether a component of it imports `wasi:http`, so its code can make
     /// web requests, as found when it was installed, updated or reloaded.
     pub uses_network: bool,
+    /// Whether a component of it imports `pane:extension/programs`, so its
+    /// code can run system programs, as found when it was installed,
+    /// updated or reloaded.
+    pub uses_programs: bool,
     /// The identity each dependency the manifest declares was resolved to
     /// when the package was installed, by dependency id.
     dependencies: Vec<(String, PackageIdentity)>,
@@ -1699,6 +1718,8 @@ impl InstalledPackage {
             npm,
             git,
             uses_network,
+            // Its record says, once loaded (see `Store::installed`).
+            uses_programs: false,
             dependencies,
             icons: PackageIcons {
                 package: Icon::letter_of(""),
@@ -2003,6 +2024,10 @@ struct RecordJson {
     /// it, until it is reloaded or updated).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     network: bool,
+    /// Set when a component of its current code imports
+    /// `pane:extension/programs`; absent means none does.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    programs: bool,
 }
 
 /// An installed [`NpmPackage`] as its record writes it, beside the name its
@@ -2240,7 +2265,7 @@ impl Store {
             .packages
             .iter()
             .map(|record| {
-                InstalledPackage::load(
+                let mut package = InstalledPackage::load(
                     PackageIdentity(record.source.clone()),
                     self.dir.join(PACKAGES_DIR).join(&record.dir),
                     !record.disabled,
@@ -2248,7 +2273,9 @@ impl Store {
                     &record.dependencies,
                     record.npm.as_ref(),
                     record.git.as_ref(),
-                )
+                );
+                package.uses_programs = record.programs;
+                package
             })
             .collect()
     }
@@ -2599,6 +2626,7 @@ impl Store {
                 record.git = git.clone();
                 record.default = default.clone();
                 record.network = package.network;
+                record.programs = package.programs;
                 !record.disabled
             }
             None => {
@@ -2615,6 +2643,7 @@ impl Store {
                     paused: None,
                     dependencies: dependencies.clone(),
                     network: package.network,
+                    programs: package.programs,
                 });
                 true
             }
@@ -2639,7 +2668,7 @@ impl Store {
                 *registry = listed;
             }
         }
-        Ok(InstalledPackage::load(
+        let mut installed = InstalledPackage::load(
             package.identity.clone(),
             location,
             enabled,
@@ -2647,7 +2676,9 @@ impl Store {
             &dependencies,
             npm.as_ref(),
             git.as_ref(),
-        ))
+        );
+        installed.uses_programs = package.programs;
+        Ok(installed)
     }
 }
 

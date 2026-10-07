@@ -1827,6 +1827,57 @@ are a [Rust](sample-helper/src/lib.rs), a
    samples' `Promise.race` against `waitFor`) keeps its helper until the
    Pane call returns, which ends it.
 
+## System programs
+
+A command may also run programs installed on the system, such as
+PowerShell, winget or git ([ADR 0033](../docs/adr/0033-extensions-may-run-system-programs.md),
+`pane:extension/programs` in [wit/programs.wit](../wit/programs.wit)). Name
+a program by an absolute path, or by a bare name Pane finds on the user's
+search path at the time of the call (on Windows read from the registry, so
+a tool installed after Pane started is found). Arguments are a list no shell
+reads. `run` waits for the program and answers its exit code, standard
+output and standard error (bytes, with text helpers); `spawn` answers a
+process to write to, read from as it writes, wait for and kill. Options:
+the working folder (the user's home folder by default), environment
+changes, a timeout, a console window on Windows (none by default) and
+elevated (Windows' elevation prompt; the run answers only the exit code, or
+`declined`; elsewhere `unavailable` for now).
+
+```rust
+use pane_guest::programs::{self, Options};
+
+let output = programs::run("git", &["status", "--short"], b"", Options::default().timeout(10_000))
+    .await
+    .map_err(|error| error.explain())?;
+let changes = output.stdout_text();
+```
+
+```ts
+import { run, spawn, powershell } from "@pane/extension/programs";
+
+const output = await run("git", ["status", "--short"], { timeoutMs: 10_000 });
+const process = await spawn("winget", ["upgrade", "--all"]);
+for await (const line of process.lines()) toast.update({ style: "animated", title: line });
+```
+
+A program belongs to the call that started it: Pane ends it, and every
+process it started (a Job Object on Windows, a process group elsewhere),
+when the call returns or is dropped, when the package is disabled,
+reloaded, updated, paused or uninstalled, and when Pane quits; what a
+program leaves running also ends when it exits. Open a program with the
+system instead to have it outlive the command. A `run` keeps at most 16 MiB
+of each stream; a program writing more is ended and the run fails
+(`too-much-output`). Read a spawned program's streams as it writes: one
+that writes much more than the command reads waits. A component that
+imports the interface is noted at install, update and reload, and the
+extension list says "Runs system programs" with a row listing the programs
+it ran this session. A JavaScript or TypeScript command imports it only if
+its bundle uses it. The programs samples are a
+[Rust](sample-programs/src/lib.rs), a
+[JavaScript](sample-programs-js/src/index.js) and a
+[TypeScript](sample-programs-ts/src/index.ts) command running `pane-echo`
+by its bare name, which must be on the search path.
+
 ## Packaging and installing a local extension
 
 A package is a folder with a `pane.json` manifest at its root and the built

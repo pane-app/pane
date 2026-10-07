@@ -52,6 +52,7 @@ mod item_actions;
 mod launching;
 mod network;
 mod presentation;
+mod programs;
 mod quick_slots;
 mod submenus;
 
@@ -209,6 +210,12 @@ pub enum Screen {
     /// session (the addresses it tried to reach), as lines of information
     /// under the title. It has no rows.
     NetworkDetails {
+        identity: PackageIdentity,
+        details: Vec<String>,
+    },
+    /// The system programs an installed package that runs them ran this
+    /// session, as lines of information under the title. It has no rows.
+    ProgramDetails {
         identity: PackageIdentity,
         details: Vec<String>,
     },
@@ -506,6 +513,7 @@ impl LauncherView {
             | Screen::Confirm { details, .. }
             | Screen::PauseDetails { details, .. }
             | Screen::NetworkDetails { details, .. }
+            | Screen::ProgramDetails { details, .. }
             | Screen::BuildDetails { details, .. }
             | Screen::RuntimeDetails { details }
             | Screen::Hotkey { details, .. } => details,
@@ -1107,6 +1115,9 @@ enum Entry {
     /// Show what this package did on the network this session (extension
     /// list).
     NetworkDetails(PackageIdentity),
+    /// Show the system programs this package ran this session (extension
+    /// list).
+    ProgramDetails(PackageIdentity),
     /// Show why Pane's extension runtime stopped (extension list).
     RuntimeDetails,
     /// Start Pane's extension runtime again after it crashed and Pane did
@@ -2198,6 +2209,13 @@ impl Launcher {
                     |entry| matches!(entry, Entry::NetworkDetails(shown) if *shown == identity),
                 );
             }
+            Screen::ProgramDetails { identity, .. } => {
+                let identity = identity.clone();
+                self.show_extensions_at(
+                    &mut state,
+                    |entry| matches!(entry, Entry::ProgramDetails(shown) if *shown == identity),
+                );
+            }
             Screen::BuildDetails { identity, .. } => {
                 let identity = identity.clone();
                 self.show_extensions_at(
@@ -2386,6 +2404,10 @@ impl Launcher {
             }
             Entry::NetworkDetails(identity) => {
                 self.show_network_details(state, &identity);
+                Pending::Nothing
+            }
+            Entry::ProgramDetails(identity) => {
+                self.show_program_details(state, &identity);
                 Pending::Nothing
             }
             Entry::PauseDetails(identity) => {
@@ -2813,7 +2835,8 @@ impl Launcher {
         request: install::Request,
     ) -> Result<SourcePackage, PackageError> {
         let mut package = off_thread(move || sources.read(&request)).await?;
-        package.network = self.check_components(&package).await?;
+        let checked = self.check_components(&package).await?;
+        package.note_imports(checked);
         Ok(package)
     }
 
@@ -2825,14 +2848,20 @@ impl Launcher {
         identity: PackageIdentity,
     ) -> Result<SourcePackage, PackageError> {
         let mut package = off_thread(move || SourcePackage::read_staged(&folder, identity)).await?;
-        package.network = self.check_components(&package).await?;
+        let checked = self.check_components(&package).await?;
+        package.note_imports(checked);
         Ok(package)
     }
 
     /// Has the runtime check each component of `package` without running
-    /// it; whether any imports `wasi:http` (it can make web requests).
-    async fn check_components(&self, package: &SourcePackage) -> Result<bool, PackageError> {
-        let mut network = false;
+    /// it; whether any imports `wasi:http` (it can make web requests), and
+    /// whether any imports `pane:extension/programs` (it can run system
+    /// programs).
+    async fn check_components(
+        &self,
+        package: &SourcePackage,
+    ) -> Result<crate::runtime::Checked, PackageError> {
+        let mut imports = crate::runtime::Checked::default();
         let mut checked_components = Vec::new();
         for (name, component) in package.manifest.components() {
             // A component serving several commands or operations is checked
@@ -2851,9 +2880,9 @@ impl Launcher {
                 command: name.clone(),
                 error,
             })?;
-            network |= checked.network;
+            imports |= checked;
         }
-        Ok(network)
+        Ok(imports)
     }
 
     /// Shows root search with an empty query: this build's commands, then
@@ -2976,6 +3005,14 @@ impl Launcher {
                 let identity = identity.clone();
                 let epoch = state.screen_epoch;
                 self.show_network_details(state, &identity);
+                state.screen_epoch = epoch;
+            }
+            // What it ran since, or the extension list once it is gone,
+            // keeping the screen epoch.
+            Screen::ProgramDetails { identity, .. } => {
+                let identity = identity.clone();
+                let epoch = state.screen_epoch;
+                self.show_program_details(state, &identity);
                 state.screen_epoch = epoch;
             }
         }

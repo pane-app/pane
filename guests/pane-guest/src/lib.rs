@@ -19,7 +19,8 @@
 //! its own package publishes with [`publish`], find and open installed
 //! applications with [`applications`], supply root results ahead of the
 //! query with [`indexed`], run its package's native helpers with
-//! [`helpers`], list the files of a folder with [`files`], search as the
+//! [`helpers`] and the system's own programs with [`programs`], list the
+//! files of a folder with [`files`], search as the
 //! user types into its own search field with [`search`], make web
 //! requests with [`http`] and keep clipboard history with
 //! [`clipboard_history`]. The crate is
@@ -438,6 +439,7 @@ pub mod service {
 }
 
 pub mod http;
+pub mod programs;
 
 /// The custom view type of a command that has none: `type CustomView =
 /// NoCustomView;` in its [`Command`] implementation, with an `open_view`

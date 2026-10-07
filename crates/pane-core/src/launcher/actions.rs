@@ -339,10 +339,13 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         // extension gave it, but Enter — and the footer's button with it —
         // submits the form.
         (Screen::Form(_), _) => acting("Submit"),
-        // A custom view takes the keys itself, and the network details
-        // screen has only Back: Enter does nothing, so there is no primary
-        // action to show.
-        (Screen::CustomView(_) | Screen::NetworkDetails { .. }, _) => unusable(""),
+        // A custom view takes the keys itself, and the network and program
+        // details screens have only Back: Enter does nothing, so there is
+        // no primary action to show.
+        (
+            Screen::CustomView(_) | Screen::NetworkDetails { .. } | Screen::ProgramDetails { .. },
+            _,
+        ) => unusable(""),
         // A row is selected: what activating it does is the action.
         // A no-view command runs and opens no screen.
         (_, Some(Entry::Open(opening))) if opening.no_view => acting("Run command"),
@@ -403,6 +406,7 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         (_, Some(Entry::Retry(_))) => acting("Retry"),
         (_, Some(Entry::PauseDetails(_))) => acting("Show details"),
         (_, Some(Entry::NetworkDetails(_))) => acting("Show network use"),
+        (_, Some(Entry::ProgramDetails(_))) => acting("Show programs run"),
         (_, Some(Entry::RuntimeDetails)) => acting("Show details"),
         (_, Some(Entry::RestartRuntime)) => acting("Restart runtime"),
         (_, Some(Entry::Develop(_))) => acting("Start developing"),

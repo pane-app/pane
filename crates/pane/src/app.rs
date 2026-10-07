@@ -1644,7 +1644,9 @@ impl Render for LauncherWindow {
             Screen::Package { .. } => "Nothing to install.",
             Screen::Form(_) => "",
             Screen::Extensions { .. } => "No extensions are installed.",
-            Screen::CustomView(_) | Screen::NetworkDetails { .. } => "",
+            Screen::CustomView(_)
+            | Screen::NetworkDetails { .. }
+            | Screen::ProgramDetails { .. } => "",
             Screen::Confirm { .. }
             | Screen::Hotkey { .. }
             | Screen::PauseDetails { .. }

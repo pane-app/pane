@@ -36,6 +36,9 @@ mod peak_memory;
 pub mod placement;
 mod platform;
 mod preferences;
+#[doc(hidden)]
+pub mod process_tree;
+mod programs;
 mod runtime;
 mod search;
 pub mod system;
@@ -79,6 +82,7 @@ pub use packages::{
 pub use pane_target::{Arch, Target};
 pub use platform::Platform;
 pub use preferences::{HELP_FILE, Preference, PreferenceKind, PreferenceOption};
+pub use programs::runner::{MAX_PROGRAM_OUTPUT, SearchPath};
 #[cfg(debug_assertions)]
 #[doc(hidden)]
 pub use runtime::Fault;

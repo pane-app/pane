@@ -24,6 +24,7 @@ members = [
     "sample-arguments",
     "sample-helper",
     "sample-icons",
+    "sample-programs",
     "fixtures/faulty",
     "fixtures/operations",
     "fixtures/old-api",
