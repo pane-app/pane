@@ -320,8 +320,27 @@ export function adaptCommand(command) {
   };
 }
 
+/**
+ * `result`, an indexed result, with the lists the interface requires and an
+ * author may leave out (`alternateTitles`, `keywords`) empty when they are.
+ */
+function indexedResult(result) {
+  if (result === null || typeof result !== "object") return result;
+  return {
+    ...result,
+    alternateTitles: result.alternateTitles ?? [],
+    keywords: result.keywords ?? [],
+  };
+}
+
+/** What a provider handler's answer becomes before Pane reads it, by name. */
+const ANSWERS = {
+  // `indexedResults.results`: the optional lists filled in.
+  results: (results) => (Array.isArray(results) ? results.map(indexedResult) : results),
+};
+
 /** An exported provider whose handler `name` answers errors as text. */
 export function adaptProvider(provider, name) {
   if (provider === null || typeof provider !== "object") return provider;
-  return { ...provider, [name]: adapted(provider, name, message) };
+  return { ...provider, [name]: adapted(provider, name, message, ANSWERS[name]) };
 }

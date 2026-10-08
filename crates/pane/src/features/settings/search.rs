@@ -371,6 +371,9 @@ impl SettingsWindow {
     fn search_open(&mut self, hit: &Hit, window: &mut Window, cx: &mut Context<Self>) {
         self.clear_search(cx);
         self.selected = hit.page;
+        // An extension's page is the page's own to choose, from the
+        // control (#168).
+        self.extension = None;
         // A jump lands its page at once: it is going somewhere specific,
         // and the reveal's scroll must not wait out an arrival first (the
         // page would arrive, then jump).
@@ -417,11 +420,17 @@ impl SettingsWindow {
         };
         self.clear_search(cx);
         self.selected = index;
+        self.extension = None;
         // As a jump does: the page lands at once, and the reveal scrolls
         // once the page has painted.
         self.section_arrival = None;
         self.drawn_section = None;
         window.focus(&self.focus, cx);
+        // The page takes the target as a jump gives it: the Extensions
+        // group opens the extension's page it names, or starts the
+        // install it names (#168).
+        let focus = self.pages[index].focus;
+        focus(self, target, window, cx);
         cx.notify();
         let this = cx.entity();
         let target = target.to_owned();

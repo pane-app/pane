@@ -38,9 +38,12 @@ use std::sync::{Arc, Mutex, MutexGuard};
 mod acquire;
 mod actions;
 mod aliases;
+mod application_changes;
+mod application_icons;
 mod application_update;
 mod argument_form;
 mod choices;
+mod clipboard_settings;
 pub mod clipboard_view;
 mod command_search;
 mod confirmations;
@@ -54,7 +57,9 @@ mod network;
 mod own_actions;
 mod presentation;
 mod programs;
+mod providers;
 mod quick_slots;
+pub mod search_files;
 mod submenus;
 
 use crate::clipboard::{Capture, ClipboardSystem};
@@ -82,6 +87,7 @@ use crate::search::{self, Keys, Query};
 mod dependents;
 mod developing;
 mod extensions;
+mod file_search;
 mod files;
 mod install;
 mod looks;
@@ -108,13 +114,15 @@ use application_update::{Application, Updates};
 use choices::Record;
 use developing::Developing;
 pub use developing::{BuildFailure, Development};
+pub use extensions::{ExtensionMark, ExtensionOperation, OperationKind};
 pub use hotkeys::HotkeyOutcome;
 use hotkeys::{Bindings, OpenPane};
 pub use item_actions::{ItemAction, ItemActions, UnboundShortcut};
 pub use looks::{AccessoryKind, ShownAccessory, absolute_date, relative_date};
 use pausing::{Pauses, Recorder};
 pub use presentation::{
-    ComputedAnswer, Presentation, RowKind, RowPresentation, Section, answer_sections, root_sections,
+    ComputedAnswer, ListPresentation, Presentation, RowKind, RowPresentation, Section,
+    answer_sections, root_sections,
 };
 pub use quick_slots::{PinTarget, QuickSlot, SlotChange};
 use schedules::Schedules;
@@ -124,6 +132,7 @@ pub use setup::{
 };
 pub use shortcuts::{ShortcutCatalog, ShortcutCommand, ShortcutGroup};
 pub use submenus::{OpenSubmenu, SubmenuState};
+pub use updates::UpdateHold;
 
 /// The id of the root row that installs a package from a local folder.
 const INSTALL_FROM_FOLDER: &str = "pane.install-from-folder";
@@ -152,9 +161,10 @@ const INSTALL_FROM_GIT: &str = "pane.install-from-git";
 /// repository to install from.
 const GIT_REPOSITORY_FIELD: &str = "repository";
 
-/// The id of the root row that lists installed packages to enable or
-/// disable them.
-const MANAGE_EXTENSIONS: &str = "pane.manage-extensions";
+/// The id of the root row of Pane's "Manage Extensions" command, which
+/// opens Settings at the extensions (#168): the window draws its tile by
+/// it.
+pub const MANAGE_EXTENSIONS: &str = "pane.manage-extensions";
 
 /// The id of the root row that opens Pane's Settings window.
 const SETTINGS: &str = "pane.settings";
@@ -255,12 +265,31 @@ pub enum Screen {
     },
 }
 
+/// Where in Pane's Settings window a root row is handled (see
+/// [`Launcher::selected_settings_target`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsTarget {
+    /// The Settings window, wherever it is.
+    Settings,
+    /// Its extensions: "Manage Extensions".
+    Extensions,
+    /// Its install flow from a folder.
+    InstallFromFolder,
+    /// Its install flow from npm.
+    InstallFromNpm,
+    /// Its install flow from Git.
+    InstallFromGit,
+}
+
 /// What a confirmation screen asks before Pane acts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Question {
     /// Whether to clear the cache of the installed package with this
     /// identity.
     ClearCache(PackageIdentity),
+    /// Whether to clear the history of Pane's own Clipboard History, the
+    /// installed package with this identity (#166).
+    ClearClipboardHistory(PackageIdentity),
     /// Whether to uninstall the installed package with this identity, and
     /// whether to keep its saved data.
     Uninstall(PackageIdentity),
@@ -501,10 +530,7 @@ impl LauncherView {
     /// search of an open command that searches as the user types; `None` on
     /// screens without one.
     pub fn search_field(&self) -> Option<&str> {
-        match &self.screen {
-            Screen::Root { query } | Screen::CommandSearch { query } => Some(query),
-            _ => None,
-        }
+        self.screen.search_field()
     }
 
     /// Lines of information under the title, such as a package's source and
@@ -536,6 +562,18 @@ impl LauncherView {
     pub fn custom_view(&self) -> Option<&CustomViewSnapshot> {
         match &self.screen {
             Screen::CustomView(view) => Some(view),
+            _ => None,
+        }
+    }
+}
+
+impl Screen {
+    /// The text of this screen's search field: root search's query, or the
+    /// search of an open command that searches as the user types; `None`
+    /// on a screen without one.
+    pub fn search_field(&self) -> Option<&str> {
+        match self {
+            Screen::Root { query } | Screen::CommandSearch { query } => Some(query),
             _ => None,
         }
     }
@@ -692,7 +730,7 @@ struct State {
     /// The form on screen, if one is open.
     form: Option<OpenForm>,
     /// The search an alias or hotkey flow returns to when the Actions
-    /// panel opened it; `None` when the flow came from Manage extensions.
+    /// panel opened it; `None` when the flow came from the extension list.
     actions_return: Option<actions::Return>,
     /// The custom view on screen, if one is open.
     custom_view: Option<OpenCustomView>,
@@ -702,6 +740,9 @@ struct State {
     /// The web images and system icons rows show, loaded in the background
     /// (see `icon_loads`).
     icon_loads: icon_loads::IconLoads,
+    /// The installed applications' own icons, which their rows draw bare
+    /// (see `application_icons`, #172).
+    application_icons: application_icons::ApplicationIcons,
     /// The clock dates are shown relative to: the system's, or the one a
     /// test gave the launcher ([`Launcher::with_clock`]).
     clock: Arc<dyn crate::clipboard::Clock>,
@@ -749,6 +790,12 @@ struct State {
     /// no-view command's answer (or its running), launched from it with
     /// that query typed, so that changing the query clears it.
     sent_from: Option<String>,
+    /// Whether the extension list was entered as a screen of its own
+    /// ([`Launcher::manage_extensions`], test support): only then do the
+    /// operations' confirmations and details screens return to it. The
+    /// operations Settings runs ([`Launcher::run_extension_operation`])
+    /// leave the launcher where the user had it.
+    list_entered: bool,
     /// Whether a command a guest launched wants Pane's window shown (see
     /// [`Launcher::take_window_request`]).
     window_wanted: bool,
@@ -796,6 +843,9 @@ struct State {
     /// as last noted: their rows in root search say "Needs setup" (see
     /// `setup`).
     setup_needed: HashSet<String>,
+    /// What this start forgot because its command is a root provider (see
+    /// `providers`), for the toast naming it.
+    provider_forgotten: providers::Forgotten,
 }
 
 /// What is happening to a package, which stops another change to it
@@ -1032,6 +1082,9 @@ struct Computed {
     command_title: String,
     row: Row,
     entry: Entry,
+    /// A file row, or the row searching all files: listed after what is
+    /// found by title, under "Files".
+    in_files: bool,
 }
 
 /// What activating a row does.
@@ -1104,7 +1157,11 @@ enum Entry {
     /// replace its installed copy, as the preview's plan assumed things to
     /// be.
     Install(install::Request, Mode, dependencies::Assumptions),
-    /// Show the installed packages (root).
+    /// Pane's "Manage Extensions" command (root): the launcher window
+    /// opens Settings at the extensions instead (see
+    /// [`Launcher::selected_settings_target`]); activated here, it enters
+    /// the extension-management flow Settings drives
+    /// ([`Launcher::manage_extensions`]).
     Manage,
     /// Nothing in the launcher: the window opens or focuses its Settings
     /// window (root). Which pages Settings offers is the app's, not the
@@ -1153,6 +1210,12 @@ enum Entry {
     ResetConfirmations(PackageIdentity),
     /// Clear this installed package's cache (confirmation).
     ClearCache(PackageIdentity),
+    /// Ask whether to clear the history of Pane's own Clipboard History,
+    /// this installed package (extension list, #166).
+    AskClearClipboardHistory(PackageIdentity),
+    /// Clear the history of Pane's own Clipboard History, this installed
+    /// package (confirmation).
+    ClearClipboardHistory(PackageIdentity),
     /// Ask for the keys of the hotkey of the command with this id
     /// (extension list).
     AskHotkey(String),
@@ -1240,6 +1303,9 @@ struct Opening {
     no_view: bool,
     /// How it is launched.
     launch: LaunchRecord,
+    /// The text its own search field opens with, for a command that
+    /// searches: root search's "Search Files for “…”" row (#175).
+    initial_search: Option<String>,
 }
 
 impl Opening {
@@ -1252,6 +1318,7 @@ impl Opening {
             search: command.search,
             no_view,
             launch: LaunchRecord::by_user(source),
+            initial_search: None,
         }
     }
 }
@@ -1345,10 +1412,19 @@ impl Launcher {
             .and_then(|installation| updates::UpdateControls::open(&installation.dir))
             .unwrap_or_default();
         let developing = Arc::new(Developing::new(None, None));
-        // A web image or a system icon that loaded redraws its row: the
-        // window is told through development's shared configuration, as
-        // the launcher's other background work tells it.
+        // A web image, a system icon or an application's icon that loaded
+        // redraws its row: the window is told through development's shared
+        // configuration, as the launcher's other background work tells it.
         let told = Arc::downgrade(&developing);
+        let told_icons = told.clone();
+        let application_icons = application_icons::ApplicationIcons::new(
+            runtime.as_ref().ok(),
+            Arc::new(move || {
+                if let Some(developing) = told_icons.upgrade() {
+                    developing.changed();
+                }
+            }),
+        );
         let icon_loads = icon_loads::IconLoads::new(
             installation
                 .as_ref()
@@ -1360,6 +1436,8 @@ impl Launcher {
                 }
             }),
         );
+        // An extension's list may name an application's own icon (#172).
+        icon_loads.set_application_icons(application_icons.cache.clone());
         let mut state = State {
             // Replaced by root search below.
             view: LauncherView::new(Screen::Command, ""),
@@ -1378,6 +1456,7 @@ impl Launcher {
             custom_view: None,
             looks: looks::Looks::default(),
             icon_loads,
+            application_icons,
             clock: Arc::new(crate::clipboard::SystemClock),
             screen_epoch: 0,
             packages,
@@ -1394,6 +1473,7 @@ impl Launcher {
             acquisitions: Acquisitions::default(),
             updates: Updates::default(),
             sent_from: None,
+            list_entered: false,
             window_wanted: false,
             launches: Arc::default(),
             runtime_slow: None,
@@ -1409,6 +1489,7 @@ impl Launcher {
             confirmations,
             confirmation_saves: Arc::default(),
             setup_needed: HashSet::new(),
+            provider_forgotten: providers::Forgotten::default(),
         };
         if let (Some(installation), Some(files)) = (&installation, &state.files) {
             files.open_record(&installation.dir);
@@ -1484,6 +1565,11 @@ impl Launcher {
         }
         launcher.report_failures();
         launcher.show_root(&mut launcher.lock(), None);
+        // Aliases, fallbacks and hotkeys recorded for a command that has
+        // become a root provider are forgotten, with a toast saying so
+        // (#164); `with_quick_slots` does the same for its pins.
+        launcher.forget_provider_choices();
+        launcher.sync_file_index(&launcher.lock());
         launcher
     }
 
@@ -1648,6 +1734,15 @@ impl Launcher {
         // launcher's, for every command it runs (see `feedback`).
         if let Ok(runtime) = &self.runtime {
             runtime.set_host_functions(Arc::new(feedback::Hosted(self.downgrade())));
+            // The commands that asked for the installed applications are
+            // asked for their results again when the list changes (see
+            // `application_changes`).
+            let launcher = self.downgrade();
+            runtime.on_applications_changed(move |components| {
+                if let Some(launcher) = launcher.upgrade() {
+                    launcher.applications_changed(components);
+                }
+            });
         }
         let (Ok(runtime), Some(_)) = (&self.runtime, &self.installation) else {
             return;
@@ -1693,6 +1788,18 @@ impl Launcher {
         self.lock().view.clone()
     }
 
+    /// The screen on show: what the window's keys, focus and screen sync
+    /// ask on every key press, read without copying the view's rows, which
+    /// a long list makes costly (#165).
+    pub fn screen(&self) -> Screen {
+        self.lock().view.screen.clone()
+    }
+
+    /// The status line's state, read without copying the view's rows.
+    pub fn status(&self) -> Status {
+        self.lock().view.status.clone()
+    }
+
     /// The installed packages, as read from their managed copies.
     pub fn packages(&self) -> Vec<InstalledPackage> {
         self.lock().packages.clone()
@@ -1736,6 +1843,21 @@ impl Launcher {
     #[doc(hidden)]
     pub fn package_being_updated(&self, component: &std::path::Path) -> bool {
         self.updating(component).is_some()
+    }
+
+    /// Test support: holds every update Pane applies by itself from now
+    /// on once it has claimed its package, before the replacement is
+    /// written, until the returned hold is dropped: the claim
+    /// ([`Launcher::package_being_updated`]) then lasts as long as the test
+    /// needs to ask things of the package, however fast the copy is
+    /// written (a clone on APFS takes no time at all). One hold at a time.
+    #[doc(hidden)]
+    pub fn hold_update_applies(&self) -> UpdateHold {
+        match &self.updates {
+            Some(updates) => updates.hold_applies(),
+            // Nothing to hold: this launcher installs no packages.
+            None => UpdateHold::of_nothing(),
+        }
     }
 
     /// Test support: the identities holding a change claim right now,
@@ -1916,23 +2038,47 @@ impl Launcher {
         &self,
         commands: Vec<(CommandRegistration, Option<PackageData>)>,
     ) {
+        self.show_indexed_results_with(commands, relist_root).await;
+    }
+
+    /// [`Launcher::show_indexed_results`], listing root search again with
+    /// `relist`.
+    async fn show_indexed_results_with(
+        &self,
+        commands: Vec<(CommandRegistration, Option<PackageData>)>,
+        relist: fn(&mut State, &str),
+    ) {
         for (command, data) in commands {
-            let answer = match self.runtime() {
-                Ok(runtime) => {
+            let (answer, applications) = match self.runtime() {
+                Ok(runtime) => (
                     runtime
                         .indexed_results_with(&command.component, data.clone())
-                        .await
-                }
-                Err(error) => Err(error),
+                        .await,
+                    Some(runtime.applications()),
+                ),
+                Err(error) => (Err(error), None),
             };
-            let mut state = self.lock();
-            let state = &mut *state;
-            if data.as_ref().and_then(PackageData::stopped).is_some() {
-                continue;
-            }
-            state.indexes.answer(&command, answer);
-            if let Some(query) = state.view.query().map(str::to_owned) {
-                relist_root(state, &query);
+            let carried = {
+                let mut state = self.lock();
+                let state = &mut *state;
+                if data.as_ref().and_then(PackageData::stopped).is_some() {
+                    continue;
+                }
+                state.indexes.answer(&command, answer);
+                // Their applications' icons are refreshed (#172).
+                application_icons::listed(state);
+                // Pins made before applications had stable identities
+                // resolve to the results listed for them now.
+                let carried = applications.is_some_and(|applications| {
+                    quick_slots::carry_over(state, &command.id, applications.as_ref())
+                });
+                if let Some(query) = state.view.query().map(str::to_owned) {
+                    relist(state, &query);
+                }
+                carried
+            };
+            if carried {
+                self.record_carried_over().await;
             }
         }
     }
@@ -1950,6 +2096,7 @@ impl Launcher {
         state
             .indexes
             .retain(|component| indexing.iter().any(|kept| kept == component));
+        application_icons::listed(state);
     }
 
     /// Opens the installed application `id`, named `name`, off the calling
@@ -1982,7 +2129,16 @@ impl Launcher {
         name: String,
     ) {
         let system = self.system();
+        let applications = self.runtime().ok().map(|runtime| runtime.applications());
         let opened = off_thread(move || {
+            // An installed application's id is opened by its source.
+            let application = match (application, applications) {
+                (Some(application), Some(applications)) => Some(crate::applications::opener(
+                    applications.as_ref(),
+                    &application,
+                )),
+                (application, _) => application,
+            };
             crate::system::System::open(system.as_ref(), &target, application.as_deref())
         })
         .await;
@@ -2129,13 +2285,13 @@ impl Launcher {
             .computed
             .retain(|computed| computed.component != component);
         let files = state.files.clone();
-        state.computed.extend(computed_results(
-            command,
-            owner.as_deref(),
-            files.as_ref(),
-            query,
-            answer,
-        ));
+        let computed = computed_results(command, owner.as_deref(), files.as_ref(), query, answer);
+        // The system icons of the files it found (#142), unless the window
+        // has each row's load as it draws the row (#165).
+        if !looks::loads_as_shown(state) {
+            file_search::want_icons(state, computed.iter().map(|computed| &computed.entry));
+        }
+        state.computed.extend(computed);
         relist_root(state, query);
         Some(listed)
     }
@@ -2153,6 +2309,41 @@ impl Launcher {
     pub fn presented_view(&self) -> (LauncherView, Presentation) {
         let state = self.lock();
         (state.view.clone(), presentation::presentation(&state))
+    }
+
+    /// The view and what the window draws of its whole list, read
+    /// together (#165): the section labels, whether every row is a
+    /// fallback, whether a row shows a date. A window that draws only the
+    /// rows in view reads this each frame and each drawn row's own
+    /// presentation with [`Launcher::present_row`], so the work behind a
+    /// frame does not grow with the list.
+    pub fn presented_list(&self) -> (LauncherView, ListPresentation) {
+        let state = self.lock();
+        (state.view.clone(), presentation::list_presentation(&state))
+    }
+
+    /// The presentation of the row at `index` as the window draws it now
+    /// (the default for an index past the rows), the same as
+    /// [`Launcher::presentation`] gives it. Once the window said it draws
+    /// only the rows in view ([`Launcher::load_icons_as_shown`]), this also
+    /// starts loading what the row's icons need (#142): the rows out of
+    /// view request none (#165).
+    pub fn present_row(&self, index: usize) -> RowPresentation {
+        let state = self.lock();
+        if looks::loads_as_shown(&state) {
+            presentation::want_row_icons(&state, index);
+        }
+        presentation::row_presentation(&state, index)
+    }
+
+    /// From now on, the icons of an open command's rows, and of its items'
+    /// actions, load as the window draws them — each row's as
+    /// [`Launcher::present_row`] presents it, an item's actions' as the
+    /// Actions panel lists them ([`Launcher::item_actions`]) — rather than
+    /// all as the list opens (#165). The launcher window says so when it
+    /// opens: it draws only the rows in view.
+    pub fn load_icons_as_shown(&self) {
+        looks::load_as_shown(&mut self.lock());
     }
 
     /// The selected row's index; `None` when nothing is selected. Cheaper
@@ -2207,6 +2398,29 @@ impl Launcher {
             .selected
             .and_then(|index| state.entries.get(index));
         matches!(entry, Some(Entry::Settings))
+    }
+
+    /// Where in Pane's Settings window the selected root row is handled,
+    /// if it is handled there (#168): the Settings row opens the window;
+    /// "Manage Extensions" opens it at the extensions; and the install
+    /// rows open its install flow from a folder, npm or Git — Settings is
+    /// where extensions are installed and managed. The launcher window
+    /// asks this before activating the row, and does not activate it when
+    /// it is handled in Settings.
+    pub fn selected_settings_target(&self) -> Option<SettingsTarget> {
+        let state = self.lock();
+        let entry = state
+            .view
+            .selected
+            .and_then(|index| state.entries.get(index))?;
+        match entry {
+            Entry::Settings => Some(SettingsTarget::Settings),
+            Entry::Manage => Some(SettingsTarget::Extensions),
+            Entry::InstallFromFolder => Some(SettingsTarget::InstallFromFolder),
+            Entry::AskNpm => Some(SettingsTarget::InstallFromNpm),
+            Entry::AskGit => Some(SettingsTarget::InstallFromGit),
+            _ => None,
+        }
     }
 
     /// Leaves an open form or custom view for its command's list, or an open
@@ -2298,17 +2512,17 @@ impl Launcher {
         true
     }
 
-    /// Shows the extension list, as activating the "Manage extensions…"
-    /// root result does, wherever the launcher now is: the same screen,
-    /// rows and operations the launcher window shows. Pane's Settings
-    /// window enters the flow through this, so both windows reach the same
-    /// operations and records — the confirmations among them — rather than
-    /// Settings growing a management flow of its own. Selecting a row and
-    /// activating it ([`Launcher::select`],
-    /// [`Launcher::activate_selected`]) drives it from there, as the
-    /// launcher window's Enter does.
+    /// Test support: shows the extension list as a screen of its own,
+    /// wherever the launcher now is, its rows driven by
+    /// [`Launcher::select`] and [`Launcher::activate_selected`], its
+    /// confirmations and details screens returning to it. Pane itself never
+    /// shows it (#168, ADR 0043): Settings runs each operation through
+    /// [`Launcher::run_extension_operation`], and the "Manage Extensions"
+    /// command opens Settings.
+    #[doc(hidden)]
     pub fn manage_extensions(&self) {
         let mut state = self.lock();
+        state.list_entered = true;
         self.show_extensions(&mut state);
     }
 
@@ -2341,6 +2555,19 @@ impl Launcher {
             Some(entry) => self.activation(&mut state, entry),
             None => Pending::Nothing,
         };
+        let work = self.pending_work(&state, pending);
+        drop(state);
+        work
+    }
+
+    /// The work [`Launcher::activation`] left, as a future to await: what
+    /// activating a row, or running an extension's operation
+    /// ([`Launcher::run_extension_operation`]), does after the lock.
+    fn pending_work(
+        &self,
+        state: &State,
+        pending: Pending,
+    ) -> impl Future<Output = ()> + Send + 'static + use<> {
         let epoch = state.screen_epoch;
         let open = state.open.clone();
         // A call into the package belongs to its generation as of now, not
@@ -2354,8 +2581,7 @@ impl Launcher {
             Pending::Run(_) | Pending::CustomView(..) => open.as_ref(),
             _ => None,
         };
-        let data = called.and_then(|component| self.data_in(&state, component));
-        drop(state);
+        let data = called.and_then(|component| self.data_in(state, component));
         let launcher = self.clone();
         async move {
             match pending {
@@ -2445,11 +2671,20 @@ impl Launcher {
             }
             Entry::StopSharingFolder(identity) => Pending::StopSharing(identity),
             Entry::Manage => {
+                state.list_entered = true;
                 self.show_extensions(state);
                 Pending::Nothing
             }
             Entry::AskClearCache(identity) => {
                 self.show_clear_cache(state, &identity);
+                Pending::Nothing
+            }
+            Entry::AskClearClipboardHistory(identity) => {
+                self.show_clear_clipboard_history(state, &identity);
+                Pending::Nothing
+            }
+            Entry::ClearClipboardHistory(identity) => {
+                self.clear_clipboard_history_of(state, &identity);
                 Pending::Nothing
             }
             Entry::ResetConfirmations(identity) => {
@@ -2850,6 +3085,9 @@ impl Launcher {
             }
             state.packages.push(installed);
             self.sync_hotkeys(state);
+            // A package that uses the file index starts it (#175), whether
+            // or not root search is refreshed after.
+            self.sync_file_index(state);
             return false;
         };
         // The replaced copy's code no longer runs: its generation ended
@@ -2872,6 +3110,8 @@ impl Launcher {
         }
         // A command the new copy no longer has releases its hotkey.
         self.sync_hotkeys(state);
+        // The new copy may use the file index, or no longer use it.
+        self.sync_file_index(state);
         // The replaced copy's results are asked for afresh.
         state
             .indexes
@@ -2958,6 +3198,7 @@ impl Launcher {
     /// the installed packages' commands, then the install row. Selects the
     /// command with component `select` if given, else the first row.
     fn show_root(&self, state: &mut State, select: Option<PathBuf>) {
+        state.list_entered = false;
         self.note_setup_needed(state);
         state.root = self.root_results(state);
         state.sent_from = None;
@@ -3005,8 +3246,9 @@ impl Launcher {
     /// the parent specification's provisional default reopens what the
     /// user left, when it is still a view there is something to return
     /// to. Root search always is, and so are the screens of Pane's own
-    /// flows (the extension list, a package's preview, their details and
-    /// confirmations); a command's view — its list, its search, a form or
+    /// flows (a package's preview, details and confirmations); the
+    /// extension list is not, since it is the flow Settings drives and the
+    /// launcher window has no screen for it (#168); a command's view — its list, its search, a form or
     /// a custom view of it — is only while the command's package is still
     /// installed and enabled, since a removed or disabled extension
     /// leaves nothing to restore and a reopening launcher returns safely
@@ -3015,6 +3257,9 @@ impl Launcher {
     /// always restorable.
     pub fn restorable_view(&self) -> bool {
         let state = self.lock();
+        if matches!(state.view.screen, Screen::Extensions { .. }) {
+            return false;
+        }
         // Only a command's view has something to lose. A command not
         // installed as a package — one registered with Pane at start —
         // owns nothing that can be removed, so it is always restorable;
@@ -3036,6 +3281,8 @@ impl Launcher {
     /// Updates root search or the extension list on screen after a package
     /// changed; other screens show no package state.
     fn refresh(&self, state: &mut State) {
+        // The file index runs while a package that uses it may run.
+        self.sync_file_index(state);
         match &state.view.screen {
             Screen::Root { .. } => self.refresh_root(state),
             Screen::Extensions { .. } => self.refresh_extensions(state),
@@ -3180,7 +3427,8 @@ impl Launcher {
                 .paused
                 .is_paused(&package.identity)
                 .then(|| Unavailable::Paused(paused_reason(&title)));
-            for (registration, unavailable) in package.available_commands() {
+            // A root provider has no row: its results answer instead.
+            for (registration, unavailable) in package.launchable_commands() {
                 let unavailable = paused
                     .clone()
                     .or(unavailable.map(Unavailable::OnThisSystem));
@@ -3261,8 +3509,8 @@ impl Launcher {
         {
             let row = Row {
                 id: MANAGE_EXTENSIONS.into(),
-                title: "Manage extensions…".into(),
-                subtitle: Some("Enable or disable installed extensions".into()),
+                title: "Manage Extensions".into(),
+                subtitle: Some("Configure, update and remove extensions in Settings".into()),
                 unavailable: None,
             };
             add(row, Entry::Manage, None, None);
@@ -3612,6 +3860,9 @@ impl Launcher {
         };
         match question.clone() {
             Question::ClearCache(identity) => self.show_extensions_at_clear_cache(state, &identity),
+            Question::ClearClipboardHistory(identity) => {
+                self.show_extensions_at_clear_clipboard_history(state, &identity)
+            }
             Question::Uninstall(identity) | Question::UninstallDependents(identity) => self
                 .show_extensions_at(
                     state,
@@ -3973,6 +4224,12 @@ impl Launcher {
     /// place). While the command's search field holds text, what it found
     /// stays listed, and `view` is kept for when the text is cleared.
     fn relist(&self, state: &mut State, component: &Path, view: View) {
+        if search_files::browsing(state) {
+            // Search Files lists the file index, not the command's own
+            // list (#177).
+            state.view.title = view.title;
+            return;
+        }
         let extra = looks::remember(state, component, &view.items);
         let list = self.command_list(state, component, view.items);
         let searching = match &state.view.screen {
@@ -4024,6 +4281,7 @@ impl Launcher {
             command,
             search,
             launch,
+            initial_search,
             ..
         } = opening;
         // Which command its screen is, for the preferences it reads.
@@ -4049,73 +4307,98 @@ impl Launcher {
             }
             Err(error) => Err(error),
         };
-        let Some(mut state) = self.lock_if_current(epoch) else {
-            return;
-        };
-        let end = data.as_ref().and_then(PackageData::stopped);
-        if end == Some(End::Disabled) {
-            // Disabled while it was opening.
-            state.view.status = Status::Error(disabled(&state, &component));
-            return;
-        }
-        if end == Some(End::Replaced) {
-            // Reloaded or updated while it was opening: the call was stopped,
-            // or its answer came from code that no longer runs. Its package's commands
-            // are in root search again. Unless the reload or update has
-            // reported its outcome meanwhile, this opening is still shown as
-            // running, so it ends here.
-            if state.view.status == Status::Running {
-                state.view.status = Status::Error(
-                    "The extension changed while its command was opening; open it again".into(),
-                );
+        // The launcher is unlocked before the search it opens with runs.
+        let searching = {
+            let Some(mut state) = self.lock_if_current(epoch) else {
+                return;
+            };
+            let end = data.as_ref().and_then(PackageData::stopped);
+            if end == Some(End::Disabled) {
+                // Disabled while it was opening.
+                state.view.status = Status::Error(disabled(&state, &component));
+                return;
             }
-            return;
-        }
-        if end == Some(End::Uninstalled) {
-            // Uninstalled while it was opening: the uninstall reports its
-            // own outcome.
-            return;
-        }
-        if end == Some(End::Paused) {
-            // Paused before it was asked (by its hotkey), or while it was
-            // opening (this opening crashed or could not start, which said
-            // so).
-            if state.view.status == Status::Running {
-                state.view.status = Status::Error(paused(&state, &component));
-            }
-            return;
-        }
-        let state = &mut *state;
-        match result {
-            Ok(view) => {
-                let extra = looks::remember(state, &component, &view.items);
-                let CommandList { rows, entries } =
-                    self.command_list(state, &component, view.items);
-                state.open_command = Some(command.clone());
-                let screen = if search {
-                    state.searching = Some(command_search::Searching::new(command));
-                    Screen::CommandSearch {
-                        query: String::new(),
-                    }
-                } else {
-                    state.searching = None;
-                    Screen::Command
-                };
-                state.entries = entries;
-                state.open = Some(component);
-                state.launch = launch;
-                state.next_screen();
-                state.view = LauncherView::new(screen, view.title).with_rows(rows);
-                state.reported_unbound = Vec::new();
-                self.report_unbound(state);
-                self.report_extra_accessories(state, extra, true);
-                // A command whose screen is a form (#149) shows it at once;
-                // Back from it leaves the command.
-                if let Some(ScreenForm { id, form }) = view.form {
-                    open_form_for(state, FormPurpose::Screen(id), form);
+            if end == Some(End::Replaced) {
+                // Reloaded or updated while it was opening: the call was stopped,
+                // or its answer came from code that no longer runs. Its package's commands
+                // are in root search again. Unless the reload or update has
+                // reported its outcome meanwhile, this opening is still shown as
+                // running, so it ends here.
+                if state.view.status == Status::Running {
+                    state.view.status = Status::Error(
+                        "The extension changed while its command was opening; open it again".into(),
+                    );
                 }
+                return;
             }
-            Err(error) => state.view.status = Status::Error(error.to_string()),
+            if end == Some(End::Uninstalled) {
+                // Uninstalled while it was opening: the uninstall reports its
+                // own outcome.
+                return;
+            }
+            if end == Some(End::Paused) {
+                // Paused before it was asked (by its hotkey), or while it was
+                // opening (this opening crashed or could not start, which said
+                // so).
+                if state.view.status == Status::Running {
+                    state.view.status = Status::Error(paused(&state, &component));
+                }
+                return;
+            }
+            let mut guard = state;
+            let state = &mut *guard;
+            let mut searching = None;
+            match result {
+                Ok(view) => {
+                    let extra = looks::remember(state, &component, &view.items);
+                    let CommandList { rows, entries } =
+                        self.command_list(state, &component, view.items);
+                    state.open_command = Some(command.clone());
+                    let screen = if search {
+                        state.searching = Some(command_search::Searching::new(command));
+                        Screen::CommandSearch {
+                            query: String::new(),
+                        }
+                    } else {
+                        state.searching = None;
+                        Screen::Command
+                    };
+                    state.entries = entries;
+                    state.open = Some(component);
+                    state.launch = launch;
+                    state.next_screen();
+                    state.view = LauncherView::new(screen, view.title).with_rows(rows);
+                    state.reported_unbound = Vec::new();
+                    // Pane's registered Files command lists the file index
+                    // itself (#177): Recently Used, or the text it opened
+                    // with.
+                    let files = search
+                        && match (state.open.clone(), state.open_command.clone()) {
+                            (Some(component), Some(command)) => {
+                                self.begin_search_files(state, &component, &command)
+                            }
+                            _ => false,
+                        };
+                    self.report_unbound(state);
+                    self.report_extra_accessories(state, extra, true);
+                    // A command whose screen is a form (#149) shows it at once;
+                    // Back from it leaves the command.
+                    if let Some(ScreenForm { id, form }) = view.form {
+                        open_form_for(state, FormPurpose::Screen(id), form);
+                    } else if let Some(text) = initial_search.filter(|_| search) {
+                        // Opened with text in its field ("Search Files for
+                        // “…”"): searched at once, as if typed.
+                        searching = self.search_in_command(state, &text);
+                    } else if files {
+                        searching = self.ask_files(state, "", 0);
+                    }
+                }
+                Err(error) => state.view.status = Status::Error(error.to_string()),
+            }
+            searching
+        };
+        if let Some(searching) = searching {
+            searching.await;
         }
     }
 
@@ -4326,7 +4609,7 @@ fn root_rows(state: &State, query: &str) -> (Vec<Row>, Vec<Entry>) {
     let (files, computed): (Vec<&Computed>, Vec<&Computed>) = state
         .computed
         .iter()
-        .partition(|computed| matches!(computed.entry, Entry::File(_)));
+        .partition(|computed| computed.in_files);
     let computed_row = |computed: &Computed| (computed.row.clone(), computed.entry.clone());
     // What the user's alias names comes first, even before computed
     // results; files found for the query follow what is found by title,
@@ -4376,27 +4659,48 @@ fn computed_results(
     let computed = |row: Row, entry: Entry| Computed {
         component: command.component.clone(),
         command_title: command.title.clone(),
+        in_files: matches!(entry, Entry::File(_)),
         row,
         entry,
     };
     match answer {
-        Ok(results) => results
-            .into_iter()
-            .filter_map(|result| {
-                let ComputedResult { listing, action } = result;
-                let (listing, entry) = match action {
-                    RootAction::Copy(text) => (listing, Entry::Copy(text)),
-                    RootAction::OpenUrl(url) => (listing, Entry::OpenUrl(url)),
-                    RootAction::OpenFile(id) => {
-                        let row_id = format!("{}:{}", command.id, listing.id);
-                        let (row, file) =
-                            files::file_row(files?, owner?, &command.component, id, row_id)?;
-                        return Some(computed(row, Entry::File(file)));
-                    }
-                };
-                Some(computed(Row::listed(listing, Some(&command.id)), entry))
-            })
-            .collect(),
+        Ok(results) => {
+            // At most `file_search::ROOT_FILE_ROWS` of the file index's
+            // entries, then a row searching them all (#175).
+            let mut indexed = 0;
+            let mut listed: Vec<Computed> = results
+                .into_iter()
+                .filter_map(|result| {
+                    let ComputedResult { listing, action } = result;
+                    let (listing, entry) = match action {
+                        RootAction::Copy(text) => (listing, Entry::Copy(text)),
+                        RootAction::OpenUrl(url) => (listing, Entry::OpenUrl(url)),
+                        RootAction::OpenFile(id) => {
+                            let row_id = format!("{}:{}", command.id, listing.id);
+                            let (row, file) =
+                                files::file_row(files?, owner?, &command.component, id, row_id)?;
+                            if file.indexed {
+                                if indexed == file_search::ROOT_FILE_ROWS {
+                                    return None;
+                                }
+                                indexed += 1;
+                            }
+                            return Some(computed(row, Entry::File(file)));
+                        }
+                    };
+                    Some(computed(Row::listed(listing, Some(&command.id)), entry))
+                })
+                .collect();
+            if indexed > 0
+                && let Some((row, entry)) = file_search::search_all_row(&command, query)
+            {
+                listed.push(Computed {
+                    in_files: true,
+                    ..computed(row, entry)
+                });
+            }
+            listed
+        }
         Err(error) => {
             let row = Row {
                 id: format!("{}:failed", command.id),

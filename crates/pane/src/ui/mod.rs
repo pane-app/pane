@@ -55,6 +55,7 @@ pub(crate) mod shell;
 pub(crate) mod split_view;
 pub(crate) mod theme;
 pub(crate) mod tooltip;
+pub(crate) mod virtual_list;
 
 use material::Material;
 use theme::Theme;

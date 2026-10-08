@@ -6,11 +6,11 @@
 //! computing for too long (which are its package's own), and whichever
 //! extension ran last did not necessarily cause it. So the launcher pauses
 //! nothing and names no extension. It says what happened in the status line
-//! and in Manage extensions, where the details and, when Pane did not
+//! and in the extension list, where the details and, when Pane did not
 //! restart the runtime by itself, **Restart the extension runtime** are.
 //! Nothing that was running is run again by itself: the runtime answers
 //! every call it held that it stopped, and the launcher never sends one
-//! again. Navigation, Manage extensions and every management action (which
+//! again. Navigation, the extension list and every management action (which
 //! run no extension) keep working meanwhile.
 
 use super::{Entry, Launcher, LauncherView, Row, Screen, State, Status};
@@ -266,12 +266,12 @@ fn toast(status: &RuntimeStatus) -> String {
     match status {
         RuntimeStatus::Stopped { .. } => format!(
             "Pane's extension runtime {stopped} again within {} minutes and was not restarted; \
-             saved data is kept. Restart it in Manage extensions.",
+             saved data is kept. Restart it in Settings.",
             CRASH_WINDOW.as_secs() / 60
         ),
         _ => format!(
             "Pane's extension runtime {stopped} and was started again; what was running was \
-             stopped and is not run again. Saved data is kept; details are in Manage extensions."
+             stopped and is not run again. Saved data is kept; details are in Settings."
         ),
     }
 }

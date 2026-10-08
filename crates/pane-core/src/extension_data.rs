@@ -9,7 +9,7 @@
 //! | Content | `content.json` | kept | the user's choice | default |
 //! | Cache | `cache.json`, `web-images/` | removed | removed | default |
 //! | Local credentials | `credentials.json` | kept | removed | the user only (Unix: 0600) |
-//! | Clipboard history | `clipboard-history.json` | kept | the user's choice | the user only (Unix: 0600) |
+//! | Clipboard history | `clipboard-history.json`, `clipboard-images/` | kept | the user's choice | the user only (Unix: 0600) |
 //!
 //! Each kind has one file next to `installed.json`, holding every package's
 //! values under the package identity's key, so they belong to the source
@@ -62,8 +62,9 @@ pub(crate) enum DataKind {
     Cache,
     /// Secrets kept on this computer, such as a sign-in token.
     LocalCredentials,
-    /// The text the user copied while the package kept clipboard history,
-    /// and whether it keeps it; written by Pane, never by the package's
+    /// What the user copied while the package kept clipboard history (and,
+    /// for Pane's own Clipboard History, the images' PNGs beside it), and
+    /// whether it keeps it; written by Pane, never by the package's
     /// code directly (see `clipboard`).
     ClipboardHistory,
 }

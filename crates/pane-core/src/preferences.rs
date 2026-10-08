@@ -18,7 +18,9 @@
 //! setup".
 //!
 //! Values are text: a checkbox's is `true` or `false`, a dropdown's the
-//! chosen option's `value`, a file's, folder's or application's a path.
+//! chosen option's `value`, a file's, folder's or application's a path,
+//! and an applications list's the applications' file names, separated by
+//! commas.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -51,11 +53,15 @@ pub enum PreferenceKind {
     Folder,
     /// An application on this computer, by its path.
     Application,
+    /// Applications on this computer, by their file names, separated by
+    /// commas (`KeePass.exe, 1Password.exe`): the system's application
+    /// picker adds one (#166).
+    Applications,
 }
 
 impl PreferenceKind {
     /// Every kind, in the order the manifest's documentation names them.
-    pub const ALL: [PreferenceKind; 7] = [
+    pub const ALL: [PreferenceKind; 8] = [
         PreferenceKind::Text,
         PreferenceKind::Password,
         PreferenceKind::Checkbox,
@@ -63,6 +69,7 @@ impl PreferenceKind {
         PreferenceKind::File,
         PreferenceKind::Folder,
         PreferenceKind::Application,
+        PreferenceKind::Applications,
     ];
 
     /// The kind's name in `pane.json`'s `type`: `text`, `password`, …
@@ -75,6 +82,7 @@ impl PreferenceKind {
             PreferenceKind::File => "file",
             PreferenceKind::Folder => "folder",
             PreferenceKind::Application => "application",
+            PreferenceKind::Applications => "applications",
         }
     }
 
@@ -381,7 +389,8 @@ pub(crate) fn normalised(preference: &Preference, value: Option<&str>) -> Option
         PreferenceKind::Text
         | PreferenceKind::Password
         | PreferenceKind::Checkbox
-        | PreferenceKind::Application => true,
+        | PreferenceKind::Application
+        | PreferenceKind::Applications => true,
     };
     kept.then(|| value.to_owned())
 }

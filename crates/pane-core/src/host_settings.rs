@@ -182,26 +182,34 @@ pub enum EscapeBehavior {
 }
 
 /// Extra keys that move the selection, beside the Keyboard page's
-/// previous and next result bindings.
+/// previous and next result bindings. They hold Alt, as Raycast for
+/// Windows' do, so none meets the Ctrl chords the launcher already has
+/// (Ctrl+K opens the Actions panel); on macOS, where Option types
+/// characters, they hold Control, as Raycast for Mac's do. Raycast's
+/// left and right keys (B and F, H and L) move through its grids; Pane's
+/// lists have no left or right selection, so those stay unbound.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NavigationBindings {
     /// No extra keys.
     #[default]
     None,
-    /// Ctrl+P and Ctrl+N.
+    /// Alt+P and Alt+N (Control on macOS).
     Emacs,
-    /// Ctrl+K and Ctrl+J.
+    /// Alt+K and Alt+J (Control on macOS), Raycast's Vim Motions.
     Vim,
 }
 
 impl NavigationBindings {
     /// The extra bindings' ids, previous result's then next result's.
     pub fn bindings(self) -> Option<(&'static str, &'static str)> {
+        let mac = cfg!(target_os = "macos");
         match self {
             NavigationBindings::None => None,
-            NavigationBindings::Emacs => Some(("ctrl-p", "ctrl-n")),
-            NavigationBindings::Vim => Some(("ctrl-k", "ctrl-j")),
+            NavigationBindings::Emacs if mac => Some(("ctrl-p", "ctrl-n")),
+            NavigationBindings::Emacs => Some(("alt-p", "alt-n")),
+            NavigationBindings::Vim if mac => Some(("ctrl-k", "ctrl-j")),
+            NavigationBindings::Vim => Some(("alt-k", "alt-j")),
         }
     }
 }
@@ -588,6 +596,45 @@ mod tests {
         ] {
             assert!(text.contains(field), "the record is {text}");
         }
+    }
+
+    #[test]
+    fn the_saved_navigation_bindings_keep_their_names_and_hold_alt() {
+        use super::NavigationBindings;
+
+        // A record written while the keys held Ctrl still names the same
+        // choices; they now take Alt's keys (Control's on macOS).
+        for (saved, navigation) in [
+            ("\"none\"", NavigationBindings::None),
+            ("\"emacs\"", NavigationBindings::Emacs),
+            ("\"vim\"", NavigationBindings::Vim),
+        ] {
+            assert_eq!(
+                serde_json::from_str::<NavigationBindings>(saved).unwrap(),
+                navigation
+            );
+            assert_eq!(serde_json::to_string(&navigation).unwrap(), saved);
+        }
+        let modifier = if cfg!(target_os = "macos") {
+            "ctrl"
+        } else {
+            "alt"
+        };
+        assert_eq!(NavigationBindings::None.bindings(), None);
+        assert_eq!(
+            NavigationBindings::Emacs.bindings(),
+            Some((
+                format!("{modifier}-p").as_str(),
+                format!("{modifier}-n").as_str()
+            ))
+        );
+        assert_eq!(
+            NavigationBindings::Vim.bindings(),
+            Some((
+                format!("{modifier}-k").as_str(),
+                format!("{modifier}-j").as_str()
+            ))
+        );
     }
 
     #[test]

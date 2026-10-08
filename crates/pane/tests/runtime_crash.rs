@@ -19,7 +19,7 @@ use tempfile::TempDir;
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::{settle, settle_shown};
+use settle::{enter_flow, settle, settle_shown};
 
 #[path = "support/packages.rs"]
 mod packages;
@@ -129,7 +129,7 @@ fn a_runtime_crash_is_explained_and_the_runtime_restarted_from_the_window(cx: &m
     // Manage extensions shows why, on a screen of its own.
     cx.simulate_keystrokes("escape");
     settle(&window, cx);
-    press_enter_on(&window, cx, "Manage extensions…");
+    enter_flow(&window, cx);
     let view = press_enter_on(&window, cx, "Why the extension runtime stopped");
     assert!(matches!(view.screen, Screen::RuntimeDetails { .. }));
     assert!(

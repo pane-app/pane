@@ -160,7 +160,7 @@ impl LauncherWindow {
         }
         match restore {
             Some(restore) => window.focus(&restore, cx),
-            None if self.launcher.view().search_field().is_some() => self.query.focus(window, cx),
+            None if self.launcher.screen().search_field().is_some() => self.query.focus(window, cx),
             None => window.focus(&self.focus_handle, cx),
         }
     }

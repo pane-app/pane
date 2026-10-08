@@ -18,6 +18,10 @@
 //! - An installed command's or package's icon replaces the generic glyph
 //!   in root search, quick slots, the Settings Extensions page and the
 //!   Shortcuts page; Pane's own rows keep their tiles ([`row_icon_of`]).
+//! - An installed application's row, and a quick slot pinning one, draw the
+//!   application's own icon bare, its light or dark file as the theme is,
+//!   and a faded application glyph of the same size until it is there
+//!   (#172).
 //! - While an open command's list shows a date, the window draws again
 //!   every [`DATE_REFRESH`], so "2h" becomes "3h" without anything else
 //!   happening ([`LauncherWindow::keep_dates_current`]).
@@ -28,8 +32,7 @@ use std::time::Duration;
 
 use gpui::{Context, Hsla, Image, ImageFormat, SharedString, rgb_to_hsla, rgba};
 use pane_core::{
-    AccessoryKind, Color, Icon, IconSource, Launcher, Mask, Presentation, ShownAccessory, Tint,
-    Tone,
+    AccessoryKind, Color, Icon, IconSource, Launcher, Mask, ShownAccessory, Tint, Tone,
 };
 
 use crate::app::{LauncherWindow, row_icon};
@@ -124,9 +127,10 @@ pub(crate) fn drawn(icon: &Icon, theme: &Theme) -> DrawnIcon {
             },
         },
         // The launcher presents a system icon as its extracted image once
-        // it is ready, and as its fallback before (#142): one reaching
-        // here unloaded draws its fallback, else nothing.
-        IconSource::File(_) => match &fallback {
+        // it is ready, and as its fallback before (#142), and an
+        // application's own icon alike (#172): one reaching here unloaded
+        // draws its fallback, else nothing.
+        IconSource::File(_) | IconSource::Application(_) => match &fallback {
             Some(fallback) => {
                 return DrawnIcon {
                     label: label.or(fallback.label.clone()),
@@ -266,25 +270,12 @@ pub(crate) fn accessory_look(accessory: &ShownAccessory, theme: &Theme) -> Acces
     }
 }
 
-/// Whether `presentation` shows a date anywhere.
-fn shows_a_date(presentation: &Presentation) -> bool {
-    presentation.rows.iter().any(|row| {
-        row.accessories
-            .iter()
-            .any(|accessory| accessory.kind == AccessoryKind::Date)
-    })
-}
-
 impl LauncherWindow {
-    /// Keeps the dates of the rows on screen current: while
-    /// `presentation` shows one, the window draws again every
-    /// [`DATE_REFRESH`]; otherwise it does not.
-    pub(crate) fn keep_dates_current(
-        &mut self,
-        presentation: &Presentation,
-        cx: &mut Context<Self>,
-    ) {
-        if !shows_a_date(presentation) {
+    /// Keeps the dates of the rows on screen current: while the list
+    /// `shows_a_date`, the window draws again every [`DATE_REFRESH`];
+    /// otherwise it does not.
+    pub(crate) fn keep_dates_current(&mut self, shows_a_date: bool, cx: &mut Context<Self>) {
+        if !shows_a_date {
             self.dates = None;
             return;
         }

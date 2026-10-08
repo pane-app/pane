@@ -551,3 +551,57 @@ fn a_system_icon_shows_the_files_icon_and_a_missing_path_its_fallback() {
         assert_eq!(pane.icons.asked.load(Ordering::SeqCst), 1);
     }
 }
+
+/// Where the window draws only the rows in view (#165), opening a list
+/// starts no load: a row's web images and system icons load as the window
+/// presents its row, so a long list's rows out of view request none, and
+/// an item's actions' as the Actions panel lists them.
+#[test]
+fn icons_load_as_their_rows_are_drawn_when_the_window_says_so() {
+    let server = ImageServer::start();
+    let pane = Pane::new(&RUST, &server);
+    pane.launcher.load_icons_as_shown();
+    pane.open();
+    pane.loaded();
+    assert_eq!(pane.icons.asked.load(Ordering::SeqCst), 0, "no row drawn");
+    assert_eq!(server.count("/favicon.ico"), 0, "{:?}", server.requests());
+
+    // The file icon's row drawn: its icon alone is extracted.
+    let at = titles(&pane.launcher)
+        .iter()
+        .position(|title| title == "File icon")
+        .expect("the file icon's row");
+    let shown = pane.launcher.present_row(at);
+    assert_eq!(
+        shown.icon.map(|icon| icon.source),
+        Some(builtin("document")),
+        "its fallback until it is extracted"
+    );
+    pane.loaded();
+    assert_eq!(pane.icons.asked.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        pane.launcher.present_row(at).icon.map(|icon| icon.source),
+        Some(IconSource::Image { .. })
+    ));
+    assert_eq!(server.count("/favicon.ico"), 0, "{:?}", server.requests());
+
+    // The favicon's row drawn: its download starts.
+    let at = titles(&pane.launcher)
+        .iter()
+        .position(|title| title == "Favicon")
+        .expect("the favicon's row");
+    pane.launcher.present_row(at);
+    assert!(server.wait_for("/favicon.ico", LOADED));
+
+    // An item's actions' icons load as the panel lists them.
+    assert_eq!(
+        server.count("/images/slow.png"),
+        0,
+        "{:?}",
+        server.requests()
+    );
+    pane.action_icon("Built-in icon", 2);
+    assert!(server.wait_for("/images/slow.png", LOADED));
+    server.release();
+    pane.loaded();
+}

@@ -147,7 +147,7 @@ fn an_installed_commands_actions_are_its_primary_action_pinning_then_its_hotkey_
 fn panes_own_rows_offer_only_their_primary_action() {
     let dirs = Dirs::new();
     let launcher = dirs.launcher();
-    search_and_select(&launcher, "manage", "Manage extensions…");
+    search_and_select(&launcher, "manage", "Manage Extensions");
     assert_eq!(
         labels(&launcher),
         [(ResultAction::Invoke, launcher.selected_action().label)]
@@ -162,7 +162,7 @@ fn nothing_selected_or_off_root_search_has_no_actions() {
     if launcher.view().selected.is_none() {
         assert!(launcher.result_actions().is_none());
     }
-    search_and_select(&launcher, "manage", "Manage extensions…");
+    search_and_select(&launcher, "manage", "Manage Extensions");
     block_on(launcher.activate_selected());
     assert!(matches!(launcher.view().screen, Screen::Extensions { .. }));
     assert!(launcher.result_actions().is_none());
@@ -266,7 +266,7 @@ fn the_same_flows_from_manage_extensions_still_return_there() {
     assert!(launcher.open_result_action(&target, ResultAction::Hotkey));
     launcher.show_root_search();
 
-    search_and_select(&launcher, "manage", "Manage extensions…");
+    search_and_select(&launcher, "manage", "Manage Extensions");
     block_on(launcher.activate_selected());
     let index = launcher
         .view()
@@ -287,7 +287,7 @@ fn an_action_for_a_target_no_longer_selected_does_nothing() {
     let launcher = dirs.launcher();
     search_and_select(&launcher, "greet", "Greeting");
     let target = selected_id(&launcher);
-    search_and_select(&launcher, "manage", "Manage extensions…");
+    search_and_select(&launcher, "manage", "Manage Extensions");
 
     let before = launcher.view();
     assert!(!launcher.open_result_action(&target, ResultAction::Alias));

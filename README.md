@@ -33,13 +33,17 @@ build acquires them from Pane's published downloads.
 
 No JavaScript toolchain is needed for these: the JS and TS sample components are committed prebuilt in `guests/prebuilt/`. Rebuilding them from source with `cargo xtask js-guests` also needs Python 3.12+, git and Node.js 22+ on any of the three OSes; see [guests/README.md](guests/README.md#writing-a-javascript-or-typescript-command).
 
-In the window, use the arrow keys to select, Enter to open a command or run an item, and Escape to go back; clicking a row runs it too. In each sample command, "Greet someone" opens a form: type a name, Tab to the greeting, arrow keys to choose, Enter to submit. "Choose a color", after it, opens a color picker the extension draws itself: arrow keys, Home and End, or a click or drag on the swatches, choose a color. The last two items are declared for some operating systems only; on another system they stay listed with the reason and do not run. **Install extension from folder…** installs a local extension package; see [Packaging and installing a local extension](guests/README.md#packaging-and-installing-a-local-extension). Once a package is installed, **Manage extensions…** after it lists the installed packages; Enter disables or enables the selected one, and a disabled package keeps its settings across restarts. Its **Reload** rows replace one package's code with its source folder's current build while Pane stays open; see [Reloading a package](guests/README.md#reloading-a-package-while-pane-stays-open).
+In the window, use the arrow keys to select, Enter to open a command or run an item, and Escape to go back; clicking a row runs it too. An open command's view starts with its content, with no heading line above it; the footer's left shows the command's icon and title. Pane registers no sample command of its own: root search lists the commands of installed packages (the default extensions, once acquired), Pane's install rows and Settings…. To try the Rust, JavaScript and TypeScript samples, install them by hand (below). In each sample command, "Greet someone" opens a form: type a name, Tab to the greeting, arrow keys to choose, Enter to submit. "Choose a color", after it, opens a color picker the extension draws itself: arrow keys, Home and End, or a click or drag on the swatches, choose a color. The last two items are declared for some operating systems only; on another system they stay listed with the reason and do not run. **Install extension from folder…** installs a local extension package; see [Packaging and installing a local extension](guests/README.md#packaging-and-installing-a-local-extension). Extensions are managed in Settings (**Manage Extensions** in root search opens it there): each installed package has a page under the sidebar's Extensions group, whose switch disables or enables it — a disabled package keeps its settings across restarts — and whose **Reload** replaces its code with its source folder's current build while Pane stays open; see [Reloading a package](guests/README.md#reloading-a-package-while-pane-stays-open).
 
 To try a package without the folder picker, open the launcher on its install screen, then press Enter to install it:
 
 ```sh
 cargo run -p pane -- --install target/guests/packages/sample-rust   # pane --install <folder>
+cargo run -p pane -- --install target/guests/packages/sample-js     # the JavaScript sample
+cargo run -p pane -- --install target/guests/packages/sample-ts     # the TypeScript sample
 ```
+
+Every sample under `target/guests/packages/` (assembled by `cargo xtask guests`) installs this way; none is built into Pane or acquired as a default extension.
 
 Installed packages go in Pane's data folder (`%LOCALAPPDATA%\Pane\data` on Windows, `~/Library/Application Support/Pane` on macOS, `$XDG_DATA_HOME/pane` or `~/.local/share/pane` on Linux). Set `PANE_DATA_DIR` to another folder to keep test installs out of it; the GUI smoke scripts use `<output-dir>/data`.
 
@@ -50,7 +54,7 @@ Layout:
 - `crates/pane`: the GPUI CE window, with [root search](docs/root-search.md) as its first screen, and the Settings window.
 - `crates/pane-target`: the operating-system and processor names shared by the core, `xtask` and native helpers.
 - `xtask/`: the `cargo xtask` build, CI and packaging commands above.
-- `guests/`: extension guests, including [the Rust, JavaScript and TypeScript sample commands](guests/README.md), TypeScript declarations for the contract, the prebuilt JS/TS components and test fixtures.
+- `guests/`: extension guests, including [the Rust, JavaScript and TypeScript sample commands](guests/README.md) (installed by hand, as above), TypeScript declarations for the contract, the prebuilt JS/TS components and test fixtures.
 - `tools/componentize-js`: the JS/TS toolchain, pinned upstream componentize-qjs plus Pane's patch queue, and its build script.
 - `scripts/smoke-*`: native GUI smoke runs used by CI, which uploads their screenshots.
 

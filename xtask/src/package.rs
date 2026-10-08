@@ -56,19 +56,18 @@ use sha2::{Digest, Sha256, Sha512};
 use crate::zip;
 
 /// The default extensions whose payloads the artifacts describe, and the
-/// assembled package each is packed from: the release's default set
-/// (#60, the user's recorded choice — the calculator, applications,
-/// quicklinks, files and clipboard history) plus the helper sample, the
-/// prebuilt-helper fixture development builds acquire with them. The ids
-/// are the ones Pane's application build acquires
-/// (`pane::default_extensions`).
-const DEFAULTS: [(&str, &str); 6] = [
+/// assembled package each is packed from: the default set (#60, the
+/// user's recorded choice — the calculator, applications, quicklinks,
+/// files and clipboard history), the same in every build. The helper
+/// sample is no default extension (#162): it is installed by hand, with
+/// `pane --install target/guests/packages/sample-helper`. The ids are the
+/// ones Pane's application build acquires (`pane::default_extensions`).
+const DEFAULTS: [(&str, &str); 5] = [
     ("calculator", "calculator"),
     ("applications", "applications"),
     ("quicklinks", "quicklinks"),
     ("files", "files"),
     ("clipboard-history", "clipboard-history"),
-    ("helper-sample", "sample-helper"),
 ];
 
 /// The pane program's version, as the package names it: this workspace's
@@ -379,9 +378,12 @@ fn application_entry(version: &str, package: &Path, packed: &[u8], target: &str)
 }
 
 /// The files of the payload packed from `source`: the manifest, and the
-/// files it names — the components of its commands and the helper file
-/// for this system — exactly what Pane installs from it. The helper
-/// sample's manifest is rewritten to name this system's helper target
+/// files it names — the components of its commands, the packaged images
+/// its package's and commands' icons name with the `@light` and `@dark`
+/// variants the package has (#163, the default extensions' tiles), and
+/// the helper file for this system — exactly what Pane installs from it. A
+/// manifest that declares helpers is rewritten to name this system's helper
+/// target
 /// alone, since the build assembles the helper for the system it runs on;
 /// nothing else in the assembled folder is packed, so a file a helper run
 /// left beside its program never travels.
@@ -413,6 +415,19 @@ fn payload_files(source: &Path, _id: &str) -> Result<Vec<(String, Vec<u8>)>, Str
             }
         }
     }
+    // The images the icons name: Pane refuses a package whose icon names
+    // an image it does not ship, so a payload without them would not
+    // install.
+    for image in manifest_images(&manifest) {
+        let present = variants(&image)
+            .into_iter()
+            .filter(|variant| assembled.iter().any(|(name, _)| name == variant));
+        for path in std::iter::once(image.clone()).chain(present) {
+            if !named.contains(&path) {
+                named.push(path);
+            }
+        }
+    }
     let target = target_id()?;
     // `get_mut`, not indexing: indexing a Value for a missing key inserts
     // a null for it, and a written-out `"helpers": null` is a manifest
@@ -423,7 +438,7 @@ fn payload_files(source: &Path, _id: &str) -> Result<Vec<(String, Vec<u8>)>, Str
         let file = format!("helpers/{target}/pane-echo{}", exe_suffix());
         if read(&file).is_err() {
             return Err(format!(
-                "the helper sample ships no {file}; `cargo xtask guests` builds it for the \
+                "the payload ships no {file}; `cargo xtask guests` builds its helper for the \
                  system it runs on"
             ));
         }
@@ -442,6 +457,60 @@ fn payload_files(source: &Path, _id: &str) -> Result<Vec<(String, Vec<u8>)>, Str
             .collect::<Result<Vec<_>, String>>()?,
     );
     Ok(payload)
+}
+
+/// The packaged images the package's and its commands' icons in
+/// `manifest` name, in order.
+fn manifest_images(manifest: &Value) -> Vec<String> {
+    std::iter::once(&manifest["icon"])
+        .chain(
+            manifest["commands"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|command| &command["icon"]),
+        )
+        .flat_map(icon_images)
+        .collect()
+}
+
+/// The packaged images an `icon` of `pane.json` names (`docs/list-tree.md`,
+/// Icons): a text ending in `.png` or `.svg`, an object's `path`, `light`
+/// and `dark`, and its `fallback`'s, in that order. A built-in icon's
+/// name, a URL and a system icon name none.
+fn icon_images(icon: &Value) -> Vec<String> {
+    match icon {
+        Value::String(text) => {
+            let lower = text.to_ascii_lowercase();
+            if lower.ends_with(".png") || lower.ends_with(".svg") {
+                vec![text.clone()]
+            } else {
+                Vec::new()
+            }
+        }
+        Value::Object(fields) => {
+            let mut images: Vec<String> = ["path", "light", "dark"]
+                .into_iter()
+                .filter_map(|field| fields.get(field)?.as_str().map(str::to_owned))
+                .collect();
+            if let Some(fallback) = fields.get("fallback") {
+                images.extend(icon_images(fallback));
+            }
+            images
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The `@light` and `@dark` variants of the image at `path`, which Pane
+/// draws in place of it in those themes when the package has them:
+/// `logo@light.png` and `logo@dark.png` beside `logo.png`.
+fn variants(path: &str) -> [String; 2] {
+    let (stem, extension) = match path.rfind('.') {
+        Some(dot) if !path[dot..].contains('/') => (&path[..dot], &path[dot..]),
+        _ => (path, ""),
+    };
+    ["light", "dark"].map(|theme| format!("{stem}@{theme}{extension}"))
 }
 
 fn exe_suffix() -> &'static str {
@@ -889,6 +958,30 @@ mod tests {
         );
     }
 
+    /// The artifacts describe the default set alone: the five default
+    /// extensions, and no sample (#162), whose payload a first setup
+    /// would otherwise acquire.
+    #[test]
+    fn the_artifacts_describe_the_default_set_without_the_samples() {
+        let ids: Vec<&str> = DEFAULTS.iter().map(|(id, _)| *id).collect();
+        assert_eq!(
+            ids,
+            [
+                "calculator",
+                "applications",
+                "quicklinks",
+                "files",
+                "clipboard-history"
+            ]
+        );
+        assert!(
+            DEFAULTS
+                .iter()
+                .all(|(_, package)| !package.starts_with("sample-")),
+            "a sample is packed as a default extension: {DEFAULTS:?}"
+        );
+    }
+
     /// Commands that share a component pack it once: Pane refuses a payload
     /// whose tarball holds a file twice, and refused Quicklinks, whose four
     /// commands share one, until this held.
@@ -908,5 +1001,81 @@ mod tests {
         let files = payload_files(&folder, "t").expect("the payload assembles");
         let paths: Vec<&str> = files.iter().map(|(path, _)| path.as_str()).collect();
         assert_eq!(paths, ["pane.json", "c.wasm"]);
+    }
+
+    /// The images the package's and commands' icons name travel in the
+    /// payload, each once, with the `@light` and `@dark` variants the
+    /// package has (#163): Pane refuses to install a package whose icon
+    /// names an image it does not ship, so the default extensions' tiles
+    /// must be in their payloads. Built-in icons name no file, and a file
+    /// no icon names stays behind.
+    #[test]
+    fn the_images_the_icons_name_are_packed_with_their_variants() {
+        let folder = std::env::temp_dir().join("pane-xtask-icon-images-test");
+        let _ = fs::remove_dir_all(&folder);
+        fs::create_dir_all(folder.join("assets")).unwrap();
+        fs::write(
+            folder.join("pane.json"),
+            br#"{"manifestVersion": 1, "title": "T", "version": "0.1.0", "apiVersion": "0.1",
+                "icon": "icon.svg",
+                "commands": [
+                    {"id": "a", "title": "A", "component": "c.wasm", "icon": "assets/a.png"},
+                    {"id": "b", "title": "B", "component": "c.wasm", "icon": "icon.svg"},
+                    {"id": "c", "title": "C", "component": "c.wasm",
+                     "icon": {"light": "assets/sun.svg", "dark": "assets/moon.svg",
+                              "fallback": {"builtin": "star"}}},
+                    {"id": "d", "title": "D", "component": "c.wasm", "icon": "star"}
+                ]}"#,
+        )
+        .unwrap();
+        for file in [
+            "c.wasm",
+            "icon.svg",
+            "assets/a.png",
+            "assets/a@dark.png",
+            "assets/sun.svg",
+            "assets/moon.svg",
+            "assets/unused.svg",
+        ] {
+            fs::write(folder.join(file), file.as_bytes()).unwrap();
+        }
+        let files = payload_files(&folder, "t").expect("the payload assembles");
+        let paths: Vec<&str> = files.iter().map(|(path, _)| path.as_str()).collect();
+        assert_eq!(
+            paths,
+            [
+                "pane.json",
+                "c.wasm",
+                "icon.svg",
+                "assets/a.png",
+                "assets/a@dark.png",
+                "assets/sun.svg",
+                "assets/moon.svg",
+            ]
+        );
+        let image = files
+            .iter()
+            .find(|(path, _)| path == "assets/a@dark.png")
+            .map(|(_, contents)| contents.as_slice());
+        assert_eq!(image, Some(b"assets/a@dark.png".as_slice()));
+    }
+
+    /// The default extensions' own manifests: every image their icons
+    /// name is in the repository's package folder, so their payloads carry
+    /// their tiles (#163).
+    #[test]
+    fn the_default_extensions_ship_the_images_their_icons_name() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        for (id, package) in DEFAULTS {
+            let folder = root.join("guests/packages").join(package);
+            let manifest: Value =
+                serde_json::from_slice(&fs::read(folder.join("pane.json")).unwrap()).unwrap();
+            for image in manifest_images(&manifest) {
+                assert!(
+                    folder.join(&image).is_file(),
+                    "{id}'s icon names {image}, which its package does not ship"
+                );
+            }
+        }
     }
 }

@@ -15,17 +15,51 @@ package pane:extension@0.1.0;
 // which extension.wit already does.
 
 /// The applications installed on this system, as Pane finds them in the
-/// system's usual places: Start menu shortcuts on Windows, application
+/// system's usual places: on Windows the shortcuts in the Start menu, on
+/// the Desktops and pinned to the taskbar, and packaged apps; application
 /// bundles on macOS and desktop entries on Linux.
 interface applications {
   record application {
-    /// Identifies the application to `open`: the shortcut, bundle or desktop
-    /// entry Pane found it by.
+    /// Identifies the application to `open`: an opaque id, stable across
+    /// the application's updates and Pane's restarts, so an extension may
+    /// keep it in its data and open the application later. Pane derives it
+    /// from what the application is (on Windows the program a shortcut
+    /// opens, ignoring version folders, or a packaged app's package family;
+    /// on macOS the bundle identifier; on Linux the desktop file id), so
+    /// several shortcuts to one program are one application. Do not parse
+    /// it.
     id: string,
-    /// Its name, as the system shows it.
+    /// Its name, as the system shows it in the user's language: the name
+    /// Explorer shows for its shortcut on Windows (a packaged app's display
+    /// name), the bundle's display name on macOS, the desktop entry's
+    /// `Name` for the user's locale on Linux.
     name: string,
     /// Where it was found, for people.
     location: string,
+    /// The other names that find it, each different from `name`: its
+    /// untranslated name, the name of another shortcut to it, and its
+    /// program's name (`code` for `Code.exe`; on Linux the program its
+    /// `Exec` runs) unless that name is generic (`setup`, `launcher`,
+    /// `update`…), another application's program has it too, or the
+    /// shortcut passes the program arguments that say what it opens. Give
+    /// them as an indexed result's `alternate-titles`.
+    alternate-titles: list<string>,
+    /// Words that find it besides its names: on Linux, the desktop entry's
+    /// `Keywords` for the user's locale. Give them as an indexed result's
+    /// `keywords`.
+    keywords: list<string>,
+    /// When another installed application has the same `name`, what tells
+    /// this one apart, the shortest that does: its program's name, else its
+    /// folder's name, else its full path. None when it is alone with its
+    /// name. Show it as a subtitle.
+    distinction: option<string>,
+    /// Its own icon, for an item to show: name it as the item's icon with
+    /// `{"application": icon}` in the tree (docs/list-tree.md, "Icons";
+    /// `Icon::application` in Rust, `{ application: app.icon }` in
+    /// JavaScript). Pane extracts the icon in the background and keeps it;
+    /// the icon's fallback (or a neutral placeholder) shows until it is
+    /// there. An opaque reference, like `id`: do not parse it.
+    icon: string,
   }
 
   /// The installed applications, in no particular order. A location that is
@@ -33,13 +67,19 @@ interface applications {
   installed: func() -> result<list<application>, string>;
 
   /// Opens (launches) the application with `id`, as `installed` gave it. An
-  /// error explains why the system did not open it.
+  /// id an earlier Pane gave (the path of the shortcut, bundle or desktop
+  /// entry) still opens the application that path belongs to. An error
+  /// explains why the system did not open it.
   open: func(id: string) -> result<_, string>;
 }
 
 /// Root results a command supplies ahead of the query, such as the installed
 /// applications. Root search asks for them once it is first used, keeps
-/// them, and matches and ranks them by title like commands.
+/// them, and matches and ranks them by title (and alternate titles) like
+/// commands. A command whose only job is this, such as Applications, also
+/// says `"mode": "provider"` in `pane.json` (a root provider, #164): it has
+/// no row of its own, each result it supplies is its own root result, and
+/// Pane never calls its `render` or `run` to open or run it.
 interface indexed-results {
   /// What an `open` result opens, and with what.
   record open-target {
@@ -67,6 +107,13 @@ interface indexed-results {
     id: string,
     title: string,
     subtitle: option<string>,
+    /// Other titles that find the result, matched as its title is (such
+    /// as an application's untranslated or program name). The row still
+    /// shows `title`. Empty for none.
+    alternate-titles: list<string>,
+    /// Words that find the result, matched as its subtitle is. Empty for
+    /// none.
+    keywords: list<string>,
     action: indexed-action,
   }
 

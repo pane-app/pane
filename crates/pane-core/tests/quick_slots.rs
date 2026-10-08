@@ -545,6 +545,7 @@ impl Applications for FakeApplications {
                 id: format!("/apps/{name}.app"),
                 name: (*name).into(),
                 location: "/apps".into(),
+                ..Application::default()
             })
             .collect())
     }

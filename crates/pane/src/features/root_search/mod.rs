@@ -36,7 +36,7 @@ use crate::{SelectNext, SelectPrevious};
 
 pub(crate) mod layouts;
 
-const CONTEXT: &str = "RootSearch";
+pub(crate) const CONTEXT: &str = "RootSearch";
 /// The query field's placeholder on root search: the reference's "Search
 /// apps, commands, plugins…" in Pane's own terms — root search finds
 /// installed applications and commands, and Pane has extensions, not
@@ -129,7 +129,7 @@ impl LauncherWindow {
     /// a search field comes on screen; focus moves to the list when the
     /// field leaves the screen.
     pub(crate) fn sync_root_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let query = self.launcher.view().search_field().map(str::to_owned);
+        let query = self.launcher.screen().search_field().map(str::to_owned);
         let was_shown = self.query.shown;
         self.query.shown = query.is_some();
         match query {

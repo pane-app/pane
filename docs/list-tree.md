@@ -1,7 +1,7 @@
 # A command's list as a tree
 
 A view command's list reaches Pane through the typed envelope of
-[ADR 0036](adr/0036-extension-ui-is-a-tree-pane-renders-written-with-a-gpui-like-api.md)
+[ADR 0036](https://github.com/hoangvu12/pane/blob/2a4f9c43c990656325297a5980f34fa4bddba76e/docs/adr/0036-extension-ui-is-a-tree-pane-renders-written-with-a-gpui-like-api.md)
 (#135, part of #120). `pane:extension/command` (`wit/extension.wit`) has two
 functions for it:
 
@@ -261,7 +261,8 @@ command's in `pane.json`. It is one of:
   the response's head, 10 s between two pieces of its body, 30 s in all, a
   4 MiB body), and keeps it as the package's extension cache, so it is not
   downloaded again after a restart and "Clear cache" removes it. A list
-  never waits for one: its fallback (or, without one, a neutral image
+  never waits for one, and a row's image is downloaded once its row comes
+  into view (#165): its fallback (or, without one, a neutral image
   glyph) shows until the image arrives, and stays if the download fails,
   is over the limits or is not an image (PNG, JPEG, GIF, WebP, BMP, ICO or
   SVG). Rows naming the same URL share one download. The SDKs' favicon
@@ -273,7 +274,15 @@ command's in `pane.json`. It is one of:
   `shell:AppsFolder\<id>` too): a document's kind's, an application's own,
   drawn bare. Pane extracts it in the background and keeps it in its own
   folder; a path that does not exist shows the fallback. The SDKs' file
-  icon helper gives it a document as its fallback.
+  icon helper gives it a document as its fallback;
+- **`{"application": "<icon>"}`**: an installed application's own icon
+  (#172), by the `icon` reference `pane:extension/applications` returns
+  with it ([applications](applications.md#icons)), drawn bare. The host
+  extracts it in the background and keeps it in its cache of the
+  applications' icons, with a packaged app's light and dark variants; its
+  fallback (or a neutral placeholder) shows until it is there and if it
+  cannot be extracted. A package's or a command's icon in `pane.json`
+  cannot be one.
 
 Any icon may also have:
 
@@ -297,8 +306,12 @@ A list's images are named relative to the package folder; they belong under
 its `assets` folder, which Pane copies into its managed copy with the
 package (with the files the package's and its commands' icons name). Pane
 draws extensions' icons bare, without a tile behind them; Pane's own rows
-keep their tiles (ADR 0035). A package without an icon of its own shows a
-tile with its title's first letter.
+keep their tiles (ADR 0035). An extension that wants a tile draws it into
+its image, as Pane's default extensions do (#163): each ships an SVG tile
+of the row tile's size, 28 by 28 with a corner radius of 7, a coloured
+rounded square with a white symbol, so it lines up with Pane's own tiles;
+one that ships a bare symbol is drawn bare. A package without an icon of
+its own shows a tile with its title's first letter.
 
 In a tree, an icon Pane cannot read (an unknown source, say) is left out,
 and so is a tint, mask, fallback or tooltip it cannot read: never the

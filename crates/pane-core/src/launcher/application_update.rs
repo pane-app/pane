@@ -4,7 +4,7 @@
 //! download and the swap are).
 //!
 //! Pane checks once, when it starts, in the background: the window, root
-//! search and Manage extensions stay usable. A newer version it finds is
+//! search and the extension list stay usable. A newer version it finds is
 //! told as a row in root search — with the version, what installing does
 //! and that the user chooses — and as a word on the status line; nothing
 //! is downloaded until the user picks the row. A check that fails is

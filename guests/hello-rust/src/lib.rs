@@ -1,8 +1,9 @@
 //! A minimal Rust command to develop with Pane's development mode: install
-//! this folder, choose "Develop Hello Rust" in Manage extensions, then edit
-//! `GREETING` and save. Pane builds the package with `cargo build --release
-//! --target wasm32-wasip2` and reloads it while it keeps running; "Say
-//! hello" then shows the new text in a toast. See guests/README.md.
+//! this folder, choose "Develop" in the Actions menu of Hello Rust's page in
+//! Settings, then edit `GREETING` and save. Pane builds the package with
+//! `cargo build --release --target wasm32-wasip2` and reloads it while it
+//! keeps running; "Say hello" then shows the new text in a toast. See
+//! guests/README.md.
 #![no_std]
 
 use pane_guest::alloc::{format, string::String, vec::Vec};

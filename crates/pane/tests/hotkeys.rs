@@ -1,5 +1,5 @@
 //! Assigning a global hotkey through the native window, on GPUI's test
-//! platform: in Manage extensions the user chooses a command's hotkey row
+//! platform: in the extension list the user chooses a command's hotkey row
 //! and presses the keys, and a press of the hotkey reported by the system
 //! opens the command in the window. The system is a fake that records what
 //! Pane registers; the real adapters are checked in pane-core's
@@ -16,7 +16,7 @@ use tempfile::TempDir;
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::{settle, settle_shown};
+use settle::{enter_flow, settle, settle_shown};
 
 #[path = "support/packages.rs"]
 mod packages;
@@ -68,11 +68,9 @@ fn pressing_keys_on_the_hotkey_screen_assigns_them_and_the_hotkey_opens_the_comm
     cx.simulate_keystrokes("enter");
     settle(&window, cx);
 
-    // Root lists Say hello, the install rows, then Manage extensions…; the
-    // extension list holds Hello's state, reload, cache and uninstall rows, then the
-    // hotkey of Say hello.
-    cx.simulate_keystrokes("down down down down enter");
-    settle(&window, cx);
+    // The extension list (the flow Settings drives, #168) holds Hello's
+    // state, reload, cache and uninstall rows, then the hotkey of Say hello.
+    enter_flow(&window, cx);
     cx.simulate_keystrokes("down down down down enter");
     let view = settle(&window, cx);
     assert!(
@@ -157,8 +155,7 @@ fn a_command_hotkey_cannot_take_the_open_pane_keys(cx: &mut TestAppContext) {
     settle(&window, cx);
     cx.simulate_keystrokes("enter");
     settle(&window, cx);
-    cx.simulate_keystrokes("down down down down enter");
-    settle(&window, cx);
+    enter_flow(&window, cx);
     cx.simulate_keystrokes("down down down down enter");
     let view = settle(&window, cx);
     assert!(

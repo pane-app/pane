@@ -13,7 +13,7 @@ separate. The same on every system: no system API is involved.
 
 ## Giving a command an alias
 
-In **Manage extensions…**, after the hotkey rows, every command of an
+In **Settings › Extensions**, after the hotkey rows, every command of an
 enabled package has a row "Alias for &lt;command&gt;", subtitled with its alias
 ("“ec”") or "None · A word that finds it in root search", then its package's
 source (copies of a package may share titles). Enter opens the form "Alias
@@ -88,16 +88,21 @@ query, trimmed.
 - By command id, so copies of a package from other sources, even with the
   same titles, have their own; each is told apart by its source in Manage
   extensions.
+- A [root provider](root-search.md#root-providers) (#164), such as the
+  calculator, has no row, so it has no alias or fallback: setting one is
+  refused, it has no alias or fallback row, and those recorded before its
+  command became one are forgotten at the next start, with a toast saying
+  so.
 - **Disabling** a package removes its commands' aliases and fallbacks from
   root search at once; they stay recorded, and their rows stay in Manage
   extensions with "Not active: Query sample is disabled". Changing them
   there does not enable the package, and nothing else does: only the user's
-  enable in Manage extensions brings them back.
+  enable in Settings › Extensions brings them back.
 - A **paused** package's command, and a command **unavailable on this
   system**, stay reachable by their alias and fallback rows, which explain
-  why and run nothing, as the command's own row does; in Manage extensions
+  why and run nothing, as the command's own row does; in Settings › Extensions
   their rows say "Not active: Query sample is paused after an error; retry
-  it in Manage extensions" or "Not active: Not available on Linux: this
+  it in Settings › Extensions" or "Not active: Not available on Linux: this
   command supports only Windows".
 - A package whose managed copy **cannot load** lists its recorded choices
   as "Alias “ec” of `echo` · Not active: query cannot load: …; Enter
@@ -174,7 +179,7 @@ shown and never counts towards [pausing](pausing.md); a trap does.
   Enter send "zqx". Rows are chosen by title.
 - Native GUI smokes, one identical phase on all three systems (screenshots
   66 to 74): with data folders of their own, install the query sample, set
-  the alias "ec" and the fallback in Manage extensions, send "ec hello" and,
+  the alias "ec" and the fallback in Settings › Extensions, send "ec hello" and,
   from the fallback chosen with Down, "zqx"; check `aliases.json`; restart,
   disable the extension and check that "ec hello" gives the same screen as
   a Pane with nothing installed. See the

@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
 use pane_core::defaults::ArtifactSource;
-use pane_core::{DefaultExtension, Launcher, PackageIdentity, Runtime, Status, Target};
+use pane_core::{DefaultExtension, IconSource, Launcher, PackageIdentity, Runtime, Status, Target};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -41,8 +41,10 @@ use feedback::shown;
 use guests::guests;
 use rows::{select_title, titles};
 
-/// The default extensions Pane's application build acquires, as the tests
-/// take them: the calculator, and the prebuilt-helper sample with it.
+/// The default set the tests acquire: the calculator, and the
+/// prebuilt-helper sample with it, a payload carrying a native helper.
+/// Pane's own build no longer acquires the sample (#162); the core still
+/// acquires whatever default set it is given, helpers included.
 fn defaults() -> Vec<DefaultExtension> {
     vec![
         DefaultExtension {
@@ -293,15 +295,23 @@ fn a_first_setup_acquires_the_calculator_and_it_answers() {
     assert_eq!(package.identity, identity);
     let record = dirs.record("calculator");
     assert_eq!(record["default"], "calculator");
-    assert_eq!(record["defaultVersion"], "0.4.0");
+    assert_eq!(record["defaultVersion"], "0.5.0");
     assert_eq!(record.get("local"), None);
     assert_eq!(record.get("npm"), None);
-    // The managed copy holds the manifest and the component it names,
-    // installed as a package from a folder is.
+    // The managed copy holds the manifest and the component and tile icon
+    // it names (#163), installed as a package from a folder is, and the
+    // calculator shows that tile from its managed copy.
     assert_eq!(
         files_of(&package.location),
-        ["calculator.wasm", "pane.json"]
+        ["calculator.wasm", "icon.svg", "pane.json"]
     );
+    let icon = launcher.icon_of(&identity.key()).expect("the icon");
+    let IconSource::Image { light, dark } = &icon.source else {
+        panic!("the calculator's icon is not its tile: {icon:?}");
+    };
+    assert!(light.starts_with(&package.location), "{light:?}");
+    assert_eq!(light.file_name().unwrap(), "icon.svg");
+    assert_eq!(dark, light);
     // The payload is cached; nothing is left in the downloads folder.
     assert_eq!(dirs.acquired("calculator").len(), 1);
     dirs.wait_for_no_downloads();
@@ -376,7 +386,7 @@ fn acquiring_shows_progress_and_leaves_the_core_usable() {
     // Once the default extensions are installed, managing them is offered
     // (the query typed meanwhile is cleared first).
     search(&launcher, "");
-    assert!(titles(&launcher).contains(&"Manage extensions…".to_owned()));
+    assert!(titles(&launcher).contains(&"Manage Extensions".to_owned()));
     search(&launcher, "6*7");
     assert_eq!(titles(&launcher), ["42"]);
 }
@@ -387,7 +397,7 @@ fn an_interrupted_download_is_tried_again_and_set_up() {
     dirs.publish();
     // The first download of the calculator's payload is interrupted
     // partway: the connection closes after its first bytes.
-    dirs.artifacts.drop_after("calculator-0.4.0.tgz", 16, 1);
+    dirs.artifacts.drop_after("calculator-0.5.0.tgz", 16, 1);
     let launcher = dirs.launcher();
 
     block_on(launcher.acquire_defaults());
@@ -468,6 +478,66 @@ fn a_cached_payload_is_reused_and_a_damaged_one_is_replaced() {
     assert_eq!(titles(&launcher), ["42"]);
 }
 
+/// A default extension a build no longer acquires stays what it became:
+/// an installed package (#162, the helper sample leaving Pane's default
+/// set). A Pane whose default set is the calculator alone, started over
+/// data that acquired the helper sample before, keeps it installed and
+/// listed, downloads nothing for it, and lets the user uninstall it, after
+/// which no first setup brings it back.
+#[test]
+fn a_default_extension_that_left_the_default_set_stays_until_uninstalled() {
+    let dirs = Dirs::new();
+    dirs.publish();
+    let launcher = dirs.launcher();
+    block_on(launcher.acquire_defaults());
+    assert_eq!(installed(&launcher), ["Calculator", "Helper sample"]);
+    drop(launcher);
+
+    // The next build's default set no longer has the helper sample.
+    let calculator_only = || {
+        Launcher::with_packages(Ok(dirs.runtime.clone()), vec![], dirs.packages_dir())
+            .with_defaults(
+                ArtifactSource::local(dirs.artifacts.url()).unwrap(),
+                vec![DefaultExtension {
+                    id: "calculator".into(),
+                    title: "Calculator".into(),
+                }],
+            )
+    };
+    let downloaded = dirs.artifacts.payload_requests().len();
+    let launcher = calculator_only();
+    block_on(launcher.acquire_defaults());
+    assert_eq!(
+        installed(&launcher),
+        ["Calculator", "Helper sample"],
+        "Pane removes nothing it acquired"
+    );
+    assert_eq!(dirs.record("helper-sample")["default"], "helper-sample");
+    assert_eq!(dirs.artifacts.payload_requests().len(), downloaded);
+    search(&launcher, "helper");
+    assert!(
+        titles(&launcher)
+            .iter()
+            .any(|title| title == "Helper sample"),
+        "its command is still in root search: {:?}",
+        titles(&launcher)
+    );
+
+    // The user uninstalls it, as any installed package.
+    let identity = PackageIdentity::default_extension("helper-sample");
+    block_on(launcher.uninstall(&identity, pane_core::SavedData::Delete));
+    assert_eq!(installed(&launcher), ["Calculator"]);
+    drop(launcher);
+    let launcher = calculator_only();
+    block_on(launcher.acquire_defaults());
+    assert_eq!(
+        installed(&launcher),
+        ["Calculator"],
+        "a first setup does not bring it back"
+    );
+    assert_eq!(dirs.artifacts.payload_requests().len(), downloaded);
+}
+
 #[test]
 fn an_unreachable_source_leaves_the_core_usable_and_a_row_tries_again() {
     let dirs = Dirs::new();
@@ -525,18 +595,18 @@ fn a_row_tries_again_and_sets_the_extension_up() {
     // The payload is not there yet: the source answers 404 for it.
     let launcher = dirs.launcher();
     dirs.artifacts
-        .fail_status("calculator-0.4.0.tgz", 404, usize::MAX);
+        .fail_status("calculator-0.5.0.tgz", 404, usize::MAX);
     block_on(launcher.acquire_defaults());
     let error = error_of(&launcher);
     assert!(
-        error.contains("the payload `calculator-0.4.0.tgz` its index names is not there"),
+        error.contains("the payload `calculator-0.5.0.tgz` its index names is not there"),
         "{error}"
     );
     // The helper sample was set up; only the calculator failed.
     assert_eq!(installed(&launcher), ["Helper sample"]);
 
     // The source answers now; the row that tries again sets it up.
-    dirs.artifacts.stop_failing("calculator-0.4.0.tgz");
+    dirs.artifacts.stop_failing("calculator-0.5.0.tgz");
     select_title(&launcher, "Set up Calculator");
     block_on(launcher.activate_selected());
 

@@ -32,6 +32,14 @@ _Avoid_: Installer payload (the installer carries none), bundled feature, runtim
 An installed extension whose execution and contributed functionality are switched off, while its settings and unexpired saved data are retained.
 _Avoid_: Uninstalled extension
 
+**Disabled command**:
+A command of an installed extension that the user turned off with its switch on the extension's page: it is not offered — no root search row, no results, alias, hotkey, schedule or service — while the rest of its extension works, and its alias and hotkey are kept for when it is on again. Recorded with its package's record, so it survives restarts, reloads and updates.
+_Avoid_: Hidden command, unlisted command
+
+**Extension page**:
+An installed extension's page in Pane's Settings, under the sidebar's Extensions group: its icon, title, description and source, its enable switch, its preferences, its commands each with its alias, hotkey and switch, and its operations (Check for Update, Reload, Clear Cache, Reset Confirmations, Show Source Folder, Uninstall), which run the launcher's own operations and confirmations: the core hands Settings each operation typed (what it is, whose, whether it is on) and runs it without moving the launcher off the screen the user had. Extensions are managed there; the launcher's built-in **Manage Extensions** command opens Settings at the group, and the launcher has no screen of its own for them (ADR 0043).
+_Avoid_: Manage extensions screen (removed), extension card, extension list (the core's list of operations, shown as a screen only in tests)
+
 **Extension settings**:
 Values an installed package's commands save through Pane, owned by its package identity and kept while it is disabled, updated or Pane is stopped.
 _Avoid_: Preferences, cache
@@ -57,7 +65,7 @@ Removing an installed package's managed copy, cache and local credentials, and i
 _Avoid_: Disable, delete source
 
 **Retained data**:
-Extension data Pane keeps for a package identity that is not installed, recorded with the title it had; installing the same source again makes it that package's data again. Manage extensions lists it per identity, and the user can delete it there without the extension, which Pane does itself.
+Extension data Pane keeps for a package identity that is not installed, recorded with the title it had; installing the same source again makes it that package's data again. The Extensions group's page in Settings lists it per identity, and the user can delete it there without the extension, which Pane does itself.
 _Avoid_: Orphaned data, leftovers (a leftover is a managed folder awaiting removal)
 
 **Local credential**:
@@ -73,11 +81,11 @@ One entry root search lists for a query and can invoke, such as an extension com
 _Avoid_: Item (an item belongs to a command's own list), search hit
 
 **Result kind**:
-What invoking a root result reaches, shown on its row: Command, Application, File, Link or Fallback. The core derives it from the result's action, never from its title.
+What invoking a root result reaches, shown on its row: Command, Application, File, Folder, Link or Fallback. The core derives it from the result's action, never from its title; Folder is a folder the file index found.
 _Avoid_: Type, category
 
 **Result section**:
-A labelled run of root results: "Commands" over a blank query's results, "Results" with their count over a query's, then "Fallbacks"; a run of computed answers sits under the title of the command that computed them ("Calculator"). Sections only label the list; they never reorder or filter it, and none claims recent use.
+A labelled run of root results: "Commands" over a blank query's results, "Results" with their count over a query's, then "Fallbacks"; a run of computed answers sits under the title of the command that computed them ("Calculator"), and the files found for the query, with the row searching them all, under "Files". Sections only label the list; they never reorder or filter it, and none claims recent use.
 _Avoid_: Group (a shortcut group is a Settings term), suggestions
 
 **Quick slot**:
@@ -129,23 +137,39 @@ A computed result whose action copies text, such as the calculator's answer: roo
 _Avoid_: Calculation, conversion, answer card (the card is how it is drawn)
 
 **No-results notice**:
-What root search shows above its fallbacks when nothing else is listed for a query that is not blank: the query, and what the user can do — pick a fallback, install an extension, or offer a command as one in Manage extensions. It selects nothing: a fallback is chosen only by the user.
+What root search shows above its fallbacks when nothing else is listed for a query that is not blank: the query, and what the user can do — pick a fallback, install an extension, or offer a command as one on its extension's page in Settings. It selects nothing: a fallback is chosen only by the user.
 _Avoid_: Empty state (a screen's own line when it has no rows), zero state
 
+**File index**:
+The host's index of the names of the files and folders under the index scope, kept in Pane's cache folder, readable by the user only and locked against a second Pane, caught up at start from what the system recorded and kept current from its change notifications while a package that uses it (`"fileIndex": true`) is enabled and not paused. It answers file search: root search's file rows, Search Files, and any package's search through `pane:extension/file-index`, each entry named by an id Pane gave it and checked again before Pane acts on it. Disabling the last package that uses it stops watching at once and keeps it on disk; uninstalling it deletes it.
+_Avoid_: Search index (Windows Search, Spotlight), database, cache (it is kept in the cache folder because it can be rebuilt, but it is the index)
+
+**Index scope**:
+The roots (the home folder, and the folders the user adds) and the rules deciding what under them the file index holds: hidden entries, what ignore files exclude, caches, temporary folders, `node_modules` and the home folder's `AppData` or `Library` left out by default, each a switch, with the user's own excluded folders and patterns, and the folders taken out for churn; Pane's own folders and the system's recycle and setup folders always left out. Pane's own record, not extension data, changed on the File Search page in Settings and applied without a restart.
+_Avoid_: Search scope, library, watched folders
+
+**Safety valve**:
+What keeps the file index from costing the user more than it gives, each listed on the File Search page with its reason and remedy: churn quarantine (a folder changing more than about 1,000 times a minute for 3 minutes in a row is taken out until the user includes it again), the ceiling (a walk stops at 5 million entries), the free-space floor (indexing stops writing while the disk holding Pane's cache has less than 1 GB free, and starts again by itself) and hung-folder skipping (a folder that does not answer within 10 seconds is skipped for that walk).
+_Avoid_: Limit (a valve is a reaction to what happens, not a bound the user sets), throttle
+
 **Granted folder**:
-The one folder the user grants a package through Pane's own "Choose folder…" row, which Pane records itself (not as extension data) and lists for that package's commands under the scan policy; they name its files only by the ids Pane gave them, and Pane opens one after checking it again. The Files default extension's root results come from it.
+The one folder the user grants a package through Pane's own "Choose folder…" row, which Pane records itself (not as extension data) and lists for that package's commands under the scan policy; they name its files only by the ids Pane gave them, and Pane opens one after checking it again. No longer what file search uses (that is the file index, since #175): it stays for a package that wants an exhaustive listing of one folder the user chooses.
 _Avoid_: Search scope, library, preopen, the extension's folder setting
 
 **Scan policy**:
-Pane's fixed bounds on listing a granted folder, the same on every system: regular files only, breadth first in name order, at most 8 folders deep, 5,000 files and 20,000 entries, skipping hidden entries, links and unreadable subfolders; a listing that reaches a bound or skips a subfolder says it is partial. A listing is kept for one visit of root search.
+Pane's fixed bounds on listing a granted folder, the same on every system: regular files only, breadth first in name order, at most 8 folders deep, 5,000 files and 20,000 entries, skipping hidden entries, links and unreadable subfolders; a listing that reaches a bound or skips a subfolder says it is partial. A listing is kept for one visit of root search. It bounds a granted folder only, not the file index.
 _Avoid_: Indexer, crawl, whole-disk search
 
 **Indexed result**:
-A root result an extension command supplies ahead of the query, such as an installed application; Pane asks for them once root search is used, keeps them, and matches and ranks them by title like commands, for a query that is not blank.
+A root result an extension command supplies ahead of the query, such as an installed application; Pane asks for them once root search is used, keeps them, and matches and ranks them by title like commands, for a query that is not blank. It may also carry alternate titles, matched as its title is, and keywords, matched as its subtitle is; its row still shows its title.
 _Avoid_: Index entry, cached result
 
+**Root provider**:
+An extension command whose only job is to answer root search, through its computed or indexed results, declared with `"mode": "provider"` in its package manifest, such as the calculator and Applications. It has no row of its own: it is never launched, cannot be pinned, has no alias, fallback or global hotkey, is offered by neither the Actions panel nor the Shortcuts page, and root search learns nothing about it; its results are root results of their own. Its **Extension page** lists it among the commands with only its own switch, which turns its results off and on, as the extension's switch does for all of them. A provider declaring neither kind of result is refused at install, and what was recorded for a command before it became one is dropped at the next start, with a toast naming it.
+_Avoid_: Search provider (any source of matching results), background command, hidden command
+
 **Installed application**:
-A program the operating system lists as installed where Pane looks for it (Start menu shortcuts, application bundles, desktop entries); Pane's host finds and opens it for an extension, which a WASI guest cannot do itself.
+A program the operating system lists as installed where Pane looks for it (on Windows the shortcuts in the Start menu, on the Desktops and pinned to the taskbar, including internet shortcuts whose scheme has a handler and ClickOnce references, and packaged apps; application bundles on macOS; desktop entries on Linux); Pane's host finds and opens it for an extension, which a WASI guest cannot do itself. It is identified by what it is, not by where it was found: several shortcuts to one program are one installed application, with one stable id that survives its updates (ADR 0038). It is titled as the system shows it in the user's language, also found by its untranslated and program names, and, when it shares its title with another, told apart by its distinction (its program's name, folder or path).
 _Avoid_: App (ambiguous with Pane itself), program
 
 **Quicklink**:
@@ -153,16 +177,24 @@ A named target the user saves through the Quicklinks default extension's Create 
 _Avoid_: Bookmark, shortcut, alias
 
 **Clipboard history**:
-The text a user copies, which Pane keeps on this computer for an installed package once the user turned it on in the package's command, watching the clipboard only while the history is on and the package runs; a copy its application marks as not to be kept (as password managers do), or from a program the user excluded, is not kept. Each item is kept for the package's retention after it was copied, then Pane deletes it, whether the package runs or not. It is that package's extension data of a kind of its own, written by Pane, never sent anywhere; the Clipboard History default extension shows it.
-_Avoid_: Clipboard (the system's current contents, which deleting history never changes), clipboard log, paste history
+What a user copies, which Pane keeps on this computer for an installed package while its recording is on: text, and for Pane's own Clipboard History also copied images (as PNGs) and files (as their paths), watching the clipboard only while some history records and its package runs. Pane's own Clipboard History default extension records from the first start (ADR 0042); any other package's history is off until the package turns it on. Recording can be paused and resumed, and disabling the package stops all observation. A copy its application marks as concealed (as password managers do), or from a disabled application, is not kept. Each item is kept for the package's retention after it was copied, then Pane deletes it, whether the package runs or not. It is that package's extension data of a kind of its own, written by Pane, never sent anywhere; the Clipboard History default extension shows it.
+_Avoid_: Clipboard (the system's current contents, which deleting history never changes), clipboard log, paste history, turning history on (Pane's own records from the start: pause and resume)
+
+**Disabled application**:
+An application whose copies Pane's clipboard history does not record, named by its program's file name (`KeePass.exe`) on the Clipboard History extension's Settings page; the host honours it before recording. Where the system does not name the program that copied (macOS, a copy with no owner), none matches.
+_Avoid_: Excluded program (the contract's older word, `set-excluded`), blocked app
 
 **Retention**:
 How long Pane keeps each clipboard history item after it was copied (7 days unless the user chose otherwise), counted from the copy, so disabling or re-enabling the package or stopping Pane never extends it. Clearing history deletes the items and keeps history on; turning it off and deleting it (the specification's Disable and delete history) also stops keeping what is copied.
 _Avoid_: Expiry date (an item's deadline follows from its copy and the retention), TTL
 
 **Clipboard history view**:
-How Pane's launcher shows the Clipboard History default extension's command: its kept items, newest first under Today, Yesterday and Older in local time, beside a plain-text preview of the selected one. Pane reads the items itself from the package's clipboard history, only for its own registered default extension (never by a command's title), and copies, deletes, pauses and resumes through the history's existing operations after checking the item, the screen and the package's code are still the ones read. The extension's own list stays reachable for the rest of its controls (retention, exclusions, clearing, turning off and deleting); every other command keeps its list. The view's projection calls each item it reads a record, as the approved contract does; the reference's word is clip, which only its fixture shows to users.
+How Pane's launcher shows the Clipboard History default extension's command: its kept items, newest first, grouped by local day (Today, Yesterday, then dates), filtered by a type dropdown at the search field's right (All Types, Text, Images, Files, Links, Colors; links and colours are text recognized as a URL or a colour value), an image's row showing its thumbnail and a files row the first file's icon, beside a preview of the selected one (its text, its image or its files) over its Information (Source, Type, Characters or an image's Dimensions, Copied). Pane reads the items itself from the package's clipboard history, only for its own registered default extension (never by a command's title), and pastes, copies, deletes, pauses, resumes, keeps for another time and clears through the history's existing operations after checking the item, the screen and the package's code are still the ones read; those are its Actions panel's entries, and the extension's Settings page has the same controls as preferences whose values are the history's own. Every other command keeps its list. The view's projection calls each item it reads a record, as the approved contract does; the reference's word is clip, which only its fixture shows to users.
 _Avoid_: Clipboard manager, paste history
+
+**Search Files view**:
+How Pane's launcher shows the Files default extension's Search Files command, as Raycast's File Search is drawn: the file index's entries in the split view, "Recently Used" (the most recently modified) before anything is typed, ranked by the index's matching once something is, filtered by a type dropdown at the search field's right (All Types, Folder, Document, Image, Video, Audio, Archive, Text, Application, Other, told from the name's extension), more rows loading as the list scrolls, each row with the system's icon of its file and its folder below the home folder, beside the selected file's detail: an image's preview and its Metadata (Name, Where, Type, Size, Created, Modified). Pane lists the index itself, only for its own registered default extension (never by a command's title); the rows are its own file rows, with its file actions (Copy Name among them) and the program rule. While the index is built the view says "Indexing… (N found so far)", and a stopped index says why, with a way to the File Search page in Settings. A copy of Files installed from a folder keeps its own search.
+_Avoid_: File browser, Finder, file manager (Pane only finds and acts on files)
 
 **Global hotkey**:
 A key combination the user assigns to an installed command in Pane, which opens that command in Pane's window while any application has focus; Pane keeps it as its own record and registers it with the system only while the command's extension is enabled.
@@ -190,7 +222,7 @@ _Avoid_: Network permission (nothing is granted or refused)
 
 **Search provider**:
 A source of matching results for a query, such as applications, files or an online service.
-_Avoid_: The entire search interface
+_Avoid_: The entire search interface, root provider (a command declared to only answer root search)
 
 **Package identity**:
 The identity that distinguishes an installed source package from other packages, independently of its display title or selected release.
@@ -269,11 +301,11 @@ An enabled extension Pane stopped running after a failure attributable to it: it
 _Avoid_: Crashed extension, quarantined, disabled (by Pane)
 
 **Extension runtime**:
-The part of Pane that runs every installed extension's code (the Wasmtime engine; the runtime is a thread in Pane's process today), shared by all extensions; the window, root search's own rows and Manage extensions do not depend on it.
+The part of Pane that runs every installed extension's code (the Wasmtime engine; the runtime is a thread in Pane's process today), shared by all extensions; the window, root search's own rows and the extension pages in Settings do not depend on it.
 _Avoid_: Engine (one part of it)
 
 **Runtime crash**:
-A failure of the extension runtime itself, not attributable to any one extension, such as a panic of its thread: every call it held is stopped and none is run again by itself, even if its effect was done and only its answer lost; Pane names and pauses no extension, keeps saved data, ends the native helpers it ran and starts the runtime again, unless it crashed within five minutes before, when it stays stopped until the user restarts it in Manage extensions. Distinct from an extension's crash (a guest trap), which counts towards pausing that extension.
+A failure of the extension runtime itself, not attributable to any one extension, such as a panic of its thread: every call it held is stopped and none is run again by itself, even if its effect was done and only its answer lost; Pane names and pauses no extension, keeps saved data, ends the native helpers it ran and starts the runtime again, unless it crashed within five minutes before, when it stays stopped until the user restarts it from the Extensions group in Settings. Distinct from an extension's crash (a guest trap), which counts towards pausing that extension.
 _Avoid_: Extension crash, paused runtime
 
 **Unresponsive call**:

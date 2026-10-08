@@ -14,7 +14,7 @@
 //! per-command choices are (see `choices`).
 //!
 //! The records are assigned through two entry points that take the same
-//! checks and write the same record: the hotkey screen in Manage extensions
+//! checks and write the same record: the hotkey screen in the extension list
 //! ([`Launcher::record_hotkey`], which ends that screen's asking), and the
 //! Settings window's Shortcuts page ([`Launcher::set_hotkey`], which leaves
 //! the launcher's screens where they are). A change either entry point
@@ -203,12 +203,14 @@ impl OpenPane {
 }
 
 /// The commands offered by enabled packages, each with why it is
-/// unavailable on this system, if it is.
+/// unavailable on this system, if it is. A root provider is never offered:
+/// no hotkey opens it, and one recorded before it became one stays
+/// unregistered.
 fn offered(packages: &[InstalledPackage]) -> Vec<(CommandRegistration, Option<String>)> {
     packages
         .iter()
         .filter(|package| package.enabled)
-        .flat_map(InstalledPackage::available_commands)
+        .flat_map(InstalledPackage::launchable_commands)
         .collect()
 }
 
@@ -358,7 +360,7 @@ impl Launcher {
             .find_map(|package| {
                 let (offered, _) =
                     package
-                        .available_commands()
+                        .launchable_commands()
                         .into_iter()
                         .find(|(offered, unavailable)| {
                             offered.id == command && unavailable.is_none()
@@ -408,7 +410,7 @@ impl Launcher {
             .filter(|package| package.enabled)
             .flat_map(|package| {
                 package
-                    .available_commands()
+                    .launchable_commands()
                     .into_iter()
                     .map(|(command, unavailable)| (command, unavailable, &package.identity))
             });
@@ -547,7 +549,7 @@ impl Launcher {
     ///
     /// The change takes effect at once — the hotkey is registered with the
     /// system before the one it replaces is released, and the launcher's
-    /// rows are refreshed, so Manage extensions and the next catalog agree
+    /// rows are refreshed, so the extension list and the next catalog agree
     /// — and the returned future records it; a record that cannot be
     /// written goes back to what was last recorded, with the registration
     /// following it (see [`Launcher::save`]), and its outcome says which it
@@ -594,6 +596,12 @@ impl Launcher {
                 write: recorded,
             });
         };
+        // A root provider is never launched, so no hotkey opens it (#164).
+        if super::choices::provider_title(state, command).is_some() {
+            return Err(format!(
+                "A hotkey cannot be recorded for {title}: it only answers root search"
+            ));
+        }
         // Recording is offered for a command that is offered and available,
         // as the hotkey screen's rows and the Shortcuts catalog's decide. A
         // catalog the page has not redrawn can still ask after the packages

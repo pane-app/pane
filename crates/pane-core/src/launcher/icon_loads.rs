@@ -20,6 +20,10 @@
 //! - **System icons**, by path, are extracted by the host
 //!   ([`crate::system_icons`]) once per path and version of the file, and
 //!   kept as PNGs in Pane's own folder beside the installed packages.
+//! - **Installed applications' own icons**, by the icon reference the
+//!   applications import returns (#172), are the host's cache of the
+//!   applications' icons ([`crate::applications::icons`]), which extracts
+//!   them on a worker of its own.
 //!
 //! Loads run on a few threads of their own, never the window's or the
 //! extension runtime's.
@@ -29,6 +33,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::UNIX_EPOCH;
 
+use crate::applications::icons::IconCache;
 use crate::extension_data::ExtensionData;
 use crate::generation::Generation;
 use crate::http::{self, GetError, Network};
@@ -37,6 +42,7 @@ use crate::icons::{
 };
 use crate::packages::PackageIdentity;
 use crate::system_icons::{NativeIcons, SystemIcon, SystemIcons};
+use crate::util::lock;
 
 /// How many loads run at once.
 const WORKERS: usize = 4;
@@ -69,6 +75,9 @@ struct Shared {
     changed: Changed,
     /// Extracts system icons: the system's, or a test's.
     system_icons: Mutex<Arc<dyn SystemIcons>>,
+    /// The host's cache of the installed applications' icons (#172), when
+    /// the launcher keeps one.
+    applications: Mutex<Option<IconCache>>,
     state: Mutex<Loads>,
 }
 
@@ -127,6 +136,7 @@ impl IconLoads {
                 network,
                 changed,
                 system_icons: Mutex::new(Arc::new(NativeIcons)),
+                applications: Mutex::new(None),
                 state: Mutex::new(Loads::default()),
             }),
         }
@@ -139,6 +149,12 @@ impl IconLoads {
         self.shared.lock().system.clear();
     }
 
+    /// Draws installed applications' own icons from `cache` from now on
+    /// (#172).
+    pub(super) fn set_application_icons(&self, cache: Option<IconCache>) {
+        *lock(&self.shared.applications) = cache;
+    }
+
     /// Starts loading what `icon` and its fallbacks need that is not
     /// loaded or loading yet, for the package with identity `owner`
     /// (`None` for a command built into Pane).
@@ -148,6 +164,11 @@ impl IconLoads {
             match &icon.source {
                 IconSource::Url(url) if is_web_url(url) => self.want_web(owner, url),
                 IconSource::File(path) => self.want_system(path),
+                IconSource::Application(reference) => {
+                    if let Some(cache) = lock(&self.shared.applications).as_ref() {
+                        cache.want(reference);
+                    }
+                }
                 _ => {}
             }
             next = icon.fallback.as_deref();
@@ -227,8 +248,9 @@ impl IconLoads {
     }
 
     /// `icon` as a row shows it now, for the package with identity key
-    /// `owner`: a web image or a system icon that is ready as its image
-    /// file; one loading or failed as its fallback (shown alike), or a
+    /// `owner`: a web image, a system icon or an application's own icon
+    /// that is ready as its image file (an application's light and dark
+    /// variants); one loading or failed as its fallback (shown alike), or a
     /// neutral placeholder without one, keeping its tooltip. Anything else
     /// as it is.
     pub(super) fn shown(&self, owner: Option<&str>, icon: &Icon) -> Icon {
@@ -236,27 +258,34 @@ impl IconLoads {
             .fallback
             .as_deref()
             .map(|fallback| self.shown(owner, fallback));
+        // A web image or a system icon is one file for both themes.
+        let both = |file: PathBuf| (file.clone(), file);
         let file = match &icon.source {
             IconSource::Url(url) if is_web_url(url) => Some(owner.and_then(|owner| {
                 let key = (owner.to_owned(), url.clone());
                 match self.shared.lock().web.get(&key) {
-                    Some(Load::Ready(file)) => Some(file.clone()),
+                    Some(Load::Ready(file)) => Some(both(file.clone())),
                     _ => None,
                 }
             })),
             IconSource::File(path) => Some(match self.shared.lock().system.get(path) {
-                Some(Load::Ready(file)) => Some(file.clone()),
+                Some(Load::Ready(file)) => Some(both(file.clone())),
                 _ => None,
             }),
+            // An application's own icon, once its cache keeps it (#172),
+            // with its light and dark variants.
+            IconSource::Application(reference) => Some(
+                lock(&self.shared.applications)
+                    .as_ref()
+                    .and_then(|cache| cache.shown(reference))
+                    .map(|shown| (shown.light, shown.dark)),
+            ),
             _ => None,
         };
         let source = match file {
             // Not one Pane loads: as it is.
             None => icon.source.clone(),
-            Some(Some(file)) => IconSource::Image {
-                light: file.clone(),
-                dark: file,
-            },
+            Some(Some((light, dark))) => IconSource::Image { light, dark },
             Some(None) => {
                 let mut stand_in = fallback.unwrap_or_else(placeholder);
                 if stand_in.tooltip.is_none() {
@@ -452,12 +481,6 @@ impl Shared {
             Err(why) => Err(why),
         }
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 #[cfg(test)]

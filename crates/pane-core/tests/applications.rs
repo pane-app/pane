@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use futures::executor::block_on;
 use pane_core::applications::{Application, Applications};
-use pane_core::{Launcher, PackageIdentity, Runtime, Screen, Status};
+use pane_core::{Launcher, PackageIdentity, Runtime, Status};
 use tempfile::TempDir;
 
 #[path = "support/feedback.rs"]
@@ -83,6 +83,7 @@ fn app(name: &str) -> Application {
         id: format!("/apps/{name}.app"),
         name: name.into(),
         location: "/apps".into(),
+        ..Application::default()
     }
 }
 
@@ -237,16 +238,10 @@ fn applications_are_looked_for_once_per_visit_of_root_search() {
     search(&launcher, "fire");
     assert_eq!(titles(&launcher), ["Firefox"]);
 
-    // Open the Applications command and come back.
-    search(&launcher, "applications");
-    let index = titles(&launcher)
-        .iter()
-        .position(|title| title == "Applications")
-        .unwrap();
-    launcher.select(index);
-    block_on(launcher.activate_selected());
-    assert_eq!(launcher.view().screen, Screen::Command);
-    launcher.back();
+    // Come back to root search afresh, as a reopened window does:
+    // Applications has no command row of its own to open and leave (a root
+    // provider, #164).
+    launcher.show_root_search();
 
     search(&launcher, "fire");
     assert_eq!(titles(&launcher), ["Firefox", "Firewall"]);
@@ -327,11 +322,11 @@ fn disabling_applications_removes_them_and_stops_looking_while_others_still_answ
     search(&launcher, "calc");
     assert_eq!(system.listed(), 1, "nothing looks for applications");
     assert!(!titles(&launcher).contains(&"Firefox".to_owned()));
-    // The calculator still answers, and its command is still found.
+    // The calculator still answers; neither has a row of its own.
     search(&launcher, "6*7");
     assert_eq!(titles(&launcher), ["42"]);
     search(&launcher, "calc");
-    assert_eq!(titles(&launcher), ["Calculator"]);
+    assert!(titles(&launcher).is_empty(), "{:?}", titles(&launcher));
 
     block_on(launcher.set_enabled(&identity(), true));
     search(&launcher, "fire");
@@ -358,22 +353,32 @@ fn an_answer_arriving_after_disabling_is_discarded() {
     assert!(titles(&launcher).is_empty(), "{:?}", titles(&launcher));
 }
 
+/// Applications is a root provider (#164): typing "applications" offers
+/// no "Applications" row to open, and each application is still its own
+/// root result.
 #[test]
-fn the_applications_command_lists_them_by_name_and_opens_one() {
+fn applications_has_no_row_of_its_own_and_each_application_is_found() {
     let dirs = Dirs::new();
     let system = FakeSystem::with(&["terminal", "Files", "Firefox"]);
     let (launcher, _) = dirs.launcher(&system, &[]);
 
     search(&launcher, "applications");
-    assert_eq!(titles(&launcher), ["Applications"]);
-    block_on(launcher.activate_selected());
+    assert!(titles(&launcher).is_empty(), "{:?}", titles(&launcher));
+    assert!(
+        launcher
+            .view()
+            .rows
+            .iter()
+            .all(|row| row.title != "Applications")
+    );
 
-    let view = launcher.view();
-    assert_eq!(view.screen, Screen::Command);
-    assert_eq!(titles(&launcher), ["Files", "Firefox", "terminal"]);
-    assert_eq!(view.rows[0].subtitle.as_deref(), Some("/apps"));
+    search(&launcher, "files");
+    assert_eq!(titles(&launcher), ["Files"]);
     block_on(launcher.activate_selected());
-    assert_eq!(shown(&launcher), Status::Result("Opened Files".into()));
+    assert_eq!(
+        launcher.view().status,
+        Status::Result("Opened Files".into())
+    );
     assert_eq!(system.opened(), ["/apps/Files.app"]);
 }
 

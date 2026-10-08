@@ -8,10 +8,6 @@
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
-use ::windows::Win32::Foundation::RPC_E_CHANGED_MODE;
-use ::windows::Win32::System::Com::{
-    COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize,
-};
 use ::windows::Win32::UI::Shell::{
     FO_DELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FOF_WANTNUKEWARNING,
     ILCreateFromPathW, ILFree, SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW,
@@ -22,6 +18,8 @@ use ::windows::core::{HRESULT, PCWSTR};
 
 use super::{Clip, MAX_CLIPBOARD_TEXT, NotTrashed, System, missing};
 use crate::clipboard::windows::{put_clip, read_clip};
+use crate::util::wide;
+use crate::windows_shell::Com;
 
 /// The system functions on Windows.
 pub(super) struct WindowsSystem;
@@ -50,7 +48,7 @@ impl System for WindowsSystem {
             return Err(missing);
         }
         let _com = Com::new()?;
-        let wide = wide(path.as_os_str().encode_wide());
+        let wide = wide(path);
         // SAFETY: a NUL-terminated path that outlives the call; the list it
         // answers is freed below.
         let item = unsafe { ILCreateFromPathW(PCWSTR(wide.as_ptr())) };
@@ -76,11 +74,6 @@ impl System for WindowsSystem {
             })
             .collect()
     }
-}
-
-/// `units` followed by a NUL.
-fn wide(units: impl Iterator<Item = u16>) -> Vec<u16> {
-    units.chain([0]).collect()
 }
 
 /// `text` as one argument on a Windows command line, quoted as
@@ -112,8 +105,8 @@ fn argument(text: &str) -> String {
 /// with `parameters` as its command line when it is a program, waiting
 /// only until the shell has started it.
 fn shell_execute(file: &str, parameters: Option<&str>) -> Result<(), String> {
-    let file = wide(file.encode_utf16());
-    let parameters = parameters.map(|parameters| wide(parameters.encode_utf16()));
+    let file = wide(file);
+    let parameters = parameters.map(wide);
     let _com = Com::new()?;
     let mut info = SHELLEXECUTEINFOW {
         cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
@@ -164,39 +157,6 @@ fn recycle(path: &Path) -> Result<(), String> {
         ));
     }
     Ok(())
-}
-
-/// COM initialized on this thread for as long as it is held, as the shell
-/// needs.
-struct Com {
-    /// Whether this guard initialized COM and must uninitialize it: not when
-    /// the thread already had it in another mode.
-    initialized: bool,
-}
-
-impl Com {
-    fn new() -> Result<Com, String> {
-        // SAFETY: no reserved pointer; paired with CoUninitialize in `drop`.
-        let result =
-            unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) };
-        if result == RPC_E_CHANGED_MODE {
-            // Already initialized as multithreaded: usable as it is.
-            return Ok(Com { initialized: false });
-        }
-        result
-            .ok()
-            .map_err(|error| format!("cannot start COM: {error}"))?;
-        Ok(Com { initialized: true })
-    }
-}
-
-impl Drop for Com {
-    fn drop(&mut self) {
-        if self.initialized {
-            // SAFETY: paired with the successful CoInitializeEx in `new`.
-            unsafe { CoUninitialize() };
-        }
-    }
 }
 
 #[cfg(test)]

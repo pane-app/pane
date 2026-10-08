@@ -16,6 +16,7 @@ pub mod downloads;
 mod dropdown;
 mod extension_data;
 pub mod feedback;
+pub mod file_index;
 pub mod files;
 mod generation;
 pub mod git;
@@ -46,6 +47,9 @@ pub mod system;
 pub mod system_icons;
 mod threads;
 pub mod tray;
+mod util;
+#[cfg(windows)]
+mod windows_shell;
 mod zip;
 
 pub use arguments::{ArgumentKind, MAX_ARGUMENTS, ManifestArgument};
@@ -65,19 +69,21 @@ pub use http::HttpLimits;
 pub use keyboard::{Binding, Keyboard, KeyboardAction, PaneKeys};
 pub use launch::{LaunchRecord, LaunchSource, LaunchType};
 pub use launcher::clipboard_view;
+pub use launcher::search_files;
 pub use launcher::{
     AliasOutcome, ApplicationUpdate, BuildFailure, CommandPreferences, CommandRegistration,
-    ComputedAnswer, CustomViewSnapshot, Development, FormField, FormView, HotkeyOutcome,
-    ItemAction, ItemActions, Launcher, LauncherView, OpenSubmenu, PackagePreferences, PinTarget,
-    PreferenceField, PreferencesTarget, Presentation, Question, QuickSlot, ResultAction,
-    ResultActionItem, ResultActions, Row, RowKind, RowPresentation, Screen, Section,
-    SelectedAction, SetupHeader, ShortcutCatalog, ShortcutCommand, ShortcutGroup, SlotChange,
-    Status, SubmenuState, Unavailable, UnboundShortcut, answer_sections, root_sections,
+    ComputedAnswer, CustomViewSnapshot, Development, ExtensionMark, ExtensionOperation, FormField,
+    FormView, HotkeyOutcome, ItemAction, ItemActions, Launcher, LauncherView, ListPresentation,
+    MANAGE_EXTENSIONS, OpenSubmenu, OperationKind, PackagePreferences, PinTarget, PreferenceField,
+    PreferencesTarget, Presentation, Question, QuickSlot, ResultAction, ResultActionItem,
+    ResultActions, Row, RowKind, RowPresentation, Screen, Section, SelectedAction, SettingsTarget,
+    SetupHeader, ShortcutCatalog, ShortcutCommand, ShortcutGroup, SlotChange, Status, SubmenuState,
+    Unavailable, UnboundShortcut, UpdateHold, answer_sections, root_sections,
 };
 pub use links::LinkOpener;
 pub use operations::{MAX_CALL_DEPTH, MAX_OPERATION_JSON};
 pub use packages::{
-    CommandMode, EXTENSION_API, InstalledPackage, MANIFEST_FILE, MANIFEST_VERSION,
+    CommandMode, EXTENSION_API, InstalledPackage, ListedCommand, MANIFEST_FILE, MANIFEST_VERSION,
     MAX_SCHEDULE_SECONDS, MIN_SCHEDULE_SECONDS, Manifest, ManifestCommand, ManifestHelper,
     ManifestOperation, ManifestSchedule, PackageError, PackageIdentity, RetainedData, SavedData,
 };

@@ -22,7 +22,7 @@ use rows::{select_title, titles};
 const INSTALL_ROW: &str = "Install extension from folder…";
 const NPM_ROW: &str = "Install extension from npm…";
 const GIT_ROW: &str = "Install extension from Git…";
-const MANAGE_ROW: &str = "Manage extensions…";
+const MANAGE_ROW: &str = "Manage Extensions";
 const SETTINGS_ROW: &str = "Settings…";
 
 /// A settings sample package: the same command in each language.
@@ -370,7 +370,7 @@ fn disabling_through_the_api_closes_the_package_command_and_updating_keeps_it_di
         launcher
             .view()
             .details()
-            .contains(&"Disabled: enable it in Manage extensions".to_owned()),
+            .contains(&"Disabled: enable it in Settings".to_owned()),
         "{:?}",
         launcher.view().details()
     );

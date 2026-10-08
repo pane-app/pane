@@ -170,6 +170,57 @@ pub(super) struct Updates {
     state: Mutex<Checking>,
     /// Wakes the updater thread, and tells when it settled.
     settled: Settled,
+    /// Test support: holds an update between its claim and its
+    /// replacement while a test asks (see [`Launcher::hold_update_applies`]).
+    hold: Arc<Hold>,
+}
+
+/// Test support: whether an update the updater applies waits, once it has
+/// claimed the package and before its replacement is written, and what
+/// wakes it when that ends.
+#[derive(Default)]
+struct Hold {
+    held: Mutex<bool>,
+    condvar: std::sync::Condvar,
+}
+
+impl Hold {
+    fn lock(&self) -> MutexGuard<'_, bool> {
+        self.held
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Waits while held.
+    fn wait(&self) {
+        let held = self.lock();
+        let _released = self
+            .condvar
+            .wait_while(held, |held| *held)
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+    }
+}
+
+/// Test support: while this is kept, every update Pane applies by itself
+/// stops once it has claimed its package, before the replacement is
+/// written; dropping it lets them go on (see
+/// [`Launcher::hold_update_applies`]).
+#[doc(hidden)]
+#[must_use = "the updates go on as soon as the hold is dropped"]
+pub struct UpdateHold(Arc<Hold>);
+
+impl UpdateHold {
+    /// The hold of a launcher that applies no updates.
+    pub(super) fn of_nothing() -> UpdateHold {
+        UpdateHold(Arc::default())
+    }
+}
+
+impl Drop for UpdateHold {
+    fn drop(&mut self) {
+        *self.0.lock() = false;
+        self.0.condvar.notify_all();
+    }
 }
 
 /// What the updater keeps: the clock it follows, when it next checks, and
@@ -212,7 +263,15 @@ impl Updates {
                 staged: Vec::new(),
             }),
             settled: Settled::default(),
+            hold: Arc::default(),
         })
+    }
+
+    /// Holds every update applied from now on between its claim and its
+    /// replacement, until the hold returned is dropped.
+    pub(super) fn hold_applies(&self) -> UpdateHold {
+        *self.hold.lock() = true;
+        UpdateHold(self.hold.clone())
     }
 
     /// Starts the updater's thread, which runs until this launcher stops.
@@ -579,6 +638,9 @@ impl Updates {
                 Err(install::Refusal::Changed) => return Applied::Dropped,
             }
         }
+        // Claimed, with the package not yet replaced: where a test that
+        // holds the updates asks things of it (never held otherwise).
+        self.hold.wait();
         let store = launcher
             .installation
             .as_ref()

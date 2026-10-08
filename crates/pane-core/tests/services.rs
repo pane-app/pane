@@ -649,7 +649,7 @@ fn three_crashing_cycles_pause_the_package_and_stop_the_service(fixture: &Fixtur
     assert_eq!(
         reason,
         format!(
-            "{} is paused after an error; retry it in Manage extensions",
+            "{} is paused after an error; retry it in Settings",
             fixture.title
         )
     );

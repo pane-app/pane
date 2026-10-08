@@ -297,6 +297,47 @@ pub(crate) fn status_message(text: impl Into<SharedString>, theme: &Theme) -> St
         )
 }
 
+/// The open command in the footer's left, as Raycast's footer names it
+/// ("Search Files", "Clipboard History"): `icon` (the command's own, drawn
+/// as the shared icon drawing draws it, at the Actions panel header's
+/// tile size) and `title` in the row title's ink, truncating. An
+/// extension's view has no heading line above it (#162); this is where
+/// the user still sees where they are. It is also the screen's drag
+/// region, as the heading line was: with the native title bar hidden, it
+/// is a place outside an editable field to grab the window by.
+pub(crate) fn command_lead(
+    icon: &crate::ui::extension_icon::RowIcon,
+    title: impl Into<SharedString>,
+    theme: &Theme,
+) -> Div {
+    div()
+        .debug_selector(|| "footer-command".into())
+        .flex()
+        .items_center()
+        .gap(theme.geometry.footer_hint_gap)
+        .min_w(px(0.))
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_size(theme.typography.footer_size)
+        .font_weight(theme.typography.medium)
+        .text_color(theme.text_title)
+        .window_control_area(gpui::WindowControlArea::Drag)
+        .child(crate::ui::extension_icon::row_icon_at(
+            icon,
+            crate::ui::icon::TileSize::Mini,
+            "footer-command-icon",
+            "footer-command",
+            theme,
+        ))
+        .child(
+            div()
+                .debug_selector(|| "footer-command-title".into())
+                .min_w(px(0.))
+                .truncate()
+                .child(title.into()),
+        )
+}
+
 /// The hint's slot in [`footer_row`]: one line, taking the room the
 /// buttons leave, centred in the strip's first 50px.
 pub(crate) fn hint_slot(hint: Option<Div>, theme: &Theme) -> Div {

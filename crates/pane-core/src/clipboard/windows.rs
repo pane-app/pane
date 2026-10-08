@@ -10,7 +10,11 @@
 //! (`ExcludeClipboardContentFromMonitorProcessing`, the older `Clipboard
 //! Viewer Ignore`, `CanIncludeInClipboardHistory` and
 //! `CanUploadToCloudClipboard` as a DWORD of 0); then, only if none of them
-//! forbids it, the text (`CF_UNICODETEXT`); and the file name of the
+//! forbids it, what was copied: the files File Explorer copied (`CF_HDROP`,
+//! every path), else the text (`CF_UNICODETEXT`), else an image — the
+//! application's own PNG (the registered `PNG` format, as browsers and
+//! Office put it), else the bitmap (`CF_DIBV5`, `CF_DIB`, 24 or 32 bits a
+//! pixel) made into a PNG (#167); and the full path of the program of the
 //! process whose window owns the clipboard. What is kept is decided by
 //! `clipboard::accept`, the same on every system. A change is read once: if
 //! reading it fails (another program holds the clipboard open), the thread
@@ -52,7 +56,10 @@ use ::windows::Win32::UI::WindowsAndMessaging::{
 };
 use ::windows::core::{PCWSTR, PWSTR, w};
 
-use super::{ClipboardSystem, Content, MAX_TEXT_BYTES, Markers, Observation, Sink, Watch};
+use super::{
+    ClipboardSystem, Content, CopiedImage, MAX_FILES, MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS,
+    MAX_TEXT_BYTES, Markers, Observation, Sink, Watch,
+};
 use crate::system::{CONCEALED_MARKERS, Clip};
 use crate::threads::windows::{MessageThread, Window, WindowClass, stop_sent};
 
@@ -62,6 +69,17 @@ const CF_UNICODETEXT: u32 = 13;
 /// `CF_HDROP`: the files copied in File Explorer, as a `DROPFILES` header
 /// and a list of paths.
 const CF_HDROP: u32 = 15;
+
+/// `CF_DIB`: a bitmap, as a `BITMAPINFOHEADER` and its pixels.
+const CF_DIB: u32 = 8;
+
+/// `CF_DIBV5`: a bitmap, as a `BITMAPV5HEADER` (with its colour masks) and
+/// its pixels.
+const CF_DIBV5: u32 = 17;
+
+/// The largest bitmap header Pane reads (`BITMAPV5HEADER`), with room for
+/// the three colour masks an older header's bit fields follow it with.
+const DIB_HEADER_BYTES: usize = 124 + 12;
 
 /// The registered format that tells File Explorer what pasting files does,
 /// and its value for copying them (`DROPEFFECT_COPY`) rather than moving.
@@ -112,6 +130,41 @@ impl ClipboardSystem for WindowsClipboard {
         // The clipboard is closed, then the window destroyed: what was put
         // on the clipboard stays there.
     }
+
+    fn write_image(&self, png: &[u8]) -> Result<(), String> {
+        let owner = WRITER_CLASS.message_window()?;
+        write_image(&owner, png)
+    }
+
+    fn write_files(&self, paths: &[PathBuf]) -> Result<(), String> {
+        let owner = WRITER_CLASS.message_window()?;
+        write_formats(
+            &owner,
+            &[(CF_HDROP, drop_list(paths))],
+            &[PREFERRED_DROP_EFFECT],
+        )
+    }
+}
+
+/// Puts the image `png` on the clipboard, owned by `owner`, a window of
+/// this thread: as the PNG itself (the registered `PNG` format, which
+/// browsers and Office read) and as a bitmap (`CF_DIB`, 32 bits a pixel,
+/// from which Windows makes the other bitmap formats), for every other
+/// application.
+fn write_image(owner: &Window, png: &[u8]) -> Result<(), String> {
+    let mut formats = Vec::new();
+    if let Some(dib) = png_to_dib(png) {
+        formats.push((CF_DIB, dib));
+    }
+    // SAFETY: a valid NUL-terminated wide string.
+    let png_format = unsafe { RegisterClipboardFormatW(w!("PNG")) };
+    if png_format != 0 {
+        formats.push((png_format, png.to_vec()));
+    }
+    if formats.is_empty() {
+        return Err("the kept image could not be read".into());
+    }
+    write_formats(owner, &formats, &[])
 }
 
 /// The listener thread, until dropped.
@@ -155,6 +208,8 @@ struct Formats {
     viewer_ignore: u32,
     history: u32,
     cloud: u32,
+    /// `PNG`, the format browsers and Office put a copied image in.
+    png: u32,
 }
 
 impl Formats {
@@ -168,6 +223,7 @@ impl Formats {
                 viewer_ignore: RegisterClipboardFormatW(w!("Clipboard Viewer Ignore")),
                 history: RegisterClipboardFormatW(w!("CanIncludeInClipboardHistory")),
                 cloud: RegisterClipboardFormatW(w!("CanUploadToCloudClipboard")),
+                png: RegisterClipboardFormatW(w!("PNG")),
             }
         }
     }
@@ -353,8 +409,8 @@ fn flag(format: u32) -> Option<bool> {
     Some(u32::from_le_bytes(value) != 0)
 }
 
-/// Opens the clipboard and reads its markers, then its text only if they
-/// allow it, and its owner; with the sequence number of what it read.
+/// Opens the clipboard and reads its markers, then what was copied only if
+/// they allow it, and its owner; with the sequence number of what it read.
 fn read(window: HWND, formats: Formats) -> Result<(u32, Observation), String> {
     let _open = OpenedClipboard::by(window)?;
     // SAFETY: no arguments. While the clipboard is open, nothing changes it.
@@ -367,21 +423,10 @@ fn read(window: HWND, formats: Formats) -> Result<(u32, Observation), String> {
     let content = if !markers.allow() {
         Content::Withheld
     } else {
-        // One unit more than Pane keeps is enough to know it is too long:
-        // UTF-8 never has fewer bytes than UTF-16 has units.
-        match bytes(CF_UNICODETEXT, (MAX_TEXT_BYTES + 1) * 2) {
-            Some(bytes) => {
-                let units: Vec<u16> = bytes
-                    .as_chunks::<2>()
-                    .0
-                    .iter()
-                    .map(|pair| u16::from_le_bytes(*pair))
-                    .take_while(|unit| *unit != 0)
-                    .collect();
-                Content::Text(String::from_utf16_lossy(&units))
-            }
-            None => Content::Other,
-        }
+        copied_files()
+            .or_else(copied_text)
+            .or_else(|| copied_image(formats.png))
+            .unwrap_or(Content::Other)
     };
     let observation = Observation {
         content,
@@ -391,8 +436,251 @@ fn read(window: HWND, formats: Formats) -> Result<(u32, Observation), String> {
     Ok((sequence, observation))
 }
 
-/// The file name of the process whose window owns the clipboard, if the
-/// system says.
+/// The text on the open clipboard (`CF_UNICODETEXT`), if it has any. One
+/// unit more than Pane keeps is read, which is enough to know it is too
+/// long: UTF-8 never has fewer bytes than UTF-16 has units.
+fn copied_text() -> Option<Content> {
+    let bytes = bytes(CF_UNICODETEXT, (MAX_TEXT_BYTES + 1) * 2)?;
+    let units: Vec<u16> = bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u16::from_le_bytes(*pair))
+        .take_while(|unit| *unit != 0)
+        .collect();
+    Some(Content::Text(String::from_utf16_lossy(&units)))
+}
+
+/// The files File Explorer copied onto the open clipboard (`CF_HDROP`),
+/// every one in order, if it holds any; more than [`MAX_FILES`] are not
+/// read.
+fn copied_files() -> Option<Content> {
+    if !available(CF_HDROP) {
+        return None;
+    }
+    // SAFETY: the clipboard is open; the handle stays the clipboard's.
+    let handle = unsafe { GetClipboardData(CF_HDROP) }.ok()?;
+    let files = HDROP(handle.0);
+    // SAFETY: `files` is the clipboard's drop list; the index 0xFFFFFFFF
+    // asks how many files it lists, passing no buffer.
+    let count = unsafe { DragQueryFileW(files, u32::MAX, None) } as usize;
+    if count == 0 {
+        return None;
+    }
+    if count > MAX_FILES {
+        return Some(Content::TooLarge);
+    }
+    let mut paths = Vec::with_capacity(count);
+    for index in 0..count as u32 {
+        // SAFETY: as above; asking for a length passes no buffer.
+        let length = unsafe { DragQueryFileW(files, index, None) } as usize;
+        if length == 0 {
+            continue;
+        }
+        let mut name = vec![0u16; length + 1];
+        // SAFETY: `name` is writable for its length, NUL included.
+        let copied = unsafe { DragQueryFileW(files, index, Some(&mut name)) } as usize;
+        paths.push(PathBuf::from(OsString::from_wide(
+            &name[..copied.min(length)],
+        )));
+    }
+    (!paths.is_empty()).then_some(Content::Files(paths))
+}
+
+/// The image on the open clipboard, if it holds one: the application's own
+/// PNG (`png_format`, the registered `PNG`) as it is, else its bitmap
+/// (`CF_DIBV5`, else `CF_DIB`) made into a PNG. A PNG larger than Pane
+/// keeps, or a bitmap of more than [`MAX_IMAGE_PIXELS`], is too large, and
+/// a bitmap's pixels are then not read; a bitmap Pane cannot read
+/// (compressed, or of fewer than 24 bits a pixel) is no image it keeps.
+fn copied_image(png_format: u32) -> Option<Content> {
+    if let Some(png) = bytes(png_format, MAX_IMAGE_BYTES + 1) {
+        if png.len() > MAX_IMAGE_BYTES {
+            return Some(Content::TooLarge);
+        }
+        if let Some(image) = CopiedImage::from_png(png) {
+            return Some(Content::Image(image));
+        }
+    }
+    let format = [CF_DIBV5, CF_DIB]
+        .into_iter()
+        .find(|format| available(*format))?;
+    let header = bytes(format, DIB_HEADER_BYTES)?;
+    let layout = DibLayout::of(&header)?;
+    if u64::from(layout.width) * u64::from(layout.height) > MAX_IMAGE_PIXELS {
+        return Some(Content::TooLarge);
+    }
+    let dib = bytes(format, layout.size())?;
+    let (width, height, rgba) = dib_pixels(&dib)?;
+    let png = crate::icons::encode_png(width, height, &rgba)?;
+    if png.len() > MAX_IMAGE_BYTES {
+        return Some(Content::TooLarge);
+    }
+    CopiedImage::from_png(png).map(Content::Image)
+}
+
+/// How a bitmap (`CF_DIB`, `CF_DIBV5`) is laid out, as its header says:
+/// what Pane reads of it is 24 or 32 bits a pixel, uncompressed or with
+/// bit fields.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DibLayout {
+    width: u32,
+    height: u32,
+    /// Whether its first row is the top one (a negative height).
+    top_down: bool,
+    bits: u16,
+    /// The red, green, blue and alpha masks of a 32-bit bitmap with bit
+    /// fields (alpha 0 where none is given); `None` for `BI_RGB`, whose
+    /// pixels are blue, green, red and a byte that may be alpha.
+    masks: Option<[u32; 4]>,
+    /// Where its pixels begin.
+    offset: usize,
+}
+
+impl DibLayout {
+    /// The layout `dib`'s header (at least) states, if Pane reads it.
+    fn of(dib: &[u8]) -> Option<DibLayout> {
+        let u32_at = |at: usize| -> Option<u32> {
+            Some(u32::from_le_bytes(dib.get(at..at + 4)?.try_into().ok()?))
+        };
+        let header = u32_at(0)? as usize;
+        // A `BITMAPCOREHEADER` (12 bytes) is not read.
+        if header < 40 {
+            return None;
+        }
+        // LONGs: a negative height says the rows run top down.
+        let width = u32_at(4)? as i32;
+        let height = u32_at(8)? as i32;
+        let bits = u16::from_le_bytes(dib.get(14..16)?.try_into().ok()?);
+        let compression = u32_at(16)?;
+        let colors = u32_at(32)? as usize;
+        if width <= 0 || height == 0 || !matches!(bits, 24 | 32) {
+            return None;
+        }
+        // BI_RGB 0, BI_BITFIELDS 3, BI_ALPHABITFIELDS 6.
+        let (masks, after) = match compression {
+            0 => (None, header),
+            3 | 6 if bits == 32 => {
+                let alpha = if header >= 56 { u32_at(52)? } else { 0 };
+                let masks = [u32_at(40)?, u32_at(44)?, u32_at(48)?, alpha];
+                // An older header's masks follow it.
+                let after = if header >= 52 { header } else { header + 12 };
+                (Some(masks), after)
+            }
+            _ => return None,
+        };
+        Some(DibLayout {
+            width: width as u32,
+            height: height.unsigned_abs(),
+            top_down: height < 0,
+            bits,
+            masks,
+            // A colour table, if one is given, comes before the pixels.
+            offset: after + colors * 4,
+        })
+    }
+
+    /// How many bytes one row of pixels takes, padded to 4.
+    fn stride(&self) -> usize {
+        (self.width as usize * usize::from(self.bits)).div_ceil(32) * 4
+    }
+
+    /// How many bytes the whole bitmap takes.
+    fn size(&self) -> usize {
+        self.offset + self.stride() * self.height as usize
+    }
+}
+
+/// The pixels of the bitmap `dib` as straight RGBA, top row first, with its
+/// width and height; `None` if Pane does not read it or it is cut short. A
+/// 32-bit bitmap whose every alpha is 0 (the byte `BI_RGB` leaves unused)
+/// is opaque.
+fn dib_pixels(dib: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    let layout = DibLayout::of(dib)?;
+    if dib.len() < layout.size() {
+        return None;
+    }
+    let (width, height) = (layout.width as usize, layout.height as usize);
+    let stride = layout.stride();
+    let mut rgba = Vec::with_capacity(width * height * 4);
+    let mut any_alpha = false;
+    for row in 0..height {
+        let from = if layout.top_down {
+            row
+        } else {
+            height - 1 - row
+        };
+        let line = &dib[layout.offset + from * stride..][..stride];
+        for x in 0..width {
+            let pixel = match layout.bits {
+                24 => {
+                    let p = &line[x * 3..x * 3 + 3];
+                    [p[2], p[1], p[0], 255]
+                }
+                _ => {
+                    let value = u32::from_le_bytes(line[x * 4..x * 4 + 4].try_into().ok()?);
+                    let [red, green, blue, alpha] = match layout.masks {
+                        None => [16, 8, 0, 24].map(|shift| (value >> shift) as u8),
+                        Some(masks) => masks.map(|mask| channel(value, mask)),
+                    };
+                    any_alpha |= alpha != 0;
+                    [red, green, blue, alpha]
+                }
+            };
+            rgba.extend_from_slice(&pixel);
+        }
+    }
+    if layout.bits == 32 && !any_alpha {
+        for pixel in rgba.as_chunks_mut::<4>().0 {
+            pixel[3] = 255;
+        }
+    }
+    Some((layout.width, layout.height, rgba))
+}
+
+/// The 8-bit value of the channel `mask` selects in `value`: its bits,
+/// scaled to 0–255; 0 for no mask.
+fn channel(value: u32, mask: u32) -> u8 {
+    if mask == 0 {
+        return 0;
+    }
+    let shift = mask.trailing_zeros();
+    let bits = (mask >> shift).count_ones();
+    let raw = u64::from((value & mask) >> shift);
+    if bits >= 8 {
+        (raw >> (bits - 8)) as u8
+    } else {
+        ((raw * 255) / ((1u64 << bits) - 1)) as u8
+    }
+}
+
+/// The PNG `png` as a bitmap for `CF_DIB`: a `BITMAPINFOHEADER` (32 bits a
+/// pixel, `BI_RGB`, bottom row first), then its pixels as blue, green, red
+/// and alpha; `None` if it cannot be decoded.
+fn png_to_dib(png: &[u8]) -> Option<Vec<u8>> {
+    let (width, height, rgba) = crate::icons::decode_png(png)?;
+    let row = width as usize * 4;
+    let mut dib = Vec::with_capacity(40 + rgba.len());
+    dib.extend_from_slice(&40u32.to_le_bytes());
+    dib.extend_from_slice(&i32::try_from(width).ok()?.to_le_bytes());
+    dib.extend_from_slice(&i32::try_from(height).ok()?.to_le_bytes());
+    dib.extend_from_slice(&1u16.to_le_bytes());
+    dib.extend_from_slice(&32u16.to_le_bytes());
+    dib.extend_from_slice(&0u32.to_le_bytes());
+    dib.extend_from_slice(&u32::try_from(rgba.len()).ok()?.to_le_bytes());
+    // Resolution and colour table: none.
+    dib.extend_from_slice(&[0; 16]);
+    for line in rgba.chunks_exact(row).rev() {
+        for pixel in line.as_chunks::<4>().0 {
+            dib.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
+        }
+    }
+    Some(dib)
+}
+
+/// The full path of the program of the process whose window owns the
+/// clipboard, if the system says: its file name decides an exclusion, and
+/// the path lets the history show the program's icon.
 fn owner_program() -> Option<String> {
     // SAFETY: no arguments.
     let owner = unsafe { GetClipboardOwner() }.ok()?;
@@ -423,7 +711,7 @@ fn owner_program() -> Option<String> {
     let _ = unsafe { CloseHandle(handle) };
     queried.ok()?;
     let path = String::from_utf16_lossy(&name[..length as usize]);
-    path.rsplit(['\\', '/']).next().map(str::to_owned)
+    (!path.trim().is_empty()).then_some(path)
 }
 
 /// Puts `text` on the clipboard, replacing what was there, with each of
@@ -504,10 +792,16 @@ pub(crate) fn put_clip(clip: &Clip, concealed: bool) -> Result<(), String> {
     }
 }
 
-/// `path` as `CF_HDROP` carries it: a `DROPFILES` header (the offset of
-/// the list, a point, whether it is in the non-client area, and that the
-/// paths are UTF-16), then the path, its NUL and the list's closing NUL.
+/// `path` as `CF_HDROP` carries it (see [`drop_list`]).
 fn drop_files(path: &Path) -> Vec<u8> {
+    drop_list(&[path])
+}
+
+/// `paths` as `CF_HDROP` carries them: a `DROPFILES` header (the offset of
+/// the list, a point, whether it is in the non-client area, and that the
+/// paths are UTF-16), then each path with its NUL, and the list's closing
+/// NUL.
+fn drop_list(paths: &[impl AsRef<Path>]) -> Vec<u8> {
     let mut bytes = Vec::new();
     // pFiles: the list follows the 20-byte header.
     bytes.extend_from_slice(&20u32.to_le_bytes());
@@ -517,10 +811,13 @@ fn drop_files(path: &Path) -> Vec<u8> {
     }
     // fWide.
     bytes.extend_from_slice(&1i32.to_le_bytes());
-    for unit in path.as_os_str().encode_wide() {
-        bytes.extend_from_slice(&unit.to_le_bytes());
+    for path in paths {
+        for unit in path.as_ref().as_os_str().encode_wide() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        bytes.extend_from_slice(&[0, 0]);
     }
-    bytes.extend_from_slice(&[0, 0, 0, 0]);
+    bytes.extend_from_slice(&[0, 0]);
     bytes
 }
 
@@ -571,7 +868,7 @@ pub(crate) fn read_clip(limit: usize) -> Result<Option<Clip>, String> {
 /// process. It replaces what was on the clipboard, which is not saved.
 #[doc(hidden)]
 pub mod testing {
-    use super::{WRITER_CLASS, Window, write};
+    use super::{CF_DIB, WRITER_CLASS, Window, write, write_formats};
 
     /// The window of this process that owns what the test put on the
     /// clipboard, until dropped (by the thread that put it).
@@ -583,6 +880,15 @@ pub mod testing {
     pub fn set_text(text: &str, markers: &[(&str, u32)]) -> Result<Owner, String> {
         let owner = WRITER_CLASS.message_window()?;
         write(&owner, text, markers)?;
+        Ok(Owner(owner))
+    }
+
+    /// Puts the bitmap `dib` (a `BITMAPINFOHEADER` and its pixels) on the
+    /// clipboard as `CF_DIB` alone, as Paint copies a picture, owned by a
+    /// window of this process while the returned owner is kept.
+    pub fn set_bitmap(dib: &[u8]) -> Result<Owner, String> {
+        let owner = WRITER_CLASS.message_window()?;
+        write_formats(&owner, &[(CF_DIB, dib.to_vec())], &[])?;
         Ok(Owner(owner))
     }
 }
@@ -613,5 +919,94 @@ mod tests {
             &[0, 0],
             "the path's NUL, then the list's"
         );
+    }
+
+    #[test]
+    fn copied_files_are_a_drop_list_of_every_path() {
+        let bytes = drop_list(&[Path::new(r"C:\a"), Path::new(r"C:\bc")]);
+        let units: Vec<u16> = bytes[20..]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
+            .collect();
+        let expected: Vec<u16> = "C:\\a\0C:\\bc\0\0".encode_utf16().collect();
+        assert_eq!(units, expected);
+    }
+
+    /// A 2×2 bitmap of 24 bits a pixel, bottom row first, each row padded
+    /// to 4 bytes: red, green over blue, white.
+    fn bitmap_24() -> Vec<u8> {
+        let mut dib = Vec::new();
+        for value in [40u32, 2, 2] {
+            dib.extend_from_slice(&value.to_le_bytes());
+        }
+        dib.extend_from_slice(&1u16.to_le_bytes());
+        dib.extend_from_slice(&24u16.to_le_bytes());
+        dib.extend_from_slice(&[0; 24]);
+        // Bottom row: blue, white (BGR), then 2 bytes of padding.
+        dib.extend_from_slice(&[255, 0, 0, 255, 255, 255, 0, 0]);
+        // Top row: red, green.
+        dib.extend_from_slice(&[0, 0, 255, 0, 255, 0, 0, 0]);
+        dib
+    }
+
+    #[test]
+    fn a_bitmap_is_read_top_row_first_as_straight_rgba() {
+        let dib = bitmap_24();
+        let layout = DibLayout::of(&dib).unwrap();
+        assert_eq!(
+            (layout.width, layout.height, layout.top_down),
+            (2, 2, false)
+        );
+        assert_eq!(layout.stride(), 8);
+        assert_eq!(layout.size(), dib.len());
+        let (width, height, rgba) = dib_pixels(&dib).unwrap();
+        assert_eq!((width, height), (2, 2));
+        assert_eq!(
+            rgba,
+            [
+                255, 0, 0, 255, 0, 255, 0, 255, // red, green
+                0, 0, 255, 255, 255, 255, 255, 255, // blue, white
+            ]
+        );
+        // Cut short, or compressed: not read.
+        assert_eq!(dib_pixels(&dib[..dib.len() - 1]), None);
+        let mut compressed = dib.clone();
+        compressed[16] = 1;
+        assert_eq!(DibLayout::of(&compressed), None);
+    }
+
+    #[test]
+    fn a_32_bit_bitmap_keeps_its_alpha_or_is_opaque_without_one() {
+        // 1×1, top down, BI_RGB: blue-green-red-alpha.
+        let header = |alpha: u8| {
+            let mut dib = Vec::new();
+            dib.extend_from_slice(&40u32.to_le_bytes());
+            dib.extend_from_slice(&1i32.to_le_bytes());
+            dib.extend_from_slice(&(-1i32).to_le_bytes());
+            dib.extend_from_slice(&1u16.to_le_bytes());
+            dib.extend_from_slice(&32u16.to_le_bytes());
+            dib.extend_from_slice(&[0; 24]);
+            dib.extend_from_slice(&[10, 20, 30, alpha]);
+            dib
+        };
+        assert_eq!(dib_pixels(&header(128)).unwrap().2, [30, 20, 10, 128]);
+        assert_eq!(dib_pixels(&header(0)).unwrap().2, [30, 20, 10, 255]);
+        // Bit fields: the masks say where each channel is.
+        assert_eq!(channel(0x00ff_0000, 0x00ff_0000), 255);
+        assert_eq!(channel(0b11111 << 10, 0b11111 << 10), 255);
+        assert_eq!(channel(0, 0), 0);
+    }
+
+    #[test]
+    fn a_png_is_put_back_as_a_bitmap_too() {
+        let rgba = [255, 0, 0, 255, 0, 0, 255, 128];
+        let png = crate::icons::encode_png(2, 1, &rgba).unwrap();
+        let dib = png_to_dib(&png).unwrap();
+        let (width, height, pixels) = dib_pixels(&dib).unwrap();
+        assert_eq!((width, height), (2, 1));
+        assert_eq!(pixels, rgba);
+        assert_eq!(png_to_dib(b"not a png"), None);
     }
 }

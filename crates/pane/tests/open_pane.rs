@@ -26,7 +26,7 @@ use tempfile::TempDir;
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::settle;
+use settle::{enter_flow, settle};
 
 #[path = "support/a11y.rs"]
 mod a11y;
@@ -445,11 +445,10 @@ fn a_collision_with_a_command_hotkey_is_refused(cx: &mut TestAppContext) {
     settle(&window, cx);
 
     // Install the package and give its command a hotkey, through the
-    // launcher's own flow.
+    // launcher's own flow (the one Settings drives, #168).
     cx.simulate_keystrokes("enter");
     settle(&window, cx);
-    cx.simulate_keystrokes("down down down down enter");
-    settle(&window, cx);
+    enter_flow(&window, cx);
     cx.simulate_keystrokes("down down down down enter");
     let view = settle(&window, cx);
     assert!(

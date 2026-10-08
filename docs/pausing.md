@@ -70,7 +70,7 @@ What is **not** a failure of the package:
   instances and views are dropped, and its code can no longer read or save
   data or call operations. A command of it that is open closes.
 - Its commands stay in root search, listed and selectable, saying "<title>
-  is paused after an error; retry it in Manage extensions"; activating one
+  is paused after an error; retry it in Settings › Extensions"; activating one
   shows that and runs nothing. A global hotkey assigned to one stays
   registered (it is the user's choice); pressing it shows the same reason.
   It computes no root results and supplies no indexed ones. Its commands'
@@ -86,7 +86,7 @@ What is **not** a failure of the package:
   calls; or "could not start and is paused"),
   that its saved data is kept, and that Retry and why are in Manage
   extensions.
-- **Manage extensions…** lists it as "Enabled · Paused after crashing"
+- **Settings › Extensions** lists it as "Enabled · Paused after crashing"
   ("Paused after not responding", "Paused after crashing or not
   responding", or "Enabled · Failed to start"), with a **Retry <title>** row (**Retry
   starting <title>** after a failure to start) and a **Why <title> is
@@ -95,7 +95,7 @@ What is **not** a failure of the package:
   and backtrace), with Retry. The diagnostics of a reload that fails to
   start also go to standard error.
 - Its settings, content, cache and credentials are kept. Clearing its cache,
-  uninstalling it and the rest of Manage extensions work, since none of them
+  uninstalling it and the rest of Settings › Extensions work, since none of them
   runs it.
 - Other packages keep running.
 
@@ -143,7 +143,7 @@ tell which extension, if any, caused it, so:
 - **No extension is named or paused**, and no crash is counted towards
   pausing one. The status line says "Pane's extension runtime stopped
   unexpectedly and was started again; what was running was stopped and is
-  not run again. Saved data is kept; details are in Manage extensions."
+  not run again. Saved data is kept; details are in Settings › Extensions."
 - **Every call the thread held stops**, running or queued, and answers
   "Extension runtime unavailable: it stopped before answering and was
   started again (or was not restarted, and why); Pane does not run this
@@ -171,8 +171,8 @@ tell which extension, if any, caused it, so:
   [`runtime/supervisor.rs`](../crates/pane-core/src/runtime/supervisor.rs),
   the same window as for pausing a package):
   then it stays stopped, and every extension call answers "it stopped after
-  crashing and runs nothing until you restart it in Manage extensions".
-- **Manage extensions** then starts with **Restart the extension runtime**
+  crashing and runs nothing until you restart it in Settings › Extensions".
+- **Settings › Extensions** then starts with **Restart the extension runtime**
   (when Pane did not restart it) and **Why the extension runtime stopped**,
   whose screen says what happened and what Pane did, and shows the panic
   message ("Diagnostics"; the backtrace, if enabled, goes to standard error
@@ -426,7 +426,7 @@ Limits:
   (#17): with the settings and helper samples running, a crash ends the
   waiting helper (Pane lists none and its heartbeat stops), names no
   extension, pauses nothing, keeps saved data and restarts the runtime;
-  Manage extensions, disable and uninstall work; a second crash soon after
+  Settings › Extensions, disable and uninstall work; a second crash soon after
   stops it until **Restart the extension runtime**; the settings sample's
   **Count**, whose answer a crash lost after it saved, is not run again.
   [`runtime.rs`](../crates/pane-core/src/runtime.rs) checks that a
@@ -443,7 +443,7 @@ Limits:
   before saving "finished".
 - [`crates/pane-core/tests/unresponsive.rs`](../crates/pane-core/tests/unresponsive.rs)
   (#18, with limits shortened through `Runtime::set_limits`): in each
-  language, while Stop responding computes, Manage extensions opens and
+  language, while Stop responding computes, Settings › Extensions opens and
   the calculator (another extension) answers as soon as the call is
   stopped; the call is stopped after the compute limit and says why, never
   saves "finished" and is not run again; the third time pauses the package
@@ -486,7 +486,7 @@ Limits:
 ## Limits
 
 - The toast is the launcher's status line, replaced by the next action's
-  outcome; the lasting status is in Manage extensions. When a crash of an
+  outcome; the lasting status is in Settings › Extensions. When a crash of an
   operation's target pauses it, the caller's own answer (which reports the
   crash) is shown instead of the toast.
 - A guest computing without waiting is stopped after 5 seconds of

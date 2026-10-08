@@ -76,7 +76,7 @@ packages, and every version of one name is one package.
 - A version is exact (`1.2.3`, `1.2.3-beta.1`, `1.2.3+build`); ranges
   (`^1.0.0`) and other tags (`next`) are refused before anything is asked of
   the registry. There is no picker of earlier versions (Q32).
-- An npm package has no **Reload** or **Develop** row in Manage extensions:
+- An npm package has no **Reload** or **Develop** row in Settings › Extensions:
   it has no source folder. Its **Retry** row (after a failure to start),
   disable, clear cache, uninstall and retained data work as for a folder;
   kept data stays with the npm name and installing it again, at any
@@ -154,7 +154,7 @@ which is the user's choice to make (Retry); a disabled one is the user
 switched off, and the code it does not run does not change under it.
 These last two are provisional choices.
 
-**The controls.** Manage extensions ends with **Update extensions
+**The controls.** Settings › Extensions ends with **Update extensions
 automatically** ("On · every eligible extension updates by itself, at
 its source's newer version" / "Off · no extension updates by itself;
 choose Update on a package's preview"), and each installed npm package
@@ -318,7 +318,7 @@ is a local package requiring it.
   its settings and ending the old code's generation; a command that is
   running finishing first, the update waiting until the screen the answer
   is on closes; a pinned, disabled and opted-out package not replaced, and
-  the controls (both rows) checked through Manage extensions; an
+  the controls (both rows) checked through Settings › Extensions; an
   incompatible version, a dependency that cannot be installed and an
   unreachable registry refused with their explanations, the installed
   copy untouched; an installed local folder's copy never asked about or

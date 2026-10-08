@@ -15,7 +15,10 @@
 //!   clippy: the half of `ci` that builds no guests and runs no tests.
 //! - `ci-tests`: build the guests, then run the workspace's tests with
 //!   cargo-nextest, which retries a failing test twice before the run
-//!   fails for it, so one flaky failure costs time, not the run.
+//!   fails for it, so one flaky failure costs time, not the run. Options
+//!   after `ci-tests` (or `ci`) go to `cargo nextest run` as they are: CI
+//!   passes `--partition hash:1/3` to run one shard of the tests, `-E
+//!   <filter>` to run only some, `--no-run` to build them only.
 //! - `package-linux`: build Pane's Linux package and the artifacts its
 //!   default extensions are acquired from, under `target/dist/` (with
 //!   `--dev`, the package's program is the development profile; see
@@ -28,6 +31,12 @@
 //!   under `target/dist/` (`--dev` as for `package-linux`; `package.rs`
 //!   assembles the artifacts everywhere and builds the package itself
 //!   only on macOS).
+//! - `file-index-bench`: build the file index's benchmark in release and
+//!   run it with the options that follow (#174; by default a generated
+//!   tree of 450,000 entries; `--home` indexes the real home folder, read
+//!   only; the options are listed in
+//!   `crates/pane-core/examples/file_index_bench.rs`). It runs on demand,
+//!   never in CI.
 
 mod package;
 mod zip;
@@ -85,6 +94,24 @@ const PREBUILT: &[&str] = &[
 
 fn main() -> ExitCode {
     let task = std::env::args().nth(1);
+    // These pass their options on as they are: the benchmark's are its
+    // own, the tests' are cargo-nextest's.
+    let options = || std::env::args().skip(2).collect::<Vec<_>>();
+    let passing_on = match task.as_deref() {
+        Some("file-index-bench") => Some(file_index_bench(options())),
+        Some("ci-tests") => Some(ci_tests(&options())),
+        Some("ci") => Some(ci(&options())),
+        _ => None,
+    };
+    if let Some(result) = passing_on {
+        return match result {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(message) => {
+                eprintln!("xtask: {message}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let dev = std::env::args().any(|arg| arg == "--dev");
     // The version a package names its program by, when it is not this
     // workspace's own: dotted numbers, as Pane reads versions.
@@ -108,16 +135,15 @@ fn main() -> ExitCode {
     let result = match (task.as_deref(), version) {
         (Some("guests"), _) => guests(),
         (Some("js-guests"), _) => js_guests(),
-        (Some("ci"), _) => ci(),
         (Some("ci-lints"), _) => ci_lints(),
-        (Some("ci-tests"), _) => ci_tests(),
         (Some("package-linux"), Ok(version)) => package::linux(dev, version),
         (Some("package-windows"), Ok(version)) => package::windows(dev, version),
         (Some("package-macos"), Ok(version)) => package::macos(dev, version),
         (_, Err(why)) => Err(why),
         _ => Err("usage: cargo xtask \
-             <guests|js-guests|ci|ci-lints|ci-tests|package-linux|package-windows|package-macos> \
-             [--dev] [--package-version <version>]"
+             <guests|js-guests|ci-lints|package-linux|package-windows|package-macos> \
+             [--dev] [--package-version <version>], cargo xtask <ci|ci-tests> \
+             [nextest options], or cargo xtask file-index-bench [options]"
             .into()),
     };
     match result {
@@ -181,7 +207,9 @@ fn guests() -> Result<(), String> {
                 "sample_helper",
                 "sample_icons",
                 "sample_programs",
+                "sample_files",
                 "faulty",
+                "folder_files",
                 "operations_fixture",
                 "old_api",
                 "mismatched_api",
@@ -378,7 +406,7 @@ fn git_sample(root: &Path, out: &Path) -> Result<(), String> {
 /// (package folder in `guests/packages`, component) of each sample package,
 /// and of the default extensions (the calculator, applications and
 /// quicklinks).
-const SAMPLE_PACKAGES: [(&str, &str); 58] = [
+const SAMPLE_PACKAGES: [(&str, &str); 59] = [
     ("sample-rust", "sample_rust"),
     ("sample-settings", "sample_settings"),
     ("sample-js", "sample_js"),
@@ -415,6 +443,7 @@ const SAMPLE_PACKAGES: [(&str, &str); 58] = [
     ("sample-helper", "sample_helper"),
     ("sample-helper-js", "sample_helper_js"),
     ("sample-helper-ts", "sample_helper_ts"),
+    ("sample-files", "sample_files"),
     ("sample-files-js", "sample_files_js"),
     ("sample-files-ts", "sample_files_ts"),
     ("sample-clipboard-js", "sample_clipboard_js"),
@@ -500,20 +529,41 @@ fn ci_lints() -> Result<(), String> {
 /// twice before the run fails for it, so one flaky failure costs time
 /// rather than the run. cargo-nextest runs no doc tests; this workspace
 /// has none (its documentation's code fences are `text` and `json`, not
-/// Rust), so nothing that `cargo test` ran is lost.
-fn ci_tests() -> Result<(), String> {
+/// Rust), so nothing that `cargo test` ran is lost. `nextest` goes on to
+/// `cargo nextest run` as it is (a shard, a filter, `--no-run`).
+fn ci_tests(nextest: &[String]) -> Result<(), String> {
     guests()?;
-    run(cargo().current_dir(root()).args([
-        "nextest",
-        "run",
-        "--locked",
-        "--workspace",
-        "--retries",
-        "2",
-    ]))
+    run(cargo()
+        .current_dir(root())
+        .args([
+            "nextest",
+            "run",
+            "--locked",
+            "--workspace",
+            "--retries",
+            "2",
+        ])
+        .args(nextest))
 }
 
-fn ci() -> Result<(), String> {
+fn ci(nextest: &[String]) -> Result<(), String> {
     ci_lints()?;
-    ci_tests()
+    ci_tests(nextest)
+}
+
+/// Builds the file index's benchmark in release and runs it with `args`.
+fn file_index_bench(args: Vec<String>) -> Result<(), String> {
+    run(cargo()
+        .current_dir(root())
+        .args([
+            "run",
+            "--locked",
+            "--release",
+            "-p",
+            "pane-core",
+            "--example",
+            "file_index_bench",
+            "--",
+        ])
+        .args(args))
 }

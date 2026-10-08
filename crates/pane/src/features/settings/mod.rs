@@ -73,6 +73,7 @@ use crate::{FocusNext, FocusPrevious};
 pub(crate) mod about;
 pub(crate) mod appearance;
 pub(crate) mod extensions;
+pub(crate) mod file_search;
 pub(crate) mod general;
 pub(crate) mod keyboard;
 pub(crate) mod launcher;
@@ -159,6 +160,10 @@ pub struct SettingsWindow {
     pages: Vec<Page>,
     /// The selected page, an index into `pages`.
     selected: usize,
+    /// On the Extensions group (#168), the identity key of the installed
+    /// extension whose page shows; `None` for the group's own page, and on
+    /// every other page.
+    extension: Option<String>,
     /// The section arrival in flight, if any: the selected page's
     /// content is fading in over a tiny directional shift. Presentation
     /// only — see [`crate::ui::motion`].
@@ -187,11 +192,17 @@ pub struct SettingsWindow {
     shortcuts: shortcuts::State,
     /// The Keyboard page's state, owned by its module.
     keyboard: keyboard::State,
-    /// The Extensions page's state (its preferences' text fields), owned
-    /// by its module.
+    /// The Extensions page's state (its preferences' text fields and
+    /// selects), owned by its module.
     extensions: extensions::State,
+    /// The File Search page's state (its pattern field), owned by its
+    /// module.
+    file_search: file_search::State,
     /// The sidebar's search, owned by its module.
     search: search::State,
+    /// The sidebar's sections list as it scrolls: a long Extensions group
+    /// draws only the entries near its view (#165).
+    sidebar_scroll: gpui::ScrollHandle,
 }
 
 impl SettingsWindow {
@@ -205,7 +216,7 @@ impl SettingsWindow {
         // repaints this window and the launcher without a restart, and
         // the platform's appearance notification feeds the system's
         // appearance back into them (see `crate::settings`).
-        crate::settings::follow(&crate::settings::ensure(cx), window, cx);
+        crate::settings::bind_window_appearance(&crate::settings::ensure(cx), window, cx);
         // The placement the Launcher page explains its choices through,
         // ensuring it exists before the page's search reads it.
         crate::placement::ensure(cx);
@@ -225,6 +236,13 @@ impl SettingsWindow {
             }
         })
         .detach();
+        // A control that had the keyboard and is gone — the install field
+        // once its package shows, an editor or a menu closed — hands it
+        // back to the sidebar's list, where the window's own keys (the
+        // close shortcut, Escape, Up and Down) are bound: focus left on a
+        // control no longer drawn reaches none of them.
+        cx.on_focus_lost(window, |this, window, cx| window.focus(&this.focus, cx))
+            .detach();
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(shortcuts::WATCH).await;
@@ -232,6 +250,7 @@ impl SettingsWindow {
                     .update(cx, |window, cx| {
                         window.shortcuts_watched(cx);
                         window.search_watched(cx);
+                        window.file_search_watched(cx);
                     })
                     .is_err()
                 {
@@ -242,18 +261,22 @@ impl SettingsWindow {
         .detach();
         SettingsWindow {
             launcher: launcher.clone(),
-            // The sidebar's order: General (with the Appearance section),
-            // Launcher, Shortcuts, Keyboard, Extensions, About last.
-            // General is the page the window first shows.
+            // The sidebar's order: Pane's own pages — General (with the
+            // Appearance section), Launcher, Shortcuts, Keyboard, File
+            // Search (#176), About — then the Extensions group, its
+            // installed extensions under it (#168). General is the page the
+            // window first shows.
             pages: vec![
                 general::page(),
                 launcher::page(),
                 shortcuts::page(),
                 keyboard::page(),
-                extensions::page(),
+                file_search::page(),
                 about::page(),
+                extensions::page(),
             ],
             selected: 0,
+            extension: None,
             section_arrival: None,
             drawn_section: None,
             #[cfg(any(test, debug_assertions))]
@@ -266,26 +289,67 @@ impl SettingsWindow {
             shortcuts: shortcuts::State::new(launcher, cx),
             keyboard: keyboard::State::new(window, cx),
             extensions: extensions::State::default(),
+            file_search: file_search::State::default(),
             search: search::State::new(cx),
+            sidebar_scroll: gpui::ScrollHandle::new(),
         }
     }
 
+    /// The sidebar's entries in order, as its keys walk them: each page,
+    /// and after the Extensions group's own entry, each installed
+    /// extension's (#168) — a page's index with the extension's identity
+    /// key, if the entry is an extension's.
+    fn sidebar_order(&self) -> Vec<(usize, Option<String>)> {
+        let mut order = Vec::new();
+        for (index, page) in self.pages.iter().enumerate() {
+            order.push((index, None));
+            if page.title == extensions::TITLE {
+                order.extend(
+                    self.launcher
+                        .packages()
+                        .into_iter()
+                        .map(|package| (index, Some(package.identity.key()))),
+                );
+            }
+        }
+        order
+    }
+
+    /// Where the selected entry is in [`SettingsWindow::sidebar_order`].
+    fn sidebar_position(&self) -> usize {
+        let order = self.sidebar_order();
+        order
+            .iter()
+            .position(|(page, extension)| *page == self.selected && *extension == self.extension)
+            .or_else(|| order.iter().position(|(page, _)| *page == self.selected))
+            .unwrap_or(0)
+    }
+
+    /// Selects the sidebar's entry at `position` in its order.
+    fn select_position(&mut self, position: usize, cx: &mut Context<Self>) {
+        let Some((page, extension)) = self.sidebar_order().get(position).cloned() else {
+            return;
+        };
+        self.selected = page;
+        self.extension = extension;
+        // Page navigation leaves the search: a query showing clears, so
+        // the sidebar returns to the sections as the page changes.
+        self.clear_search(cx);
+        cx.notify();
+    }
+
     fn next_section(&mut self, _: &NextSection, _: &mut Window, cx: &mut Context<Self>) {
-        if self.selected + 1 < self.pages.len() {
-            self.selected += 1;
-            // Page navigation leaves the search: a query showing clears,
-            // so the sidebar returns to the sections as the page changes.
-            self.clear_search(cx);
-            cx.notify();
+        let position = self.sidebar_position();
+        if position + 1 < self.sidebar_order().len() {
+            self.select_position(position + 1, cx);
         }
     }
 
     fn previous_section(&mut self, _: &PreviousSection, _: &mut Window, cx: &mut Context<Self>) {
-        if self.selected > 0 {
-            self.selected -= 1;
+        let position = self.sidebar_position();
+        if position > 0 {
             // As the sections' Down key does.
-            self.clear_search(cx);
-            cx.notify();
+            self.select_position(position - 1, cx);
         }
     }
 
@@ -351,11 +415,13 @@ impl SettingsWindow {
         let rows: Vec<AnyElement> = if searching {
             search::result_rows(self, theme, cx)
         } else {
-            self.pages
-                .iter()
-                .enumerate()
-                .map(|(index, page)| {
-                    let selected = index == self.selected;
+            let mut rows = Vec::new();
+            for (index, page) in self.pages.iter().enumerate() {
+                let group = page.title == extensions::TITLE;
+                // The group's entry is selected while its own page shows,
+                // not an extension's under it.
+                let selected = index == self.selected && !(group && self.extension.is_some());
+                let row = {
                     // Presentation only: the sidebar's own item paints the
                     // chrome — its washes change at once, as the
                     // reference's `.nav` does — and the identity,
@@ -381,19 +447,33 @@ impl SettingsWindow {
                     .aria_label(page.title)
                     .aria_selected(selected)
                     .when(selected, |row| row.aria_active_descendant())
-                    .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                        if this.selected != index {
-                            this.selected = index;
-                            // Choosing a section is page navigation: any
-                            // query showing clears, as the sections' keys
-                            // also do.
-                            this.clear_search(cx);
-                            cx.notify();
-                        }
-                    }))
-                    .into_any_element()
-                })
-                .collect()
+                    .on_click(cx.listener(
+                        move |this, _: &gpui::ClickEvent, _, cx| {
+                            if this.selected != index || this.extension.is_some() {
+                                this.selected = index;
+                                this.extension = None;
+                                // Choosing a section is page navigation: any
+                                // query showing clears, as the sections' keys
+                                // also do.
+                                this.clear_search(cx);
+                                cx.notify();
+                            }
+                        },
+                    ))
+                };
+                if group {
+                    // The group's + menu, and its installed extensions
+                    // under it (#168).
+                    rows.push(
+                        row.children(extensions::add_button(self, theme, cx))
+                            .into_any_element(),
+                    );
+                    rows.extend(extensions::sidebar_entries(self, index, theme, cx));
+                } else {
+                    rows.push(row.into_any_element());
+                }
+            }
+            rows
         };
         // The sidebar's sections scroll inside it when the window is short,
         // independent of the page (see the shell's smaller-window policy).
@@ -401,6 +481,7 @@ impl SettingsWindow {
             .id("sections")
             .debug_selector(|| "sections".into())
             .overflow_y_scroll()
+            .track_scroll(&self.sidebar_scroll)
             .track_focus(&self.focus)
             .role(Role::ListBox)
             .aria_label(if searching {
@@ -444,13 +525,16 @@ impl SettingsWindow {
         // down the list, the page arrives from below; up, from above. A
         // rapid switch retargets from the interrupted presentation, and
         // the first frame a window draws is settled.
-        let moving_down = self.drawn_section.is_some_and(|last| last < self.selected);
+        // Where the selected entry is in the sidebar, an extension's page
+        // among them (#168).
+        let position = self.sidebar_position();
+        let moving_down = self.drawn_section.is_some_and(|last| last < position);
         let from = if moving_down {
             motion::VIEW_SHIFT
         } else {
             -motion::VIEW_SHIFT
         };
-        let changed = self.drawn_section.is_some_and(|last| last != self.selected);
+        let changed = self.drawn_section.is_some_and(|last| last != position);
         let arriving = motion::advance_arrival(
             &mut self.section_arrival,
             from,
@@ -458,7 +542,7 @@ impl SettingsWindow {
             cx.reduce_motion(),
             now,
         );
-        self.drawn_section = Some(self.selected);
+        self.drawn_section = Some(position);
         #[cfg(any(test, debug_assertions))]
         {
             self.arriving = arriving;
@@ -504,8 +588,18 @@ impl Render for SettingsWindow {
             .on_action(cx.listener(Self::search_focus))
             .on_action(cx.listener(Self::close_settings))
             .on_action(cx.listener(Self::escape_settings));
-        // The titlebar names the page showing.
-        let title = self.pages[self.selected].title;
+        // The titlebar names the page showing: an extension's, its title.
+        let title: gpui::SharedString = self
+            .extension
+            .as_ref()
+            .and_then(|key| {
+                self.launcher
+                    .packages()
+                    .into_iter()
+                    .find(|package| package.identity.key() == *key)
+                    .map(|package| package.title().into())
+            })
+            .unwrap_or_else(|| self.pages[self.selected].title.into());
         compose(
             root,
             title,
@@ -524,7 +618,7 @@ impl Render for SettingsWindow {
 /// panel.
 pub(crate) fn compose(
     root: Div,
-    title: &'static str,
+    title: gpui::SharedString,
     sidebar: impl IntoElement,
     page: impl IntoElement,
     theme: &ui::theme::Theme,
@@ -559,7 +653,7 @@ pub(crate) fn compose(
 /// control hitboxes in paint order and takes the first one under the
 /// pointer, so a drag region wrapping the buttons would swallow them.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn titlebar(title: &'static str, theme: &ui::theme::Theme) -> Div {
+fn titlebar(title: gpui::SharedString, theme: &ui::theme::Theme) -> Div {
     let titlebar = settings_shell::titlebar(theme);
     let titlebar = titlebar.debug_selector(|| "settings-titlebar".into());
     // macOS: clear of the traffic lights, which stay where AppKit puts
@@ -747,8 +841,8 @@ pub(crate) fn open(launcher: &Launcher, cx: &mut App) -> WindowHandle<SettingsWi
 /// Opens Pane's Settings window, or focuses the one already open, at the
 /// page titled `page`, scrolled to the control `target` names (a search
 /// anchor's id): the Actions panel's "Configure Command…" and "Configure
-/// Extension…" open an extension's card on the Extensions page this way
-/// (#143).
+/// Extension…" open an extension's page this way (#143, #168), and the
+/// launcher's "Manage Extensions" and install rows the Extensions group.
 pub(crate) fn open_at(launcher: &Launcher, page: &str, target: &str, cx: &mut App) {
     let window = open(launcher, cx);
     window

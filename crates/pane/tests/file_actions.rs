@@ -1,7 +1,8 @@
 //! Search Files and the file actions Pane performs itself (#150) in the
 //! launcher's window, with real key events, the Files default extension,
 //! a recording handler of files and a recording system: typing in the
-//! command's own field lists the granted folder's files; on a document,
+//! command's own field lists the files Pane's file index found (#175, over
+//! a fixture folder standing for the home folder); on a document,
 //! Enter opens it and Ctrl+Enter reveals it, each closing the window; on a
 //! program, Enter reveals it (nothing runs it) and Ctrl+Enter opens the
 //! Actions panel at Open With…. The core's rules (every action, the other
@@ -16,6 +17,7 @@ use std::time::{Duration, Instant};
 use futures::executor::block_on;
 use gpui::{AppContext, Entity, TestAppContext, VisualTestContext};
 use pane::LauncherWindow;
+use pane_core::file_index::{IndexerConfig, WalkOptions};
 use pane_core::{Launcher, LauncherView, LinkOpener, Runtime, Screen, Status};
 use tempfile::TempDir;
 
@@ -59,16 +61,17 @@ fn same_file(reported: &Path, made: &Path) -> bool {
 struct World {
     _data: TempDir,
     _temp: TempDir,
-    /// The granted folder, named plainly inside `_temp` (whose own name
-    /// starts with a dot, which Pane refuses as hidden).
+    /// The folder standing for the home folder, which the file index
+    /// covers, named plainly inside `_temp` (whose own name starts with a
+    /// dot, which the index leaves out as hidden).
     folder: PathBuf,
     opener: FakeOpener,
     system: Arc<RecordingSystem>,
 }
 
 impl World {
-    /// Pane with Files installed and a folder holding `plan.txt` and
-    /// `run plan.bat` granted to it.
+    /// Pane with Files installed and its file index of a folder holding
+    /// `plan.txt` and `run plan.bat` settled.
     fn launcher(cx: &mut TestAppContext) -> (World, Launcher) {
         let package =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/files");
@@ -80,7 +83,7 @@ impl World {
         cx.executor().allow_parking();
         let data = tempfile::tempdir().unwrap();
         let temp = tempfile::tempdir().unwrap();
-        let folder = temp.path().join("Granted");
+        let folder = temp.path().join("Home");
         fs::create_dir(&folder).unwrap();
         fs::write(folder.join("plan.txt"), "plan").unwrap();
         fs::write(folder.join("run plan.bat"), "@echo off").unwrap();
@@ -88,17 +91,29 @@ impl World {
         let system = Arc::new(RecordingSystem::default());
         runtime.set_applications(system.clone());
         let opener = FakeOpener::default();
+        let index = IndexerConfig {
+            first_walk_delay: Duration::ZERO,
+            walk: WalkOptions {
+                background: false,
+                ..WalkOptions::default()
+            },
+            ..IndexerConfig::native(&data.path().join("cache"), folder.clone(), Vec::new())
+        };
         let launcher = Launcher::with_packages(Ok(runtime), vec![], data.path().join("extensions"))
             .with_link_opener(Arc::new(opener.clone()))
-            .with_system(system.clone());
+            .with_system(system.clone())
+            .with_file_index(index);
         block_on(launcher.install_package(&package));
-        launcher.back();
-        let identity = launcher.packages()[0].identity.clone();
-        block_on(launcher.grant_folder(&identity, &folder));
         assert!(
             matches!(launcher.view().status, Status::Result(_)),
             "{:?}",
             launcher.view().status
+        );
+        launcher.back();
+        assert!(
+            launcher.wait_for_file_index(Duration::from_secs(60)),
+            "{:?}",
+            launcher.file_index_status()
         );
         launcher.show_root_search();
         let world = World {
@@ -138,13 +153,14 @@ fn search_files<'a>(
         view.status
     );
     cx.simulate_input(query);
-    // The files found, once the folder is listed and the search answered.
+    // The files found, once the search answered: each titled with its
+    // name and its folder below the home folder.
     until(&window, cx, |view| {
         view.status != Status::Running
             && view.rows.iter().any(|row| {
                 row.subtitle
                     .as_deref()
-                    .is_some_and(|subtitle| subtitle.starts_with("File in"))
+                    .is_some_and(|subtitle| subtitle.starts_with('~'))
             })
     });
     settle(&window, cx);

@@ -10,137 +10,153 @@ name: CI (fast)
 # of this workflow with `verify` set, which the agent asks for once it
 # believes the branch is done:
 #   gh workflow run ci-fast.yml --ref <branch> -f verify=true
-# It used to be a "[verify]" in the pushed commit's message, which left
-# a trail of empty retry commits on main; a run asks for nothing in the
-# history. Plain iterations never pay for it. The full ci.yml matrix (smokes, renderers, packaging,
-# guests-from-source) ignores these branches; the merger lands them on
-# the milestone's PR branch, whose pushes take the branch tier in
-# ci-branch.yml; that matrix runs on pushes to main (or on demand), as
-# docs/agents/ci.md describes.
+# and a manual run with `tests` set rechecks only the tests it names:
+#   gh workflow run ci-fast.yml --ref <branch> -f tests='test(/file_index/)'
+# A run asks for nothing in the history (the old "[verify]" commit
+# message left a trail of empty retry commits on main). The full ci.yml
+# matrix (smokes, renderers, packaging, guests-from-source) ignores these
+# branches; the merger lands them on the milestone's PR branch, whose
+# pushes take the branch tier in ci-branch.yml. docs/agents/ci.md
+# describes the tiers.
 on:
   push:
     branches:
       - "pi-subagent/**"
-  # The verification tier, asked for by a manual run (above). `inputs`
-  # is empty on a push, so `inputs.verify` is false there.
+  # `inputs` is empty on a push, so there `inputs.verify` is false and
+  # `inputs.tests` empty: the quick tier.
   workflow_dispatch:
     inputs:
       verify:
         description: Run the full check leg (guests, clippy, tests) and the macOS check
         type: boolean
         default: true
+      tests:
+        description: >-
+          Run only these tests instead, as a nextest filter expression such as
+          test(/file_index/), on Linux, Windows and macOS, to recheck fixes
+          without the whole suite; leave empty for the full verify run
+        type: string
+        default: ''
 
 # As in ci.yml: one run per branch, a superseded run cancelled.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
+  # The quick tier: compile feedback only. `cargo check --all-targets`
+  # type-checks the workspace's libraries, binaries, tests and examples
+  # without codegen or linking, and the root workspace does not include
+  # the guest crates, so no wasm is built. It catches the cross-platform
+  # compile errors (the cfg-gating class) in minutes.
   check:
     name: Check (${{ matrix.os }})
+    if: ${{ !inputs.verify && !inputs.tests }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, windows-2025]
     runs-on: ${{ matrix.os }}
-    env:
-      # As in ci.yml's check job: the Linux binaries link with mold,
-      # host-triple-scoped so the wasm guest builds keep their own
-      # linker (a verify run builds them).
-      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ${{ matrix.os == 'ubuntu-24.04' && '-C link-arg=-fuse-ld=mold' || '' }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install Linux build dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
-            libxcb1-dev libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers \
-            xvfb xdotool imagemagick mold
-      - name: Install the pinned Rust toolchain
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            .
-            guests
-            guests/fixtures/mixed-p2
-      # The quick tier: compile feedback only. `cargo check
-      # --all-targets` type-checks the workspace's libraries, binaries,
-      # tests and examples without codegen or linking, and the root
-      # workspace does not include the guest crates, so no wasm is
-      # built. It catches the cross-platform compile errors (the
-      # cfg-gating class) in minutes.
+      - uses: ./.github/actions/setup
       - name: Quick compile check
-        if: ${{ !inputs.verify }}
         run: |
           cargo fmt --all --check
           cargo check --locked --workspace --all-targets
-      # cargo-nextest, which the verify tier's `cargo xtask ci` runs
-      # the tests with (a flaky failure is retried, not fatal to the
-      # run); installed only when that tier runs, as the quick tier runs
-      # no tests. Pinned to an exact version as ci.yml pins cargo-deny.
-      - uses: taiki-e/install-action@v2
-        if: ${{ inputs.verify }}
+
+  # The verify tier, the full check leg of ci.yml on Linux and Windows:
+  # the lints beside the tests, the tests split into shards that run at
+  # once, as in ci-branch.yml.
+  lints:
+    name: Lints (${{ matrix.os }})
+    if: ${{ inputs.verify && !inputs.tests }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Check formatting, prebuilt samples and lints
+        run: cargo xtask ci-lints
+
+  tests:
+    name: Tests (${{ matrix.os }}, ${{ matrix.shard }})
+    if: ${{ inputs.verify && !inputs.tests }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+        # nextest's hash partition, as in ci-branch.yml.
+        shard: [1/3, 2/3, 3/3]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
         with:
-          tool: cargo-nextest@0.9.146
-      # The verification tier: the agent asks for it with a manual run
-      # (`verify` set) — the full check leg of ci.yml (guests, clippy
-      # -D warnings, the workspace tests).
-      - name: Full checks and tests
-        if: ${{ inputs.verify }}
-        run: cargo xtask ci
-        env:
-          # As in ci.yml: the real-clipboard adapter tests opt in where a
-          # logged-in session exists; on Linux they run under Xvfb below.
-          PANE_TEST_REAL_CLIPBOARD: ${{ runner.os != 'Linux' && '1' || '' }}
-          # As in ci.yml: the Windows system icon adapter's test (#142).
-          PANE_TEST_SYSTEM_ICONS: ${{ runner.os == 'Windows' && '1' || '' }}
-          # As in ci.yml: the program containment adapter test starts and
-          # ends real processes of its own.
-          PANE_TEST_PROCESS_TREES: "1"
-      # The Linux (X11) clipboard adapter's test also replaces what is on
-      # the clipboard, and needs a display to watch: the same opt-in, run
-      # under Xvfb (the step above runs without a display, so the test
-      # skips itself there).
+          tests: true
+      - name: Build guests and run this shard of the tests
+        run: cargo xtask ci-tests --partition hash:${{ matrix.shard }}
+      # As in ci-branch.yml: the Linux (X11) clipboard adapter's test
+      # under Xvfb, in one shard, reusing its build.
       - name: Run the Linux clipboard adapter test (Xvfb)
-        if: ${{ runner.os == 'Linux' && inputs.verify }}
-        run: xvfb-run -a cargo test --locked -p pane-core --test clipboard_adapter_linux
+        if: runner.os == 'Linux' && matrix.shard == '1/3'
+        run: xvfb-run -a cargo nextest run --locked --workspace --retries 2 -E 'binary(clipboard_adapter_linux)'
         env:
           PANE_TEST_REAL_CLIPBOARD: "1"
 
-  # The quick tier compiles Linux and Windows; the macOS-gated code
-  # (the autostart, tray, placement and hotkey adapters) is compiled
-  # only by the branch tier and the release matrix. A verify run is
-  # the ticket's completion signal, so it also pays a compile check on
-  # macOS: an uncompiled macOS adapter (wave 4's tray and placement
-  # adapters each shipped a real error) is then caught at the ticket,
-  # not at the wave gate. Plain iterations never pay for it.
+  # The quick tier compiles Linux and Windows; the macOS-gated code (the
+  # autostart, tray, placement and hotkey adapters) is compiled only by
+  # the branch tier and the release matrix. A verify run is the ticket's
+  # completion signal, so it also pays a compile check on macOS: an
+  # uncompiled macOS adapter (wave 4's tray and placement adapters each
+  # shipped a real error) is then caught at the ticket, not at the wave
+  # gate. Plain iterations never pay for it.
   macos-check:
-    name: Check (macos-15, verify only)
-    if: inputs.verify
+    name: Check (macos-15)
+    if: ${{ inputs.verify && !inputs.tests }}
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - name: Install the pinned Rust toolchain
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            .
-            guests
-            guests/fixtures/mixed-p2
+      - uses: ./.github/actions/setup
       - name: Quick compile check
         run: |
           cargo fmt --all --check
           cargo check --locked --workspace --all-targets
       # The macOS clipboard adapter's test replaces what is on the
       # clipboard; the runner's logged-in session keeps the pasteboard
-      # live, as ci.yml's check job does on its macOS leg.
+      # live, as in ci.yml's tests on macOS.
       - name: Run the macOS clipboard adapter test
         run: cargo test --locked -p pane-core --test clipboard_adapter_macos
         env:
           PANE_TEST_REAL_CLIPBOARD: "1"
+
+  # A manual run with `tests` set rechecks just those tests on Linux,
+  # Windows and macOS: the guests they load, then the chosen tests, with
+  # the same opt-ins as every test job.
+  chosen:
+    name: Chosen tests (${{ matrix.os }})
+    if: ${{ inputs.tests }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          tests: true
+      - name: Build guests and run the chosen tests
+        shell: bash
+        run: cargo xtask ci-tests -E "$TESTS"
+        env:
+          TESTS: ${{ inputs.tests }}
 
   # The JS/TS sample components are committed (guests/prebuilt), and the
   # verify tier's prebuilt-samples check fails once their sources, the
@@ -152,7 +168,7 @@ jobs:
   # asking for a verify run. A push whose components are current skips
   # the rebuild after the check.
   js-guests:
-    name: Rebuild stale JS/TS samples (Linux)
+    name: Rebuild stale JS/TS samples (ubuntu-24.04)
     if: ${{ !inputs.verify }}
     runs-on: ubuntu-24.04
     steps:
@@ -191,3 +207,20 @@ jobs:
         with:
           name: js-guests
           path: guests/prebuilt
+
+  # The one check to require, as in ci-branch.yml: green when every job
+  # above passed or was skipped. A job added here is added to `needs`.
+  passed:
+    name: CI passed
+    if: always()
+    needs: [check, lints, tests, macos-check, chosen, js-guests]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Every job passed or was skipped
+        run: |
+          for result in ${{ join(needs.*.result, ' ') }}; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "A job ended with: $result"; exit 1 ;;
+            esac
+          done

@@ -1,5 +1,7 @@
 # Let the host register the global hotkeys users assign to commands
 
+**Amended:** [ADR 0043](0043-extensions-are-managed-in-settings-one-page-per-extension.md) (accepted 2026-10-07) moves managing extensions to Settings: a command's hotkey is assigned on its extension's page or the Shortcuts page, and the launcher has no "Manage extensions" screen. A command turned off on its page releases its hotkey, as a disabled extension does, and registers it again once it is on. The rest below holds; preserve the original text.
+
 Proposed 2026-09-28 by the implementation of #32, #33 and #34; not yet confirmed by the user. The spec's access direction includes hotkeys (US10), and disabling an extension must stop its hotkeys (US57). A WASI 0.3 guest cannot see key presses in other applications, and a hotkey is a user's binding of a command, not something the command does.
 
 So the core owns global hotkeys: the user assigns one to any installed command in Manage extensions, Pane keeps the choice in its own record (`hotkeys.json` beside `installed.json`, by command id, not in the extension's data), and registers it with the system exactly while the command is offered (its package enabled, the command available here). A press opens the command in Pane's window as root search would. No extension API is added: an extension cannot assign, read or declare a hotkey, so any command in any language can have one and nothing runs until it is pressed ([ADR 0005](0005-lazy-activation-and-managed-dependencies.md)).

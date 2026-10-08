@@ -26,7 +26,7 @@ mod rows;
 use feedback::shown;
 use rows::{select_title, titles};
 
-const MANAGE_ROW: &str = "Manage extensions…";
+const MANAGE_ROW: &str = "Manage Extensions";
 const KEEP_ROW: &str = "Uninstall and keep saved data";
 const DELETE_ROW: &str = "Uninstall and delete saved data";
 const DELETE_RETAINED_ROW: &str = "Delete retained data";

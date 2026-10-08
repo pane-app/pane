@@ -61,6 +61,7 @@ pub(super) fn run(
 
     use super::runner::{self, stopped_code};
     use crate::process_tree::windows_job::Job;
+    use crate::util::wide;
 
     /// How long each wait for the program lasts before the run checks
     /// whether it must end, in milliseconds.
@@ -96,17 +97,12 @@ pub(super) fn run(
         return Err(runner::quitting(request));
     }
     let launch = runner::launch(request, owner)?;
-    let wide = |text: &std::ffi::OsStr| -> Vec<u16> {
-        use std::os::windows::ffi::OsStrExt;
-        text.encode_wide().chain([0]).collect()
-    };
-    let file = wide(launch.path.as_os_str());
-    let parameters = wide(std::ffi::OsStr::new(&command_line(&request.args)));
-    let folder = launch
-        .folder
-        .as_ref()
-        .map(|folder| wide(folder.as_os_str()));
-    let _com = Com::new();
+    let file = wide(&launch.path);
+    let parameters = wide(command_line(&request.args));
+    let folder = launch.folder.as_ref().map(wide);
+    // COM for the shell's elevation, while this runs; without it the
+    // shell may still elevate.
+    let _com = crate::windows_shell::Com::new();
     let mut info = SHELLEXECUTEINFOW {
         cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
         // Pane waits for the program, and explains a failure itself.
@@ -217,37 +213,6 @@ pub(super) fn run(
         stdout: Vec::new(),
         stderr: Vec::new(),
     })
-}
-
-/// COM on the calling thread for the shell's elevation, while this lives.
-#[cfg(windows)]
-struct Com {
-    initialized: bool,
-}
-
-#[cfg(windows)]
-impl Com {
-    fn new() -> Com {
-        use windows::Win32::System::Com::{
-            COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx,
-        };
-        // SAFETY: no reserved pointer; paired with CoUninitialize in `drop`.
-        let result =
-            unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) };
-        Com {
-            initialized: result.is_ok(),
-        }
-    }
-}
-
-#[cfg(windows)]
-impl Drop for Com {
-    fn drop(&mut self) {
-        if self.initialized {
-            // SAFETY: pairs the successful CoInitializeEx in `new`.
-            unsafe { windows::Win32::System::Com::CoUninitialize() };
-        }
-    }
 }
 
 /// `args` as one Windows command line, quoted so that the program's

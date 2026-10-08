@@ -47,6 +47,26 @@ then brings the window to the foreground and sends real key events with
 presses Enter to open it, Down and Enter to run "Wait briefly" (an async WASI 0.3
 clock import inside the guest), then Escape.
 
+Extensions are managed in Settings since #168, where switches, menus and
+confirmation rows answer the pointer only. The smoke opens Settings with
+root search's Manage Extensions command, then finds each control by its
+accessible name in the Settings window through UI Automation
+(`UIAutomationClient`; Pane's tree comes from AccessKit) and toggles or
+invokes it, clicking its center where it offers no pattern. It checks an
+operation's outcome by the name of the page's status line, not by a
+color, and closes Settings with Ctrl+W before it goes back to the
+launcher. Lines of plain text (a preview's details) have no accessible
+name, so a preview is waited for by its row (Update, Install). Release run
+37689872256 drove Settings this way through frame 68; it failed at frame
+69, Echo's answer: a command's answer is a toast since #141, which leaves
+the footer 3 seconds after it appears, and the fixed 3-second wait
+captured the screen after it had left. Such answers are now captured
+until their color shows (`Capture-Until`), from half a second after the
+key. Release run 37698693722 then reached the Files phase, where an
+Escape after installing Files hid the launcher (the install lands on a
+blank root search, where Escape hides it), so frame 221 showed the
+desktop; the return to root key (Shift+Escape) is pressed there instead.
+
 It fails if the window does not appear or Pane exits. The same three screenshot
 checks as on macOS and Linux also run (`scripts/check_screenshot.py`):
 
@@ -58,7 +78,7 @@ Screenshots, cropped to the window (and inspected):
 
 | Step | Evidence |
 | --- | --- |
-| Root search lists the three sample commands | [1-root.png](evidence/windows/1-root.png) |
+| Root search lists the three samples, installed first into a data folder of their own (#162) | [1-root.png](evidence/windows/1-root.png) |
 | Rust command opened; action result "Waited 50 ms inside the Rust guest" | [2-command-0.png](evidence/windows/2-command-0.png), [2-result-0.png](evidence/windows/2-result-0.png) |
 | JavaScript command; "Waited 50 ms inside the JavaScript guest" | [3-command-1.png](evidence/windows/3-command-1.png), [3-result-1.png](evidence/windows/3-result-1.png) |
 | TypeScript command; "Waited 50 ms inside the TypeScript guest" | [4-command-2.png](evidence/windows/4-command-2.png), [4-result-2.png](evidence/windows/4-result-2.png) |
@@ -125,7 +145,9 @@ here is checked only through the tests' recording opener. Not run yet.
 ## Global hotkeys (#32)
 
 The smoke's hotkey phase (screenshots 52 to 58, [global hotkeys](../hotkeys.md#checks))
-assigns Ctrl+Alt+G to Greeting on its hotkey screen, minimizes Pane,
+assigns Ctrl+Alt+G to Greeting in the hotkey recorder on the settings
+sample's page in Settings (#168; it was the launcher's hotkey screen
+before), minimizes Pane,
 presses it with `SendKeys` and checks that Pane's window is the foreground
 window again with Greeting open; then again after a restart; then, with the
 extension disabled, that pressing it leaves Pane minimized and unchanged.
@@ -141,8 +163,8 @@ transition (foreground rules) are unverified natively.
 The smoke's retained-data phase (screenshots 63 to 65, [deleting retained
 data](../extension-data.md#deleting-retained-data)), with a data folder of
 its own, saves a note with the settings sample, uninstalls it keeping its
-saved data, deletes its retained data from the extension list's last row
-(Down from the selected Cancel, then Enter), checks that `installed.json`
+saved data, deletes its retained data from its row on the Extensions
+group's page in Settings and confirms (#168), checks that `installed.json`
 and `content.json` no longer hold it, and reinstalls the same folder, which
 must show nothing kept. **Not run on Windows yet.** A data file locked by
 another program is covered only by the tests' unreadable files, and a
@@ -152,7 +174,8 @@ record that cannot be written after the data is deleted only by a Unix test.
 
 The smoke's alias phase (screenshots 66 to 74, [aliases and fallbacks](../aliases.md#checks))
 gives Echo, the query sample's command, the alias "ec" and makes it a
-fallback in Manage extensions, sends "ec hello" and, from the unselected
+fallback on its extension's page in Settings (its alias cell and fallback
+switch, #168), sends "ec hello" and, from the unselected
 fallback row chosen with Down, "zqx" to it, and checks that with the
 extension disabled "ec hello" lists nothing. Nothing in it is specific to
 Windows (no system API is involved); **not run on Windows yet**.
@@ -201,7 +224,8 @@ No Windows arm64 build was made.
 
 The smoke's last phase (screenshots 110 to 136, [development
 mode](../development-mode.md#checks)) builds a copy of each development
-sample, develops it from Manage extensions, saves an edit, a change that
+sample, develops it from its page in Settings (Develop in the Actions
+menu, #168), saves an edit, a change that
 does not build, two saves in a row and, after stopping, one more, checking
 the answers, the error and that nothing is built after stopping. The
 TypeScript and JavaScript samples run only where the JS toolchain is built,
@@ -215,11 +239,11 @@ are unverified natively.
 ## Disabling required dependents (#43)
 
 The disable-dependents phase (screenshots 140 to 143, [disabling a required dependency](../dependencies.md#disabling-a-required-dependency)),
-with a data folder of its own, installs the dependencies sample, presses
-Enter on the JavaScript operations sample in Manage extensions, which must
-ask first (the details color), cancels, then chooses Disable all (the
-result color) and enables the JavaScript sample again alone (the result
-color); `installed.json` must then record exactly one disabled package.
+with a data folder of its own, installs the dependencies sample, turns off
+the JavaScript operations sample's switch on its page in Settings (#168),
+which must ask first (its Disable all row shown), cancels, then chooses
+Disable all (the page's status says so) and enables the JavaScript sample
+again alone; `installed.json` must then record exactly one disabled package.
 Nothing in it is specific to Windows (no system API is involved; the
 closure reuses the dependency identities recorded at install); **not run on
 Windows yet**.
@@ -234,8 +258,9 @@ Count, starts the waiting helper and has the runtime crash: the helper must
 be gone (`Get-Process`, and its heartbeat must stop growing), the note it saved kept,
 and the status line the error color. A second crash, injected before
 Count's answer, must leave the count at 2 and the runtime stopped; root
-search explains it, Manage extensions shows why (the details color), a
-disable works, **Restart the extension runtime** runs extensions again and
+search explains it, the Extensions group's page in Settings shows why (its
+runtime rows, and the details behind one), a disable works, **Restart the
+extension runtime** runs extensions again and
 Count then counts 3; no package may be recorded as paused. Nothing in it is
 specific to Windows (the runtime is a thread; helpers are ended as for a
 disable); **not run on Windows yet**.
@@ -248,7 +273,7 @@ sets the runtime's limits through the fault file, first `limits:60,4,15`
 (a minute of a guest's own computing), installs the settings sample and
 runs its **Stop responding**, which computes without waiting: while it
 still computes (Pane's standard error has stopped no call yet), Escape and
-Manage extensions must answer (the details color, frame 240); then
+Manage Extensions must answer (Settings opens, frame 240); then
 `limits:2,4,15` must stop that call at once, as it computed longer; run
 again, the call must be stopped after 2 seconds of its own computing (thread CPU time from
 `GetThreadTimes` on Windows, `CLOCK_THREAD_CPUTIME_ID` on macOS) with the
@@ -257,7 +282,7 @@ colors), with the saved `busy` note still "started"; the pause details and
 Retry must work. Then the runtime thread is made to hang through the fault
 file (`hang`): opening Greeting must first show "not responding yet" (the
 progress color, frame 245), then the error color after Pane gave up on the
-thread, Manage extensions' first row must
+thread, the runtime row of the Extensions group's page in Settings must
 open the runtime's details, and after `release` a fresh thread must save
 the formal greeting; no package may be recorded as paused. Epoch
 interruption and the watchdog are Wasmtime's and Pane's own, with nothing
@@ -266,10 +291,10 @@ specific to Windows; **not run on Windows yet**.
 ## Uninstalling required dependents (#44)
 
 A phase of the smoke (screenshots 180 to 183, [uninstalling a required dependency](../dependencies.md#uninstalling-a-required-dependency)),
-with a data folder of its own, installs the dependencies sample, presses
-Enter on "Uninstall JavaScript operations sample" in Manage extensions,
-which must ask first (the details color), cancels, then chooses Uninstall
-all 2 keeping saved data (the result color); `installed.json` must then hold
+with a data folder of its own, installs the dependencies sample, chooses
+Uninstall in the Actions menu of the JavaScript operations sample's page in
+Settings (#168), which must ask first, cancels, then chooses Uninstall all 2
+keeping saved data (the page's status says so); `installed.json` must then hold
 no package. Pane is started again to install the JavaScript operations
 sample alone, and `installed.json` must then hold exactly one package.
 Removing a managed copy uses the same `remove_dir_all` as a single
@@ -285,8 +310,9 @@ with a data folder of its own, starts `scripts/npm_registry.py` (with
 and points the development build at it with `PANE_NPM_REGISTRY`: it installs
 the local Dependencies from npm sample, which downloads and installs the npm
 package it requires, calls its `greet` operation, then names the npm package
-in "Install extension from npm…" (two rows up from the last row; SendKeys types
-`@pane-samples/greeter`), updates it and runs its command, which answers
+in the npm field "Install extension from npm…" opens in Settings (#168;
+SendKeys types `@pane-samples/greeter`, and Show Package previews it there),
+updates it and runs its command, which answers
 "Hello from the npm package". #49 extends the phase: a 0.2.0 of the
 sample is published into the registry's folder (`scripts/npm_publish.py`;
 the registry reads its folder on request), Pane is stopped and started
@@ -320,9 +346,9 @@ configuration) and serves it on 127.0.0.1 with `scripts/repository_server.py
 serve`, which runs `git upload-pack`: `--install git:<address>` explains the
 default branch as source-only (300, captured again every half second until
 the explanation's color shows, for up to 60 s, rather than after a fixed
-delay), then "Install extension from Git…"
-(root's last row there, with nothing installed) takes `<address>@v0.1.0`
-(301), previews the tag, pinned (302), installs it (303) and runs its
+delay), then "Install extension from Git…", found by its title, opens the
+Git field in Settings (#168), which takes `<address>@v0.1.0`
+(301); Show Package previews the tag, pinned (302), Install installs it (303), and the smoke runs its
 command, which answers "Hello from the Git repository" (304);
 `installed.json`, read as JSON (`scripts/check_git_record.py`'s checks, done with `ConvertFrom-Json`), must then
 record one package from Git with `"gitRef": "refs/tags/v0.1.0"`, `pinned`
@@ -352,19 +378,23 @@ evidence).
 
 ## Files (#29)
 
-The files phase (screenshots 220 to 223, [files](../files.md)), with a data
-folder of its own, installs Files and presses Enter on Pane's own "Choose
-folder…" row; a debug build's `PANE_TEST_CHOOSE_FOLDER` names a fixture
-folder "Pane smoke files" (spaces) in the smoke's output folder instead of
-showing the system's picker. It types "plan", which must list "Résumé plan
-ü.txt" selected, and presses Enter. The real opener (PowerShell's
+The files phase (screenshots 220 to 224, [files](../files.md)), with a data
+folder of its own, installs Files (220, "Installed Files"), whose file
+index (#175) covers a fixture folder "Pane smoke files" (spaces) in the
+smoke's output folder that a debug build's `PANE_TEST_FILE_INDEX_HOME`
+names instead of the home folder; there is no folder to choose any more.
+It types "plan" in root search, which must list "Résumé plan ü.txt" under
+"Files", selected, and presses Enter. Files installed from its folder is not
+the registered default, so its Search Files command keeps the generic list
+(#177): the smoke does not open it. The real opener (PowerShell's
 `Invoke-Item -LiteralPath` for an existing path, through the `open` crate,
 the path passed in an environment variable) can show the "Open with" dialog
 for a type with no handler, so a debug build's `PANE_TEST_OPEN_FILE_LOG`
 makes it record the path in a file instead; the recorded path, resolved,
 must be the fixture file's, resolved. Last it types "runner" and presses
-Enter on a batch file, which Pane must refuse without recording or running
-it. A positive native open on Windows is therefore not run by the smoke. The
+Enter on a batch file, which Pane must show in File Explorer without
+recording or running it (ADR 0037). A positive native open on Windows is
+therefore not run by the smoke. The
 scan policy skips entries with the hidden or system attribute and junctions
 (reparse points) on Windows only, and a grant refuses UNC paths from their
 text before any file system call; a Windows-only test (`attrib +h`,
@@ -394,15 +424,20 @@ do. The fix was checked by reading only (no PowerShell or Windows here).
 ## Clipboard history (#35)
 
 The smoke's clipboard phase (screenshots 280 to 285, [clipboard history](../clipboard-history.md#checks)),
-with a data folder of its own, installs Clipboard History and checks
-`clipboard-history.json` at each step: text copied before it is turned on is
-not kept; once turned on (its first row) plain text is kept, while text
+with a data folder of its own, runs after the #51 phase: since #166 only
+Pane's registered Clipboard History records from the first start, so the
+phase acquires the default set from the artifacts that phase built, served
+on 127.0.0.1, with the smoke's own build (Files' index on an empty folder,
+`PANE_TEST_FILE_INDEX_HOME`). It checks `clipboard-history.json` at each
+step: plain text copied with nothing turned on is kept, while text
 carrying `ExcludeClipboardContentFromMonitorProcessing`,
 `CanIncludeInClipboardHistory` = 0 or `CanUploadToCloudClipboard` = 0 is
-not; nothing is kept while paused, or while disabled, also after a restart;
-Enter on a kept item puts it on the clipboard again and moves it to the
-front; enabled again, text is kept, also after a restart, before the command
-is opened. The smoke copies only its own `pane-smoke-...` text, through the
+not; nothing is kept while paused (Pause Recording in the split view's
+Actions panel, Ctrl+K), or while disabled (the switch on its page in
+Settings), also after a restart; Enter on a record (the view's filter
+leaves it) puts it on the clipboard again and moves it to the front;
+enabled again, text is kept, also after a restart, before the command is
+opened. The smoke copies only its own `pane-smoke-...` text, through the
 clipboard API from PowerShell, and so replaces what was on the clipboard,
 without reading or restoring it. `clipboard_adapter.rs` checks the adapter
 alone: plain text reported with its owner (the test's process), each marker
@@ -423,23 +458,22 @@ owner lookup and the DACL are unverified natively.
 
 ## Clipboard history expiry and deletion (#36)
 
-The clipboard phase goes on (screenshots 400 to 404, [clipboard
+The clipboard phase goes on (screenshots 400 to 405, [clipboard
 history](../clipboard-history.md#checks)) with the history it kept. With
 Pane stopped, the smoke makes `pane-smoke-kept` 8 days old and
 `pane-smoke-enabled` 2 hours old in `clipboard-history.json`
 (`scripts/clipboard_history.py`), as a downtime would; once Pane starts,
 the first is gone from the file and the list before the command shows
-anything. Then, in the command: Enter on `pane-smoke-second` and "Delete
-it" deletes that item alone, and the clipboard is unchanged; Delete recent
-items (the last hour) deletes the two copied minutes before and keeps
-`pane-smoke-enabled`; keeping items for 1 hour deletes it at once; after
-one more copy, Turn off and delete clipboard history deletes that and turns
-history off (no `capture` in the file), the clipboard still holding the
-copied text, and a later copy is not kept. The #35 step that copies an item
-again now takes Enter on the item, then Enter on "Copy it again". Written
-on Linux without PowerShell, so it was only reviewed by reading: **not run
-or even parsed yet**; CI's next green Windows run of the branch is its
-evidence.
+anything. Then, in the split view's Actions panel (#166): Delete Entry on
+`pane-smoke-second` deletes that record alone, and the clipboard is
+unchanged; keeping records for 1 Hour deletes `pane-smoke-enabled` at once;
+a file copied as File Explorer copies it (`CF_HDROP`) is kept as a file
+(#167, 403); and Clear History, once confirmed (404), deletes every record
+while recording goes on (`capture` stays `on`), the clipboard still
+holding the copied text, and a later copy is kept. The forms #36 added
+(Delete recent items, Turn off and delete) are gone since #166. Rewritten
+with #161 and parsed, **not run yet**.
+
 
 ## Text input and accessibility findings
 
@@ -553,9 +587,9 @@ can't be ruled out from the log.
 | The installed command answers ("Hello from the Rust guest") | [11-installed-result.png](evidence/windows/11-installed-result.png) |
 | Still listed after a restart | [12-restarted.png](evidence/windows/12-restarted.png) |
 
-The installed copy has the same title as the built-in Rust sample, so the
-screenshots can't show which copy opened; the core tests prove the installed
-copy runs. In these screenshots the root list is taller than the window and its
+Since #162 Pane registers no sample command: the first phase installs the
+three samples into a data folder of their own, and this phase's data folder
+lists the installed Rust sample alone, so the screenshots show that copy. In these screenshots the root list is taller than the window and its
 last row is cut off; since #19 the list scrolls to keep the selected row
 visible.
 
@@ -584,15 +618,15 @@ checked with `Get-Command` of cargo, rustc, node, npm, git, cc, clang and
 make; a running process's own environment cannot be read on Windows, so
 what is checked is the environment `Start-Process` hands the child),
 pointed at the controlled source with `PANE_ARTIFACTS`. It acquires the
-calculator and the helper sample by itself (`installed.json` must record
-both under `"default"`), root search lists their commands, "6*7" answers
-42 and Enter copies it, and the Helper sample's "Echo through the helper"
-runs the payload's prebuilt `pane-echo.exe` ("Echoed \"hello from Pane\"
-on Windows x86-64"), from the managed copy, with no developer tool
-reachable. The acquired payloads must be cached, the downloads folder
-empty, and no helper process left running. The program files are removed
-again at the phase's end, so the uploaded evidence is the screenshots and
-records (frames 500 to 503), not the program. CI builds the
+five default extensions by itself (`installed.json` must record each under
+`"default"`, and no sample: the helper sample left the default set with
+#162, and a helper running from an acquired payload is
+`crates/pane-core/tests/installer.rs`'s), root search lists their
+commands, "6*7" answers 42 and Enter copies it, with no developer tool
+reachable. The acquired payloads must be cached and the downloads folder
+empty. The program files are removed again at the phase's end, so the
+uploaded evidence is the screenshots and records (frames 500 to 502), not
+the program. CI builds the
 release-profile package after the smoke and uploads it with the artifacts
 of the job (`windows-package`).
 
@@ -624,10 +658,9 @@ README answers is answered.
 
 | Step | Evidence |
 | --- | --- |
-| The clean machine's Pane acquired both default extensions and lists their commands | pending CI (frame 500) |
+| The clean machine's Pane acquired the five default extensions, and no sample (#162), and lists their commands | pending CI (frame 500) |
 | "6*7" answers 42 | pending CI (frame 501) |
 | Enter copies the answer | pending CI (frame 502) |
-| The helper sample's prebuilt helper answers | pending CI (frame 503) |
 
 ## Installing a Pane application update by the user's choice (#54)
 
@@ -648,9 +681,10 @@ background, checks the index for a newer version of itself: the offer
 appears as **Update Pane to 99.0.0** in root search (frame 601; the
 status line tells what was found, frame 600). The artifact server's log
 must hold **no request for the package** until the row is chosen —
-nothing is downloaded, installed or restarted automatically. The Helper
-sample is disabled first, so an extension the user disabled before the
-update must stay disabled after it. Choosing the row with a **damaged
+nothing is downloaded, installed or restarted automatically. Clipboard
+History is disabled first (the Helper sample was, until #162 took it out
+of the default set), so an extension the user disabled before the update
+must stay disabled after it. Choosing the row with a **damaged
 package** is explained (its bytes do not match the sha512 its entry
 gives, frame 602) with the program, the data and the folder untouched
 and the row ready to try again; then the real choice downloads the
@@ -660,7 +694,7 @@ staging folder gone (frame 603, and hash checks of both programs against
 the two packages' own files). The next start runs the new version: it
 reports `Pane 99.0.0`, removes `pane.exe.old` at start, the calculator
 still answers "6*7" with 42 from the old version's acquired payload
-(frames 604 and 605), and the disabled Helper sample stays disabled —
+(frames 604 and 605), and the disabled Clipboard History stays disabled —
 Pane's data was never touched. Pane itself was never restarted by the
 update: the smoke stops the old process and starts the new program
 itself, exactly as the user would.

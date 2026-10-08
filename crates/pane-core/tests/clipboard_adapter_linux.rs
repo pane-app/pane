@@ -1,8 +1,9 @@
 //! The Linux (X11) clipboard adapter against the real X11 clipboard: it
 //! reports each change the test makes with the program that copied, reads
-//! a copy no text can be read from as none, reports an owner that names no
-//! program as unknown, puts text on it, and reports nothing once its watch
-//! is dropped.
+//! a copy no text can be read from as none, a PNG image and a file
+//! manager's list of files as what they are (#167), reports an owner that
+//! names no program as unknown, puts text, an image and files on it, and
+//! reports nothing once its watch is dropped.
 //!
 //! The test replaces what is on the clipboard, and does not put it back:
 //! it runs only where `PANE_TEST_REAL_CLIPBOARD=1` is set and an X11
@@ -22,7 +23,8 @@ use std::sync::{Mutex, mpsc};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use pane_core::clipboard::{
-    Content, Markers, Observation, ProgramName, Sink, Skip, Ticket, accept, testing,
+    Content, Copied, Markers, Observation, ProgramName, Sink, Skip, Ticket, accept, accept_any,
+    testing,
 };
 
 /// How long a change may take to be reported: the watcher must ask the
@@ -47,9 +49,17 @@ impl Sink for Ours {
         // runs.
         let ours = match &observation.content {
             Content::Text(text) => text.starts_with(&self.prefix),
-            // Its text was never read: only this test's own image is
-            // reported as no text on this quiet display.
-            Content::Other => observation.source.is_none(),
+            // Its own files are named with its prefix.
+            Content::Files(files) => files
+                .iter()
+                .any(|file| file.to_string_lossy().contains(&self.prefix)),
+            // Only this test copies images on this quiet display (from an
+            // owner that names no program, or as Pane's own write); the
+            // test tells its own by their bytes.
+            Content::Image(_) => true,
+            // Only this test's own copies with no text are reported from
+            // an owner that names no program on this quiet display.
+            Content::Other | Content::TooLarge => observation.source.is_none(),
             Content::Withheld => false,
         };
         if ours {
@@ -135,6 +145,59 @@ fn the_watcher_reports_this_tests_changes_until_dropped() {
     assert_eq!(accept(&other, &[]), Err(Skip::NotText));
     assert_eq!(other.markers, Markers::default());
     assert_eq!(other.source, None);
+
+    // #167: an image copied as a PNG is read as that image, which Pane's
+    // own Clipboard History keeps.
+    let rgba = [255, 0, 0, 255, 0, 0, 255, 128];
+    let png = pane_core::icons::encode_png(2, 1, &rgba).unwrap();
+    let _png_owner = testing::set_target("image/png", &png).unwrap();
+    let image = next(
+        "a PNG image",
+        &|report| matches!(&report.content, Content::Image(image) if image.png == png),
+    );
+    match &image.content {
+        Content::Image(image) => assert_eq!((image.width, image.height), (2, 1)),
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(accept_any(&image, &[]), Ok(Copied::Image(_))));
+    assert_eq!(accept(&image, &[]), Err(Skip::NotText));
+
+    // Files, as a file manager copies them (`text/uri-list`): every path,
+    // in order.
+    let folder = tempfile::tempdir().unwrap();
+    let files = [
+        folder.path().join(format!("{prefix}a b.txt")),
+        folder.path().join(format!("{prefix}c")),
+    ];
+    let list: String = files
+        .iter()
+        .map(|file| {
+            format!(
+                "file://{}\r\n",
+                file.display().to_string().replace(' ', "%20")
+            )
+        })
+        .collect();
+    let _files_owner = testing::set_target("text/uri-list", list.as_bytes()).unwrap();
+    let copied = next("copied files", &|report| {
+        report.content == Content::Files(files.to_vec())
+    });
+    assert!(matches!(
+        accept_any(&copied, &[]),
+        Ok(Copied::Files(listed)) if listed == files.as_slice()
+    ));
+
+    // Pane puts an image and files back as what they are: its own writes
+    // are reported as such.
+    clipboard.write_image(&png).unwrap();
+    next(
+        "the written image",
+        &|report| matches!(&report.content, Content::Image(image) if image.png == png),
+    );
+    clipboard.write_files(&files).unwrap();
+    next("the written files", &|report| {
+        report.content == Content::Files(files.to_vec())
+    });
 
     // Writing is a change too, reported with its owner, Pane's process.
     let written = format!("{prefix}written");

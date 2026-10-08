@@ -878,8 +878,10 @@ mod tests {
 
     #[test]
     fn a_record_holding_a_new_actions_default_keeps_it_and_the_action_takes_its_alternate() {
+        // As ids name them: the modifiers in their fixed order, Shift
+        // before Command.
         let (taken, alternate) = if cfg!(target_os = "macos") {
-            ("cmd-k", "cmd-shift-k")
+            ("cmd-k", "shift-cmd-k")
         } else {
             ("ctrl-k", "ctrl-shift-k")
         };
@@ -1087,9 +1089,15 @@ mod tests {
         );
         assert_eq!(keys.taken(&dismiss), None);
 
-        // The navigation bindings' extra keys.
+        // The navigation bindings' extra keys: Alt's, Control's on macOS.
+        let next = if cfg!(target_os = "macos") {
+            "ctrl-n"
+        } else {
+            "alt-n"
+        };
+        assert_eq!(PaneKeys::default().taken(&binding(next)), None);
         let keys = PaneKeys::new(&keyboard, NavigationBindings::Emacs);
-        assert!(keys.taken(&binding("ctrl-n")).is_some());
+        assert!(keys.taken(&binding(next)).is_some());
     }
 
     #[test]

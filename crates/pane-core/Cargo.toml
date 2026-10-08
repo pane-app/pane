@@ -49,17 +49,41 @@ sha1-checked = { version = "0.10", default-features = false }
 # Awaiting a scheduled run's answer on its own thread, off the window's
 # thread and the scheduler's (already in the tree through the `pane` crate).
 futures.workspace = true
+# The file index (#126, docs/files.md): each segment's term dictionary is a
+# finite state transducer (`fst`, BurntSushi, Unlicense OR MIT, no
+# dependencies of its own), read through a memory map of the segment file
+# (`memmap2`, MIT OR Apache-2.0, already in the tree). `.gitignore`,
+# `.ignore` and the global Git ignore file are matched as Git matches them
+# by ripgrep's `ignore` crate (Unlicense OR MIT), whose own dependencies
+# are already in the tree but for `globset`, of the same author and license.
+fst = "0.4"
+memmap2 = "0.9"
+ignore = "0.4"
+# Decoding PNG images (MIT OR Apache-2.0, already in the tree through
+# GPUI's `image`): putting a kept clipboard image back as a bitmap
+# (`CF_DIB`) beside its PNG on Windows (#167), and cropping an
+# application's icon to its visible content on every system (#172).
+png = "0.18"
 
-# Listing the Apps folder and opening a shortcut or packaged app as Explorer
-# does, global hotkeys (`RegisterHotKey`), the Job Object that stops a
+# Listing the Apps folder, reading what a shortcut opens (its target,
+# arguments and AppUserModelID property, through the shortcut interface and
+# a property store), the program an MSI-advertised shortcut installs (the
+# Windows Installer's functions), the known folders of the Desktops, and
+# opening a shortcut or packaged app as Explorer does, global hotkeys (`RegisterHotKey`), the Job Object that stops a
 # development build or a system program with every process it started (and
 # the thread list that lets a program started suspended run), the system
 # search path in the registry, the elevation prompt (`ShellExecuteExW` with
 # `runas`), and the clipboard format listener of clipboard history (a
 # message-only window, the clipboard and its global memory); already in the
-# dependency tree through GPUI CE.
+# dependency tree through GPUI CE. The file index (#126) lists folders with
+# their file ids, reads the NTFS change journal without administrator rights
+# (`DeviceIoControl`, the journal's control codes) and runs its threads in
+# background mode with EcoQoS; its benchmark reads the process's private
+# memory (`ProcessStatus`). The applications' icons (#172) read a packaged
+# app's install folder through the package functions, a shortcut's icon
+# location and icon resources.
 [target.'cfg(windows)'.dependencies]
-windows = { workspace = true, features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_DataExchange", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_Storage_Packaging_Appx", "Win32_System_ApplicationInstallationAndServicing", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_DataExchange", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_Ioctl", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_ProcessStatus", "Win32_System_Registry", "Win32_System_Threading", "Win32_System_Variant", "Win32_System_WindowsProgramming", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Shell_PropertiesSystem", "Win32_UI_WindowsAndMessaging"] }
 
 # Global hotkeys on X11 (key grabs on the root window) and the X11
 # clipboard of clipboard history (XFIXES selection events, selection
@@ -82,10 +106,17 @@ global-hotkey = "0.8"
 # file copies and its trash (#145: NSURL, NSFileManager): pure Rust
 # bindings with no build script, already in the dependency tree through GPUI
 # CE's and global-hotkey's AppKit code. The system icon of a file or an
-# application (#142): NSWorkspace's icon, its images and their PNG.
+# application (#142): NSWorkspace's icon, its images and their PNG. Copied
+# images and files in clipboard history (#167): a copy's pasteboard items
+# (every file URL), and a TIFF made into a PNG and back.
 objc2.workspace = true
-objc2-app-kit = { version = "0.3", default-features = false, features = ["NSControl", "NSMenu", "NSMenuItem", "NSPasteboard", "NSResponder", "NSStatusBar", "NSStatusBarButton", "NSStatusItem", "NSView", "NSButton", "NSWorkspace", "NSImage", "NSImageRep", "NSBitmapImageRep", "objc2-core-foundation"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSControl", "NSMenu", "NSMenuItem", "NSPasteboard", "NSPasteboardItem", "NSResponder", "NSStatusBar", "NSStatusBarButton", "NSStatusItem", "NSView", "NSButton", "NSWorkspace", "NSImage", "NSImageRep", "NSBitmapImageRep", "objc2-core-foundation"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSData", "NSDictionary", "NSError", "NSFileManager", "NSString", "NSURL", "std"] }
+# The file index's change source (#175): an FSEvents stream opened from a
+# saved event id, so that FSEvents replays what changed while Pane was not
+# running and then reports live changes (MIT, already in the tree through
+# `notify`'s FSEvents backend).
+fsevent-sys = "4.1"
 
 [dev-dependencies]
 tempfile.workspace = true
@@ -119,3 +150,9 @@ path = "tests/hotkey_adapters.rs"
 [[test]]
 name = "program_adapters"
 path = "tests/program_adapters.rs"
+
+# The file index's benchmark (#174), run by `cargo xtask file-index-bench`
+# in release: it is a program, not a test, and runs only on demand.
+[[example]]
+name = "file_index_bench"
+path = "examples/file_index_bench.rs"

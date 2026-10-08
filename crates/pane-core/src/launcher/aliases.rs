@@ -1,7 +1,7 @@
 //! Aliases and fallbacks the user gives installed commands, to reach them
 //! from root search in fewer steps.
 //!
-//! - An **alias** is one word the user gives a command in Manage extensions.
+//! - An **alias** is one word the user gives a command in the extension list.
 //!   Typing it in root search lists the command first, above everything
 //!   else. For a command that takes a query (`"takesQuery": true`, or a
 //!   first argument that is text with every other optional; see
@@ -28,7 +28,7 @@
 //! command offers neither (and they never enable it); an uninstalled one's
 //! are forgotten. A recorded choice that cannot be used now (its package is
 //! disabled, paused or cannot load, its command is unavailable here, gone or
-//! no longer takes a query) is shown in Manage extensions as not active,
+//! no longer takes a query) is shown in the extension list as not active,
 //! with why.
 
 use std::collections::BTreeMap;
@@ -36,7 +36,7 @@ use std::future::Future;
 
 use serde_json::{Map, Value};
 
-use super::choices::{Choices, Record, split};
+use super::choices::{Choices, Record, provider_title, split};
 use super::{
     CommandRegistration, Entry, FormField, FormPurpose, FormView, Launcher, LauncherView, OpenForm,
     Opening, Row, Screen, State, Status, Unavailable, off_thread,
@@ -305,7 +305,7 @@ pub(super) fn first_choice(entries: &[Entry]) -> Option<usize> {
     })
 }
 
-/// An installed command as Manage extensions lists its alias and fallback.
+/// An installed command as the extension list lists its alias and fallback.
 struct Configured<'a> {
     id: String,
     title: String,
@@ -339,15 +339,24 @@ impl Launcher {
             } else {
                 None
             };
-            let commands = package.available_commands().into_iter();
-            for ((registration, unavailable), command) in commands.zip(&manifest.commands) {
-                if package.enabled || chosen.has_any(&registration.id) {
+            let commands = package.listed_commands().into_iter();
+            for (listed, command) in commands.zip(&manifest.commands) {
+                // A root provider has no alias or fallback to set.
+                if command.mode == crate::packages::CommandMode::Provider {
+                    continue;
+                }
+                let registration = listed.registration;
+                // A command turned off on its extension's page (#168) keeps
+                // its choices, not active, as a disabled package's are.
+                let off =
+                    (!listed.enabled).then(|| format!("{} is turned off", registration.title));
+                if (package.enabled && listed.enabled) || chosen.has_any(&registration.id) {
                     configured.push(Configured {
                         id: registration.id,
                         title: registration.title,
                         takes_query: command.accepts_fallback_text(),
                         identity: &package.identity,
-                        inactive: package_inactive.clone().or(unavailable),
+                        inactive: package_inactive.clone().or(off).or(listed.unavailable),
                     });
                 }
             }
@@ -427,6 +436,15 @@ impl Launcher {
                     Err(error) => (
                         format!("{what} of `{command}`"),
                         format!("{} cannot load: {error}", owner.title()),
+                    ),
+                    // An update made it a root provider, which has no
+                    // alias or fallback; the next start forgets them.
+                    Ok(_) if owner.is_provider(command) => (
+                        format!("{what} of `{command}`"),
+                        format!(
+                            "`{command}` of {} only answers root search now",
+                            owner.title()
+                        ),
                     ),
                     Ok(_) => (
                         format!("{what} of a missing command"),
@@ -675,7 +693,11 @@ pub enum AliasOutcome {
 /// alias — so the callers decide what an empty one means. This is the one
 /// rule the alias form and the Settings window's inline field both apply.
 fn alias_refusal(launcher: &Launcher, state: &State, command: &str, alias: &str) -> Option<String> {
-    if alias.chars().any(char::is_whitespace) {
+    if let Some(title) = provider_title(state, command) {
+        Some(format!(
+            "{title} only answers root search, so it has no alias to set"
+        ))
+    } else if alias.chars().any(char::is_whitespace) {
         Some("An alias is one word, without spaces".to_string())
     } else if alias.chars().count() > MAX_ALIAS_CHARS {
         Some(format!("An alias has at most {MAX_ALIAS_CHARS} characters"))

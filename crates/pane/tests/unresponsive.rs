@@ -16,9 +16,7 @@ use tempfile::TempDir;
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::settle;
-
-const MANAGE_ROW: &str = "Manage extensions…";
+use settle::{enter_flow, settle};
 
 /// Copies the assembled Rust settings sample into `folder`.
 fn package(folder: &Path) -> PathBuf {
@@ -129,7 +127,7 @@ fn a_command_that_stops_responding_leaves_the_window_usable_and_pauses_the_third
     // Manage extensions opens, while the guest still computes.
     cx.simulate_keystrokes("escape");
     assert!(matches!(view(&window, cx).screen, Screen::Root { .. }));
-    let manage = press_enter_on(&window, cx, MANAGE_ROW);
+    let manage = enter_flow(&window, cx);
     assert!(matches!(manage.screen, Screen::Extensions { .. }));
     assert_eq!(
         saved(&data, &identity, "busy").as_deref(),
@@ -171,7 +169,7 @@ fn a_command_that_stops_responding_leaves_the_window_usable_and_pauses_the_third
     assert_eq!(saved(&data, &identity, "busy").as_deref(), Some("started"));
 
     // Manage extensions offers Retry, which starts it again.
-    press_enter_on(&window, cx, MANAGE_ROW);
+    enter_flow(&window, cx);
     assert!(cx.debug_bounds("row-Retry Settings sample").is_some());
     let retried = press_enter_on(&window, cx, "Retry Settings sample");
     assert_eq!(

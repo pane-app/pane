@@ -35,7 +35,7 @@ use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
 
@@ -45,6 +45,7 @@ use super::{elevated, search};
 use crate::generation::{End, Fence, Generation};
 use crate::helpers::runner::{Helpers, Kind, Refusal, Run};
 use crate::process_tree::{self, ProcessTree};
+use crate::util::lock;
 
 /// The most bytes of each stream, standard output and standard error, a
 /// program run with `run` may write: one writing more is ended and the run
@@ -874,10 +875,6 @@ impl Kept {
         let _ = self.done.recv_timeout(DRAIN);
         (std::mem::take(&mut *lock(&self.bytes)), self.over())
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|p| p.into_inner())
 }
 
 /// Writes `input` to `stdin` on a thread of its own, then closes it.

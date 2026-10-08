@@ -58,7 +58,12 @@ impl LauncherWindow {
     /// screen: a newly opened view, even one replacing another at once,
     /// takes focus, and focus returns to the list when the view closes.
     pub(crate) fn sync_custom_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let open = self.launcher.view().custom_view().map(|view| view.id);
+        // The screen alone: a long list's rows are not copied on every
+        // screen sync (#165).
+        let open = match self.launcher.screen() {
+            pane_core::Screen::CustomView(view) => Some(view.id),
+            _ => None,
+        };
         let shown = self.custom_view.as_ref().map(|controls| controls.view);
         if open == shown {
             return;

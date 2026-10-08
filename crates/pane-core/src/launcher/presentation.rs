@@ -12,7 +12,7 @@
 //! projection the launcher has no data for is absent, not guessed. Root
 //! search is projected, and an opened command's own list for how its items
 //! look (#139: their icons, tooltips and accessories, see `looks`): the
-//! rows of a command's search results, Manage extensions and the other
+//! rows of a command's search results, the extension list and the other
 //! screens present as they always did, with no kind, alias, hotkey, match,
 //! icon or section.
 
@@ -34,6 +34,8 @@ pub enum RowKind {
     Application,
     /// A file a command found for the query.
     File,
+    /// A folder the file index found for the query (#175).
+    Folder,
     /// A web address a command answered with.
     Link,
     /// A fallback: a command the user chose to offer any text to.
@@ -47,6 +49,7 @@ impl RowKind {
             RowKind::Command => "Command",
             RowKind::Application => "Application",
             RowKind::File => "File",
+            RowKind::Folder => "Folder",
             RowKind::Link => "Link",
             RowKind::Fallback => "Fallback",
         }
@@ -78,8 +81,10 @@ pub struct RowPresentation {
     pub needs_setup: bool,
     /// The row's icon, drawn bare (#139): an installed command's in root
     /// search (its own, its package's, or its package's first-letter
-    /// tile), or an item's in an opened command's list. `None` for Pane's
-    /// own rows, which keep their tiles, and an item without one.
+    /// tile), an installed application's own (#172, or its placeholder
+    /// until it is there), or an item's in an opened command's list.
+    /// `None` for Pane's own rows, which keep their tiles, and an item
+    /// without one.
     pub icon: Option<Icon>,
     /// Shown when the pointer rests on the row's title (an item's).
     pub title_tooltip: Option<String>,
@@ -128,83 +133,161 @@ pub struct Presentation {
     pub sections: Vec<Section>,
 }
 
-/// The presentation of `state`'s rows.
-pub(super) fn presentation(state: &State) -> Presentation {
-    let listed = match &state.view.screen {
+/// What the window draws of the whole list, beside the rows it shows
+/// (#165): a list draws only its rows in view, each projected on its own
+/// ([`row_presentation`]), so the work behind a frame does not grow with
+/// the list.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ListPresentation {
+    /// The section labels, in order; empty off root search.
+    pub sections: Vec<Section>,
+    /// Whether every row listed is a fallback (vacuously, when none is):
+    /// on root search, for a query, the window's notice that nothing
+    /// matched shows then.
+    pub only_fallbacks: bool,
+    /// Whether a row shows a date accessory, which the window keeps
+    /// current while the list is open.
+    pub shows_a_date: bool,
+}
+
+/// Whether `state`'s rows are an opened command's own list, whose items'
+/// looks are projected (#139).
+fn listed(state: &State) -> bool {
+    match &state.view.screen {
         Screen::Command => true,
         Screen::CommandSearch { query } => query.trim().is_empty(),
         _ => false,
+    }
+}
+
+/// The presentation of `state`'s rows.
+pub(super) fn presentation(state: &State) -> Presentation {
+    let rows = (0..state.view.rows.len())
+        .map(|index| row_presentation(state, index))
+        .collect();
+    Presentation {
+        rows,
+        sections: sections(state),
+    }
+}
+
+/// What the window draws of `state`'s whole list (see
+/// [`ListPresentation`]), without projecting a row.
+pub(super) fn list_presentation(state: &State) -> ListPresentation {
+    let root = matches!(state.view.screen, Screen::Root { .. });
+    let only_fallbacks = if root {
+        state
+            .entries
+            .iter()
+            .take(state.view.rows.len())
+            .all(|entry| kind(entry) == Some(RowKind::Fallback))
+    } else {
+        state.view.rows.is_empty()
     };
-    if listed {
-        // An opened command's own list: how its items look.
-        let now = state.clock.now();
-        let rows = state
+    let shows_a_date = listed(state)
+        && state
             .view
             .rows
             .iter()
-            .map(|row| match state.looks.of(&row.id) {
-                Some(look) => RowPresentation {
-                    // Web images and system icons as they are now (#142).
-                    icon: look
-                        .icon
-                        .as_ref()
-                        .map(|icon| looks::shown_icon(state, icon)),
-                    title_tooltip: look.title_tooltip.clone(),
-                    subtitle_tooltip: look.subtitle_tooltip.clone(),
-                    accessories: looks::shown_accessories(look, now)
-                        .into_iter()
-                        .map(|accessory| ShownAccessory {
-                            icon: accessory
-                                .icon
-                                .as_ref()
-                                .map(|icon| looks::shown_icon(state, icon)),
-                            ..accessory
-                        })
-                        .collect(),
-                    ..RowPresentation::default()
-                },
-                None => RowPresentation::default(),
-            })
-            .collect();
-        return Presentation {
-            rows,
-            sections: Vec::new(),
+            .any(|row| state.looks.of(&row.id).is_some_and(looks::shows_a_date));
+    ListPresentation {
+        sections: sections(state),
+        only_fallbacks,
+        shows_a_date,
+    }
+}
+
+/// The presentation of `state`'s row at `index`; the default for an index
+/// past the rows.
+pub(super) fn row_presentation(state: &State, index: usize) -> RowPresentation {
+    let Some(row) = state.view.rows.get(index) else {
+        return RowPresentation::default();
+    };
+    if listed(state) {
+        // An opened command's own list: how its items look.
+        return match state.looks.of(&row.id) {
+            Some(look) => RowPresentation {
+                // Web images and system icons as they are now (#142).
+                icon: look
+                    .icon
+                    .as_ref()
+                    .map(|icon| looks::shown_icon(state, icon)),
+                title_tooltip: look.title_tooltip.clone(),
+                subtitle_tooltip: look.subtitle_tooltip.clone(),
+                accessories: looks::shown_accessories(look, state.clock.now())
+                    .into_iter()
+                    .map(|accessory| ShownAccessory {
+                        icon: accessory
+                            .icon
+                            .as_ref()
+                            .map(|icon| looks::shown_icon(state, icon)),
+                        ..accessory
+                    })
+                    .collect(),
+                ..RowPresentation::default()
+            },
+            None => RowPresentation::default(),
         };
     }
     let Screen::Root { query } = &state.view.screen else {
-        return Presentation {
-            rows: vec![RowPresentation::default(); state.view.rows.len()],
-            sections: Vec::new(),
-        };
+        return RowPresentation::default();
     };
-    let rows = state
-        .view
-        .rows
-        .iter()
-        .zip(&state.entries)
-        .map(|(row, entry)| {
-            let command = matches!(entry, Entry::Open(_) | Entry::Unavailable(_));
-            RowPresentation {
-                kind: kind(entry),
-                alias: command
-                    .then(|| state.aliases.chosen.active_alias(&row.id))
-                    .flatten()
-                    .map(str::to_owned),
-                hotkey: command
-                    .then(|| state.bindings.registered_of(&row.id))
-                    .flatten(),
-                matched: title_matches(&row.title, query),
-                answer: answer(state, row, entry, query),
-                needs_setup: matches!(entry, Entry::Open(_))
-                    && state.setup_needed.contains(&row.id),
-                icon: icon(state, row, entry),
-                ..RowPresentation::default()
-            }
-        })
-        .collect::<Vec<_>>();
-    let shown = state.view.rows.len();
-    let first_fallback = state
+    let Some(entry) = state.entries.get(index) else {
+        return RowPresentation::default();
+    };
+    let command = matches!(entry, Entry::Open(_) | Entry::Unavailable(_));
+    RowPresentation {
+        kind: kind(entry),
+        alias: command
+            .then(|| state.aliases.chosen.active_alias(&row.id))
+            .flatten()
+            .map(str::to_owned),
+        hotkey: command
+            .then(|| state.bindings.registered_of(&row.id))
+            .flatten(),
+        matched: title_matches(&row.title, query),
+        answer: answer(state, row, entry, query),
+        needs_setup: matches!(entry, Entry::Open(_)) && state.setup_needed.contains(&row.id),
+        icon: icon(state, row, entry),
+        ..RowPresentation::default()
+    }
+}
+
+/// Starts loading what the icons of `state`'s row at `index` need (#142),
+/// as the window draws it (#165): its own icon and its accessories' on an
+/// opened command's list, the icon of root search's row.
+pub(super) fn want_row_icons(state: &State, index: usize) {
+    let Some(row) = state.view.rows.get(index) else {
+        return;
+    };
+    if listed(state) {
+        if let Some(look) = state.looks.of(&row.id) {
+            looks::want_look(state, look);
+        }
+        return;
+    }
+    if !matches!(state.view.screen, Screen::Root { .. }) {
+        return;
+    }
+    // A file row loads its system icon, not the stand-in it shows until
+    // then (#175).
+    if let Some(icon) = state
         .entries
+        .get(index)
+        .and_then(|entry| file_icon(entry).or_else(|| icon(state, row, entry)))
+    {
+        looks::want_icon(state, None, &icon);
+    }
+}
+
+/// Root search's section labels over `state`'s rows; none on another
+/// screen.
+fn sections(state: &State) -> Vec<Section> {
+    let Screen::Root { query } = &state.view.screen else {
+        return Vec::new();
+    };
+    let shown = state.view.rows.len().min(state.entries.len());
+    let first_fallback = state.entries[..shown]
         .iter()
         .position(|entry| {
             matches!(
@@ -216,12 +299,24 @@ pub(super) fn presentation(state: &State) -> Presentation {
             )
         })
         .unwrap_or(shown);
-    let answers: Vec<Option<&str>> = rows
+    // Only the computed answers name a command: a row is one only when
+    // activating it copies what a command computed. The files found for
+    // the query (with the row searching them all) are labelled "Files".
+    let answers: Vec<Option<&str>> = state.view.rows[..shown]
         .iter()
-        .map(|row| row.answer.as_ref().map(|answer| answer.command.as_str()))
+        .zip(&state.entries)
+        .map(|(row, entry)| match entry {
+            Entry::Copy(_) => state
+                .computed
+                .iter()
+                .find(|computed| computed.row.id == row.id)
+                .map(|computed| computed.command_title.as_str()),
+            Entry::File(_) => Some("Files"),
+            Entry::Open(opening) if opening.initial_search.is_some() => Some("Files"),
+            _ => None,
+        })
         .collect();
-    let sections = answer_sections(query, &answers, first_fallback);
-    Presentation { rows, sections }
+    answer_sections(query, &answers, first_fallback)
 }
 
 /// The computed answer `row` is, when `entry` copies text a command
@@ -243,8 +338,19 @@ fn answer(state: &State, row: &Row, entry: &Entry, query: &str) -> Option<Comput
 
 /// The icon of root search's `row`, when activating it (`entry`) reaches
 /// an installed command: opening it, saying why it cannot, or sending it
-/// text (whose row's id is the command's after `alias:` or `fallback:`).
+/// text (whose row's id is the command's after `alias:` or `fallback:`);
+/// or, when it opens an installed application, whichever extension
+/// supplied it, the application's own icon, or its placeholder until it is
+/// there (#172); or, for a file the index found, its system icon (#175).
 fn icon(state: &State, row: &Row, entry: &Entry) -> Option<Icon> {
+    if let Entry::OpenApplication { id, .. } = entry {
+        return Some(super::application_icons::shown(state, id));
+    }
+    // A file the index found: the system's icon for its path (#142), as
+    // loaded now.
+    if let Some(icon) = file_icon(entry) {
+        return Some(looks::shown_icon(state, &icon));
+    }
     let id = match entry {
         Entry::Open(_) | Entry::Unavailable(_) => row.id.as_str(),
         Entry::Send(_) => row
@@ -254,6 +360,18 @@ fn icon(state: &State, row: &Row, entry: &Entry) -> Option<Icon> {
         _ => return None,
     };
     looks::icon_of(state, id)
+}
+
+/// The system icon of the file the index found that activating `entry`
+/// opens (#175), before it is loaded: its source and stand-in.
+fn file_icon(entry: &Entry) -> Option<Icon> {
+    match entry {
+        Entry::File(file) => file
+            .path
+            .as_ref()
+            .map(|path| super::file_search::entry_icon(path, file.folder)),
+        _ => None,
+    }
 }
 
 /// What kind of thing activating `entry` from root search reaches.
@@ -268,6 +386,7 @@ pub(super) fn kind(entry: &Entry) -> Option<RowKind> {
         }) => Some(RowKind::Command),
         Entry::OpenApplication { .. } => Some(RowKind::Application),
         Entry::OpenTarget { .. } => Some(RowKind::Link),
+        Entry::File(file) if file.folder => Some(RowKind::Folder),
         Entry::File(_) => Some(RowKind::File),
         Entry::OpenUrl(_) => Some(RowKind::Link),
         // Pane's own rows are its commands.

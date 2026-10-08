@@ -138,8 +138,9 @@ impl LauncherWindow {
     /// when the form closes; and to the rejected field after a rejected
     /// submission.
     pub(crate) fn sync_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let view = self.launcher.view();
-        let form = match view.screen {
+        // The screen alone: a long list's rows are not copied on every
+        // screen sync (#165).
+        let form = match self.launcher.screen() {
             Screen::Form(form) => Some(form),
             _ => None,
         };
@@ -151,7 +152,7 @@ impl LauncherWindow {
         match (form, self.form.is_some()) {
             (Some(form), true) if !new => {
                 let rejected = form.fields.iter().position(|field| field.error.is_some());
-                if let (Some(index), Status::Error(_)) = (rejected, view.status) {
+                if let (Some(index), Status::Error(_)) = (rejected, self.launcher.status()) {
                     let handle = self.form.as_ref().unwrap().fields[index].focus_handle(cx);
                     window.focus(&handle, cx);
                 }

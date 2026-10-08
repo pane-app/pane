@@ -429,7 +429,10 @@ impl Launcher {
         let package = state.package(identity)?;
         let manifest = package.manifest.as_ref().ok()?;
         let installation = self.installation.as_ref()?;
-        let stored = installation.data.preference_values(identity);
+        let mut stored = installation.data.preference_values(identity);
+        // Pane's own Clipboard History's controls are the history's own
+        // state, read from it (see `clipboard_settings`).
+        stored.extend(self.clipboard_preference_values(identity));
         let field = |declared: Declared<'_>| {
             let key = declared.key();
             let value = stored.get(&key).cloned();
@@ -503,13 +506,28 @@ impl Launcher {
                 .ok_or_else(|| format!("{} has no preference `{key}`", package.title()))?;
             refusal(declared.preference, &value).map_or(Ok(()), Err)
         })();
-        let stored =
-            checked.and_then(|()| self.store_preferences(identity, vec![(key.to_owned(), value)]));
+        // Pane's own Clipboard History's controls change the history itself
+        // (see `clipboard_settings`); every other value is stored.
+        let applied = match &checked {
+            Ok(()) => self.set_clipboard_preference(identity, key, &value),
+            Err(_) => None,
+        };
+        let stored = match applied {
+            Some(applied) => applied.map(|()| None),
+            None => checked
+                .and_then(|()| self.store_preferences(identity, vec![(key.to_owned(), value)]))
+                .map(Some),
+        };
         if stored.is_ok() {
             self.after_preferences_changed(&mut self.lock());
             self.preferences_changed();
         }
-        async move { stored?.written().await }
+        async move {
+            match stored? {
+                Some(writes) => writes.written().await,
+                None => Ok(()),
+            }
+        }
     }
 
     /// The package identity and command id of the installed command whose
@@ -626,6 +644,15 @@ fn setup_field(unset: &UnsetPreference) -> FormField {
             PathKind::Application,
             "The path of an application",
         ),
+        // A list: its applications' file names, typed.
+        PreferenceKind::Applications => FieldKind::Text {
+            placeholder: Some(
+                preference
+                    .placeholder
+                    .clone()
+                    .unwrap_or_else(|| "File names of applications, separated by commas".into()),
+            ),
+        },
     };
     let value = match &kind {
         FieldKind::Choice(choices) => choices

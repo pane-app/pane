@@ -804,7 +804,7 @@ fn the_extension_list_says_which_packages_use_the_network_and_what_they_reached(
 
         pane.to_root();
         pane.search("manage extensions");
-        pane.activate("Manage extensions…");
+        pane.activate("Manage Extensions");
         let view = pane.view();
         assert!(matches!(view.screen, Screen::Extensions { .. }));
         // Its row says so; the other package's does not.

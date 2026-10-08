@@ -97,8 +97,9 @@ pub trait System: Send + Sync + 'static {
 
     /// Opens `target` (a URL of any scheme, a file, a folder or an
     /// application) with the system's handler, or with `application` (a
-    /// path, or an installed application's id) when one is named, without
-    /// waiting for what opens it.
+    /// path: an installed application's id is turned into its source's
+    /// path by the caller, `applications::opener`) when one is named,
+    /// without waiting for what opens it.
     fn open(&self, target: &str, application: Option<&str>) -> Result<(), String>;
 
     /// Shows `path`, which exists, selected in the system's file manager.

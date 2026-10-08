@@ -43,19 +43,26 @@ struct Fixture {
     package: &'static str,
     /// Its package's title.
     title: &'static str,
+    /// The keys of the preferences "Show preferences" declares: the Rust
+    /// sample's also include an applications preference, so that one
+    /// sample declares every type (#166).
+    show_keys: &'static [&'static str],
 }
 
 const RUST: Fixture = Fixture {
     package: "sample-preferences",
     title: "Preferences sample",
+    show_keys: &["show#folder", "show#notes", "show#editor", "show#skipped"],
 };
 const JAVASCRIPT: Fixture = Fixture {
     package: "sample-preferences-js",
     title: "JavaScript preferences sample",
+    show_keys: &["show#folder", "show#notes", "show#editor"],
 };
 const TYPESCRIPT: Fixture = Fixture {
     package: "sample-preferences-ts",
     title: "TypeScript preferences sample",
+    show_keys: &["show#folder", "show#notes", "show#editor"],
 };
 
 /// How long the scheduler and a launch may take: compiling the guest once
@@ -422,10 +429,7 @@ fn the_command_receives_its_typed_effective_values(fixture: &Fixture) {
     assert_eq!(
         commands,
         [
-            (
-                "Show preferences",
-                vec!["show#folder", "show#notes", "show#editor"]
-            ),
+            ("Show preferences", fixture.show_keys.to_vec()),
             ("Report preferences", vec!["report#loud"]),
         ]
     );

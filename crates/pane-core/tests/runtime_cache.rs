@@ -45,6 +45,9 @@ fn walk(dir: &PathBuf) -> usize {
 
 #[test]
 fn compiled_code_is_cached_and_reused_by_a_later_runtime() {
+    // The test runs share one compiled-code cache (`PANE_TEST_CODE_CACHE`,
+    // set in `.cargo/config.toml`); this test checks the caller's own.
+    Runtime::ignore_shared_code_cache();
     let cache = empty_dir("compiled-code-cache");
 
     let first = Runtime::start_with_cache(cache.clone()).unwrap();

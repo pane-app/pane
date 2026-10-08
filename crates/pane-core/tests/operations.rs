@@ -484,7 +484,7 @@ fn a_disabled_target_is_reported_and_stays_disabled() {
         fixture_run(&launcher, "Call b's echo"),
         error(
             "disabled: Package b is disabled; Pane does not enable it for a call, enable it \
-             in Manage extensions"
+             in Settings"
         )
     );
     let b = launcher
@@ -588,7 +588,7 @@ fn a_target_that_keeps_crashing_is_paused_and_its_caller_is_not() {
     // command opens and answers).
     assert_eq!(
         fixture_run(&launcher, "Call b's echo"),
-        error("unavailable: Package b is paused after an error; retry it in Manage extensions")
+        error("unavailable: Package b is paused after an error; retry it in Settings")
     );
 
     block_on(launcher.retry_start(&dirs.identity("b")));
@@ -784,7 +784,7 @@ fn a_package_that_only_publishes_operations_adds_no_command() {
             "Install extension from folder…",
             "Install extension from npm…",
             "Install extension from Git…",
-            "Manage extensions…",
+            "Manage Extensions",
             // Pane's own row, listed after every command.
             "Settings…"
         ]
@@ -966,7 +966,7 @@ fn disabling_a_target_stops_the_call_it_serves_and_its_caller_is_told() {
         shown(&launcher),
         error(
             "disabled: Package b is disabled; Pane does not enable it for a call, enable it \
-             in Manage extensions"
+             in Settings"
         )
     );
     block_on(disabling);
@@ -1200,7 +1200,7 @@ fn disabling_a_sample_target_stops_its_wait_in_every_language() {
             launcher.view().status,
             Status::Error(format!(
                 "disabled: {} is disabled; Pane does not enable it for a call, enable it in \
-                 Manage extensions",
+                 Settings",
                 sample_titles(target).0
             )),
             "{caller} calling {target}"

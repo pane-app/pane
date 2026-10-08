@@ -16,28 +16,37 @@ use crate::files::FileAccess;
 use crate::links;
 use crate::packages::PackageIdentity;
 
-/// A file of a package's granted folder, as a row lists it: root search's
-/// file results and Search Files' results. Pane performs its actions itself
-/// (see `own_actions`), checking it again first.
+/// A file of the file index (#175), or of a package's granted folder, as a
+/// row lists it: root search's file results and Search Files' results. Pane
+/// performs its actions itself (see `own_actions`), checking it again first.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct FileRow {
-    /// The identity key of the package whose listing found it.
+    /// The identity key of the package whose search or listing found it.
     pub(super) owner: String,
-    /// The id Pane gave it in that listing.
+    /// The id Pane gave it in that search or listing.
     pub(super) id: String,
     /// Its own name, as Pane found it.
     pub(super) name: String,
-    /// Whether it is a program or script, as listed: Enter reveals it
+    /// Whether it is a program or script, as found: Enter reveals it
     /// instead of opening it.
     pub(super) program: bool,
     /// The component of the command that found it.
     pub(super) component: PathBuf,
+    /// Found in the file index, rather than a granted folder's listing.
+    pub(super) indexed: bool,
+    /// A folder (only the index finds folders): Enter opens it in the
+    /// file manager.
+    pub(super) folder: bool,
+    /// Its path, for its system icon (#142): the index's entries only.
+    pub(super) path: Option<PathBuf>,
 }
 
-/// The row for the file with id `id` of the latest listing of the package
-/// with identity key `owner`, as Pane names it (its own name, and "File in"
-/// its folder), with `row_id`, found by the command in `component`; `None`
-/// for an id Pane did not give.
+/// The row for the file with id `id` that a search of the file index by the
+/// package with identity key `owner` found, or else of that package's
+/// granted folder's latest listing, as Pane names it (its own name, and its
+/// folder: `~/…` for the index, "File in" the granted folder's), with
+/// `row_id`, found by the command in `component`; `None` for an id Pane did
+/// not give.
 pub(super) fn file_row(
     files: &FileAccess,
     owner: &str,
@@ -45,6 +54,25 @@ pub(super) fn file_row(
     id: String,
     row_id: String,
 ) -> Option<(Row, FileRow)> {
+    if let Some(entry) = files.indexer().known(owner, &id) {
+        let row = Row {
+            id: row_id,
+            title: entry.name.clone(),
+            subtitle: Some(entry.folder),
+            unavailable: None,
+        };
+        let file = FileRow {
+            owner: owner.to_owned(),
+            id,
+            name: entry.name,
+            program: entry.program,
+            component: component.to_path_buf(),
+            indexed: true,
+            folder: entry.kind == crate::file_index::EntryKind::Folder,
+            path: Some(entry.path),
+        };
+        return Some((row, file));
+    }
     let known = files.known(owner, &id)?;
     let row = Row {
         id: row_id,
@@ -58,6 +86,9 @@ pub(super) fn file_row(
         name: known.name,
         program: known.program,
         component: component.to_path_buf(),
+        indexed: false,
+        folder: false,
+        path: None,
     };
     Some((row, file))
 }

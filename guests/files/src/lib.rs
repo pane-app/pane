@@ -1,25 +1,31 @@
-//! Pane's file search, a default extension: **Search Files**. The user
-//! grants it one folder through Pane's own "Choose folder…" row in its
-//! command (its `pane.json` sets `"folderAccess": true`). Once open, the
-//! command owns the launcher's search field (`"search": true`): it lists
-//! the files of that folder whose names (or folders) match what is typed,
-//! and so does root search (`"rootResults": true`). Pane gives each file
-//! its actions (Open, Reveal in Explorer, Open With…, Copy Path, Copy File,
-//! Move to Recycle Bin; for a program or script, Enter reveals it and only
-//! Run runs it) and performs them itself.
+//! Pane's file search, a default extension: **Search Files**, over Pane's
+//! file index of the home folder (#126, #175; its `pane.json` sets
+//! `"fileIndex": true`, so Pane keeps the index current while Files is
+//! enabled, and stops watching the moment it is disabled). Root search asks
+//! it (`"rootResults": true`) and lists the best few files after what is
+//! found by title, with a row opening Search Files with the query typed;
+//! once open, the command owns the launcher's search field
+//! (`"search": true`) and lists more.
 //!
-//! Pane's host owns the grant, lists the folder under its scan limits and
-//! checks each file again before acting on it; the extension only matches
-//! the listing Pane gives it and names files by the ids Pane gave them,
-//! never by a path. Disabling the package removes its results and stops
-//! any listing.
+//! Installed as Pane's default extension, Search Files is drawn by Pane
+//! itself, as Raycast's File Search is (#177): Pane lists the index for it
+//! — Recently Used before typing, a type dropdown, more rows as the list
+//! scrolls, a detail with an image's preview and the file's Metadata —
+//! and this command's own list is not shown nor its `search` asked. A copy
+//! installed from a folder keeps them: its list says what is searched, and
+//! its `search` answers the best 50 entries.
+//!
+//! Pane's host keeps the index, ranks the entries and checks each again
+//! before acting on it; the extension only asks the index and names the
+//! entries by the ids Pane gave them, never by a path. Pane gives each its
+//! actions (Open, Show in Explorer, Open With…, Copy Path, Copy Name, Copy
+//! File, Move to Recycle Bin) and performs them itself: Enter on a program shows it in
+//! the file manager and only Run runs it.
 #![no_std]
-
-mod matching;
 
 use pane_guest::alloc::{format, string::String, vec::Vec};
 use pane_guest::feedback::{Toast, show_toast};
-use pane_guest::files::{self, FolderState};
+use pane_guest::file_index::{self, FileEntry, IndexState, SearchOptions};
 use pane_guest::root::{RootAction, RootResult};
 use pane_guest::search::SearchResult;
 use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
@@ -29,41 +35,50 @@ pane_guest::export!(Files);
 pane_guest::root::export!(Files);
 pane_guest::search::export!(Files);
 
-/// What Pane lists, in its own limits.
-fn policy() -> String {
-    let limits = files::limits();
-    format!(
-        "Regular files of the folder and its subfolders, {} deep, at most {} files and {} \
-         entries looked at; not hidden files, links or folders Pane cannot read",
-        limits.depth, limits.files, limits.entries
-    )
+/// The most files root search lists (Pane lists 5 at most, then a row
+/// searching them all).
+const ROOT_RESULTS: u32 = 5;
+
+/// The most files one search in Search Files' own field lists.
+const SEARCH_RESULTS: u32 = 50;
+
+/// What the index is doing, for people.
+fn status() -> String {
+    let status = file_index::status();
+    let reason = status.reason.map(|reason| format!(" ({reason})"));
+    let reason = reason.as_deref().unwrap_or("");
+    match status.state {
+        IndexState::Off => format!("File search is off{reason}"),
+        IndexState::Building => format!(
+            "Indexing your files… {} found so far{reason}",
+            status.found.max(status.entries)
+        ),
+        IndexState::Current => format!(
+            "{} files and folders of your home folder are indexed{reason}",
+            status.entries
+        ),
+        IndexState::Stopped => format!("File search stopped{reason}"),
+    }
 }
 
 /// Runs the action of the item `item_id`: a toast saying what is searched.
 async fn act(item_id: &str) -> Result<(), String> {
     match item_id {
-        "policy" => {
-            show_toast(Toast::success(policy()));
+        "status" => {
+            show_toast(Toast::success(status()));
             Ok(())
         }
         _ => Err(format!("unknown item: {item_id}")),
     }
 }
 
-/// The files of the granted folder `query` finds, best first, each as the
-/// id Pane gave it and its path below the folder; none while no folder is
-/// granted or Pane is still listing it (it asks again when it is done).
-fn found(query: &str) -> Result<Vec<(String, String)>, String> {
-    let listing = match files::list_folder()
-        .map_err(|problem| format!("cannot search the granted folder: {problem}"))?
-    {
-        FolderState::Ready(listing) => listing,
-        FolderState::NotGranted | FolderState::Listing => return Ok(Vec::new()),
-    };
-    Ok(matching::matching(&listing.files, query)
-        .into_iter()
-        .map(|file| (file.id.clone(), file.relative.clone()))
-        .collect())
+/// The entries `query` finds, best first, at most `limit`.
+fn found(query: &str, limit: u32) -> Result<Vec<FileEntry>, String> {
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    file_index::search(query, SearchOptions::first(limit))
+        .map_err(|problem| format!("cannot search your files: {problem}"))
 }
 
 impl Command for Files {
@@ -71,9 +86,9 @@ impl Command for Files {
 
     async fn render() -> Result<List, String> {
         Ok(List::new("Search Files").item(
-            Item::new("policy", "What is searched")
-                .subtitle(policy())
-                .on_action(|| act("policy")),
+            Item::new("status", "What is searched")
+                .subtitle(status())
+                .on_action(|| act("status")),
         ))
     }
 
@@ -90,35 +105,36 @@ impl Command for Files {
 }
 
 impl pane_guest::search::Guest for Files {
-    /// The files the text typed in Search Files' field finds, each named by
-    /// the id Pane gave it: Pane lists it with its own name and folder, and
-    /// gives it its file actions.
+    /// The entries the text typed in Search Files' field finds, each named
+    /// by the id Pane gave it: Pane lists it with its own name and folder,
+    /// and gives it its file actions.
     async fn search(_command: String, query: String) -> Result<Vec<SearchResult>, String> {
-        Ok(found(&query)?
+        Ok(found(&query, SEARCH_RESULTS)?
             .into_iter()
-            .map(|(id, relative)| SearchResult {
-                title: matching::last_name(&relative).into(),
-                id: relative,
+            .map(|entry| SearchResult {
+                title: entry.name,
+                id: entry.path,
                 subtitle: None,
-                file: Some(id),
+                file: Some(entry.id),
             })
             .collect())
     }
 }
 
 impl pane_guest::root::Guest for Files {
-    /// The files the query typed in root search finds, each opening the
-    /// file (Pane gives it the same actions as in Search Files).
+    /// The best few entries the query typed in root search finds, each
+    /// opening the entry (Pane gives it the same actions as in Search
+    /// Files).
     async fn results_for(query: String) -> Result<Vec<RootResult>, String> {
-        Ok(found(&query)?
+        Ok(found(&query, ROOT_RESULTS)?
             .into_iter()
-            .map(|(id, relative)| RootResult {
-                // Pane shows the file's own name and folder, whatever these
-                // say.
-                title: matching::last_name(&relative).into(),
-                id: relative,
+            .map(|entry| RootResult {
+                // Pane shows the entry's own name and folder, whatever
+                // these say.
+                title: entry.name,
+                id: entry.path,
                 subtitle: None,
-                action: RootAction::OpenFile(id),
+                action: RootAction::OpenFile(entry.id),
             })
             .collect())
     }

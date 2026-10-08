@@ -60,7 +60,7 @@ call: async func(source: string, operation: string, version: u32, input: string)
 - **Addressing by identity.** `source` is the target package's
   [package identity](../CONTEXT.md) exactly as installed, never its title:
   `local:` and the absolute path of the folder it was installed from, as
-  Pane resolved it (the path Manage extensions shows after "local folder";
+  Pane resolved it (the path Settings › Extensions shows after "local folder";
   `PackageIdentity::key` on the host). A relative path, or a spelling of the same folder
   other than the resolved one, is not an identity and is `not-found`; so is
   another scheme until Pane installs from npm or Git. A caller learns its

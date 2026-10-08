@@ -368,10 +368,7 @@ fn a_second_crash_soon_after_stops_the_runtime_until_the_user_restarts_it() {
     select_title(&pane.launcher, "Greeting");
     block_on(pane.launcher.activate_selected());
     let refused = error(pane.launcher.view().status);
-    assert!(
-        refused.contains("restart it in Manage extensions"),
-        "{refused}"
-    );
+    assert!(refused.contains("restart it in Settings"), "{refused}");
     // The extension list works, and pauses nothing; a disable is recorded.
     assert!(!pane.any_paused());
     assert_eq!(

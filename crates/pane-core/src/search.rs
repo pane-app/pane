@@ -8,6 +8,11 @@
 //! locale-aware case folding: language-specific rules such as Turkish dotted
 //! and dotless I are out of scope.
 //!
+//! An indexed result may also have alternate titles (an application's
+//! untranslated or program name), each matched as the title is, the best
+//! of them counting, and keywords, matched as the subtitle is; the row
+//! still shows its title.
+//!
 //! Every word of the query must appear in the title, subtitle or package
 //! title. Matches are ranked by how well the title matches, best first:
 //!
@@ -60,31 +65,69 @@ fn normalize(text: &str) -> String {
 /// listed rather than on every keystroke.
 #[derive(Clone, Debug)]
 pub(crate) struct Keys {
-    title: String,
-    /// The title's words: runs of letters and digits.
-    title_words: Vec<String>,
+    title: Title,
+    /// Other titles that find the result as its title does (an indexed
+    /// result's alternate titles); the row still shows the title.
+    alternates: Vec<Title>,
     subtitle: String,
+    /// Words that find the result as its subtitle does (an indexed
+    /// result's keywords), separated by spaces.
+    keywords: String,
     package: String,
     /// The alias the user gave the result, if any.
     alias: Option<String>,
+}
+
+/// A title as it is matched.
+#[derive(Clone, Debug)]
+struct Title {
+    text: String,
+    /// Its words: runs of letters and digits.
+    words: Vec<String>,
+}
+
+impl Title {
+    fn new(title: &str) -> Title {
+        let text = normalize(title);
+        let words = text
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .map(str::to_owned)
+            .collect();
+        Title { text, words }
+    }
 }
 
 impl Keys {
     /// The keys of a result titled `title`, with `subtitle`, offered by the
     /// package titled `package`, if any.
     pub(crate) fn new(title: &str, subtitle: Option<&str>, package: Option<&str>) -> Keys {
-        let title = normalize(title);
-        let title_words = title
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|word| !word.is_empty())
-            .map(str::to_owned)
-            .collect();
         Keys {
-            title,
-            title_words,
+            title: Title::new(title),
+            alternates: Vec::new(),
             subtitle: subtitle.map(normalize).unwrap_or_default(),
+            keywords: String::new(),
             package: package.map(normalize).unwrap_or_default(),
             alias: None,
+        }
+    }
+
+    /// These keys, also matched by `alternate_titles` as the title is and
+    /// by `keywords` as the subtitle is. Blank ones are ignored.
+    pub(crate) fn with_alternates(self, alternate_titles: &[String], keywords: &[String]) -> Keys {
+        Keys {
+            alternates: alternate_titles
+                .iter()
+                .map(|title| Title::new(title))
+                .filter(|title| !title.text.is_empty())
+                .collect(),
+            keywords: keywords
+                .iter()
+                .map(|keyword| normalize(keyword))
+                .filter(|keyword| !keyword.is_empty())
+                .collect::<Vec<_>>()
+                .join(" "),
+            ..self
         }
     }
 
@@ -126,32 +169,61 @@ impl Query {
     /// How well a result with `keys` matches this non-empty query; `None`
     /// if it does not.
     fn rank(&self, keys: &Keys) -> Option<Rank> {
-        let in_title = |word: &String| keys.title.contains(word.as_str());
-        let in_subtitle = |word: &String| in_title(word) || keys.subtitle.contains(word.as_str());
-        let rank = if keys.title == self.text {
-            Rank::Exact
-        } else if keys.title.starts_with(&self.text) {
-            Rank::Prefix
-        } else if self.words.iter().all(|word| {
-            keys.title_words
-                .iter()
-                .any(|title_word| title_word.starts_with(word.as_str()))
-        }) {
-            Rank::WordPrefixes
-        } else if self.words.iter().all(in_title) {
-            Rank::InTitle
-        } else if self.words.iter().all(in_subtitle) {
-            Rank::InSubtitle
+        // The best a title or an alternate title matches.
+        let titled = std::iter::once(&keys.title)
+            .chain(&keys.alternates)
+            .filter_map(|title| self.title_rank(title))
+            .min();
+        if titled.is_some() {
+            return titled;
+        }
+        let in_titles = |word: &String| {
+            std::iter::once(&keys.title)
+                .chain(&keys.alternates)
+                .any(|title| title.text.contains(word.as_str()))
+        };
+        let in_subtitle = |word: &String| {
+            in_titles(word)
+                || keys.subtitle.contains(word.as_str())
+                || keys.keywords.contains(word.as_str())
+        };
+        if self.words.iter().all(in_subtitle) {
+            Some(Rank::InSubtitle)
         } else if self
             .words
             .iter()
             .all(|word| in_subtitle(word) || keys.package.contains(word.as_str()))
         {
-            Rank::InPackage
+            Some(Rank::InPackage)
         } else {
-            return None;
-        };
-        Some(rank)
+            None
+        }
+    }
+
+    /// How well `title` alone matches this non-empty query, at best
+    /// [`Rank::Exact`] and at worst [`Rank::InTitle`]; `None` if some word
+    /// is not in it.
+    fn title_rank(&self, title: &Title) -> Option<Rank> {
+        if title.text == self.text {
+            Some(Rank::Exact)
+        } else if title.text.starts_with(&self.text) {
+            Some(Rank::Prefix)
+        } else if self.words.iter().all(|word| {
+            title
+                .words
+                .iter()
+                .any(|title_word| title_word.starts_with(word.as_str()))
+        }) {
+            Some(Rank::WordPrefixes)
+        } else if self
+            .words
+            .iter()
+            .all(|word| title.text.contains(word.as_str()))
+        {
+            Some(Rank::InTitle)
+        } else {
+            None
+        }
     }
 }
 
@@ -267,6 +339,58 @@ pub fn settings_matches(query: &str, entries: &[SettingsEntry]) -> Vec<usize> {
         .collect::<Vec<_>>();
     let query = Query::new(query);
     ranked_matches(&query, keys.iter())
+}
+
+#[cfg(test)]
+mod alternate_tests {
+    use super::{Keys, Query, ranked_matches};
+
+    fn matches(query: &str, keys: &[Keys]) -> Vec<usize> {
+        ranked_matches(&Query::new(query), keys.iter())
+    }
+
+    fn strings(words: &[&str]) -> Vec<String> {
+        words.iter().map(|word| (*word).to_owned()).collect()
+    }
+
+    #[test]
+    fn an_alternate_title_matches_as_the_title_does_and_the_best_counts() {
+        let keys = [
+            Keys::new("Windows Terminal", Some("Application"), None)
+                .with_alternates(&strings(&["wt", "Terminal"]), &[]),
+            Keys::new("Wtf Notes", Some("Application"), None),
+            Keys::new("Paint", Some("Application"), None),
+        ];
+        // `wt` is Windows Terminal's alternate title exactly: it ranks
+        // before a title merely starting with it.
+        assert_eq!(matches("wt", &keys), [0, 1]);
+        // `term` starts an alternate title: as a prefix of a title.
+        assert_eq!(matches("term", &keys), [0]);
+        assert!(matches("paintbrush", &keys).is_empty());
+    }
+
+    #[test]
+    fn keywords_match_as_the_subtitle_does() {
+        let keys = [
+            Keys::new("Browser Notes", None, None),
+            Keys::new("Firefox", Some("Application"), None)
+                .with_alternates(&[], &strings(&["web browser", "internet"])),
+        ];
+        // The title match first, then the keyword's.
+        assert_eq!(matches("browser", &keys), [0, 1]);
+        assert_eq!(matches("internet", &keys), [1]);
+        // Every word must be found, wherever: a title word and a keyword.
+        assert_eq!(matches("fire internet", &keys), [1]);
+    }
+
+    #[test]
+    fn blank_alternates_and_keywords_find_nothing() {
+        let keys = [Keys::new("Firefox", None, None)
+            .with_alternates(&strings(&["", "  "]), &strings(&[" "]))];
+        // A letter the title lacks: the blanks match it no more than any.
+        assert!(matches("q", &keys).is_empty());
+        assert_eq!(matches("fire", &keys), [0]);
+    }
 }
 
 #[cfg(test)]

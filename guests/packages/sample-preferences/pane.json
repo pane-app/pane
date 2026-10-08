@@ -70,6 +70,12 @@
           "type": "application",
           "title": "Editor",
           "description": "The application notes open in, if any."
+        },
+        {
+          "name": "skipped",
+          "type": "applications",
+          "title": "Skipped Applications",
+          "description": "Applications whose notes are left out, if any."
         }
       ]
     },

@@ -3,7 +3,7 @@
 //! survives restarting Pane and disabling and re-enabling the package. It also
 //! keeps one value of each other kind of data: a note ([`content`]), the last
 //! greeting ([`cache`]) and a sign-in token ([`credentials`]), so clearing its
-//! cache in Manage extensions shows what is removed and what is kept.
+//! cache on its page in Settings shows what is removed and what is kept.
 //! "Save after waiting" shows a call Pane stops: it notes in its settings
 //! that it started, waits ten seconds, then notes that it finished; disabling
 //! or reloading the package meanwhile stops it, so it never finishes.

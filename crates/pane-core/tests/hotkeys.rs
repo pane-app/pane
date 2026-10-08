@@ -23,7 +23,7 @@ mod rows;
 use feedback::shown;
 use rows::{select_title, titles};
 
-const MANAGE_ROW: &str = "Manage extensions…";
+const MANAGE_ROW: &str = "Manage Extensions";
 
 /// The system as the tests set it up.
 #[derive(Default)]
@@ -360,7 +360,7 @@ fn the_hotkey_of_a_paused_extension_explains_the_pause() {
     assert!(matches!(launcher.view().screen, Screen::Root { .. }));
     assert_eq!(
         error(&launcher),
-        "Settings sample is paused after an error; retry it in Manage extensions"
+        "Settings sample is paused after an error; retry it in Settings"
     );
 }
 

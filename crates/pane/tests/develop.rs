@@ -17,9 +17,7 @@ use pane_core::{Launcher, Runtime, Screen, Status};
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::until;
-
-const MANAGE_ROW: &str = "Manage extensions…";
+use settle::{enter_flow, until};
 
 fn guest(name: &str) -> PathBuf {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -118,11 +116,8 @@ fn the_window_shows_a_failed_build_and_the_reload_after_a_fix(cx: &mut TestAppCo
         view.status == Status::Result("Installed Hello".into())
     });
 
-    select(&window, cx, MANAGE_ROW);
-    cx.simulate_keystrokes("enter");
-    until(&window, cx, |view| {
-        matches!(view.screen, Screen::Extensions { .. })
-    });
+    // The extension list, as Settings enters it (#168).
+    enter_flow(&window, cx);
     select(&window, cx, "Develop Hello");
     cx.simulate_keystrokes("enter");
     until(

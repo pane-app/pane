@@ -7,7 +7,7 @@ use futures::executor::block_on;
 use pane_core::{Launcher, Screen};
 
 /// Root search's row that opens the extension manager.
-pub const MANAGE_ROW: &str = "Manage extensions…";
+pub const MANAGE_ROW: &str = "Manage Extensions";
 
 /// The titles of the rows on screen, in order.
 pub fn titles(launcher: &Launcher) -> Vec<String> {

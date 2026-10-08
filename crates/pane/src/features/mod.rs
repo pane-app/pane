@@ -10,5 +10,6 @@ pub(crate) mod icons;
 pub(crate) mod number_hints;
 pub(crate) mod quick_slots;
 pub(crate) mod root_search;
+pub(crate) mod search_files;
 pub(crate) mod settings;
 pub(crate) mod toast;

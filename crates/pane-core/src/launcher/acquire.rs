@@ -3,7 +3,7 @@
 //! try a failed one again.
 //!
 //! Acquisition goes on in the background: the window, root search, the
-//! install rows and Manage extensions stay usable while it runs and after
+//! install rows and the extension list stay usable while it runs and after
 //! it fails. Each default extension Pane is missing is acquired in turn:
 //! its payload is downloaded from Pane's own downloads with progress and
 //! retries, then installed through the same path a package from a folder

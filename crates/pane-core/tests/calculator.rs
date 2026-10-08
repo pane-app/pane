@@ -132,9 +132,10 @@ fn incomplete_and_invalid_expressions_and_ordinary_words_list_no_answer() {
         assert_eq!(launcher.view().selected, None, "{query}");
         assert_eq!(launcher.view().status, status, "{query}");
     }
-    // Other root results are found as usual.
+    // The calculator is a root provider (#164): typing its name finds no
+    // row of its own.
     search(&launcher, "calc");
-    assert_eq!(titles(&launcher), ["Calculator"]);
+    assert_eq!(titles(&launcher), Vec::<String>::new());
     // Completing the expression answers it.
     search(&launcher, "(1 + 2");
     search(&launcher, "(1 + 2)");
@@ -243,7 +244,8 @@ fn enter_on_the_answer_reports_the_copy_of_its_text() {
     );
     assert_eq!(view.query(), Some("6 * 7"), "root search stays as it was");
     // Other rows copy nothing.
-    search(&launcher, "calc");
+    search(&launcher, "install");
+    assert!(!titles(&launcher).is_empty());
     assert_eq!(launcher.selected_copy(), None);
 }
 
@@ -514,7 +516,7 @@ fn the_answer_is_listed_while_a_command_asked_after_it_is_still_answering() {
     // ("Slow answers"). Waiting longer is this test's own business; the
     // calculator's answer is not affected.
     runtime.set_limits(Limits {
-        compute: Duration::from_secs(30),
+        compute: Duration::from_secs(180),
         ..Limits::default()
     });
     let launcher = dirs.launcher(runtime);
@@ -546,7 +548,9 @@ fn the_answer_is_listed_while_a_command_asked_after_it_is_still_answering() {
         answered.try_recv().is_err(),
         "the slow command is still answering"
     );
-    answered.recv_timeout(Duration::from_secs(60)).unwrap();
+    // Generous: alone the slow command answers in seconds, but beside the
+    // whole suite its instance and its busy second can take over a minute.
+    answered.recv_timeout(Duration::from_secs(240)).unwrap();
     assert_eq!(titles(&launcher), ["0", "Slow answer"]);
     assert_eq!(selected_title(&launcher).as_deref(), Some("0"));
 }

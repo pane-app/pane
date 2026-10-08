@@ -52,6 +52,10 @@ pub(super) struct Searching {
     /// is asked again: dropping it (a newer text, the command left) ends
     /// that wait.
     waiting: Option<tokio::sync::oneshot::Sender<()>>,
+    /// Search Files browsed by Pane itself, when the command is Pane's
+    /// registered Files command (#177, see `search_files`): the command is
+    /// then never asked to search.
+    pub(super) files: Option<super::search_files::Browsing>,
 }
 
 impl Searching {
@@ -61,6 +65,7 @@ impl Searching {
             list: None,
             in_progress: None,
             waiting: None,
+            files: None,
         }
     }
 
@@ -127,6 +132,10 @@ impl Launcher {
     /// (the rows listed meanwhile stay, with a running status). `None` when
     /// nothing is asked.
     pub(super) fn search_in_command(&self, state: &mut State, query: &str) -> Option<Pending> {
+        // Search Files lists the file index itself (#177).
+        if super::search_files::browsing(state) {
+            return self.ask_files(state, query, 0);
+        }
         let blank = query.trim().is_empty();
         let command = self.set_search_text(state, query)?;
         let component = state.open.clone()?;
@@ -205,6 +214,10 @@ impl Launcher {
     /// progress, if any, is stopped, and the command's own list is shown as
     /// it was last listed, without asking the command.
     pub(super) fn clear_search_in_command(&self, state: &mut State) {
+        if super::search_files::browsing(state) {
+            self.clear_files_search(state);
+            return;
+        }
         let _ = self.set_search_text(state, "");
     }
 
@@ -343,6 +356,8 @@ impl Launcher {
             }
             (None, Err(error)) => (CommandList::default(), Status::Error(error.to_string())),
         };
+        // The system icons of the files the file index found (#142).
+        super::file_search::want_icons(state, &list.entries);
         // Told the folder is still being listed: asked again once it is.
         let listed = match (&status, &owner, &access) {
             (Status::Idle, Some(owner), Some(access)) => access.listed(owner),

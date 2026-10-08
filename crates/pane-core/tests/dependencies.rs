@@ -338,7 +338,7 @@ fn a_disabled_required_dependency_is_not_enabled_again() {
     assert!(
         details(&launcher).contains(
             &"Requires: Rust operations sample, which you disabled: it stays disabled, and \
-              Caller cannot use it until you enable it in Manage extensions"
+              Caller cannot use it until you enable it in Settings"
                 .into()
         ),
         "{:#?}",
@@ -349,8 +349,8 @@ fn a_disabled_required_dependency_is_not_enabled_again() {
     assert_eq!(
         launcher.view().status,
         result(
-            "Installed Caller; Rust operations sample stays disabled: enable it in Manage \
-             extensions for Caller to use it"
+            "Installed Caller; Rust operations sample stays disabled: enable it in Settings \
+             for Caller to use it"
         )
     );
     let rust = launcher
@@ -363,7 +363,7 @@ fn a_disabled_required_dependency_is_not_enabled_again() {
         greet(&launcher, "greeter"),
         error(
             "disabled: Rust operations sample is disabled; Pane does not enable it for a call, \
-             enable it in Manage extensions"
+             enable it in Settings"
         )
     );
 }
@@ -1007,7 +1007,7 @@ fn a_paused_required_dependency_is_shown_as_paused_and_stays_paused() {
     assert!(
         details(&launcher).contains(
             &"Requires: Rust operations sample, installed but it is paused after an error; \
-              retry it in Manage extensions"
+              retry it in Settings"
                 .into()
         ),
         "{:#?}",
@@ -1019,7 +1019,7 @@ fn a_paused_required_dependency_is_shown_as_paused_and_stays_paused() {
         launcher.view().status,
         result(
             "Installed Caller; Rust operations sample stays paused after an error: retry it in \
-             Manage extensions for Caller to use it"
+             Settings for Caller to use it"
         )
     );
 }

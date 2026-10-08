@@ -15,7 +15,8 @@
 //!
 //! The Windows titlebar's close, minimize and maximize marks (see the
 //! Settings window's custom titlebar) stay `pane/`'s thin marks whatever
-//! the set, and the Pane mark (`mark-*.svg`) is Pane's own.
+//! the set, as does the Actions panel's Delete cross on every system, and
+//! the Pane mark (`mark-*.svg`) is Pane's own.
 //!
 //! The glyphs are embedded at compile time with `include_bytes!` — no
 //! runtime file lookup, no `AssetSource` registration; `svg().data(bytes)`
@@ -61,7 +62,6 @@ pub(crate) enum Glyph {
     Search,
     Terminal,
     Prompt,
-    Code,
     Folder,
     Blocks,
     /// A clipboard: clipboard history.
@@ -118,6 +118,10 @@ pub(crate) enum Glyph {
     Reset,
     /// A keyboard: a key binding recorder's record mark.
     Record,
+    /// A cross: the Actions panel's Delete entry on a clipboard record
+    /// (#166) — `pane/`'s close mark on every system, since the set in
+    /// use has no cross.
+    Delete,
     /// The Windows titlebar's close mark.
     #[cfg(target_os = "windows")]
     WindowClose,
@@ -136,7 +140,6 @@ impl Glyph {
         Glyph::Search,
         Glyph::Terminal,
         Glyph::Prompt,
-        Glyph::Code,
         Glyph::Folder,
         Glyph::Blocks,
         Glyph::Clipboard,
@@ -160,6 +163,7 @@ impl Glyph {
         Glyph::Plus,
         Glyph::Reset,
         Glyph::Record,
+        Glyph::Delete,
     ];
 
     /// The embedded SVG bytes for this glyph.
@@ -168,7 +172,6 @@ impl Glyph {
             Glyph::Search => glyph_svg!("search"),
             Glyph::Terminal => glyph_svg!("terminal"),
             Glyph::Prompt => glyph_svg!("prompt"),
-            Glyph::Code => glyph_svg!("code"),
             Glyph::Folder => glyph_svg!("folder"),
             Glyph::Blocks => glyph_svg!("blocks"),
             Glyph::Clipboard => glyph_svg!("clipboard"),
@@ -192,6 +195,7 @@ impl Glyph {
             Glyph::Plus => glyph_svg!("plus"),
             Glyph::Reset => glyph_svg!("reset"),
             Glyph::Record => glyph_svg!("record"),
+            Glyph::Delete => include_bytes!("../../assets/icons/pane/window-close.svg"),
             #[cfg(target_os = "windows")]
             Glyph::WindowClose => include_bytes!("../../assets/icons/pane/window-close.svg"),
             #[cfg(target_os = "windows")]
@@ -258,7 +262,6 @@ fn embolden(svg: &str) -> String {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum IconTone {
     Term,
-    Code,
     Web,
     Folder,
     Command,
@@ -275,7 +278,6 @@ fn color(hex: u32) -> Hsla {
 fn app_tone(tone: IconTone) -> Option<(Hsla, Hsla, Hsla)> {
     let (top, bottom, glyph) = match tone {
         IconTone::Term => (0x4A4D55FF, 0x1C1E22FF, 0xC8F5B4FF),
-        IconTone::Code => (0x45A3F5FF, 0x1D62C8FF, 0xFFFFFFFF),
         IconTone::Web => (0xFFA24DFF, 0xE2530FFF, 0xFFFFFFFF),
         IconTone::Folder => (0x74B6FFFF, 0x2F78DEFF, 0xFFFFFFFF),
         IconTone::Command => return None,

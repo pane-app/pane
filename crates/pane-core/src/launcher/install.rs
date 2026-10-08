@@ -213,13 +213,13 @@ pub(in crate::launcher) fn outcome_message(mode: &Mode, outcome: &Outcome) -> St
     }
     if !outcome.disabled.is_empty() {
         message.push_str(&format!(
-            "; {} stays disabled: enable it in Manage extensions for {title} to use it",
+            "; {} stays disabled: enable it in Settings for {title} to use it",
             platform::join(&outcome.disabled)
         ));
     }
     if !outcome.paused.is_empty() {
         message.push_str(&format!(
-            "; {} stays paused after an error: retry it in Manage extensions for {title} to \
+            "; {} stays paused after an error: retry it in Settings for {title} to \
              use it",
             platform::join(&outcome.paused)
         ));
@@ -878,7 +878,7 @@ fn preview_view(
                 },
             );
             if !installed.enabled {
-                details.push("Disabled: enable it in Manage extensions".into());
+                details.push("Disabled: enable it in Settings".into());
             }
             let replace = match (package.npm.as_ref().map(|npm| &npm.package), &package.git) {
                 (Some(npm), _) if npm.pinned => format!("npm version {}, pinned", npm.version),

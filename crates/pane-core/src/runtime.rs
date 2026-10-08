@@ -35,7 +35,7 @@ use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{self, Poll};
 
@@ -50,6 +50,7 @@ use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpCtxView, WasiHttpView};
 
 use crate::http;
 
+mod application_list;
 pub(crate) mod deadlines;
 mod faults;
 mod host_functions;
@@ -86,7 +87,7 @@ pub use tree::{
 pub(crate) mod bindings {
     wasmtime::component::bindgen!({
         path: "../../wit",
-        world: "extension-with-clipboard",
+        world: "extension-with-file-index",
         imports: {
             "pane:extension/operations": store,
             "pane:extension/helpers": store,
@@ -296,6 +297,10 @@ pub(crate) enum RootAction {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct IndexedResult {
     pub listing: ResultListing,
+    /// Other titles that find it, as its title does.
+    pub alternate_titles: Vec<String>,
+    /// Words that find it, as its subtitle does.
+    pub keywords: Vec<String>,
     pub action: IndexedAction,
 }
 
@@ -331,9 +336,9 @@ pub(crate) struct Exports {
     pub service: bool,
 }
 
-/// The system's applications as the runtime's guests and the launcher see
-/// them; replaceable, for tests.
-type SharedApplications = Arc<Mutex<Arc<dyn Applications>>>;
+// The system's applications as the runtime's guests and the launcher see
+// them; replaceable, for tests.
+pub(crate) use application_list::SharedApplications;
 
 /// Where the runtime's guests keep clipboard history, once the launcher
 /// said (see [`Runtime::set_clipboard`]); held weakly, since the launcher
@@ -920,7 +925,8 @@ impl Runtime {
         }
     }
 
-    /// Starts the runtime thread. Extensions are compiled on every start.
+    /// Starts the runtime thread. Extensions are compiled on every start
+    /// (unless `PANE_TEST_CODE_CACHE` names a cache shared by the tests).
     pub fn start() -> Result<Runtime, CallError> {
         Runtime::start_with(None)
     }
@@ -932,9 +938,18 @@ impl Runtime {
         Runtime::start_with(Some(cache_dir))
     }
 
+    /// For the tests of the compiled-code cache itself: from now on, the
+    /// runtimes this process starts keep compiled code where they were
+    /// started to ([`Runtime::start_with_cache`]), or nowhere, even when
+    /// `PANE_TEST_CODE_CACHE` names a cache shared by the tests.
+    #[doc(hidden)]
+    pub fn ignore_shared_code_cache() {
+        IGNORE_SHARED_CODE_CACHE.store(true, Ordering::Relaxed);
+    }
+
     fn start_with(cache_dir: Option<PathBuf>) -> Result<Runtime, CallError> {
         let engine = engine(cache_dir.clone())?;
-        let applications: SharedApplications = Arc::new(Mutex::new(crate::applications::native()));
+        let applications = SharedApplications::new(crate::applications::native());
         let code = Arc::new(Code::new(engine));
         let (checks, pending_checks) = std::sync::mpsc::channel::<Check>();
         let checker = code.clone();
@@ -1318,7 +1333,17 @@ impl Runtime {
     /// find and open applications through `applications` from now on,
     /// instead of this system's own ([`crate::applications::native`]).
     pub fn set_applications(&self, applications: Arc<dyn Applications>) {
-        *lock(&self.shared.applications) = applications;
+        self.shared.applications.replace(applications);
+    }
+
+    /// Has `changed` told, with the components that asked for the
+    /// installed applications and may still run, each time the list
+    /// changes by itself (see [`Applications::on_change`]).
+    pub(crate) fn on_applications_changed(
+        &self,
+        changed: impl Fn(Vec<PathBuf>) + Send + Sync + 'static,
+    ) {
+        self.shared.applications.on_change(Arc::new(changed));
     }
 
     /// Has the runtime list granted folders through `folders` from now on,
@@ -1334,7 +1359,21 @@ impl Runtime {
 
     /// Finds and opens the system's applications.
     pub(crate) fn applications(&self) -> Arc<dyn Applications> {
-        lock(&self.shared.applications).clone()
+        self.shared.applications.current()
+    }
+
+    /// What finds the system's applications, as it is replaced
+    /// ([`Runtime::set_applications`]), without keeping the runtime: the
+    /// worker refreshing their icons holds it (#172).
+    pub(crate) fn applications_handle(&self) -> SharedApplications {
+        self.shared.applications.clone()
+    }
+
+    /// The folder of disposable data this runtime was started with
+    /// ([`Runtime::start_with_cache`]), which also holds the installed
+    /// applications' icons (#172); `None` when it keeps none.
+    pub(crate) fn cache_folder(&self) -> Option<PathBuf> {
+        self.shared.cache_dir.clone()
     }
 
     /// Has the runtime's guests keep clipboard history through `capture`
@@ -1828,22 +1867,43 @@ fn parse_limits(text: &str) -> Option<Limits> {
     })
 }
 
-/// Locks `mutex`, taking it over if a thread panicked while holding it:
-/// the runtime thread may crash while a lock is held (see `supervisor`),
-/// and Pane carries on with what the lock guarded.
-pub(crate) fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
+/// Locks a mutex, taking it over if a thread panicked while holding it
+/// (the runtime thread may crash while a lock is held, see `supervisor`).
+pub(crate) use crate::util::lock;
 
 /// The runtime could not do something because of `error`.
 pub(crate) fn unavailable(error: impl fmt::Display) -> CallError {
     CallError::RuntimeUnavailable(error.to_string())
 }
 
+/// The environment variable naming a folder that every runtime keeps its
+/// compiled extension code in, in place of its own cache folder (or none):
+/// the test runs set it (`.cargo/config.toml`), so a run's tests compile
+/// each component once rather than once per test, which for the 4 MB
+/// JavaScript components is most of a test's time. Only the compiled code
+/// moves; the runtime's cache folder ([`Runtime::cache_folder`]) and all it
+/// holds stay where they were. Wasmtime's cache may be shared by processes
+/// running at once: it writes each entry whole under a temporary name and
+/// renames it into place, and treats an entry it cannot read as missing.
+/// Unset or empty, each runtime keeps its own, as a released Pane does.
+const SHARED_CODE_CACHE: &str = "PANE_TEST_CODE_CACHE";
+
+/// Set by [`Runtime::ignore_shared_code_cache`].
+static IGNORE_SHARED_CODE_CACHE: AtomicBool = AtomicBool::new(false);
+
+/// The folder [`SHARED_CODE_CACHE`] names, unless this process ignores it.
+fn shared_code_cache() -> Option<PathBuf> {
+    if IGNORE_SHARED_CODE_CACHE.load(Ordering::Relaxed) {
+        return None;
+    }
+    std::env::var_os(SHARED_CODE_CACHE)
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+}
+
 /// The engine every runtime thread runs guests with: WASI 0.3 and
-/// component-model async, keeping compiled code in `cache_dir`, if given.
+/// component-model async, keeping compiled code in `cache_dir`, if given
+/// (or in the shared cache [`SHARED_CODE_CACHE`] names).
 fn engine(cache_dir: Option<PathBuf>) -> Result<Engine, CallError> {
     let mut config = Config::new();
     config
@@ -1852,7 +1912,7 @@ fn engine(cache_dir: Option<PathBuf>) -> Result<Engine, CallError> {
         // Every guest yields to the runtime thread at each tick (see
         // `deadlines`), so none holds it by computing.
         .epoch_interruption(true);
-    if let Some(dir) = cache_dir {
+    if let Some(dir) = shared_code_cache().or(cache_dir) {
         let mut cache = CacheConfig::new();
         cache.with_directory(dir);
         let cache = Cache::new(cache).map_err(unavailable)?;
@@ -2245,7 +2305,7 @@ fn launch_record(launch: &LaunchRecord, command: Option<&str>) -> launching::Lau
 
 impl GuestState {
     fn applications(&self) -> Arc<dyn Applications> {
-        lock(&self.applications).clone()
+        self.applications.current()
     }
 
     /// The granted folders and their listings, for the guest.
@@ -2268,14 +2328,23 @@ impl applications::Host for GuestState {
         if let Some(end) = self.stopped() {
             return Err(stopped_code(end));
         }
+        // The host keeps its list while a package that asked can run.
+        self.applications.asked_by(
+            &self.component,
+            self.data.as_ref().map(PackageData::generation),
+        );
         Ok(self
             .applications()
             .installed()?
             .into_iter()
             .map(|application| applications::Application {
+                icon: crate::applications::icon_reference(&application.id),
                 id: application.id,
                 name: application.name,
                 location: application.location,
+                alternate_titles: application.alternate_titles,
+                keywords: application.keywords,
+                distinction: application.distinction,
             })
             .collect())
     }
@@ -2375,7 +2444,12 @@ impl clipboard_history::Host for GuestState {
                 text: item.text,
                 copied_at: item.copied_at,
                 age_seconds: now.saturating_sub(item.copied_at) / 1000,
-                source: item.source,
+                // The program's file name, as the contract says, also where
+                // Pane keeps its path (Windows).
+                source: item
+                    .source
+                    .as_deref()
+                    .map(|source| clipboard::program_file_name(source).to_owned()),
             })
             .collect())
     }
@@ -2421,7 +2495,7 @@ impl WasiHttpView for GuestState {
 /// A running guest instance of one component.
 struct Instance {
     store: Store<GuestState>,
-    bindings: bindings::ExtensionWithClipboard,
+    bindings: bindings::ExtensionWithFileIndex,
     /// Its root results export, if it has one.
     root_results: Option<root_bindings::RootResultsProvider>,
     /// Its indexed results export, if it has one.
@@ -2642,6 +2716,11 @@ impl Code {
             |state| state,
         )
         .expect("registering files in a fresh linker cannot conflict");
+        bindings::pane::extension::file_index::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
+            &mut linker,
+            |state| state,
+        )
+        .expect("registering the file index in a fresh linker cannot conflict");
         launching::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)
             .expect("registering launching commands in a fresh linker cannot conflict");
         window_host::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| {
@@ -2797,7 +2876,7 @@ impl Code {
                 ))
             })?;
         }
-        bindings::ExtensionWithClipboardPre::new(pre).map_err(interface)?;
+        bindings::ExtensionWithFileIndexPre::new(pre).map_err(interface)?;
         Ok(Checked { network, programs })
     }
 }
@@ -3783,6 +3862,8 @@ impl Host {
                     title: result.title,
                     subtitle: result.subtitle,
                 },
+                alternate_titles: result.alternate_titles,
+                keywords: result.keywords,
                 action: match result.action {
                     indexed_results::IndexedAction::OpenApplication(id) => {
                         IndexedAction::OpenApplication(id)
@@ -4306,7 +4387,7 @@ impl Host {
             started => started?,
         };
         let bindings =
-            bindings::ExtensionWithClipboard::new(&mut store, &instance).map_err(load)?;
+            bindings::ExtensionWithFileIndex::new(&mut store, &instance).map_err(load)?;
         // Only a command that computes root results exports them.
         let root_results = root_bindings::RootResultsProvider::new(&mut store, &instance).ok();
         // Only a command that supplies results ahead of the query exports

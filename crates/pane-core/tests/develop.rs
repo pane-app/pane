@@ -32,7 +32,7 @@ use feedback::shown;
 use guests::guest;
 use rows::{select_title, titles};
 
-const MANAGE_ROW: &str = "Manage extensions…";
+const MANAGE_ROW: &str = "Manage Extensions";
 
 /// The stand-in build's shared state: which packages it built, how often
 /// it was stopped, and a gate builds wait at.
@@ -381,7 +381,7 @@ fn a_build_that_fails_keeps_the_working_code_and_shows_its_diagnostics() {
     assert_eq!(
         message,
         "Dev did not build: error[E0308]: mismatched types. It keeps running its installed \
-         code; the diagnostics are under \"Why Dev did not build\" in Manage extensions."
+         code; the diagnostics are under \"Why Dev did not build\" in Settings."
     );
     let failure = dev
         .launcher

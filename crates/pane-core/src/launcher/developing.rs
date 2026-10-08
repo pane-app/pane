@@ -703,7 +703,7 @@ impl Launcher {
             identity,
             Status::Error(format!(
                 "{title} did not build: {summary}. It keeps running its installed code; the \
-                 diagnostics are under \"{}\" in Manage extensions.",
+                 diagnostics are under \"{}\" in Settings.",
                 build_details_title(&title)
             )),
         );

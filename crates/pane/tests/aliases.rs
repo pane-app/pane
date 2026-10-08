@@ -12,7 +12,7 @@ use pane_core::{Launcher, LauncherView, Runtime, Screen, Status};
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::{settle, settle_shown};
+use settle::{enter_flow, settle, settle_shown};
 
 #[path = "support/packages.rs"]
 mod packages;
@@ -60,7 +60,8 @@ fn an_alias_and_a_fallback_set_in_the_window_send_the_typed_text_to_the_command(
     cx.simulate_keystrokes("enter");
     settle(&window, cx);
 
-    press_enter_on(&window, cx, "Manage extensions…");
+    // The extension list, as Settings enters it (#168).
+    enter_flow(&window, cx);
     let view = press_enter_on(&window, cx, "Alias for Echo");
     assert_eq!(view.title, "Alias for Echo");
     assert!(matches!(view.screen, Screen::Form(_)));

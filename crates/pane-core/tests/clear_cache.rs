@@ -22,7 +22,7 @@ mod rows;
 use feedback::shown;
 use rows::{select_title, titles};
 
-const MANAGE_ROW: &str = "Manage extensions…";
+const MANAGE_ROW: &str = "Manage Extensions";
 
 /// What "Show what Pane keeps" answers once every kind of data is saved.
 const EVERYTHING_KEPT: &str =

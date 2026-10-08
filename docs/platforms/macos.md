@@ -54,6 +54,28 @@ of the Rust, JavaScript and TypeScript sample commands it presses Return to open
 it, Down and Return to run "Wait briefly" (an async WASI 0.3 clock import inside
 the guest), then Escape.
 
+Extensions are managed in Settings since #168, where switches, menus and
+confirmation rows answer the pointer only. The smoke opens Settings with
+root search's Manage Extensions command, then finds each control by its
+accessible name in the Settings window through System Events (Pane's tree
+comes from AccessKit; the same Accessibility permission covers it) and
+presses it, clicking its center where it offers no press. It checks an
+operation's outcome by the name of the page's status line, not by a
+color, and closes Settings with Command+W before it goes back to the
+launcher. A switch is the `AXCheckBox` of that name: AccessKit reports a
+heading's role as `Heading`, not `AXHeading`, so release run 37689872256,
+which only ruled out the roles a switch is not, pressed the page's heading
+"Settings sample" instead of its switch and waited in vain for "Disabled
+Settings sample". Lines of plain text (a preview's details) have no
+accessible name, so a preview is waited for by its row (Update, Install).
+A command's answer is a toast since #141, which leaves the footer 3
+seconds after it appears (run 37612772185 missed Echo's at frame 72), so
+such answers are captured until their color shows (`capture_until`).
+Release run 37698693722 reached the helper phase, where the disable came
+after the helper's ten-second wait had ended (the note said "finished"):
+Settings is now opened there the shortest way, without `open_extension`'s
+pauses, so the switch is reached within the wait.
+
 It fails if Pane exits. Three checks also run against the `screencapture`
 screenshots (`scripts/check_screenshot.py`):
 
@@ -66,7 +88,7 @@ Screenshots, cropped to the window (and inspected):
 
 | Step | Evidence |
 | --- | --- |
-| Root search lists the three sample commands | [1-root.png](evidence/macos/1-root.png) |
+| Root search lists the three samples, installed first into a data folder of their own (#162) | [1-root.png](evidence/macos/1-root.png) |
 | Rust command opened; action result "Waited 50 ms inside the Rust guest" | [2-command-0.png](evidence/macos/2-command-0.png), [2-result-0.png](evidence/macos/2-result-0.png) |
 | JavaScript command; "Waited 50 ms inside the JavaScript guest" | [3-command-1.png](evidence/macos/3-command-1.png), [3-result-1.png](evidence/macos/3-result-1.png) |
 | TypeScript command; "Waited 50 ms inside the TypeScript guest" | [4-command-2.png](evidence/macos/4-command-2.png), [4-result-2.png](evidence/macos/4-result-2.png) |
@@ -146,7 +168,9 @@ here is checked only through the tests' recording opener. Not run yet.
 ## Global hotkeys (#33)
 
 The smoke's hotkey phase (screenshots 52 to 58, [global hotkeys](../hotkeys.md#checks))
-assigns Control+Option+G to Greeting on its hotkey screen, brings Finder to
+assigns Control+Option+G to Greeting in the hotkey recorder on the settings
+sample's page in Settings (#168; it was the launcher's hotkey screen
+before), brings Finder to
 the front, presses it through System Events and checks that Pane is the
 frontmost process with Greeting open; then again after a restart; then,
 with the extension disabled, that pressing it leaves Finder in front and
@@ -163,8 +187,8 @@ focus transition are unverified natively.
 The smoke's retained-data phase (screenshots 63 to 65, [deleting retained
 data](../extension-data.md#deleting-retained-data)), with a data folder of
 its own, saves a note with the settings sample, uninstalls it keeping its
-saved data, deletes its retained data from the extension list's last row
-(Down from the selected Cancel, then Return), checks that `installed.json`
+saved data, deletes its retained data from its row on the Extensions
+group's page in Settings and confirms (#168), checks that `installed.json`
 and `content.json` no longer hold it, and reinstalls the same folder, which
 must show nothing kept. **Not run on macOS yet.**
 
@@ -172,7 +196,8 @@ must show nothing kept. **Not run on macOS yet.**
 
 The smoke's alias phase (screenshots 66 to 74, [aliases and fallbacks](../aliases.md#checks))
 gives Echo, the query sample's command, the alias "ec" and makes it a
-fallback in Manage extensions, sends "ec hello" and, from the unselected
+fallback on its extension's page in Settings (its alias cell and fallback
+switch, #168), sends "ec hello" and, from the unselected
 fallback row chosen with Down, "zqx" to it, and checks that with the
 extension disabled "ec hello" lists nothing. Nothing in it is specific to
 macOS (no system API is involved); **not run on macOS yet**.
@@ -214,7 +239,8 @@ handler for a quit Apple event is unverified until the smoke runs. No macOS x86-
 
 The smoke's last phase (screenshots 110 to 136, [development
 mode](../development-mode.md#checks)) builds a copy of each development
-sample, develops it from Manage extensions, saves an edit, a change that
+sample, develops it from its page in Settings (Develop in the Actions
+menu, #168), saves an edit, a change that
 does not build, two saves in a row and, after stopping, one more, checking
 the answers, the error and that nothing is built after stopping. The
 TypeScript and JavaScript samples run only where the JS toolchain is built,
@@ -229,11 +255,11 @@ that quits kills it).
 ## Disabling required dependents (#43)
 
 The disable-dependents phase (screenshots 140 to 143, [disabling a required dependency](../dependencies.md#disabling-a-required-dependency)),
-with a data folder of its own, installs the dependencies sample, presses
-Enter on the JavaScript operations sample in Manage extensions, which must
-ask first (the details color), cancels, then chooses Disable all (the
-result color) and enables the JavaScript sample again alone (the result
-color); `installed.json` must then record exactly one disabled package.
+with a data folder of its own, installs the dependencies sample, turns off
+the JavaScript operations sample's switch on its page in Settings (#168),
+which must ask first (its Disable all row shown), cancels, then chooses
+Disable all (the page's status says so) and enables the JavaScript sample
+again alone; `installed.json` must then record exactly one disabled package.
 Nothing in it is specific to macOS (no system API is involved; the
 closure reuses the dependency identities recorded at install); **not run on
 macOS yet**.
@@ -248,8 +274,9 @@ Count, starts the waiting helper and has the runtime crash: the helper must
 be gone (`pgrep`, and its heartbeat must stop growing), the note it saved kept,
 and the status line the error color. A second crash, injected before
 Count's answer, must leave the count at 2 and the runtime stopped; root
-search explains it, Manage extensions shows why (the details color), a
-disable works, **Restart the extension runtime** runs extensions again and
+search explains it, the Extensions group's page in Settings shows why (its
+runtime rows, and the details behind one), a disable works, **Restart the
+extension runtime** runs extensions again and
 Count then counts 3; no package may be recorded as paused. Nothing in it is
 specific to macOS (the runtime is a thread; helpers are ended as for a
 disable); **not run on macOS yet**.
@@ -262,7 +289,7 @@ sets the runtime's limits through the fault file, first `limits:60,4,15`
 (a minute of a guest's own computing), installs the settings sample and
 runs its **Stop responding**, which computes without waiting: while it
 still computes (Pane's standard error has stopped no call yet), Escape and
-Manage extensions must answer (the details color, frame 240); then
+Manage Extensions must answer (Settings opens, frame 240); then
 `limits:2,4,15` must stop that call at once, as it computed longer; run
 again, the call must be stopped after 2 seconds of its own computing (thread CPU time from
 `GetThreadTimes` on Windows, `CLOCK_THREAD_CPUTIME_ID` on macOS) with the
@@ -271,7 +298,7 @@ colors), with the saved `busy` note still "started"; the pause details and
 Retry must work. Then the runtime thread is made to hang through the fault
 file (`hang`): opening Greeting must first show "not responding yet" (the
 progress color, frame 245), then the error color after Pane gave up on the
-thread, Manage extensions' first row must
+thread, the runtime row of the Extensions group's page in Settings must
 open the runtime's details, and after `release` a fresh thread must save
 the formal greeting; no package may be recorded as paused. Epoch
 interruption and the watchdog are Wasmtime's and Pane's own, with nothing
@@ -280,10 +307,10 @@ specific to macOS; **not run on macOS yet**.
 ## Uninstalling required dependents (#44)
 
 A phase of the smoke (screenshots 180 to 183, [uninstalling a required dependency](../dependencies.md#uninstalling-a-required-dependency)),
-with a data folder of its own, installs the dependencies sample, presses
-Enter on "Uninstall JavaScript operations sample" in Manage extensions,
-which must ask first (the details color), cancels, then chooses Uninstall
-all 2 keeping saved data (the result color); `installed.json` must then hold
+with a data folder of its own, installs the dependencies sample, chooses
+Uninstall in the Actions menu of the JavaScript operations sample's page in
+Settings (#168), which must ask first, cancels, then chooses Uninstall all 2
+keeping saved data (the page's status says so); `installed.json` must then hold
 no package. Pane is started again to install the JavaScript operations
 sample alone, and `installed.json` must then hold exactly one package.
 Removing a managed copy uses the same `remove_dir_all` as a single
@@ -299,7 +326,8 @@ with a data folder of its own, starts `scripts/npm_registry.py` on
 development build at it with `PANE_NPM_REGISTRY`: it installs the local
 Dependencies from npm sample, which downloads and installs the npm package
 it requires, calls its `greet` operation, then names the npm package in
-"Install extension from npm…" (two rows up from the last row), updates it and runs
+the npm field "Install extension from npm…" opens in Settings (#168; Show
+Package previews it there), updates it and runs
 its command, which answers "Hello from the npm package". #49 extends the
 phase: a 0.2.0 of the sample is published into the registry's folder
 (`scripts/npm_publish.py`; the registry reads its folder on request), Pane
@@ -338,9 +366,9 @@ configuration) and serves it on 127.0.0.1 with `scripts/repository_server.py
 serve`, which runs `git upload-pack`: `--install git:<address>` explains the
 default branch as source-only (300, captured again every half second until
 the explanation's color shows, for up to 60 s, rather than after a fixed
-delay), then "Install extension from Git…"
-(root's last row there, with nothing installed) takes `<address>@v0.1.0`
-(301), previews the tag, pinned (302), installs it (303) and runs its
+delay), then "Install extension from Git…", found by its title, opens the
+Git field in Settings (#168), which takes `<address>@v0.1.0`
+(301); Show Package previews the tag, pinned (302), Install installs it (303), and the smoke runs its
 command, which answers "Hello from the Git repository" (304);
 `installed.json`, read as JSON (`scripts/check_git_record.py` on macOS), must then
 record one package from Git with `"gitRef": "refs/tags/v0.1.0"`, `pinned`
@@ -371,17 +399,21 @@ macOS yet**.
 
 ## Files (#29)
 
-The files phase (screenshots 220 to 223, [files](../files.md)), with a data
-folder of its own, installs Files and presses Return on Pane's own "Choose
-folder…" row; a debug build's `PANE_TEST_CHOOSE_FOLDER` names a fixture
-folder "Pane smoke files" (spaces) in the system's temporary folder instead
-of showing the system's picker. It types "plan", which must list "Résumé
-plan ü.txt" selected, and presses Return. A debug build's
+The files phase (screenshots 220 to 224, [files](../files.md)), with a data
+folder of its own, installs Files (220, "Installed Files"), whose file
+index (#175) covers a fixture folder "Pane smoke files" (spaces) in the
+system's temporary folder that a debug build's `PANE_TEST_FILE_INDEX_HOME`
+names instead of the home folder; there is no folder to choose any more.
+It types "plan" in root search, which must list "Résumé plan ü.txt" under
+"Files", selected, and presses Return. Files installed from its folder is
+not the registered default, so its Search Files command keeps the generic
+list (#177): the smoke does not open it. A debug build's
 `PANE_TEST_OPEN_FILE_LOG` makes the opener record the path in a file instead
 of running `/usr/bin/open`, so no application of the user's opens it; the
 recorded path, resolved, must be the fixture file's, resolved. Last it types
-"runner" and presses Return on an executable script, which Pane must refuse
-without recording or running it. A positive native open on macOS is
+"runner" and presses Return on an executable script, which Pane must show
+in Finder without recording or running it (ADR 0037). A positive native
+open on macOS is
 therefore not run by the smoke. Listing the folder and the scan policy use
 only `std::fs` (case-insensitive APFS sorts names by bytes like the other
 systems; links are skipped); the policy tests with symbolic links and the
@@ -422,19 +454,27 @@ same `clipboard::accept`, unchanged, and the retention/storage contract is
 reused as is (the fake-clipboard tests cover it).
 
 The smoke's clipboard phase (screenshots 280 to 287, on the pattern of the
-Windows and Linux ones), with a data folder of its own, turns history on
-after checking nothing is kept while off, keeps the smoke's own copies
-(put on the pasteboard with AppleScript's `set the clipboard to`), pauses,
-resumes, copies a kept item again and checks the pasteboard with `pbpaste`
-and by pasting into root search, disables, restarts disabled, enables and
-keeps again across a restart, with `clipboard-history.json` checked at each
-step. The expiry and deletion phase (400 to 404) backdates the kept items
-through `scripts/clipboard_history.py`, checks the expired one is gone
-after the restart, deletes one item, the recent ones, all through the
-retention form and all with history turned off, and checks the pasteboard
-still holds what was copied last (`pbpaste`). No marked copy is made in
-the smoke (AppleScript cannot set a custom type); the concealed marker is
-checked by the adapter test instead.
+Windows and Linux ones), with a data folder of its own, runs after the #52
+phase: since #166 only Pane's registered Clipboard History records from
+the first start, so the phase acquires the default set from the artifacts
+that phase built, served on 127.0.0.1, with the smoke's own build (Files'
+index on an empty folder, `PANE_TEST_FILE_INDEX_HOME`). It keeps the
+smoke's own copies with nothing turned on (put on the pasteboard with
+AppleScript's `set the clipboard to`), pauses and resumes recording in the
+split view's Actions panel (Command+K), copies a kept record again (Return
+on it, the view's filter leaving it) and checks the pasteboard with
+`pbpaste` and by pasting into root search, disables it (the switch on its
+page in Settings), restarts disabled, enables and keeps again across a
+restart, with `clipboard-history.json` checked at each step. The expiry
+and deletion phase (400 to 405) backdates the kept records through
+`scripts/clipboard_history.py`, checks the expired one is gone after the
+restart, deletes one record (Delete Entry), keeps records for 1 Hour,
+which deletes the older one, copies a file as Finder does (a file URL,
+kept as a file, #167), and clears the history once confirmed (Clear
+History), recording going on, and checks the pasteboard still holds what
+was copied last (`pbpaste`). No marked copy is made in the smoke
+(AppleScript cannot set a custom type); the concealed marker is checked by
+the adapter test instead.
 
 **Not run on macOS yet.** The adapter was written on this headless Linux
 machine, where macOS code cannot build: it was reviewed by reading and
@@ -450,11 +490,12 @@ anywhere; the convention's type name is what the test checks.
 
 ## Clipboard history expiry (#36)
 
-Covered by the same smoke phase (screenshots 400 to 404, above) since the
-command now runs on macOS: items expire after their package's retention
+Covered by the same smoke phase (screenshots 400 to 405, above) since the
+command now runs on macOS: records expire after their package's retention
 whether or not the extension runs, and the phase backdates and deletes
-items exactly as the Linux one does, with the pasteboard checked directly
-(`pbpaste`). **Not run on macOS yet.**
+records as the Linux one does, plus a copied file (#167), with the
+pasteboard checked directly (`pbpaste`). **Not run on macOS yet.**
+
 
 ## Installing Pane and acquiring its calculator (#52)
 
@@ -480,18 +521,16 @@ runs `pane --version` to check what it installed. The installed Pane then
 starts — the bundle's `Contents/MacOS/pane` — with a PATH that holds
 nothing at all (an empty folder, checked with `command -v` of cargo,
 rustc, node, npm, git, cc, clang and make), pointed at the controlled
-source with `PANE_ARTIFACTS`. It acquires the calculator and the helper
-sample by itself (`installed.json` must record both under `"default"`),
-root search lists their commands, "6*7" answers 42 and Enter copies it,
-and the Helper sample's "Echo through the helper" runs the payload's
-prebuilt `pane-echo` ("Echoed \"hello from Pane\" on macOS arm64"),
-built for `macos-aarch64` (the packaging rewrote the payload's manifest
-to that target), from the managed copy, with no developer tool
-reachable. The acquired payloads must be cached, the downloads folder
-empty, and no helper process left running. The program files are removed
-again at the phase's end, so the uploaded evidence is the screenshots and
-records (frames 500 to 503, and the `clean-home-records` folder), not the
-program. CI builds the release-profile package after the smoke and
+source with `PANE_ARTIFACTS`. It acquires the five default extensions
+by itself (`installed.json` must record each under `"default"`, and no
+sample: the helper sample left the default set with #162, and a helper
+running from an acquired payload is
+`crates/pane-core/tests/installer.rs`'s), root search lists their
+commands, "6*7" answers 42 and Enter copies it, with no developer tool
+reachable. The acquired payloads must be cached and the downloads folder
+empty. The program files are removed again at the phase's end, so the
+uploaded evidence is the screenshots and records (frames 500 to 502, and
+the `clean-home-records` folder), not the program. CI builds the release-profile package after the smoke and
 uploads it with the artifacts of the job (`macos-package`). Nothing is
 signed (no Apple Developer credentials exist): the smoke's binaries are
 built on the runner, so they carry no Gatekeeper quarantine mark; a
@@ -528,10 +567,9 @@ runner provides.
 
 | Step | Evidence |
 | --- | --- |
-| The clean machine's Pane acquired both default extensions and lists their commands | pending CI (frame 500) |
+| The clean machine's Pane acquired the five default extensions, and no sample (#162), and lists their commands | pending CI (frame 500) |
 | "6*7" answers 42 | pending CI (frame 501) |
 | Enter copies the answer | pending CI (frame 502) |
-| The helper sample's prebuilt helper answers | pending CI (frame 503) |
 
 ## Installing a Pane application update by the user's choice (#55)
 
@@ -554,9 +592,10 @@ background, checks the index for a newer version of itself: the offer
 appears as **Update Pane to 99.0.0** in root search (frame 601; the
 status line tells what was found, frame 600). The artifact server's log
 must hold **no request for the package** until the row is chosen —
-nothing is downloaded, installed or restarted automatically. The Helper
-sample is disabled first, so an extension the user disabled before the
-update must stay disabled after it. Choosing the row with a **damaged
+nothing is downloaded, installed or restarted automatically. Clipboard
+History is disabled first (the Helper sample was, until #162 took it out
+of the default set), so an extension the user disabled before the update
+must stay disabled after it. Choosing the row with a **damaged
 package** is explained (its bytes do not match the sha512 its entry
 gives, frame 602) with the program, the data and the bundle untouched
 and the row ready to try again; then the real choice downloads the
@@ -567,7 +606,7 @@ comparisons of both binaries against the two packages' own files). The
 next start runs the new version: it reports `Pane 99.0.0`, removes
 `pane.old` at start, the calculator still answers "6*7" with 42 from
 the old version's acquired payload (frames 604 and 605, and the
-pasteboard holds 42), and the disabled Helper sample stays disabled —
+pasteboard holds 42), and the disabled Clipboard History stays disabled —
 Pane's data was never touched. The bundle itself is never replaced: the
 same `Pane.app` keeps its identity, and what the swap does not update
 (the `Info.plist` version keys) is a provisional limit recorded in the
@@ -712,9 +751,9 @@ treats them, and symbolic links.
 | The installed command answers ("Hello from the Rust guest") | [11-installed-result.png](evidence/macos/11-installed-result.png) |
 | Still listed after a restart | [12-restarted.png](evidence/macos/12-restarted.png) |
 
-The installed copy has the same title as the built-in Rust sample, so the
-screenshots can't show which copy opened; the core tests prove the installed
-copy runs. In these screenshots the root list is taller than the window and its
+Since #162 Pane registers no sample command: the first phase installs the
+three samples into a data folder of their own, and this phase's data folder
+lists the installed Rust sample alone, so the screenshots show that copy. In these screenshots the root list is taller than the window and its
 last row is cut off; since #19 the list scrolls to keep the selected row
 visible.
 

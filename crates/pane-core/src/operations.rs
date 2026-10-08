@@ -132,9 +132,7 @@ impl fmt::Display for OperationError {
 }
 
 fn disabled(title: &str) -> String {
-    format!(
-        "{title} is disabled; Pane does not enable it for a call, enable it in Manage extensions"
-    )
+    format!("{title} is disabled; Pane does not enable it for a call, enable it in Settings")
 }
 
 /// A call a guest made, waiting for the runtime to serve it.

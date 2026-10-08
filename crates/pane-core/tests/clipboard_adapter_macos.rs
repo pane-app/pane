@@ -1,8 +1,9 @@
 //! The macOS (pasteboard) clipboard adapter against the real pasteboard:
 //! it reports each change the test makes, withholds the text of a copy
 //! marked the way a password manager marks it, reads a copy no text can be
-//! read from as none, puts text on it, and reports nothing once its watch
-//! is dropped.
+//! read from as none, a PNG image and Finder's files as what they are
+//! (#167), puts text, an image and files on it, and reports nothing once
+//! its watch is dropped.
 //!
 //! The test replaces what is on the pasteboard, and does not put it back:
 //! it runs only where `PANE_TEST_REAL_CLIPBOARD=1` is set, as CI's macOS
@@ -31,8 +32,12 @@ use std::sync::mpsc;
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use objc2::rc::autoreleasepool;
+use objc2_app_kit::NSPasteboard;
+use objc2_foundation::{NSArray, NSString, NSURL};
 use pane_core::clipboard::{
-    Content, Markers, Observation, ProgramName, Sink, Skip, Ticket, accept, testing,
+    Content, Copied, Markers, Observation, ProgramName, Sink, Skip, Ticket, accept, accept_any,
+    testing,
 };
 use pane_core::system::Clip;
 
@@ -75,7 +80,13 @@ impl Sink for Ours {
         let ours = match &observation.content {
             Content::Text(text) => text.starts_with(&self.prefix),
             Content::Withheld => self.concealed.swap(false, Ordering::SeqCst),
-            Content::Other => true,
+            // Its own files are named with its prefix (#167).
+            Content::Files(files) => files
+                .iter()
+                .any(|file| file.to_string_lossy().contains(&self.prefix)),
+            // Only this test copies images on this quiet runner; it tells
+            // its own by their bytes.
+            Content::Other | Content::Image(_) | Content::TooLarge => true,
         };
         if ours {
             let _ = self.reports.lock().unwrap().send(observation);
@@ -166,6 +177,94 @@ fn the_watcher_reports_this_tests_changes_until_dropped() {
     assert_eq!(other.markers, Markers::default());
     assert_eq!(other.source, None);
 
+    // #167: a PNG image is read as that image, which Pane's own Clipboard
+    // History keeps; Pane puts one back as an image.
+    let rgba = [255, 0, 0, 255, 0, 0, 255, 128];
+    let png = pane_core::icons::encode_png(2, 1, &rgba).unwrap();
+    testing::set_target("public.png", &png).unwrap();
+    let image = next(
+        "a PNG image",
+        &|report| matches!(&report.content, Content::Image(image) if image.png == png),
+    );
+    assert!(matches!(accept_any(&image, &[]), Ok(Copied::Image(_))));
+    assert_eq!(accept(&image, &[]), Err(Skip::NotText));
+    clipboard.write_image(&png).unwrap();
+    next(
+        "the written image",
+        &|report| matches!(&report.content, Content::Image(image) if (image.width, image.height) == (2, 1)),
+    );
+
+    // Files, as Finder copies them (one file URL per item), every one in
+    // order: Pane puts them back so, and reads them back.
+    let folder = tempfile::tempdir().unwrap();
+    let files = vec![
+        folder.path().join(format!("{prefix}a b.txt")),
+        folder.path().join(format!("{prefix}c")),
+    ];
+    for file in &files {
+        std::fs::write(file, b"").unwrap();
+    }
+    // Finder names a file by its canonical path (/private/var, not /var).
+    let files: Vec<_> = files
+        .iter()
+        .map(|file| file.canonicalize().unwrap())
+        .collect();
+    clipboard.write_files(&files).unwrap();
+    let copied = next("the written files", &|report| {
+        report.content == Content::Files(files.clone())
+    });
+    assert!(matches!(
+        accept_any(&copied, &[]),
+        Ok(Copied::Files(listed)) if listed == files.as_slice()
+    ));
+
+    // Taking ownership announces a change before its data is necessarily
+    // ready. Filling a declared type does not increment that change count.
+    let declared = autoreleasepool(|_| {
+        let board = NSPasteboard::generalPasteboard();
+        let kind = NSString::from_str("public.file-url");
+        // SAFETY: there is no owner object; the test supplies the data.
+        unsafe { board.declareTypes_owner(&NSArray::from_slice(&[&*kind]), None) }
+    });
+    // Keep the producer's data unavailable across several watcher polls.
+    std::thread::sleep(Duration::from_secs(1));
+    autoreleasepool(|_| {
+        let board = NSPasteboard::generalPasteboard();
+        let url = NSURL::fileURLWithPath(&NSString::from_str(&files[0].to_string_lossy()));
+        assert!(board.setString_forType(
+            &url.absoluteString().unwrap(),
+            &NSString::from_str("public.file-url")
+        ));
+        assert_eq!(board.changeCount(), declared);
+    });
+    next(
+        "the file supplied after its change was announced",
+        &|report| report.content == Content::Files(vec![files[0].clone()]),
+    );
+
+    // A different process supplies the same format, as the native smoke
+    // does. Repeating crosses the watcher's polling boundary while
+    // AppleScript declares and fills the pasteboard.
+    for iteration in 0..20 {
+        std::thread::sleep(Duration::from_millis(iteration * 13));
+        let copied = std::process::Command::new("osascript")
+            .args([
+                "-e",
+                "on run argv\nset the clipboard to (POSIX file (item 1 of argv))\nend run",
+            ])
+            .arg(&files[0])
+            .output()
+            .unwrap();
+        assert!(
+            copied.status.success(),
+            "{}",
+            String::from_utf8_lossy(&copied.stderr)
+        );
+        next("the externally copied file", &|report| {
+            report.content == Content::Files(vec![files[0].clone()])
+        });
+    }
+
     // Writing is a change too, reported like any other.
     let written = format!("{prefix}written");
     clipboard.write_text(&written).unwrap();
@@ -201,7 +300,7 @@ impl Sink for Prefixed {
         let ours = match &observation.content {
             Content::Text(text) => text.starts_with(&self.prefix),
             Content::Withheld => true,
-            Content::Other => false,
+            Content::Other | Content::Image(_) | Content::Files(_) | Content::TooLarge => false,
         };
         if ours {
             let _ = self.reports.lock().unwrap().send(observation);

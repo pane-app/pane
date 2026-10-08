@@ -31,7 +31,8 @@
 //!
 //! Above the actions, the Behavior section (Raycast's keyboard settings):
 //! what the back key does in the launcher, whether Escape closes Settings,
-//! and extra Emacs or Vim keys for moving the selection.
+//! and extra Emacs or Vim Motions keys for moving the selection, on Alt as
+//! Raycast for Windows has them (see [`NavigationBindings`]).
 
 use std::collections::BTreeMap;
 
@@ -105,12 +106,25 @@ pub(crate) const ESCAPES: [(EscapeBehavior, &str, &str); 2] = [
 ];
 
 /// The navigation bindings the page offers: the preference, the choice's
-/// id and its label.
+/// id and its name, Raycast's. The label adds the keys the choice binds
+/// ([`navigation_label`]).
 const NAVIGATIONS: [(NavigationBindings, &str, &str); 3] = [
     (NavigationBindings::None, "none", "None"),
-    (NavigationBindings::Emacs, "emacs", "Emacs (Ctrl+P, Ctrl+N)"),
-    (NavigationBindings::Vim, "vim", "Vim (Ctrl+K, Ctrl+J)"),
+    (NavigationBindings::Emacs, "emacs", "Emacs"),
+    (NavigationBindings::Vim, "vim", "Vim Motions"),
 ];
+
+/// A navigation choice's label: its name, then the keys it binds as this
+/// platform writes them ("Emacs (Alt+P, Alt+N)"), only the keys that do
+/// something — Raycast's left and right keys have no list to move in.
+fn navigation_label(navigation: NavigationBindings, name: &str) -> String {
+    let Some((previous, next)) = navigation.bindings() else {
+        return name.to_owned();
+    };
+    let keys = [previous, next]
+        .map(|id| Binding::parse(id).map_or_else(|_| id.to_owned(), |binding| binding.to_string()));
+    format!("{name} ({}, {})", keys[0], keys[1])
+}
 
 /// The Keyboard page, registered after Shortcuts in the window's page
 /// list, as the reference's sections order it.
@@ -239,15 +253,19 @@ impl State {
     }
 }
 
-/// The navigation bindings' choices, a set whose keys an action already
-/// has listed with the reason.
+/// The navigation bindings' choices, a set whose keys an action has been
+/// rebound to listed with the reason.
 fn navigation_choices(cx: &App) -> Vec<Choice> {
     let settings = crate::settings::shared(cx);
     let settings = settings.read(cx);
     NAVIGATIONS
         .iter()
-        .map(|&(navigation, id, label)| {
-            super::choice(id, label, settings.navigation_conflict(navigation))
+        .map(|&(navigation, id, name)| {
+            super::choice(
+                id,
+                navigation_label(navigation, name),
+                settings.navigation_conflict(navigation),
+            )
         })
         .collect()
 }

@@ -243,8 +243,8 @@ fn open<'a>(
     cx.executor().allow_parking();
     cx.update(pane::bind_keys);
     let (window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
-    // Install each package as the user does: the install row opens the
-    // folder picker, the chosen package is previewed and Enter installs.
+    // Install each package: the chosen package is previewed and Enter
+    // installs.
     for folder in packages {
         choose_folder(&window, cx, folder.to_path_buf());
         cx.simulate_keystrokes("enter");
@@ -267,23 +267,12 @@ fn open<'a>(
     (window, settings, hotkeys, cx)
 }
 
-/// Presses Enter on the install row and answers the folder picker with
-/// `folder`.
+/// Previews the package in `folder` in the launcher window, as the folder
+/// Settings' picker chose is previewed (#168): Enter on the preview then
+/// installs it.
 fn choose_folder(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, folder: PathBuf) {
-    let launcher = cx.read_entity(window, |window, _| window.launcher().clone());
-    let view = launcher.view();
-    let index = view
-        .rows
-        .iter()
-        .position(|row| row.title == "Install extension from folder…")
-        .expect("the install row");
-    launcher.select(index);
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
-    assert!(cx.did_prompt_for_paths(), "a folder picker opened");
-    cx.simulate_path_prompt_response(move |options| {
-        assert!(options.directories && !options.files && !options.multiple);
-        Some(vec![folder])
+    window.update_in(cx, |launcher, window, cx| {
+        launcher.preview_package(&folder, window, cx);
     });
     settle(window, cx);
 }

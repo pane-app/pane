@@ -5,7 +5,10 @@ package pane:extension@0.1.0;
 // Results a command computes from root search's query, such as a
 // calculator's answer. Kept apart from extension.wit so a command that
 // computes none is unchanged: only a command whose `pane.json` entry sets
-// `"rootResults": true` exports this interface, beside `command`. Rust
+// `"rootResults": true` exports this interface, beside `command`. A command
+// whose only job is this, such as the calculator, also says `"mode":
+// "provider"` (a root provider, #164): it has no row of its own, and Pane
+// never calls its `render` or `run` to open or run it. Rust
 // commands export it through pane-guest (`pane_guest::root::export!`).
 // The header follows `package`: comments above it would document the package,
 // which extension.wit already does.
@@ -21,13 +24,18 @@ interface root-results {
     /// Pane refuses any other kind of address and explains a system that
     /// cannot open it.
     open-url(string),
-    /// Opens the file with this id, as `files.list-folder` gave it in the
-    /// package's latest listing, with the system's handler for its type.
-    /// Pane shows the file's own name and folder in the row, whatever the
-    /// result's title and subtitle say, checks again when it is invoked
-    /// that it is a regular file inside the granted folder, not a link, and
-    /// refuses programs and scripts. Root search lists these results after
-    /// the results it finds by title.
+    /// Opens the entry with this id, as `file-index.search` gave it to the
+    /// package (wit/file-index.wit), or as `files.list-folder` gave it in
+    /// the package's latest listing of its granted folder, with the
+    /// system's handler for its type (a folder in the file manager). Pane
+    /// shows the entry's own name and folder in the row, whatever the
+    /// result's title and subtitle say, and checks it again when it is
+    /// invoked: still there, of the kind found, not a link, inside the
+    /// folders file search covers (or the granted folder). Enter on a
+    /// program the index found shows it in the file manager and never runs
+    /// it; the granted folder's programs are refused. Root search lists
+    /// these results after the results it finds by title, at most 5 of the
+    /// index's per command, then a row opening the command with the query.
     open-file(string),
   }
 

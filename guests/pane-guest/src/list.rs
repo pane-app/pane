@@ -516,6 +516,10 @@ impl Item {
 /// }
 /// ```
 ///
+/// A root provider (`"mode": "provider"`, a command that only answers root
+/// search through [`crate::root`] or [`crate::indexed`]) implements neither:
+/// Pane never opens or runs it, so `type CustomView` is all it needs.
+///
 /// A no-view command implements [`Command::run`] instead of `render`:
 ///
 /// ```ignore

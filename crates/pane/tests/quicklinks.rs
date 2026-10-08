@@ -15,6 +15,8 @@ use std::time::{Duration, Instant};
 use futures::executor::block_on;
 use gpui::{Entity, TestAppContext, VisualTestContext, prelude::*};
 use pane::LauncherWindow;
+use pane_core::changes::Changes;
+use pane_core::develop::Toolchains;
 use pane_core::system::Clip;
 use pane_core::tray::TrayAction;
 use pane_core::{Launcher, LauncherView, Runtime, Screen, Status};
@@ -41,16 +43,21 @@ struct Folders {
 }
 
 /// A launcher with Quicklinks installed, a recording system, and the
-/// quicklinks `links` (name, link) saved through Create Quicklink.
-fn launcher_with(links: &[(&str, &str)]) -> (Launcher, Arc<RecordingSystem>, Folders) {
+/// quicklinks `links` (name, link) saved through Create Quicklink; with
+/// the changes it reports in the background, as Pane's own is: Edit opens
+/// its form by launching Create Quicklink, which opens on a thread of its
+/// own, and only that change tells the window to draw the form.
+fn launcher_with(links: &[(&str, &str)]) -> (Launcher, Changes, Arc<RecordingSystem>, Folders) {
     let sources = tempfile::tempdir().unwrap();
     let data = tempfile::tempdir().unwrap();
     let folder = packages::assembled_package("quicklinks", &sources.path().join("quicklinks"));
     let system = Arc::new(RecordingSystem::default());
     let runtime = Runtime::start().unwrap();
     runtime.set_applications(system.clone());
+    let (changed, changes) = pane_core::changes::channel();
     let launcher = Launcher::with_packages(Ok(runtime), vec![], data.path().join("extensions"))
-        .with_system(system.clone());
+        .with_system(system.clone())
+        .with_development(Arc::new(Toolchains::from_env(None)), changed);
     block_on(launcher.install_package(&folder));
     assert_eq!(
         launcher.view().status,
@@ -75,6 +82,7 @@ fn launcher_with(links: &[(&str, &str)]) -> (Launcher, Arc<RecordingSystem>, Fol
     block_on(launcher.set_query(""));
     (
         launcher,
+        changes,
         system,
         Folders {
             _sources: sources,
@@ -89,14 +97,19 @@ fn to_root(launcher: &Launcher) {
     }
 }
 
-/// The launcher's window over `launcher`.
+/// The launcher's window over `launcher`, redrawn on its `changes`.
 fn window_of(
     cx: &mut TestAppContext,
     launcher: Launcher,
+    changes: Changes,
 ) -> (Entity<LauncherWindow>, &mut VisualTestContext) {
     cx.executor().allow_parking();
     cx.update(pane::bind_keys);
-    cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx))
+    cx.add_window_view(|window, cx| {
+        let mut launcher = LauncherWindow::new(launcher, window, cx);
+        launcher.follow_changes(changes, window, cx);
+        launcher
+    })
 }
 
 fn selected_title(view: &LauncherView) -> &str {
@@ -219,8 +232,8 @@ fn open_search(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) {
 /// and Enter opens it.
 #[gpui::test]
 fn create_quicklink_opens_its_form_and_saves_from_the_keyboard(cx: &mut TestAppContext) {
-    let (launcher, system, _folders) = launcher_with(&[]);
-    let (window, cx) = window_of(cx, launcher);
+    let (launcher, changes, system, _folders) = launcher_with(&[]);
+    let (window, cx) = window_of(cx, launcher, changes);
 
     cx.simulate_input("create quicklink");
     settle(&window, cx);
@@ -291,12 +304,12 @@ fn create_quicklink_opens_its_form_and_saves_from_the_keyboard(cx: &mut TestAppC
 /// with the application chosen, and Enter opens.
 #[gpui::test]
 fn search_quicklinks_actions_work_from_the_keyboard(cx: &mut TestAppContext) {
-    let (launcher, system, _folders) = launcher_with(&[
+    let (launcher, changes, system, _folders) = launcher_with(&[
         ("Docs", "https://docs.example.com"),
         ("News", "https://news.example.com"),
     ]);
     system.take();
-    let (window, cx) = window_of(cx, launcher);
+    let (window, cx) = window_of(cx, launcher, changes);
     open_search(&window, cx);
     assert_eq!(titles(&settle(&window, cx)), ["Docs", "News"]);
 

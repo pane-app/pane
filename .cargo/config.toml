@@ -1,2 +1,12 @@
 [alias]
 xtask = "run --quiet --package xtask --"
+
+[env]
+# One compiled-code cache for every extension runtime a test starts, in
+# place of each runtime's own (see `SHARED_CODE_CACHE` in
+# crates/pane-core/src/runtime.rs): a run's tests then compile each guest
+# component once instead of once per test, which for the 4 MB JavaScript
+# components was most of each test's time. Cargo sets this for what it
+# runs (`cargo test`, cargo-nextest, `cargo run`, `cargo xtask`) unless it
+# is already set; set it empty to have every runtime compile again.
+PANE_TEST_CODE_CACHE = { value = "target/test-code-cache", relative = true }

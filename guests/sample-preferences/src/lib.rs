@@ -9,8 +9,9 @@
 //!   command needs setup: Pane shows its Setup screen, with the package's
 //!   `HELP.md`, before the first run.
 //! - "Show preferences" is a view command that also declares a notes
-//!   folder (a folder, required), a notes file (a file) and an editor (an
-//!   application): its list shows every value it received.
+//!   folder (a folder, required), a notes file (a file), an editor (an
+//!   application) and skipped applications (applications, declared so the
+//!   sample has every type): its list shows the other values it received.
 //! - "Report preferences" is a no-view command that also declares "Loud"
 //!   (a checkbox): it shows in a toast where it was launched from and its
 //!   values, shouted when Loud is on.

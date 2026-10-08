@@ -203,6 +203,14 @@ impl Launcher {
     pub fn set_window_presence(&self, presence: WindowPresence) {
         let left = {
             let mut state = self.lock();
+            // The file index's first walk waits for the window to say it is
+            // shown (#175), the first time too, when the launcher already
+            // counted itself shown (its presence starts as shown).
+            if presence != WindowPresence::Hidden
+                && let Some(files) = &state.files
+            {
+                files.indexer().launcher_shown();
+            }
             if state.feedback.presence == presence {
                 return;
             }
@@ -590,6 +598,12 @@ impl Launcher {
         });
         present(&mut state.feedback);
         id
+    }
+
+    /// Shows a toast of Pane's own, of no command, with no actions: such as
+    /// the one naming what a start forgot for root providers (#164).
+    pub(super) fn show_own_toast(&self, state: &mut State, toast: Toast) {
+        self.put_toast(state, PathBuf::new(), None, toast);
     }
 
     /// Shows the error `message` the command `command` in `component`

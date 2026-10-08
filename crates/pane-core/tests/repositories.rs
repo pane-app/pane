@@ -295,7 +295,7 @@ fn a_release_tag_is_previewed_installed_and_its_command_runs() {
 
     // It has no source folder: no Reload or Develop rows.
     launcher.back();
-    select_title(&launcher, "Manage extensions…");
+    select_title(&launcher, "Manage Extensions");
     block_on(launcher.activate_selected());
     let titles = titles(&launcher);
     assert!(

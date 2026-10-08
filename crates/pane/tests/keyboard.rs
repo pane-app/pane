@@ -27,6 +27,11 @@ use tempfile::TempDir;
 #[path = "support/settle.rs"]
 mod settle;
 
+// Pane registers no sample command (#162): the tests that drive the
+// samples register them themselves.
+#[path = "support/samples.rs"]
+mod samples;
+
 #[path = "../../pane-core/tests/support/service.rs"]
 mod service;
 
@@ -41,7 +46,8 @@ mod wait;
 
 use a11y::a11y;
 use setup::{
-    CTRL, actions_shortcut_name, init_settings, settings_shortcut, settings_shortcut_name,
+    CTRL, actions_shortcut, actions_shortcut_name, init_settings, settings_shortcut,
+    settings_shortcut_name,
 };
 use wait::{until, until_record_holds};
 
@@ -93,7 +99,7 @@ fn open_sample<'a>(
 ) -> (gpui::Entity<LauncherWindow>, &'a mut VisualTestContext) {
     open_launcher(
         cx,
-        Launcher::new(Runtime::start(), pane::sample_commands()),
+        Launcher::new(Runtime::start(), samples::sample_commands()),
         data,
     )
 }
@@ -162,7 +168,7 @@ fn dismiss_shortcut() -> &'static str {
 /// Records `keystroke` as the binding of the action whose row selector is
 /// `row`, through the page's recorder: the row is clicked, the keys are
 /// pressed, and the page answers.
-fn record(settings_cx: &mut VisualTestContext, row: &'static str, keystroke: &'static str) {
+fn record(settings_cx: &mut VisualTestContext, row: &'static str, keystroke: &str) {
     click(settings_cx, row);
     settings_cx.run_until_parked();
     settings_cx.simulate_keystrokes(keystroke);
@@ -300,7 +306,7 @@ fn a_rebind_takes_effect_at_once_is_saved_and_survives_a_restart(cx: &mut TestAp
     fresh.update(pane::bind_keys);
     let (window, fresh_cx) = fresh.add_window_view(|window, cx| {
         LauncherWindow::new(
-            Launcher::new(Runtime::start(), pane::sample_commands()),
+            Launcher::new(Runtime::start(), samples::sample_commands()),
             window,
             cx,
         )
@@ -806,7 +812,7 @@ fn escape_clears_the_query_then_hides_the_launcher_which_keeps_running(cx: &mut 
     let data = tempfile::tempdir().unwrap();
     let system = Arc::new(FakeSystem::default());
     let launcher =
-        Launcher::new(Runtime::start(), pane::sample_commands()).with_hotkeys(system.clone());
+        Launcher::new(Runtime::start(), samples::sample_commands()).with_hotkeys(system.clone());
     let (window, cx) = open_launcher(cx, launcher, Some(data.path()));
     let handle = handle_of(cx);
 
@@ -931,7 +937,7 @@ fn window_local_actions_stay_in_their_windows(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
     let system = Arc::new(FakeSystem::default());
     let launcher =
-        Launcher::new(Runtime::start(), pane::sample_commands()).with_hotkeys(system.clone());
+        Launcher::new(Runtime::start(), samples::sample_commands()).with_hotkeys(system.clone());
     let (window, cx) = open_launcher(cx, launcher, Some(data.path()));
     let handle = handle_of(cx);
 
@@ -1139,6 +1145,27 @@ fn the_rebound_back_key_clears_a_command_search_before_leaving_it(cx: &mut TestA
     assert!(matches!(view.screen, Screen::Root { .. }), "then it left");
 }
 
+/// The navigation bindings' modifier as the keys name it: Alt, as Raycast
+/// for Windows holds them; Control on macOS, where Option types
+/// characters.
+const NAV: &str = if cfg!(target_os = "macos") {
+    "ctrl"
+} else {
+    "alt"
+};
+
+/// The navigation bindings' modifier as a binding's text names it.
+const NAV_NAME: &str = if cfg!(target_os = "macos") {
+    "Control"
+} else {
+    "Alt"
+};
+
+/// The navigation bindings' keystroke for `key`: [`NAV`] and the key.
+fn nav(key: &str) -> String {
+    format!("{NAV}-{key}")
+}
+
 /// Chooses the navigation bindings through the page's select: its trigger
 /// opens the choices, and the choice whose row selector is `choice`
 /// (`keyboard-navigation-` and the choice's id) takes it.
@@ -1162,7 +1189,7 @@ fn escape_set_to_hide_hides_from_any_screen_and_the_reopening_decides_what_shows
         "{ \"version\": 1, \"reopening\": \"after-90-seconds\" }",
     )
     .unwrap();
-    let launcher = Launcher::new(Runtime::start(), pane::sample_commands())
+    let launcher = Launcher::new(Runtime::start(), samples::sample_commands())
         .with_hotkeys(Arc::new(FakeSystem::default()));
     let (window, cx) = open_launcher(cx, launcher, Some(data.path()));
     let default = Shortcut::open_pane_default();
@@ -1302,14 +1329,32 @@ fn the_navigation_bindings_move_the_selection_unless_an_action_has_their_keys(
     cx.simulate_input("script");
     assert_eq!(settle(&window, cx).selected, Some(0));
 
-    // Emacs: Ctrl+N and Ctrl+P move the selection, beside Down and Up.
+    // The choices are Raycast's, each labelled with the keys it binds,
+    // and none clashes with the default keys: Vim Motions is available
+    // beside Open actions' Ctrl+K.
     let (_settings, mut settings_cx) = keyboard_page(cx);
-    choose_navigation(&mut settings_cx, "keyboard-navigation-emacs");
+    click(&mut settings_cx, "keyboard-navigation");
+    settings_cx.run_until_parked();
+    let tree = a11y(&mut settings_cx);
+    for label in [
+        format!("Emacs ({NAV_NAME}+P, {NAV_NAME}+N)"),
+        format!("Vim Motions ({NAV_NAME}+K, {NAV_NAME}+J)"),
+    ] {
+        assert!(tree.contains(&label), "{label} is offered, {tree}");
+    }
+    assert!(
+        !tree.contains("is Open actions"),
+        "no choice is refused, {tree}"
+    );
+
+    // Emacs: Alt+N and Alt+P move the selection, beside Down and Up.
+    click(&mut settings_cx, "keyboard-navigation-emacs");
+    settings_cx.run_until_parked();
     until_record(&mut settings_cx, data.path(), "navigationBindings", "emacs");
-    cx.simulate_keystrokes("ctrl-n");
-    assert_eq!(settle(&window, cx).selected, Some(1), "Ctrl+N moves down");
-    cx.simulate_keystrokes("ctrl-p");
-    assert_eq!(settle(&window, cx).selected, Some(0), "Ctrl+P moves up");
+    cx.simulate_keystrokes(&nav("n"));
+    assert_eq!(settle(&window, cx).selected, Some(1), "Alt+N moves down");
+    cx.simulate_keystrokes(&nav("p"));
+    assert_eq!(settle(&window, cx).selected, Some(0), "Alt+P moves up");
     cx.simulate_keystrokes("down");
     assert_eq!(settle(&window, cx).selected, Some(1), "Down still moves");
     cx.simulate_keystrokes("up");
@@ -1317,72 +1362,80 @@ fn the_navigation_bindings_move_the_selection_unless_an_action_has_their_keys(
 
     // Recording one of their keys for an action is refused while they are
     // chosen, and the recorder keeps listening.
-    record(&mut settings_cx, "keyboard-back", "ctrl-n");
+    record(&mut settings_cx, "keyboard-back", &nav("n"));
     let tree = a11y(&mut settings_cx);
     assert!(
-        tree.contains(&format!("{CTRL}+N already moves the selection")),
+        tree.contains(&format!("{NAV_NAME}+N already moves the selection")),
         "the refusal is explained, {tree}"
     );
     assert!(
         tree.contains("Recording; Back"),
         "the recorder keeps listening, {tree}"
     );
-    assert!(!record_holds(data.path(), "back", "ctrl-n"));
+    assert!(!record_holds(data.path(), "back", &nav("n")));
     settings_cx.simulate_keystrokes("escape");
     settings_cx.run_until_parked();
 
-    // Vim is refused while Open actions holds Ctrl+K, its default here
-    // (macOS's is Cmd+K, which Vim's keys never meet): the choice is
-    // listed with the conflict named, and choosing it keeps nothing.
-    if !cfg!(target_os = "macos") {
-        click(&mut settings_cx, "keyboard-navigation");
-        settings_cx.run_until_parked();
-        let tree = a11y(&mut settings_cx);
-        assert!(
-            tree.contains("Ctrl+K is Open actions"),
-            "the conflict is named, {tree}"
-        );
-        click(&mut settings_cx, "keyboard-navigation-vim");
-        settings_cx.run_until_parked();
-        assert!(
-            record_holds(data.path(), "navigationBindings", "emacs"),
-            "the refused choice was not kept"
-        );
-        // The choices are still open: Escape is theirs.
-        settings_cx.simulate_keystrokes("escape");
-        settings_cx.run_until_parked();
-        cx.simulate_keystrokes("ctrl-n");
-        assert_eq!(settle(&window, cx).selected, Some(1), "Emacs still moves");
-        cx.simulate_keystrokes("ctrl-p");
-        assert_eq!(settle(&window, cx).selected, Some(0));
-    }
-
-    // Open actions moves to Ctrl+B: Vim can be chosen, and Ctrl+J and
-    // Ctrl+K move the selection while Emacs's keys no longer do.
-    record(&mut settings_cx, "keyboard-open-actions", "ctrl-b");
-    until_record(&mut settings_cx, data.path(), "open-actions", "ctrl-b");
+    // Vim Motions, with Open actions on its default: Alt+J and Alt+K move
+    // the selection while Emacs's keys no longer do, and Open actions'
+    // own key still opens the Actions panel.
     choose_navigation(&mut settings_cx, "keyboard-navigation-vim");
     until_record(&mut settings_cx, data.path(), "navigationBindings", "vim");
-    cx.simulate_keystrokes("ctrl-j");
-    assert_eq!(settle(&window, cx).selected, Some(1), "Ctrl+J moves down");
-    cx.simulate_keystrokes("ctrl-k");
-    assert_eq!(settle(&window, cx).selected, Some(0), "Ctrl+K moves up");
-    cx.simulate_keystrokes("ctrl-n");
+    cx.simulate_keystrokes(&nav("j"));
+    assert_eq!(settle(&window, cx).selected, Some(1), "Alt+J moves down");
+    cx.simulate_keystrokes(&nav("k"));
+    assert_eq!(settle(&window, cx).selected, Some(0), "Alt+K moves up");
+    cx.simulate_keystrokes(&nav("n"));
     assert_eq!(
         settle(&window, cx).selected,
         Some(0),
-        "Ctrl+N no longer moves"
+        "Alt+N no longer moves"
     );
+    cx.simulate_keystrokes(actions_shortcut());
+    settle(&window, cx);
+    assert!(
+        cx.read_entity(&window, |window, _| window.actions_open()),
+        "Open actions still opens the panel"
+    );
+    cx.simulate_keystrokes(actions_shortcut());
+    settle(&window, cx);
+    assert!(!cx.read_entity(&window, |window, _| window.actions_open()));
 
     // None removes the extra keys; the set's own keep moving.
     choose_navigation(&mut settings_cx, "keyboard-navigation-none");
     until_record(&mut settings_cx, data.path(), "navigationBindings", "none");
-    cx.simulate_keystrokes("ctrl-j");
+    cx.simulate_keystrokes(&nav("j"));
     let view = settle(&window, cx);
-    assert_eq!(view.selected, Some(0), "Ctrl+J no longer moves");
+    assert_eq!(view.selected, Some(0), "Alt+J no longer moves");
     assert_eq!(view.query(), Some("script"));
     cx.simulate_keystrokes("down");
     assert_eq!(settle(&window, cx).selected, Some(1), "Down still moves");
+    cx.simulate_keystrokes("up");
+    settle(&window, cx);
+
+    // A set whose keys an action has been rebound to is refused: with
+    // Open actions on Alt+P, Emacs is listed with the conflict named, and
+    // choosing it keeps nothing.
+    record(&mut settings_cx, "keyboard-open-actions", &nav("p"));
+    until_record(&mut settings_cx, data.path(), "open-actions", &nav("p"));
+    click(&mut settings_cx, "keyboard-navigation");
+    settings_cx.run_until_parked();
+    let tree = a11y(&mut settings_cx);
+    assert!(
+        tree.contains(&format!("{NAV_NAME}+P is Open actions")),
+        "the conflict is named, {tree}"
+    );
+    click(&mut settings_cx, "keyboard-navigation-emacs");
+    settings_cx.run_until_parked();
+    assert!(
+        record_holds(data.path(), "navigationBindings", "none"),
+        "the refused choice was not kept"
+    );
+    // The choices are still open: Escape is theirs.
+    settings_cx.simulate_keystrokes("escape");
+    settings_cx.run_until_parked();
+    cx.simulate_keystrokes(&nav("n"));
+    assert_eq!(settle(&window, cx).selected, Some(0), "Alt+N does not move");
 }
 
 #[gpui::test]
@@ -1392,10 +1445,8 @@ fn a_navigation_choice_that_fails_to_save_restores_the_recorded_keys(cx: &mut Te
     cx.simulate_input("script");
     assert_eq!(settle(&window, cx).selected, Some(0));
 
-    // Saved: Open actions on Ctrl+B, so Vim can be chosen, and Emacs.
+    // Saved: Emacs.
     let (_settings, mut settings_cx) = keyboard_page(cx);
-    record(&mut settings_cx, "keyboard-open-actions", "ctrl-b");
-    until_record(&mut settings_cx, data.path(), "open-actions", "ctrl-b");
     choose_navigation(&mut settings_cx, "keyboard-navigation-emacs");
     until_record(&mut settings_cx, data.path(), "navigationBindings", "emacs");
 
@@ -1404,7 +1455,7 @@ fn a_navigation_choice_that_fails_to_save_restores_the_recorded_keys(cx: &mut Te
     fs::remove_file(data.path().join("settings.json")).unwrap();
     fs::create_dir(data.path().join("settings.json")).unwrap();
 
-    // Vim: it takes effect, but cannot be saved.
+    // Vim Motions: it takes effect, but cannot be saved.
     choose_navigation(&mut settings_cx, "keyboard-navigation-vim");
     until(&mut settings_cx, |cx| {
         a11y(cx)
@@ -1414,17 +1465,17 @@ fn a_navigation_choice_that_fails_to_save_restores_the_recorded_keys(cx: &mut Te
 
     // The keys the record holds are the ones that work: Vim's stopped,
     // and Emacs's work again.
-    cx.simulate_keystrokes("ctrl-j");
+    cx.simulate_keystrokes(&nav("j"));
     assert_eq!(
         settle(&window, cx).selected,
         Some(0),
-        "the unsaved Ctrl+J no longer moves"
+        "the unsaved Alt+J no longer moves"
     );
-    cx.simulate_keystrokes("ctrl-n");
+    cx.simulate_keystrokes(&nav("n"));
     assert_eq!(
         settle(&window, cx).selected,
         Some(1),
-        "the recorded Ctrl+N moves again"
+        "the recorded Alt+N moves again"
     );
 }
 
@@ -1453,13 +1504,13 @@ fn the_behavior_choices_are_applied_by_a_fresh_application(cx: &mut TestAppConte
     let mut fresh = cx.cx.new_app();
     init_settings(Some(data.path()), &mut fresh);
     fresh.update(pane::bind_keys);
-    let launcher = Launcher::new(Runtime::start(), pane::sample_commands())
+    let launcher = Launcher::new(Runtime::start(), samples::sample_commands())
         .with_hotkeys(Arc::new(FakeSystem::default()));
     let (window, fresh_cx) =
         fresh.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
     fresh_cx.simulate_input("script");
     assert_eq!(settle(&window, fresh_cx).selected, Some(0));
-    fresh_cx.simulate_keystrokes("ctrl-n");
+    fresh_cx.simulate_keystrokes(&nav("n"));
     assert_eq!(
         settle(&window, fresh_cx).selected,
         Some(1),

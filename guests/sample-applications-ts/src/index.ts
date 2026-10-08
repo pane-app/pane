@@ -55,6 +55,7 @@ async function render(): Promise<List> {
       id: app.id,
       title: app.name,
       subtitle: app.location,
+      icon: { application: app.icon },
       onAction: () => act(app.id),
     })),
   };
@@ -76,6 +77,10 @@ export const indexedResults: IndexedResults = {
       id: app.id,
       title: `Launch ${app.name}`,
       subtitle: SAMPLE,
+      // Found by its other names (its program's, untranslated) and its
+      // keywords too, as Pane's own Applications results are.
+      alternateTitles: app.alternateTitles.map((name) => `Launch ${name}`),
+      keywords: app.keywords,
       action: { tag: "open-application", val: app.id },
     }));
   },

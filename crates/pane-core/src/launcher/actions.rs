@@ -5,7 +5,7 @@
 //! action (the footer's, the same definition and dispatch), then, for a
 //! result a quick slot can hold, pinning it (see `quick_slots`: a slot's
 //! own entries remove and move it), then, for an installed command, the
-//! hotkey and alias configuration Manage extensions already offers, and
+//! hotkey and alias configuration the extension list already offers, and
 //! "Configure Command…" and "Configure Extension…" when the command or its
 //! package declares preferences (the window opens the extension's card in
 //! Settings for them; see `setup`).
@@ -15,7 +15,7 @@
 //!
 //! An alias or hotkey flow opened here returns to the search it came from
 //! — the same rows, the target still selected, the outcome in the status —
-//! where the same flows opened from Manage extensions return there.
+//! where the same flows opened from the extension list return there.
 
 use super::{
     Entry, Launcher, LauncherView, Mode, Screen, SelectedAction, State, Status, quick_slots,
@@ -193,7 +193,7 @@ impl Launcher {
             self.show_alias_form(&mut state, target);
         }
         // Set after the flow opened: opening it clears what a visit from
-        // Manage extensions would otherwise inherit.
+        // the extension list would otherwise inherit.
         state.actions_return = Some(Return {
             view,
             entries,
@@ -367,7 +367,7 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         (_, Some(Entry::Acquire(_))) => acting("Set up extension"),
         (_, Some(Entry::InstallUpdate)) => acting("Install update"),
         (_, Some(Entry::CheckUpdate)) => acting("Check for update"),
-        (_, Some(Entry::Manage)) => acting("Manage extensions"),
+        (_, Some(Entry::Manage)) => acting("Manage Extensions"),
         // Pane's Settings row opens the Settings window, exactly as its
         // ellipsis menu entry and the local shortcut do (the window, not
         // the launcher, acts; see [`Launcher::selected_opens_settings`]).
@@ -439,6 +439,9 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         }
         (_, Some(Entry::DeleteRetained(_))) => acting("Delete retained data"),
         (_, Some(Entry::ClearCache(_))) => acting("Clear cache"),
+        (_, Some(Entry::AskClearClipboardHistory(_) | Entry::ClearClipboardHistory(_))) => {
+            acting("Clear history")
+        }
         (_, Some(Entry::DisableAll(..))) => acting("Disable all"),
         (_, Some(Entry::Cancel)) => acting("Cancel"),
         // Nothing is selected: the screen's own action, which cannot run

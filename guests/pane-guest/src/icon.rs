@@ -18,7 +18,8 @@
 //! (with `@dark` and `@light` variants beside it, or a light and dark
 //! pair), an image by URL (a `data:` URL, or a web image, which Pane
 //! downloads and caches, showing the fallback until it arrives), or the
-//! system's icon of a file or application by its path. Every icon may have
+//! system's icon of a file or application by its path, or an installed
+//! application's own icon ([`Icon::application`]). Every icon may have
 //! a tint, a mask and a fallback, and a tooltip, which also makes
 //! assistive technology read it. [`avatar`], [`progress_ring`],
 //! [`favicon`] and [`file_icon`] build common ones from these.
@@ -132,6 +133,7 @@ enum Source {
     Pair { light: String, dark: String },
     Url(String),
     File(String),
+    Application(String),
 }
 
 /// An icon (see the module docs).
@@ -205,6 +207,15 @@ impl Icon {
     /// fallback.
     pub fn file(path: impl Into<String>) -> Icon {
         Icon::of(Source::File(path.into()))
+    }
+
+    /// The installed application's own icon, by the `icon` reference
+    /// [`crate::applications::installed`] gives with it
+    /// (`Icon::application(app.icon)`), drawn bare. Pane extracts it in the
+    /// background and keeps it; the fallback (or a neutral placeholder)
+    /// shows until it is there.
+    pub fn application(reference: impl Into<String>) -> Icon {
+        Icon::of(Source::Application(reference.into()))
     }
 
     /// This icon drawn in `tint`: a built-in icon's colour, or an image
@@ -522,6 +533,10 @@ pub(crate) fn write_icon(json: &mut String, icon: &Icon) {
         Source::File(path) => {
             json.push_str("\"file\":");
             string(json, path);
+        }
+        Source::Application(reference) => {
+            json.push_str("\"application\":");
+            string(json, reference);
         }
     }
     if let Some(tint) = &icon.tint {

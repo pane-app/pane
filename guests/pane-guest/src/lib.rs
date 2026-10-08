@@ -280,6 +280,11 @@ pub mod publish {
 /// pane_guest::export!(Calculator);
 /// pane_guest::root::export!(Calculator);
 /// ```
+///
+/// A command whose only job is this, as the calculator's, also says
+/// `"mode": "provider"` (a root provider): it has no row of its own and
+/// Pane never opens or runs it, so its [`Command`](crate::Command) keeps
+/// the defaults (`type CustomView = NoCustomView;` and nothing else).
 pub mod root {
     wit_bindgen::generate!({
         path: "../../wit",
@@ -293,7 +298,13 @@ pub mod root {
 
 /// The applications installed on the system (`pane:extension/applications`),
 /// which Pane finds and opens for the extension: [`applications::installed`] and
-/// [`applications::open`].
+/// [`applications::open`]. An application's `id` is opaque and stable across
+/// its updates and Pane's restarts, so a command may keep it in its data.
+/// Its `name` is the one the system shows in the user's language; its
+/// `alternate_titles` (its untranslated and program names) and `keywords`
+/// find it too, so give them to an [`indexed::IndexedResult`]; its
+/// `distinction`, when another application has its name, tells them apart
+/// as a subtitle.
 pub mod applications {
     wit_bindgen::generate!({
         path: "../../wit",
@@ -371,9 +382,49 @@ pub mod files {
     };
 }
 
+/// Pane's file index (`pane:extension/file-index`): the names of the files
+/// and folders under the user's home folder (and the folders the user
+/// adds), which Pane keeps current from the system's change records.
+/// [`file_index::search`] answers at once from what is indexed, each entry
+/// with the id Pane gave it and its path, name, folder, kind, size and
+/// modified time; [`file_index::status`] says whether the index is being
+/// built, is current or stopped. The package's `pane.json` sets
+/// `"fileIndex": true`, so that Pane keeps the index current while it is
+/// enabled. A command answers `open-file` results
+/// ([`root::RootAction::OpenFile`]) or search results whose `file` is an
+/// entry's id; Pane checks the entry again before acting on it, and its
+/// Enter never runs a program.
+pub mod file_index {
+    wit_bindgen::generate!({
+        path: "../../wit",
+        world: "file-index-user",
+        default_bindings_module: "pane_guest::file_index",
+    });
+
+    pub use pane::extension::file_index::{
+        Category, EntryKind, FileEntry, IndexState, IndexStatus, SearchOptions, Sort, search,
+        status,
+    };
+
+    impl SearchOptions {
+        /// The first `limit` entries by relevance, of any kind.
+        pub fn first(limit: u32) -> SearchOptions {
+            SearchOptions {
+                kind: None,
+                category: None,
+                sort: Sort::Relevance,
+                limit,
+                offset: 0,
+            }
+        }
+    }
+}
+
 /// Root results a command supplies ahead of the query
 /// (`pane:extension/indexed-results`), such as the installed applications,
-/// which root search matches by title like commands. A command whose
+/// which root search matches by title like commands, by each of an
+/// [`indexed::IndexedResult`]'s `alternate_titles` as by its title, and by
+/// its `keywords` as by its subtitle (empty lists for none). A command whose
 /// `pane.json` entry sets `"indexedResults": true` implements
 /// [`indexed::Guest`] too and calls [`indexed::export!`](crate::indexed::export)
 /// beside [`export!`]:
@@ -382,6 +433,11 @@ pub mod files {
 /// pane_guest::export!(Applications);
 /// pane_guest::indexed::export!(Applications);
 /// ```
+///
+/// A command whose only job is this, as Applications', also says `"mode":
+/// "provider"` (a root provider): it has no row of its own, each result it
+/// supplies is its own root result, and Pane never opens or runs it, so
+/// its [`Command`](crate::Command) keeps the defaults.
 pub mod indexed {
     wit_bindgen::generate!({
         path: "../../wit",

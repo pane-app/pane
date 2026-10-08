@@ -51,5 +51,5 @@ impl Command for Echo {
 }
 
 /// What Echo says when it was sent no text.
-const NOTHING: &str = "Echo heard nothing: give it an alias or make it a fallback in Manage \
-                       extensions, then send it text from root search";
+const NOTHING: &str = "Echo heard nothing: give it an alias or make it a fallback in Settings, \
+                       then send it text from root search";

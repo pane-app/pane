@@ -20,7 +20,9 @@ commands; [global hotkeys](hotkeys.md) (#32 to #34) open a command from any
 application. [#29](https://github.com/hoangvu12/pane/issues/29) adds
 [file search](files.md) within one folder the user chose, whose file
 results are computed results listed after the title matches, and makes a
-search cancel its pending calls for computed results.
+search cancel its pending calls for computed results;
+[#175](https://github.com/hoangvu12/pane/issues/175) moves file search to
+the host's [file index](files.md) of the home folder (below).
 
 ## What is searched
 
@@ -28,7 +30,10 @@ Root search lists **root results**, in this order when the query is empty
 (for a query that is not blank, the [computed results](#results-computed-from-the-query)
 for it come first, once they arrive):
 
-1. the commands built into this Pane build (the three samples);
+1. the commands built into this Pane build: none in any build since
+   [#162](https://github.com/hoangvu12/pane/issues/162) (the Rust,
+   JavaScript and TypeScript samples are installed by hand with
+   `pane --install`, and a test registers its own);
 2. the commands of each enabled installed package, in install order, and,
    for a query that is not blank only, the [results supplied ahead of the
    query](#results-supplied-ahead-of-the-query), such as the installed
@@ -36,8 +41,14 @@ for it come first, once they arrive):
 3. an enabled installed package whose managed copy cannot be read, as one row
    explaining the problem;
 4. Pane's own rows: "Install extension from folder…", "Install extension
-   from npm…" ([npm](npm.md)), "Install extension from Git…" ([Git](git.md))
-   and "Manage extensions…".
+   from npm…" ([npm](npm.md)), "Install extension from Git…" ([Git](git.md)),
+   "Manage Extensions" and "Settings…". Extensions are installed and
+   managed in Settings ([ADR 0043](adr/0043-extensions-are-managed-in-settings-one-page-per-extension.md),
+   #168): "Manage Extensions" opens Settings at its Extensions group, and
+   the install rows open its install flow there — the folder picker, or
+   the field for an npm package or a Git repository, then the package's
+   preview with its Install. The launcher itself has no screen for
+   extensions.
 
 For a query that is not blank, a command whose [alias](aliases.md) the
 query is, or starts with, comes before everything (computed results
@@ -79,6 +90,12 @@ ranked by how well the title matches:
 | 5 | (a word is only in the subtitle) | Clear cache, "Delete downloaded files" |
 | 6 | (a word is only in the package title) | a command of package "Downloads" with a subtitle of its own |
 
+An [indexed result](#results-supplied-ahead-of-the-query) may also have
+**alternate titles** (an application's untranslated name or its program's
+name, such as `wt` for Windows Terminal), each matched as the title is,
+the best of them giving the rank, and **keywords**, matched as the subtitle
+is (rank 5). The row still shows its real title (#170).
+
 Results of the same rank keep root search order. A blank query lists every
 root result. The best match is selected after every change of the query;
 searching the same query again changes nothing. Each result's text is
@@ -88,7 +105,8 @@ not on every keystroke.
 Not done, deliberately: typo tolerance, abbreviations ("ts" for TypeScript
 sample), accent folding ("e" finding "é"), locale-aware case folding,
 frequency or recency, per-user ranking, keywords or aliases in the manifest
-(aliases are the user's, [#31](aliases.md)), and ranking results of
+(aliases are the user's, [#31](aliases.md); keywords and alternate titles
+exist only for indexed results), and ranking results of
 different kinds (apps, files) against each other.
 
 ## Host behavior
@@ -102,6 +120,7 @@ state and maps input to those calls.
 | --- | --- |
 | Typing, editing keys, clipboard, undo, input-method composition | Edit the query (GPUI CE's single-line editable text element); every change searches again |
 | Up / Down | Previous / next result (not the caret) |
+| Alt+P / Alt+N (the Keyboard page's Emacs navigation bindings) or Alt+K / Alt+J (its Vim Motions), Control instead of Alt on macOS | Previous / next result too, beside Up and Down, while that set is chosen (the default is None). Raycast for Windows puts these sets on Alt as well; its Alt+B / Alt+F and Alt+H / Alt+L move left and right in its grids, and Pane has no left or right selection to give them, so they stay unbound |
 | Moving the pointer over a result | Select it, so the footer's action and Enter act on it; a pointer resting on a result never undoes the keys' selection, and while a layer over the list owns the target (the Actions panel, the Pane menu) the pointer selects nothing. The first pointer event after the window shows only records where the pointer is |
 | A click on a result | The selected result: invoke it, as Enter does. An unselected one (the keys moved the selection away while the pointer rested on it): select it; a second click invokes it |
 | Enter | Invoke the selected result: open the command, explain an unavailable or unreadable one, open Pane's own screen, copy a computed result's text to the clipboard ("Copied 42 to the clipboard"; root search stays as it was), open an application ("Opened Firefox"; root search stays as it was), or send the text to a command that takes a query, through its alias or as a fallback, and show its answer (root search stays as it was) |
@@ -114,7 +133,7 @@ result, from the core's `Launcher::result_actions`: its primary action
 command or an indexed result, or "Unpin" once it is pinned (see [the
 pinned home](#the-pinned-home)) and, for an installed command, "Assign
 Hotkey…"/"Change Hotkey…" and "Add Alias…"/"Change Alias…", which open the
-same hotkey screen and alias form Manage extensions does and return to this
+same hotkey screen and alias form the extension list does and return to this
 search when they end. Nothing without a working operation is listed: no new
 window, file manager, quit or hide (#100). Its search field holds focus: typing filters
 the entries by label ("No actions match" when none does), Up and Down move
@@ -139,6 +158,11 @@ Pane lists no suggestions of recent use.
   by its id, or an indexed result (an installed application) by its own id
   under the command that supplies it. A computed answer, a file or Pane's
   own rows cannot be pinned. A fresh installation pins nothing.
+- **Same-title pins:** a pinned indexed result whose title another result
+  of its command shares (two applications of one name) says what tells it
+  apart, its row's subtitle (an application's
+  [distinction](applications.md#names)), as its tile's tooltip, its
+  vertical row's subtitle and its accessible description (#170).
 - **Pinning:** the Actions panel's "Pin" adds the selected result at the
   end of the list ("Pinned …"); there is no slot to choose and nothing is
   replaced. Pinning what is already pinned changes nothing, says so and
@@ -202,13 +226,26 @@ Esc goes back" — and at its right the primary action and the Actions
 button, whose keys say how each is pressed. While a status shows, its
 message takes the strip and the buttons step aside.
 
+**An opened command** has no heading line above its content
+([#162](https://github.com/hoangvu12/pane/issues/162)): its list, its
+search, a form or a custom view opened from it, Clipboard History and
+Manage extensions start with their content, as Raycast's views do. The
+footer's left names it instead, after the Pane mark, while no hint or
+status takes that place: the command's icon (its own, as its package
+ships it; Pane's tile for Pane's own screens) and the screen's title — the
+command's on its list, a form's or a custom view's on those ("Search
+Files", "Clipboard History"). Section labels inside a list ("Today",
+"Commands") stay. The core's own screens — a package's preview, a
+confirmation, the details and hotkey screens — keep the heading that says
+what they are about.
+
 Each row shows what the launcher knows beyond its title and subtitle, from a read-only presentation (`Launcher::presentation`). That is:
 
-- the row's kind (Command, Application, File, Link or Fallback), taken from what activating it does;
+- the row's kind (Command, Application, File, Folder, Link or Fallback), taken from what activating it does;
 - the alias and the registered global hotkey the user gave its command;
 - the part of its title the query matched, in the accent.
 
-Rows sit under section labels: "Commands" over a blank query's list (root search's own order, with no claim of recent use), "Results" with their count over a query's, a computed answer under the title of the command that computed it ("Calculator"), and the fallbacks under "Fallbacks" (below the no-results notice when nothing else matched). The presentation changes nothing about what is listed, its order, or what a row does.
+Rows sit under section labels: "Commands" over a blank query's list (root search's own order, with no claim of recent use), "Results" with their count over a query's, a computed answer under the title of the command that computed it ("Calculator"), the files found for the query with the row searching them all under "Files" (#175), and the fallbacks under "Fallbacks" (below the no-results notice when nothing else matched). The presentation changes nothing about what is listed, its order, or what a row does.
 
 **A computed answer** (#96) — a computed result whose action copies
 text, such as the calculator's — is drawn as the reference calculator
@@ -227,8 +264,8 @@ fallbacks is listed for a query that is not blank: "Nothing matches
 “…”", then "Pick a fallback below, or install an extension that knows
 about it." (or, with no fallback, where one is offered: Manage
 extensions). It stays above the fallbacks whichever is selected; Pane
-searches commands, applications and a granted folder, so it claims no
-search of the whole computer, and it suggests no extensions, having no
+searches commands, applications and the files of the home folder (and
+the folders the user adds), so it claims no search of the whole computer, and it suggests no extensions, having no
 store to suggest them from.
 
 The query field has keyboard focus whenever root search is on screen: when
@@ -283,7 +320,10 @@ comes from the extension, through the same guest boundary as its command:
   (provisional, pending user confirmation; see
   [current decisions](current-decisions.md) item 10). Those that open a
   file (**open-file**, since #29) are listed **after** the title matches
-  instead, since a folder can hold many files matching a short query.
+  instead, since a folder can hold many files matching a short query; of
+  the file index's entries (#175), at most 5 per command, followed by a
+  row "<command> for “<query>”" when the command searches in its own field
+  (Search Files for “plan”), which opens it with the query typed.
   When each command's results arrive the first row is selected again, unless the user had
   moved the selection, which stays on its row.
 - A computed result has an id (`<command id>:<result id>`), title, optional
@@ -293,10 +333,13 @@ comes from the extension, through the same guest boundary as its command:
   status says "Copied … to the clipboard". **open-url** (since #28): Enter
   opens an address of any scheme (ADR 0037, #145) with the launcher's link
   opener, the system's handler in the window. **open-file** (since
-  #29): Enter opens a file of the package's granted folder, named by the id
-  the host gave it, with the system's handler for its type, once the host
-  has checked it again; the row shows the host's name for the file
-  ([opening a file](files.md#opening-a-file)).
+  #29): Enter opens an entry of the file index (#175) or a file of the
+  package's granted folder, named by the id the host gave it, with the
+  system's handler for its type (a folder in the file manager), once the
+  host has checked it again; the row shows the host's name for the entry,
+  its folder, the system's icon for its path and its kind, File or Folder.
+  Enter on a program the index found shows it in the file manager and
+  never runs it ([files](files.md#opening)).
 - **No result is not a failure**: a query the command cannot answer (words,
   an incomplete or invalid expression) gives no results and the status is
   untouched. An error or crash of the extension is shown as a row titled
@@ -326,12 +369,18 @@ extension, through the same guest boundary as its command:
   the answer and ranks it with the other root results on every later query,
   so typing never waits for it; until it answers, the results kept from an
   earlier visit are listed. They are asked again after each return to root
-  search. The guest's work is not cancelled; calls run one at a time (#29).
+  search, and when the host's list of installed applications changes by
+  itself for a command that asked for it: at once while root search shows
+  a query, listed in place with the selected row kept on its result,
+  otherwise at the next query ([applications](applications.md#live-list)).
+  The guest's work is not cancelled; calls run one at a time (#29).
 - They are listed only for a query that is not blank, ranked by title,
   subtitle and rank exactly as commands are; on the same rank they come
   after commands.
 - An indexed result has an id (`<command id>:<result id>`), title, optional
-  subtitle and an **action** Pane performs without calling the extension
+  subtitle, **alternate titles** and **keywords** (both lists, empty for
+  none; see [matching](#matching-and-ranking)), and an **action** Pane
+  performs without calling the extension
   again: **open-application**, which opens the application through the
   host's [applications adapter](applications.md), or **open** (#149), which
   opens a target (a URL of any scheme, a file, a folder or an application),
@@ -345,13 +394,40 @@ extension, through the same guest boundary as its command:
   answer still on its way is discarded; enabled again, it is asked with the
   next query.
 
+### Root providers
+
+A command whose only job is to answer root search declares `"mode":
+"provider"` in its `pane.json` entry
+([#164](https://github.com/hoangvu12/pane/issues/164); the
+[author guide](../guests/README.md#root-providers)). Such a **root
+provider** computes results from the query (`"rootResults": true`) or
+supplies them ahead of it (`"indexedResults": true`), and has no row of its
+own: root search never lists it, so typing its name finds nothing of it,
+and it cannot be pinned, has no alias, fallback or hotkey, is not offered by
+the Actions panel or the Shortcuts page, and cannot be launched by another
+command. Its results are listed as any command's are. Its extension's
+card in Settings names it under the extension's switch, which turns its
+results off and on. The calculator and Applications are providers, so
+there is no "Calculator" or "Applications" row.
+
+At install, a provider that declares neither `rootResults` nor
+`indexedResults`, or declares what only a launched command uses (`search`,
+`takesQuery`, `arguments`, a `schedule`), is refused with the reason. A
+command can become a provider after the user recorded choices for it (the
+calculator and Applications had rows before #164, and an update can change
+a command's mode): at the next start, its pins (`quick-slots.json`),
+aliases and fallbacks (`aliases.json`) and hotkey (`hotkeys.json`) are
+removed and those records written, once, and a toast names what was
+removed ("Calculator now only answers root search"). A pinned application,
+an indexed result of Applications, keeps its slot. Until that start, a
+recorded choice for a provider takes no effect.
+
 ### The calculator
 
 The calculator ([`guests/calculator`](../guests/calculator)) is a default
-extension in Rust: package `guests/packages/calculator`, command
-"Calculator", which lists the expressions it understands, and computed
-results for root search. It is not part of the core and can be disabled
-like any package. Acquiring it automatically at setup is
+extension in Rust: package `guests/packages/calculator`, a root provider
+whose command, "Calculator", has no row and computes results for root
+search. It is not part of the core and can be disabled like any package. Acquiring it automatically at setup is
 [#51](https://github.com/hoangvu12/pane/issues/51) to
 [#53](https://github.com/hoangvu12/pane/issues/53); until then it is
 installed from its folder like any package
@@ -425,7 +501,10 @@ which the core keeps and ranks like titles (the installed applications).
 Since #29 a computed result can come from a provider that searches outside
 Pane per query (the [files](files.md) of a granted folder, listed by the
 host off the extension thread, the command asked again once the listing
-ends), and a search cancels its providers' pending work. What is *not*
+ends), and a search cancels its providers' pending work. Since #175 file
+search's provider asks the host's file index, which answers at once from
+what is indexed and never waits for a walk, so a busy disk holds up no
+other result. What is *not*
 settled here, and is left to the tickets that need it: provider-supplied
 ranks and how they mix with title matching, and online providers, which
 stay inside their own command (US11, T03): nothing in root search queries
@@ -516,6 +595,22 @@ results stay, and a fresh instance afterwards; and a package declaring
 `rootResults` whose component lacks the interface refused at install. The
 same computed result ("reverse <text>") in Rust, JavaScript and TypeScript
 ([`samples.rs`](../crates/pane-core/tests/samples.rs)).
+
+For root providers
+([`crates/pane-core/tests/root_providers.rs`](../crates/pane-core/tests/root_providers.rs)),
+with the real calculator and Applications guests and a fake system with
+one application: both declare the provider mode; typing "calc",
+"calculator", "applications" or "appl", or nothing, lists no row of either,
+while "6*7" is still answered under "Calculator" and the application is
+found by name; neither can be given an alias or a hotkey, and the
+Shortcuts catalog lists neither; disabling the calculator stops its answer
+and enabling it brings it back; a provider without `rootResults` or
+`indexedResults`, or with `search`, `takesQuery` or a `schedule`, refused
+at install with the reason; and a data folder seeded with a pin, alias,
+fallback and hotkey for both, from before they became providers, losing
+them at start, with a pinned application kept and a toast naming what
+went, and a second start saying nothing. The toast's wording is unit-tested
+in `launcher/providers.rs`.
 
 Window checks through GPUI's test platform with real key events
 ([`crates/pane/tests/window.rs`](../crates/pane/tests/window.rs)): typing

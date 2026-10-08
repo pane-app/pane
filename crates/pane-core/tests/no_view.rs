@@ -539,7 +539,7 @@ fn a_command_launches_one_of_another_package_but_not_a_disabled_one(fixture: &Fi
         pane.send(&format!("ln {}#report", other.key())),
         answered_error(&format!(
             "{} is disabled; Pane does not enable it to launch its command, enable it in \
-             Manage extensions",
+             Settings",
             fixture.title
         ))
     );
@@ -626,7 +626,8 @@ fn an_invalid_mode_is_refused_at_install_with_the_reason() {
     assert!(
         error.contains(
             "command `report` has the mode \"menu-bar\"; a command's `mode` is \"view\" (it \
-             opens a screen, the default) or \"no-view\" (it runs without one)"
+             opens a screen, the default), \"no-view\" (it runs without one) or \"provider\" \
+             (it only answers root search)"
         ),
         "{error}"
     );

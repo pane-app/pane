@@ -1,6 +1,6 @@
 //! Pane's native launcher, rendered with GPUI CE: this module exposes the
-//! crate's entry points — the key bindings, the build's sample commands and
-//! default extensions, the folders Pane keeps, and the host settings — and
+//! crate's entry points — the key bindings, the default extensions, the
+//! folders Pane keeps, and the host settings — and
 //! re-exports the launcher window ([`app`]), the Settings window
 //! ([`features::settings`]) and the system's link opener ([`links`]).
 
@@ -10,7 +10,7 @@ use gpui::{App, KeyBinding, WindowBackgroundAppearance, actions};
 // `Window` names the rounded-corner preference's and the HUD's
 // click-through's parameter.
 use gpui::Window;
-use pane_core::{CommandRegistration, Keyboard};
+use pane_core::Keyboard;
 
 mod app;
 mod background;
@@ -32,6 +32,8 @@ actions!(
     [
         SelectNext,
         SelectPrevious,
+        SelectNextPage,
+        SelectPreviousPage,
         Confirm,
         Back,
         FocusNext,
@@ -65,6 +67,12 @@ pub(crate) fn bind_keys_with(
     cx.bind_keys([
         KeyBinding::new("tab", FocusNext, Some(app::KEY_CONTEXT)),
         KeyBinding::new("shift-tab", FocusPrevious, Some(app::KEY_CONTEXT)),
+        // Page Down and Page Up move the selection by the rows in view
+        // (#165), also while the query field has focus, which does not
+        // take them; a binding the Keyboard page records for them wins,
+        // registered after.
+        KeyBinding::new("pagedown", SelectNextPage, Some(app::KEY_CONTEXT)),
+        KeyBinding::new("pageup", SelectPreviousPage, Some(app::KEY_CONTEXT)),
     ]);
     let text_editing = ui::input::bind_text_editing(cx);
     extension_views::form::bind_keys(cx, &text_editing);
@@ -92,75 +100,20 @@ pub const APP_VERSION: &str = match option_env!("PANE_PACKAGE_VERSION") {
     None => env!("CARGO_PKG_VERSION"),
 };
 
-/// The sample commands: (id, title, subtitle, component file name). Each
-/// implements the same command in a different extension language.
-#[cfg(debug_assertions)]
-const SAMPLES: [(&str, &str, &str, &str); 3] = [
-    (
-        "rust-sample",
-        "Rust sample",
-        "A sample command implemented by a Rust extension",
-        "sample_rust.wasm",
-    ),
-    (
-        "javascript-sample",
-        "JavaScript sample",
-        "The same command implemented by a JavaScript extension",
-        "sample_js.wasm",
-    ),
-    (
-        "typescript-sample",
-        "TypeScript sample",
-        "The same command implemented by a TypeScript extension",
-        "sample_ts.wasm",
-    ),
-];
-
-/// The commands this build offers from the development checkout: the
-/// Rust, JavaScript and TypeScript sample commands. A release build offers
-/// none: their components live in the build's `target/guests` folder,
-/// which an installed Pane does not have — its features come from the
-/// default extensions it acquires at first setup instead.
-///
-/// Their components are read from `PANE_EXTENSIONS_DIR` when set, otherwise
-/// from the development build output `target/guests`. A missing component
-/// leaves its command listed; opening it explains what is missing.
-pub fn sample_commands() -> Vec<CommandRegistration> {
-    #[cfg(not(debug_assertions))]
-    return Vec::new();
-    #[cfg(debug_assertions)]
-    {
-        let dir = std::env::var_os("PANE_EXTENSIONS_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests")
-            });
-        SAMPLES
-            .iter()
-            .map(|&(id, title, subtitle, file)| CommandRegistration {
-                id: id.into(),
-                title: title.into(),
-                subtitle: Some(subtitle.into()),
-                component: dir.join(file),
-                takes_query: false,
-                search: false,
-            })
-            .collect()
-    }
-}
-
 /// The default extensions this build of Pane acquires at first setup, from
 /// Pane's own downloads (see
 /// [`pane_core::defaults`]): the installer carries none of their payloads.
-/// The release's default extensions are the calculator, applications,
-/// quicklinks, files and clipboard history ([#60](https://github.com/hoangvu12/pane/issues/60),
-/// the user's recorded choice): all five enabled by default and each
-/// individually disableable, with clipboard history's capture still off
-/// until the user turns it on. In development builds the prebuilt-helper
-/// sample is acquired with them, so a payload carrying a native helper is
-/// acquired and its helper runs without any developer tool.
+/// The default extensions are the calculator, applications, quicklinks,
+/// files and clipboard history ([#60](https://github.com/hoangvu12/pane/issues/60),
+/// the user's recorded choice), in every build: all five enabled by
+/// default and each individually disableable, clipboard history recording
+/// what is copied from the first start (#166, ADR 0042). The samples are no
+/// default extension (#162): a contributor installs one by hand with
+/// `pane --install <folder>`. An install that acquired the helper sample
+/// as a default before keeps it as an ordinary installed package, which
+/// the user can uninstall; Pane does not remove it.
 pub fn default_extensions() -> Vec<pane_core::DefaultExtension> {
-    let mut extensions = vec![
+    vec![
         pane_core::DefaultExtension {
             id: "calculator".into(),
             title: "Calculator".into(),
@@ -174,20 +127,14 @@ pub fn default_extensions() -> Vec<pane_core::DefaultExtension> {
             title: "Quicklinks".into(),
         },
         pane_core::DefaultExtension {
-            id: "files".into(),
+            id: pane_core::search_files::FILES.into(),
             title: "Files".into(),
         },
         pane_core::DefaultExtension {
-            id: "clipboard-history".into(),
+            id: pane_core::clipboard_view::CLIPBOARD_HISTORY.into(),
             title: "Clipboard History".into(),
         },
-    ];
-    #[cfg(debug_assertions)]
-    extensions.push(pane_core::DefaultExtension {
-        id: "helper-sample".into(),
-        title: "Helper sample".into(),
-    });
-    extensions
+    ]
 }
 
 /// Initializes Pane's host settings — the appearance preferences, the
@@ -390,4 +337,27 @@ fn env_dir(name: &str) -> Option<PathBuf> {
     std::env::var_os(name)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
+}
+
+#[cfg(test)]
+mod tests {
+    /// The default set is the five default extensions in every build:
+    /// no sample is acquired at first setup (#162).
+    #[test]
+    fn the_default_set_is_the_five_default_extensions_without_the_samples() {
+        let ids: Vec<String> = super::default_extensions()
+            .into_iter()
+            .map(|extension| extension.id)
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                "calculator",
+                "applications",
+                "quicklinks",
+                pane_core::search_files::FILES,
+                pane_core::clipboard_view::CLIPBOARD_HISTORY
+            ]
+        );
+    }
 }

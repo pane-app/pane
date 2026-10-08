@@ -30,7 +30,7 @@ use feedback::shown;
 use guests::guest_file as guest;
 use rows::{select_title, titles};
 
-const MANAGE_ROW: &str = "Manage extensions…";
+const MANAGE_ROW: &str = "Manage Extensions";
 
 struct Dirs {
     sources: TempDir,

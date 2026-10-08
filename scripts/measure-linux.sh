@@ -13,7 +13,9 @@
 # (the proposed targets; a null ceiling is pending, not checked).
 #
 # Requires what scripts/smoke-linux.sh requires: Xvfb, xdotool, Pillow (the
-# one screenshot check) and a Vulkan driver, plus the guests built
+# one screenshot check), a Vulkan driver, and for Settings, where the
+# lifecycle's reloads and disables happen (#168), dbus-launch (dbus-x11),
+# at-spi2-core, python3-gi and gir1.2-atspi-2.0; plus the guests built
 # (`cargo xtask ci` or `cargo xtask guests`). The binary measured is the one
 # given (target/debug/pane by default, the smoke's; record.json records the
 # profile: a release build reaches for the not-yet-deployed artifact source
@@ -101,9 +103,13 @@ PY
 xvfb_pid=
 pane_pid=
 sampler_pid=
+a11y_bus_pid=
+dbus_pid=
 cleanup() {
   [ -n "$pane_pid" ] && kill "$pane_pid" 2>/dev/null || true
   [ -n "$sampler_pid" ] && kill "$sampler_pid" 2>/dev/null || true
+  [ -n "$a11y_bus_pid" ] && kill "$a11y_bus_pid" 2>/dev/null || true
+  [ -n "$dbus_pid" ] && kill "$dbus_pid" 2>/dev/null || true
   [ -n "$xvfb_pid" ] && kill "$xvfb_pid" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -133,6 +139,30 @@ if command -v xdpyinfo >/dev/null; then
   xdpyinfo >/dev/null || { echo "Xvfb on $display does not answer"; exit 1; }
 fi
 
+# Settings (#168) is driven through its accessibility tree, as the smoke
+# drives it (see scripts/smoke-linux.sh): a D-Bus session bus of the
+# workload's own, the accessibility bus on it, reported enabled so that
+# Pane registers its windows there. PANE_A11Y_PYTHON names another
+# interpreter than the system's python3.
+a11y_python=${PANE_A11Y_PYTHON:-/usr/bin/python3}
+"$a11y_python" -c 'import gi; gi.require_version("Atspi", "2.0"); from gi.repository import Atspi' 2>/dev/null \
+  || { echo "Settings is driven through AT-SPI: $a11y_python needs python3-gi and gir1.2-atspi-2.0"; exit 1; }
+eval "$(dbus-launch --sh-syntax)" || { echo "no D-Bus session bus for AT-SPI (dbus-launch, from dbus-x11)"; exit 1; }
+dbus_pid=$DBUS_SESSION_BUS_PID
+# Not `ls a b | head`: ls fails for the path that is missing, and pipefail
+# ends the script there, silently.
+bus_launcher=
+for candidate in /usr/libexec/at-spi-bus-launcher /usr/lib/at-spi2-core/at-spi-bus-launcher; do
+  [ -x "$candidate" ] && { bus_launcher=$candidate; break; }
+done
+[ -n "$bus_launcher" ] || { echo "no at-spi-bus-launcher (at-spi2-core)"; exit 1; }
+"$bus_launcher" --launch-immediately 2>>"$out/at-spi.log" &
+a11y_bus_pid=$!
+sleep 1
+dbus-send --session --print-reply --dest=org.a11y.Bus /org/a11y/bus \
+  org.freedesktop.DBus.Properties.Set string:org.a11y.Status string:IsEnabled variant:boolean:true >/dev/null \
+  || { echo "the accessibility bus did not start (see $out/at-spi.log)"; exit 1; }
+
 capture() {
   if command -v import >/dev/null; then
     import -window root "$out/$1"
@@ -143,17 +173,143 @@ capture() {
 }
 check() { python3 "$here/check_screenshot.py" "$out/$1" "$2" ${3:+"$3"}; }
 
-# Opens Manage extensions from root search. A blind run of Downs to root's
-# end was the way in until #72's Settings… root result made itself last of
-# all (it is listed whatever is installed, so this root ends with it too):
-# the run now opens the Settings window instead, and the lifecycle's
-# reloads and disables would never happen. Searching for the row by its
-# title is order-proof: "manage" matches only the Manage extensions… row,
-# which is selected when the list narrows to it, and Return opens it.
-manage_extensions() {
+click_at() { "$xdotool" mousemove "$1" "$2" click 1; }
+# Focusing a window that is not viewable is an X error (BadMatch) that ends
+# xdotool and the script, as the smoke's run 37698693722 did after
+# Settings closed: X window $1 takes the keyboard once it is viewable, and
+# the launcher is summoned with the Open Pane hotkey (Ctrl+Alt+Space) where
+# it is not shown (see scripts/smoke-linux.sh).
+viewable() { "$xdotool" search --onlyvisible --pid "$pane_pid" 2>/dev/null | grep -qx "$1"; }
+focus_window() {
+  local _
+  for _ in $(seq 50); do
+    if viewable "$1" && "$xdotool" windowfocus --sync "$1" 2>/dev/null; then return 0; fi
+    sleep 0.1
+  done
+  return 1
+}
+focus_launcher() {
+  focus_window "$window" && return 0
+  "$xdotool" key ctrl+alt+space; sleep 1
+  focus_window "$window" || { echo "the launcher window is not shown, even after the Open Pane hotkey"; exit 1; }
+}
+# Back to a blank root search, with the return to root key (Shift+Escape).
+to_root() { "$xdotool" key shift+Escape; sleep 1; }
+# Extensions are managed in Settings (#168), one page per extension, whose
+# switch and Actions menu answer the pointer: they are found by their
+# accessible names and invoked, as the smoke does (scripts/smoke-linux.sh
+# documents the names). a11y <verb> <name> [prefix]: "press", "toggle"
+# (the switch of that name), "shown" or "absent", in the Settings window.
+a11y() {
+  local at
+  at=$("$a11y_python" - "$pane_pid" "$@" <<'PY'
+import sys
+import time
+
+import gi
+
+gi.require_version("Atspi", "2.0")
+from gi.repository import Atspi
+
+Atspi.init()
+pid, verb, name = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+prefix = sys.argv[4:5] == ["prefix"]
+# What a switch is to AT-SPI: AccessKit gives a switch and a toggle button
+# TOGGLE_BUTTON (a checkbox CHECK_BOX), never the role of the sidebar entry,
+# the group page's item or the page's heading of the same name.
+SWITCHES = {getattr(Atspi.Role, role) for role in ("TOGGLE_BUTTON", "CHECK_BOX", "SWITCH")
+            if hasattr(Atspi.Role, role)}
+
+
+def settings():
+    desktop = Atspi.get_desktop(0)
+    for i in range(desktop.get_child_count()):
+        app = desktop.get_child_at_index(i)
+        if app is None or app.get_process_id() != pid:
+            continue
+        for j in range(app.get_child_count()):
+            window = app.get_child_at_index(j)
+            if window is not None and window.get_name() == "Settings":
+                return window
+    return None
+
+
+def walk(node):
+    yield node
+    for i in range(node.get_child_count()):
+        child = node.get_child_at_index(i)
+        if child is not None:
+            yield from walk(child)
+
+
+def find():
+    window = settings()
+    if window is None:
+        return None
+    window.clear_cache()   # what the window shows now, not what was read before
+    for node in walk(window):
+        label = node.get_name() or ""
+        if not (label.startswith(name) if prefix else label == name):
+            continue
+        if verb == "toggle" and node.get_role() not in SWITCHES:
+            continue
+        return node
+    return None
+
+
+def found():
+    try:
+        return find()
+    except Exception:   # a node that went away while the tree was read
+        return None
+
+
+if verb == "absent":
+    time.sleep(1)
+    sys.exit(1 if found() else 0)
+for _ in range(600):
+    node = found()
+    if node is not None:
+        break
+    time.sleep(0.1)
+else:
+    sys.exit(f"Settings shows nothing named {name}")
+if verb in ("press", "toggle"):
+    action = node.get_action_iface()
+    if action is not None and action.get_n_actions() > 0:
+        action.do_action(0)
+    else:
+        box = node.get_extents(Atspi.CoordType.SCREEN)
+        print(box.x + box.width // 2, box.y + box.height // 2)
+PY
+  ) || { [ "$1" = absent ] && echo "Settings still shows $2"; exit 1; }
+  if [ -n "$at" ]; then click_at $at; fi
+  case $1 in press|toggle) sleep 1;; esac
+}
+# The Settings window's X11 id, if it is open.
+settings_window() { "$xdotool" search --all --pid "$pane_pid" --name '^Settings$' 2>/dev/null | head -1; }
+# Opens the Settings page of the extension titled $1 from root search:
+# "manage" finds the Manage Extensions command, which opens Settings at
+# its Extensions group, and its sidebar entry opens the page.
+open_extension() {
+  focus_launcher
+  to_root
   "$xdotool" key ctrl+a
   "$xdotool" type --delay 50 manage; sleep 1
-  "$xdotool" key Return; sleep 1
+  "$xdotool" key Return; sleep 2
+  a11y press "$1"
+  a11y shown "Actions for $1"
+}
+# Closes Settings (Ctrl+W) and goes back to a blank root search.
+close_settings() {
+  local settings
+  settings=$(settings_window)
+  if [ -n "$settings" ]; then
+    focus_window "$settings" || { echo "Settings cannot take the keyboard"; exit 1; }; sleep 0.5
+    "$xdotool" key ctrl+w; sleep 1
+  fi
+  focus_launcher
+  to_root
 }
 
 # The sampler watches the whole tree of the pid the control file names, in
@@ -216,7 +372,7 @@ wait_for() {
 # then the record in installed.json before Pane stops.
 install_package() {
   start_pane --install "target/guests/packages/$1"
-  "$xdotool" windowfocus --sync "$window"
+  focus_launcher
   "$xdotool" key Return
   wait_for "$PANE_DATA_DIR/extensions/installed.json" "packages/$1" present; sleep 1
   stop_pane
@@ -261,7 +417,7 @@ stop_pane
 # first answer is checked to be sure the workload runs the calculator.
 start_pane
 set_phase calculator
-"$xdotool" windowfocus --sync "$window"
+focus_launcher
 "$xdotool" type --delay 50 '6*7'; sleep 2
 capture 4-calculator-answer.png
 check 4-calculator-answer.png answer   # the selected answer card
@@ -297,7 +453,7 @@ note schedule_runs "$schedule_runs"
 [ "$service_cycles" -ge 10 ] || { echo "the service ran only $service_cycles cycles"; exit 1; }
 [ "$schedule_runs" -ge 1 ] || { echo "the schedule ran no work"; exit 1; }
 # Both commands opened once, so the record holds what their screens show.
-"$xdotool" windowfocus --sync "$window"
+focus_launcher
 "$xdotool" type --delay 50 watch; sleep 2
 "$xdotool" key Return; sleep 2
 capture 5-watching.png
@@ -308,11 +464,12 @@ capture 6-counting.png
 "$xdotool" key Escape; sleep 1
 stop_pane
 
-# 7. Repeated lifecycle: one package of its own in a fresh data folder, so
-# the extension list's rows are known (the package's row first, its Reload
-# row second). Each reload swaps the component between the Rust and the
-# JavaScript sample and waits until Pane replaced the managed copy; each
-# disable cycle disables and enables the package again.
+# 7. Repeated lifecycle: one package of its own in a fresh data folder,
+# managed on its page in Settings (#168), which stays open through both
+# phases. Each reload (Reload, an item of the page's Actions menu) swaps
+# the component between the Rust and the JavaScript sample and waits until
+# Pane replaced the managed copy; each disable cycle disables and enables
+# the package again with the page's switch.
 export PANE_DATA_DIR=$out/lifecycle-data
 rm -rf "$PANE_DATA_DIR"
 package=$out/lifecycle-package
@@ -328,7 +485,7 @@ cat >"$package/pane.json" <<'JSON'
 JSON
 set_phase install-lifecycle-package
 start_pane --install "$package"
-"$xdotool" windowfocus --sync "$window"
+focus_launcher
 "$xdotool" key Return
 wait_for "$PANE_DATA_DIR/extensions/installed.json" lifecycle-package present; sleep 1
 set_phase reload
@@ -343,25 +500,24 @@ wait_reloaded() {
   done
   echo "Pane did not reload the package"; exit 1
 }
+open_extension Measure
 for run in $(seq "$reloads"); do
   if [ $((run % 2)) = 0 ]; then cp target/guests/sample_rust.wasm "$package/command.wasm";
   else cp target/guests/sample_js.wasm "$package/command.wasm"; fi
-  manage_extensions
-  "$xdotool" key Down; sleep 0.5   # Reload Measure
-  "$xdotool" key Return; sleep 2
+  a11y press "Actions for Measure"
+  a11y press Reload   # Reload Measure
   wait_reloaded
-  "$xdotool" key Escape; sleep 1
 done
 set_phase disable
 for run in $(seq "$disables"); do
-  manage_extensions
-  "$xdotool" key Return; sleep 1   # the package's row: disable
+  a11y toggle Measure   # the page's switch: disable
   wait_for "$PANE_DATA_DIR/extensions/installed.json" '"disabled": true' present
-  "$xdotool" key Return; sleep 1   # the same row: enable again
+  a11y toggle Measure   # the same switch: enable again
   wait_for "$PANE_DATA_DIR/extensions/installed.json" '"disabled": true' absent
-  "$xdotool" key Escape; sleep 1
 done
+close_settings
 capture 7-lifecycle-root.png
+
 stop_pane
 
 # The record, the summary and the check against the proposed targets.

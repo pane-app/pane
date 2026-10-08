@@ -43,9 +43,11 @@ use super::actions::{ResultAction, ResultActionItem, ResultActions};
 use super::choices::split;
 use super::indexed::Listing;
 use super::presentation::{self, RowKind};
-use super::{CommandRegistration, Entry, Launcher, Screen, State, Status, off_thread};
+use super::{CommandRegistration, Entry, Launcher, RootResult, Screen, State, Status, off_thread};
+use crate::applications::Applications;
 use crate::atomic::{Readers, write_atomically};
 use crate::packages::{InstalledPackage, paused_reason};
+use crate::search::same_text;
 
 /// The record's file name, in Pane's data folder beside `settings.json`.
 const FILE: &str = "quick-slots.json";
@@ -89,6 +91,12 @@ pub struct QuickSlot {
     /// The title to show: the target's own as root search lists it, else
     /// the best name Pane has for it (its command's title, or its id).
     pub title: String,
+    /// What tells the target apart from another result of the same title
+    /// its command lists (two applications of one name): its row's
+    /// subtitle, which for an application is its distinction. Shown as
+    /// the slot's tooltip and said with it; `None` when no other result
+    /// shares its title.
+    pub detail: Option<String>,
     /// What invoking it reaches, once resolved.
     pub kind: Option<RowKind>,
     /// Why it cannot run now — disabled, paused, not installed, not listed
@@ -277,6 +285,9 @@ fn text(arrangement: &Arrangement) -> String {
 /// How a target resolves now.
 struct Resolved {
     title: String,
+    /// What tells it apart from a result of the same title
+    /// ([`QuickSlot::detail`]).
+    detail: Option<String>,
     kind: Option<RowKind>,
     /// What invoking it does, or why it cannot run.
     outcome: Result<Entry, String>,
@@ -333,6 +344,7 @@ fn resolve_command(launcher: &Launcher, state: &State, target: &PinTarget, id: &
         };
         return Resolved {
             title: listed.row.title,
+            detail: None,
             kind: Some(RowKind::Command),
             outcome,
         };
@@ -350,11 +362,17 @@ fn resolve_command(launcher: &Launcher, state: &State, target: &PinTarget, id: &
     let reason = match installed {
         Some(package) if !package.enabled => format!("{} is disabled", package.title()),
         Some(package) if package.manifest.is_err() => format!("{} cannot load", package.title()),
+        // Pinned before it became a root provider (#164): the next start
+        // removes the pin.
+        Some(package) if package.is_provider(split(id).1) => {
+            format!("{title} only answers root search now")
+        }
         Some(package) => format!("{} no longer offers this command", package.title()),
         None => "Its extension is not installed".to_owned(),
     };
     Resolved {
         title,
+        detail: None,
         kind: Some(RowKind::Command),
         outcome: Err(reason),
     }
@@ -364,12 +382,14 @@ fn resolve_indexed(state: &State, target: &PinTarget, command: &str) -> Resolved
     let Some((package, registration)) = registered(state, command) else {
         return Resolved {
             title: missing_title(command),
+            detail: None,
             kind: None,
             outcome: Err("Its extension is not installed".into()),
         };
     };
     let unresolved = |reason: String| Resolved {
         title: registration.title.clone(),
+        detail: None,
         kind: None,
         outcome: Err(reason),
     };
@@ -394,8 +414,16 @@ fn resolve_indexed(state: &State, target: &PinTarget, command: &str) -> Resolved
         .results()
         .find(|result| result.pin.as_ref() == Some(target))
     {
+        // Two results of one title (two applications of one name): the
+        // slot says what its row's subtitle says to tell them apart.
+        let theirs = |other: &&RootResult| matches!(&other.pin, Some(PinTarget::Indexed { command: pinned, .. }) if pinned == command);
+        let shared =
+            state.indexes.results().filter(theirs).any(|other| {
+                other.pin != found.pin && same_text(&other.row.title, &found.row.title)
+            });
         return Resolved {
             title: found.row.title.clone(),
+            detail: found.row.subtitle.clone().filter(|_| shared),
             kind: presentation::kind(&found.entry),
             outcome: Ok(found.entry.clone()),
         };
@@ -409,12 +437,112 @@ fn resolve_indexed(state: &State, target: &PinTarget, command: &str) -> Resolved
     })
 }
 
+/// What a quick slot pinning one of `command`'s results by `result`, an
+/// id the command no longer lists, holds now, when `result` names an
+/// installed application by another id, such as the path that was its id
+/// before applications had stable identities: the command's result for
+/// that application (the one with its current id, else the one opening
+/// it). `None` when `result` is listed or names no application.
+fn carried(
+    state: &State,
+    command: &str,
+    result: &str,
+    applications: &dyn Applications,
+) -> Option<PinTarget> {
+    let theirs = |found: &&RootResult| matches!(&found.pin, Some(PinTarget::Indexed { command: pinned, .. }) if pinned == command);
+    let listed = |id: &str| {
+        state.indexes.results().filter(theirs).find(
+            |found| matches!(&found.pin, Some(PinTarget::Indexed { result, .. }) if result == id),
+        )
+    };
+    if listed(result).is_some() {
+        return None;
+    }
+    let current = applications
+        .current_id(result)
+        .filter(|current| current != result)?;
+    listed(&current)
+        .or_else(|| {
+            state.indexes.results().filter(theirs).find(
+                |found| matches!(&found.entry, Entry::OpenApplication { id, .. } if *id == current),
+            )
+        })
+        .and_then(|found| found.pin.clone())
+}
+
+/// Carries the quick slots pinning `command`'s results by an id it no
+/// longer lists over to the result now listed for the same application
+/// ([`carried`]), as the command's results arrive: a pin made before
+/// applications had stable identities resolves, and its record is
+/// rewritten. A pin carried to a result already pinned leaves its slot.
+/// Returns whether anything changed, so the caller records it; nothing
+/// changes while the record cannot be read.
+pub(super) fn carry_over(
+    state: &mut State,
+    command: &str,
+    applications: &dyn Applications,
+) -> bool {
+    if state.quick_slots.unreadable.is_some() {
+        return false;
+    }
+    let chosen = std::mem::take(&mut state.quick_slots.chosen);
+    let mut changed = false;
+    let mut kept = Arrangement::with_capacity(chosen.len());
+    for target in chosen {
+        let carried_to = match &target {
+            PinTarget::Indexed {
+                command: pinned,
+                result,
+            } if pinned == command => carried(state, command, result, applications),
+            _ => None,
+        };
+        let target = match carried_to {
+            Some(carried_to) => {
+                changed = true;
+                carried_to
+            }
+            None => target,
+        };
+        if kept.contains(&target) {
+            changed = true;
+            continue;
+        }
+        kept.push(target);
+    }
+    state.quick_slots.chosen = kept;
+    changed
+}
+
+/// Takes out the slots pinning a root provider (#164), which has no row
+/// and cannot be pinned: one pinned before it became one. An indexed
+/// result it supplies, such as an application, keeps its slot. Whether any
+/// went; each is noted for the toast (see `providers`).
+fn forget_provider_pins(state: &mut State) -> bool {
+    let providers = super::providers::providers(state);
+    let mut gone = Vec::new();
+    state.quick_slots.chosen.retain(|target| match target {
+        PinTarget::Command(id) => match super::providers::title_of(&providers, id) {
+            Some(title) => {
+                gone.push(title.to_owned());
+                false
+            }
+            None => true,
+        },
+        PinTarget::Indexed { .. } => true,
+    });
+    for title in &gone {
+        Launcher::note_provider_pin(state, title);
+    }
+    !gone.is_empty()
+}
+
 /// The slot holding `target` as it stands in `state`.
 fn view(launcher: &Launcher, state: &State, target: &PinTarget) -> QuickSlot {
     let resolved = resolve(launcher, state, target);
     QuickSlot {
         target: target.clone(),
         title: resolved.title,
+        detail: resolved.detail,
         kind: resolved.kind,
         unavailable: resolved.outcome.err(),
     }
@@ -577,9 +705,10 @@ impl Launcher {
     /// recorded there is read now. A record that cannot be read leaves
     /// every slot empty, is reported on root search's status line, and is
     /// never replaced. Without this, the slots last until the launcher
-    /// stops.
+    /// stops. A slot pinning a command that has become a root provider is
+    /// taken out and the record written, with a toast saying so (#164).
     pub fn with_quick_slots(self, dir: &Path) -> Self {
-        {
+        let forgot = {
             let mut state = self.lock();
             state.quick_slots = Kept::open(dir);
             let problem = state.quick_slots.unreadable.clone();
@@ -589,6 +718,15 @@ impl Launcher {
             {
                 state.view.status = Status::Error(unreadable_report(&problem));
             }
+            forget_provider_pins(&mut state)
+        };
+        if forgot {
+            // Written now, once: the next start reads the slots without them.
+            if let Err(problem) = self.write_quick_slots() {
+                eprintln!("Pane could not forget the pin of a root provider: {problem}");
+            }
+            let mut state = self.lock();
+            self.show_provider_toast(&mut state);
         }
         self
     }
@@ -824,6 +962,15 @@ impl Launcher {
             }
         };
         (changed, recording)
+    }
+
+    /// Records the quick slots after [`carry_over`] changed them, off the
+    /// calling thread. A failed write puts back what the record holds,
+    /// whose pins are carried over again when the results next arrive, so
+    /// nothing is said about it.
+    pub(super) async fn record_carried_over(&self) {
+        let writer = self.clone();
+        let _ = off_thread(move || writer.write_quick_slots()).await;
     }
 
     /// Writes the arrangement as it is when the write begins, blocking:

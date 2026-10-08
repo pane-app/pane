@@ -42,6 +42,11 @@
 //!
 //! The slots are tab stops after the query field, so the keyboard reaches
 //! every one of them; the pin hint is not one — it only says how to pin.
+//!
+//! A pin whose result shares its title with another its command lists
+//! (two applications of one name) says what tells it apart
+//! ([`pane_core::QuickSlot::detail`]): as its tile's tooltip, its row's
+//! subtitle, and its accessible description ([`slot_description`]).
 
 use gpui::{
     AnyElement, App, ClickEvent, Context, Div, EntityInputHandler, FocusHandle, Focusable,
@@ -59,6 +64,7 @@ use crate::ui::pinned::{
 };
 use crate::ui::result_row::{RowContent, RowMeta, result_row_with};
 use crate::ui::theme::Theme;
+use crate::ui::tooltip::{TooltipLook, text_tooltip};
 
 actions!(
     quick_slots,
@@ -149,17 +155,29 @@ fn slot_icon(launcher: &pane_core::Launcher, slot: &QuickSlot, theme: &Theme) ->
     crate::features::icons::row_icon_of(launcher, &slot.target.key(), theme)
 }
 
+/// What assistive technology says of `slot` after its name: what tells it
+/// apart from a result of the same title (its tooltip), then why it cannot
+/// run; `None` when there is neither.
+pub(crate) fn slot_description(slot: &QuickSlot) -> Option<String> {
+    let parts: Vec<&str> = [slot.detail.as_deref(), slot.unavailable.as_deref()]
+        .into_iter()
+        .flatten()
+        .collect();
+    (!parts.is_empty()).then(|| parts.join(". "))
+}
+
 /// `element`, the slot at `index` showing `slot`, as assistive technology
 /// sees it, tile or row alike: a button named "Pinned N: <title>", N its
-/// place among the pins from 1, saying why it cannot run, with its chord
-/// while it is a numbered pin.
+/// place among the pins from 1, saying what tells it apart from a result of
+/// the same title and why it cannot run, with its chord while it is a
+/// numbered pin.
 fn slot_accessibility(index: usize, slot: &QuickSlot, element: Stateful<Div>) -> Stateful<Div> {
     let shortcut = slot_number(index).map(|number| crate::keyboard::quick_slot_keys(number).name());
     element
         .role(Role::Button)
         .aria_label(format!("Pinned {}: {}", index + 1, slot.title))
-        .when_some(slot.unavailable.clone(), |element, why| {
-            element.aria_description(why)
+        .when_some(slot_description(slot), |element, description| {
+            element.aria_description(description)
         })
         .when_some(shortcut, |element, shortcut| {
             element.aria_keyshortcuts(shortcut)
@@ -175,7 +193,7 @@ impl LauncherWindow {
     pub(crate) fn sync_home(&mut self, cx: &mut Context<Self>) {
         let pins = self.launcher.quick_slots().len();
         self.ensure_slot_focus(pins, cx);
-        let on_root = matches!(self.launcher.view().screen, Screen::Root { .. });
+        let on_root = matches!(self.launcher.screen(), Screen::Root { .. });
         let was = std::mem::replace(&mut self.home.on_root, on_root);
         if on_root && !was {
             let resolving = self.launcher.resolve_quick_slots();
@@ -232,7 +250,7 @@ impl LauncherWindow {
     /// keys: only on root search, with no overlay open and no composition
     /// in the query field.
     fn slot_keys_act(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if !matches!(self.launcher.view().screen, Screen::Root { .. })
+        if !matches!(self.launcher.screen(), Screen::Root { .. })
             || self.actions.is_some()
             || self.menu.is_some()
         {
@@ -401,7 +419,7 @@ impl LauncherWindow {
         }
         self.activate_quick_slot(index, window, cx);
         self.arm_arrival();
-        if matches!(self.launcher.view().screen, Screen::Root { .. }) {
+        if matches!(self.launcher.screen(), Screen::Root { .. }) {
             self.query.focus(window, cx);
         }
     }
@@ -550,7 +568,9 @@ impl LauncherWindow {
         let row = result_row_with(
             RowContent {
                 title: slot.title.clone().into(),
-                subtitle: None,
+                // What tells it apart from a result of its title, as its
+                // tile's tooltip says.
+                subtitle: slot.detail.clone().map(Into::into),
                 unavailable_reason: slot.unavailable.clone().map(Into::into),
                 unavailable_id: ("slot-unavailable", index).into(),
                 selected: false,
@@ -620,7 +640,13 @@ impl LauncherWindow {
             number,
             unavailable: slot.unavailable.clone().map(Into::into),
         };
-        let tile = self.slot_input(index, pinned_slot(content, theme), cx);
+        let tile = self
+            .slot_input(index, pinned_slot(content, theme), cx)
+            // What tells it apart from a result of its title, which its
+            // tile has no room to show.
+            .when_some(slot.detail.clone(), |tile, detail| {
+                tile.tooltip(text_tooltip(detail.into(), TooltipLook::of(theme)))
+            });
         slot_accessibility(index, &slot, tile)
     }
 }

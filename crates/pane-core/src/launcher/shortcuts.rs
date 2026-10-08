@@ -4,7 +4,7 @@
 //!
 //! The catalog is one read over the same records the launcher's own
 //! management flow uses — `aliases.json` and `hotkeys.json`, by command id
-//! — so the page and Manage extensions cannot disagree, and nothing runs
+//! — so the page and the extension pages cannot disagree, and nothing runs
 //! to build it: it lists what the installed packages' manifests declare
 //! and what Pane recorded, with each command's own explanation of why its
 //! configuration is not active (its package is disabled or paused, the
@@ -83,7 +83,8 @@ pub struct ShortcutCommand {
     pub alias_inactive: Option<String>,
     /// Whether an alias can be given to the command here: a command that
     /// is gone keeps the alias recorded for it, but none can be given to
-    /// it, only forgotten in Manage extensions.
+    /// it, only forgotten (its extension's page in Settings, or
+    /// uninstalling).
     pub editable: bool,
     /// The global hotkey the user gave it, if any.
     pub hotkey: Option<Shortcut>,
@@ -128,7 +129,7 @@ pub(super) fn catalog(launcher: &Launcher, state: &State) -> ShortcutCatalog {
             .paused
             .is_paused(&package.identity)
             .then(|| paused_reason(&title));
-        // The alias row's package-level wording, as Manage extensions has
+        // The alias row's package-level wording, as the extension list has
         // it: a disabled or paused package's choices are kept but not
         // active.
         let package_inactive = disabled.clone().or(paused);
@@ -137,17 +138,29 @@ pub(super) fn catalog(launcher: &Launcher, state: &State) -> ShortcutCatalog {
         // releases it.
         let hotkey_package_inactive = disabled;
         let mut commands = Vec::new();
-        for (registration, unavailable) in package.available_commands() {
+        for entry in package.listed_commands() {
+            let registration = entry.registration;
+            // A root provider has no alias or hotkey, so the page does not
+            // list it, nor what was recorded for it before it became one
+            // (the next start forgets that).
+            if entry.mode == crate::packages::CommandMode::Provider {
+                listed.insert(registration.id);
+                continue;
+            }
             listed.insert(registration.id.clone());
+            // A command the user turned off on its extension's page keeps
+            // its alias and hotkey, not active until it is on again
+            // (#168).
+            let off = (!entry.enabled).then(|| format!("{} is turned off", registration.title));
             commands.push(command(
                 state,
-                package_inactive.as_deref(),
-                hotkey_package_inactive.as_deref(),
+                package_inactive.as_deref().or(off.as_deref()),
+                hotkey_package_inactive.as_deref().or(off.as_deref()),
                 registration.id,
                 registration.title,
                 registration.subtitle,
                 registration.takes_query,
-                unavailable.as_deref(),
+                entry.unavailable.as_deref(),
             ));
         }
         // Choices whose command this package no longer lists: an update

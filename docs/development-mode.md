@@ -23,7 +23,7 @@ package would.
    `rust-toolchain.toml` beside it.)
 2. `cargo run -p pane -- --install guests/hello-rust`, and Enter on
    **Install**.
-3. In **Manage extensions…**, choose **Develop Hello Rust** (the list's
+3. In **Settings › Extensions**, choose **Develop Hello Rust** (the list's
    last rows). The status says which command each save runs.
 4. Edit `GREETING` in `guests/hello-rust/src/lib.rs` and save. The status
    shows "Building Hello Rust: cargo build --release --target
@@ -32,7 +32,7 @@ package would.
 5. Save something that does not compile (`const GREETING: &str = 42;`): the
    status says "Hello Rust did not build: error[E0308]: mismatched types.
    It keeps running its installed code; …", and **Why Hello Rust did not
-   build** in Manage extensions shows the compiler's output. "Say hello"
+   build** in Settings › Extensions shows the compiler's output. "Say hello"
    still answers as before. Fix it and save: it is reloaded.
 6. **Stop developing Hello Rust** ends it.
 
@@ -128,7 +128,7 @@ Development is turned on per installed, enabled package, from its **Develop
 3. **A build that fails** replaces nothing: the package keeps running its
    installed code. The status says "<title> did not build: <first error>.
    It keeps running its installed code; the diagnostics are under "Why
-   <title> did not build" in Manage extensions." The first error is the
+   <title> did not build" in Settings › Extensions." The first error is the
    first line that rustc or cargo (`error:`, `error[E0308]:`), TypeScript
    (`error TS2322`) or `pane_js.py` (`pane-js: error:`) report as one; a
    line such as `Compiling thiserror` is not; without one, why the build
@@ -165,7 +165,7 @@ Development is turned on per installed, enabled package, from its **Develop
    extensions, a build's details and root search with nothing typed. On
    another screen (an open command, a form, a query's results) it does not
    replace what that screen says; the newest is shown when the user returns
-   to Manage extensions or root search.
+   to Settings › Extensions or root search.
 
 Only the developed package is built and reloaded; Pane and every other
 package keep running.
@@ -206,7 +206,7 @@ explained ("Cannot develop <title>: …") rather than developed.
 
 These are implementation choices of #12/#13, not user decisions:
 
-- Development is turned on per package in Manage extensions and is **not
+- Development is turned on per package in Settings › Extensions and is **not
   recorded**: it ends when Pane quits, and starting it does not build at
   once (the next save does).
 - The build is chosen by the folder's `Cargo.toml` or `package.json`, with
@@ -219,14 +219,14 @@ These are implementation choices of #12/#13, not user decisions:
   path.
 - **Build <title> again** on the details screen reruns the build without a
   save.
-- A development status waits on screens other than Manage extensions, a
+- A development status waits on screens other than Settings › Extensions, a
   build's details and an empty root search.
 - `pane_js.py` runs `tsc` in the staged copy of the package, so a type
   error names the file as the package has it (`src/index.ts(12,7)`).
 - Reloading on save starts every available command, as a manual reload does
   (the provisional exception to lazy activation in
   [current decisions](current-decisions.md)).
-- The rows are near the end of Manage extensions, one per enabled
+- The rows are near the end of Settings › Extensions, one per enabled
   package, after the hotkey rows and before retained data.
 
 ## Checks
@@ -251,7 +251,7 @@ These are implementation choices of #12/#13, not user decisions:
   folder moved into the source folder is watched, and editors' temporary
   files are not saves; reading the sources or changing only their
   metadata (a file's or a folder's) is not a save; a published copy keeps its identity and code; the
-  rows in Manage extensions; the window is told of each change.
+  rows in Settings › Extensions; the window is told of each change.
 - [`crates/pane-core/tests/develop_builds.rs`](../crates/pane-core/tests/develop_builds.rs)
   runs the real builds on copies of the samples: an edit is built and
   reloaded, a compile or type error keeps the code and shows the compiler's

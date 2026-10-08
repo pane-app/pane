@@ -21,7 +21,7 @@ mod rows;
 use feedback::shown;
 use rows::titles;
 
-const MANAGE_ROW: &str = "Manage extensions…";
+const MANAGE_ROW: &str = "Manage Extensions";
 
 struct Fixture {
     /// The assembled package under `target/guests/packages`.
@@ -836,7 +836,7 @@ fn enter_on_echo_runs_it_without_text_and_opens_no_screen() {
     assert_eq!(
         shown(&launcher),
         Status::Result(
-            "Echo heard nothing: give it an alias or make it a fallback in Manage extensions, \
+            "Echo heard nothing: give it an alias or make it a fallback in Settings, \
              then send it text from root search"
                 .into()
         )

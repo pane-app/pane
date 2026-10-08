@@ -213,7 +213,7 @@ fn three_crashes_pause_the_package_until_retry(fixture: &Fixture) {
         "{toast}"
     );
     assert!(
-        toast.ends_with("Retry it, or see why, in Manage extensions."),
+        toast.ends_with("Retry it, or see why, in Settings."),
         "{toast}"
     );
     // Its open command closed, and none of its code runs.
@@ -228,7 +228,7 @@ fn three_crashes_pause_the_package_until_retry(fixture: &Fixture) {
     };
     assert_eq!(
         reason,
-        format!("{title} is paused after an error; retry it in Manage extensions")
+        format!("{title} is paused after an error; retry it in Settings")
     );
     select_title(&launcher, COMMAND);
     block_on(launcher.activate_selected());

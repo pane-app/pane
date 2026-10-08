@@ -1,0 +1,20 @@
+File index benchmark: a generated tree of about 450000 entries, 8 walker threads at background priority, windows on x86_64
+run 1: 450000 entries in 9.16 s (walk 6.29 s), 36.1 MB on disk, 0 folders unreadable
+run 2: 450000 entries in 12.60 s (walk 6.82 s), 36.1 MB on disk, 0 folders unreadable
+run 3: 450000 entries in 17.09 s (walk 11.62 s), 36.1 MB on disk, 0 folders unreadable
+
+| Measure | Pane | Target (#126) | Raycast |
+| --- | --- | --- | --- |
+| Entries indexed | 450000 | | 450,097 |
+| First index, run 1 (cold only if first since a restart) | 9.16 s | below 12.9 s, aim 6.45 s | 12.9 s |
+| First index, warm (median of 2 runs) | 17.09 s | below 12.9 s, aim 6.45 s | |
+| Index on disk | 36.1 MB (80 B per entry) | below 61.8 MB | 61.8 MB (≈137 B per entry) |
+| Query, 95th percentile (first pass after opening) | 60.56 ms | under 10 ms | not measured |
+| Query, 95th percentile (warm) | 45.21 ms (p50 18.69 ms, p99 68.66 ms, max 138.85 ms) | under 10 ms | not measured |
+| A changed file re-indexed, 95th percentile | 28.88 ms (p50 14.86 ms) | under 10 ms | 4–10 ms |
+| Catch-up after 10,000 changes | 1.636 s (30192 records) | under 1 s | not measured |
+| Opening the index at start | 6.58 ms | | |
+| Private memory added by the open index, idle | 0.1 MB (after queries: 23.3 MB) | after measuring (#4) | |
+| Peak memory of the benchmark while indexing | 232.0 MB | | |
+
+Queries: 1000 of 5 kinds (whole name, name prefix, a word, folder and name words, one letter), limit 20.

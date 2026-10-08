@@ -550,7 +550,7 @@ fn an_installed_npm_dependency_is_used_as_it_is_and_a_disabled_one_stays_disable
         has(
             &details,
             "Requires: Greeter from npm, which you disabled: it stays disabled, and Caller \
-             cannot use it until you enable it in Manage extensions"
+             cannot use it until you enable it in Settings"
         ),
         "{details:#?}"
     );
@@ -1196,7 +1196,7 @@ fn an_npm_package_has_no_reload_or_develop_rows() {
     let launcher = dirs.launcher();
     block_on(launcher.install_npm(GREETER));
     launcher.back();
-    select_title(&launcher, "Manage extensions…");
+    select_title(&launcher, "Manage Extensions");
     block_on(launcher.activate_selected());
 
     let titles = titles(&launcher);

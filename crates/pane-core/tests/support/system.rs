@@ -194,6 +194,7 @@ pub fn installed_applications() -> Vec<Application> {
             id: format!("app:{name}"),
             name: name.into(),
             location: "/apps".into(),
+            ..Application::default()
         })
         .collect()
 }

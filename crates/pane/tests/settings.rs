@@ -30,6 +30,11 @@ use tempfile::TempDir;
 #[path = "support/settle.rs"]
 mod settle;
 
+// Pane registers no sample command (#162): the tests that drive the
+// samples register them themselves.
+#[path = "support/samples.rs"]
+mod samples;
+
 #[path = "support/paint.rs"]
 mod paint;
 
@@ -142,7 +147,7 @@ type Opened<'a> = (
 fn open_launcher(cx: &mut TestAppContext) -> Opened<'_> {
     let links = Arc::new(RecordedLinks::default());
     let launcher =
-        Launcher::new(Runtime::start(), pane::sample_commands()).with_link_opener(links.clone());
+        Launcher::new(Runtime::start(), samples::sample_commands()).with_link_opener(links.clone());
     // Guest replies arrive from the real runtime thread, outside the test
     // scheduler's deterministic control.
     cx.executor().allow_parking();
@@ -155,7 +160,7 @@ fn open_launcher(cx: &mut TestAppContext) -> Opened<'_> {
 fn open_refusing(
     cx: &mut TestAppContext,
 ) -> (gpui::Entity<LauncherWindow>, &mut VisualTestContext) {
-    let launcher = Launcher::new(Runtime::start(), pane::sample_commands())
+    let launcher = Launcher::new(Runtime::start(), samples::sample_commands())
         .with_link_opener(Arc::new(RefusingLinks));
     cx.executor().allow_parking();
     cx.update(pane::bind_keys);
@@ -1697,6 +1702,23 @@ fn until_text(cx: &mut VisualTestContext, text: &str) {
     }
 }
 
+/// Runs the window until it has drawn the element with debug selector
+/// `selector`: a line of text, which the accessibility tree does not hold.
+fn until_drawn(cx: &mut VisualTestContext, selector: &'static str) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        cx.run_until_parked();
+        if cx.debug_bounds(selector).is_some() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {selector:?} to be drawn"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 /// A development builder that fakes a build: it copies the guest that the
 /// folder's `source.txt` names, or fails when the source names an error, as
 /// `develop.rs`'s does, so a build can fail in the background without any
@@ -1738,40 +1760,134 @@ impl Build for FakeBuild {
     }
 }
 
+/// Opens the page of the installed extension titled `title` from its entry
+/// under the sidebar's Extensions group (#168).
+fn open_page(settings_cx: &mut VisualTestContext, title: &str) {
+    let entry = selector(format!("extension-entry-{title}"));
+    click(settings_cx, entry);
+    settings_cx.run_until_parked();
+    assert!(
+        settings_cx
+            .debug_bounds(selector(format!("extension-page-title-{title}")))
+            .is_some(),
+        "{title}'s page opened"
+    );
+}
+
+/// Opens the extension page's Actions menu and clicks its item whose
+/// debug selector is `item`.
+fn choose_in_menu(settings_cx: &mut VisualTestContext, item: &'static str) {
+    click_row(settings_cx, "extension-menu");
+    assert!(
+        settings_cx.debug_bounds("extension-menu-popup").is_some(),
+        "the menu opened"
+    );
+    click_row(settings_cx, item);
+}
+
+/// Whether the node with `role` labelled `label` is in the window's
+/// accessibility tree.
+fn has_node(cx: &mut VisualTestContext, role: &str, label: &str) -> bool {
+    let (_, json) = accessibility(cx);
+    let tree: serde_json::Value = serde_json::from_str(&json).unwrap();
+    tree["nodes"]
+        .as_object()
+        .unwrap()
+        .values()
+        .any(|node| node["aria"]["role"] == role && node["aria"]["label"] == label)
+}
+
 #[gpui::test]
-fn the_extensions_page_lists_the_installed_extensions_and_their_reach(cx: &mut TestAppContext) {
+fn every_installed_extension_has_a_sidebar_entry_and_a_page(cx: &mut TestAppContext) {
     let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let folder = settings_package(&sources.path().join("settings"));
     let (launcher, cx) = open_installed(cx, &data, &folder);
     let (_settings, mut settings_cx) = open_extensions(cx);
 
-    // The page lists the package as a card — its switch and the
-    // management operations the launcher's own list holds, as buttons —
-    // the global automatic updates, and the launcher's install sources.
-    // A command's hotkey and alias are the Shortcuts page's.
-    for row in [
-        "extension-row-Settings sample",
-        "extension-row-Reload Settings sample",
-        "extension-row-Clear cache of Settings sample",
-        "extension-row-Uninstall Settings sample",
-        "extension-row-Develop Settings sample",
+    // The group's page lists the extension, what governs them all, and
+    // the install sources; the sidebar has the extension's own entry under
+    // the group's, with its + menu.
+    for drawn in [
+        "extension-entry-Settings sample",
+        "extensions-add",
+        "extension-item-Settings sample",
         "extension-row-Update extensions automatically",
         "extension-install-Folder…",
         "extension-install-npm…",
         "extension-install-Git…",
     ] {
-        assert!(settings_cx.debug_bounds(row).is_some(), "{row} is drawn");
+        assert!(
+            settings_cx.debug_bounds(drawn).is_some(),
+            "{drawn} is drawn"
+        );
     }
-    for row in [
-        "extension-row-Hotkey for Greeting",
-        "extension-row-Alias for Greeting",
-    ] {
-        assert!(settings_cx.debug_bounds(row).is_none(), "{row} is not");
-    }
-    // The package's switch says it is enabled.
-    assert!(extension_enabled(&mut settings_cx, "Settings sample"));
+    // No explanatory paragraphs, no operations as rows on the group's page.
+    assert!(
+        settings_cx
+            .debug_bounds("extension-row-Reload Settings sample")
+            .is_none()
+    );
 
-    // Reading the page moved nothing: the launcher stayed where it was,
+    // Its page: the large icon, the title, what it does, its source, the
+    // enable switch, the Actions menu, and its commands with their alias,
+    // hotkey and switch.
+    open_page(&mut settings_cx, "Settings sample");
+    for drawn in [
+        "extension-page-icon",
+        "extension-page-description",
+        "extension-page-source",
+        "extension-row-Settings sample",
+        "extension-menu",
+        "extension-commands",
+    ] {
+        assert!(
+            settings_cx.debug_bounds(drawn).is_some(),
+            "{drawn} is drawn"
+        );
+    }
+    let key = PackageIdentity::local(&folder).unwrap().key();
+    let command = format!("{key}#greeting");
+    for drawn in [
+        format!("extension-command-{command}"),
+        format!("extension-command-toggle-{command}"),
+        format!("shortcut-alias-{command}"),
+        format!("shortcut-hotkey-{command}"),
+    ] {
+        assert!(
+            settings_cx.debug_bounds(selector(drawn.clone())).is_some(),
+            "{drawn} is drawn"
+        );
+    }
+    assert!(extension_enabled(&mut settings_cx, "Settings sample"));
+    assert!(has_node(&mut settings_cx, "Switch", "Greeting enabled"));
+    // The sidebar's selected entry is the extension's, and the titlebar
+    // names it.
+    assert!(has_node(
+        &mut settings_cx,
+        "ListBoxOption",
+        "Settings sample"
+    ));
+    assert!(has_node(&mut settings_cx, "Heading", "Settings sample"));
+
+    // The Actions menu offers every operation the old flow had, and the
+    // page's own: Check for Update (not for a folder's extension, which
+    // says why), Show Source Folder.
+    click_row(&mut settings_cx, "extension-menu");
+    for drawn in [
+        "extension-menu-Check for Update",
+        "extension-row-Reload Settings sample",
+        "extension-row-Clear cache of Settings sample",
+        "extension-row-Develop Settings sample",
+        "extension-menu-Show Source Folder",
+        "extension-row-Uninstall Settings sample",
+    ] {
+        assert!(
+            settings_cx.debug_bounds(drawn).is_some(),
+            "{drawn} is drawn"
+        );
+    }
+
+    // Reading the pages moved nothing: the launcher stayed where it was,
     // with the install's own outcome still on it.
     let view = cx.read_entity(&launcher, |window, _| window.launcher().view());
     assert!(
@@ -1786,7 +1902,39 @@ fn the_extensions_page_lists_the_installed_extensions_and_their_reach(cx: &mut T
 }
 
 #[gpui::test]
-fn disabling_a_required_extension_from_the_page_confirms_and_disables_all(cx: &mut TestAppContext) {
+fn a_paused_extension_is_marked_in_the_sidebar_and_on_its_page(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = hello_package(&sources.path().join("hello"));
+    let (_launcher, cx) = open_installed(cx, &data, &folder);
+    let (_settings, mut settings_cx) = open_extensions(cx);
+    assert!(
+        settings_cx
+            .debug_bounds("extension-entry-mark-Hello")
+            .is_none(),
+        "nothing to say yet"
+    );
+
+    // A reload that fails to start pauses it: its entry says so in a
+    // word, and its page in full.
+    open_page(&mut settings_cx, "Hello");
+    rebuild(&folder, "failing_start");
+    choose_in_menu(&mut settings_cx, "extension-row-Reload Hello");
+    until_text(&mut settings_cx, "Reloaded Hello, but it failed to start");
+    assert!(
+        settings_cx
+            .debug_bounds("extension-entry-mark-Hello")
+            .is_some(),
+        "the entry is marked"
+    );
+    assert!(has_node(&mut settings_cx, "ListBoxOption", "Hello, Paused"));
+    assert!(
+        settings_cx.debug_bounds("extension-page-mark").is_some(),
+        "the page says why"
+    );
+}
+
+#[gpui::test]
+fn disabling_a_required_extension_from_its_page_confirms_and_disables_all(cx: &mut TestAppContext) {
     let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     operations_package(&sources.path().join("greeter"), "Greeter", "");
     let caller = operations_package(
@@ -1798,9 +1946,10 @@ fn disabling_a_required_extension_from_the_page_confirms_and_disables_all(cx: &m
     let (launcher, cx) = open_installed(cx, &data, &caller);
     let (_settings, mut settings_cx) = open_extensions(cx);
 
-    // The page's row for the dependency, clicked, enters the launcher's
-    // own flow and asks the required-dependent confirmation there — the
-    // same question, rows and records the launcher's list asks.
+    // The page's switch for the dependency enters the launcher's own flow
+    // and asks the required-dependent confirmation, in place of the page —
+    // the same question, rows and records the launcher's list asks.
+    open_page(&mut settings_cx, "Greeter");
     click_row(&mut settings_cx, "extension-row-Greeter");
     for row in ["extension-row-Disable all 2", "extension-row-Cancel"] {
         assert!(settings_cx.debug_bounds(row).is_some(), "{row} is drawn");
@@ -1815,15 +1964,13 @@ fn disabling_a_required_extension_from_the_page_confirms_and_disables_all(cx: &m
         "the dependents are listed"
     );
 
-    // Cancel keeps everything enabled and returns to the list.
+    // Cancel keeps everything enabled and returns to the page.
     click_row(&mut settings_cx, "extension-row-Cancel");
     assert!(
-        settings_cx.debug_bounds("extension-row-Greeter").is_some(),
-        "back on the list"
-    );
-    assert!(
-        settings_cx.debug_bounds("extensions-status").is_none(),
-        "nothing was done"
+        settings_cx
+            .debug_bounds("extension-page-title-Greeter")
+            .is_some(),
+        "back on the page"
     );
     let enabled = |cx: &mut VisualTestContext| {
         cx.read_entity(&launcher, |window, _| {
@@ -1846,16 +1993,10 @@ fn disabling_a_required_extension_from_the_page_confirms_and_disables_all(cx: &m
         "Disabled Greeter and Caller, which requires it",
     );
     assert_eq!(enabled(cx), [false, false]);
+    assert!(!extension_enabled(&mut settings_cx, "Greeter"));
 
-    // The launcher window shares the flow: it shows the extension list
-    // too, and the page's status is the launcher's own outcome.
-    let view = cx.read_entity(&launcher, |window, _| window.launcher().view());
-    assert!(
-        matches!(view.screen, Screen::Extensions { .. }),
-        "{:?}",
-        view.screen
-    );
-    // Root search offers the commands of neither disabled package.
+    // Root search offers the commands of neither disabled package, and
+    // "Manage Extensions" is a command of Pane's.
     cx.read_entity(&launcher, |window, _| window.launcher().back());
     assert_eq!(
         titles(&launcher, cx),
@@ -1863,7 +2004,7 @@ fn disabling_a_required_extension_from_the_page_confirms_and_disables_all(cx: &m
             "Install extension from folder…",
             "Install extension from npm…",
             "Install extension from Git…",
-            "Manage extensions…",
+            "Manage Extensions",
             "Settings…"
         ]
     );
@@ -1891,9 +2032,10 @@ fn uninstalling_from_the_page_offers_the_saved_data_choice_and_keeps_it(cx: &mut
     let (launcher, cx) = open_installed(cx, &data, &folder);
     let (_settings, mut settings_cx) = open_extensions(cx);
 
-    // The uninstall row asks first, with the saved-data choice the
-    // launcher's own confirmation offers.
-    click_row(&mut settings_cx, "extension-row-Uninstall Settings sample");
+    // Uninstall, from the page's menu, asks first, with the saved-data
+    // choice the launcher's own confirmation offers.
+    open_page(&mut settings_cx, "Settings sample");
+    choose_in_menu(&mut settings_cx, "extension-row-Uninstall Settings sample");
     for row in [
         "extension-row-Uninstall and keep saved data",
         "extension-row-Uninstall and delete saved data",
@@ -1919,12 +2061,17 @@ fn uninstalling_from_the_page_offers_the_saved_data_choice_and_keeps_it(cx: &mut
         "Uninstalled Settings sample; its settings and content are kept",
     );
     assert!(keeps_settings(&settings, &key), "the saved data is kept");
-    // Nothing is installed; the retained data is listed for the same
-    // identity, with its own row and confirmation, as in the launcher.
+    // Nothing is installed: its entry and page are gone, and the group's
+    // page lists the retained data with its own row and confirmation.
     assert!(
         cx.read_entity(&launcher, |window, _| window.launcher().packages())
             .is_empty(),
         "nothing is installed"
+    );
+    assert!(
+        settings_cx
+            .debug_bounds("extension-entry-Settings sample")
+            .is_none()
     );
     assert!(
         settings_cx
@@ -1942,24 +2089,20 @@ fn a_reload_that_fails_to_start_is_explained_on_the_page_and_offers_retry(cx: &m
     let folder = hello_package(&sources.path().join("hello"));
     let (_launcher, cx) = open_installed(cx, &data, &folder);
     let (_settings, mut settings_cx) = open_extensions(cx);
+    open_page(&mut settings_cx, "Hello");
 
     // A source that no longer builds a startable package: the reload's
-    // failure is the page's status, and the paused package's Retry row is
-    // offered, as in the launcher's list.
+    // failure is the page's status, and the paused package's Retry is
+    // offered in its menu, as in the launcher's list.
     rebuild(&folder, "failing_start");
-    click_row(&mut settings_cx, "extension-row-Reload Hello");
+    choose_in_menu(&mut settings_cx, "extension-row-Reload Hello");
     until_text(&mut settings_cx, "Reloaded Hello, but it failed to start");
-    assert!(
-        settings_cx
-            .debug_bounds("extension-row-Retry starting Hello")
-            .is_some(),
-        "the recovery row is offered"
-    );
 
     // Retry starts it again, through the same row the launcher's list
     // holds.
-    click_row(&mut settings_cx, "extension-row-Retry starting Hello");
+    choose_in_menu(&mut settings_cx, "extension-row-Retry starting Hello");
     until_text(&mut settings_cx, "Started Hello");
+    click_row(&mut settings_cx, "extension-menu");
     assert!(
         settings_cx
             .debug_bounds("extension-row-Retry starting Hello")
@@ -1969,89 +2112,469 @@ fn a_reload_that_fails_to_start_is_explained_on_the_page_and_offers_retry(cx: &m
 }
 
 #[gpui::test]
-fn the_install_rows_from_the_page_open_the_launcher_windows_flows(cx: &mut TestAppContext) {
+fn clearing_the_cache_from_the_page_asks_first(cx: &mut TestAppContext) {
     let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let folder = settings_package(&sources.path().join("settings"));
-    let (launcher, cx) = open_installed(cx, &data, &folder);
-    let launcher_window = cx
-        .update(|window, _| window.window_handle())
-        .downcast::<LauncherWindow>()
-        .expect("the launcher window");
+    let (_launcher, cx) = open_installed(cx, &data, &folder);
     let (_settings, mut settings_cx) = open_extensions(cx);
+    open_page(&mut settings_cx, "Settings sample");
 
-    // The install rows are the launcher's own root rows: clicking one opens
-    // the flow in the launcher window, where its form (or folder picker)
-    // lives, focused there.
-    click_row(&mut settings_cx, "extension-install-npm…");
-    let view = settle(&launcher, cx);
-    assert!(matches!(view.screen, Screen::Form(_)), "{:?}", view.screen);
-    assert!(
-        cx.debug_bounds("field-package").is_some(),
-        "the form is drawn"
+    choose_in_menu(
+        &mut settings_cx,
+        "extension-row-Clear cache of Settings sample",
     );
+    for row in ["extension-row-Clear cache", "extension-row-Cancel"] {
+        assert!(settings_cx.debug_bounds(row).is_some(), "{row} is drawn");
+    }
+    click_row(&mut settings_cx, "extension-row-Clear cache");
+    until_text(&mut settings_cx, "Cleared the cache of Settings sample");
     assert!(
-        cx.cx
-            .update(|cx| launcher_window.is_active(cx))
-            .unwrap_or(false),
-        "the launcher window took focus"
+        settings_cx
+            .debug_bounds("extension-page-title-Settings sample")
+            .is_some(),
+        "back on the page"
     );
-    // The Settings window stayed open.
-    assert!(settings_cx.debug_bounds("extensions-title").is_some());
+}
+
+/// A link opener that also records the folders it is asked to show.
+#[derive(Default)]
+struct RecordedFiles(std::sync::Mutex<Vec<PathBuf>>);
+
+impl pane_core::LinkOpener for RecordedFiles {
+    fn open(&self, _url: &str) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn open_file(&self, path: &Path) -> Result<(), String> {
+        self.0.lock().unwrap().push(path.to_path_buf());
+        Ok(())
+    }
 }
 
 #[gpui::test]
-fn an_install_row_from_the_page_opens_past_a_query_that_hides_it(cx: &mut TestAppContext) {
+fn show_source_folder_opens_the_extensions_folder(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = settings_package(&sources.path().join("settings"));
+    let files = Arc::new(RecordedFiles::default());
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"))
+            .with_link_opener(files.clone());
+    install(&launcher, &folder);
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let (_launcher, cx) =
+        cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    let (_settings, mut settings_cx) = open_extensions(cx);
+    open_page(&mut settings_cx, "Settings sample");
+
+    // A folder's extension: its source folder, which its author edits.
+    choose_in_menu(&mut settings_cx, "extension-menu-Show Source Folder");
+    until_text(&mut settings_cx, "Showed");
+    let identity = PackageIdentity::local(&folder).unwrap();
+    assert_eq!(
+        files.0.lock().unwrap().as_slice(),
+        [identity.local_folder().unwrap().to_path_buf()]
+    );
+}
+
+#[gpui::test]
+fn check_for_update_is_explained_for_a_folders_extension(cx: &mut TestAppContext) {
     let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let folder = settings_package(&sources.path().join("settings"));
     let (launcher, cx) = open_installed(cx, &data, &folder);
+    let (_settings, mut settings_cx) = open_extensions(cx);
+    open_page(&mut settings_cx, "Settings sample");
 
-    // Root search was left filtered by a query none of the install rows
-    // match: the row the page shows is not in the launcher's list.
-    cx.simulate_input("zzzz");
-    settle(&launcher, cx);
+    // A folder's extension has no source to check: the entry says why and
+    // does nothing (an npm or Git one previews its source: `npm.rs`).
+    click_row(&mut settings_cx, "extension-menu");
+    assert!(has_node(&mut settings_cx, "MenuItem", "Check for Update"));
+    click_row(&mut settings_cx, "extension-menu-Check for Update");
+    let view = cx.read_entity(&launcher, |window, _| window.launcher().view());
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "{:?}",
+        view.screen
+    );
+}
+
+#[gpui::test]
+fn a_command_is_turned_off_and_on_from_its_extensions_page(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = settings_package(&sources.path().join("settings"));
+    let (launcher, cx) = open_installed(cx, &data, &folder);
+    let (_settings, mut settings_cx) = open_extensions(cx);
+    open_page(&mut settings_cx, "Settings sample");
+    let key = PackageIdentity::local(&folder).unwrap().key();
+    let toggle = selector(format!("extension-command-toggle-{key}#greeting"));
+
+    // Off: root search no longer offers it, the rest of the extension
+    // stays enabled, and the choice is recorded.
+    click_row(&mut settings_cx, toggle);
+    until_text(&mut settings_cx, "Turned off Greeting");
+    assert!(!has_node_toggled(&mut settings_cx, "Greeting enabled"));
+    assert!(extension_enabled(&mut settings_cx, "Settings sample"));
+    cx.read_entity(&launcher, |window, _| window.launcher().back());
     assert!(
         !titles(&launcher, cx)
             .iter()
-            .any(|title| title == "Install extension from npm…"),
-        "the query hides the install rows"
+            .any(|title| title == "Greeting"),
+        "root search no longer offers it"
     );
-    let (_settings, mut settings_cx) = open_extensions(cx);
+    let installed = fs::read_to_string(data.path().join("extensions/installed.json")).unwrap();
+    assert!(installed.contains("\"greeting\""), "{installed}");
 
-    // The page's install row still opens its flow in the launcher window,
-    // as it does from an empty root search.
-    click_row(&mut settings_cx, "extension-install-npm…");
-    let view = settle(&launcher, cx);
-    assert!(matches!(view.screen, Screen::Form(_)), "{:?}", view.screen);
+    // On again: it is back.
+    click_row(&mut settings_cx, toggle);
+    until_text(&mut settings_cx, "Turned on Greeting");
+    assert!(has_node_toggled(&mut settings_cx, "Greeting enabled"));
     assert!(
-        cx.debug_bounds("field-package").is_some(),
-        "the form is drawn"
+        titles(&launcher, cx)
+            .iter()
+            .any(|title| title == "Greeting"),
+        "root search offers it again"
     );
 }
 
+/// Whether the switch labelled `label` reads as on, as assistive
+/// technology sees it.
+fn has_node_toggled(cx: &mut VisualTestContext, label: &str) -> bool {
+    let (_, json) = accessibility(cx);
+    let tree: serde_json::Value = serde_json::from_str(&json).unwrap();
+    tree["nodes"].as_object().unwrap().values().any(|node| {
+        let aria = &node["aria"];
+        aria["role"] == "Switch" && aria["label"] == label && aria["toggled"] == "True"
+    })
+}
+
 #[gpui::test]
-fn the_page_follows_a_change_the_launcher_window_made(cx: &mut TestAppContext) {
+fn a_commands_alias_is_set_on_its_extensions_page(cx: &mut TestAppContext) {
     let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let folder = settings_package(&sources.path().join("settings"));
     let (launcher, cx) = open_installed(cx, &data, &folder);
     let (_settings, mut settings_cx) = open_extensions(cx);
+    open_page(&mut settings_cx, "Settings sample");
+    let key = PackageIdentity::local(&folder).unwrap().key();
+    let command = format!("{key}#greeting");
 
-    // The launcher window enters its own Manage extensions flow and
-    // disables the package: the page, open on the Extensions page,
-    // redraws with the state the launcher now holds.
-    cx.simulate_input("manage");
-    settle(&launcher, cx);
-    cx.simulate_keystrokes("enter");
-    settle(&launcher, cx);
-    cx.simulate_keystrokes("enter");
-    settle(&launcher, cx);
+    // The alias field is the Shortcuts page's own: its editor opens in
+    // place, Enter commits through the same rules and record.
+    click_row(
+        &mut settings_cx,
+        selector(format!("shortcut-alias-{command}")),
+    );
+    assert!(settings_cx.debug_bounds("shortcut-editor").is_some());
+    settings_cx.simulate_input("gr");
+    settings_cx.simulate_keystrokes("enter");
+    let alias = || {
+        cx.read_entity(&launcher, |window, _| {
+            window
+                .launcher()
+                .shortcut_catalog()
+                .groups
+                .into_iter()
+                .flat_map(|group| group.commands)
+                .find(|shortcut| shortcut.id == command)
+                .and_then(|shortcut| shortcut.alias)
+        })
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while alias().as_deref() != Some("gr") {
+        assert!(Instant::now() < deadline, "the alias was never set");
+        settings_cx.run_until_parked();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[gpui::test]
+fn an_extension_is_installed_from_a_folder_through_the_plus_menu(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = hello_package(&sources.path().join("hello"));
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    let (_launcher, cx) =
+        cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    let (_settings, mut settings_cx) = open_extensions(cx);
+    assert!(settings_cx.debug_bounds("extension-empty").is_some());
+
+    // The group's + menu offers the three sources.
+    click_row(&mut settings_cx, "extensions-add");
+    for drawn in [
+        "extensions-add-Install from Folder…",
+        "extensions-add-Install from npm…",
+        "extensions-add-Install from Git…",
+    ] {
+        assert!(
+            settings_cx.debug_bounds(drawn).is_some(),
+            "{drawn} is drawn"
+        );
+    }
+
+    // Cancelling the folder picker changes nothing.
+    click_row(&mut settings_cx, "extensions-add-Install from Folder…");
+    assert!(settings_cx.did_prompt_for_paths(), "a folder picker opened");
+    settings_cx.simulate_path_prompt_response(|_| None);
+    settings_cx.run_until_parked();
+    assert!(settings_cx.debug_bounds("extension-empty").is_some());
+
+    // A folder chosen is previewed on the page, and its Install installs
+    // it: the extension has its entry and its page.
+    click_row(&mut settings_cx, "extensions-add");
+    click_row(&mut settings_cx, "extensions-add-Install from Folder…");
+    assert!(settings_cx.did_prompt_for_paths(), "a folder picker opened");
+    let chosen = folder.clone();
+    settings_cx.simulate_path_prompt_response(move |options| {
+        assert!(options.directories && !options.files && !options.multiple);
+        Some(vec![chosen])
+    });
+    until_drawn(&mut settings_cx, "extension-detail-Version: 1.0.0");
+    click_row(&mut settings_cx, "extension-row-Install");
+    until_text(&mut settings_cx, "Installed Hello");
     assert!(
-        !extension_enabled(&mut settings_cx, "Settings sample"),
-        "the page shows the new state"
+        settings_cx.debug_bounds("extension-entry-Hello").is_some(),
+        "its entry is listed"
+    );
+    open_page(&mut settings_cx, "Hello");
+}
+
+#[gpui::test]
+fn the_npm_and_git_sources_ask_for_their_package_on_the_page(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    let (_launcher, cx) =
+        cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    let (settings, mut settings_cx) = open_extensions(cx);
+
+    // npm: the field takes the keyboard; a name that is no npm package's
+    // is explained by the preview, on the page.
+    click_row(&mut settings_cx, "extensions-add");
+    click_row(&mut settings_cx, "extensions-add-Install from npm…");
+    assert!(
+        settings_cx
+            .debug_bounds("extension-install-field")
+            .is_some()
+    );
+    let field = settings
+        .read_with(&settings_cx, |window, _| window.install_field())
+        .unwrap()
+        .expect("the install field");
+    {
+        use gpui::Focusable;
+        assert!(
+            settings_cx.update(|window, cx| field.focus_handle(cx).is_focused(window)),
+            "the field has the keyboard"
+        );
+    }
+    settings_cx.simulate_input("Not A Package!");
+    click_row(&mut settings_cx, "extension-install-show");
+    until_text(
+        &mut settings_cx,
+        "`Not A Package!` is not an npm package name",
+    );
+    click_row(&mut settings_cx, "extension-back");
+
+    // Git: the same field asks for a repository.
+    click_row(&mut settings_cx, "extension-install-Git…");
+    assert!(
+        has_node(
+            &mut settings_cx,
+            "TextInput",
+            "Git repository: its address, and @ a branch, tag or commit to install that one"
+        ),
+        "the field asks for a repository"
     );
 }
 
-/// Whether the Extensions page's switch for the extension `title` reads as
-/// on, as assistive technology sees it.
+#[gpui::test]
+fn the_window_keeps_its_keys_once_the_install_field_has_gone(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    let (_launcher, cx) =
+        cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    let (_settings, mut settings_cx) = open_extensions(cx);
+
+    // The field has the keyboard, then goes once Show Package previews
+    // what it named: the keyboard is the window's again, so its close
+    // shortcut closes it (release run 37725624283's smokes pressed it
+    // there, and it reached nothing).
+    click_row(&mut settings_cx, "extensions-add");
+    click_row(&mut settings_cx, "extensions-add-Install from npm…");
+    settings_cx.simulate_input("Not A Package!");
+    click_row(&mut settings_cx, "extension-install-show");
+    until_text(
+        &mut settings_cx,
+        "`Not A Package!` is not an npm package name",
+    );
+    assert!(
+        settings_cx
+            .debug_bounds("extension-install-field")
+            .is_none()
+    );
+    settings_cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-w"
+    } else {
+        "ctrl-w"
+    });
+    cx.run_until_parked();
+    assert!(settings_windows(cx).is_empty(), "Settings closed");
+}
+
+#[gpui::test]
+fn manage_extensions_and_the_install_rows_open_settings(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = settings_package(&sources.path().join("settings"));
+    let (launcher, cx) = open_installed(cx, &data, &folder);
+
+    // "Manage Extensions" is a command of Pane's: it opens Settings at
+    // the Extensions group, and the launcher stays on root search — it
+    // has no screen of its own for extensions.
+    cx.simulate_input("manage extensions");
+    settle(&launcher, cx);
+    assert!(settings_windows(cx).is_empty());
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let settings = settings_windows(cx).pop().expect("Settings opened");
+    let mut settings_cx = settings_context(&settings, cx);
+    settings_cx.run_until_parked();
+    assert!(settings_cx.debug_bounds("extensions-title").is_some());
+    assert!(has_node(&mut settings_cx, "ListBoxOption", "Extensions"));
+    let view = cx.read_entity(&launcher, |window, _| window.launcher().view());
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "{:?}",
+        view.screen
+    );
+
+    // Root search's install rows open Settings' install flow: npm's
+    // field, focused.
+    cx.simulate_keystrokes("escape");
+    cx.simulate_input("install extension from npm");
+    settle(&launcher, cx);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    settings_cx.run_until_parked();
+    assert!(
+        settings_cx
+            .debug_bounds("extension-install-field")
+            .is_some(),
+        "the npm field is asked for"
+    );
+    let view = cx.read_entity(&launcher, |window, _| window.launcher().view());
+    assert!(
+        !matches!(view.screen, Screen::Form(_)),
+        "the launcher shows no form of its own"
+    );
+}
+
+#[gpui::test]
+fn the_search_finds_an_extension_and_its_preferences(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = assembled("sample-preferences", &sources.path().join("preferences"));
+    let (_launcher, cx) = open_installed(cx, &data, &folder);
+    let (_settings, mut settings_cx) = open_extensions(cx);
+
+    // The extension by its title.
+    settings_cx.simulate_keystrokes(find_shortcut());
+    settings_cx.simulate_input("preferences sample");
+    settings_cx.run_until_parked();
+    assert!(
+        settings_cx
+            .debug_bounds("settings-search-result-Preferences sample")
+            .is_some(),
+        "the extension is found"
+    );
+    settings_cx.simulate_keystrokes("escape");
+    settings_cx.run_until_parked();
+
+    // A preference by its title: Enter opens the extension's page there.
+    settings_cx.simulate_input("units");
+    settings_cx.run_until_parked();
+    assert!(
+        settings_cx
+            .debug_bounds("settings-search-result-Units")
+            .is_some(),
+        "the preference is found"
+    );
+    settings_cx.simulate_keystrokes("enter");
+    settings_cx.run_until_parked();
+    for _ in 0..3 {
+        settings_cx.update(|window, _| window.refresh());
+        settings_cx.run_until_parked();
+    }
+    assert!(
+        settings_cx
+            .debug_bounds("extension-page-title-Preferences sample")
+            .is_some(),
+        "the extension's page opened"
+    );
+    assert!(settings_cx.debug_bounds("preference-units").is_some());
+}
+
+/// An assembled package `name` from `cargo xtask guests`, copied into
+/// `folder` with every file it has.
+fn assembled(name: &str, folder: &Path) -> PathBuf {
+    let assembled = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/guests/packages")
+        .join(name);
+    assert!(
+        assembled.exists(),
+        "{} is missing; run `cargo xtask guests`",
+        assembled.display()
+    );
+    copy_tree(&assembled, folder);
+    folder.to_path_buf()
+}
+
+/// Copies the folder `from` into `to`, recursively.
+fn copy_tree(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
+#[gpui::test]
+fn the_page_follows_a_change_made_elsewhere(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = settings_package(&sources.path().join("settings"));
+    let (launcher, cx) = open_installed(cx, &data, &folder);
+    let (_settings, mut settings_cx) = open_extensions(cx);
+    open_page(&mut settings_cx, "Settings sample");
+    assert!(extension_enabled(&mut settings_cx, "Settings sample"));
+
+    // The package is disabled elsewhere (the launcher, in the
+    // background): the page, open on it, redraws with the state the
+    // launcher now holds, by its watcher.
+    let identity = PackageIdentity::local(&folder).unwrap();
+    let core = cx.read_entity(&launcher, |window, _| window.launcher().clone());
+    futures::executor::block_on(core.set_enabled(&identity, false));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while extension_enabled(&mut settings_cx, "Settings sample") {
+        assert!(Instant::now() < deadline, "the page never followed");
+        settings_cx
+            .cx
+            .executor()
+            .advance_clock(Duration::from_millis(600));
+        settings_cx.run_until_parked();
+    }
+}
+
+/// Whether the switch of the extension `title` on its page reads as on, as
+/// assistive technology sees it.
 fn extension_enabled(cx: &mut VisualTestContext, title: &str) -> bool {
     let (_, json) = accessibility(cx);
     let tree: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -2078,10 +2601,11 @@ fn the_page_follows_a_background_build_failure_by_itself(cx: &mut TestAppContext
         launcher
     });
     let (_settings, mut settings_cx) = open_extensions(cx);
+    open_page(&mut settings_cx, "Hello");
 
-    // Development starts from the page: the same row the launcher's list
-    // holds, entered through the same flow.
-    click_row(&mut settings_cx, "extension-row-Develop Hello");
+    // Development starts from the page's menu: the same row the
+    // launcher's list holds, entered through the same flow.
+    choose_in_menu(&mut settings_cx, "extension-row-Develop Hello");
     until_text(&mut settings_cx, "Developing Hello");
 
     // A save that does not build: the development thread reports it, the
@@ -2089,11 +2613,12 @@ fn the_page_follows_a_background_build_failure_by_itself(cx: &mut TestAppContext
     // what the launcher holds — by itself, with no action on it.
     fs::write(folder.join("source.txt"), "error: expected `;`").unwrap();
     until_text(&mut settings_cx, "Hello did not build: error: expected `;`");
+    click_row(&mut settings_cx, "extension-menu");
     assert!(
         settings_cx
             .debug_bounds("extension-row-Why Hello did not build")
             .is_some(),
-        "the build-failure row is drawn"
+        "the build-failure operation is offered"
     );
 }
 
@@ -2506,8 +3031,9 @@ fn overridden_segments_take_no_keyboard_focus(cx: &mut TestAppContext) {
     }
 }
 
-/// The six real pages — and only those — are the sidebar's sections, in
+/// The real pages — and only those — are the sidebar's sections, in
 /// order: each opens its page, and the search finds each by its title.
+/// (Six pages and the Extensions group; File Search joined with #176.)
 /// Appearance is a section of the General page, not a page of its own,
 /// and the reference's other labels (Window Manager, Clipboard, Privacy)
 /// add no page.
@@ -2515,13 +3041,15 @@ fn overridden_segments_take_no_keyboard_focus(cx: &mut TestAppContext) {
 fn all_six_pages_are_listed_reachable_and_searchable(cx: &mut TestAppContext) {
     let (_launcher, _links, cx) = open_launcher(cx);
     let (_settings, mut settings_cx) = opened_settings(cx);
+    // Pane's own pages, then the Extensions group (#168).
     let pages = [
         "General",
         "Launcher",
         "Shortcuts",
         "Keyboard",
-        "Extensions",
+        "File Search",
         "About",
+        "Extensions",
     ];
     let mut above = None;
     for title in pages {
@@ -2533,7 +3061,7 @@ fn all_six_pages_are_listed_reachable_and_searchable(cx: &mut TestAppContext) {
         assert!(above.is_none_or(|above| above < top), "{section} in order");
         above = Some(top);
         click_section(&mut settings_cx, section);
-        let page = selector(title.to_lowercase());
+        let page = selector(title.to_lowercase().replace(' ', "-"));
         assert!(
             settings_cx.debug_bounds(page).is_some(),
             "{section} opens its page"
@@ -2754,8 +3282,8 @@ fn the_about_pages_actions_are_buttons_whose_washes_change_at_once(cx: &mut Test
     );
 }
 
-/// The Extensions page lists the launcher's management rows as Settings
-/// list items (#99), not root result rows: each at least 44 high, white 5%
+/// The Extensions group's page lists the installed extensions as Settings
+/// list items (#99, #168), not root result rows: each at least 44 high, white 5%
 /// under the pointer (the sidebar item's hover), at once, and no root-row
 /// wash.
 #[gpui::test]
@@ -2768,7 +3296,7 @@ fn the_extensions_page_lists_its_rows_as_list_items(cx: &mut TestAppContext) {
     pointer_leaves(sc);
     settle_frames(sc);
 
-    let selector = "extension-row-Settings sample";
+    let selector = "extension-item-Settings sample";
     let row = sc.debug_bounds(selector).expect("the row");
     assert!(row.size.height >= px(44.), "{selector}: {row:?}");
     sc.simulate_mouse_move(row.center(), None::<MouseButton>, Modifiers::none());
@@ -2897,7 +3425,7 @@ fn moving_up_the_sidebar_arrives_from_above(cx: &mut TestAppContext) {
     let (_launcher, _links, cx) = open_launcher(cx);
     let (settings, mut settings_cx) = opened_settings(cx);
 
-    // Down to About — the last section — and settled.
+    // Down to About — the last of Pane's own pages — and settled.
     click_section(&mut settings_cx, "section-About");
     settle_frames(&mut settings_cx);
     assert!(section_arrival(&settings, &mut settings_cx).is_none());

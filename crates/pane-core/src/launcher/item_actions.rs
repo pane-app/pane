@@ -179,6 +179,11 @@ impl Launcher {
         let state = self.lock();
         let listed = selected_listed(&state)?;
         let mut actions = item_actions(&listed, &state.pane_keys);
+        // Loaded as the panel lists them, where the window draws only the
+        // rows in view (#165).
+        if looks::loads_as_shown(&state) {
+            looks::want_action_icons(&state, &listed.actions);
+        }
         actions.actions = looks::with_action_icons(&state, &listed.actions, actions.actions);
         Some(actions)
     }

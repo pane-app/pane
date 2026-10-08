@@ -4,7 +4,7 @@ Pane uses [hoangvu12/gpui-ce](https://github.com/hoangvu12/gpui-ce), branch
 `pane/source-over-alpha`, to carry the Windows alpha correction and macOS startup ABI repair required by
 [#63](https://github.com/hoangvu12/pane/issues/63), under
 [#61](https://github.com/hoangvu12/pane/issues/61). Cargo uses an immutable commit,
-not the branch tip: `bcf3a0acd047c1873293069d0ed42085a38f699b`. All four declarations in `crates/pane/Cargo.toml` (including
+not the branch tip: `5d27954ce5305447bb97d1d7b89b0db9b7a2c59c`. All four declarations in `crates/pane/Cargo.toml` (including
 the test dependency) move together. The fork's internal path dependencies resolve
 to that same Git source, preserving one GPUI type identity across renderer,
 platforms and editable controls. `Cargo.lock` records the full closure, and
@@ -150,3 +150,13 @@ its full 15-test command. Windows source-over code and historical alpha evidence
 are unchanged; deny.toml already permits the same maintained repository.
 This bounded ABI repair changes no material selection or blur policy and does
 not complete #66 or establish native desktop-blur quality.
+
+## Pop-up tracking area return type
+
+Fork `5d27954ce5305447bb97d1d7b89b0db9b7a2c59c` (also on the fork's `main`)
+types a pop-up window's `-[NSTrackingArea initWithRect:options:owner:userInfo:]`
+as returning the area, not `()`. objc2's debug signature verification panicked on
+the old `()` inside a macOS callback, which aborted every debug build the first
+time it opened a pop-up: Pane's HUD, which the macOS smoke reached after opening a
+found file (release run 37730452204). Release builds skip the check and were not
+affected.

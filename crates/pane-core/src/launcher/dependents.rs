@@ -88,7 +88,7 @@ impl Launcher {
         }));
         details.push(format!(
             "Each keeps its settings and saved data. Enabling {title} again does not enable \
-             them: enable each in Manage extensions."
+             them: enable each in Settings."
         ));
         let with = match to_disable.as_slice() {
             [dependent] => format!("{}, which requires it", dependent.package.title),

@@ -1,5 +1,7 @@
 # Let the host grant, list and open one folder's files for an extension
 
+**Superseded for file search** by [ADR 0034](0034-file-search-indexes-the-users-home-folder.md) (#126, implemented by #175): file search now uses the host's file index of the home folder. What this record decided and ADR 0034 keeps still holds: the host, not the extension, reads the file system; files are named by the ids the host gives them; the host checks a file again before opening it. The granted folder below stays, unchanged, for packages other than file search; its refusal to open programs stays for its own `open-file` results, while file search follows [ADR 0037](0037-a-command-declares-its-mode-and-host-functions-decide-what-happens-after-it-runs.md) (Enter on a program shows it, only Run runs it).
+
 Proposed 2026-09-28 by the implementation of #29, revised after its security review; not yet confirmed by the user. File search is a disableable default extension ([ADR 0001](0001-small-core.md), spec constraint 1), and the core owns matching, ranking and dispatch ([ADR 0006](0006-raycast-style-search-with-extension-providers.md)). A WASI 0.3 guest has no folders to read (Pane preopens none) and cannot open a file with the system's handler, so something must give it access to the folder the user chose, and that access must not reach further than the user meant, even though extensions are trusted code (Q9: the point is predictable behaviour, not isolation).
 
 The host owns every step that decides what is reached:

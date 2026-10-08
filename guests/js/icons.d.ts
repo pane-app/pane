@@ -63,6 +63,8 @@ export interface IconOptions {
  *   and if it fails;
  * - the system's icon of a file, folder or application by its path,
  *   `{ file }` (absolute, or from `~/`), drawn bare;
+ * - an installed application's own icon, `{ application }`, by the `icon`
+ *   reference `pane:extension/applications` gives with it, drawn bare;
  *
  * each with any of the options.
  */
@@ -76,6 +78,7 @@ export type IconObject = IconOptions &
     | { light: string; dark: string }
     | { url: string }
     | { file: string }
+    | { application: string }
   );
 
 /** What every accessory may have besides what it shows. */

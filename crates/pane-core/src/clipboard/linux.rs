@@ -4,20 +4,27 @@
 //! it and without a permission. A Wayland session has no X11 clipboard:
 //! [`native`] says clipboard history is unavailable there.
 //!
-//! On each change the thread, and only it, asks the new owner for the text
-//! (`ConvertSelection`, into a property of a window of Pane's own): first
-//! as `UTF8_STRING`, then, if the owner refuses that, as `STRING` (Latin-1);
-//! a text the owner sends in pieces (`INCR`) is read piece by piece, and
-//! one longer than [`MAX_TEXT_BYTES`] is abandoned rather than kept. What
-//! is kept is decided by `clipboard::accept`, the same on every system. X11
+//! On each change the thread, and only it, asks the new owner what it
+//! offers (`TARGETS`), then for what was copied (`ConvertSelection`, into a
+//! property of a window of Pane's own): the files a file manager copied
+//! (`text/uri-list`, every `file://` URI), else the text — first as
+//! `UTF8_STRING`, then, if the owner refuses that, as `STRING` (Latin-1) —
+//! else an image (`image/png`; #167). An owner that does not answer
+//! `TARGETS` is asked for the text alone, as before. What the owner sends
+//! in pieces (`INCR`) is read piece by piece, and abandoned once it is
+//! larger than Pane keeps ([`MAX_TEXT_BYTES`] for text, [`MAX_IMAGE_BYTES`]
+//! for an image). What is kept is decided by `clipboard::accept`, the same
+//! on every system. X11
 //! has no formats that mark a copy as not to be kept: the markers are
 //! reported as [`Markers::default`] and only a program the user excluded is
 //! skipped, matched by the owner window's process, which `_NET_WM_PID` and
 //! `/proc` name (or its `WM_CLASS`, which usually is the program's name);
 //! a copy made by a window that says neither is never excluded.
 //!
-//! Writing ([`ClipboardSystem::write_text`]) takes the selection with a
-//! window of Pane's own, which serves the text to whoever pastes, as a
+//! Writing ([`ClipboardSystem::write_text`], and an image or files with
+//! [`ClipboardSystem::write_image`] and [`ClipboardSystem::write_files`])
+//! takes the selection with a window of Pane's own, which serves what was
+//! written to whoever pastes, as a
 //! program that copied does, until another program copies; a write is a
 //! change like any other, so the watcher reports it too. When Pane stops,
 //! the server offers the selection to the clipboard manager, as the ICCCM
@@ -31,8 +38,10 @@
 //! sink's fence before, so what a late read returns is dropped.
 
 use std::collections::VecDeque;
+use std::ffi::OsString;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::panic::AssertUnwindSafe;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -48,13 +57,18 @@ use x11rb::protocol::xproto::{
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
 
-use super::{ClipboardSystem, Content, MAX_TEXT_BYTES, Markers, Observation, Sink, Watch};
+use super::{
+    ClipboardSystem, Content, CopiedImage, MAX_FILES, MAX_IMAGE_BYTES, MAX_TEXT_BYTES, Markers,
+    Observation, Sink, Watch,
+};
 use crate::threads::Joinable;
 
 x11rb::atom_manager! {
     /// The atoms Pane's clipboard adapter uses. `PANE_SELECTION` is the
     /// property the watcher reads what it asked for into; `NET_WM_PID` is
-    /// the EWMH property that names a window's process.
+    /// the EWMH property that names a window's process; `text/uri-list`,
+    /// `x-special/gnome-copied-files` and `image/png` are the targets of
+    /// copied files and images (#167).
     Atoms: AtomCookies {
         CLIPBOARD,
         TARGETS,
@@ -64,8 +78,19 @@ x11rb::atom_manager! {
         SAVE_TARGETS,
         PANE_SELECTION: b"PANE_SELECTION",
         NET_WM_PID: b"_NET_WM_PID",
+        URI_LIST: b"text/uri-list",
+        GNOME_COPIED_FILES: b"x-special/gnome-copied-files",
+        IMAGE_PNG: b"image/png",
     }
 }
+
+/// The most bytes of the targets an owner offers that Pane reads: far more
+/// than any owner lists.
+const TARGETS_BYTES: usize = 4096;
+
+/// The most bytes of a list of copied files Pane reads: room for
+/// [`MAX_FILES`] long paths; a longer list is too large to keep.
+const URI_LIST_BYTES: usize = MAX_FILES * 1024;
 
 /// How long dropping the watch waits for the watcher to end.
 const STOP_WAIT: Duration = Duration::from_secs(1);
@@ -86,10 +111,12 @@ const PARK: Duration = Duration::from_millis(20);
 /// Pane stops, serving its requests meanwhile.
 const HANDOVER_WAIT: Duration = Duration::from_millis(300);
 
-/// How much of a property Pane reads at once, in 4-byte units: one unit
-/// more than [`MAX_TEXT_BYTES`], so a text too long to keep is seen as too
-/// long rather than cut short.
-const READ_UNITS: u32 = (MAX_TEXT_BYTES as u32 + 8) / 4;
+/// How much of a property Pane reads at once to read at most `limit`
+/// bytes, in 4-byte units: one unit more than `limit`, so what is too
+/// large to keep is seen as too large rather than cut short.
+fn read_units(limit: usize) -> u32 {
+    u32::try_from((limit + 8) / 4).unwrap_or(u32::MAX)
+}
 
 /// What a server serves, in the target it is served in: the target and its
 /// bytes.
@@ -234,6 +261,14 @@ impl ClipboardSystem for LinuxClipboard {
     fn write_text(&self, text: &str) -> Result<(), String> {
         self.writer()?.put_text(text)
     }
+
+    fn write_image(&self, png: &[u8]) -> Result<(), String> {
+        self.writer()?.put_image(png)
+    }
+
+    fn write_files(&self, paths: &[PathBuf]) -> Result<(), String> {
+        self.writer()?.put_files(paths)
+    }
 }
 
 /// This session's X11 clipboard, or why Linux cannot watch the clipboard
@@ -310,7 +345,7 @@ struct Watcher {
 
 /// What asking the owner for the clipboard as one target came to.
 enum Transfer {
-    /// The bytes it served (at most a little over [`MAX_TEXT_BYTES`]).
+    /// The bytes it served (at most a little over the limit asked for).
     Served(Vec<u8>),
     /// The owner cannot serve this target.
     Refused,
@@ -443,35 +478,87 @@ impl Watcher {
         );
     }
 
-    /// The text on the clipboard, as its owner serves it: first UTF-8,
-    /// then, if the owner refuses that, Latin-1. An owner that answers
-    /// neither serves no text Pane keeps.
+    /// What is on the clipboard, as its owner serves it: the files it
+    /// offers (`text/uri-list`), else its text — first UTF-8, then, if the
+    /// owner refuses that, Latin-1 — else its image (`image/png`). The
+    /// owner is asked what it offers first; one that does not say is asked
+    /// for the text alone. An owner that answers none of them serves
+    /// nothing Pane keeps.
     fn content(&mut self, time: Timestamp) -> Content {
-        for latin1 in [false, true] {
-            let target = if latin1 {
-                Atom::from(AtomEnum::STRING)
-            } else {
-                self.atoms.UTF8_STRING
-            };
-            match self.transfer(time, target) {
-                Transfer::Served(bytes) => return Content::Text(text_of(&bytes, latin1)),
-                Transfer::Refused => {}
-                Transfer::Failed(failure) => {
-                    log(&format!(
-                        "Pane could not read the clipboard, and skips this change: {failure}"
-                    ));
-                    return Content::Other;
+        let failed = |failure: String| {
+            log(&format!(
+                "Pane could not read the clipboard, and skips this change: {failure}"
+            ));
+            Content::Other
+        };
+        let atom = Atom::from(AtomEnum::ATOM);
+        let offered = match self.transfer(time, self.atoms.TARGETS, atom, TARGETS_BYTES) {
+            Transfer::Served(bytes) => Some(atoms_of(&bytes)),
+            Transfer::Refused => None,
+            Transfer::Failed(failure) => return failed(failure),
+        };
+        let offers = |target: Atom| offered.as_ref().is_some_and(|all| all.contains(&target));
+
+        let uri_list = self.atoms.URI_LIST;
+        if offers(uri_list) {
+            match self.transfer(time, uri_list, uri_list, URI_LIST_BYTES) {
+                Transfer::Served(bytes) if bytes.len() > URI_LIST_BYTES => {
+                    return Content::TooLarge;
                 }
+                Transfer::Served(bytes) => {
+                    let files = files_of(&bytes);
+                    if files.len() > MAX_FILES {
+                        return Content::TooLarge;
+                    }
+                    if !files.is_empty() {
+                        return Content::Files(files);
+                    }
+                }
+                Transfer::Refused => {}
+                Transfer::Failed(failure) => return failed(failure),
+            }
+        }
+
+        let string = Atom::from(AtomEnum::STRING);
+        let text_offered = offered.is_none() || offers(self.atoms.UTF8_STRING) || offers(string);
+        if text_offered {
+            for latin1 in [false, true] {
+                let target = if latin1 {
+                    string
+                } else {
+                    self.atoms.UTF8_STRING
+                };
+                match self.transfer(time, target, target, MAX_TEXT_BYTES) {
+                    Transfer::Served(bytes) => return Content::Text(text_of(&bytes, latin1)),
+                    Transfer::Refused => {}
+                    Transfer::Failed(failure) => return failed(failure),
+                }
+            }
+        }
+
+        let png = self.atoms.IMAGE_PNG;
+        if offers(png) {
+            match self.transfer(time, png, png, MAX_IMAGE_BYTES) {
+                Transfer::Served(bytes) if bytes.len() > MAX_IMAGE_BYTES => {
+                    return Content::TooLarge;
+                }
+                Transfer::Served(bytes) => {
+                    if let Some(image) = CopiedImage::from_png(bytes) {
+                        return Content::Image(image);
+                    }
+                }
+                Transfer::Refused => {}
+                Transfer::Failed(failure) => return failed(failure),
             }
         }
         Content::Other
     }
 
     /// Asks the owner of the clipboard for it as `target`, reading its
-    /// answer into the watcher's own property. A text sent in pieces
-    /// (`INCR`) is read piece by piece, and abandoned once it is longer
-    /// than Pane keeps.
-    fn transfer(&mut self, time: Timestamp, target: Atom) -> Transfer {
+    /// answer, of the type `kind`, into the watcher's own property. What
+    /// is sent in pieces (`INCR`) is read piece by piece, and abandoned
+    /// once it is larger than `limit`, which Pane keeps no more of.
+    fn transfer(&mut self, time: Timestamp, target: Atom, kind: Atom, limit: usize) -> Transfer {
         let asked = self
             .connection
             .convert_selection(
@@ -510,7 +597,7 @@ impl Watcher {
         }
         let Ok(reply) = self
             .connection
-            .get_property(false, window, property, AtomEnum::ANY, 0, READ_UNITS)
+            .get_property(false, window, property, AtomEnum::ANY, 0, read_units(limit))
             .map_err(why)
             .and_then(|cookie| cookie.reply().map_err(why))
         else {
@@ -524,7 +611,7 @@ impl Watcher {
                 .delete_property(window, property)
                 .map_err(why)
                 .and_then(|cookie| cookie.check().map_err(why));
-            return self.pieces(target);
+            return self.pieces(kind, limit);
         }
         // Reading the property is the whole transfer; deleting it tells the
         // owner it is done with.
@@ -533,17 +620,17 @@ impl Watcher {
             .delete_property(window, property)
             .map_err(why)
             .and_then(|cookie| cookie.check().map_err(why));
-        if reply.type_ != target {
+        if reply.type_ != kind {
             return Transfer::Refused;
         }
         Transfer::Served(reply.value)
     }
 
-    /// The pieces of a text the owner sends in pieces, each read by
-    /// deleting the property, until the empty last piece; abandoned (with
-    /// the property deleted, which the owner sees) once it is longer than
-    /// Pane keeps.
-    fn pieces(&mut self, target: Atom) -> Transfer {
+    /// The pieces of what the owner sends in pieces, of the type `kind`,
+    /// each read by deleting the property, until the empty last piece;
+    /// abandoned (with the property deleted, which the owner sees) once it
+    /// is larger than `limit`.
+    fn pieces(&mut self, kind: Atom, limit: usize) -> Transfer {
         let window = self.window;
         let property = self.atoms.PANE_SELECTION;
         let mut bytes: Vec<u8> = Vec::new();
@@ -558,15 +645,15 @@ impl Watcher {
                 )
             });
             if piece.is_none() {
-                return Transfer::Failed("the program that copied stopped sending the text".into());
+                return Transfer::Failed("the program that copied stopped sending its copy".into());
             }
             let Ok(reply) = self
                 .connection
-                .get_property(false, window, property, AtomEnum::ANY, 0, READ_UNITS)
+                .get_property(false, window, property, AtomEnum::ANY, 0, read_units(limit))
                 .map_err(why)
                 .and_then(|cookie| cookie.reply().map_err(why))
             else {
-                return Transfer::Failed("a piece of the text could not be read".into());
+                return Transfer::Failed("a piece of the copy could not be read".into());
             };
             // Deleting the property asks for the next piece.
             let _ = self
@@ -574,15 +661,15 @@ impl Watcher {
                 .delete_property(window, property)
                 .map_err(why)
                 .and_then(|cookie| cookie.check().map_err(why));
-            if reply.type_ != target {
+            if reply.type_ != kind {
                 return Transfer::Refused;
             }
             if reply.value.is_empty() {
                 return Transfer::Served(bytes);
             }
             bytes.extend_from_slice(&reply.value);
-            if bytes.len() > MAX_TEXT_BYTES {
-                log("Pane stopped reading a text longer than it keeps");
+            if bytes.len() > limit {
+                log("Pane stopped reading a copy larger than it keeps");
                 return Transfer::Served(bytes);
             }
         }
@@ -642,6 +729,72 @@ fn text_of(bytes: &[u8], latin1: bool) -> String {
     } else {
         String::from_utf8_lossy(text).into_owned()
     }
+}
+
+/// The atoms of an `ATOM` property's value `bytes`, as the server sends
+/// them (32 bits each, in this connection's byte order, which x11rb makes
+/// the host's).
+fn atoms_of(bytes: &[u8]) -> Vec<Atom> {
+    bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|atom| u32::from_ne_bytes(*atom))
+        .collect()
+}
+
+/// The files of a `text/uri-list` (RFC 2483): one URI a line, lines
+/// starting with `#` being comments; each `file://` URI of this computer
+/// (no host, or `localhost`) as its path, percent-decoded, in order. Other
+/// URIs are not files and are left out.
+fn files_of(list: &[u8]) -> Vec<PathBuf> {
+    String::from_utf8_lossy(list)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(path_of_uri)
+        .collect()
+}
+
+/// The path a `file://` URI of this computer names, percent-decoded.
+fn path_of_uri(uri: &str) -> Option<PathBuf> {
+    let rest = uri.strip_prefix("file://")?;
+    let slash = rest.find('/')?;
+    let host = &rest[..slash];
+    if !(host.is_empty() || host.eq_ignore_ascii_case("localhost")) {
+        return None;
+    }
+    let encoded = &rest.as_bytes()[slash..];
+    let mut path = Vec::with_capacity(encoded.len());
+    let mut at = 0;
+    while at < encoded.len() {
+        let hex = |byte: u8| (byte as char).to_digit(16);
+        match (encoded[at], encoded.get(at + 1), encoded.get(at + 2)) {
+            (b'%', Some(&high), Some(&low)) if hex(high).is_some() && hex(low).is_some() => {
+                path.push((hex(high)? * 16 + hex(low)?) as u8);
+                at += 3;
+            }
+            (byte, _, _) => {
+                path.push(byte);
+                at += 1;
+            }
+        }
+    }
+    Some(PathBuf::from(OsString::from_vec(path)))
+}
+
+/// The `file://` URI of the absolute path `path`, as file managers write
+/// it: every byte but the unreserved ones and `/` percent-encoded.
+fn uri_of(path: &Path) -> String {
+    let mut uri = String::from("file://");
+    for &byte in path.as_os_str().as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'_' | b'.' | b'~') {
+            uri.push(byte as char);
+        } else {
+            uri.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    uri
 }
 
 /// The class of a `WM_CLASS` value, its second NUL-terminated name.
@@ -749,6 +902,34 @@ impl Server {
     fn put_text(&self, text: &str) -> Result<(), String> {
         let targets = vec![(self.atoms.UTF8_STRING, text.as_bytes().to_vec())];
         self.put(targets)
+    }
+
+    /// Puts the image `png` on the clipboard, replacing what was there,
+    /// served as `image/png` (#167).
+    fn put_image(&self, png: &[u8]) -> Result<(), String> {
+        self.put(vec![(self.atoms.IMAGE_PNG, png.to_vec())])
+    }
+
+    /// Puts the files `paths` on the clipboard, replacing what was there,
+    /// as file managers copy them (#167): their `file://` URIs as
+    /// `text/uri-list`, and as `x-special/gnome-copied-files` (GNOME
+    /// Files' own, saying they are copied, not cut); their paths as
+    /// `UTF8_STRING`, for pasting into text.
+    fn put_files(&self, paths: &[PathBuf]) -> Result<(), String> {
+        let uris: Vec<String> = paths.iter().map(|path| uri_of(path)).collect();
+        let mut list = uris.join("\r\n");
+        list.push_str("\r\n");
+        let gnome = format!("copy\n{}", uris.join("\n"));
+        let text = paths
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("\n");
+        self.put(vec![
+            (self.atoms.URI_LIST, list.into_bytes()),
+            (self.atoms.GNOME_COPIED_FILES, gnome.into_bytes()),
+            (self.atoms.UTF8_STRING, text.into_bytes()),
+        ])
     }
 
     /// Takes the `CLIPBOARD` selection with what `targets` serve,
@@ -991,7 +1172,42 @@ pub mod testing {
 
 #[cfg(test)]
 mod tests {
-    use super::{class_of, program_of, session, text_of};
+    use std::path::{Path, PathBuf};
+
+    use super::{atoms_of, class_of, files_of, program_of, session, text_of, uri_of};
+
+    /// #167: a file manager's `text/uri-list` is read as its files, in
+    /// order, percent-decoded; comments, other hosts and other schemes are
+    /// left out; and Pane writes a path as the URI it reads back.
+    #[test]
+    fn copied_files_are_read_from_and_written_as_a_uri_list() {
+        let list = b"# copied by Files\r\nfile:///home/me/a%20b.txt\r\n\
+            file://localhost/tmp/caf%C3%A9\r\nfile://other-host/x\r\nhttps://example.com\r\n\
+            file:///home/me/100%25\r\n";
+        assert_eq!(
+            files_of(list),
+            [
+                PathBuf::from("/home/me/a b.txt"),
+                PathBuf::from("/tmp/café"),
+                PathBuf::from("/home/me/100%"),
+            ]
+        );
+        assert!(files_of(b"").is_empty());
+        let path = Path::new("/home/me/My Notes/été #1.md");
+        let uri = uri_of(path);
+        assert_eq!(uri, "file:///home/me/My%20Notes/%C3%A9t%C3%A9%20%231.md");
+        assert_eq!(files_of(uri.as_bytes()), [path.to_path_buf()]);
+    }
+
+    #[test]
+    fn the_targets_an_owner_offers_are_read_as_atoms() {
+        let mut bytes = Vec::new();
+        for atom in [1u32, 300, 70_000] {
+            bytes.extend_from_slice(&atom.to_ne_bytes());
+        }
+        assert_eq!(atoms_of(&bytes), [1, 300, 70_000]);
+        assert!(atoms_of(&[1, 2, 3]).is_empty(), "a partial atom is none");
+    }
 
     #[test]
     fn text_is_read_as_latin_1_or_utf_8_and_ends_at_its_first_nul() {

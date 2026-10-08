@@ -10,13 +10,16 @@
 #![allow(clippy::duplicate_mod)]
 
 mod aliases;
+mod application_icons;
 mod arguments;
 mod command_search;
 mod compact_pins;
 mod confirmations;
+mod default_icons;
 mod develop;
 mod feedback;
 mod file_actions;
+mod file_search_settings;
 mod hotkeys;
 mod icons;
 mod install;
@@ -30,6 +33,7 @@ mod preferences;
 mod quicklinks;
 mod repositories;
 mod runtime_crash;
+mod search_files;
 mod settings;
 mod settings_search;
 mod shortcuts;
@@ -38,6 +42,7 @@ mod system;
 mod tray;
 mod unresponsive;
 mod update;
+mod virtual_lists;
 mod web_icons;
 mod window;
 

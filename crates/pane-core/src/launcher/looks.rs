@@ -47,6 +47,12 @@ pub(super) struct Looks {
     /// The items with more accessories than a row draws, as last reported
     /// while their package is developed.
     reported: Vec<(String, usize)>,
+    /// Whether the window says which rows it draws (#165): the icons of a
+    /// list's rows then load as their rows are drawn
+    /// ([`super::Launcher::present_row`]), so a long list's rows out of
+    /// view request none; otherwise they all start loading when the list
+    /// is remembered.
+    as_shown: bool,
 }
 
 impl Looks {
@@ -129,18 +135,16 @@ pub(super) fn remember(
     state.looks.identity = identity.clone();
     state.looks.folder = folder;
     // The web images and system icons start loading; the list does not
-    // wait for them.
-    for look in state.looks.by_item.values() {
-        let accessories = look
-            .accessories
-            .iter()
-            .filter_map(|accessory| accessory.icon.as_ref());
-        for icon in look.icon.iter().chain(accessories) {
-            state.icon_loads.want(identity.as_ref(), icon);
+    // wait for them. A window that says which rows it draws has each
+    // row's load as its row is drawn, and an item's actions' as the
+    // Actions panel lists them (#165).
+    if !state.looks.as_shown {
+        for look in state.looks.by_item.values() {
+            want_look(state, look);
         }
-    }
-    for item in items {
-        want_action_icons(state, &item.actions);
+        for item in items {
+            want_action_icons(state, &item.actions);
+        }
     }
     let mut extra: Vec<(String, usize)> = items
         .iter()
@@ -149,6 +153,42 @@ pub(super) fn remember(
         .collect();
     extra.sort();
     extra
+}
+
+/// Starts loading what `look`'s icon and its accessories' icons need, for
+/// the open command's package.
+pub(super) fn want_look(state: &State, look: &ItemLook) {
+    let accessories = look
+        .accessories
+        .iter()
+        .filter_map(|accessory| accessory.icon.as_ref());
+    for icon in look.icon.iter().chain(accessories) {
+        state.icon_loads.want(state.looks.identity.as_ref(), icon);
+    }
+}
+
+/// Starts loading what `icon` needs, for the package with `identity`
+/// (`None` for one built into Pane, or not known).
+pub(super) fn want_icon(state: &State, identity: Option<&PackageIdentity>, icon: &Icon) {
+    state.icon_loads.want(identity, icon);
+}
+
+/// Whether a row with `look` shows a date among the accessories it draws.
+pub(super) fn shows_a_date(look: &ItemLook) -> bool {
+    look.accessories
+        .iter()
+        .take(MAX_ACCESSORIES)
+        .any(|accessory| matches!(accessory.content, AccessoryContent::Date(_)))
+}
+
+/// Has the window say which rows it draws (see [`Looks::as_shown`]).
+pub(super) fn load_as_shown(state: &mut State) {
+    state.looks.as_shown = true;
+}
+
+/// Whether the window says which rows it draws.
+pub(super) fn loads_as_shown(state: &State) -> bool {
+    state.looks.as_shown
 }
 
 /// `look` with its icons resolved in `folder` (see [`Icon::resolved`]).
@@ -330,10 +370,36 @@ impl Launcher {
     /// in its manifest>`, as root search, quick slots and the Shortcuts
     /// page name it), or of the installed package with key `id` (#139):
     /// the command's own, else its package's, else its package's
-    /// first-letter tile. `None` for anything else, such as Pane's own
-    /// rows, which keep their tiles.
+    /// first-letter tile. A root row opening an installed application
+    /// (`<command id>:<result id>`, as a quick slot pins it) shows the
+    /// application's own icon, or its placeholder until it is there
+    /// (#172). `None` for anything else, such as Pane's own rows, which
+    /// keep their tiles.
     pub fn icon_of(&self, id: &str) -> Option<Icon> {
-        icon_of(&self.lock(), id)
+        let state = self.lock();
+        icon_of(&state, id).or_else(|| super::application_icons::of_row(&state, id))
+    }
+
+    /// The id of the command whose view is open, on its list, its search,
+    /// a form or a custom view of it: `<package key>#<id in its
+    /// manifest>` for an installed command, as [`Launcher::icon_of`]
+    /// takes it, or the registration's own id for a command registered
+    /// with the launcher. The footer shows the open command's icon and
+    /// title where a heading line once was (#162). `None` while no
+    /// command is open.
+    pub fn open_command_id(&self) -> Option<String> {
+        let state = self.lock();
+        let component = state.open.as_ref()?;
+        let command = state.open_command.as_deref()?;
+        if let Some(package) = owner(&state.packages, component) {
+            return Some(package.identity.command_id(command));
+        }
+        self.commands
+            .iter()
+            .find(|registration| {
+                &registration.component == component && registration.manifest_id() == command
+            })
+            .map(|registration| registration.id.clone())
     }
 
     /// While the open command's package is developed, says in the status

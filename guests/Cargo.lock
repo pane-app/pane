@@ -81,6 +81,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "folder-files"
+version = "0.1.0"
+dependencies = [
+ "pane-guest",
+]
+
+[[package]]
 name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -334,6 +341,13 @@ version = "0.1.0"
 dependencies = [
  "pane-guest",
  "serde_json",
+]
+
+[[package]]
+name = "sample-files"
+version = "0.1.0"
+dependencies = [
+ "pane-guest",
 ]
 
 [[package]]

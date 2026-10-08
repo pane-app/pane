@@ -31,7 +31,8 @@ impl System for MacosSystem {
         match application {
             None => programs::run(OPEN, &[target]),
             // `-a` takes an application's name or the path of its bundle,
-            // which is the id Pane gives installed applications here.
+            // which is what the host turns an installed application's id
+            // into before calling this (`applications::opener`).
             Some(application) => programs::run(OPEN, &["-a", application, target]),
         }
     }

@@ -10,6 +10,7 @@
 
 mod frame_motion;
 mod presence;
+mod result_list;
 
 use std::future::Future;
 use std::mem::{Discriminant, discriminant};
@@ -17,16 +18,16 @@ use std::path::Path;
 
 use gpui::{
     App, ClipboardItem, Context, Div, EntityInputHandler, FocusHandle, Focusable, Hsla,
-    KeyDownEvent, MouseMoveEvent, ObjectFit, PathPromptOptions, Pixels, Point, Role, ScrollHandle,
-    SharedString, Size, Stateful, Window, div, img, prelude::*, px, relative,
+    KeyDownEvent, MouseMoveEvent, ObjectFit, PathPromptOptions, Pixels, Point, Role, SharedString,
+    Size, Stateful, Window, div, img, prelude::*, px, relative,
 };
 use pane_core::changes::Changes;
 use pane_core::feedback::WindowRequest;
 use pane_core::hotkeys::Shortcut;
 use pane_core::tray::TrayAction;
 use pane_core::{
-    ComputedAnswer, Launcher, LauncherView, NextShowing, Presentation, Row, RowPresentation,
-    Screen, SelectedAction, Status, WindowPresence,
+    ComputedAnswer, Launcher, LauncherView, ListPresentation, NextShowing, Row, RowPresentation,
+    Screen, SelectedAction, SettingsTarget, Status, WindowPresence,
 };
 
 use crate::extension_views::{custom_view, form};
@@ -49,9 +50,10 @@ use crate::ui::motion;
 use crate::ui::result_row::{RowContent, RowMeta, result_row_with};
 use crate::ui::shell;
 use crate::ui::theme::{Theme, pressed};
+use crate::ui::virtual_list;
 use crate::{
     Back, Confirm, DismissLauncher, FocusNext, FocusPrevious, OpenSettings, ReturnToRoot,
-    SelectNext, SelectPrevious,
+    SelectNext, SelectNextPage, SelectPrevious, SelectPreviousPage,
 };
 
 pub(crate) use frame_motion::FrameMotion;
@@ -81,6 +83,9 @@ pub struct LauncherWindow {
     /// Pane's Clipboard History in the split view, while its command is
     /// open; see [`features::clipboard_history`].
     pub(crate) clipboard: Option<clipboard_history::ClipboardHistory>,
+    /// Pane's Search Files in the split view, while its command is open;
+    /// see [`features::search_files`].
+    pub(crate) files: Option<crate::features::search_files::SearchFiles>,
     /// The footer toast's focus and time; see [`features::toast`].
     pub(crate) toast: toast::ToastControls,
     /// The HUD's window, while one shows; see [`features::hud`].
@@ -100,8 +105,10 @@ pub struct LauncherWindow {
     /// hotkey's repeat guard and the compact window mode's sizes; see
     /// [`Presence`].
     presence: Presence,
-    /// The list's scroll position.
-    scroll: ScrollHandle,
+    /// The result list, drawn virtually: its scroll position, the heights
+    /// it measured and the frame it lays out (#165; see
+    /// [`result_list`]).
+    results: result_list::ResultList,
     /// Where the pointer last moved in the window, as the last pointer
     /// event reported it: a row selects on root search only when the
     /// pointer really moves over it, never on an event that repeats the
@@ -117,9 +124,9 @@ pub struct LauncherWindow {
     pointer_selection_frozen: bool,
     /// What the list was last scrolled for.
     scrolled_for: Option<ScrolledFor>,
-    /// Whether the next frame scrolls to the selected row again, once the
-    /// list changed in this one has been laid out.
-    scroll_again: bool,
+    /// The row this frame scrolls to again once the list, changed in it,
+    /// has been laid out (see [`LauncherWindow::keep_selected_visible`]).
+    reveal_after_layout: Option<usize>,
     /// Draws the window again now and then while its rows show a date,
     /// keeping it current (#139; see
     /// [`LauncherWindow::keep_dates_current`]).
@@ -137,16 +144,16 @@ pub struct LauncherWindow {
 
 /// What the list was last scrolled for. When any of it changes, the list
 /// scrolls the least it can to keep the selected row visible: the screen,
-/// title or selection; the rows, as reloaded after an install; or the size
-/// of the window or of the list. The mouse wheel changes none of it, so the
-/// list never scrolls back while the user scrolls it.
+/// title or selection; the size of the window or of the list; or the rows,
+/// as reloaded after an install (which the result list itself compares,
+/// see [`result_list::ResultList::show`]). The mouse wheel changes none of
+/// it, so the list never scrolls back while the user scrolls it.
 #[derive(PartialEq)]
 struct ScrolledFor {
     /// Which screen, not its contents (a form's values, a view's drawing).
     screen: Discriminant<Screen>,
     title: String,
     selected: Option<usize>,
-    rows: Vec<Row>,
     window: Size<Pixels>,
     list: Size<Pixels>,
 }
@@ -164,7 +171,7 @@ impl LauncherWindow {
         // window) without a restart, its background follows the material
         // in effect, and the platform's appearance notification feeds the
         // system's appearance back into them (see `crate::settings`).
-        crate::settings::follow(&crate::settings::ensure(cx), window, cx);
+        crate::settings::bind_window_appearance(&crate::settings::ensure(cx), window, cx);
         // The launcher this window runs owns the global-shortcut
         // registration: the recorded Open Pane hotkey is applied to the
         // system here, at startup, and the settings keep this launcher for
@@ -173,6 +180,10 @@ impl LauncherWindow {
         // The placement the launcher window opens through, ensuring it
         // exists before the window below is placed by it.
         crate::placement::ensure(cx);
+        // The window draws only the rows in view (#165): their icons load
+        // as they are drawn, not all as a list opens.
+        launcher.load_icons_as_shown();
+        let results = result_list::ResultList::new(&crate::settings::launcher_visuals(cx).theme);
         // Quitting ends development: its watchers go and a running build
         // is stopped with the processes it started.
         cx.on_app_quit(|this: &mut Self, _| {
@@ -185,17 +196,18 @@ impl LauncherWindow {
             focus_handle,
             query,
             form: None,
-            scroll: ScrollHandle::new(),
+            results,
             pointer: None,
             pointer_selection_frozen: false,
             scrolled_for: None,
-            scroll_again: false,
+            reveal_after_layout: None,
             dates: None,
             custom_view: None,
             menu_button,
             menu: None,
             actions: None,
             clipboard: None,
+            files: None,
             toast: toast::ToastControls::new(cx),
             hud: hud::HudWindow::default(),
             confirmation: confirmation::ConfirmationControls::new(cx),
@@ -416,17 +428,57 @@ impl LauncherWindow {
         self.window_requested(WindowRequest::Hud(hud), window, cx);
     }
 
-    fn select_next(&mut self, _: &SelectNext, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn select_next(&mut self, _: &SelectNext, _: &mut Window, cx: &mut Context<Self>) {
         self.launcher.move_selection(1);
         cx.notify();
     }
 
-    fn select_previous(&mut self, _: &SelectPrevious, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn select_previous(
+        &mut self,
+        _: &SelectPrevious,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.launcher.move_selection(-1);
         cx.notify();
     }
 
-    fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
+    /// Page Down: the selection moves down by the rows that fit in the
+    /// list's view, stopping at the last row (#165), kept in view as the
+    /// arrows' is.
+    pub(crate) fn select_next_page(
+        &mut self,
+        _: &SelectNextPage,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let step = virtual_list::page_move(Some(self.paged_list()), true);
+        self.launcher.move_selection(step);
+        cx.notify();
+    }
+
+    /// Page Up: the selection moves up by a page, stopping at the first
+    /// row.
+    pub(crate) fn select_previous_page(
+        &mut self,
+        _: &SelectPreviousPage,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let step = virtual_list::page_move(Some(self.paged_list()), false);
+        self.launcher.move_selection(step);
+        cx.notify();
+    }
+
+    /// The list Page Down and Up move the launcher's selection through:
+    /// Search Files' while it shows, else the results'.
+    fn paged_list(&self) -> &virtual_list::VirtualList {
+        self.files
+            .as_ref()
+            .map_or(&self.results.list, |files| &files.list)
+    }
+
+    pub(crate) fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
         // The open Actions panel takes Enter from the key press itself, once
         // per press ([`LauncherWindow::panel_keys`]).
         if self.actions.is_some() {
@@ -439,7 +491,7 @@ impl LauncherWindow {
         // whether it is a held key's repeat (an action cannot).
         let focused = self.query_field().focus_handle(cx).is_focused(window)
             || self.focus_handle.is_focused(window);
-        if actions_panel::item_list(&self.launcher.view().screen)
+        if actions_panel::item_list(&self.launcher.screen())
             && focused
             && self.launcher.item_actions().is_some()
         {
@@ -453,12 +505,12 @@ impl LauncherWindow {
     /// opens the Actions panel at the submenu an item's primary action
     /// opens (#140), or activates the row.
     fn invoke_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let primary_submenu = actions_panel::item_list(&self.launcher.view().screen)
+        let primary_submenu = actions_panel::item_list(&self.launcher.screen())
             && self
                 .launcher
                 .item_actions()
                 .is_some_and(|actions| actions.actions.first().is_some_and(|first| first.submenu));
-        if matches!(self.launcher.view().screen, Screen::Form(_)) {
+        if matches!(self.launcher.screen(), Screen::Form(_)) {
             self.submit_form(window, cx);
         } else if primary_submenu {
             self.open_item_submenu(0, window, cx);
@@ -477,7 +529,7 @@ impl LauncherWindow {
     /// at that submenu instead (#140). A missing action runs nothing, and
     /// the key goes no further. Once per press: the system's repeats of a
     /// held key run nothing more.
-    fn item_action_keys(
+    pub(crate) fn item_action_keys(
         &mut self,
         event: &KeyDownEvent,
         window: &mut Window,
@@ -485,7 +537,7 @@ impl LauncherWindow {
     ) {
         if self.actions.is_some()
             || self.menu.is_some()
-            || !actions_panel::item_list(&self.launcher.view().screen)
+            || !actions_panel::item_list(&self.launcher.screen())
         {
             return;
         }
@@ -546,19 +598,12 @@ impl LauncherWindow {
         {
             return;
         }
-        // Clipboard History's own list, shown from its split view: back to
-        // the split view first.
-        if self.leave_clipboard_controls(window, cx) {
-            return;
-        }
         // The Keyboard page's escape behavior: hide from wherever the
         // launcher is, or go back one level and hide from an empty root
         // search.
         let hides =
             crate::settings::shared(cx).read(cx).escape() == pane_core::EscapeBehavior::Hide;
-        if hides
-            || matches!(&self.launcher.view().screen, Screen::Root { query } if query.is_empty())
-        {
+        if hides || matches!(&self.launcher.screen(), Screen::Root { query } if query.is_empty()) {
             self.hide(window, cx);
             return;
         }
@@ -830,6 +875,23 @@ impl LauncherWindow {
         self.place_sized(gpui::size(px(size.width), px(size.height)), window, cx);
     }
 
+    /// Resizes the window's client to `size` (the split view's, or the
+    /// launcher's own again) and places it as the launcher's placement
+    /// does, unless it is that size already.
+    pub(crate) fn fit_client(
+        &mut self,
+        (width, height): (f32, f32),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let size = gpui::size(px(width), px(height));
+        if window.viewport_size() == size {
+            return;
+        }
+        window.resize(size);
+        self.place_sized(size, window, cx);
+    }
+
     /// Places the launcher window as [`LauncherWindow::place`] does, for a
     /// window of `size`: the size it is about to take (the Clipboard
     /// History view's), which the window reports only once the system has
@@ -915,7 +977,7 @@ impl LauncherWindow {
             // `return_to_root` does: it lands at once.
             self.motion.land_at_once();
             self.sync_screen(window, cx);
-        } else if self.launcher.view().search_field().is_some() {
+        } else if self.launcher.screen().search_field().is_some() {
             self.query.focus(window, cx);
         }
         cx.notify();
@@ -958,7 +1020,7 @@ impl LauncherWindow {
     /// hotkey. Keys the launcher binds (Enter, Escape, arrows, Tab) do not
     /// reach here; pressing a modifier alone is not a key press.
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if !matches!(self.launcher.view().screen, Screen::Hotkey { .. }) {
+        if !matches!(self.launcher.screen(), Screen::Hotkey { .. }) {
             return;
         }
         let keystroke = &event.keystroke;
@@ -1024,10 +1086,13 @@ impl LauncherWindow {
     /// again after calling this (see [`crate::ui::motion`]).
     pub(crate) fn activate_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.motion.land_at_once();
-        // The Settings root result opens the Settings window; the launcher
-        // itself does nothing (see [`Launcher::selected_opens_settings`]).
-        if self.launcher.selected_opens_settings() {
-            settings::open(&self.launcher, cx);
+        // The Settings root result opens the Settings window, "Manage
+        // Extensions" opens it at the extensions, and the install rows at
+        // its install flow (#168): Settings is where extensions are
+        // installed and managed. The launcher itself does nothing (see
+        // [`Launcher::selected_settings_target`]).
+        if let Some(target) = self.launcher.selected_settings_target() {
+            open_settings_at(&self.launcher, target, cx);
             return;
         }
         if self.launcher.selected_asks_for_folder() {
@@ -1043,69 +1108,6 @@ impl LauncherWindow {
         }
         let pending = self.launcher.activate_selected();
         self.show_until_done(pending, window, cx);
-    }
-
-    /// Activates the root result with `id` in this window, as clicking it
-    /// in root search does: the launcher returns to root search first,
-    /// wherever it is, this window is summoned and focused, and the result
-    /// is selected and activated through the same Enter path
-    /// ([`LauncherWindow::activate_selected`]). The Settings window's
-    /// Extensions page reaches the launcher's own install rows and a
-    /// package's commands through this, so those flows keep running where
-    /// their forms, folder pickers and key capture already live — here,
-    /// with the window they belong to in front.
-    pub(crate) fn activate_root_result(
-        &mut self,
-        id: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        // A click in the Settings window: the view it opens arrives, as a
-        // click on the row would — unless the launcher was hidden, when
-        // the window's first frame draws it settled (see `unhide`).
-        let was_shown = !self.presence.hidden();
-        // Root search is reached as Escape reaches it, one screen back at a
-        // time, wherever the launcher is (a form, a command, the extension
-        // list Settings entered); every `back` moves toward root search,
-        // and at root search this stops.
-        while !matches!(self.launcher.view().screen, Screen::Root { .. }) {
-            self.launcher.back();
-        }
-        // Root search may have been left filtered by a query that hides
-        // the row the page drew (Settings lists every root result): it is
-        // shown unfiltered, as a summoned launcher starts, so the row is
-        // there to find.
-        if self
-            .launcher
-            .view()
-            .query()
-            .is_some_and(|query| !query.is_empty())
-        {
-            self.launcher.show_root_search();
-            self.sync_screen(window, cx);
-        }
-        self.unhide(window, cx);
-        window.activate_window();
-        cx.activate(true);
-        let Some(index) = self
-            .launcher
-            .view()
-            .rows
-            .iter()
-            .position(|row| row.id == id)
-        else {
-            // No such root result (the row was disabled or removed since
-            // the page drew it): root search is shown, focused, which is as
-            // far as this reaches.
-            self.sync_screen(window, cx);
-            cx.notify();
-            return;
-        };
-        self.launcher.select(index);
-        self.activate_selected(window, cx);
-        if was_shown {
-            self.motion.pointer_open();
-        }
     }
 
     /// Shows the launcher's state now and again when `pending`, a launcher
@@ -1133,57 +1135,72 @@ impl LauncherWindow {
     }
 
     /// Scrolls the list to the selected row when what it shows or its size
-    /// changed since it was last scrolled for (see [`ScrolledFor`]).
+    /// changed since it was last scrolled for (see [`ScrolledFor`]);
+    /// `rows_changed` says whether the result list's rows did.
     fn keep_selected_visible(
         &mut self,
         view: &LauncherView,
-        presentation: &Presentation,
+        rows_changed: bool,
         window: &mut Window,
-        cx: &App,
     ) {
         let shown = ScrolledFor {
             screen: discriminant(&view.screen),
             title: view.title.clone(),
             selected: view.selected,
-            rows: view.rows.clone(),
             window: window.viewport_size(),
             // As laid out in the last frame.
-            list: self.scroll.bounds().size,
+            list: self.results.list.viewport().size,
         };
         let last = self.scrolled_for.as_ref();
-        if last == Some(&shown) && !self.scroll_again {
+        self.reveal_after_layout = None;
+        if last == Some(&shown) && !rows_changed {
             return;
         }
-        // Scrolling uses the list's size and rows as last laid out. When the
-        // window, the screen or the rows changed, those are known only once
-        // this frame is laid out, so the next frame scrolls again with them:
-        // otherwise a short screen after a long list, scrolled far down,
-        // would keep an offset that hides its selected row.
-        let relaid = last.is_some_and(|last| {
-            last.window != shown.window
-                || last.screen != shown.screen
-                || last.title != shown.title
-                || last.rows != shown.rows
-        });
-        self.scroll_again = relaid && !self.scroll_again;
-        if self.scroll_again {
-            window.request_animation_frame();
-        }
+        // Scrolling uses the list's size as last laid out, and the heights
+        // of the rows it drew; a row not yet drawn is taken to be a row
+        // high. When the window, the screen, the rows or the selection
+        // changed, the true sizes are known only once this frame is laid
+        // out, so the list scrolls again with them right after (see
+        // [`crate::ui::virtual_list::VirtualList::reveal_after_layout`]),
+        // drawing another frame only if that moved it: otherwise a short
+        // screen after a long list, scrolled far down, would keep an offset
+        // that hides its selected row, and a selection paged past section
+        // labels would stop a label's height short.
+        let relaid = rows_changed
+            || last.is_some_and(|last| {
+                last.window != shown.window
+                    || last.screen != shown.screen
+                    || last.title != shown.title
+                    || last.selected != shown.selected
+            });
         if let Some(selected) = view.selected {
-            // The list's children are its rows with the section labels
-            // between them, after the pinned home's while it shows (a blank
-            // query's) and after root search's no-results notice while it
-            // shows (over the fallbacks, whichever is selected). (Another
-            // screen's empty line shows only while nothing is selected,
-            // when nothing is scrolled to.)
-            let home = self.home_children(view, cx);
-            let notice = root_search::layouts::nothing_found(&view.screen, presentation);
-            let labels = section_labels(presentation);
-            let child =
-                home + root_search::layouts::child_of_row(notice.is_some(), &labels, selected);
-            self.scroll.scroll_to_item(child);
+            self.results.reveal_row(selected);
+            self.reveal_after_layout = relaid.then_some(selected);
         }
         self.scrolled_for = Some(shown);
+    }
+
+    /// Test support: the rows the last frame drew of the result list, by
+    /// index — the rows in view and the few past its edges it laid out
+    /// ahead (#165). Test and debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn drawn_rows(&self) -> Vec<usize> {
+        self.results.drawn_rows.iter().copied().collect()
+    }
+
+    /// Test support: shows the launcher's extension list as a screen of
+    /// its own ([`pane_core::Launcher::manage_extensions`]), which Pane
+    /// itself never shows (Settings runs each operation, #168), and follows
+    /// it as this window follows any change Settings makes to the launcher
+    /// (see `launcher_changed_outside`): the list takes the keys from the
+    /// query field. Test and debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn enter_extension_flow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.launcher.manage_extensions();
+        self.sync_screen(window, cx);
+        cx.notify();
     }
 
     /// Makes the form's and custom view's controls, root search's query
@@ -1203,7 +1220,7 @@ impl LauncherWindow {
         // search or a command's list: a screen that replaced it (a hotkey
         // pressed, a change from Settings) takes the panel with it, and
         // its own focus and submenus with it.
-        if !self.actions_belong_to(&self.launcher.view().screen) && self.actions.take().is_some() {
+        if !self.actions_belong_to(&self.launcher.screen()) && self.actions.take().is_some() {
             self.launcher.close_submenus();
         }
         self.sync_form(window, cx);
@@ -1213,6 +1230,8 @@ impl LauncherWindow {
         self.sync_root_search(window, cx);
         // After it: the Clipboard History view focuses its own search.
         self.sync_clipboard_history(window, cx);
+        // Search Files keeps root search's field, in its split view.
+        self.sync_search_files(window, cx);
         self.sync_home(cx);
         // Last of all: a confirmation a command waits on keeps the focus
         // over whatever screen is shown (#146).
@@ -1476,7 +1495,7 @@ impl LauncherWindow {
     /// list the Actions button. `action` is the launcher's one
     /// selected-action definition ([`Launcher::selected_action`]): on a
     /// command's list it names the selected item's primary action.
-    fn footer_buttons(
+    pub(crate) fn footer_buttons(
         &self,
         action: &SelectedAction,
         with_actions: bool,
@@ -1522,6 +1541,28 @@ impl LauncherWindow {
             footer::actions_hint(crate::keyboard::escape_keys()),
             theme,
         ))
+    }
+
+    /// The footer's left at rest on a screen with no heading line (#162):
+    /// the open command's icon and the screen's title — the command's own
+    /// on its list and search, a form's or a custom view's on those — or,
+    /// over the extension list the tests show as a screen
+    /// ([`LauncherWindow::enter_extension_flow`]), the Manage Extensions
+    /// row's tile and title. `None` on every
+    /// other screen: root search has no title, and the core's own screens
+    /// (a preview, a confirmation, the details screens) keep their
+    /// heading, which says what they ask.
+    pub(crate) fn footer_command(&self, view: &LauncherView, theme: &Theme) -> Option<Div> {
+        let id = match &view.screen {
+            Screen::Command
+            | Screen::CommandSearch { .. }
+            | Screen::Form(_)
+            | Screen::CustomView(_) => self.launcher.open_command_id()?,
+            Screen::Extensions { .. } => pane_core::MANAGE_EXTENSIONS.to_owned(),
+            _ => return None,
+        };
+        let icon = crate::features::icons::row_icon_of(&self.launcher, &id, theme);
+        Some(footer::command_lead(&icon, view.title.clone(), theme))
     }
 
     /// Arms the next view change to arrive, for a pointer open: the click
@@ -1612,18 +1653,27 @@ impl Render for LauncherWindow {
             &crate::settings::keyboard_of(cx),
             crate::settings::navigation_of(cx),
         ));
-        let (view, presentation) = self.launcher.presented_view();
+        // The view, and what the list draws of all its rows; each row's own
+        // presentation is read as the list draws it (#165).
+        let (mut view, listing) = self.launcher.presented_list();
         #[cfg(any(test, debug_assertions))]
         {
             self.drawn = Some(view.clone());
             self.drawn_over = self.actions.is_some() || self.launcher.confirmation().is_some();
+            self.results.drawn_rows.clear();
         }
         // The toast the footer shows, if any, and its time (#141).
         let toast = self.footer_toast(&view.status);
         self.time_toast(toast.as_ref(), window, cx);
-        // Pane's Clipboard History draws its own split view (#102), with a
-        // confirmation its command asks for over it (#146).
-        if let Some(split) = self.render_clipboard_history(&view, cx) {
+        // Pane's Clipboard History and Search Files draw their own split
+        // view (#102, #177), with a confirmation the command asks for over
+        // it (#146).
+        if let Some(split) = self.render_search_files(&view, window, cx) {
+            let visuals = crate::settings::launcher_visuals(cx);
+            let asked = self.render_confirmation_layer(&visuals.theme, visuals.material, cx);
+            return split.children(asked);
+        }
+        if let Some(split) = self.render_clipboard_history(&view, window, cx) {
             let visuals = crate::settings::launcher_visuals(cx);
             let asked = self.render_confirmation_layer(&visuals.theme, visuals.material, cx);
             return split.children(asked);
@@ -1640,8 +1690,7 @@ impl Render for LauncherWindow {
                 WindowPresence::Shown
             });
         }
-        self.keep_selected_visible(&view, &presentation, window, cx);
-        self.keep_dates_current(&presentation, cx);
+        self.keep_dates_current(listing.shows_a_date, cx);
         // What moves this frame — the arriving content, the footer menu
         // popup's entrance or exit, the number hints' slide — and whether
         // another frame is needed; see [`FrameMotion`] and
@@ -1675,6 +1724,9 @@ impl Render for LauncherWindow {
             | Screen::RuntimeDetails { .. }
             | Screen::BuildDetails { .. } => "",
         };
+        // The footer's left at rest on a screen with no heading line: the
+        // open command (#162). Read before the rows move out of the view.
+        let footer_command = self.footer_command(&view, &theme);
         // A confirmation, and a package preview offering Install or Update
         // (an npm or Git package's has several more lines), keep their choices in
         // view.
@@ -1702,12 +1754,10 @@ impl Render for LauncherWindow {
             (&view.screen, &view.status),
             (Screen::CommandSearch { .. }, Status::Error(_))
         );
-        // A blank query's pinned home, above the rows (read before the
-        // status moves out of the view).
-        let home = self.render_home(&view, numbers, &theme, cx);
-        // Each row's number while Ctrl is held.
+        // Each of the first rows' number while Ctrl is held: only Ctrl+1
+        // to Ctrl+9 pick a row.
         let slots = self.numbered_slots();
-        let row_numbers: Vec<Option<usize>> = (0..view.rows.len())
+        let row_numbers: Vec<Option<usize>> = (0..view.rows.len().min(9))
             .map(|index| row_number(&view, &slots, index))
             .collect();
         // The footer's status: while the launcher runs, works, answers or
@@ -1717,7 +1767,7 @@ impl Render for LauncherWindow {
         // the primary action steps aside then, toast or not.
         let status_busy = view.status != Status::Idle;
         let (status_selector, status, status_color): (&str, Option<SharedString>, Hsla) =
-            match view.status {
+            match view.status.clone() {
                 // A toast speaks where the status line would (#141).
                 _ if toast.is_some() => ("status-toast", None, theme.text_body),
                 Status::Idle => ("status-idle", None, theme.text_muted),
@@ -1749,71 +1799,87 @@ impl Render for LauncherWindow {
         let with_actions = root || actions_panel::commands_list(&view.screen);
         // Root search's notice when nothing but fallbacks is listed for
         // its query (#96).
-        let notice = root_search::layouts::nothing_found(&view.screen, &presentation);
-        // The rows — a computed answer as its card — with each section's
-        // label ahead of its first row, after the notice.
-        let rows: Vec<gpui::AnyElement> = view
-            .rows
-            .into_iter()
-            .enumerate()
-            .map(|(index, row)| {
-                let selected = view.selected == Some(index);
-                let shown = presentation.rows.get(index).cloned().unwrap_or_default();
-                let number = row_numbers[index]
-                    .filter(|_| numbers > 0.)
-                    .map(|number| (number, numbers));
-                if let Some(answer) = &shown.answer {
-                    return self
-                        .render_answer(index, row, answer, selected, number, cx)
-                        .into_any_element();
-                }
-                self.render_row(index, row, selected, shown, root, number, cx)
-                    .into_any_element()
-            })
-            .collect();
-        let rows = root_search::layouts::list_children(
-            notice
-                .as_ref()
-                .map(|copy| root_search::layouts::notice(copy, &theme).into_any_element()),
-            rows,
-            &section_labels(&presentation),
-            &theme,
+        let notice = root_search::layouts::nothing_found(
+            &view.screen,
+            listing.only_fallbacks,
+            !view.rows.is_empty(),
         );
-        let empty = match &view.screen {
-            Screen::CommandSearch { .. } if search_failed => div().id("empty"),
-            Screen::CommandSearch { query } if !query.trim().is_empty() => div()
-                .id("no-results")
-                .debug_selector(|| "no-results".into())
-                .child(format!("No results for “{}”", query.trim())),
-            _ => div().id("empty").child(empty),
-        };
+        // Above the rows, with none selected: a command's search found
+        // nothing, or a screen has no rows. (Root search's notice for a
+        // query is above its fallbacks.)
+        let empty = (notice.is_none() && view.selected.is_none()).then(|| match &view.screen {
+            Screen::CommandSearch { .. } if search_failed => result_list::EmptyLine::Failed,
+            Screen::CommandSearch { query } if !query.trim().is_empty() => {
+                result_list::EmptyLine::NoResults(query.trim().to_owned())
+            }
+            _ => result_list::EmptyLine::Note(empty),
+        });
+        // The list draws only its children in view (#165): its rows — a
+        // computed answer as its card — with each section's label ahead of
+        // its first row, after the head: the pinned home over a blank
+        // query (#101), then the empty line or the notice.
+        let home = self.home_children(&view, cx) > 0;
+        let head = home || notice.is_some() || empty.is_some();
+        let sections = section_labels(&listing);
+        let rows = std::mem::take(&mut view.rows);
+        let rows_changed = self.results.show(result_list::ListFrame {
+            view: view.clone(),
+            children: crate::ui::virtual_list::children(head, rows.len(), &sections),
+            rows,
+            sections,
+            root,
+            numbers,
+            row_numbers,
+            home,
+            notice,
+            empty,
+        });
+        self.keep_selected_visible(&view, rows_changed, window);
         let list = shell::result_list(&theme)
             .aria_label(match view.screen {
                 Screen::Root { .. } => "Results".into(),
                 Screen::CommandSearch { .. } => format!("{} results", view.title),
                 _ => view.title.clone(),
             })
-            .track_scroll(&self.scroll)
-            // The pinned home over a blank query, above the rows (#101).
-            .when_some(home, |list, home| list.children(home))
-            // Above the rows, with none selected: a command's search found
-            // nothing, or a screen has no rows. (Root search's notice for a
-            // query is among the rows' children, above its fallbacks.)
-            .when(notice.is_none() && view.selected.is_none(), |rows| {
-                rows.child(empty.text_color(theme.text_muted))
-            })
-            .children(rows);
+            .child(
+                gpui::list(
+                    self.results.list.state().clone(),
+                    cx.processor(|this, index, window, cx| {
+                        this.render_list_child(index, window, cx)
+                    }),
+                )
+                .flex_1()
+                .min_h(px(0.))
+                .w_full()
+                .pt(theme.geometry.list_padding_top)
+                .pb(theme.geometry.list_padding_bottom),
+            )
+            .children(
+                self.reveal_after_layout
+                    .and_then(|row| self.results.reveal_row_after_layout(row)),
+            );
         // The launcher decides what an item opens; its screen says which.
-        // The search screens carry their own header (the query field);
-        // every other screen keeps its heading. Root search has no extra
-        // title — the reference's launcher has none. The heading is
-        // computed before the body dispatch, which moves the screen.
-        // It is also the non-search screens' drag region: with the native
-        // title bar hidden, the heading is the one place outside the
-        // editable field to grab the window by, and a long heading
-        // truncates instead of eating the list.
+        // Root search has no title — the reference's launcher has none —
+        // and neither has an extension's view (its list, its search, a
+        // form or a custom view of it) nor the extension list the tests
+        // show (Pane's own extensions are managed in Settings): they start
+        // with their content, as Raycast's do, and the footer's left names
+        // the open command instead (#162). The core's own screens (a
+        // package's preview, a confirmation, the details and hotkey
+        // screens) keep their heading, which says what they are about. The
+        // heading and the footer's command are computed before the body
+        // dispatch, which moves the screen. A heading is also its screen's
+        // drag region (the footer's command is the others'): with the
+        // native title bar hidden, it is a place outside the editable
+        // field to grab the window by, and a long heading truncates
+        // instead of eating the list.
         let heading = match &view.screen {
-            Screen::Root { .. } => None,
+            Screen::Root { .. }
+            | Screen::Command
+            | Screen::CommandSearch { .. }
+            | Screen::Form(_)
+            | Screen::CustomView(_)
+            | Screen::Extensions { .. } => None,
             _ => Some(shell::screen_heading(view.title.clone(), &theme)),
         };
         // Whether the result list is what scrolls: a form and a custom
@@ -1887,6 +1953,8 @@ impl Render for LauncherWindow {
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(Self::select_next))
             .on_action(cx.listener(Self::select_previous))
+            .on_action(cx.listener(Self::select_next_page))
+            .on_action(cx.listener(Self::select_previous_page))
             .on_action(cx.listener(Self::confirm))
             .on_action(cx.listener(Self::back))
             .on_action(cx.listener(Self::return_to_root))
@@ -1965,7 +2033,7 @@ impl Render for LauncherWindow {
                             self.render_menu_popup_layer(menu_in_flight, cx),
                             |strip, popup| strip.child(popup),
                         )
-                        .when_some(self.render_actions_layer(cx), |strip, panel| {
+                        .when_some(self.render_actions_layer(window, cx), |strip, panel| {
                             strip.child(panel)
                         })
                         // The strip is the live region: it carries the
@@ -1989,8 +2057,11 @@ impl Render for LauncherWindow {
                                 (None, Some(text)) => {
                                     footer::status_message(text, &theme).into_any_element()
                                 }
+                                // At rest: the open Actions panel's hint,
+                                // else the open command's icon and title
+                                // (#162).
                                 (None, None) => footer::hint_slot(
-                                    self.footer_hint(with_actions, &theme),
+                                    self.footer_hint(with_actions, &theme).or(footer_command),
                                     &theme,
                                 )
                                 .into_any_element(),
@@ -2028,7 +2099,7 @@ impl Render for LauncherWindow {
                 f32::from(window.viewport_size().height)
             };
             let scrolled = if listed && !collapsed {
-                (-f32::from(self.scroll.offset().y)).max(0.)
+                f32::from(self.results.list.scrolled())
             } else {
                 0.
             };
@@ -2081,6 +2152,25 @@ const HERO_GLASS_OPACITY: f32 = 0.84;
 /// disabled from Settings), and the screen sync the update runs asks
 /// every window to redraw, Settings included. Focus is not taken: the
 /// flow runs in Settings.
+/// Opens Pane's Settings window, or focuses the one already open, where
+/// `target` says (#168): anywhere, at the Extensions group, or at its
+/// install flow from a folder, npm or Git.
+pub(crate) fn open_settings_at(launcher: &Launcher, target: SettingsTarget, cx: &mut App) {
+    use crate::features::settings::extensions::{InstallSource, TITLE};
+    let install = |source: InstallSource| source.target();
+    let place = match target {
+        SettingsTarget::Settings => {
+            settings::open(launcher, cx);
+            return;
+        }
+        SettingsTarget::Extensions => "",
+        SettingsTarget::InstallFromFolder => install(InstallSource::Folder),
+        SettingsTarget::InstallFromNpm => install(InstallSource::Npm),
+        SettingsTarget::InstallFromGit => install(InstallSource::Git),
+    };
+    settings::open_at(launcher, TITLE, place, cx);
+}
+
 pub(crate) fn launcher_changed_outside(cx: &mut App) {
     for window in cx.windows() {
         let Some(launcher) = window.downcast::<LauncherWindow>() else {
@@ -2142,8 +2232,8 @@ fn window_size(size: Size<Pixels>) -> WindowSize {
 
 /// The launcher presentation's section labels, as the shared list draws
 /// them.
-fn section_labels(presentation: &Presentation) -> Vec<shell::SectionLabel> {
-    presentation.sections.iter().map(section_label).collect()
+fn section_labels(listing: &ListPresentation) -> Vec<shell::SectionLabel> {
+    listing.sections.iter().map(section_label).collect()
 }
 
 /// A launcher section as the shared list labels it: the adapter between
@@ -2161,18 +2251,17 @@ pub(crate) fn section_label(section: &pane_core::Section) -> shell::SectionLabel
 /// its kind's place: only the user, through the Setup screen, runs it.
 pub(crate) const NEEDS_SETUP: &str = "Needs setup";
 
-/// The icon presentation for a row, chosen by the row's stable id: the
-/// built-in rows and this build's sample commands are known identities,
-/// each with a reference tone and glyph; everything else is a plain
-/// command. No presentation is inferred from a title's text.
+/// The icon presentation for a row, chosen by the row's stable id: Pane's
+/// own rows are known identities, each with a reference tone and glyph;
+/// everything else is a plain command. No presentation is inferred from a
+/// title's text. (The samples are installed packages now, #162, drawn
+/// with their package's icon.)
 pub(crate) fn row_icon(id: &str) -> (IconTone, Glyph) {
     match id {
-        "rust-sample" => (IconTone::Term, Glyph::Prompt),
-        "javascript-sample" | "typescript-sample" => (IconTone::Code, Glyph::Code),
         "pane.install-from-folder" => (IconTone::Folder, Glyph::Folder),
         "pane.install-from-npm" => (IconTone::Web, Glyph::Blocks),
         "pane.install-from-git" => (IconTone::Term, Glyph::Terminal),
-        "pane.manage-extensions" => (IconTone::Command, Glyph::Blocks),
+        pane_core::MANAGE_EXTENSIONS => (IconTone::Command, Glyph::Blocks),
         "pane.settings" => (IconTone::Command, Glyph::Gear),
         _ => (IconTone::Command, Glyph::Prompt),
     }

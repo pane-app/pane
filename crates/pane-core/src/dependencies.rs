@@ -439,7 +439,7 @@ impl Plan {
                 RequiredState::Installed => format!("{needs}: {name}, already installed"),
                 RequiredState::Disabled => format!(
                     "{needs}: {name}, which you disabled: it stays disabled, and {} cannot use \
-                     it until you enable it in Manage extensions",
+                     it until you enable it in Settings",
                     requested.title
                 ),
                 RequiredState::Paused => {

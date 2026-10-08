@@ -1,8 +1,9 @@
 //! Installing an extension from npm through the native window, on GPUI's
-//! test platform, with real key events: the "Install extension from npm…"
-//! row, its form, the preview and Install, then its command running. The
-//! registry is a local one on 127.0.0.1 (`pane-core`'s test support);
-//! nothing reaches the network.
+//! test platform, with real key events: the preview of the package named
+//! (as Settings' install field names it, #168; the field itself is tested
+//! in `settings.rs`) and Install, then its command running. The registry
+//! is a local one on 127.0.0.1 (`pane-core`'s test support); nothing
+//! reaches the network.
 
 use std::path::PathBuf;
 
@@ -42,6 +43,19 @@ fn press_enter_on(
     settle(window, cx)
 }
 
+/// Previews the npm package `spec` names in the window, as Settings'
+/// install field does once it is shown (#168).
+fn preview(
+    window: &Entity<LauncherWindow>,
+    cx: &mut VisualTestContext,
+    spec: &str,
+) -> LauncherView {
+    window.update_in(cx, |launcher, window, cx| {
+        launcher.preview_npm(spec, window, cx)
+    });
+    settle(window, cx)
+}
+
 #[gpui::test]
 fn a_package_named_in_the_npm_form_is_previewed_installed_and_run(cx: &mut TestAppContext) {
     let guests = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests");
@@ -62,12 +76,8 @@ fn a_package_named_in_the_npm_form_is_previewed_installed_and_run(cx: &mut TestA
     cx.simulate_resize(gpui::size(gpui::px(640.), gpui::px(420.)));
     settle(&window, cx);
 
-    let view = press_enter_on(&window, cx, "Install extension from npm…");
-    assert_eq!(view.title, "Install extension from npm");
-    assert!(matches!(view.screen, Screen::Form(_)));
-    cx.simulate_input("@pane-samples/greeter");
-    cx.simulate_keystrokes("enter");
-    let view = settle(&window, cx);
+    let view = preview(&window, cx, "@pane-samples/greeter");
+    assert!(matches!(view.screen, Screen::Package { .. }));
     assert_eq!(view.title, "Greeter from npm", "{view:#?}");
     assert_eq!(titles(&view), ["Install"]);
     assert!(
@@ -87,10 +97,7 @@ fn a_package_named_in_the_npm_form_is_previewed_installed_and_run(cx: &mut TestA
 
     // Named again, it is offered as an Update, whose row stays in view below
     // the npm package's longer details.
-    press_enter_on(&window, cx, "Install extension from npm…");
-    cx.simulate_input("@pane-samples/greeter");
-    cx.simulate_keystrokes("enter");
-    let view = settle(&window, cx);
+    let view = preview(&window, cx, "@pane-samples/greeter");
     assert_eq!(titles(&view), ["Update"]);
     for _ in 0..2 {
         window.update(cx, |_, cx| cx.notify());
@@ -119,4 +126,83 @@ fn a_package_named_in_the_npm_form_is_previewed_installed_and_run(cx: &mut TestA
         Status::Result("Hello from the npm package".into())
     );
     assert!(cx.debug_bounds("toast-success").is_some());
+}
+
+#[path = "support/setup.rs"]
+mod setup;
+
+/// Clicks the element whose debug selector is `name` in the window `cx`
+/// drives, the pointer moving onto it first, as its user's does.
+fn click(cx: &mut VisualTestContext, name: &str) {
+    let name: &'static str = Box::leak(name.to_owned().into_boxed_str());
+    let bounds = cx
+        .debug_bounds(name)
+        .unwrap_or_else(|| panic!("no {name} is drawn"));
+    cx.simulate_mouse_move(
+        bounds.center(),
+        None::<gpui::MouseButton>,
+        gpui::Modifiers::none(),
+    );
+    cx.simulate_click(bounds.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn check_for_update_on_its_settings_page_previews_it_from_npm(cx: &mut TestAppContext) {
+    let guests = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests");
+    let registry = Registry::start();
+    registry.publish(
+        "@pane-samples/greeter",
+        "0.1.0",
+        pack(&greeter_files(&guests, "0.1.0")),
+    );
+    let data = tempfile::tempdir().unwrap();
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"))
+            .with_npm_registry(NpmRegistry::local(registry.url()).unwrap());
+    let (window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    preview(&window, cx, "@pane-samples/greeter");
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert_eq!(
+        view.status,
+        Status::Result("Installed Greeter from npm".into())
+    );
+
+    // Its page in Settings (#168): the menu's Check for Update shows the
+    // package from npm again, on the page, offering its Update.
+    cx.simulate_keystrokes(setup::settings_shortcut());
+    cx.run_until_parked();
+    let settings = cx
+        .update(|_, cx| {
+            cx.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<pane::SettingsWindow>())
+        })
+        .expect("Settings opened");
+    let mut sc = VisualTestContext::from_window(gpui::AnyWindowHandle::from(settings), &cx.cx);
+    sc.simulate_resize(gpui::size(gpui::px(760.), gpui::px(1200.)));
+    sc.run_until_parked();
+    click(&mut sc, "section-Extensions");
+    click(&mut sc, "extension-entry-Greeter from npm");
+    assert!(
+        sc.debug_bounds("extension-page-source").is_some(),
+        "its page shows where it comes from"
+    );
+    click(&mut sc, "extension-menu");
+    click(&mut sc, "extension-menu-Check for Update");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while sc.debug_bounds("extension-row-Update").is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the preview never offered its Update"
+        );
+        sc.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let view = settle(&window, cx);
+    assert!(matches!(view.screen, Screen::Package { .. }));
+    assert_eq!(view.title, "Greeter from npm");
 }

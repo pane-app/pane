@@ -18,6 +18,20 @@ use gpui::{Entity, VisualTestContext, prelude::*};
 use pane::LauncherWindow;
 use pane_core::{LauncherView, Status};
 
+/// Enters the launcher's extension-management flow, as Pane's Settings
+/// window does when one of its extension pages runs an operation (#168),
+/// and runs the window until it has drawn the list: the launcher window
+/// has no row of its own that opens it ("Manage Extensions" opens
+/// Settings), but it still draws the flow's screens while the launcher
+/// holds them, and follows them with the keyboard as it follows any
+/// change Settings makes.
+pub fn enter_flow(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> LauncherView {
+    window.update_in(cx, |window, w, cx| window.enter_extension_flow(w, cx));
+    until(window, cx, |view| {
+        matches!(view.screen, pane_core::Screen::Extensions { .. })
+    })
+}
+
 /// Runs the window until the launcher is no longer running an action and
 /// the window has drawn what it shows.
 pub fn settle(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> LauncherView {

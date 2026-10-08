@@ -1,0 +1,116 @@
+name: Set up Pane's Rust build
+description: >-
+  What every CI job that runs cargo needs, set up the same way in every
+  workflow: the Linux build dependencies and mold, the pinned toolchain
+  (and no other), the one Rust cache of this operating system, and, for a
+  job that runs tests, cargo-nextest, the opt-ins CI's runners allow and
+  (on Windows) a faster drive for temporary files.
+
+inputs:
+  tests:
+    description: >-
+      The job runs tests: install cargo-nextest, opt in to the tests that
+      need a CI runner's session, and on Windows put TMP and TEMP on a
+      faster drive.
+    default: "false"
+  save-cache:
+    description: >-
+      Save the Rust cache when the job ends. Only the lints job of the
+      release matrix on main sets it (`ci.yml`): every other job, on every
+      branch and pull request (forks included), only restores what main
+      saved, so the branches never fill the 10 GB the repository's caches
+      may take and evict each other's.
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Install Linux build dependencies
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+          libxcb1-dev libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers \
+          xvfb xdotool imagemagick mold \
+          dbus-x11 at-spi2-core python3-gi gir1.2-atspi-2.0
+
+    # The many test binaries each link Pane's whole dependency tree, so on
+    # Linux they link with mold. The flag is scoped to the host triple,
+    # never RUSTFLAGS: a job-wide RUSTFLAGS would also reach the
+    # wasm32-wasip2 guest builds, whose wasm-component-ld rejects native
+    # linker flags (run 36789533844 failed on "unexpected argument '-f'
+    # found"). Set here, before the cache step, so every Linux job hashes
+    # the same environment into the cache key.
+    - name: Link with mold (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C link-arg=-fuse-ld=mold" >> "$GITHUB_ENV"
+
+    # rust-cache hashes the version of every installed toolchain into its
+    # key, so the runner image's own stable Rust, updated with the image
+    # every week or two, would otherwise start every cache again. Only the
+    # toolchain rust-toolchain.toml pins is kept.
+    - name: Install the pinned Rust toolchain, and only it
+      shell: bash
+      run: |
+        rustup toolchain install
+        pinned=$(rustup show active-toolchain | cut -d' ' -f1)
+        rustup default "$pinned"
+        for toolchain in $(rustup toolchain list | cut -d' ' -f1); do
+          if [ "$toolchain" != "$pinned" ]; then
+            rustup toolchain uninstall "$toolchain"
+          fi
+        done
+        rustup toolchain list
+
+    # One cache per operating system (`shared-key`), not one per job:
+    # every job of every workflow restores the same entry, saved by main.
+    # A new Cargo workspace whose builds should be cached is added here.
+    - uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: pane
+        save-if: ${{ inputs.save-cache == 'true' }}
+        workspaces: |
+          .
+          guests
+          guests/fixtures/mixed-p2
+          guests/helpers/echo
+
+    # Pinned to an exact version, as ci.yml's licenses job pins cargo-deny.
+    - uses: taiki-e/install-action@v2
+      if: inputs.tests == 'true'
+      with:
+        tool: cargo-nextest@0.9.146
+
+    # The tests that need what a CI runner has and a developer's computer
+    # should not be put through, opted in on every test job alike:
+    # - the Windows and macOS clipboard adapters' tests replace what is on
+    #   the clipboard (the macOS runner has its logged-in WindowServer
+    #   session, so the pasteboard is live); the Linux one needs a display
+    #   too, so it runs under Xvfb in a step of its own;
+    # - the Windows system icon adapter's test (#142) extracts real icons
+    #   through the shell, which needs the runner's session;
+    # - the program containment adapter's test (a Job Object on Windows, a
+    #   process group elsewhere) starts and ends real processes of its own.
+    - name: Opt in to the tests that need a CI runner
+      if: inputs.tests == 'true'
+      shell: bash
+      run: |
+        {
+          echo "PANE_TEST_PROCESS_TREES=1"
+          if [ "$RUNNER_OS" != Linux ]; then echo "PANE_TEST_REAL_CLIPBOARD=1"; fi
+          if [ "$RUNNER_OS" = Windows ]; then echo "PANE_TEST_SYSTEM_ICONS=1"; fi
+        } >> "$GITHUB_ENV"
+
+    # The tests write many small files under their temporary folders. On
+    # Windows those go to a faster drive: the runner's D: drive when it has
+    # one, else a Dev Drive made for the job (as astral-sh/uv does), else
+    # C: as before. The drive gets a change journal, as C: has, for the
+    # file index's catch-up tests. Only TMP and TEMP move: the cache's
+    # paths (CARGO_HOME, target/) stay put, since a Dev Drive's letter is
+    # not fixed and a cache saved under other paths is not restored.
+    - name: Put temporary files on a faster drive (Windows)
+      if: inputs.tests == 'true' && runner.os == 'Windows'
+      shell: pwsh
+      run: '& "$env:GITHUB_ACTION_PATH/fast-temp.ps1"'

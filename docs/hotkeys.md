@@ -13,7 +13,7 @@ shortcut with the system. The architecture is recorded in
 
 ## Assigning one
 
-In **Manage extensions…**, after each package's state, Reload, Clear cache and Uninstall
+In **Settings › Extensions**, after each package's state, Reload, Clear cache and Uninstall
 rows, every command of an enabled package has a row "Hotkey for
 &lt;command&gt;", subtitled with its hotkey ("Ctrl+Alt+G · Opens it from any
 application"), "None · …", or why it is not active, then its package's source (copies of a package may share titles). Enter opens the hotkey
@@ -83,6 +83,11 @@ released, reaches Pane no more.
   keeps the hotkeys of the copy from `x#y`. A change whose write fails after
   its package was uninstalled does not bring its hotkey back. The record is
   kept as the [aliases](aliases.md)' is.
+- A [root provider](root-search.md#root-providers) (#164), such as the
+  calculator, is never launched, so it has no hotkey: recording one is
+  refused ("it only answers root search"), it has no hotkey row, and a
+  hotkey recorded before its command became one is never registered and is
+  forgotten at the next start, with a toast saying so.
 - A hotkey another application took meanwhile is shown on its row as "Not
   active: another application or the system already uses it" and tried again
   with every change to the installed packages and at the next start; the
@@ -113,7 +118,7 @@ cannot assign, read or declare one (no WIT or manifest change).
 
 - Launcher public interface ([`crates/pane-core/tests/hotkeys.rs`](../crates/pane-core/tests/hotkeys.rs)),
   with the real settings-sample guests and a fake system (which shortcuts
-  other applications use is deterministic): assigning in Manage extensions
+  other applications use is deterministic): assigning in Settings › Extensions
   registers it and a press opens the command from root search or from
   another open command; kept and registered again after a restart; changing
   releases the old one; Remove hotkey; disable releases and enable restores,

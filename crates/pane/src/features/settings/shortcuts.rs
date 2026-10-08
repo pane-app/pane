@@ -2,7 +2,7 @@
 //! by their extensions, searchable, each with its Name, Alias and Hotkey.
 //!
 //! The page is a renderer over [`Launcher::shortcut_catalog`] — one read
-//! of the same records Manage extensions shows — rebuilt on every redraw:
+//! of the same records the extension list shows — rebuilt on every redraw:
 //! a package installed, disabled, enabled, updated or removed, in the
 //! launcher window or in the background, is in the next catalog the page
 //! draws. The window's watcher (see the Settings window's module docs) is
@@ -16,7 +16,7 @@
 //! open, and the change reaches root search at once and is recorded by
 //! the same write the form's submission makes. The Hotkey column records
 //! through [`Launcher::set_hotkey`] — the same checks and the same
-//! `hotkeys.json` the hotkey screen in Manage extensions writes: the
+//! `hotkeys.json` the hotkey screen in the extension list writes: the
 //! cell's click, Enter or Space starts the recorder, which takes the keys
 //! pressed next as the binding being recorded (captured: they do not
 //! navigate or act; Escape cancels, changing nothing), and a Clear button
@@ -65,6 +65,7 @@ use crate::ui::extension_icon::row_icon_at;
 use crate::ui::icon::{Glyph, TileSize, glyph_rotated};
 use crate::ui::motion;
 use crate::ui::theme::Theme;
+use crate::ui::virtual_list::{PAGE_WINDOW_ROWS, PageWindow};
 
 /// The page's sidebar title, its identity in the sidebar and the tests'
 /// selectors.
@@ -261,6 +262,11 @@ pub(crate) struct State {
     /// What the last alias or hotkey change came to, as the page's status
     /// line.
     status: Option<StatusLine>,
+    /// A long catalog's rows near the page's view, which alone are drawn
+    /// (#165), and the filter they were laid out under: a change of filter
+    /// lays them all out again.
+    rows_window: PageWindow,
+    windowed_query: String,
     /// Each group's disclosure state as the last frame drew it, for
     /// tests (see [`SettingsWindow::group_disclosure`]). Test and debug
     /// builds only.
@@ -333,6 +339,8 @@ impl State {
             group_cells: HashMap::new(),
             drawn: Some(launcher.shortcut_catalog()),
             status: None,
+            rows_window: PageWindow::default(),
+            windowed_query: String::new(),
             #[cfg(any(test, debug_assertions))]
             drawn_looks: HashMap::new(),
             #[cfg(any(test, debug_assertions))]
@@ -721,7 +729,9 @@ impl SettingsWindow {
     /// last one drawn asks for a redraw — the next frame reads the catalog
     /// fresh, so it shows the launcher's packages as they are now.
     pub(crate) fn shortcuts_watched(&mut self, cx: &mut Context<Self>) {
-        if self.pages[self.selected].title != TITLE {
+        // The extension pages list the same records (#168).
+        let title = self.pages[self.selected].title;
+        if title != TITLE && title != super::extensions::TITLE {
             return;
         }
         if Some(self.launcher.shortcut_catalog()) != self.shortcuts.drawn {
@@ -776,10 +786,36 @@ fn render(
         .editing
         .as_ref()
         .map(|editing| editing.command.clone());
+    // A long catalog draws only the rows near the page's view (#165): the
+    // row being edited or recorded, and the one holding the focus, always.
+    if this.shortcuts.windowed_query != query {
+        this.shortcuts.windowed_query = query.clone();
+        this.shortcuts.rows_window.forget();
+    }
+    let listed: usize = catalog
+        .groups
+        .iter()
+        .map(|group| group.commands.len())
+        .sum();
+    let windowing = (listed >= PAGE_WINDOW_ROWS).then(|| Windowing {
+        page: this.search.scroll().clone(),
+        keep: active_commands(this, window),
+    });
     let groups: Vec<AnyElement> = catalog
         .groups
         .iter()
-        .filter_map(|group| group_element(this, group, &query, &editing, filtering, &theme, cx))
+        .filter_map(|group| {
+            group_element(
+                this,
+                group,
+                &query,
+                &editing,
+                filtering,
+                windowing.as_ref(),
+                &theme,
+                cx,
+            )
+        })
         .collect();
     // While any group's disclosure is still in flight, keep frames
     // coming; the frame that completes them requests none, so a settled
@@ -943,12 +979,14 @@ fn commands_inset(theme: &Theme) -> Pixels {
 /// `filtering` says the filter changed since the last drawn frame, which
 /// makes whatever rows appear or vanish here a content update — those
 /// never animate.
+#[allow(clippy::too_many_arguments)]
 fn group_element(
     this: &mut SettingsWindow,
     group: &ShortcutGroup,
     query: &str,
     editing: &Option<String>,
     filtering: bool,
+    windowing: Option<&Windowing>,
     theme: &Theme,
     cx: &mut Context<SettingsWindow>,
 ) -> Option<AnyElement> {
@@ -1085,7 +1123,20 @@ fn group_element(
     } else {
         shown
             .into_iter()
-            .map(|command| row_element(this, command, editing, theme, cx))
+            .map(|command| {
+                let Some(windowing) = windowing else {
+                    return row_element(this, command, editing, theme, cx);
+                };
+                // A long catalog: a row away from the page's view is a
+                // stand-in as high as it was (#165).
+                let rows = this.shortcuts.rows_window.clone();
+                let id = command.id.clone();
+                if !windowing.keep.contains(&id) && !rows.near(&id, &windowing.page) {
+                    return rows.stand_in(id, &windowing.page).into_any_element();
+                }
+                let row = row_element(this, command, editing, theme, cx);
+                rows.track(id, &windowing.page, row).into_any_element()
+            })
             .collect()
     };
     // The commands the group shows, in one container of their own, which
@@ -1136,6 +1187,43 @@ fn group_element(
             .child(commands)
             .into_any_element(),
     )
+}
+
+/// How a long catalog's rows are drawn (#165): only those near the view of
+/// the `page` that scrolls them, and those to `keep` (being edited or
+/// recorded, or holding the focus).
+struct Windowing {
+    page: gpui::ScrollHandle,
+    keep: HashSet<String>,
+}
+
+/// The commands whose alias or hotkey cell holds the focus, or whose alias
+/// is being edited or hotkey recorded: the rows a long list draws however
+/// far they are from the page's view (#165), here and on an extension's
+/// page.
+pub(super) fn active_commands(this: &SettingsWindow, window: &Window) -> HashSet<String> {
+    let shortcuts = &this.shortcuts;
+    let mut keep: HashSet<String> = shortcuts
+        .alias_cells
+        .iter()
+        .chain(&shortcuts.hotkey_cells)
+        .chain(&shortcuts.hotkey_clears)
+        .filter(|(_, cell)| cell.is_focused(window))
+        .map(|(command, _)| command.clone())
+        .collect();
+    keep.extend(
+        shortcuts
+            .editing
+            .as_ref()
+            .map(|editing| editing.command.clone()),
+    );
+    keep.extend(
+        shortcuts
+            .recording
+            .as_ref()
+            .map(|recording| recording.command.clone()),
+    );
+    keep
 }
 
 /// The group's stable key: its package identity's key, or "not installed"
@@ -1207,6 +1295,38 @@ fn row_element(
         .child(alias)
         .child(hotkey)
         .into_any_element()
+}
+
+/// The Alias column for `command` as this page draws it — its cell, or the
+/// inline editor in its place while it is edited — for another page that
+/// lists a command's alias the same way: an extension's page (#168).
+pub(super) fn alias_column(
+    this: &mut SettingsWindow,
+    command: &ShortcutCommand,
+    theme: &Theme,
+    cx: &mut Context<SettingsWindow>,
+) -> Div {
+    let editing = this
+        .shortcuts
+        .editing
+        .as_ref()
+        .is_some_and(|editing| editing.command == command.id);
+    if editing {
+        editor_element(this, command, theme, cx)
+    } else {
+        alias_cell(this, command, theme, cx)
+    }
+}
+
+/// The Hotkey column for `command` as this page draws it, for another page
+/// that lists a command's hotkey the same way: an extension's page (#168).
+pub(super) fn hotkey_column(
+    this: &mut SettingsWindow,
+    command: &ShortcutCommand,
+    theme: &Theme,
+    cx: &mut Context<SettingsWindow>,
+) -> Div {
+    hotkey_cell(this, command, theme, cx)
 }
 
 /// What a cell shows as its text: the alias, quoted, or "None" muted.

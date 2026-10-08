@@ -300,7 +300,7 @@ impl Launcher {
         if !package.enabled {
             return Err(format!(
                 "{title} is disabled; Pane does not enable it to launch its command, enable it \
-                 in Manage extensions"
+                 in Settings"
             ));
         }
         if state.paused.is_paused(&package.identity) {
@@ -317,6 +317,12 @@ impl Launcher {
         else {
             return Err(format!("{title} has no command `{command}`"));
         };
+        if package.is_provider(command) {
+            return Err(format!(
+                "{} of {title} only answers root search, so it cannot be launched",
+                registration.title
+            ));
+        }
         if let Some(reason) = unavailable {
             return Err(format!("{} of {title}: {reason}", registration.title));
         }

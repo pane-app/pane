@@ -16,6 +16,9 @@
 //! - a **system icon**: the icon the system shows for a file or an
 //!   application, by its path, which the host extracts (#142, see
 //!   [`crate::system_icons`]);
+//! - an **installed application's own icon**, by the icon reference the
+//!   applications import returns with it (#172, see
+//!   [`crate::applications::icons`]);
 //! - a generated **first-letter tile**, which a package without an icon of
 //!   its own gets.
 //!
@@ -87,6 +90,11 @@ pub enum IconSource {
     /// once resolved (a leading `~` is the user's home folder); a path that
     /// does not exist draws the fallback.
     File(PathBuf),
+    /// The own icon of the installed application with this icon reference
+    /// ([`crate::applications::icon_reference`], #172), which the host
+    /// keeps in its cache of the applications' icons; its fallback (or a
+    /// neutral placeholder) shows until it is there.
+    Application(String),
     /// A generated tile showing this letter: the icon of a package that
     /// has none of its own.
     Letter(char),
@@ -244,6 +252,10 @@ impl Icon {
                 (is_data_url(&url) || is_web_url(&url)).then_some(IconSource::Url(url))
             }
             IconSource::File(path) => system_path(&path).map(IconSource::File),
+            IconSource::Application(reference) => {
+                let reference = reference.trim();
+                (!reference.is_empty()).then(|| IconSource::Application(reference.to_owned()))
+            }
             IconSource::Letter(letter) => Some(IconSource::Letter(letter)),
         };
         match source {
@@ -293,7 +305,11 @@ pub(crate) fn parse_manifest_icon(value: &Value, what: &str) -> Result<Icon, Str
 /// Checks that `icon` and its fallbacks name only sources a manifest may:
 /// a built-in icon or an image the package ships.
 fn check_manifest_sources(icon: &Icon) -> Result<(), String> {
-    if let IconSource::Url(_) | IconSource::File(_) | IconSource::Letter(_) = icon.source {
+    if let IconSource::Url(_)
+    | IconSource::File(_)
+    | IconSource::Application(_)
+    | IconSource::Letter(_) = icon.source
+    {
         return Err(
             "is not a built-in icon's name or an image the package ships, which a package's \
              and a command's icon are"
@@ -478,11 +494,17 @@ fn parse_at(value: &Value, depth: usize, strict: bool) -> Result<Icon, String> {
         }
         sources.push(IconSource::File(PathBuf::from(file.trim())));
     }
+    if let Some(reference) = text("application")? {
+        if reference.trim().is_empty() {
+            return Err("gives an empty `application` icon reference".into());
+        }
+        sources.push(IconSource::Application(reference.trim().to_owned()));
+    }
     let source = match sources.len() {
         0 => {
             return Err(
-                "names nothing to draw: give `builtin`, `path`, `light` and `dark`, `url` or \
-                 `file`"
+                "names nothing to draw: give `builtin`, `path`, `light` and `dark`, `url`, \
+                 `file` or `application`"
                     .into(),
             );
         }
@@ -743,8 +765,18 @@ pub fn web_image_stem(url: &str) -> String {
 }
 
 /// The kinds of image a web image may be, by their file extension, as
-/// Pane caches them; the window draws each.
+/// Pane caches them ([`image_kind`] tells them by their first bytes): each
+/// is one the window draws ([`DRAWN_IMAGE_EXTENSIONS`]).
 pub const WEB_IMAGE_KINDS: [&str; 7] = ["png", "jpg", "gif", "webp", "bmp", "ico", "svg"];
+
+/// The file extensions of the images Pane's window draws, under every name
+/// each kind goes by ("jpg" and "jpeg", "tif" and "tiff"): what Search
+/// Files' detail previews. The one list of them; a web image is cached as
+/// one of [`WEB_IMAGE_KINDS`], and the Images category of file search
+/// holds these and the images Pane cannot draw (a camera's raw file).
+pub const DRAWN_IMAGE_EXTENSIONS: [&str; 10] = [
+    "png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "ico", "svg",
+];
 
 /// What kind of image `bytes` are, by their first bytes: the extension of
 /// one of [`WEB_IMAGE_KINDS`], or `None` when they are not an image Pane
@@ -831,6 +863,30 @@ pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Option<Vec<u8>> {
     chunk(b"IDAT", &compressed);
     chunk(b"IEND", &[]);
     Some(png)
+}
+
+/// The pixels of the PNG file `png` as straight-alpha RGBA, row by row,
+/// with its width and height; `None` when it cannot be decoded.
+pub fn decode_png(png: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    let mut decoder = ::png::Decoder::new(std::io::Cursor::new(png));
+    decoder.set_transformations(
+        ::png::Transformations::normalize_to_color8() | ::png::Transformations::ALPHA,
+    );
+    let mut reader = decoder.read_info().ok()?;
+    let mut buffer = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut buffer).ok()?;
+    let pixels = &buffer[..info.buffer_size()];
+    let rgba = match info.color_type {
+        ::png::ColorType::Rgba => pixels.to_vec(),
+        ::png::ColorType::GrayscaleAlpha => pixels
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .flat_map(|pair| [pair[0], pair[0], pair[0], pair[1]])
+            .collect(),
+        _ => return None,
+    };
+    Some((info.width, info.height, rgba))
 }
 
 /// What the `data:` URL `url` holds: its media type (`image/svg+xml`) and
@@ -1279,6 +1335,28 @@ mod tests {
     }
 
     #[test]
+    fn an_application_icon_names_its_reference_and_a_manifest_cannot() {
+        let folder = tempfile::tempdir().unwrap();
+        let icon = parse(&json!({"application": " 0123abcd ", "fallback": "category"})).unwrap();
+        assert_eq!(icon.source, IconSource::Application("0123abcd".into()));
+        let resolved = icon.resolved(folder.path()).unwrap();
+        assert_eq!(resolved.source, IconSource::Application("0123abcd".into()));
+        assert!(resolved.fallback.is_some());
+        assert!(
+            parse(&json!({"application": " "}))
+                .unwrap_err()
+                .contains("empty")
+        );
+        assert!(
+            parse(&json!({"application": "a", "file": "/b"}))
+                .unwrap_err()
+                .contains("more than one")
+        );
+        let error = parse_manifest_icon(&json!({"application": "a"}), "the package").unwrap_err();
+        assert!(error.contains("not a built-in icon's name"), "{error}");
+    }
+
+    #[test]
     fn web_urls_are_http_and_https_addresses_with_a_host() {
         for url in [
             "https://example.com/favicon.ico",
@@ -1302,6 +1380,13 @@ mod tests {
         assert!(stem.chars().all(|c| c.is_ascii_hexdigit()));
         assert_eq!(stem, web_image_stem("https://example.com/favicon.ico"));
         assert_ne!(stem, web_image_stem("https://example.org/favicon.ico"));
+    }
+
+    #[test]
+    fn every_web_image_kind_is_one_the_window_draws() {
+        for kind in WEB_IMAGE_KINDS {
+            assert!(DRAWN_IMAGE_EXTENSIONS.contains(&kind), "{kind}");
+        }
     }
 
     #[test]

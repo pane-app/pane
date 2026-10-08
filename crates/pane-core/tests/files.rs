@@ -8,8 +8,12 @@
 //! and the listing: made once per visit of root search on the package's
 //! worker, never holding up other results, and stopped when root search is
 //! left, the grant changes or the extension is disabled (with a fake folder
-//! lister the test holds up). The packages are the ones `cargo xtask guests`
-//! assembles in `target/guests/packages`.
+//! lister the test holds up). File search itself moved to the file index
+//! (#175, `file_search.rs`); the granted-folder capability stays for other
+//! packages (ADR 0017, #126), so these tests keep it covered with a fixture
+//! (`guests/fixtures/folder-files`) that is what Files was, titled as it
+//! was. The components are the ones `cargo xtask guests` builds in
+//! `target/guests`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -137,11 +141,24 @@ impl Pane {
         (launcher, runtime)
     }
 
-    /// Starts Pane with the package in `target/guests/packages/<package>`
-    /// installed.
-    fn with(&self, package: &str) -> (Launcher, Runtime) {
+    /// Starts Pane with the granted-folder fixture installed: what the
+    /// Files default extension was before file search moved to the file
+    /// index (#175), titled as it was, its `pane.json` asking for a folder
+    /// (`"folderAccess": true`).
+    fn with_folder_files(&self) -> (Launcher, Runtime) {
         let (launcher, runtime) = self.start();
-        install(&launcher, &built(&format!("packages/{package}")));
+        let folder = self.sources.path().join("folder-files");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join("pane.json"),
+            r#"{ "manifestVersion": 1, "title": "Files", "version": "0.6.0", "apiVersion": "0.1",
+  "folderAccess": true,
+  "commands": [{ "id": "files", "title": "Search Files", "component": "folder_files.wasm",
+    "search": true, "rootResults": true }] }"#,
+        )
+        .unwrap();
+        fs::copy(built("folder_files.wasm"), folder.join("folder_files.wasm")).unwrap();
+        install(&launcher, &folder);
         (launcher, runtime)
     }
 }
@@ -494,7 +511,7 @@ fn programs_and_scripts_are_told_apart_from_documents() {
 fn a_granted_folder_is_searched_and_a_found_file_opened() {
     let fixture = Fixture::new();
     let pane = Pane::new();
-    let (launcher, _runtime) = pane.with("files");
+    let (launcher, _runtime) = pane.with_folder_files();
 
     // No folder granted yet: nothing is found, and nothing fails.
     search(&launcher, "plan");
@@ -538,7 +555,7 @@ fn a_granted_folder_is_searched_and_a_found_file_opened() {
 fn the_grant_is_pane_s_own_record_not_the_extension_s_data() {
     let fixture = Fixture::new();
     let pane = Pane::new();
-    let (launcher, _runtime) = pane.with("files");
+    let (launcher, _runtime) = pane.with_folder_files();
     grant(&launcher, SEARCH_FILES, &fixture.root);
 
     let record: serde_json::Value =
@@ -573,7 +590,7 @@ fn the_grant_is_pane_s_own_record_not_the_extension_s_data() {
 fn stopping_to_share_the_folder_removes_the_files() {
     let fixture = Fixture::new();
     let pane = Pane::new();
-    let (launcher, _runtime) = pane.with("files");
+    let (launcher, _runtime) = pane.with_folder_files();
     grant(&launcher, SEARCH_FILES, &fixture.root);
     open_command(&launcher, SEARCH_FILES);
     assert_eq!(titles(&launcher)[1], "Stop sharing the folder with Files");
@@ -638,7 +655,7 @@ fn a_guest_cannot_name_a_file_or_retitle_one() {
 fn a_file_is_checked_again_when_it_is_opened() {
     let fixture = Fixture::new();
     let pane = Pane::new();
-    let (launcher, _runtime) = pane.with("files");
+    let (launcher, _runtime) = pane.with_folder_files();
     fs::write(fixture.file("notes/run plan.bat"), "@echo off").unwrap();
     #[cfg(unix)]
     {
@@ -728,7 +745,7 @@ fn a_file_is_checked_again_when_it_is_opened() {
 fn a_folder_gone_since_it_was_granted_is_explained_in_root_search() {
     let fixture = Fixture::new();
     let pane = Pane::new();
-    let (launcher, _runtime) = pane.with("files");
+    let (launcher, _runtime) = pane.with_folder_files();
     grant(&launcher, SEARCH_FILES, &fixture.root);
     fs::remove_dir_all(&fixture.root).unwrap();
 
@@ -746,7 +763,7 @@ fn a_folder_gone_since_it_was_granted_is_explained_in_root_search() {
 fn files_are_listed_after_the_results_found_by_title() {
     let fixture = Fixture::new();
     let pane = Pane::new();
-    let (launcher, _runtime) = pane.with("files");
+    let (launcher, _runtime) = pane.with_folder_files();
     grant(&launcher, SEARCH_FILES, &fixture.root);
     search(&launcher, "files");
     assert_eq!(titles(&launcher), [SEARCH_FILES, "files index.txt"]);
@@ -757,7 +774,7 @@ fn files_are_listed_after_the_results_found_by_title() {
 fn the_grant_is_kept_across_a_restart_disabling_hides_it_and_uninstalling_forgets_it() {
     let fixture = Fixture::new();
     let pane = Pane::new();
-    let (launcher, _runtime) = pane.with("files");
+    let (launcher, _runtime) = pane.with_folder_files();
     grant(&launcher, SEARCH_FILES, &fixture.root);
     drop(launcher);
 
@@ -778,33 +795,6 @@ fn the_grant_is_kept_across_a_restart_disabling_hides_it_and_uninstalling_forget
         serde_json::from_str(&fs::read_to_string(pane.extensions().join("folders.json")).unwrap())
             .unwrap();
     assert!(record["folders"].as_object().unwrap().is_empty());
-}
-
-#[test]
-fn the_javascript_and_typescript_samples_find_and_open_files_too() {
-    let fixture = Fixture::new();
-    for (package, title) in [
-        ("sample-files-js", "Find files (JavaScript)"),
-        ("sample-files-ts", "Find files (TypeScript)"),
-    ] {
-        let pane = Pane::new();
-        let (launcher, _runtime) = pane.with(package);
-        let status = grant(&launcher, title, &fixture.root);
-        assert!(matches!(status, Status::Result(_)), "{status:?}");
-        search(&launcher, "résumé");
-        assert_eq!(titles(&launcher), ["Résumé plan ü.txt"], "{title}");
-        assert_eq!(
-            launcher.view().rows[0].subtitle.as_deref(),
-            Some("File in Pane files — ñ")
-        );
-        assert_eq!(
-            activated(&launcher).as_deref(),
-            Some("Opened Résumé plan ü.txt")
-        );
-        let opened = pane.opener.files();
-        assert_eq!(opened.len(), 1, "{title}");
-        assert!(same_file(&opened[0], &fixture.file("Résumé plan ü.txt")));
-    }
 }
 
 /// A folder lister the test holds up: each listing waits until the test
@@ -944,6 +934,7 @@ impl Applications for OneApplication {
             id: "report-writer".into(),
             name: "Report Writer".into(),
             location: "test".into(),
+            ..Application::default()
         }])
     }
 
@@ -957,7 +948,7 @@ fn a_slow_listing_holds_up_neither_the_calculator_nor_the_applications() {
     let folders = HeldFolders::new(vec!["report 2 + 2.txt"]);
     let mut pane = Pane::with_folders(folders.clone());
     pane.applications = Some(Arc::new(OneApplication));
-    let (launcher, _runtime) = pane.with("files");
+    let (launcher, _runtime) = pane.with_folder_files();
     install(&launcher, &built("packages/calculator"));
     install(&launcher, &built("packages/applications"));
     let folder = granted_folder(&pane);
@@ -992,7 +983,7 @@ fn a_slow_listing_holds_up_neither_the_calculator_nor_the_applications() {
 fn a_new_query_waits_for_the_same_listing_and_older_answers_never_show() {
     let folders = HeldFolders::new(vec!["report late.txt", "report current.txt"]);
     let pane = Pane::with_folders(folders.clone());
-    let (launcher, _runtime) = pane.with("files");
+    let (launcher, _runtime) = pane.with_folder_files();
     let folder = granted_folder(&pane);
     block_on(launcher.grant_folder(&identity(&launcher, "Files"), &folder));
     launcher.back();
@@ -1012,7 +1003,7 @@ fn a_new_query_waits_for_the_same_listing_and_older_answers_never_show() {
 fn leaving_root_search_stops_the_listing_and_the_next_visit_lists_again() {
     let folders = HeldFolders::new(vec!["report late.txt"]);
     let pane = Pane::with_folders(folders.clone());
-    let (launcher, runtime) = pane.with("files");
+    let (launcher, runtime) = pane.with_folder_files();
     let folder = granted_folder(&pane);
     block_on(launcher.grant_folder(&identity(&launcher, "Files"), &folder));
     launcher.back();
@@ -1037,7 +1028,7 @@ fn leaving_root_search_stops_the_listing_and_the_next_visit_lists_again() {
 fn disabling_files_stops_the_listing_and_nothing_arrives_afterwards() {
     let folders = HeldFolders::new(vec!["report late.txt"]);
     let pane = Pane::with_folders(folders.clone());
-    let (launcher, runtime) = pane.with("files");
+    let (launcher, runtime) = pane.with_folder_files();
     let folder = granted_folder(&pane);
     let files = identity(&launcher, "Files");
     block_on(launcher.grant_folder(&files, &folder));
@@ -1061,7 +1052,7 @@ fn disabling_files_stops_the_listing_and_nothing_arrives_afterwards() {
 fn a_new_grant_stops_the_listing_of_the_old_one() {
     let folders = HeldFolders::new(vec!["report late.txt"]);
     let pane = Pane::with_folders(folders.clone());
-    let (launcher, _runtime) = pane.with("files");
+    let (launcher, _runtime) = pane.with_folder_files();
     let folder = granted_folder(&pane);
     let files = identity(&launcher, "Files");
     block_on(launcher.grant_folder(&files, &folder));

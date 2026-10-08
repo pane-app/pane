@@ -54,11 +54,42 @@ unpacked from the distribution packages (`apt-get download`, `dpkg -x`) and
 selected with `PANE_XVFB`, `PANE_XDOTOOL` and `LD_LIBRARY_PATH`; CI installs them
 normally.
 
+Extensions are managed in Settings since #168, where switches, menus and
+confirmation rows answer the pointer only. The smoke (and
+`scripts/measure-linux.sh`) opens Settings with root search's Manage
+Extensions command, then finds each control by its accessible name in the
+Settings window through AT-SPI and invokes it (`a11y` in the script; Pane's
+tree comes from AccessKit), clicking its center with xdotool where it
+offers no action. It checks an operation's outcome by the name of the
+page's status line, not by a color, and closes Settings with Ctrl+W before
+it goes back to the launcher. AT-SPI needs a session bus, which the smoke
+starts with `dbus-launch`, and the accessibility bus on it
+(`at-spi-bus-launcher`, reported enabled before Pane starts), read with the
+system's `python3` and its GObject bindings: the packages `dbus-x11`,
+`at-spi2-core`, `python3-gi` and `gir1.2-atspi-2.0`. The runs recorded below
+predate #168: where they mention **Manage extensions…**, they drove the
+launcher's extension list, which is gone. The Settings flow has not run
+yet: release run 37689872256 ended the smoke before its first step, with
+status 2 and no message, because the bus launcher was looked for with `ls`
+over two paths, one of them missing, under `pipefail`. A switch is the
+toggle button of that name; lines of plain text (a preview's details) have
+no accessible name, so a preview is waited for by its row (Update,
+Install). A command's answer is a toast since #141, which leaves the footer
+3 seconds after it appears (run 37612772185 missed one at frame 77), so
+such answers are captured until their color shows (`capture_until`).
+Release run 37698693722 drove Settings through frame 19, then ended on an
+X error (`BadMatch`, `X_SetInputFocus`) focusing the launcher after
+Settings closed: a window is now focused only once it is viewable, and
+the launcher is summoned with the Open Pane hotkey (Ctrl+Alt+Space) where
+it is not shown (`focus_launcher`). The helper phase opens Settings the
+shortest way, so the switch is reached within the helper's ten-second
+wait (that run's macOS leg reached it after the wait had ended).
+
 Screenshots (inspected, not machine-asserted):
 
 | Step | Evidence |
 | --- | --- |
-| Root search lists the three sample commands | [1-root.png](evidence/linux-x11/1-root.png) |
+| Root search lists the three samples, installed first into a data folder of their own (#162) | [1-root.png](evidence/linux-x11/1-root.png) |
 | Rust command opened; action result "Waited 50 ms inside the Rust guest" | [2-command-0.png](evidence/linux-x11/2-command-0.png), [2-result-0.png](evidence/linux-x11/2-result-0.png) |
 | JavaScript command; "Waited 50 ms inside the JavaScript guest" | [3-command-1.png](evidence/linux-x11/3-command-1.png), [3-result-1.png](evidence/linux-x11/3-result-1.png) |
 | TypeScript command; "Waited 50 ms inside the TypeScript guest" | [4-command-2.png](evidence/linux-x11/4-command-2.png), [4-result-2.png](evidence/linux-x11/4-result-2.png) |
@@ -82,7 +113,7 @@ same Xvfb/lavapipe setup), all screenshot checks passed:
 | Step | Evidence |
 | --- | --- |
 | Package screen: source folder, version, commands, compatibility, Install | `9-package.png` (not committed: it shows the local checkout path) |
-| Installed; root lists the samples, the installed "Rust sample", then the install row; status "Installed Rust sample" | [10-installed.png](evidence/linux-x11/10-installed.png) |
+| Installed; root lists the installed "Rust sample" (the samples are no built-in commands since #162), then the install row; status "Installed Rust sample" | [10-installed.png](evidence/linux-x11/10-installed.png) |
 | The installed command answers "Hello from the Rust guest" | [11-installed-result.png](evidence/linux-x11/11-installed-result.png) |
 | After a restart the installed command is still listed | [12-restarted.png](evidence/linux-x11/12-restarted.png) |
 
@@ -113,8 +144,9 @@ results; they have not run there yet.
 
 The smoke then installs `target/guests/packages/sample-settings`, opens its
 Greeting command and chooses "Use a formal greeting" (the guest saves it with
-`pane:extension/settings`), and disables Settings sample in **Manage
-extensions…**. It checks that `installed.json` records `"disabled": true` and
+`pane:extension/settings`), and disables Settings sample (with the switch
+on its page in Settings since #168; in **Manage extensions…** in the run
+below). It checks that `installed.json` records `"disabled": true` and
 `settings.json` holds the saved style, restarts Pane, enables the package
 again, and runs "Greet me", which answers in the saved style and is an error
 when no style is saved. Run locally on 2026-09-28 (Ubuntu 26.04.1 LTS, kernel
@@ -234,8 +266,9 @@ natively.
 After the operations phase, the smoke writes a package `Dev` in
 `<output-dir>/dev` whose component
 is a copy of the Rust sample, installs it and runs "Say hello". It then
-copies the JavaScript sample over the component, reloads Dev in **Manage
-extensions…** without restarting Pane, and runs "Say hello" again. Next it
+copies the JavaScript sample over the component, reloads Dev (Reload in the
+Actions menu of its page in Settings since #168; in **Manage extensions…**
+in the run below) without restarting Pane, and runs "Say hello" again. Next it
 deletes the component and reloads (the checks fail, so the working code must
 keep answering exactly as before), and finally copies in the
 `failing-start` fixture, whose first start traps, reloads, and presses Retry.
@@ -264,8 +297,10 @@ After the reload phase, the smoke restarts Pane, and in Greeting chooses
 [extension data](../extension-data.md): its style (settings), a note
 (content), the greeting cached by "Greet me" earlier (cache) and a token
 (credentials). It checks each value in `content.json`, `credentials.json` and
-`cache.json`, restarts, chooses "Clear cache of Settings sample" in **Manage
-extensions…**, confirms, and shows what Pane keeps again. Finally it checks
+`cache.json`, restarts, chooses Clear Cache in the Actions menu of the
+settings sample's page in Settings (since #168; "Clear cache of Settings
+sample" in **Manage extensions…** in the run below), confirms, and shows
+what Pane keeps again. Finally it checks
 that `cache.json` no longer holds the greeting while the style, note and
 token are still in their files. Run locally on 2026-09-28 (Ubuntu 26.04.1
 LTS, kernel 7.0.0-37-generic, x86_64, same Xvfb/lavapipe setup), all checks
@@ -329,8 +364,10 @@ to screenshot 47; it has not run there yet.
 
 ### Uninstalling an extension (#40)
 
-The last phase, after the quicklinks phase, restarts Pane, chooses "Uninstall Settings sample" in
-**Manage extensions…** and the first choice, "Uninstall and keep saved
+The last phase, after the quicklinks phase, restarts Pane, chooses
+Uninstall in the Actions menu of the settings sample's page in Settings
+(since #168; "Uninstall Settings sample" in **Manage extensions…** in the
+run below) and the first choice, "Uninstall and keep saved
 data". It then checks that `installed.json` records the retained data, that
 the token is gone from `credentials.json` and that the style and note are
 still in `settings.json` and `content.json`; installs the same folder again
@@ -359,8 +396,10 @@ natively.
 ### Global hotkeys (#32, #33, #34)
 
 The last phase, after the uninstall phase ([global hotkeys](../hotkeys.md#checks)), with a data folder
-of its own, installs the settings sample, opens "Hotkey for Greeting" in
-Manage extensions and presses Ctrl+Alt+G with real X11 key events, then
+of its own, installs the settings sample, starts Greeting's hotkey recorder
+on the settings sample's page in Settings (since #168; "Hotkey for
+Greeting" in Manage extensions in the run below) and presses Ctrl+Alt+G
+with real X11 key events, then
 moves X input focus to the root window (checked with `xdotool
 getwindowfocus`) and presses Ctrl+Alt+G again through XTEST: the X server
 delivers it to Pane's passive grab and Greeting opens. After a restart the
@@ -390,9 +429,11 @@ window manager, so raising and focusing Pane's window
 
 The retained-data phase, after the hotkeys and pausing phases, with a data folder of its own,
 installs the settings sample, saves a note, uninstalls it keeping its saved
-data, then chooses "Delete retained data of Settings sample" (the extension
-list's last row) and confirms with Down from the selected Cancel, then Return,
-waiting for Pane's files to change rather than a fixed time. It checks that `installed.json` no longer has
+data, then chooses "Delete retained data of Settings sample" (a row of the
+Extensions group's page in Settings since #168; the extension list's last
+row, confirmed with Down from the selected Cancel and Return, in the run
+below) and confirms, waiting for Pane's files to change rather than a fixed
+time. It checks that `installed.json` no longer has
 a `retained` record and that the note is gone from `content.json`; installs
 the same folder again and shows what Pane keeps, which must differ from
 screenshot 51. Run locally on 2026-09-28 (Ubuntu 26.04.1 LTS, kernel
@@ -413,8 +454,9 @@ covered only by the tests' unreadable and unwritable files, not natively.
 
 The phase after the retained-data phase ([aliases and fallbacks](../aliases.md#checks)),
 with data folders of its own, installs the query sample, gives Echo the
-alias "ec" in its alias form (typed with real X11 key events) and makes it a
-fallback, then in root search types "ec hello" (the row sending "hello" to
+alias "ec" (typed with real X11 key events in its alias cell on its page in
+Settings since #168; its alias form in the run below) and makes it a
+fallback (its fallback switch there), then in root search types "ec hello" (the row sending "hello" to
 Echo is listed and selected) and presses Enter ("Echo heard “hello”");
 types "zqx" ("No results", then the fallback, not selected), presses Down
 (now selected) and Enter ("Echo heard “zqx”"). It checks `aliases.json`,
@@ -461,7 +503,8 @@ whose `pane-echo` `cargo xtask guests` built for `linux-x86_64`, and runs
 it with real X11 key events: the answer names Linux x86-64; "Echo within a
 second" cancels the slow run after one second; "Echo after waiting" starts
 the ten-second run, which `pgrep -f` finds running from the managed copy in
-the data folder; Escape, then disabling the package in Manage extensions,
+the data folder; Escape, then disabling the package (its switch in
+Settings since #168; Manage extensions in the run below),
 ends it: `pgrep` finds no helper, `settings.json` keeps "started" and never
 gets "finished", and no helper outlives Pane. The second (`helper-quit-data`)
 starts the waiting helper again ("Running…"), finds its heartbeat file,
@@ -493,7 +536,8 @@ not built or run.
 The last phase ([development mode](../development-mode.md#checks)) takes a
 copy of each development sample in `<output-dir>/develop-<sample>`, builds
 it once with its documented command, installs it with a data folder of its
-own and chooses **Develop <title>** in Manage extensions. It then edits the
+own and chooses Develop in the Actions menu of its page in Settings (since
+#168; **Develop <title>** in Manage extensions in the run below). It then edits the
 greeting in the copy's source as an editor would save it and waits until
 the managed copy holds the new build, and checks the answer; saves a
 greeting that does not compile or type-check and checks the error and that
@@ -530,12 +574,12 @@ paths; the other steps of each language (116, 120 to 122, 124, 125, 129 to 131, 
 
 A phase of its own, after the development-mode phase, with its own data folder
 ([disabling a required dependency](../dependencies.md#disabling-a-required-dependency)),
-installs the dependencies sample with the JavaScript operations sample,
-opens Manage extensions and presses Enter on the JavaScript operations
-sample (the first row). Pane asks first, listing the Dependencies sample;
-Down and Enter (Cancel) returns to the list with both enabled; Enter and
-Enter (Disable all 2) disables both; Enter again enables the JavaScript
-operations sample alone. Afterwards `installed.json` must record exactly one
+installs the dependencies sample with the JavaScript operations sample and
+turns off the JavaScript operations sample's switch on its page in
+Settings (since #168; Enter on its row in Manage extensions in the run
+below). Pane asks first, listing the Dependencies sample; Cancel returns
+with both enabled; the switch and Disable all 2 disable both; the switch
+again enables the JavaScript operations sample alone. Afterwards `installed.json` must record exactly one
 disabled package. Run locally on 2026-09-28 (same Ubuntu 26.04.1 / Xvfb /
 lavapipe setup): all checks of the whole smoke passed, and frames 140 to
 143 were looked at.
@@ -566,9 +610,10 @@ heartbeat stops growing), keeps its "started" note and never saves
 "finished", and the status line explains the crash without naming an
 extension. Count again, with the answer lost to a second crash: the count
 in `content.json` is 2 and stays 2, and the runtime is not restarted.
-Opening Greeting explains that nothing runs; Manage extensions lists
-**Restart the extension runtime** and **Why the extension runtime
-stopped** first; the details screen renders; disabling the helper sample
+Opening Greeting explains that nothing runs; the Extensions group's page in
+Settings (Manage extensions in the run below) lists **Restart the extension
+runtime** and **Why the extension runtime stopped**; the details screen
+renders; disabling the helper sample
 works while the runtime is stopped; Restart runs extensions again, and
 Count answers "Counted 3" only when asked. `installed.json` must record the
 disable and no pause, and no helper may outlive Pane. Run locally on
@@ -596,15 +641,17 @@ It sets the runtime's limits through the fault file, first
 yet" after 4 seconds without progress, given up on after 15), installs
 the settings sample and runs **Stop responding**, which computes without
 waiting: while it still computes (Pane's standard error has stopped no
-call yet), Escape returns to root search and Manage extensions opens
-(frame 240). Then `limits:2,4,15` stops that call at once, as it computed
+call yet), Escape returns to root search and Manage Extensions opens
+Settings (the launcher's list in the run below; frame 240). Then
+`limits:2,4,15` stops that call at once, as it computed
 longer. Run again, the call is stopped after 2 seconds of its computing
 (thread CPU time) with its error; the third time
 pauses the package, whose saved `busy` note stays "started"; the pause
 details and Retry work. Then the fault file's `hang` blocks the runtime
 thread: opening Greeting first shows that the runtime is not responding
 yet, then answers that it stopped responding once Pane gave up on it,
-Manage extensions' first row opens the runtime's details, and after
+the runtime row of the Extensions group's page in Settings (Manage
+extensions' first row in the run below) opens the runtime's details, and after
 `release` a fresh thread saves the formal greeting; `installed.json`
 records no pause (read as JSON). Run locally on 2026-09-29 after the
 second #18 review, with #46 merged (Ubuntu 26.04.1 LTS, kernel
@@ -630,12 +677,13 @@ checked but not kept, as they show the local package path.
 
 A phase of its own, after the runtime crash phase, with its own data folder
 ([uninstalling a required dependency](../dependencies.md#uninstalling-a-required-dependency)),
-installs the dependencies sample with the JavaScript operations sample,
-opens Manage extensions and presses Enter on "Uninstall JavaScript
-operations sample" (the seventh row). Pane asks first, listing the
-Dependencies sample and the saved data of both; Down, Down and Enter
-(Cancel) returns to the list with both installed; Enter and Enter
-(Uninstall all 2 and keep saved data) uninstalls both, and `installed.json`
+installs the dependencies sample with the JavaScript operations sample and
+chooses Uninstall in the Actions menu of the JavaScript operations sample's
+page in Settings (since #168; "Uninstall JavaScript operations sample",
+the seventh row of Manage extensions, in the run below). Pane asks first,
+listing the Dependencies sample and the saved data of both; Cancel returns
+with both installed; Uninstall again and "Uninstall all 2 and keep saved
+data" uninstall both, and `installed.json`
 must then hold no package. Pane started again installs the JavaScript
 operations sample alone, and `installed.json` must then hold exactly one
 package. Run locally on 2026-09-28 (same Ubuntu 26.04.1 / Xvfb / lavapipe
@@ -668,11 +716,12 @@ npm, installed with it from npm:@pane-samples/greeter"); Enter installs both
 (261) and "Greet through the required greeter" answers "Hello, Pane, from
 the npm package" from the npm package's own component (262; the item's
 subtitle is the Rust dependencies sample's, shared with the local
-Dependencies sample). Two rows up from root's last row is
-"Install extension from npm…" (since #46 added "Install extension from
-Git…" after it), whose form (263) takes
-`@pane-samples/greeter`; its preview (264) shows the npm lines and, the
-package being installed, **Update**, which Enter chooses ("Updated Greeter
+Dependencies sample). "Install extension from npm…", found by its title,
+opens the npm field in Settings since #168 (a form in the launcher in the
+runs below; 263), which takes
+`@pane-samples/greeter`; Show Package previews it there (264) with the npm
+lines and, the package being installed, **Update**, which the smoke
+chooses ("Updated Greeter
 from npm to 0.1.0", 265); its command's "Say hello" answers "Hello from the
 npm package" (266). #49 extends the phase: a 0.2.0 of the sample is
 published into the registry's folder (`scripts/npm_publish.py`; the
@@ -724,15 +773,16 @@ git:http://127.0.0.1:<port>/greeter.git` (the default branch) is explained
 as source-only, with nothing offered (frame 300, captured again every half
 second until the explanation's color shows, for up to 60 s: "The default branch, main
 (commit …) of the Git repository 127.0.0.1:<port>/greeter holds only the
-source of "Greeter from Git" …"). Escape, then root's last row (with nothing
-installed in this data folder there is no "Manage extensions…") is "Install
-extension from Git…", whose form (301) takes `<address>@v0.1.0`; its
-preview (302) shows "Source: Git repository 127.0.0.1:<port>/greeter",
+source of "Greeter from Git" …"). Escape, then "Install extension from
+Git…", found by its title, opens the Git field in Settings since #168 (a
+form in the launcher in the runs below; 301), which takes
+`<address>@v0.1.0`; Show Package previews it there (302): "Source: Git
+repository 127.0.0.1:<port>/greeter",
 "Revision: tag v0.1.0, which you named: installing pins it to that
 revision", the commit fetched ("Fetched: commit … “Release 0.1.0”, served at
 http://127.0.0.1:<port>/greeter.git; …") and "Pane builds nothing and runs
 no repository hooks, …", with Install in view below them (a preview's details
-may take 62% of the window since the review, so none is cut); Enter installs it
+may take 62% of the window since the review, so none is cut); Install installs it
 (303, "Installed Greeter from Git") and its command's "Say hello" answers
 "Hello from the Git repository" (304). `installed.json`, read as JSON
 (`scripts/check_git_record.py`), must then record one package from Git with
@@ -772,6 +822,16 @@ their first run (the next smoke run, local or CI's).
 path.)
 
 ### Files (#29)
+
+Since #175 Files answers from Pane's file index: the phase installs Files
+(220 is now `220-files-installed`, "Installed Files"), whose index covers
+the fixture folder a debug build's `PANE_TEST_FILE_INDEX_HOME` names, with
+no folder to choose; "plan" lists the file under "Files" in root search;
+and Return on the script shows its folder in the file manager (ADR 0037)
+instead of refusing it, so 224 is `224-files-program-revealed`. Files
+installed from its folder is not the registered default, so its Search
+Files command keeps the generic list (#177), which the smoke does not
+open. The run recorded below is of the earlier, granted-folder flow:
 
 The last phase, with its own data folder ([files](../files.md)), makes a
 fixture folder `/tmp/pane-smoke-files.XXXXXX/Pane smoke files` (spaces;
@@ -850,14 +910,19 @@ serving window are unverified natively.
 
 The smoke's clipboard phase (screenshots 280 to 287, [clipboard
 history](../clipboard-history.md#checks)), with a data folder of its own,
-installs Clipboard History, whose command now runs here, and checks
-`clipboard-history.json` at each step: text copied before it is turned on is
-not kept; once turned on (its first row) the smoke's own copies are kept,
-newest first; nothing is kept while paused, or while disabled, also after a
-restart; once enabled again, text is kept, also after a restart, before the
-command is opened; Enter on a kept item and its first choice copies it again
-and the item moves to the front, the pasted text proving the clipboard holds
-it. The smoke copies only its own `pane-smoke-...` text, by typing it into
+runs after the #53 phase: since #166 only Pane's registered Clipboard
+History records from the first start, so the phase acquires the default
+set from the artifacts that phase built, served on 127.0.0.1, with the
+smoke's own build (Files' index on an empty folder,
+`PANE_TEST_FILE_INDEX_HOME`). It checks `clipboard-history.json` at each
+step: the smoke's own copies are kept with nothing turned on, newest
+first; nothing is kept while paused (Pause Recording in the split view's
+Actions panel, Ctrl+K), or while disabled (the switch on its page in
+Settings), also after a restart; once enabled again, text is kept, also
+after a restart, before the command is opened; Return on a record (the
+view's filter leaving it) copies it again, as Pane cannot paste here yet,
+and the record moves to the front, the pasted text proving the clipboard
+holds it. The smoke copies only its own `pane-smoke-...` text, by typing it into
 root search and copying it with Ctrl+A and Ctrl+C through the window's X11
 clipboard (Xvfb is the smoke's own display), and so replaces what is on the
 clipboard without reading or putting it back. X11 has no marker formats a
@@ -866,13 +931,13 @@ be read from and an unknown owner are the adapter test's checks.
 
 | Step | Evidence |
 | --- | --- |
-| The command opened: "Off · Pane keeps nothing you copy until you turn it on" | 280-clipboard-off.png |
-| Enter on "Turn on clipboard history": "Clipboard history is on" | 281-clipboard-on.png |
-| Two kept items, newest first, with their rows | 282-clipboard-kept.png |
-| Enter on an item, "Copy it again": "Copied to the clipboard" | 283-clipboard-copied.png |
-| Pasting into root search shows the copied item | 284-clipboard-pasted.png |
+| The split view: Today, the two records kept with nothing turned on | 280-clipboard-recording.png |
+| Pause Recording, in the Actions panel: "Recording paused" | 281-clipboard-paused.png |
+| Three records, newest first | 282-clipboard-kept.png |
+| Return on a record: copied again, the window closed with a HUD | 283-clipboard-copied.png |
+| Pasting into root search shows the copied record | 284-clipboard-pasted.png |
 | Typing the same text (the same frame) | 285-clipboard-typed.png |
-| "Disabled Clipboard History", after which nothing is kept | 286-clipboard-disabled.png |
+| Settings: "Disabled Clipboard History", after which nothing is kept | 286-clipboard-disabled.png |
 | Kept again across a restart, before the command is opened | 287-clipboard-after-restart.png |
 
 (Cropped to Pane's window; the smoke checks the whole frames. The frames
@@ -881,32 +946,35 @@ ones are.)
 
 ### Clipboard history expiry (#36)
 
-The phase goes on (screenshots 400 to 406, [clipboard
+The phase goes on (screenshots 400 to 407, [clipboard
 history](../clipboard-history.md#checks)) with the history it kept: with
 Pane stopped, the smoke makes `pane-smoke-kept` 8 days old and
 `pane-smoke-enabled` 2 hours old (`scripts/clipboard_history.py`), as a
 downtime would; once Pane starts, the first is gone from the file and the
-list before the command shows anything. Then, in the command: Enter on
-`pane-smoke-second` and "Delete it" deletes that item alone, and the
-clipboard is unchanged; Delete recent items (the last hour) deletes the two
-copied in this smoke's last minutes and keeps `pane-smoke-enabled`; keeping
-items for 1 hour deletes it at once; after one more copy, Turn off and
-delete clipboard history deletes that and turns history off (no `capture` in
-the file), a later copy is not kept, and pasting into root search still
-shows the copied text, so the clipboard still holds it (Windows reads the
-clipboard API directly; on Linux, where reading means a paste, this is
-checked once, at the end, as after the copy in phase 280 to 287). As the
-#35 phase, **not run locally**; CI's next green Linux run is its evidence.
+list before the command shows anything. Then, in the split view's Actions
+panel (#166): Delete Entry on `pane-smoke-second` (the filter leaving it)
+deletes that record alone; keeping records for 1 Hour deletes
+`pane-smoke-enabled` at once; after one more copy, Clear History, once
+confirmed, deletes every record while recording goes on (`capture` stays
+`on`), a later copy is kept, and pasting into root search still shows the
+copied text, so the clipboard still holds it (Windows reads the clipboard
+API directly; on Linux, where reading means a paste, this is checked once,
+at the end, as after the copy in phase 280 to 287). No file is copied here
+(#167): nothing on this session offers one, and the adapter test checks
+`text/uri-list`. The forms #36 added (Delete recent items, Turn off and
+delete) are gone since #166. As the #35 phase, **not run locally**; CI's
+next green Linux run is its evidence.
 
 | Step | Evidence |
 | --- | --- |
-| After the restart, the 8-day-old item is gone | 400-clipboard-expired.png |
+| After the restart, the 8-day-old record is gone | 400-clipboard-expired.png |
 | "Deleted the kept item" | 401-clipboard-item-deleted.png |
-| "Deleted 2 kept items" (the recent ones) | 402-clipboard-recent-deleted.png |
-| "Items are kept for 1 hour; deleted 1 older item" | 403-clipboard-retention-changed.png |
-| "Clipboard history is off; deleted 1 kept item" | 404-clipboard-turned-off-and-deleted.png |
-| Pasting into root search still shows the copied text | 405-clipboard-still-held.png |
-| Typing the same text (the same frame) | 406-clipboard-held-typed.png |
+| "History is kept for 1 hour; deleted 1 kept item older" | 402-clipboard-retention-changed.png |
+| "Clear Clipboard History?", asked over the view | 404-clipboard-clear-asked.png |
+| Cleared, recording going on | 405-clipboard-cleared.png |
+| Pasting into root search still shows the copied text | 406-clipboard-still-held.png |
+| Typing the same text (the same frame) | 407-clipboard-held-typed.png |
+
 
 ### Installing Pane and acquiring its calculator (#53)
 
@@ -925,16 +993,15 @@ development tool is configured. The installed Pane
 nothing at all (an empty folder, checked by `command -v` of cargo, rustc,
 node, npm, git, cc, clang and make, and by reading the running process's
 `PATH`), pointed at the controlled source with `PANE_ARTIFACTS`. It
-acquires the calculator and the helper sample by itself
-(`installed.json` must record both under `"default"`), root search lists
-their commands, "6*7" answers 42 and Enter copies it, and the Helper
-sample's "Echo through the helper" runs the payload's prebuilt `pane-echo`
-("Echoed \"hello from Pane\" on Linux x86-64"), from the managed copy,
-with no developer tool reachable. The acquired payloads must be cached,
-the downloads folder empty, and no helper process left running. The
-program files are removed again at the phase's end, so the uploaded
-evidence is the screenshots and records (frames 500 to 503), not the
-program.
+acquires the five default extensions by itself (`installed.json` must
+record each under `"default"`, and no sample: the helper sample left the
+default set with #162, and a helper running from an acquired payload is
+`crates/pane-core/tests/installer.rs`'s), root search lists their
+commands, "6*7" answers 42 and Enter copies it, with no developer tool
+reachable. The acquired payloads must be cached and the downloads folder
+empty. The program files are removed again at the phase's end, so the
+uploaded evidence is the screenshots and records (frames 500 to 502),
+not the program.
 
 **Recorded 2026-09-29, this machine (Ubuntu aarch64, no display — the GUI
 cannot run here):** what ran locally is everything short of the GUI: the
@@ -950,10 +1017,9 @@ runner provides.
 
 | Step | Evidence |
 | --- | --- |
-| The clean machine's Pane acquired both default extensions and lists their commands | pending CI (frame 500) |
+| The clean machine's Pane acquired the five default extensions, and no sample (#162), and lists their commands | pending CI (frame 500) |
 | "6*7" answers 42 | pending CI (frame 501) |
 | Enter copies the answer | pending CI (frame 502) |
-| The helper sample's prebuilt helper answers | pending CI (frame 503) |
 
 
 ### Installing a Pane application update by the user's choice (#56)
@@ -977,9 +1043,10 @@ the same background, checks the index for a newer version of itself: the
 offer appears as **Update Pane to 99.0.0** in root search (frame 601;
 the status line tells what was found, frame 600). The artifact server's
 log must hold **no request for the package** until the row is chosen —
-nothing is downloaded, installed or restarted automatically. The Helper
-sample is disabled first, so an extension the user disabled before the
-update must stay disabled after it. Choosing the row with a **damaged
+nothing is downloaded, installed or restarted automatically. Clipboard
+History is disabled first (the Helper sample was, until #162 took it out
+of the default set), so an extension the user disabled before the update
+must stay disabled after it. Choosing the row with a **damaged
 package** is explained (its bytes do not match the sha512 its entry
 gives, frame 602) with the program, the data and the bin folder
 untouched and the row ready to try again; then the real choice
@@ -991,7 +1058,7 @@ and swaps the running program — the old `~/.local/bin/pane` renamed
 packages' own files). The next start runs the new version: it reports
 `Pane 99.0.0`, removes `pane.old` at start, the calculator still
 answers "6*7" with 42 from the old version's acquired payload (frames
-604 and 605), and the disabled Helper sample stays disabled — Pane's
+604 and 605), and the disabled Clipboard History stays disabled — Pane's
 data was never touched. The desktop entry the install script put in
 `~/.local/share/applications` keeps naming the same program file, which
 the swap leaves in place, so it never points anywhere else. Pane itself

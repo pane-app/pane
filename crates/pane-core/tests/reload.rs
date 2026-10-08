@@ -24,7 +24,7 @@ use feedback::shown;
 use guests::guest;
 use rows::{select_title, titles};
 
-const MANAGE_ROW: &str = "Manage extensions…";
+const MANAGE_ROW: &str = "Manage Extensions";
 
 /// Writes a package folder titled `title` with one command, "Open <title>",
 /// whose component `command.wasm` is a copy of the guest `name`.

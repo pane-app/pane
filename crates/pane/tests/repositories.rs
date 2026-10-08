@@ -1,7 +1,8 @@
 //! Installing an extension from a Git repository through the native window,
-//! on GPUI's test platform, with real key events: the "Install extension
-//! from Git…" row, its form, the preview of a source-only revision and of a
-//! release tag, Install, then its command running. The repository is made
+//! on GPUI's test platform, with real key events: the preview of a
+//! source-only revision and of a release tag (as Settings' install field
+//! names them, #168; the field itself is tested in `settings.rs`),
+//! Install, then its command running. The repository is made
 //! by the test and served from 127.0.0.1 (`pane-core`'s test support);
 //! nothing reaches the network.
 
@@ -42,6 +43,19 @@ fn press_enter_on(
     settle(window, cx)
 }
 
+/// Previews the Git repository `spec` names in the window, as Settings'
+/// install field does once it is shown (#168).
+fn preview(
+    window: &Entity<LauncherWindow>,
+    cx: &mut VisualTestContext,
+    spec: &str,
+) -> LauncherView {
+    window.update_in(cx, |launcher, window, cx| {
+        launcher.preview_git(spec, window, cx)
+    });
+    settle(window, cx)
+}
+
 #[gpui::test]
 fn a_repository_named_in_the_form_is_previewed_installed_and_run(cx: &mut TestAppContext) {
     let guests = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests");
@@ -66,12 +80,8 @@ fn a_repository_named_in_the_form_is_previewed_installed_and_run(cx: &mut TestAp
     settle(&window, cx);
 
     // The default branch holds the source only: explained, nothing offered.
-    let view = press_enter_on(&window, cx, "Install extension from Git…");
-    assert_eq!(view.title, "Install extension from Git");
-    assert!(matches!(view.screen, Screen::Form(_)));
-    cx.simulate_input(&url);
-    cx.simulate_keystrokes("enter");
-    let view = settle(&window, cx);
+    let view = preview(&window, cx, &url);
+    assert!(matches!(view.screen, Screen::Package { .. }));
     assert!(titles(&view).is_empty(), "{view:#?}");
     assert!(
         matches!(&view.status, Status::Error(text) if text.contains("holds only the source")),
@@ -83,10 +93,7 @@ fn a_repository_named_in_the_form_is_previewed_installed_and_run(cx: &mut TestAp
     // Its release tag installs.
     cx.simulate_keystrokes("escape");
     settle(&window, cx);
-    press_enter_on(&window, cx, "Install extension from Git…");
-    cx.simulate_input(&format!("{url}@v0.1.0"));
-    cx.simulate_keystrokes("enter");
-    let view = settle(&window, cx);
+    let view = preview(&window, cx, &format!("{url}@v0.1.0"));
     assert_eq!(view.title, "Greeter from Git", "{view:#?}");
     assert_eq!(titles(&view), ["Install"]);
     assert!(

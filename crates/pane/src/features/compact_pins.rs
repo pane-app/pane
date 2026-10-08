@@ -170,8 +170,17 @@ impl LauncherWindow {
             .active(move |style| style.bg(pressed(hover)))
             .role(Role::Button)
             .aria_label(format!("Pinned {place}: {}", pin.title))
-            .when_some(pin.unavailable.clone(), |element, why| {
-                element.aria_description(why)
+            .when_some(
+                crate::features::quick_slots::slot_description(&pin),
+                |element, description| element.aria_description(description),
+            )
+            // What tells it apart from a result of its title, which the
+            // compact pin has no room to show.
+            .when_some(pin.detail.clone(), |element, detail| {
+                element.tooltip(crate::ui::tooltip::text_tooltip(
+                    detail.into(),
+                    crate::ui::tooltip::TooltipLook::of(theme),
+                ))
             })
             .when_some(number, |element, number| {
                 element.aria_keyshortcuts(crate::keyboard::quick_slot_keys(number).name())
@@ -210,7 +219,7 @@ impl LauncherWindow {
         }
         self.activate_quick_slot(index, window, cx);
         self.arm_arrival();
-        if matches!(self.launcher.view().screen, Screen::Root { .. }) {
+        if matches!(self.launcher.screen(), Screen::Root { .. }) {
             self.query.focus(window, cx);
         }
     }

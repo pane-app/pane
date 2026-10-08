@@ -1579,8 +1579,8 @@ impl Geometry {
 }
 
 /// The split view's tokens: the reference's clipboard board (#102) — its
-/// 64px header with the back button, the command's chip and the capture
-/// button; the 46px tab strip; the 360px list of 44px rows beside the
+/// 64px header with the back button, the search and the type dropdown;
+/// the 360px list of 44px rows beside the
 /// preview card; and the 52px footer. Rows, section labels, keycaps and
 /// footer buttons are the launcher's own families and take their tokens.
 /// The board's source tones and its code, color, link and image previews
@@ -1600,44 +1600,13 @@ pub(crate) struct SplitTokens {
     pub(crate) back_glyph: Pixels,
     pub(crate) back_fill: Hsla,
     pub(crate) back_text: Hsla,
-    /// The command's chip: 30 high, padding 6 left and 10 right, gap 7,
-    /// radius 8, 13px/500, white 8% with a white 8% inset ring; its tile
-    /// 20 square, radius 5, white 10%, a 12px glyph.
-    pub(crate) chip_height: Pixels,
-    pub(crate) chip_padding_left: Pixels,
-    pub(crate) chip_padding_right: Pixels,
-    pub(crate) chip_gap: Pixels,
-    pub(crate) chip_radius: Pixels,
-    pub(crate) chip_size: Pixels,
-    pub(crate) chip_fill: Hsla,
-    pub(crate) chip_edge: Hsla,
-    pub(crate) chip_tile: Pixels,
-    pub(crate) chip_tile_radius: Pixels,
-    pub(crate) chip_tile_fill: Hsla,
-    pub(crate) chip_glyph: Pixels,
-    /// The capture button's glyph (15).
-    pub(crate) capture_glyph: Pixels,
-    /// The tab strip: 46 high, 14px either side, 4 between tabs.
-    pub(crate) tabs_height: Pixels,
-    pub(crate) tabs_padding_x: Pixels,
-    pub(crate) tabs_gap: Pixels,
-    /// A tab: 30 high, 12px either side, radius 8, 12.5px/500; #9A9BA0 at
-    /// rest, white 4% and #EDEDEF on hover, white 10% and white with a
-    /// white 6% inset ring while chosen.
-    pub(crate) tab_height: Pixels,
-    pub(crate) tab_padding_x: Pixels,
-    pub(crate) tab_radius: Pixels,
-    pub(crate) tab_size: Pixels,
-    pub(crate) tab_text: Hsla,
-    pub(crate) tab_hover: Hsla,
-    pub(crate) tab_hover_text: Hsla,
-    pub(crate) tab_on: Hsla,
-    pub(crate) tab_on_text: Hsla,
-    pub(crate) tab_on_edge: Hsla,
-    /// The strip's caption: 12px, a 14px glyph 6px before it.
-    pub(crate) caption_size: Pixels,
-    pub(crate) caption_glyph: Pixels,
-    pub(crate) caption_gap: Pixels,
+    /// The detail pane's Information (#166): 12px, rows 30 high, the
+    /// source's 14px icon 6px before its name, 10 above the section.
+    pub(crate) info_size: Pixels,
+    pub(crate) info_row_height: Pixels,
+    pub(crate) info_icon: Pixels,
+    pub(crate) info_gap: Pixels,
+    pub(crate) info_margin_top: Pixels,
     /// The list: 360 wide with its 1px rule on the right, padded 2 above,
     /// 8 either side and 10 below.
     pub(crate) list_width: Pixels,
@@ -1668,11 +1637,9 @@ pub(crate) struct SplitTokens {
     pub(crate) text_line_height: f32,
     pub(crate) text_tracking: f32,
     /// The footer: 52 high, padded 16 left and 8 right, its two sides 16
-    /// apart; the clock glyph (16) 10 before the copied line.
+    /// apart.
     pub(crate) footer_height: Pixels,
     pub(crate) footer_gap: Pixels,
-    pub(crate) footer_lead_gap: Pixels,
-    pub(crate) footer_glyph: Pixels,
 }
 
 impl SplitTokens {
@@ -1684,15 +1651,6 @@ impl SplitTokens {
         SplitTokens {
             back_fill: color(0x0000000F),
             back_text: color(0x3B3D44FF),
-            chip_fill: color(0x00000012),
-            chip_edge: color(0x00000014),
-            chip_tile_fill: color(0x00000014),
-            tab_text: color(0x575A63FF),
-            tab_hover: color(0x0000000A),
-            tab_hover_text: color(0x202126FF),
-            tab_on: color(0x00000016),
-            tab_on_text: color(0x111214FF),
-            tab_on_edge: color(0x0000000F),
             preview_fill: color(0x0000000A),
             preview_edge: color(0x00000012),
             ..SplitTokens::dark()
@@ -1712,35 +1670,11 @@ impl SplitTokens {
             back_glyph: px(16.),
             back_fill: color(0xFFFFFF0F),
             back_text: color(0xC9CACEFF),
-            chip_height: px(30.),
-            chip_padding_left: px(6.),
-            chip_padding_right: px(10.),
-            chip_gap: px(7.),
-            chip_radius: px(8.),
-            chip_size: px(13.),
-            chip_fill: color(0xFFFFFF14),
-            chip_edge: color(0xFFFFFF14),
-            chip_tile: px(20.),
-            chip_tile_radius: px(5.),
-            chip_tile_fill: color(0xFFFFFF1A),
-            chip_glyph: px(12.),
-            capture_glyph: px(15.),
-            tabs_height: px(46.),
-            tabs_padding_x: px(14.),
-            tabs_gap: px(4.),
-            tab_height: px(30.),
-            tab_padding_x: px(12.),
-            tab_radius: px(8.),
-            tab_size: px(12.5),
-            tab_text: color(0x9A9BA0FF),
-            tab_hover: color(0xFFFFFF0A),
-            tab_hover_text: color(0xEDEDEFFF),
-            tab_on: color(0xFFFFFF1A),
-            tab_on_text: color(0xFFFFFFFF),
-            tab_on_edge: color(0xFFFFFF0F),
-            caption_size: px(12.),
-            caption_glyph: px(14.),
-            caption_gap: px(6.),
+            info_size: px(12.),
+            info_row_height: px(30.),
+            info_icon: px(14.),
+            info_gap: px(6.),
+            info_margin_top: px(10.),
             list_width: px(360.),
             list_max_share: 0.5,
             list_padding_top: px(2.),
@@ -1762,8 +1696,6 @@ impl SplitTokens {
             text_tracking: -0.005,
             footer_height: px(52.),
             footer_gap: px(16.),
-            footer_lead_gap: px(10.),
-            footer_glyph: px(16.),
         }
     }
 }

@@ -1,0 +1,143 @@
+package pane:extension@0.1.0;
+
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// Pane's file index (#126, ADR 0034): the names of the files and folders
+// under the user's home folder (and the folders the user adds), which Pane's
+// host keeps in its cache folder and current from the system's own change
+// records, so that a command finds files as it finds anything else, without
+// walking the disk itself (a pure WASI guest has no folders to read). A
+// package whose pane.json sets `"fileIndex": true` may search it; Pane keeps
+// the index open, caught up and watched exactly while such a package is
+// enabled and not paused. Rust commands use it through pane-guest
+// (`pane_guest::file_index`), JS/TS commands as the module
+// "pane:extension/file-index@0.1.0" (guests/js/file-index.d.ts), imported
+// only by a command whose package.json sets `"pane": { "fileIndex": true }`.
+// Kept apart from the other files so a command that uses none is unchanged.
+// The header follows `package`: comments above it would document the package,
+// which extension.wit already does.
+
+/// Searches the file index Pane keeps.
+interface file-index {
+  /// What kind of entry it is.
+  enum entry-kind {
+    file,
+    folder,
+    /// A symbolic link, a junction or another link: listed, never
+    /// followed.
+    link,
+  }
+
+  /// A kind of file, told from its name's extension, the same table on
+  /// every system.
+  enum category {
+    documents,
+    images,
+    audio,
+    video,
+    archives,
+    /// Programs, scripts, shortcuts, installers and application bundles.
+    applications,
+    /// Plain text: notes, data and configuration files, source code.
+    text,
+    /// A file of none of the other categories.
+    other,
+  }
+
+  /// How results are ordered.
+  enum sort {
+    /// Best match first; for a blank query, the most recently modified
+    /// first.
+    relevance,
+    /// The most recently modified first.
+    modified,
+  }
+
+  /// What to search for besides the text.
+  record search-options {
+    /// Only entries of this kind.
+    kind: option<entry-kind>,
+    /// Only files of this category.
+    category: option<category>,
+    sort: sort,
+    /// At most this many entries (Pane answers 200 at most per call).
+    limit: u32,
+    /// Skip this many first: the next page starts where the last ended.
+    offset: u32,
+  }
+
+  /// An entry the index holds.
+  record file-entry {
+    /// Names the entry to Pane: an `open-file` root result
+    /// (wit/root-results.wit) or a command search result's `file`
+    /// (wit/search.wit). An opaque id Pane gave it for this package; Pane
+    /// checks the entry again before it acts on it.
+    id: string,
+    /// Its absolute path, for showing and copying (a name that is not
+    /// valid Unicode has replacement characters here).
+    path: string,
+    /// Its own name.
+    name: string,
+    /// Its folder for people: below the home folder as `~/…`, elsewhere
+    /// its full path.
+    folder: string,
+    kind: entry-kind,
+    /// Whether opening it would run a program (an executable, a script, a
+    /// shortcut, an installer), as its name says. File search's own Enter
+    /// shows such a file rather than run it.
+    program: bool,
+    /// In bytes; 0 for a folder.
+    size: u64,
+    /// Last modified, in whole seconds since 1970; 0 when unknown.
+    modified: u64,
+    /// The volume it is on, as the system numbers it.
+    volume: u64,
+  }
+
+  /// Where the index is.
+  enum index-state {
+    /// No enabled extension uses it (or this Pane keeps none).
+    off,
+    /// Being built or caught up: what is indexed already is searched.
+    building,
+    /// Current, and kept so while Pane runs.
+    current,
+    /// Stopped: `reason` says why.
+    stopped,
+  }
+
+  /// The index's state, for telling the user why results are incomplete.
+  record index-status {
+    state: index-state,
+    /// Entries in the index (an estimate while it changes).
+    entries: u64,
+    /// Entries the walk in progress has found so far.
+    found: u64,
+    /// Why it is off, waiting or stopped, or what to know about it.
+    reason: option<string>,
+  }
+
+  /// The entries whose name (or folders) match `query`, best first, as
+  /// `options` filters, sorts and pages them; a blank query lists the most
+  /// recently modified entries. Answers at once from what is indexed, never
+  /// waiting for a walk. Fails for a package whose pane.json does not set
+  /// `"fileIndex": true`.
+  search: func(query: string, options: search-options) -> result<list<file-entry>, string>;
+
+  /// Where the index is now.
+  status: func() -> index-status;
+}
+
+/// The file index import alone, for guest bindings.
+world file-index-user {
+  import file-index;
+}
+
+/// The world Pane hosts: a command that may also use extension data, call
+/// operations, find and open installed applications, run its native
+/// helpers and system programs, list the folder granted to its package,
+/// keep clipboard history and search the file index.
+world extension-with-file-index {
+  include extension-with-clipboard;
+  import file-index;
+}

@@ -1,12 +1,28 @@
 # cargo-nextest's settings for the workspace's tests (`cargo xtask
 # ci-tests`). Only what differs from nextest's defaults is here.
 
+# Test priorities (below) need 0.9.91; CI pins 0.9.146.
+nextest-version = "0.9.91"
+
+# Run every test even after one fails, so a single CI run reports every
+# failure instead of stopping at the first.
+[profile.default]
+fail-fast = false
+
 # The tests that print how much memory the samples and default extensions
 # take at most, under the 128 MiB cap on a guest's memory (#120), show
 # their output when they pass too, so a verify run's log carries it.
 [[profile.default.overrides]]
 filter = "test(/memory_peaks|stays_under_the_memory_cap/)"
 success-output = "immediate"
+
+# The longest tests start first, so a run (or a CI shard) does not end
+# waiting on one that started last: `memory_peaks` takes about 150 s on a
+# CI runner, where most tests take seconds. A test found to take minutes
+# is added here.
+[[profile.default.overrides]]
+filter = "test(/memory_peaks/)"
+priority = 100
 
 # The real-clipboard adapter tests (with PANE_TEST_REAL_CLIPBOARD=1) replace
 # what is on the system's clipboard, so they run one at a time: each test is
@@ -16,5 +32,5 @@ success-output = "immediate"
 real-clipboard = { max-threads = 1 }
 
 [[profile.default.overrides]]
-filter = "binary(clipboard_adapter)"
+filter = "binary(~clipboard_adapter)"
 test-group = "real-clipboard"

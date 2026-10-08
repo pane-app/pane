@@ -34,8 +34,8 @@ declare module "pane:extension/content@0.1.0" {
 
 /**
  * `pane:extension/cache@0.1.0`: disposable values the extension can compute
- * or download again. The user can clear the cache in Manage extensions at any
- * time without the extension running, so any value may be `null` next time.
+ * or download again. The user can clear the cache on the extension's page in
+ * Settings at any time without the extension running, so any value may be `null` next time.
  * `get` and `set` behave as in the settings module.
  */
 declare module "pane:extension/cache@0.1.0" {

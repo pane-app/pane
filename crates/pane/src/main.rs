@@ -114,18 +114,42 @@ fn main() {
             .detach();
         }
         // The quick slots' record, beside the host settings in the same
-        // data folder (#101).
+        // data folder (#101). Pane registers no command of its build's
+        // own: every root row comes from an installed package (the
+        // samples are installed by hand, #162).
         let launcher = match pane::data_dir() {
-            Some(dir) => {
-                Launcher::with_packages(runtime, pane::sample_commands(), dir.join("extensions"))
-                    .with_quick_slots(&dir)
-            }
-            None => Launcher::new(runtime, pane::sample_commands()),
+            Some(dir) => Launcher::with_packages(runtime, Vec::new(), dir.join("extensions"))
+                .with_quick_slots(&dir),
+            None => Launcher::new(runtime, Vec::new()),
         }
         .with_link_opener(Arc::new(pane::SystemLinks))
         // What commands copy, open, reveal and recycle reaches the system's
         // own clipboard, handlers, file manager and Recycle Bin (#145).
         .with_system(pane_core::system::native());
+        // File search's index of the home folder (#126, #175), kept in
+        // Pane's cache folder; it runs only while an enabled extension uses
+        // it, and never indexes Pane's own folders.
+        let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+            .filter(|home| !home.is_empty())
+            .map(PathBuf::from);
+        let cache = pane::cache_dir();
+        // The native smokes index a fixture folder of their own instead of
+        // the home folder, keeping the index in their own data folder;
+        // nothing else sets this, and a release build has no such hook.
+        #[cfg(debug_assertions)]
+        let (cache, home) = match std::env::var_os("PANE_TEST_FILE_INDEX_HOME") {
+            Some(fixture) => (pane::data_dir(), Some(PathBuf::from(fixture))),
+            None => (cache, home),
+        };
+        let launcher = match (cache, home) {
+            (Some(cache), Some(home)) => {
+                let own = pane::data_dir().into_iter().collect();
+                launcher.with_file_index(pane_core::file_index::IndexerConfig::native(
+                    &cache, home, own,
+                ))
+            }
+            _ => launcher,
+        };
         // Development builds can download npm packages from a registry on
         // this computer instead (the tests' and smokes' own); release builds
         // always use registry.npmjs.org.
@@ -319,7 +343,7 @@ fn main() {
         })
         .detach();
         // Acquiring the default extensions goes on in the background: the
-        // window, root search and Manage extensions stay usable, and the
+        // window, root search and the extension list stay usable, and the
         // status line says what it is doing (the changes channel redraws
         // the window as it goes, as for development builds).
         cx.spawn(async move |_| {

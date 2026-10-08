@@ -1,6 +1,8 @@
 # Native GUI smoke on Windows: launches Pane, drives it with real key events
 # and captures the screen. Pane keeps installed packages in <output-dir>\data,
-# not the user's data folder.
+# not the user's data folder. Settings is driven through UI Automation (see
+# Press-Named). The clipboard phases serve the artifacts the #51 phase's
+# package build leaves in target\dist\artifacts, so they run after it.
 # Usage: scripts/smoke-windows.ps1 -OutDir <output-dir>
 param([string]$OutDir = "smoke")
 $ErrorActionPreference = "Stop"
@@ -54,6 +56,48 @@ function Check($name, $color, $minimum = 20) {
     python "$PSScriptRoot/check_screenshot.py" (Join-Path $OutDir $name) $color $minimum
     if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: $name" }
 }
+# Captures $name until it shows text in $color, for at most $seconds, then
+# checks it: for a view that appears once work in the background ends,
+# whenever that is, and for a command's answer in a toast (#141), which
+# leaves the footer 3 seconds after it appears: a capture after a fixed
+# wait missed Echo's (release run 37689872256, frame 69).
+function Capture-Until($name, $color, $seconds) {
+    $deadline = (Get-Date).AddSeconds($seconds)
+    while ($true) {
+        Capture $name
+        # Only its exit code matters. Windows PowerShell 5.1 turns a native
+        # program's redirected standard error into errors, which "Stop" would
+        # throw at the first failed check, so it runs with "Continue" in a
+        # scope of its own.
+        & {
+            $ErrorActionPreference = "Continue"
+            python "$PSScriptRoot/check_screenshot.py" (Join-Path $OutDir $name) $color 20 *> $null
+        }
+        if ($LASTEXITCODE -eq 0) { return }
+        if ((Get-Date) -gt $deadline) { Check $name $color; return }
+        Start-Sleep -Milliseconds 250
+    }
+}
+# Waits, for at most $seconds, until the Pane window no longer shows text
+# in $color: a toast leaves 3 seconds after it shows (#141), but a slow
+# runner can still show it after a fixed wait, and the next answer's toast,
+# of the same color, would then be taken for it (release run 37725624283's
+# macOS frame 91 showed the earlier answer).
+function Until-Toast-Gone($color, $seconds) {
+    # Hover pauses the toast's timer; move away without changing focus.
+    if (-not [Win]::SetCursorPos(1, 1)) { throw "cannot move pointer away from toast" }
+    $deadline = (Get-Date).AddSeconds($seconds)
+    while ($true) {
+        Capture "toast-wait.png"
+        & {
+            $ErrorActionPreference = "Continue"
+            python "$PSScriptRoot/check_screenshot.py" --absent (Join-Path $OutDir "toast-wait.png") $color *> $null
+        }
+        if ($LASTEXITCODE -eq 0) { return }
+        if ((Get-Date) -gt $deadline) { throw "the $color toast did not leave within $seconds seconds" }
+        Start-Sleep -Milliseconds 250
+    }
+}
 # Returns x, y: where the screenshot shows the given color.
 function Locate($name, $color) {
     $at = python "$PSScriptRoot/check_screenshot.py" --locate (Join-Path $OutDir $name) $color
@@ -67,22 +111,147 @@ function Click-At($x, $y) {
     [Win]::mouse_event(0x4, 0, 0, 0, [UIntPtr]::Zero)   # left button up
 }
 function Send($keys) { [System.Windows.Forms.SendKeys]::SendWait($keys) }
-# Opens Manage extensions from root search. A blind run of Downs to root's
-# end was the way in until #72's Settings… root result made itself last of
-# all (it is listed whatever is installed, so every phase's root ends with
-# it): the run now opens the Settings window instead. Searching for the row
-# by its title is order-proof: "manage" matches only the Manage extensions…
-# row, which is selected when the list narrows to it, and Enter opens it.
-# ^A first, so a query an earlier step left in the field is replaced, not
-# extended.
-function Manage-Extensions {
-    Send "^a"; Send "manage"; Start-Sleep -Seconds 1
-    Send "{ENTER}"; Start-Sleep -Seconds 1
-}
 # Brings Pane's window to the front, so that key events reach it.
 function Focus-Pane($process) {
     [Win]::SetForegroundWindow($process.MainWindowHandle) | Out-Null
     Start-Sleep -Milliseconds 500
+}
+# Back to a blank root search from wherever the launcher is, with the
+# return to root key (Shift+Escape): Escape at a blank root search hides
+# the launcher since the redesign (1e61793), so it cannot be pressed blind.
+function To-Root { Send "+{ESC}"; Start-Sleep -Seconds 1 }
+
+# Extensions are managed in Settings (#168): root search's "Manage
+# Extensions" command opens the Settings window at its Extensions group,
+# one page per installed extension, and the launcher has no screen for
+# them any more. Settings' switches, menus and confirmation rows answer
+# the pointer, not the keyboard, so the smoke finds them by their
+# accessible names (Pane's own labels, which AccessKit gives UI
+# Automation) in the Settings window and invokes them; an element that
+# offers no pattern is clicked at its center. The names used: an
+# extension's sidebar entry and its group-page item are its title, its
+# page's switch is its title too (the one with a toggle), its menu
+# button "Actions for <title>" and the menu's items Reload, Retry, Why
+# Paused, Clear Cache, Develop, Stop Developing and Uninstall; a
+# confirmation's or a details screen's rows are their titles; a
+# command's alias and hotkey cells "Alias for <command>: …" and "Hotkey
+# for <command>: …", its fallback switch "Offer <command> as a
+# fallback"; the page's status line is the operation's outcome.
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+# The Settings window of the Pane running as $process, or $null.
+function Settings-Window {
+    $byProcess = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$process.Id)
+    $byName = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, "Settings")
+    $condition = [System.Windows.Automation.AndCondition]::new([System.Windows.Automation.Condition[]]@($byProcess, $byName))
+    [System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+}
+# The element of the Settings window named $name (whose name starts with
+# it, with -Prefix; the switch of that name, with -Toggle), waiting up to
+# a minute for it to be drawn; $null with -Quiet when it never is.
+function Find-Named($name, [switch]$Prefix, [switch]$Toggle, [switch]$Quiet, $tries = 600) {
+    for ($i = 0; $i -lt $tries; $i++) {
+        $window = Settings-Window
+        if ($window) {
+            $all = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+            foreach ($element in $all) {
+                $current = $element.Current.Name
+                if (-not $current) { continue }
+                $named = if ($Prefix) { $current.StartsWith($name, [System.StringComparison]::Ordinal) } else { $current -ceq $name }
+                if (-not $named) { continue }
+                # A switch: what toggles, not the sidebar entry, the list
+                # item or the heading of the same name.
+                $pattern = $null
+                $switch = $element.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$pattern) -or
+                    $element.Current.ControlType -eq [System.Windows.Automation.ControlType]::CheckBox -or
+                    $element.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button
+                if ($Toggle -and -not $switch) { continue }
+                return $element
+            }
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    if ($Quiet) { return $null }
+    throw "Settings shows nothing named $name"
+}
+# Invokes the element of the Settings window named $name (see Find-Named):
+# its toggle, its invoke pattern, or a click at its center.
+function Press-Named($name, [switch]$Prefix, [switch]$Toggle) {
+    $element = Find-Named $name -Prefix:$Prefix -Toggle:$Toggle
+    $pattern = $null
+    if ($element.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$pattern)) {
+        $pattern.Toggle()
+    } elseif ($element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
+        $pattern.Invoke()
+    } else {
+        $box = $element.Current.BoundingRectangle
+        Click-At ([int]($box.X + $box.Width / 2)) ([int]($box.Y + $box.Height / 2))
+    }
+    Start-Sleep -Seconds 1
+}
+# Waits until the Settings window shows something named $text (a prefix of
+# its name with -Prefix): an operation's outcome on the status line, a
+# confirmation's or a details screen's rows.
+function Wait-Shown($text, [switch]$Prefix) { Find-Named $text -Prefix:$Prefix | Out-Null }
+# Asserts that the Settings window, settled, shows nothing named $text.
+function Assert-Not-Shown($text) {
+    Start-Sleep -Seconds 1
+    if (Find-Named $text -Quiet -tries 1) { throw "Settings still shows $text" }
+}
+# Types $text into the Settings field that has the keyboard and waits, up
+# to a minute, until the field holds all of it (its value, as UI Automation
+# reads it): SendKeys returns before Pane has handled every key, and a
+# button pressed through UI Automation can overtake the rest (release run
+# 37725624283's Show Package asked npm for "@pane-samples/gre").
+function Type-Field($text) {
+    Send $text
+    for ($i = 0; $i -lt 600; $i++) {
+        $window = Settings-Window
+        if ($window) {
+            $all = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+            foreach ($element in $all) {
+                $pattern = $null
+                if ($element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern) -and
+                    $pattern.Current.Value -ceq $text) { return }
+            }
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "no field of Settings holds $text"
+}
+# Opens Settings at the Extensions group from root search: "manage" finds
+# the Manage Extensions command, the only root row it matches, and Enter
+# runs it. The launcher is brought back to a blank root search first: it
+# is wherever the user left it, a Settings operation leaving it there (#168).
+function Manage-Extensions {
+    Focus-Pane $process
+    To-Root
+    Send "^a"; Send "manage"; Start-Sleep -Seconds 1
+    Send "{ENTER}"; Start-Sleep -Seconds 2
+    Find-Named "Extensions" | Out-Null
+}
+# Opens the Settings page of the installed extension titled $title.
+function Open-Extension($title) {
+    Manage-Extensions
+    Press-Named $title
+    Find-Named "Actions for $title" | Out-Null
+}
+# Opens the Actions menu of the page of the extension titled $title and
+# chooses its item $item.
+function Extension-Action($title, $item) {
+    Press-Named "Actions for $title"
+    Press-Named $item
+}
+# Closes Settings (its close shortcut, Ctrl+W) and goes back to a blank
+# root search in the launcher.
+function Close-Settings {
+    $window = Settings-Window
+    if ($window) {
+        [Win]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle) | Out-Null
+        Start-Sleep -Milliseconds 500
+        Send "^w"; Start-Sleep -Seconds 1
+    }
+    Focus-Pane $process
+    To-Root
 }
 # Starts Pane with the given arguments, writing its errors to $log, and
 # brings its window to the front. The program is the smoke's own debug
@@ -128,6 +297,35 @@ function Stop-Pane($process) {
     $process.WaitForExit()
 }
 
+# Waits until $file contains $text ($present) or no longer does (-not
+# $present), trying $tries times (100 by default: 10 seconds; the first
+# setup of the installed Pane needs far more, as a payload's components
+# are checked one at a time).
+function Wait-For($file, $text, [bool]$present, $tries = 100) {
+    for ($i = 0; $i -lt $tries; $i++) {
+        $found = (Test-Path $file) -and (Select-String -Quiet -SimpleMatch $text $file)
+        if ($found -eq $present) { return }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "${file}: $text is not $(if ($present) { 'present' } else { 'absent' })"
+}
+
+# The Rust, JavaScript and TypeScript samples are no commands of Pane's
+# own (#162): installed with `pane --install` into a data folder of their
+# own, they are root's first three rows, in install order (Rust sample,
+# JavaScript sample, TypeScript sample), then Pane's install rows. The
+# first phase and the root search phase run there.
+$samplesData = Join-Path $OutDir "samples-data"
+if (Test-Path $samplesData) { Remove-Item -Recurse -Force $samplesData }
+$env:PANE_DATA_DIR = $samplesData
+foreach ($sample in "sample-rust", "sample-js", "sample-ts") {
+    $process = Start-Pane "stderr-install-$sample.log" @("--install", "target/guests/packages/$sample")
+    Send "{ENTER}"   # Install
+    # 120 s: the install reads and checks the whole package, which a loaded
+    # runner can take past the 10 s default.
+    Wait-For (Join-Path $samplesData "extensions/installed.json") $sample $true 1200; Start-Sleep -Seconds 1
+    Stop-Pane $process
+}
 $process = Start-Pane "stderr.log"
 Capture "1-root.png"
 Check "1-root.png" "hint"   # the hint line: text renders
@@ -161,9 +359,36 @@ Check "8-form-result.png" "success"   # the guest's answer
 Send "{ESC}{ESC}"; Start-Sleep -Seconds 1
 Stop-Pane $process
 
+# Root search, over the samples' data folder still: typing narrows root to
+# the matching commands and Enter opens the best match. "typescr" matches
+# only TypeScript sample, whose "Wait briefly" answers exactly as in step
+# 4. A query that matches nothing shows no results, and Enter then opens
+# nothing.
+$process = Start-Pane "stderr-search.log"
+Send "typescr"; Start-Sleep -Seconds 1
+Capture "24-search.png"
+Send "{ENTER}"; Start-Sleep -Seconds 3
+Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 2
+Capture "25-search-result.png"
+Check "25-search-result.png" "success"   # the TypeScript guest's answer
+python "$PSScriptRoot/check_screenshot.py" --same (Join-Path $OutDir "4-result-2.png") (Join-Path $OutDir "25-search-result.png")
+if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the searched command is not the TypeScript sample" }
+Send "{ESC}"; Start-Sleep -Seconds 1
+Send "zzz"; Start-Sleep -Seconds 1
+Send "{ENTER}"; Start-Sleep -Seconds 1
+Capture "26-no-results.png"
+$shots = "1-root", "24-search", "25-search-result", "26-no-results" | ForEach-Object { Join-Path $OutDir "$_.png" }
+python "$PSScriptRoot/check_screenshot.py" --distinct @shots
+if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: root search showed the same window twice" }
+Stop-Pane $process
+
+# The phases below share $data, which starts with nothing installed:
+# root lists no sample until one is installed.
+$env:PANE_DATA_DIR = $data
+
 # Install the assembled Rust sample package (the folder the picker would
-# return), then run its command. Root lists the three samples, the installed
-# command, then the install and Manage extensions rows.
+# return), then run its command. Root lists the installed command, then
+# the install and Manage Extensions rows.
 $process = Start-Pane "stderr-install.log" @("--install", "target/guests/packages/sample-rust")
 Capture "9-package.png"
 Check "9-package.png" "details"   # the package's identity and compatibility lines
@@ -176,7 +401,7 @@ Capture "11-installed-result.png"
 Check "11-installed-result.png" "success"   # the installed guest's answer
 Stop-Pane $process
 
-# The installed command is still listed after a restart.
+# The installed command is still listed after a restart, root's first row.
 $process = Start-Pane "stderr-restart.log"
 Capture "12-restarted.png"
 Check "12-restarted.png" "hint"
@@ -216,10 +441,9 @@ Capture "15-no-compatible-package.png"
 Check "15-no-compatible-package.png" "error"   # "Not available on Windows: ..."
 Stop-Pane $process
 
-# Install the settings sample, save a choice with it, then disable it in
-# Manage extensions. Root lists the three samples, Rust sample, Greeting, the
-# install rows, then Manage extensions… and Settings… last; the extension
-# list holds Rust sample, then Settings sample.
+# Install the settings sample, save a choice with it, then disable it with
+# the switch on its page in Settings (#168). Root lists Rust sample,
+# Greeting, the install rows, then Manage Extensions and Settings… last.
 $process = Start-Pane "stderr-settings.log" @("--install", "target/guests/packages/sample-settings")
 Send "{ENTER}"; Start-Sleep -Seconds 2   # Install; Greeting is selected
 Send "{ENTER}"; Start-Sleep -Seconds 3   # open Greeting
@@ -227,10 +451,10 @@ Send "{ENTER}"; Start-Sleep -Seconds 2   # "Use a formal greeting"
 Capture "16-setting-saved.png"
 Check "16-setting-saved.png" "success"   # "Saved the formal greeting"
 Send "{ESC}"; Start-Sleep -Seconds 1
-Manage-Extensions
-Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 2
-Capture "17-disabled.png"
-Check "17-disabled.png" "success"   # "Disabled Settings sample"
+Open-Extension "Settings sample"
+Press-Named "Settings sample" -Toggle   # its switch: off
+Wait-Shown "Disabled Settings sample"
+Capture "17-disabled.png"   # Settings: the page's status says so
 Stop-Pane $process
 if (-not (Select-String -Quiet -SimpleMatch '"disabled": true' (Join-Path $data "extensions/installed.json"))) { throw "disabled state not recorded" }
 if (-not (Select-String -Quiet -SimpleMatch '"greeting-style": "formal"' (Join-Path $data "extensions/settings.json"))) { throw "setting not saved" }
@@ -244,12 +468,12 @@ Capture "18-restarted-disabled.png"
 Check "18-restarted-disabled.png" "hint"
 python "$PSScriptRoot/check_screenshot.py" --same (Join-Path $OutDir "12-restarted.png") (Join-Path $OutDir "18-restarted-disabled.png")
 if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: root after the restart lists the disabled package" }
-Manage-Extensions
-Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 2
+Open-Extension "Settings sample"
+Press-Named "Settings sample" -Toggle   # its switch: on
+Wait-Shown "Enabled Settings sample"
 Capture "19-enabled.png"
-Check "19-enabled.png" "success"   # "Enabled Settings sample"
-Send "{ESC}"; Start-Sleep -Seconds 1
-Send "{DOWN 4}"   # Greeting
+Close-Settings
+Send "{DOWN}"   # Greeting, after Rust sample
 Send "{ENTER}"; Start-Sleep -Seconds 3
 Send "{DOWN}{DOWN}{ENTER}"; Start-Sleep -Seconds 2   # "Greet me"
 Capture "20-greeted.png"
@@ -275,28 +499,6 @@ Click-At $x $y; Start-Sleep -Seconds 1
 Capture "23-color-click.png"
 Check "23-color-click.png" "1b5e20" 3000   # dark green
 Send "{ESC}{ESC}"; Start-Sleep -Seconds 1
-Stop-Pane $process
-
-# Root search: typing narrows root to the matching commands and Enter opens
-# the best match. "typescr" matches only TypeScript sample, whose "Wait
-# briefly" answers exactly as in step 4. A query that matches nothing shows
-# no results, and Enter then opens nothing.
-$process = Start-Pane "stderr-search.log"
-Send "typescr"; Start-Sleep -Seconds 1
-Capture "24-search.png"
-Send "{ENTER}"; Start-Sleep -Seconds 3
-Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 2
-Capture "25-search-result.png"
-Check "25-search-result.png" "success"   # the TypeScript guest's answer
-python "$PSScriptRoot/check_screenshot.py" --same (Join-Path $OutDir "4-result-2.png") (Join-Path $OutDir "25-search-result.png")
-if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the searched command is not the TypeScript sample" }
-Send "{ESC}"; Start-Sleep -Seconds 1
-Send "zzz"; Start-Sleep -Seconds 1
-Send "{ENTER}"; Start-Sleep -Seconds 1
-Capture "26-no-results.png"
-$shots = "1-root", "24-search", "25-search-result", "26-no-results" | ForEach-Object { Join-Path $OutDir "$_.png" }
-python "$PSScriptRoot/check_screenshot.py" --distinct @shots
-if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: root search showed the same window twice" }
 Stop-Pane $process
 
 # The calculator, a default extension: an expression typed into root search
@@ -347,11 +549,11 @@ if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the operation's answe
 Stop-Pane $process
 
 # Reload a development package while Pane stays open. Its command starts as
-# the Rust sample; a new build of it is the JavaScript sample. Root lists the
-# three samples, Rust sample, Greeting, Calculator, Call from JavaScript, Call
-# from Rust, Dev sample (the ninth row), the install row, then Manage
-# extensions... last; the extension list holds the six packages (Dev is the
-# sixth), then their six Reload rows (Reload Dev is the twelfth).
+# the Rust sample; a new build of it is the JavaScript sample. Root lists
+# Rust sample, Greeting, Call from JavaScript, Call from Rust, Dev sample
+# (the fifth row: Calculator only answers root search), the install row,
+# then Manage Extensions and Settings… last. Reload is an item of the
+# Actions menu on Dev's page in Settings.
 $dev = Join-Path $OutDir "dev"
 New-Item -ItemType Directory -Force -Path $dev | Out-Null
 Copy-Item "target/guests/sample_rust.wasm" (Join-Path $dev "command.wasm")
@@ -371,13 +573,12 @@ Capture "33-dev-before.png"
 Check "33-dev-before.png" "success"   # "Hello from the Rust guest"
 Send "{ESC}"; Start-Sleep -Seconds 1
 Copy-Item -Force "target/guests/sample_js.wasm" (Join-Path $dev "command.wasm")
-Manage-Extensions
-Send "{DOWN 11}"   # Reload Dev
-Send "{ENTER}"; Start-Sleep -Seconds 3
+Open-Extension "Dev"
+Extension-Action "Dev" "Reload"
+Wait-Shown "Reloaded Dev"
 Capture "34-reloaded.png"
-Check "34-reloaded.png" "success"   # "Reloaded Dev"
-Send "{ESC}"; Start-Sleep -Seconds 1
-Send "{DOWN 8}"   # Dev sample
+Close-Settings
+Send "{DOWN 4}"   # Dev sample
 Send "{ENTER}"; Start-Sleep -Seconds 3
 Send "{ENTER}"; Start-Sleep -Seconds 2   # "Say hello"
 Capture "35-dev-after.png"
@@ -389,13 +590,12 @@ Send "{ESC}"; Start-Sleep -Seconds 1
 # A build that fails the install checks (here its component is missing) is
 # not reloaded: the working code keeps running, exactly as before.
 Remove-Item (Join-Path $dev "command.wasm")
-Manage-Extensions
-Send "{DOWN 11}"
-Send "{ENTER}"; Start-Sleep -Seconds 2
+Open-Extension "Dev"
+Extension-Action "Dev" "Reload"
+Wait-Shown "Dev was not reloaded" -Prefix
 Capture "36-not-reloaded.png"
-Check "36-not-reloaded.png" "error"   # "Dev was not reloaded: ..."
-Send "{ESC}"; Start-Sleep -Seconds 1
-Send "{DOWN 8}"
+Close-Settings
+Send "{DOWN 4}"
 Send "{ENTER}"; Start-Sleep -Seconds 3
 Send "{ENTER}"; Start-Sleep -Seconds 2
 Capture "37-still-running.png"
@@ -403,17 +603,17 @@ python "$PSScriptRoot/check_screenshot.py" --same (Join-Path $OutDir "35-dev-aft
 if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: a build that failed its checks replaced the working code" }
 Send "{ESC}"; Start-Sleep -Seconds 1
 
-# A build whose start fails is reported with Retry, after Reload Dev; this
-# one saves a setting and fails its first start only, so Retry starts it.
+# A build whose start fails is reported with Retry, an item of the same
+# Actions menu; this one saves a setting and fails its first start only,
+# so Retry starts it.
 Copy-Item "target/guests/failing_start.wasm" (Join-Path $dev "command.wasm")
-Manage-Extensions
-Send "{DOWN 11}"
-Send "{ENTER}"; Start-Sleep -Seconds 3
+Open-Extension "Dev"
+Extension-Action "Dev" "Reload"
+Wait-Shown "Reloaded Dev, but it failed to start" -Prefix
 Capture "38-start-failed.png"
-Check "38-start-failed.png" "error"   # "Reloaded Dev, but it failed to start; ..."
-Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 3   # Retry starting Dev
+Extension-Action "Dev" "Retry"   # Retry starting Dev
+Wait-Shown "Started Dev"
 Capture "39-retried.png"
-Check "39-retried.png" "success"   # "Started Dev"
 Stop-Pane $process
 if (-not (Select-String -Quiet -SimpleMatch '"start-attempted": "yes"' (Join-Path $data "extensions/settings.json"))) { throw "the failed start's setting was not kept" }
 
@@ -422,7 +622,7 @@ if (-not (Select-String -Quiet -SimpleMatch '"start-attempted": "yes"' (Join-Pat
 # fifth items save a note (content) and sign in (a local credential), and its
 # sixth shows all four.
 $process = Start-Pane "stderr-kept.log"
-Send "{DOWN 4}"   # Greeting
+Send "{DOWN}"   # Greeting
 Send "{ENTER}"; Start-Sleep -Seconds 3
 Send "{DOWN 3}"
 Send "{ENTER}"; Start-Sleep -Seconds 2   # "Save a note"
@@ -436,20 +636,19 @@ if (-not (Select-String -Quiet -SimpleMatch '"note": "Water the plants"' (Join-P
 if (-not (Select-String -Quiet -SimpleMatch '"token": "sample-token"' (Join-Path $data "extensions/credentials.json"))) { throw "credential not saved" }
 if (-not (Select-String -Quiet -SimpleMatch '"last-greeting": "Good day to you"' (Join-Path $data "extensions/cache.json"))) { throw "greeting not cached" }
 
-# Clear the settings sample's cache in Manage extensions: its row follows the
-# six package rows, their six Reload rows and "Clear cache of Rust sample". Pane asks first, then deletes only the cached
-# greeting, without running the extension.
+# Clear the settings sample's cache from its page in Settings: Clear Cache,
+# an item of its Actions menu. Pane asks first, on the page, then deletes
+# only the cached greeting, without running the extension.
 $process = Start-Pane "stderr-clear-cache.log"
-Manage-Extensions
-Send "{DOWN 13}"
-Send "{ENTER}"; Start-Sleep -Seconds 1   # "Clear cache of Settings sample"
+Open-Extension "Settings sample"
+Extension-Action "Settings sample" "Clear Cache"
+Wait-Shown "Clear cache"   # the confirmation's row: what is deleted and what is kept above it
 Capture "41-confirm-clear-cache.png"
-Check "41-confirm-clear-cache.png" "details"   # what is deleted and what is kept
-Send "{ENTER}"; Start-Sleep -Seconds 2   # "Clear cache"
+Press-Named "Clear cache"
+Wait-Shown "Cleared the cache of Settings sample"
 Capture "42-cache-cleared.png"
-Check "42-cache-cleared.png" "success"   # "Cleared the cache of Settings sample"
-Send "{ESC}"; Start-Sleep -Seconds 1
-Send "{DOWN 4}"   # Greeting
+Close-Settings
+Send "{DOWN}"   # Greeting
 Send "{ENTER}"; Start-Sleep -Seconds 3
 Send "{DOWN 5}"
 Send "{ENTER}"; Start-Sleep -Seconds 2   # "Show what Pane keeps"
@@ -523,19 +722,19 @@ python "$PSScriptRoot/check_screenshot.py" --distinct @shots
 if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the quicklink was not found" }
 Stop-Pane $process
 
-# Uninstall the settings sample, keeping its saved data: its row follows the
-# eight Clear cache rows. Pane asks first, showing its saved data, and the first
-# choice keeps its settings and content while its copy and credential go.
-# Installing the same folder again finds its formal style and note, signed out.
+# Uninstall the settings sample, keeping its saved data: Uninstall, the last
+# item of its page's Actions menu. Pane asks first, showing its saved data,
+# and the first choice keeps its settings and content while its copy and
+# credential go. Installing the same folder again finds its formal style
+# and note, signed out.
 $process = Start-Pane "stderr-uninstall.log"
-Manage-Extensions
-Send "{DOWN 25}"
-Send "{ENTER}"; Start-Sleep -Seconds 1   # "Uninstall Settings sample"
+Open-Extension "Settings sample"
+Extension-Action "Settings sample" "Uninstall"
+Wait-Shown "Uninstall and keep saved data"   # the confirmation: what is removed and the saved data
 Capture "49-confirm-uninstall.png"
-Check "49-confirm-uninstall.png" "details"   # what is removed and the saved data
-Send "{ENTER}"; Start-Sleep -Seconds 2   # "Uninstall and keep saved data"
+Press-Named "Uninstall and keep saved data"
+Wait-Shown "Uninstalled Settings sample" -Prefix   # "...; its settings and content are kept"
 Capture "50-uninstalled.png"
-Check "50-uninstalled.png" "success"   # "Uninstalled Settings sample; its settings and content are kept"
 Stop-Pane $process
 if (-not (Select-String -Quiet -SimpleMatch '"retained"' (Join-Path $data "extensions/installed.json"))) { throw "kept data not recorded" }
 if (Select-String -Quiet -SimpleMatch 'sample-token' (Join-Path $data "extensions/credentials.json")) { throw "credential not removed" }
@@ -554,13 +753,13 @@ Send "{ESC}"; Start-Sleep -Seconds 1
 Stop-Pane $process
 if (Select-String -Quiet -SimpleMatch '"retained"' (Join-Path $data "extensions/installed.json")) { throw "retained record not dropped" }
 
-# Global hotkeys: in Manage extensions, the settings sample's command,
-# Greeting, is given Ctrl+Alt+G by pressing it on its hotkey screen (its row
-# follows the package's state, Reload, Clear cache and Uninstall rows).
-# With Pane minimized, pressing the hotkey brings Pane's window to the front with
-# Greeting open, also after a restart; once the extension is disabled,
-# pressing it does nothing. A data folder of its own keeps the rows in a
-# known order. (Screenshot 48 is the Linux smoke's opened quicklink.)
+# Global hotkeys: on the settings sample's page in Settings, its command,
+# Greeting, is given Ctrl+Alt+G by pressing it in the command's hotkey
+# recorder (its Commands section, #168). With Pane minimized, pressing the
+# hotkey brings Pane's window to the front with Greeting open, also after
+# a restart; once the extension is disabled, pressing it does nothing. A
+# data folder of its own. (Screenshot 48 is the Linux smoke's opened
+# quicklink.)
 function Minimize-Pane($process) {
     [Win]::ShowWindow($process.MainWindowHandle, 6) | Out-Null   # SW_MINIMIZE
     Start-Sleep -Seconds 1
@@ -580,14 +779,15 @@ if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 $env:PANE_DATA_DIR = $data
 $process = Start-Pane "stderr-hotkeys.log" @("--install", "target/guests/packages/sample-settings")
 Send "{ENTER}"; Start-Sleep -Seconds 2   # Install; Greeting is selected
-Manage-Extensions
-Send "{DOWN 4}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 1   # "Hotkey for Greeting"
+Open-Extension "Settings sample"
+Press-Named "Hotkey for Greeting:" -Prefix   # the recorder listens
+Wait-Shown "Recording; Hotkey for Greeting" -Prefix
 Capture "52-hotkey-screen.png"
-Check "52-hotkey-screen.png" "details"   # "Press the keys that should open Greeting ..."
-Send "^%g"; Start-Sleep -Seconds 2
-Capture "53-hotkey-assigned.png"
-Check "53-hotkey-assigned.png" "success"   # "Ctrl+Alt+G now opens Greeting"
-Send "{ESC}"; Start-Sleep -Seconds 1   # root search
+Send "^%g"
+Wait-For (Join-Path $data "extensions/hotkeys.json") '"ctrl+alt+g"' $true
+Assert-Not-Shown "Hotkey for Greeting: none"
+Capture "53-hotkey-assigned.png"   # the recorder shows Ctrl+Alt+G
+Close-Settings   # root search
 Minimize-Pane $process
 Capture "54-unfocused.png"   # evidence only: Pane is not on screen
 Press-Hotkey
@@ -609,9 +809,10 @@ $shots = "53-hotkey-assigned", "56-hotkey-after-restart" | ForEach-Object { Join
 python "$PSScriptRoot/check_screenshot.py" --distinct @shots
 if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the hotkey did not open Greeting after a restart" }
 Send "{ESC}"; Start-Sleep -Seconds 1
-Manage-Extensions
-Send "{ENTER}"; Start-Sleep -Seconds 2   # disable Settings sample
-Send "{ESC}"; Start-Sleep -Seconds 1
+Open-Extension "Settings sample"
+Press-Named "Settings sample" -Toggle   # disable Settings sample
+Wait-Shown "Disabled Settings sample"
+Close-Settings
 Capture "57-disabled.png"   # root search
 Minimize-Pane $process
 Press-Hotkey
@@ -627,10 +828,9 @@ Stop-Pane $process
 # Pausing a broken extension: the settings sample's last item, Crash, crashes
 # on purpose; the third crash within five minutes pauses the package and
 # returns to root search, where Greeting stays listed with why it does not
-# run. The pause holds after a restart. In Manage extensions, the package's
-# "Why ... is paused" row (after its Reload and Retry rows) shows the
-# details, whose only row, Retry, starts it again. A data folder of its own
-# keeps the rows in a known order.
+# run. The pause holds after a restart. On its page in Settings, Why
+# Paused (an item of its Actions menu) shows the details, whose only row,
+# Retry, starts it again. A data folder of its own.
 $data = Join-Path $OutDir "pausing-data"
 if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 $env:PANE_DATA_DIR = $data
@@ -650,13 +850,13 @@ Send "greet"; Start-Sleep -Seconds 1
 Capture "60-paused-after-restart.png"
 Check "60-paused-after-restart.png" "warning"   # Greeting is still paused
 Send "{ESC}"; Start-Sleep -Seconds 1   # clears the query
-Manage-Extensions
-Send "{DOWN 3}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 1   # "Why Settings sample is paused"
+Open-Extension "Settings sample"
+Extension-Action "Settings sample" "Why Paused"
+Wait-Shown "Retry Settings sample"   # "Why Settings sample is paused": the details, then Retry
 Capture "61-pause-details.png"
-Check "61-pause-details.png" "details"   # the details
-Send "{ENTER}"; Start-Sleep -Seconds 2   # Retry Settings sample
+Press-Named "Retry Settings sample"
+Wait-Shown "Started Settings sample"
 Capture "62-pause-retried.png"
-Check "62-pause-retried.png" "success"   # "Started Settings sample"
 $shots = "61-pause-details", "62-pause-retried" | ForEach-Object { Join-Path $OutDir "$_.png" }
 python "$PSScriptRoot/check_screenshot.py" --distinct @shots
 if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: Retry changed nothing" }
@@ -664,28 +864,14 @@ Stop-Pane $process
 if (Select-String -Quiet -SimpleMatch '"paused"' (Join-Path $data "extensions/installed.json")) { throw "pause not cleared" }
 
 # Delete retained data: with a data folder of its own, the settings sample
-# saves a note and is uninstalled keeping it (its Uninstall row follows its
-# state, Reload and Clear cache rows); its retained data, the extension
-# list's first row with nothing else installed, already selected when the
-# list opens, is deleted after confirming (Cancel is selected first, so
-# Down then Enter), without the extension. Installing the same folder again
-# finds nothing. Steps that change Pane's files wait for the change instead of a
-# fixed time.
+# saves a note and is uninstalled keeping it (Uninstall, on its page in
+# Settings); its retained data, a row of the Extensions group's own page
+# once nothing is installed, is deleted after confirming, without the
+# extension. Installing the same folder again finds nothing. Steps that
+# change Pane's files wait for the change instead of a fixed time.
 $data = Join-Path $OutDir "retained-data"
 if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 $env:PANE_DATA_DIR = $data
-# Waits until $file contains $text ($present) or no longer does (-not
-# $present), trying $tries times (100 by default: 10 seconds; the first
-# setup of the installed Pane needs far more, as a payload's components
-# are checked one at a time).
-function Wait-For($file, $text, [bool]$present, $tries = 100) {
-    for ($i = 0; $i -lt $tries; $i++) {
-        $found = (Test-Path $file) -and (Select-String -Quiet -SimpleMatch $text $file)
-        if ($found -eq $present) { return }
-        Start-Sleep -Milliseconds 100
-    }
-    throw "${file}: $text is not $(if ($present) { 'present' } else { 'absent' })"
-}
 $registry = Join-Path $data "extensions/installed.json"
 $process = Start-Pane "stderr-retained.log" @("--install", "target/guests/packages/sample-settings")
 Send "{ENTER}"   # Install; Greeting is selected
@@ -697,9 +883,9 @@ Send "{DOWN 3}"
 Send "{ENTER}"   # "Save a note"
 Wait-For (Join-Path $data "extensions/content.json") '"note": "Water the plants"' $true
 Send "{ESC}"; Start-Sleep -Seconds 1   # root search
-Manage-Extensions
-Send "{DOWN 3}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 1   # "Uninstall Settings sample"
-Send "{ENTER}"   # "Uninstall and keep saved data"
+Open-Extension "Settings sample"
+Extension-Action "Settings sample" "Uninstall"
+Press-Named "Uninstall and keep saved data"
 Wait-For $registry '"retained"' $true; Start-Sleep -Seconds 1
 # A restart before the deletion: the retained record is what survives one
 # (that is its point).
@@ -707,21 +893,16 @@ Stop-Pane $process
 $process = Start-Pane "stderr-retained.log"
 Start-Sleep -Seconds 2
 Manage-Extensions
-Send "{ENTER}"; Start-Sleep -Seconds 1   # "Delete retained data of Settings sample" (the list's first row)
+Press-Named "Delete retained data of Settings sample"   # a row of the group's page
+# The confirmation itself, found by its row, not by a color: the group's
+# page shows hint lines too, so a color alone let the wrong screen pass
+# once (#58).
+Wait-Shown "Delete retained data"   # what is kept and what is not touched, above it
 Capture "63-confirm-delete-retained.png"
-Check "63-confirm-delete-retained.png" "details"   # what is kept and what is not touched
-# The confirmation's status line is the idle hint, not a result: the
-# extension list also shows hint subtitles, so that color alone let the
-# wrong screen pass (what #58 turned out to be: Down to the list's end had
-# landed on the automatic-update row, whose Enter toggles it and leaves its
-# result on screen). No result color on screen says the right screen is up.
-python "$PSScriptRoot/check_screenshot.py" --absent (Join-Path $OutDir "63-confirm-delete-retained.png") "success"
-if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the confirmation shows a result status" }
-Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"   # "Delete retained data"
-Start-Sleep -Seconds 2
+Press-Named "Delete retained data"
 Wait-For $registry '"retained"' $false; Start-Sleep -Seconds 1
+Wait-Shown "Deleted the retained data of Settings sample"
 Capture "64-retained-deleted.png"
-Check "64-retained-deleted.png" "success"   # "Deleted the retained data of Settings sample"
 Stop-Pane $process
 if (Select-String -Quiet -SimpleMatch 'Water the plants' (Join-Path $data "extensions/content.json")) { throw "note not deleted" }
 $process = Start-Pane "stderr-reinstall-empty.log" @("--install", "target/guests/packages/sample-settings")
@@ -737,9 +918,9 @@ if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the deleted data is s
 Send "{ESC}"; Start-Sleep -Seconds 1
 Stop-Pane $process
 
-# Aliases and fallbacks: in Manage extensions, the query sample's command,
-# Echo, is given the alias "ec" (its row follows the package's state, Reload,
-# Clear cache, Uninstall and hotkey rows) and made a fallback (the next row).
+# Aliases and fallbacks: on the query sample's page in Settings, its
+# command, Echo, is given the alias "ec" in its alias cell and made a
+# fallback with its fallback switch (its Commands section, #168).
 # In root search, "ec hello" lists the row that sends "hello" to Echo,
 # selected, and Enter shows Echo's answer; text nothing matches lists "No
 # results" with Echo below it, not selected, until Down selects it and Enter
@@ -751,25 +932,24 @@ if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 $env:PANE_DATA_DIR = $data
 $process = Start-Pane "stderr-aliases.log" @("--install", "target/guests/packages/sample-query")
 Send "{ENTER}"; Start-Sleep -Seconds 2   # Install; Echo is selected
-Manage-Extensions
-Send "{DOWN 5}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 1   # "Alias for Echo"
+Open-Extension "Query sample"
+Press-Named "Alias for Echo:" -Prefix   # its inline editor takes the keyboard
 Send "ec"
-Send "{ENTER}"; Start-Sleep -Seconds 2
+Send "{ENTER}"
+Wait-Shown "Alias for Echo: ec"
 Capture "66-alias-saved.png"
-Check "66-alias-saved.png" "success"   # "Typing “ec” now finds Echo"
-Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 2   # "Fallback: Echo"
+Press-Named "Offer Echo as a fallback"
+Wait-Shown "Echo is now offered" -Prefix   # "... for any text typed in root search"
 Capture "67-fallback-on.png"
-Check "67-fallback-on.png" "success"   # "Echo is now offered for any text typed in root search"
 $shots = "66-alias-saved", "67-fallback-on" | ForEach-Object { Join-Path $OutDir "$_.png" }
 python "$PSScriptRoot/check_screenshot.py" --distinct @shots
-if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the fallback row changed nothing" }
-Send "{ESC}"; Start-Sleep -Seconds 1   # root search
+if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the fallback switch changed nothing" }
+Close-Settings   # root search
 Send "ec hello"; Start-Sleep -Seconds 1
 Capture "68-alias-row.png"
 Check "68-alias-row.png" "selected" 3000   # Echo, sending “hello”, selected
-Send "{ENTER}"; Start-Sleep -Seconds 3
-Capture "69-alias-answer.png"
-Check "69-alias-answer.png" "success"   # "Echo heard “hello”"
+Send "{ENTER}"; Start-Sleep -Milliseconds 500
+Capture-Until "69-alias-answer.png" "success" 15   # Echo's toast: "Echo heard “hello”"
 Send "{ESC}"; Start-Sleep -Seconds 1   # clears the query
 Send "zqx"; Start-Sleep -Seconds 1
 Capture "70-fallback-listed.png"   # "No results for “zqx”", then Echo, not selected
@@ -779,9 +959,8 @@ Check "71-fallback-chosen.png" "selected" 3000   # Echo, now selected
 $shots = "70-fallback-listed", "71-fallback-chosen" | ForEach-Object { Join-Path $OutDir "$_.png" }
 python "$PSScriptRoot/check_screenshot.py" --distinct @shots
 if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: Down did not select the fallback" }
-Send "{ENTER}"; Start-Sleep -Seconds 3
-Capture "72-fallback-answer.png"
-Check "72-fallback-answer.png" "success"   # "Echo heard “zqx”"
+Send "{ENTER}"; Start-Sleep -Milliseconds 500
+Capture-Until "72-fallback-answer.png" "success" 15   # Echo's toast: "Echo heard “zqx”"
 $shots = "69-alias-answer", "72-fallback-answer" | ForEach-Object { Join-Path $OutDir "$_.png" }
 python "$PSScriptRoot/check_screenshot.py" --distinct @shots
 if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the fallback got the alias's text" }
@@ -790,9 +969,10 @@ $aliases = Join-Path $data "extensions/aliases.json"
 if (-not (Select-String -Quiet -SimpleMatch '"ec"' $aliases)) { throw "alias not recorded" }
 if (-not (Select-String -Quiet -SimpleMatch '#echo"' $aliases)) { throw "fallback not recorded" }
 $process = Start-Pane "stderr-aliases-restart.log"
-Manage-Extensions
-Send "{ENTER}"; Start-Sleep -Seconds 2   # disable Query sample
-Send "{ESC}"; Start-Sleep -Seconds 1
+Open-Extension "Query sample"
+Press-Named "Query sample" -Toggle   # disable Query sample
+Wait-Shown "Disabled Query sample"
+Close-Settings
 Send "ec hello"; Start-Sleep -Seconds 1
 Capture "73-alias-disabled.png"   # "No results for “ec hello”"
 Stop-Pane $process
@@ -824,9 +1004,8 @@ Send "{ENTER}"; Start-Sleep -Seconds 3   # Install; Greet through dependencies i
 Capture "76-dependencies-installed.png"
 Check "76-dependencies-installed.png" "success"   # "Installed Dependencies sample with JavaScript operations sample, which it requires"
 Send "{ENTER}"; Start-Sleep -Seconds 3   # open Greet through dependencies
-Send "{ENTER}"; Start-Sleep -Seconds 5   # Greet through the required greeter
-Capture "77-dependency-answer.png"
-Check "77-dependency-answer.png" "success"   # the JavaScript guest's answer
+Send "{ENTER}"; Start-Sleep -Milliseconds 500   # Greet through the required greeter
+Capture-Until "77-dependency-answer.png" "success" 20   # the JavaScript guest's answer, in a toast
 $shots = "75-dependencies-preview", "76-dependencies-installed", "77-dependency-answer" | ForEach-Object { Join-Path $OutDir "$_.png" }
 python "$PSScriptRoot/check_screenshot.py" --distinct @shots
 if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: installing with dependencies changed nothing" }
@@ -839,10 +1018,10 @@ if ((Select-String -SimpleMatch '"dir"' $record).Count -ne 2) { throw "not exact
 # package ships for this system (built by `cargo xtask guests`). Its first
 # item shows the helper's answer, naming the system; its third races the
 # helper against a one-second timer and cancels it. Its second has the
-# helper wait ten seconds: disabling the package meanwhile (its row is the
-# first in Manage extensions) ends the helper's process at once, and the
-# note it saved before is kept. A data folder of its own keeps the rows in a
-# known order; the helper runs from its managed copy there.
+# helper wait ten seconds: disabling the package meanwhile (the switch on
+# its page in Settings) ends the helper's process at once, and the note it
+# saved before is kept. A data folder of its own; the helper runs from its
+# managed copy there.
 $data = Join-Path $OutDir "helper-data"
 if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 $env:PANE_DATA_DIR = $data
@@ -866,9 +1045,9 @@ for ($i = 0; $i -lt 30; $i++) {
     Start-Sleep -Milliseconds 500
 }
 Check "90-helper-echoed.png" "success"   # 'Echoed "hello from Pane" on Windows x86-64'
-Send "{DOWN 2}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 3   # Echo within a second
-Capture "91-helper-cancelled.png"
-Check "91-helper-cancelled.png" "success"   # "Stopped the helper after one second"
+Until-Toast-Gone "success" 20   # the answer's toast leaves, so the next one is the next answer's
+Send "{DOWN 2}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Milliseconds 500   # Echo within a second
+Capture-Until "91-helper-cancelled.png" "success" 15   # its toast: "Stopped the helper after one second"
 $shots = "90-helper-echoed", "91-helper-cancelled" | ForEach-Object { Join-Path $OutDir "$_.png" }
 python "$PSScriptRoot/check_screenshot.py" --distinct @shots
 if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the helper's answers look the same" }
@@ -877,10 +1056,10 @@ Send "{UP}{ENTER}"; Start-Sleep -Seconds 2   # Echo after waiting
 if (-not (Helpers-Running)) { throw "the waiting helper is not running" }
 Capture "92-helper-waiting.png"
 Send "{ESC}"; Start-Sleep -Seconds 1   # root search; the helper keeps running
-Manage-Extensions
-Send "{ENTER}"; Start-Sleep -Seconds 2   # disable Helper sample
+Open-Extension "Helper sample"
+Press-Named "Helper sample" -Toggle   # disable Helper sample
+Wait-Shown "Disabled Helper sample"
 Capture "93-helper-disabled.png"
-Check "93-helper-disabled.png" "success"   # "Disabled Helper sample"
 if (Helpers-Running) { throw "the helper outlived its disabled package" }
 $settings = Join-Path $data "extensions/settings.json"
 if (-not (Select-String -Quiet -SimpleMatch '"helper-wait": "started"' $settings)) { throw "saved note lost" }
@@ -913,16 +1092,15 @@ if ((Get-Item $alive.FullName).Length -ne $beats) { throw "the helper still beat
 
 # Development mode (#12, #13): a copy of each development sample
 # (guests/hello-rust, hello-ts, hello-js) is built once, installed and
-# developed from Manage extensions ("Develop <title>", the row above the
-# list's last: #49's global automatic-update choice is last of all now, and
-# the develop row no longer is). Saving
+# developed from its page in Settings (Develop, an item of its Actions
+# menu, #168). Saving
 # an edit of its greeting builds it with the documented command and reloads
 # it while Pane keeps running; a save that does not build keeps the working
 # code and shows the error; two saves in a row (the second while the first
-# builds) end with the newer greeting; after "Stop developing", a save builds
-# nothing. Each sample has a data folder of its own, so root lists the three
-# built-in samples, then its command, the install and Manage extensions
-# rows. The JavaScript and TypeScript samples need the JS toolchain
+# builds) end with the newer greeting; after "Stop Developing", a save builds
+# nothing. Each sample has a data folder of its own, so root lists its
+# command first, then the install and Manage Extensions rows. The
+# JavaScript and TypeScript samples need the JS toolchain
 # (guests/README.md) and are skipped without it.
 function Set-Greeting($path, $line) {
     $text = [IO.File]::ReadAllText($path)
@@ -956,9 +1134,9 @@ function Wait-Failed($log, $before) {
     }
     throw "Pane did not report the failed build"
 }
-# From root: open the developed command, the 4th row, and run its item.
+# From root: open the developed command, the first row, and run its item.
 function Say-Hello {
-    Send "{DOWN 3}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 3
+    Send "{ENTER}"; Start-Sleep -Seconds 3
     Send "{ENTER}"; Start-Sleep -Seconds 2
 }
 function Shots-Differ($first, $second, $what) {
@@ -993,14 +1171,11 @@ function Develop-Sample($sample, $title, $component, $source, $n, $greeting, $br
     $log = "stderr-develop-$sample.log"
     $process = Start-Pane $log @("--install", $copy)
     Send "{ENTER}"; Start-Sleep -Seconds 2   # Install
-    Manage-Extensions
-    # "Develop <title>": the row above the list's last, which is the
-    # global automatic-update choice since #49 (the develop row was the
-    # last row before it, and Down to the end now lands on that instead).
-    Send "{DOWN 14}"; Start-Sleep -Milliseconds 120; Send "{UP}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 2
+    Open-Extension $title
+    Extension-Action $title "Develop"
+    Wait-Shown "Developing ${title}:" -Prefix   # "Developing <title>: each save in ..."
     Capture "$n-$sample-develop-started.png"
-    Check "$n-$sample-develop-started.png" "success"   # "Developing <title>: each save in ..."
-    Send "{ESC}"; Start-Sleep -Seconds 1
+    Close-Settings
     Say-Hello
     Capture "$($n + 1)-$sample-greeting-before.png"
     Check "$($n + 1)-$sample-greeting-before.png" "success"   # "Hello from ..."
@@ -1047,11 +1222,10 @@ function Develop-Sample($sample, $title, $component, $source, $n, $greeting, $br
     Send "{ESC}"; Start-Sleep -Seconds 1
 
     # Stopped: a save builds nothing.
-    Manage-Extensions
-    # "Stop developing <title>": as above, the row above the list's last.
-    Send "{DOWN 14}"; Start-Sleep -Milliseconds 120; Send "{UP}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 2
+    Open-Extension $title
+    Extension-Action $title "Stop Developing"
+    Wait-Shown "Stopped developing $title"
     Capture "$($n + 8)-$sample-stopped.png"
-    Check "$($n + 8)-$sample-stopped.png" "success"   # "Stopped developing <title>"
     Copy-Item -Force $built $before
     Set-Greeting (Join-Path $copy $source) ($greeting -f "Hello unseen")
     Start-Sleep -Seconds 8
@@ -1072,9 +1246,9 @@ if ((Test-Path (Join-Path $jsToolchain "bin/*/toolchain.json")) -and (Get-Comman
 
 # Disabling a required dependency: installed with the dependencies sample
 # (whose install and data folder are this phase's own), the JavaScript
-# operations sample is the first row of Manage extensions. Enter asks first,
-# listing the Dependencies sample, which requires it, with Disable all and
-# Cancel; Cancel changes nothing, Disable all disables both, and Enter again
+# operations sample's switch on its page in Settings asks first, listing
+# the Dependencies sample, which requires it, with Disable all and Cancel;
+# Cancel changes nothing, Disable all disables both, and the switch again
 # enables the JavaScript operations sample alone: the Dependencies sample
 # stays disabled, on record too.
 $data = Join-Path $OutDir "disable-dependents-data"
@@ -1082,19 +1256,21 @@ if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 $env:PANE_DATA_DIR = $data
 $process = Start-Pane "stderr-disable-dependents.log" @("--install", "target/guests/packages/sample-dependencies")
 Send "{ENTER}"; Start-Sleep -Seconds 3   # Install
-Manage-Extensions
-Send "{ENTER}"; Start-Sleep -Seconds 1   # disable JavaScript operations sample: asks first
+$operations = "JavaScript operations sample"
+Open-Extension $operations
+Press-Named $operations -Toggle   # disable it: asks first
+Wait-Shown "Disable all 2"   # "Dependencies sample, which requires JavaScript operations sample ...", above it
 Capture "140-disable-dependents-asked.png"
-Check "140-disable-dependents-asked.png" "details"   # "Dependencies sample, which requires JavaScript operations sample ..."
-Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 1   # Cancel
-Capture "141-disable-dependents-cancelled.png"   # both still enabled
-Send "{ENTER}"; Start-Sleep -Seconds 1   # asks again
-Send "{ENTER}"; Start-Sleep -Seconds 2   # Disable all 2
+Press-Named "Cancel"
+Find-Named $operations -Toggle | Out-Null   # its page again: both still enabled
+Capture "141-disable-dependents-cancelled.png"
+Press-Named $operations -Toggle   # asks again
+Press-Named "Disable all 2"
+Wait-Shown "Disabled JavaScript operations sample and Dependencies sample" -Prefix   # "..., which requires it"
 Capture "142-disable-dependents-disabled.png"
-Check "142-disable-dependents-disabled.png" "success"   # "Disabled JavaScript operations sample and Dependencies sample, which requires it"
-Send "{ENTER}"; Start-Sleep -Seconds 2   # enable JavaScript operations sample
+Press-Named $operations -Toggle   # enable JavaScript operations sample
+Wait-Shown "Enabled JavaScript operations sample"   # Dependencies sample stays disabled
 Capture "143-disable-dependents-enabled-alone.png"
-Check "143-disable-dependents-enabled-alone.png" "success"   # "Enabled JavaScript operations sample"; Dependencies sample stays disabled
 $shots = "140-disable-dependents-asked", "141-disable-dependents-cancelled", "142-disable-dependents-disabled", "143-disable-dependents-enabled-alone" | ForEach-Object { Join-Path $OutDir "$_.png" }
 python "$PSScriptRoot/check_screenshot.py" --distinct @shots
 if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: disabling with dependents changed nothing" }
@@ -1109,9 +1285,9 @@ if ((Select-String -SimpleMatch '"disabled": true' $record).Count -ne 1) { throw
 # ends the helper, keeps the saved note and restarts the runtime; Count (the
 # settings sample's last item) then saves and loses its answer in a second
 # crash, which stops the runtime: the count is not run again. Root search
-# explains that nothing runs, Manage extensions shows why (its first rows),
-# a disable still works, and Restart runs extensions again, Count only when
-# asked. A data folder of its own keeps the rows in a known order.
+# explains that nothing runs, the Extensions group's page in Settings
+# shows why (its runtime rows), a disable still works, and Restart runs
+# extensions again, Count only when asked. A data folder of its own.
 $data = Join-Path $OutDir "runtime-crash-data"
 if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 $env:PANE_DATA_DIR = $data
@@ -1184,19 +1360,23 @@ Capture "204-runtime-refused.png"
 Check "204-runtime-refused.png" "error"   # "Extension runtime unavailable: it stopped after crashing ..."
 Send "{ESC}"; Start-Sleep -Seconds 1   # clears the query
 Manage-Extensions
-Capture "205-runtime-manage.png"   # Restart the extension runtime, Why the extension runtime stopped
-Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 1   # Why the extension runtime stopped
+Wait-Shown "Restart the extension runtime"
+Wait-Shown "Why the extension runtime stopped"
+Capture "205-runtime-manage.png"   # the group's page: Restart the extension runtime, Why the extension runtime stopped
+Press-Named "Why the extension runtime stopped"
+Wait-Shown "Back"   # the details, with the way back
 Capture "206-runtime-details.png"
-Check "206-runtime-details.png" "details"   # the details
-Send "{ESC}"; Start-Sleep -Seconds 1   # back at its row
-Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 2   # disable Helper sample, the first package
+Press-Named "Back"
+Open-Extension "Helper sample"
+Press-Named "Helper sample" -Toggle   # disable Helper sample
+Wait-Shown "Disabled Helper sample"
 Capture "207-runtime-disabled.png"
-Check "207-runtime-disabled.png" "success"   # "Disabled Helper sample"
-Send "{UP 2}{ENTER}"; Start-Sleep -Seconds 2   # Restart the extension runtime
+Manage-Extensions
+Press-Named "Restart the extension runtime"
+Wait-Shown "Restarted the extension runtime"
 Capture "208-runtime-restarted.png"
-Check "208-runtime-restarted.png" "success"   # "Restarted the extension runtime"
 if ((Saved-Count) -ne "2") { throw "Count was run again without asking" }
-Send "{ESC}"; Start-Sleep -Seconds 1
+Close-Settings
 Send "greet"; Start-Sleep -Seconds 1
 Send "{ENTER}"; Start-Sleep -Seconds 2   # open Greeting
 Send "{DOWN 8}"   # Count
@@ -1220,15 +1400,16 @@ if (Select-String -Quiet -SimpleMatch '"paused"' $record) { throw "a package was
 # progress, given up on after 15, and a guest's own computing at first a
 # minute, so that the first Stop responding still computes when frame 240
 # is taken (Pane's standard error has stopped no call yet): meanwhile the
-# window answers keys, Escape returns to root search and Manage extensions
-# opens. The compute limit then becomes 2 seconds, which the running call
+# window answers keys, Escape returns to root search and Manage Extensions
+# opens Settings. The compute limit then becomes 2 seconds, which the running call
 # has passed, so Pane stops it at once; each later call is stopped after 2
 # seconds of its computing, says why, and the third time pauses the
 # package (a failure of its own); Retry starts it again. Then the runtime
 # thread itself is made to hang through the fault file: the status line
 # says it is not responding yet, then Pane gives up on it, names and
-# pauses no extension, and Manage extensions says the runtime stopped
-# responding; a fresh thread runs the next call. A data folder of its own keeps the rows in a known order.
+# pauses no extension, and the Extensions group's page in Settings says
+# the runtime stopped responding; a fresh thread runs the next call. A
+# data folder of its own.
 $data = Join-Path $OutDir "unresponsive-data"
 if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 $env:PANE_DATA_DIR = $data
@@ -1256,13 +1437,13 @@ Send "{ENTER}"; Start-Sleep -Seconds 1   # it computes
 if ((Saved-Setting "busy") -ne "started") { throw "Stop responding did not start" }
 Send "{ESC}"; Start-Sleep -Seconds 1   # root search answers meanwhile
 Manage-Extensions
-Capture "240-unresponsive-window-answers.png"   # the extension list, while the guest computes
-Check "240-unresponsive-window-answers.png" "subtitle"   # its rows' subtitles
+Wait-Shown "Settings sample"
+Capture "240-unresponsive-window-answers.png"   # Settings' Extensions page, while the guest computes
 if ((Stopped-Calls) -ne 0) { throw "Stop responding was stopped before frame 240" }
 Inject-Fault "limits:2,4,15"   # it has computed longer: Pane stops it at its next tick
 for ($i = 0; $i -lt 300 -and (Stopped-Calls) -lt 1; $i++) { Start-Sleep -Milliseconds 100 }
 if ((Stopped-Calls) -lt 1) { throw "Stop responding was not stopped at the shorter limit" }
-Send "{ESC}"; Start-Sleep -Seconds 1   # its answer is not shown here
+Close-Settings   # its answer is not shown here
 Send "greet"; Start-Sleep -Seconds 1
 Send "{ENTER}"; Start-Sleep -Seconds 2   # open Greeting
 Send "{DOWN 9}"   # Stop responding
@@ -1276,14 +1457,14 @@ Check "242-unresponsive-paused.png" "error"   # "Settings sample stopped respond
 Check "242-unresponsive-paused.png" "warning"   # Greeting: "Settings sample is paused after an error; ..."
 if ((Saved-Setting "busy") -ne "started") { throw "Stop responding finished or was lost" }
 Send "{ESC}"; Start-Sleep -Seconds 1   # clears the query
-Manage-Extensions
-Send "{DOWN 3}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 1   # "Why Settings sample is paused"
+Open-Extension "Settings sample"
+Extension-Action "Settings sample" "Why Paused"
+Wait-Shown "Retry Settings sample"   # "Why Settings sample is paused": the details, then Retry
 Capture "243-unresponsive-pause-details.png"
-Check "243-unresponsive-pause-details.png" "details"   # the details
-Send "{ENTER}"; Start-Sleep -Seconds 2   # Retry Settings sample
+Press-Named "Retry Settings sample"
+Wait-Shown "Started Settings sample"
 Capture "244-unresponsive-retried.png"
-Check "244-unresponsive-retried.png" "success"   # "Started Settings sample"
-Send "{ESC}"; Start-Sleep -Seconds 1
+Close-Settings
 Inject-Fault "hang"
 Send "greet"; Start-Sleep -Seconds 1
 Send "{ENTER}"; Start-Sleep -Seconds 4   # open Greeting: the stuck runtime is not responding yet
@@ -1294,11 +1475,11 @@ Capture "246-unresponsive-runtime.png"
 Check "246-unresponsive-runtime.png" "error"   # the runtime stopped responding and was started again
 Send "{ESC}"; Start-Sleep -Seconds 1   # clears the query
 Manage-Extensions
-Send "{ENTER}"; Start-Sleep -Seconds 1   # Why the extension runtime stopped, its first row
+Press-Named "Why the extension runtime stopped"   # a row of the group's page
+Wait-Shown "Back"   # the details, with the way back
 Capture "247-unresponsive-runtime-details.png"
-Check "247-unresponsive-runtime-details.png" "details"   # the details
 Inject-Fault "release"
-Send "{ESC}{ESC}"; Start-Sleep -Seconds 1
+Close-Settings
 Send "greet"; Start-Sleep -Seconds 1
 Send "{ENTER}"; Start-Sleep -Seconds 2   # open Greeting on a fresh runtime thread
 Send "{ENTER}"; Start-Sleep -Seconds 2   # Use a formal greeting
@@ -1318,8 +1499,8 @@ if ($paused.Count -ne 0) { throw "a package was paused for the runtime's hang" }
 
 # Uninstalling a required dependency: installed with the dependencies sample
 # (whose install and data folder are this phase's own), the JavaScript
-# operations sample's Uninstall row is the seventh of Manage extensions.
-# Enter asks first, listing the Dependencies sample, which requires it, and
+# operations sample's Uninstall (an item of its page's Actions menu in
+# Settings) asks first, listing the Dependencies sample, which requires it, and
 # each one's saved data, with Uninstall all keeping or deleting saved data
 # and Cancel; Cancel changes nothing, Uninstall all 2 (keeping) uninstalls
 # both, and installing the JavaScript operations sample again installs it
@@ -1329,25 +1510,27 @@ if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 $env:PANE_DATA_DIR = $data
 $process = Start-Pane "stderr-uninstall-dependents.log" @("--install", "target/guests/packages/sample-dependencies")
 Send "{ENTER}"; Start-Sleep -Seconds 3   # Install
-Manage-Extensions
-for ($i = 0; $i -lt 6; $i++) { Send "{DOWN}" }   # Uninstall JavaScript operations sample
-Send "{ENTER}"; Start-Sleep -Seconds 1   # asks first
+$operations = "JavaScript operations sample"
+Open-Extension $operations
+Extension-Action $operations "Uninstall"   # asks first
+Wait-Shown "Uninstall all 2 and keep saved data"   # "Dependencies sample, which requires JavaScript operations sample ...", above it
 Capture "180-uninstall-dependents-asked.png"
-Check "180-uninstall-dependents-asked.png" "details"   # "Dependencies sample, which requires JavaScript operations sample ..."
-Send "{DOWN}{DOWN}{ENTER}"; Start-Sleep -Seconds 1   # Cancel
-Capture "181-uninstall-dependents-cancelled.png"   # both still installed
-Send "{ENTER}"; Start-Sleep -Seconds 1   # asks again
-Send "{ENTER}"; Start-Sleep -Seconds 3   # Uninstall all 2 and keep saved data
+Press-Named "Cancel"
+Find-Named "Actions for $operations" | Out-Null   # its page again: both still installed
+Capture "181-uninstall-dependents-cancelled.png"
+Extension-Action $operations "Uninstall"   # asks again
+Press-Named "Uninstall all 2 and keep saved data"
+Wait-Shown "Uninstalled JavaScript operations sample and Dependencies sample" -Prefix   # "..., which requires it; ..."
 Capture "182-uninstall-dependents-uninstalled.png"
-Check "182-uninstall-dependents-uninstalled.png" "success"   # "Uninstalled JavaScript operations sample and Dependencies sample, which requires it; ..."
 Stop-Pane $process
 $record = Join-Path $data "extensions/installed.json"
 if ((Select-String -SimpleMatch '"dir"' $record).Count -ne 0) { throw "not both uninstalled" }
 $process = Start-Pane "stderr-uninstall-dependents-again.log" @("--install", "target/guests/packages/sample-operations-js")
 Send "{ENTER}"; Start-Sleep -Seconds 3   # Install the dependency alone
 Manage-Extensions
+Wait-Shown $operations
+Assert-Not-Shown "Dependencies sample"
 Capture "183-uninstall-dependents-reinstalled-alone.png"   # only the JavaScript operations sample is listed
-Check "183-uninstall-dependents-reinstalled-alone.png" "subtitle"
 $shots = "180-uninstall-dependents-asked", "181-uninstall-dependents-cancelled", "182-uninstall-dependents-uninstalled", "183-uninstall-dependents-reinstalled-alone" | ForEach-Object { Join-Path $OutDir "$_.png" }
 python "$PSScriptRoot/check_screenshot.py" --distinct @shots
 if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: uninstalling with dependents changed nothing" }
@@ -1359,11 +1542,11 @@ if ((Select-String -SimpleMatch '"dir"' $record).Count -ne 1) { throw "not the d
 # the network), with a data folder of its own. Installing the local
 # Dependencies from npm sample shows the npm package it requires and
 # installs both; its command calls the npm package's greet operation. Then
-# "Install extension from npm..." (searched for by title, as Manage-Extensions
-# does: a blind run of Downs to root's end would open #72's Settings… row,
-# last of all now) asks for the
-# npm package in a form; naming the installed one offers Update, and its
-# command runs: "Hello from the npm package".
+# "Install extension from npm..." (searched for by title, as
+# Manage-Extensions does) opens Settings at the Extensions group's npm
+# field (#168), which takes the keyboard; Show Package previews the
+# installed package there, offering Update, and its command runs: "Hello
+# from the npm package".
 $data = Join-Path $OutDir "npm-data"
 if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 $env:PANE_DATA_DIR = $data
@@ -1384,21 +1567,22 @@ try {
     Capture "261-npm-dependency-installed.png"
     Check "261-npm-dependency-installed.png" "success"   # "Installed Dependencies from npm sample with Greeter from npm, which it requires"
     Send "{ENTER}"; Start-Sleep -Seconds 3   # open it
-    Send "{ENTER}"; Start-Sleep -Seconds 3   # "Greet through the required greeter"
-    Capture "262-npm-dependency-called.png"
-    Check "262-npm-dependency-called.png" "success"   # "Hello, Pane, from the npm package"
+    Send "{ENTER}"; Start-Sleep -Milliseconds 500   # "Greet through the required greeter"
+    Capture-Until "262-npm-dependency-called.png" "success" 20   # its toast: "Hello, Pane, from the npm package"
     Send "{ESC}"; Start-Sleep -Seconds 1
     Send "^a"; Send "install npm"; Start-Sleep -Seconds 1
-    Send "{ENTER}"; Start-Sleep -Seconds 1   # Install extension from npm...
+    Send "{ENTER}"; Start-Sleep -Seconds 2   # Install extension from npm...: Settings, its npm field
+    Wait-Shown "npm package:" -Prefix   # the field, named by its label
     Capture "263-npm-form.png"
-    Check "263-npm-form.png" "hint"   # the form's hint line
-    Send "@pane-samples/greeter"
-    Send "{ENTER}"; Start-Sleep -Seconds 3
+    Type-Field "@pane-samples/greeter"
+    Press-Named "Show Package"
+    Wait-Shown "Update"   # the preview's row, under "Source: npm package @pane-samples/greeter", "npm version: 0.1.0, the latest", ... (lines of text with no accessible name: the screenshot shows them)
     Capture "264-npm-preview.png"
-    Check "264-npm-preview.png" "details"   # "Source: npm package @pane-samples/greeter", "npm version: 0.1.0, the latest", ...
-    Send "{ENTER}"; Start-Sleep -Seconds 3   # Update; Greeter from npm is selected
+    Press-Named "Update"
+    Wait-Shown "Updated Greeter from npm to 0.1.0"
     Capture "265-npm-updated.png"
-    Check "265-npm-updated.png" "success"   # "Updated Greeter from npm to 0.1.0"
+    Close-Settings
+    Send "greeter from npm"; Start-Sleep -Seconds 1
     Send "{ENTER}"; Start-Sleep -Seconds 3   # open Greeter from npm
     Send "{ENTER}"; Start-Sleep -Seconds 2   # "Say hello"
     Capture "266-npm-command-ran.png"
@@ -1428,9 +1612,13 @@ try {
     Send "{ENTER}"; Start-Sleep -Seconds 2   # "Say hello"
     Capture "268-npm-new-copy-ran.png"
     Check "268-npm-new-copy-ran.png" "success"   # "Hello from the npm package"
-    $shots = "260-npm-dependency-preview", "261-npm-dependency-installed", "262-npm-dependency-called", "263-npm-form", "264-npm-preview", "265-npm-updated", "266-npm-command-ran", "267-npm-updated-automatically", "268-npm-new-copy-ran" | ForEach-Object { Join-Path $OutDir "$_.png" }
+    $shots = "260-npm-dependency-preview", "261-npm-dependency-installed", "262-npm-dependency-called", "263-npm-form", "264-npm-preview", "265-npm-updated", "266-npm-command-ran", "267-npm-updated-automatically" | ForEach-Object { Join-Path $OutDir "$_.png" }
     python "$PSScriptRoot/check_screenshot.py" --distinct @shots
     if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: installing from npm changed nothing" }
+    # 0.2.0 is 0.1.0's code at a newer version (npm_publish.py), so the new
+    # copy's command answers exactly as the old one did.
+    python "$PSScriptRoot/check_screenshot.py" --same (Join-Path $OutDir "266-npm-command-ran.png") (Join-Path $OutDir "268-npm-new-copy-ran.png")
+    if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the updated copy answered differently" }
     Stop-Pane $process
 } finally {
     Stop-Process -Id $registry.Id -ErrorAction SilentlyContinue
@@ -1449,11 +1637,10 @@ if ((Select-String -SimpleMatch '"dir"' $record).Count -ne 2) { throw "not both 
 # folder of its own. `--install git:<address>` names the default branch,
 # which holds the source only: explained, nothing offered. Then "Install
 # extension from Git..." (searched for by title rather than counted to, as
-# Manage-Extensions does: root's last row is #72's Settings… now, and with
-# nothing installed in this data folder there is no Manage extensions... row
-# to find either) asks for the repository
-# in a form; naming the tag previews the release revision, pinned, and
-# installs it, and its command runs: "Hello from the Git repository".
+# Manage-Extensions does) opens Settings at the Extensions group's Git
+# field (#168), which takes the keyboard; naming the tag and Show Package
+# previews the release revision, pinned, there, Install installs it, and
+# its command runs: "Hello from the Git repository".
 $data = Join-Path $OutDir "git-data"
 if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 $env:PANE_DATA_DIR = $data
@@ -1463,26 +1650,6 @@ python "$PSScriptRoot/repository_server.py" make-sample target/guests/git/greete
 if ($LASTEXITCODE -ne 0) { throw "the Git sample's repository was not made" }
 $portFile = Join-Path $OutDir "repository-server.port"
 if (Test-Path $portFile) { Remove-Item -Force $portFile }
-# Captures $name until it shows text in $color, for at most $seconds, then
-# checks it: for a view that appears once work in the background ends,
-# whenever that is.
-function Capture-Until($name, $color, $seconds) {
-    $deadline = (Get-Date).AddSeconds($seconds)
-    while ($true) {
-        Capture $name
-        # Only its exit code matters. Windows PowerShell 5.1 turns a native
-        # program's redirected standard error into errors, which "Stop" would
-        # throw at the first failed check, so it runs with "Continue" in a
-        # scope of its own.
-        & {
-            $ErrorActionPreference = "Continue"
-            python "$PSScriptRoot/check_screenshot.py" (Join-Path $OutDir $name) $color 20 *> $null
-        }
-        if ($LASTEXITCODE -eq 0) { return }
-        if ((Get-Date) -gt $deadline) { Check $name $color; return }
-        Start-Sleep -Milliseconds 500
-    }
-}
 $server = Start-Process python -PassThru -NoNewWindow `
     -ArgumentList @("`"$PSScriptRoot/repository_server.py`"", "serve", "`"$repositories`"", "`"$portFile`"") `
     -RedirectStandardError (Join-Path $OutDir "repository-server.log")
@@ -1496,16 +1663,18 @@ try {
     Capture-Until "300-git-source-only.png" "error" 60   # "The default branch, main (commit ...) of the Git repository ... holds only the source of ..."
     Send "{ESC}"; Start-Sleep -Seconds 1
     Send "^a"; Send "install git"; Start-Sleep -Seconds 1
-    Send "{ENTER}"; Start-Sleep -Seconds 1   # Install extension from Git...
+    Send "{ENTER}"; Start-Sleep -Seconds 2   # Install extension from Git...: Settings, its Git field
+    Wait-Shown "Git repository:" -Prefix   # the field, named by its label
     Capture "301-git-form.png"
-    Check "301-git-form.png" "hint"   # the form's hint line
-    Send "$repository@v0.1.0"
-    Send "{ENTER}"; Start-Sleep -Seconds 3
+    Type-Field "$repository@v0.1.0"
+    Press-Named "Show Package"
+    Wait-Shown "Install"   # the preview's row, under "Source: Git repository 127.0.0.1:<port>/greeter", "Revision: tag v0.1.0, which you named: ..." (lines of text with no accessible name: the screenshot shows them)
     Capture "302-git-preview.png"
-    Check "302-git-preview.png" "details"   # "Source: Git repository 127.0.0.1:<port>/greeter", "Revision: tag v0.1.0, which you named: ..."
-    Send "{ENTER}"; Start-Sleep -Seconds 3   # Install; Greeter from Git is selected
+    Press-Named "Install"
+    Wait-Shown "Installed Greeter from Git"
     Capture "303-git-installed.png"
-    Check "303-git-installed.png" "success"   # "Installed Greeter from Git"
+    Close-Settings
+    Send "greeter from git"; Start-Sleep -Seconds 1
     Send "{ENTER}"; Start-Sleep -Seconds 3   # open Greeter from Git
     Send "{ENTER}"; Start-Sleep -Seconds 2   # "Say hello"
     Capture "304-git-command-ran.png"
@@ -1595,18 +1764,19 @@ if ($fromGit[0].pinned) { throw "the tracked branch recorded as pinned" }
 $downloads = Join-Path $updateData "extensions/downloads"
 if ((Test-Path $downloads) -and (Get-ChildItem $downloads)) { throw "a Git download was left" }
 
-# File search (#29): Files, a default extension (its data folder is this
-# phase's own; Files is selected once installed, and Pane's own "Choose
-# folder..." row is the first of its command). Enter on it would show the
-# system's folder picker; the smoke names the folder in
-# PANE_TEST_CHOOSE_FOLDER instead (a debug build's hook). The fixture folder's
+# File search (#29, #175): Files, a default extension (its data folder is
+# this phase's own), answers from Pane's file index, which covers the home
+# folder; the smoke names a fixture folder for it to cover instead in
+# PANE_TEST_FILE_INDEX_HOME (a debug build's hook, which also keeps the index
+# in the data folder). Installing Files starts the index, and showing the
+# window lets its first walk start. The fixture folder's
 # path has spaces, and a file in it has non-ASCII letters too; typing "plan"
-# lists that file, selected, and Enter (Open, the file's first action, #150)
+# lists that file under "Files", selected, and Enter (Open, the file's first action, #150)
 # hands it to Pane's handler for files, which PANE_TEST_OPEN_FILE_LOG (a
 # debug build's hook) makes record the path instead of running Invoke-Item,
 # which could show the "Open with" dialog or open the user's own program.
 # Each file action closes the window after it acts, so Pane is started again
-# (the grant is kept) for the next file. A batch file in the folder is
+# (the index is caught up from the change journal) for the next file. A batch file in the folder is
 # found, and Enter reveals it in File Explorer (ADR 0037: file search's
 # Enter never runs a program; only its explicit Run does): it neither runs
 # nor reaches the handler for files, and the window closes as after any
@@ -1624,15 +1794,16 @@ Set-Content -Encoding UTF8 -LiteralPath (Join-Path $filesFolder "notes/todo.txt"
 Set-Content -Encoding ASCII -LiteralPath (Join-Path $filesFolder "notes/runner.bat") "@echo ran > `"$filesFixture\runner-ran`""
 $openLog = Join-Path $OutDir "opened-file.txt"
 if (Test-Path $openLog) { Remove-Item -Force $openLog }
-$env:PANE_TEST_CHOOSE_FOLDER = (Resolve-Path -LiteralPath $filesFolder).Path
+$env:PANE_TEST_FILE_INDEX_HOME = (Resolve-Path -LiteralPath $filesFolder).Path
 $env:PANE_TEST_OPEN_FILE_LOG = $openLog
 $process = Start-Pane "stderr-files.log" @("--install", "target/guests/packages/files")
-Send "{ENTER}"; Start-Sleep -Seconds 2   # Install; Files is selected
-Send "{ENTER}"; Start-Sleep -Seconds 3   # open Files; "Choose folder..." is selected
-Send "{ENTER}"; Start-Sleep -Seconds 2   # the folder PANE_TEST_CHOOSE_FOLDER names
-Capture "220-files-folder-granted.png"
-Check "220-files-folder-granted.png" "success"   # "Files may now list "Pane smoke files""
-Send "{ESC}"; Start-Sleep -Seconds 1
+Send "{ENTER}"; Start-Sleep -Seconds 3   # Install; the index walks the fixture
+Capture "220-files-installed.png"
+Check "220-files-installed.png" "success"   # "Installed Files"
+# The install lands on a blank root search, where Escape hides the
+# launcher (release run 37698693722's frame 221 was the desktop): the
+# return to root key keeps it.
+To-Root
 Send "plan"; Start-Sleep -Seconds 3
 Capture "221-files-found.png"
 Check "221-files-found.png" "selected" 3000   # the selected file row
@@ -1661,11 +1832,11 @@ foreach ($window in (New-Object -ComObject Shell.Application).Windows()) {
     try { $path = $window.Document.Folder.Self.Path } catch { continue }
     if ($path -eq $notes) { $window.Quit() }
 }
-$shots = "220-files-folder-granted", "221-files-found", "223-files-program-found" | ForEach-Object { Join-Path $OutDir "$_.png" }
+$shots = "220-files-installed", "221-files-found", "223-files-program-found" | ForEach-Object { Join-Path $OutDir "$_.png" }
 python "$PSScriptRoot/check_screenshot.py" --distinct @shots
 if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: file search changed nothing" }
 Stop-Pane $process
-Remove-Item Env:PANE_TEST_CHOOSE_FOLDER
+Remove-Item Env:PANE_TEST_FILE_INDEX_HOME
 Remove-Item Env:PANE_TEST_OPEN_FILE_LOG
 Remove-Item -Recurse -Force $filesFixture
 
@@ -1727,21 +1898,23 @@ try {
     Capture "164-search-results.png"   # aurora-charts, selected, and aurora-cli
     Check "164-search-results.png" "selected" 3000
     if (-not (Select-String -Quiet -Pattern '^GET /search\?q=aurora$' $serviceLog)) { throw "the command's search did not reach the service" }
-    Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 3   # aurora-cli's details
-    Capture "165-details.png"
-    Check "165-details.png" "success"   # "aurora-cli 0.9.3 (Apache-2.0): Command-line parsing with subcommands"
+    Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 1   # aurora-cli's details
+    Capture-Until "165-details.png" "success" 15   # its toast: "aurora-cli 0.9.3 (Apache-2.0): Command-line parsing with subcommands"
     Send "^a"; Send "slow"; Start-Sleep -Seconds 2   # held by the service
     Send "^a"; Send "ember"; Start-Sleep -Seconds 3
     Capture "166-newer-search.png"   # ember-tz, not what "slow" would list
     Check "166-newer-search.png" "selected" 3000
     if (-not (Select-String -Quiet -Pattern '^ABANDONED /search\?q=slow$' $serviceLog)) { throw "the replaced search was not stopped" }
-    Send "^a"; Send "down"; Start-Sleep -Seconds 3
-    Capture "167-service-error.png"
-    Check "167-service-error.png" "error"   # "... The service answered 503: the registry is down for maintenance"
+    # A search error stays in the status line until the query changes.
+    Send "^a"; Send "down"; Start-Sleep -Seconds 1
+    Capture-Until "167-service-error.png" "error" 15   # "... The service answered 503: the registry is down for maintenance"
     Stop-Process -Id $service.Id; $service.WaitForExit()
-    Send "^a"; Send "basalt"; Start-Sleep -Seconds 6   # Windows retries a refused connection for about two seconds
-    Capture "168-offline.png"
-    Check "168-offline.png" "error"   # "... Could not reach the service at http://127.0.0.1:<port>: connection refused"
+    Send "{ESC}"; Start-Sleep -Seconds 1   # clear the failed search and return to the command's list
+    Capture "167-service-error-cleared.png"
+    python "$PSScriptRoot/check_screenshot.py" --absent (Join-Path $OutDir "167-service-error-cleared.png") error
+    if ($LASTEXITCODE -ne 0) { throw "the previous search error was not cleared" }
+    Send "^a"; Send "basalt"; Start-Sleep -Seconds 1   # Windows retries a refused connection for about two seconds
+    Capture-Until "168-offline.png" "error" 20   # "... Could not reach the service at http://127.0.0.1:<port>: connection refused"
     $service = Start-FixtureService "fixture-service-again.log" $servicePort
     Send "^a"; Send "cobalt"; Start-Sleep -Seconds 3
     Capture "169-back-online.png"   # cobalt-http, selected: not paused
@@ -1754,251 +1927,6 @@ try {
     if (-not $service.HasExited) { Stop-Process -Id $service.Id }
 }
 
-# Clipboard history (#35): the Clipboard History default extension keeps
-# nothing until it is turned on in its command (its first item); then the
-# text this smoke copies is kept, except text marked as a password manager
-# marks it (ExcludeClipboardContentFromMonitorProcessing,
-# CanIncludeInClipboardHistory, CanUploadToCloudClipboard); nothing is kept
-# while it is paused or the extension is disabled, also after a restart,
-# and once enabled again it is kept again, also after a restart. Enter on
-# a kept item runs its first action, Paste (#150): Pane cannot paste on
-# Windows yet, so it copies the item again instead, closes the window and
-# says so in a HUD; Pane is then started again. The smoke copies only text of its own
-# ("pane-smoke-..."), and so replaces what was on the clipboard without
-# reading or putting it back: run it on CI's runner or a desktop given to
-# it, as the rest of the smoke already takes over the keyboard. A data
-# folder of its own.
-$data = Join-Path $OutDir "clipboard-data"
-if (Test-Path $data) { Remove-Item -Recurse -Force $data }
-$env:PANE_DATA_DIR = $data
-$registry = Join-Path $data "extensions/installed.json"
-$history = Join-Path $data "extensions/clipboard-history.json"
-Add-Type @"
-using System; using System.Runtime.InteropServices; using System.Text; using System.Threading;
-public static class PaneClip {
-    [DllImport("user32.dll")] static extern bool OpenClipboard(IntPtr owner);
-    [DllImport("user32.dll")] static extern bool CloseClipboard();
-    [DllImport("user32.dll")] static extern bool EmptyClipboard();
-    [DllImport("user32.dll")] static extern IntPtr GetClipboardData(uint format);
-    [DllImport("user32.dll")] static extern IntPtr SetClipboardData(uint format, IntPtr memory);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern uint RegisterClipboardFormatW(string name);
-    [DllImport("kernel32.dll")] static extern IntPtr GlobalAlloc(uint flags, UIntPtr bytes);
-    [DllImport("kernel32.dll")] static extern IntPtr GlobalLock(IntPtr memory);
-    [DllImport("kernel32.dll")] static extern bool GlobalUnlock(IntPtr memory);
-    [DllImport("kernel32.dll")] static extern UIntPtr GlobalSize(IntPtr memory);
-    const uint CF_UNICODETEXT = 13;
-    static void Open() {
-        for (int i = 0; i < 50; i++) { if (OpenClipboard(IntPtr.Zero)) return; Thread.Sleep(20); }
-        throw new Exception("another application keeps the clipboard open");
-    }
-    static void Put(uint format, byte[] bytes) {
-        IntPtr memory = GlobalAlloc(2, (UIntPtr)Math.Max(bytes.Length, 1));   // GMEM_MOVEABLE
-        IntPtr data = GlobalLock(memory);
-        Marshal.Copy(bytes, 0, data, bytes.Length);
-        GlobalUnlock(memory);
-        if (SetClipboardData(format, memory) == IntPtr.Zero) throw new Exception("SetClipboardData failed");
-    }
-    static byte[] Get(uint format) {
-        IntPtr memory = GetClipboardData(format);
-        if (memory == IntPtr.Zero) return null;
-        IntPtr data = GlobalLock(memory);
-        if (data == IntPtr.Zero) return null;
-        byte[] bytes = new byte[(int)(ulong)GlobalSize(memory)];
-        Marshal.Copy(data, bytes, 0, bytes.Length);
-        GlobalUnlock(memory);
-        return bytes;
-    }
-    // Puts text on the clipboard, with the registered format `marker` (a DWORD of 0) if named.
-    public static void SetText(string text, string marker) {
-        Open();
-        try {
-            EmptyClipboard();
-            Put(CF_UNICODETEXT, Encoding.Unicode.GetBytes(text + "\0"));
-            if (!String.IsNullOrEmpty(marker)) Put(RegisterClipboardFormatW(marker), new byte[4]);
-        } finally { CloseClipboard(); }
-    }
-    public static string GetText() {
-        Open();
-        try {
-            byte[] bytes = Get(CF_UNICODETEXT);
-            if (bytes == null) return null;
-            string text = Encoding.Unicode.GetString(bytes);
-            int end = text.IndexOf('\0');
-            return end < 0 ? text : text.Substring(0, end);
-        } finally { CloseClipboard(); }
-    }
-}
-"@
-function Copy-Text($text, $marker) { [PaneClip]::SetText($text, $marker); Start-Sleep -Milliseconds 500 }
-# The kept texts, newest first, as clipboard-history.json holds them.
-function Kept-Texts {
-    if (-not (Test-Path $history)) { return @() }
-    $file = Get-Content -Raw $history | ConvertFrom-Json
-    # {"version": 1, "packages": {<identity>: {"items": [...newest first]}}}
-    $items = foreach ($package in $file.packages.PSObject.Properties) { $package.Value.items }
-    return @($items | ForEach-Object { $_.text })
-}
-function Not-Kept($text) {
-    Start-Sleep -Seconds 2
-    if ((Kept-Texts) -contains $text) { throw "$text was kept" }
-}
-# Back to a blank root search from wherever the smoke is, with the return
-# to root key (Shift+Escape): Escape at a blank root search hides the
-# launcher since the redesign (1e61793), so it cannot be pressed blind.
-function To-Root { Send "+{ESC}"; Start-Sleep -Seconds 1 }
-function Open-History {
-    To-Root
-    Send "clipboard"; Start-Sleep -Seconds 1
-    Send "{ENTER}"; Start-Sleep -Seconds 2
-}
-function Open-Manage {
-    To-Root
-    Send "manage"; Start-Sleep -Seconds 1
-    Send "{ENTER}"; Start-Sleep -Seconds 1
-}
-$process = Start-Pane "stderr-clipboard.log" @("--install", "target/guests/packages/clipboard-history")
-Send "{ENTER}"   # Install; Clipboard History is selected
-Wait-For $registry "clipboard-history" $true; Start-Sleep -Seconds 1
-Copy-Text "pane-smoke-before" $null   # while history is off
-Send "{ENTER}"; Start-Sleep -Seconds 3   # open Clipboard History
-Capture "280-clipboard-off.png"
-Check "280-clipboard-off.png" "subtitle"   # "Off · Pane keeps nothing you copy until you turn it on ..."
-Send "{ENTER}"   # Turn on clipboard history
-Wait-For $history '"capture": "on"' $true; Start-Sleep -Seconds 1
-Capture "281-clipboard-on.png"
-Check "281-clipboard-on.png" "success"   # "Clipboard history is on"
-Copy-Text "pane-smoke-kept" $null
-Copy-Text "pane-smoke-secret" "ExcludeClipboardContentFromMonitorProcessing"
-Copy-Text "pane-smoke-no-history" "CanIncludeInClipboardHistory"
-Copy-Text "pane-smoke-no-cloud" "CanUploadToCloudClipboard"
-Copy-Text "pane-smoke-second" $null
-Wait-For $history "pane-smoke-second" $true
-if (((Kept-Texts) -join ",") -ne "pane-smoke-second,pane-smoke-kept") { throw "kept: $(Kept-Texts)" }
-Open-History
-Capture "282-clipboard-kept.png"
-Check "282-clipboard-kept.png" "subtitle"   # the two kept items, newest first
-Send "{ENTER}"   # Pause clipboard history
-Wait-For $history '"capture": "paused"' $true
-Copy-Text "pane-smoke-paused" $null
-Not-Kept "pane-smoke-paused"
-Open-History
-Send "{ENTER}"   # Resume clipboard history
-Wait-For $history '"capture": "on"' $true
-Copy-Text "pane-smoke-resumed" $null
-Wait-For $history "pane-smoke-resumed" $true
-Open-History
-Send "{DOWN 8}"; Start-Sleep -Milliseconds 120   # the second kept item, pane-smoke-second, after Pause, Turn off, Keep items for, Exclude, Clear, Turn off and delete, Delete recent and the first
-Send "{ENTER}"; Start-Sleep -Seconds 2   # Paste: not available yet, so it copies it again (#150)
-Capture "283-clipboard-copied.png"   # evidence only: the HUD "Copied — paste is not available here yet", Pane hidden
-if ([PaneClip]::GetText() -ne "pane-smoke-second") { throw "Enter did not copy the item" }
-if ([Win]::GetForegroundWindow() -eq $process.MainWindowHandle) { throw "Paste left Pane's window in front" }
-Start-Sleep -Seconds 1
-if ((Kept-Texts)[0] -ne "pane-smoke-second") { throw "the copied item did not move to the front" }
-Stop-Pane $process
-$process = Start-Pane "stderr-clipboard-pasted.log"
-Open-Manage
-Send "{ENTER}"   # disable Clipboard History, the first row
-Wait-For $registry '"disabled": true' $true; Start-Sleep -Seconds 1
-Capture "284-clipboard-disabled.png"
-Check "284-clipboard-disabled.png" "success"   # "Disabled Clipboard History"
-Copy-Text "pane-smoke-disabled" $null
-Not-Kept "pane-smoke-disabled"
-Stop-Pane $process
-$process = Start-Pane "stderr-clipboard-disabled.log"
-Copy-Text "pane-smoke-restarted-disabled" $null
-Not-Kept "pane-smoke-restarted-disabled"
-Open-Manage
-Send "{ENTER}"   # enable Clipboard History
-Wait-For $registry '"disabled": true' $false; Start-Sleep -Seconds 1
-Copy-Text "pane-smoke-enabled" $null
-Wait-For $history "pane-smoke-enabled" $true
-Stop-Pane $process
-$process = Start-Pane "stderr-clipboard-restarted.log"
-Copy-Text "pane-smoke-after-restart" $null
-Wait-For $history "pane-smoke-after-restart" $true
-Open-History
-Capture "285-clipboard-after-restart.png"
-Check "285-clipboard-after-restart.png" "subtitle"   # kept again after the restart
-$shots = "280-clipboard-off", "281-clipboard-on", "282-clipboard-kept", "284-clipboard-disabled", "285-clipboard-after-restart" | ForEach-Object { Join-Path $OutDir "$_.png" }
-python "$PSScriptRoot/check_screenshot.py" --distinct @shots
-if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: clipboard history changed nothing" }
-Stop-Pane $process
-$expected = "pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-second,pane-smoke-resumed,pane-smoke-kept"
-if (((Kept-Texts) -join ",") -ne $expected) { throw "kept: $(Kept-Texts)" }
-foreach ($never in "before", "secret", "no-history", "no-cloud", "paused", "disabled", "restarted-disabled") {
-    if (Select-String -Quiet -SimpleMatch "pane-smoke-$never" $history) { throw "pane-smoke-$never was kept" }
-}
-
-# Clipboard history expiry and deletion (#36), on the history just kept.
-# With Pane stopped, the smoke makes pane-smoke-kept 8 days old (past the
-# default 7-day retention) and pane-smoke-enabled 2 hours old, as a downtime
-# would: once Pane starts again, before the command shows anything,
-# pane-smoke-kept is gone from the file and the list. Then, in the command:
-# Delete, pane-smoke-second's third action (Ctrl+Shift+Enter, #150), deletes
-# that item alone; Delete
-# recent items (the last hour) deletes the two copied in this smoke's last
-# minutes and keeps pane-smoke-enabled; keeping items for 1 hour deletes
-# pane-smoke-enabled at once; and after one more copy, "Turn off and delete
-# clipboard history" deletes it and turns history off, so a later copy is not
-# kept. Deleting never changes what is on the clipboard. The rows: Pause,
-# Turn off, Keep items for…, Exclude a program, Clear, Turn off and delete,
-# Delete recent items, then the items, newest first.
-$extensions = Join-Path $data "extensions"
-function History-Field($name) { (python "$PSScriptRoot/clipboard_history.py" field $extensions $name) -join "" }
-# The kept texts, newest first, joined by commas ("" when none).
-function Kept-Joined { (python "$PSScriptRoot/clipboard_history.py" texts $extensions) -join "" }
-python "$PSScriptRoot/clipboard_history.py" backdate $extensions 8 pane-smoke-kept
-if ($LASTEXITCODE -ne 0) { throw "could not backdate the history" }
-python "$PSScriptRoot/clipboard_history.py" backdate $extensions 0.084 pane-smoke-enabled
-if ($LASTEXITCODE -ne 0) { throw "could not backdate the history" }
-$process = Start-Pane "stderr-clipboard-expiry.log"
-Start-Sleep -Seconds 1
-if ((Kept-Joined) -ne "pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-second,pane-smoke-resumed") { throw "kept after starting: $(Kept-Joined)" }
-Open-History
-Capture "400-clipboard-expired.png"
-Check "400-clipboard-expired.png" "subtitle"   # pane-smoke-kept is no longer listed
-$onClipboard = [PaneClip]::GetText()
-Send "{DOWN 9}"; Start-Sleep -Milliseconds 120   # pane-smoke-second: Paste, Copy, Delete
-Send "^+{ENTER}"   # Delete, its third action
-Wait-For $history "pane-smoke-second" $false; Start-Sleep -Seconds 1
-Capture "401-clipboard-item-deleted.png"
-Check "401-clipboard-item-deleted.png" "success"   # "Deleted the kept item"
-if ((Kept-Joined) -ne "pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-resumed") { throw "kept: $(Kept-Joined)" }
-if ([PaneClip]::GetText() -ne $onClipboard) { throw "deleting an item changed the clipboard" }
-Open-History
-Send "{DOWN 6}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 1   # Delete recent items: 15 minutes, hour or day
-Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"   # the last hour
-Wait-For $history "pane-smoke-resumed" $false; Start-Sleep -Seconds 1
-Capture "402-clipboard-recent-deleted.png"
-Check "402-clipboard-recent-deleted.png" "success"   # "Deleted 2 kept items"
-if ((Kept-Joined) -ne "pane-smoke-enabled") { throw "kept: $(Kept-Joined)" }
-Send "{ESC}"
-Open-History
-Send "{DOWN 2}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 1   # Keep items for 7 days: 7 days (the retention now, chosen), 1 hour, 1 day, 30 or 90 days
-Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"   # 1 hour, the second choice
-Wait-For $history '"retentionSeconds": 3600' $true; Start-Sleep -Seconds 1
-Capture "403-clipboard-retention-changed.png"
-Check "403-clipboard-retention-changed.png" "success"   # "Items are kept for 1 hour; deleted 1 older item"
-if ((Kept-Joined) -ne "") { throw "kept: $(Kept-Joined)" }
-Copy-Text "pane-smoke-final" $null
-Wait-For $history "pane-smoke-final" $true
-Send "{ESC}"
-Open-History
-Send "{DOWN 5}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"   # Turn off and delete clipboard history
-Wait-For $history "pane-smoke-final" $false; Start-Sleep -Seconds 1
-Capture "404-clipboard-turned-off-and-deleted.png"
-Check "404-clipboard-turned-off-and-deleted.png" "success"   # "Clipboard history is off; deleted 1 kept item"
-if ((History-Field "capture") -ne "") { throw "history is still $(History-Field 'capture')" }
-if ([PaneClip]::GetText() -ne "pane-smoke-final") { throw "deleting history changed the clipboard" }
-Copy-Text "pane-smoke-after-off" $null
-Not-Kept "pane-smoke-after-off"
-$shots = "400-clipboard-expired", "401-clipboard-item-deleted", "402-clipboard-recent-deleted", "403-clipboard-retention-changed", "404-clipboard-turned-off-and-deleted" | ForEach-Object { Join-Path $OutDir "$_.png" }
-python "$PSScriptRoot/check_screenshot.py" --distinct @shots
-if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: clipboard history expiry and deletion changed nothing" }
-Stop-Pane $process
-if ((Kept-Joined) -ne "") { throw "kept: $(Kept-Joined)" }
-if ((History-Field "retentionSeconds") -ne "3600") { throw "retention: $(History-Field 'retentionSeconds')" }
-
 # Installing Pane and acquiring its calculator (#51): the package
 # `cargo xtask package-windows --dev` builds is installed on a clean
 # machine — a fresh user profile (LOCALAPPDATA and APPDATA pointing into
@@ -2006,13 +1934,12 @@ if ((History-Field "retentionSeconds") -ne "3600") { throw "retention: $(History
 # shortcut touch nothing of the runner's user) and a PATH that holds
 # nothing at all, so no Rust, Node, npm, Git or compiler can be reached —
 # and Pane, started from what the install script installed, acquires its
-# default extensions (the calculator, and the prebuilt-helper sample with
-# it) from the artifact source this smoke serves on 127.0.0.1
+# default extensions (the five of #60; no sample is one, #162) from the
+# artifact source this smoke serves on 127.0.0.1
 # (scripts/artifact_server.py, the payloads `cargo xtask package-windows`
 # assembled; nothing reaches the network or Pane's published downloads).
-# The calculator answers "6*7" with 42, and the helper sample's pane-echo
-# runs: a prebuilt program from the acquired payload, no developer tool
-# anywhere. The package is the development profile, because only a
+# The calculator answers "6*7" with 42, with no developer tool anywhere.
+# The package is the development profile, because only a
 # development build takes its artifact source from PANE_ARTIFACTS; a
 # release build uses Pane's published downloads, which no controlled
 # source may replace. (The program files are removed again at the end of
@@ -2075,9 +2002,9 @@ try {
     # Generous: a slow runner may take a while to check every payload's
     # components (120 s each).
     if ($process.HasExited) { throw "the installed Pane exited during setup" }
-    # The release's default extensions (#60): all five, plus the helper
-    # sample a development build acquires with them.
-    foreach ($default in "calculator", "applications", "quicklinks", "files", "clipboard-history", "helper-sample") {
+    # The default extensions (#60): all five, in every build; no sample
+    # is acquired (#162).
+    foreach ($default in "calculator", "applications", "quicklinks", "files", "clipboard-history") {
         Wait-For (Join-Path $extensions "installed.json") ('"default": "' + $default + '"') $true 1200
     }
     Start-Sleep -Seconds 1
@@ -2089,19 +2016,13 @@ try {
     Send "{ENTER}"; Start-Sleep -Seconds 1
     Capture "502-calculator-copied.png"
     Check "502-calculator-copied.png" "success"   # "Copied 42 to the clipboard"
-    Send "^a"; Send "helper"; Start-Sleep -Seconds 1
-    Send "{ENTER}"; Start-Sleep -Seconds 2   # Helper sample
-    Send "{ENTER}"; Start-Sleep -Seconds 3   # "Echo through the helper"
-    Capture "503-helper-echoed.png"
-    Check "503-helper-echoed.png" "success"   # 'Echoed "hello from Pane" on Windows x86-64'
-    if (-not (Get-ChildItem (Join-Path $extensions "packages\*\helpers\*\pane-echo.exe") -ErrorAction SilentlyContinue)) {
-        throw "the acquired payload's helper was not installed"
+    if (Select-String -Quiet -SimpleMatch '"default": "helper-sample"' (Join-Path $extensions "installed.json")) {
+        throw "a sample was acquired as a default extension"
     }
-    if (Get-Process -Name "pane-echo" -ErrorAction SilentlyContinue) { throw "a helper is still running" }
     if ((Get-ChildItem (Join-Path $extensions "acquired\calculator")).Count -ne 1) { throw "the calculator's payload is not cached" }
     $downloads = Join-Path $extensions "downloads"
     if ((Test-Path $downloads) -and (Get-ChildItem $downloads)) { throw "downloads were left behind" }
-    $shots = "500-installed-root", "501-calculator-answer", "503-helper-echoed" | ForEach-Object { Join-Path $OutDir "$_.png" }
+    $shots = "500-installed-root", "501-calculator-answer" | ForEach-Object { Join-Path $OutDir "$_.png" }
     python "$PSScriptRoot/check_screenshot.py" --distinct @shots
     if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the installed Pane changed nothing" }
     Stop-Pane $process
@@ -2115,6 +2036,298 @@ try {
     $env:PATH = $realPath
     $env:APPDATA = $realAppData
     $env:LOCALAPPDATA = $realLocal
+}
+
+# Clipboard history (#35, #166, #167): Pane's own Clipboard History
+# records what is copied from the first start, with nothing to turn on.
+# Only the registered default extension does (a copy installed from its
+# folder starts off and shows the generic list), so this phase acquires
+# the default set from the artifact source the #51 phase built, served on
+# 127.0.0.1 as there, with the smoke's own build; Files' index covers an
+# empty folder of the smoke's (PANE_TEST_FILE_INDEX_HOME), not the
+# runner's home. The text this smoke copies is kept, except text marked as
+# a password manager marks it (ExcludeClipboardContentFromMonitorProcessing,
+# CanIncludeInClipboardHistory, CanUploadToCloudClipboard); nothing is kept
+# while recording is paused (Pause Recording and Resume Recording, in the
+# view's Actions panel, Ctrl+K) or the extension is disabled (its switch
+# in Settings), also after a restart, and once enabled again it is kept
+# again, also after a restart. The command opens Pane's split view: the
+# records by day, a type dropdown and the selected record's Information.
+# Enter on a record runs Paste (#150): Pane cannot paste on Windows yet,
+# so it copies the record again instead, closes the window and says so in
+# a HUD; Pane is then started again. The smoke copies only text of its own
+# ("pane-smoke-...") and a file of its own folder, and so replaces what
+# was on the clipboard without reading or putting it back: run it on CI's
+# runner or a desktop given to it, as the rest of the smoke already takes
+# over the keyboard. A data folder of its own.
+$data = Join-Path $OutDir "clipboard-data"
+if (Test-Path $data) { Remove-Item -Recurse -Force $data }
+$env:PANE_DATA_DIR = $data
+$registry = Join-Path $data "extensions/installed.json"
+$history = Join-Path $data "extensions/clipboard-history.json"
+$clipboardHome = Join-Path $OutDir "clipboard-home"
+if (Test-Path $clipboardHome) { Remove-Item -Recurse -Force $clipboardHome }
+New-Item -ItemType Directory -Force -Path $clipboardHome | Out-Null
+$env:PANE_TEST_FILE_INDEX_HOME = (Resolve-Path $clipboardHome).Path
+$portFile = Join-Path $OutDir "clipboard-artifact-server.port"
+if (Test-Path $portFile) { Remove-Item -Force $portFile }
+$server = Start-Process python -PassThru -NoNewWindow `
+    -ArgumentList @("`"$PSScriptRoot/artifact_server.py`"", "target/dist/artifacts", "`"$portFile`"") `
+    -RedirectStandardError (Join-Path $OutDir "clipboard-artifact-server.log")
+for ($i = 0; $i -lt 600 -and -not (Test-Path $portFile) -and -not $server.HasExited; $i++) { Start-Sleep -Milliseconds 100 }
+if (-not (Test-Path $portFile)) { throw "the clipboard phase's artifact source did not start (see clipboard-artifact-server.log)" }
+$env:PANE_ARTIFACTS = "http://127.0.0.1:$((Get-Content $portFile).Trim())/"
+Add-Type @"
+using System; using System.Runtime.InteropServices; using System.Text; using System.Threading;
+public static class PaneClip {
+    [DllImport("user32.dll")] static extern bool OpenClipboard(IntPtr owner);
+    [DllImport("user32.dll")] static extern bool CloseClipboard();
+    [DllImport("user32.dll")] static extern bool EmptyClipboard();
+    [DllImport("user32.dll")] static extern IntPtr GetClipboardData(uint format);
+    [DllImport("user32.dll")] static extern IntPtr SetClipboardData(uint format, IntPtr memory);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern uint RegisterClipboardFormatW(string name);
+    [DllImport("kernel32.dll")] static extern IntPtr GlobalAlloc(uint flags, UIntPtr bytes);
+    [DllImport("kernel32.dll")] static extern IntPtr GlobalLock(IntPtr memory);
+    [DllImport("kernel32.dll")] static extern bool GlobalUnlock(IntPtr memory);
+    [DllImport("kernel32.dll")] static extern UIntPtr GlobalSize(IntPtr memory);
+    const uint CF_UNICODETEXT = 13;
+    static void Open() {
+        for (int i = 0; i < 50; i++) { if (OpenClipboard(IntPtr.Zero)) return; Thread.Sleep(20); }
+        throw new Exception("another application keeps the clipboard open");
+    }
+    static void Put(uint format, byte[] bytes) {
+        IntPtr memory = GlobalAlloc(2, (UIntPtr)Math.Max(bytes.Length, 1));   // GMEM_MOVEABLE
+        IntPtr data = GlobalLock(memory);
+        Marshal.Copy(bytes, 0, data, bytes.Length);
+        GlobalUnlock(memory);
+        if (SetClipboardData(format, memory) == IntPtr.Zero) throw new Exception("SetClipboardData failed");
+    }
+    static byte[] Get(uint format) {
+        IntPtr memory = GetClipboardData(format);
+        if (memory == IntPtr.Zero) return null;
+        IntPtr data = GlobalLock(memory);
+        if (data == IntPtr.Zero) return null;
+        byte[] bytes = new byte[(int)(ulong)GlobalSize(memory)];
+        Marshal.Copy(data, bytes, 0, bytes.Length);
+        GlobalUnlock(memory);
+        return bytes;
+    }
+    // Puts text on the clipboard, with the registered format `marker` (a DWORD of 0) if named.
+    public static void SetText(string text, string marker) {
+        Open();
+        try {
+            EmptyClipboard();
+            Put(CF_UNICODETEXT, Encoding.Unicode.GetBytes(text + "\0"));
+            if (!String.IsNullOrEmpty(marker)) Put(RegisterClipboardFormatW(marker), new byte[4]);
+        } finally { CloseClipboard(); }
+    }
+    public static string GetText() {
+        Open();
+        try {
+            byte[] bytes = Get(CF_UNICODETEXT);
+            if (bytes == null) return null;
+            string text = Encoding.Unicode.GetString(bytes);
+            int end = text.IndexOf('\0');
+            return end < 0 ? text : text.Substring(0, end);
+        } finally { CloseClipboard(); }
+    }
+    // Puts the file at `path` on the clipboard as a drop list (CF_HDROP):
+    // a DROPFILES header (its list at byte 20, wide names), then the
+    // path, the list ended by an empty name.
+    public static void SetFiles(string path) {
+        Open();
+        try {
+            EmptyClipboard();
+            byte[] names = Encoding.Unicode.GetBytes(path + "\0\0");
+            byte[] drop = new byte[20 + names.Length];
+            BitConverter.GetBytes(20).CopyTo(drop, 0);
+            BitConverter.GetBytes(1).CopyTo(drop, 16);
+            names.CopyTo(drop, 20);
+            Put(15, drop);   // CF_HDROP
+        } finally { CloseClipboard(); }
+    }
+}
+"@
+function Copy-Text($text, $marker) { [PaneClip]::SetText($text, $marker); Start-Sleep -Milliseconds 500 }
+# Puts the file at $path on the clipboard, as File Explorer's Copy does
+# (CF_HDROP).
+function Copy-File($path) { [PaneClip]::SetFiles($path); Start-Sleep -Milliseconds 500 }
+# The kept texts, newest first, as clipboard-history.json holds them.
+function Kept-Texts {
+    if (-not (Test-Path $history)) { return @() }
+    $file = Get-Content -Raw $history | ConvertFrom-Json
+    # {"version": 1, "packages": {<identity>: {"items": [...newest first]}}}
+    $items = foreach ($package in $file.packages.PSObject.Properties) { $package.Value.items }
+    return @($items | ForEach-Object { $_.text })
+}
+function Not-Kept($text) {
+    Start-Sleep -Seconds 2
+    if ((Kept-Texts) -contains $text) { throw "$text was kept" }
+}
+# Opens Pane's Clipboard History from wherever the launcher is: its split
+# view, the field ("Type to filter entries…") holding the keyboard.
+function Open-History {
+    Focus-Pane $process
+    To-Root
+    Send "clipboard history"; Start-Sleep -Seconds 1
+    Send "{ENTER}"; Start-Sleep -Seconds 2
+}
+# Runs the entry of the view's Actions panel (Ctrl+K) its filter narrows
+# to with $label.
+function History-Action($label) {
+    Send "^k"; Start-Sleep -Seconds 1
+    Send $label; Start-Sleep -Milliseconds 500
+    Send "{ENTER}"; Start-Sleep -Seconds 1
+}
+$process = $null
+try {
+    $process = Start-Pane "stderr-clipboard.log"
+    # The default set (#60), acquired at this first start.
+    foreach ($default in "calculator", "applications", "quicklinks", "files", "clipboard-history") {
+        Wait-For $registry ('"default": "' + $default + '"') $true 1200
+    }
+    Start-Sleep -Seconds 3   # Clipboard History runs, and the watch with it
+    Copy-Text "pane-smoke-kept" $null   # nothing was turned on
+    Copy-Text "pane-smoke-secret" "ExcludeClipboardContentFromMonitorProcessing"
+    Copy-Text "pane-smoke-no-history" "CanIncludeInClipboardHistory"
+    Copy-Text "pane-smoke-no-cloud" "CanUploadToCloudClipboard"
+    Copy-Text "pane-smoke-second" $null
+    Wait-For $history "pane-smoke-second" $true
+    if (((Kept-Texts) -join ",") -ne "pane-smoke-second,pane-smoke-kept") { throw "kept: $(Kept-Texts)" }
+    Open-History
+    Capture "280-clipboard-recording.png"
+    Check "280-clipboard-recording.png" "hint"   # the split view: Today, the two records, the field's placeholder
+    History-Action "Pause Recording"
+    Wait-For $history '"capture": "paused"' $true
+    Capture-Until "281-clipboard-paused.png" "success" 10   # its toast: "Recording paused"
+    Copy-Text "pane-smoke-paused" $null
+    Not-Kept "pane-smoke-paused"
+    Open-History
+    History-Action "Resume Recording"
+    Wait-For $history '"capture": "on"' $true
+    Copy-Text "pane-smoke-resumed" $null
+    Wait-For $history "pane-smoke-resumed" $true
+    Open-History
+    Capture "282-clipboard-kept.png"   # evidence only: the three records, newest first
+    Send "pane-smoke-second"; Start-Sleep -Seconds 1   # the filter leaves that record, selected
+    Send "{ENTER}"; Start-Sleep -Seconds 2   # Paste: not available yet, so it copies it again (#150)
+    Capture "283-clipboard-copied.png"   # evidence only: the HUD "Copied — paste is not available here yet", Pane hidden
+    if ([PaneClip]::GetText() -ne "pane-smoke-second") { throw "Enter did not copy the record" }
+    if ([Win]::GetForegroundWindow() -eq $process.MainWindowHandle) { throw "Paste left Pane's window in front" }
+    Start-Sleep -Seconds 1
+    if ((Kept-Texts)[0] -ne "pane-smoke-second") { throw "the copied record did not move to the front" }
+    Stop-Pane $process
+    $process = Start-Pane "stderr-clipboard-pasted.log"
+    Open-Extension "Clipboard History"
+    Press-Named "Clipboard History" -Toggle   # disable Clipboard History
+    Wait-For $registry '"disabled": true' $true
+    Wait-Shown "Disabled Clipboard History"
+    Capture "284-clipboard-disabled.png"
+    Close-Settings
+    Copy-Text "pane-smoke-disabled" $null
+    Not-Kept "pane-smoke-disabled"
+    Stop-Pane $process
+    $process = Start-Pane "stderr-clipboard-disabled.log"
+    Copy-Text "pane-smoke-restarted-disabled" $null
+    Not-Kept "pane-smoke-restarted-disabled"
+    Open-Extension "Clipboard History"
+    Press-Named "Clipboard History" -Toggle   # enable Clipboard History
+    Wait-For $registry '"disabled": true' $false
+    Close-Settings
+    Copy-Text "pane-smoke-enabled" $null
+    Wait-For $history "pane-smoke-enabled" $true
+    Stop-Pane $process
+    $process = Start-Pane "stderr-clipboard-restarted.log"
+    Copy-Text "pane-smoke-after-restart" $null
+    Wait-For $history "pane-smoke-after-restart" $true
+    Open-History
+    Capture "285-clipboard-after-restart.png"
+    Check "285-clipboard-after-restart.png" "hint"   # kept again after the restart
+    $shots = "280-clipboard-recording", "281-clipboard-paused", "284-clipboard-disabled", "285-clipboard-after-restart" | ForEach-Object { Join-Path $OutDir "$_.png" }
+    python "$PSScriptRoot/check_screenshot.py" --distinct @shots
+    if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: clipboard history changed nothing" }
+    Stop-Pane $process
+    $expected = "pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-second,pane-smoke-resumed,pane-smoke-kept"
+    if (((Kept-Texts) -join ",") -ne $expected) { throw "kept: $(Kept-Texts)" }
+    foreach ($never in "secret", "no-history", "no-cloud", "paused", "disabled", "restarted-disabled") {
+        if (Select-String -Quiet -SimpleMatch "pane-smoke-$never" $history) { throw "pane-smoke-$never was kept" }
+    }
+
+    # Clipboard history expiry and deletion (#36, #166), on the history just
+    # kept. With Pane stopped, the smoke makes pane-smoke-kept 8 days old
+    # (past the default 7-day retention) and pane-smoke-enabled 2 hours old,
+    # as a downtime would: once Pane starts again, before the command shows
+    # anything, pane-smoke-kept is gone from the file and the list. Then, in
+    # the view's Actions panel: Delete Entry on pane-smoke-second (the filter
+    # leaves it) deletes that record alone; keeping records for 1 Hour
+    # deletes pane-smoke-enabled at once; a copied file is kept as a file
+    # (#167); and Clear History, once confirmed, deletes every record while
+    # recording goes on, so a later copy is kept. Deleting never changes
+    # what is on the clipboard.
+    $extensions = Join-Path $data "extensions"
+    function History-Field($name) { (python "$PSScriptRoot/clipboard_history.py" field $extensions $name) -join "" }
+    # The kept texts, newest first, joined by commas ("" when none).
+    function Kept-Joined { (python "$PSScriptRoot/clipboard_history.py" texts $extensions) -join "" }
+    python "$PSScriptRoot/clipboard_history.py" backdate $extensions 8 pane-smoke-kept
+    if ($LASTEXITCODE -ne 0) { throw "could not backdate the history" }
+    python "$PSScriptRoot/clipboard_history.py" backdate $extensions 0.084 pane-smoke-enabled
+    if ($LASTEXITCODE -ne 0) { throw "could not backdate the history" }
+    $process = Start-Pane "stderr-clipboard-expiry.log"
+    Start-Sleep -Seconds 1
+    if ((Kept-Joined) -ne "pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-second,pane-smoke-resumed") { throw "kept after starting: $(Kept-Joined)" }
+    Open-History
+    Capture "400-clipboard-expired.png"
+    Check "400-clipboard-expired.png" "hint"   # pane-smoke-kept is no longer listed
+    $onClipboard = [PaneClip]::GetText()
+    Send "pane-smoke-second"; Start-Sleep -Seconds 1   # the filter leaves that record, selected
+    History-Action "Delete Entry"
+    Wait-For $history "pane-smoke-second" $false
+    Capture-Until "401-clipboard-item-deleted.png" "success" 10   # its toast: "Deleted the kept item"
+    if ((Kept-Joined) -ne "pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-resumed") { throw "kept: $(Kept-Joined)" }
+    if ([PaneClip]::GetText() -ne $onClipboard) { throw "deleting a record changed the clipboard" }
+    Open-History
+    History-Action "1 Hour"   # Keep History For: 1 Hour
+    Wait-For $history '"retentionSeconds": 3600' $true
+    Capture-Until "402-clipboard-retention-changed.png" "success" 10   # its toast: "History is kept for 1 hour; deleted 1 kept item older"
+    if ((Kept-Joined) -ne "pane-smoke-after-restart,pane-smoke-resumed") { throw "kept: $(Kept-Joined)" }
+    $copiedFile = Join-Path $clipboardHome "pane-smoke-file.txt"
+    Set-Content -Encoding ASCII -LiteralPath $copiedFile "a file the smoke copies"
+    Copy-File (Resolve-Path -LiteralPath $copiedFile).Path
+    Wait-For $history "pane-smoke-file.txt" $true
+    if (-not (Select-String -Quiet -SimpleMatch '"files"' $history)) { throw "the copied file was not kept as a file" }
+    Open-History
+    Send "pane-smoke-file"; Start-Sleep -Seconds 1   # the filter leaves the file's record, selected
+    Capture "403-clipboard-file.png"   # evidence only: the record, the file's icon and its preview
+    Copy-Text "pane-smoke-final" $null
+    Wait-For $history "pane-smoke-final" $true
+    Open-History
+    History-Action "Clear History"   # asks first
+    Capture "404-clipboard-clear-asked.png"   # evidence only: "Clear Clipboard History?"
+    Send "{ENTER}"   # Clear History
+    Wait-For $history "pane-smoke-final" $false; Start-Sleep -Seconds 1
+    Capture "405-clipboard-cleared.png"
+    if ((Kept-Joined) -ne "") { throw "kept: $(Kept-Joined)" }
+    if ((History-Field "capture") -ne "on") { throw "history is $(History-Field 'capture') after Clear History" }
+    if ([PaneClip]::GetText() -ne "pane-smoke-final") { throw "deleting history changed the clipboard" }
+    Copy-Text "pane-smoke-after-clear" $null
+    Wait-For $history "pane-smoke-after-clear" $true
+    $shots = "400-clipboard-expired", "401-clipboard-item-deleted", "402-clipboard-retention-changed", "403-clipboard-file", "405-clipboard-cleared" | ForEach-Object { Join-Path $OutDir "$_.png" }
+    python "$PSScriptRoot/check_screenshot.py" --distinct @shots
+    if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: clipboard history expiry and deletion changed nothing" }
+    Stop-Pane $process
+    if ((Kept-Joined) -ne "pane-smoke-after-clear") { throw "kept: $(Kept-Joined)" }
+    if ((History-Field "retentionSeconds") -ne "3600") { throw "retention: $(History-Field 'retentionSeconds')" }
+} finally {
+    if ($process -and -not $process.HasExited) {
+        Stop-Process -Id $process.Id -ErrorAction SilentlyContinue
+        $process.WaitForExit()
+    }
+    Stop-Process -Id $server.Id -ErrorAction SilentlyContinue
+    Remove-Item Env:PANE_ARTIFACTS -ErrorAction SilentlyContinue
+    Remove-Item Env:PANE_TEST_FILE_INDEX_HOME -ErrorAction SilentlyContinue
+    # The update phase's installed Pane keeps its data where a real one
+    # does, as the #51 phase's.
+    Remove-Item Env:PANE_DATA_DIR -ErrorAction SilentlyContinue
 }
 
 # Installing a Pane application update by the user's choice (#54): a
@@ -2134,8 +2347,8 @@ try {
 # version is used the next time Pane starts (Pane never restarts itself).
 # The new Pane, started again, reports 99.0.0, with the old version's
 # data (the calculator acquired at first setup) and the extension the
-# user disabled kept, and with nothing of the update left in the install
-# folder.
+# user disabled (Clipboard History) kept, and with nothing of the update
+# left in the install folder.
 cargo xtask package-windows --dev --package-version 99.0.0
 if ($LASTEXITCODE -ne 0) { throw "the update package was not built" }
 $older = Get-ChildItem "target/dist/pane-0.1.0-windows-*-dev.zip" | Select-Object -First 1
@@ -2184,8 +2397,8 @@ try {
     # First setup: the default extensions are acquired (one index read
     # per payload), and Pane's own check reads the index once more.
     if ($process.HasExited) { throw "the installed Pane exited during setup" }
-    # The release's default set (#60) plus the helper sample.
-    foreach ($default in "calculator", "applications", "quicklinks", "files", "clipboard-history", "helper-sample") {
+    # The default set (#60).
+    foreach ($default in "calculator", "applications", "quicklinks", "files", "clipboard-history") {
         Wait-For $registry ('"default": "' + $default + '"') $true 1200
     }
     # The check has read the index (its request is the third): the offer
@@ -2206,15 +2419,13 @@ try {
     # Taking no action downloads nothing: no package was asked for.
     if (Select-String -SimpleMatch ".zip" $serverLog) { throw "a package was downloaded without the user choosing it" }
 
-    # Disable the Helper sample first: an extension the user disabled
-    # before the update must stay disabled after it.
-    Send "^a"; Send "manage"; Start-Sleep -Seconds 1
-    Send "{ENTER}"; Start-Sleep -Seconds 1   # Manage extensions…
-    # The Helper sample is the sixth extension now (#60's set is listed
-    # first), so five Downs reach it.
-    Send "{DOWN 5}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 2   # Helper sample: disabled
+    # Disable Clipboard History first: an extension the user disabled
+    # before the update must stay disabled after it (the switch on its
+    # page in Settings, #168).
+    Open-Extension "Clipboard History"
+    Press-Named "Clipboard History" -Toggle   # Clipboard History: disabled
     Wait-For $registry '"disabled": true' $true
-    Send "{ESC}"; Start-Sleep -Seconds 1
+    Close-Settings
 
     # A package that does not match the integrity its index gives is
     # explained and not installed: the bytes of the served package are
@@ -2262,7 +2473,7 @@ try {
 
     # The next start runs the new version: it reports 99.0.0, removes what
     # the update left, and the old version's data is kept — the
-    # calculator answers and the Helper sample stays disabled.
+    # calculator answers and Clipboard History stays disabled.
     $version = Join-Path $OutDir "update-version.txt"
     $check = Start-Process -FilePath $installed -ArgumentList "--version" -Wait -PassThru -RedirectStandardOutput $version
     if ($check.ExitCode -ne 0) { throw "the new pane.exe --version failed" }

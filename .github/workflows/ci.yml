@@ -11,11 +11,28 @@ on:
   # happen once. A milestone's release-validation ticket (for #70, #84)
   # is fed by the run on main when its pull request merges.
   # pi-subagent/** worktrees keep their own two-tier workflow in
-  # ci-fast.yml.
+  # ci-fast.yml. docs/agents/ci.md describes the tiers.
   push:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      only:
+        description: >-
+          Run only these jobs, comma-separated with no spaces, to recheck a
+          fix without the whole matrix: renderers, licenses, lints, tests,
+          smoke, package, js-guests. Empty runs everything.
+        type: string
+        default: ""
+      smoke_os:
+        description: Operating system for the smoke jobs (other jobs are unchanged).
+        type: choice
+        default: all
+        options:
+          - all
+          - windows-2025
+          - macos-15
+          - ubuntu-24.04
 
 # One run per branch: a superseded run is cancelled instead of finishing
 # (each leg holds a shared runner for the better part of an hour, and
@@ -24,26 +41,32 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   # Renderer tests live in the maintained fork, outside Pane's workspace.
   # Keep this revision aligned with Pane's GPUI dependency pin. The harness
   # uses a hidden DirectX target; it does not focus or capture the desktop.
   windows-renderer:
-    name: Windows renderer output
+    name: Renderer output (windows-2025)
+    if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',renderers,') }}
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
         with:
           repository: hoangvu12/gpui-ce
-          ref: bcf3a0acd047c1873293069d0ed42085a38f699b
+          ref: 5d27954ce5305447bb97d1d7b89b0db9b7a2c59c
           path: renderer
           persist-credentials: false
       - name: Install renderer test toolchain
         run: rustup toolchain install 1.98.1 --profile minimal
+      # Saved only on main, as every Rust cache is (see the setup action).
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: renderer
           key: windows-renderer-1.98.1
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Check source-over quad and path output
         working-directory: renderer
         run: cargo +1.98.1 test --locked -j1 -p gpui_ce_windows --features test-support --lib
@@ -58,7 +81,8 @@ jobs:
           if-no-files-found: warn
 
   macos-renderer:
-    name: macOS renderer CGColor regression
+    name: Renderer CGColor regression (macos-15)
+    if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',renderers,') }}
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -91,6 +115,7 @@ jobs:
         with:
           workspaces: renderer
           key: macos-renderer-1.98.1
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Check recursive native layer background clearing
         working-directory: renderer
         shell: bash
@@ -107,6 +132,7 @@ jobs:
 
   licenses:
     name: Licenses and sources
+    if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',licenses,') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -122,12 +148,13 @@ jobs:
         working-directory: guests/hello-rust
         run: cargo deny --locked --workspace --exclude-dev check licenses sources
 
-  # What changed, so the JS/TS guests job can skip a push that touches
-  # nothing it rebuilds (it is a second full Linux build and test run).
+  # What changed, so the JS/TS guests jobs can skip a push that touches
+  # nothing they rebuild (they are a second full Linux build and test run).
   changes:
     name: What changed
     runs-on: ubuntu-24.04
     permissions:
+      contents: read
       pull-requests: read
     outputs:
       js-guests: ${{ steps.filter.outputs.js-guests }}
@@ -144,108 +171,77 @@ jobs:
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
               - '.github/workflows/ci.yml'
+              - '.github/actions/**'
 
-  check:
-    name: Check (${{ matrix.os }})
+  # Formatting, the prebuilt JS/TS samples and clippy on every operating
+  # system. On main this job is also what saves each system's Rust cache,
+  # the one every other job of every workflow restores: it builds the
+  # guests and the tests too (without running them), so the cache holds
+  # what clippy, the test builds and the guest builds reuse.
+  lints:
+    name: Lints (${{ matrix.os }})
+    if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',lints,') }}
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2025, macos-15, ubuntu-24.04]
+        os: [ubuntu-24.04, windows-2025, macos-15]
     runs-on: ${{ matrix.os }}
-    env:
-      # The many test binaries each link Pane's whole dependency tree, so
-      # the Linux legs link them with mold (Windows and macOS link with
-      # their own linkers; the empty value keeps the cache key uniform
-      # per operating system). The flag is scoped to the host triple, never
-      # RUSTFLAGS: a job-wide RUSTFLAGS would also reach the wasm32-wasip2
-      # guest builds, whose wasm-component-ld rejects native linker flags
-      # (run 36789533844 failed on "unexpected argument '-f' found"). The
-      # matrix is what a job-level env may read: the runner context exists
-      # only inside a step; and on the other legs the triple never builds,
-      # so the variable is inert there whatever it holds.
-      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ${{ matrix.os == 'ubuntu-24.04' && '-C link-arg=-fuse-ld=mold' || '' }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install Linux build dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
-            libxcb1-dev libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers \
-            xvfb xdotool imagemagick mold
-      - name: Install the pinned Rust toolchain
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
+      # On main, `tests` installs the cargo-nextest the cache build uses.
+      - uses: ./.github/actions/setup
         with:
-          workspaces: |
-            .
-            guests
-            guests/fixtures/mixed-p2
-      # cargo-nextest, which `cargo xtask ci` runs the tests with (a
-      # flaky failure is retried, not fatal to the run); pinned to an
-      # exact version, as the licenses job pins cargo-deny.
-      - uses: taiki-e/install-action@v2
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          tests: ${{ github.ref == 'refs/heads/main' }}
+      - name: Check formatting, prebuilt samples and lints
+        run: cargo xtask ci-lints
+      - name: Build the guests and the tests for the cache
+        if: github.ref == 'refs/heads/main'
+        run: cargo xtask ci-tests --no-run
+
+  # The workspace's tests on every operating system, split into shards
+  # that run at once (nextest's hash partition, as in ci-branch.yml).
+  tests:
+    name: Tests (${{ matrix.os }}, ${{ matrix.shard }})
+    if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',tests,') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+        shard: [1/3, 2/3, 3/3]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
         with:
-          tool: cargo-nextest@0.9.146
-      - name: Build guests, check formatting and lints, run tests
-        run: cargo xtask ci
-        env:
-          # The Windows and macOS clipboard adapters' tests replace what is
-          # on the clipboard, so they run only where this is set: on CI's
-          # runners (the macOS one has the runner's logged-in WindowServer
-          # session, so the pasteboard is live), never by default on a
-          # developer's computer.
-          PANE_TEST_REAL_CLIPBOARD: ${{ runner.os != 'Linux' && '1' || '' }}
-          # The Windows system icon adapter's test (#142) extracts real
-          # icons through the shell, which needs the runner's session.
-          PANE_TEST_SYSTEM_ICONS: ${{ runner.os == 'Windows' && '1' || '' }}
-          # The program containment adapter test (a Job Object on Windows,
-          # a process group elsewhere) starts and ends real processes of
-          # its own, so it opts in the same way.
-          PANE_TEST_PROCESS_TREES: "1"
-      # The Linux (X11) clipboard adapter's test also replaces what is on
-      # the clipboard, and needs a display to watch: the same opt-in, run
-      # under Xvfb (the step above runs without a display, so the test
-      # skips itself there).
+          tests: true
+      - name: Build guests and run this shard of the tests
+        run: cargo xtask ci-tests --partition hash:${{ matrix.shard }}
+      # The Linux (X11) clipboard adapter's test replaces what is on the
+      # clipboard and needs a display to watch: opted in and run under
+      # Xvfb here, in one shard, reusing its build (the shards run it
+      # without a display, where it skips itself).
       - name: Run the Linux clipboard adapter test (Xvfb)
-        if: runner.os == 'Linux'
-        run: xvfb-run -a cargo test --locked -p pane-core --test clipboard_adapter_linux
+        if: runner.os == 'Linux' && matrix.shard == '1/3'
+        run: xvfb-run -a cargo nextest run --locked --workspace --retries 2 -E 'binary(clipboard_adapter_linux)'
         env:
           PANE_TEST_REAL_CLIPBOARD: "1"
 
-  # The native GUI smokes and the packages, in their own jobs so they run
-  # beside the tests instead of after them: the tests need not finish
-  # before the smoke starts, and a failing test no longer skips the
-  # evidence a smoke would have collected.
+  # The native GUI smokes, in their own jobs so they run beside the tests
+  # instead of after them: the tests need not finish before the smoke
+  # starts, and a failing test does not skip the evidence a smoke would
+  # have collected.
   smoke:
     name: Smoke (${{ matrix.os }})
+    if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',smoke,') }}
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2025, macos-15, ubuntu-24.04]
+        os: ${{ fromJSON(inputs.smoke_os && inputs.smoke_os != 'all' && format('["{0}"]', inputs.smoke_os) || '["windows-2025","macos-15","ubuntu-24.04"]') }}
     runs-on: ${{ matrix.os }}
-    env:
-      # As in the check job: host-triple-scoped so the wasm guest builds
-      # keep their own linker (and the matrix is what a job-level env may
-      # read).
-      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ${{ matrix.os == 'ubuntu-24.04' && '-C link-arg=-fuse-ld=mold' || '' }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install Linux build dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
-            libxcb1-dev libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers \
-            xvfb xdotool imagemagick mold
-      - name: Install the pinned Rust toolchain
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            .
-            guests
-            guests/fixtures/mixed-p2
+      - uses: ./.github/actions/setup
       # The launcher the smokes drive, and the guest packages they install
       # (the installer phases build their own packages besides).
       - name: Build the launcher and the guests
@@ -281,36 +277,6 @@ jobs:
       - name: Native GUI smoke (macOS)
         if: runner.os == 'macOS'
         run: bash scripts/smoke-macos.sh smoke
-      - name: Build the Linux package (release, x86_64)
-        if: runner.os == 'Linux'
-        run: cargo xtask package-linux
-      - name: Build the Windows package (release, x86_64)
-        if: runner.os == 'Windows'
-        run: cargo xtask package-windows
-      - name: Build the macOS package (release, aarch64)
-        if: runner.os == 'macOS'
-        run: cargo xtask package-macos
-      - name: Upload the Linux package and its artifacts
-        if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-package
-          path: target/dist/
-          if-no-files-found: error
-      - name: Upload the Windows package and its artifacts
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-package
-          path: target/dist/
-          if-no-files-found: error
-      - name: Upload the macOS package and its artifacts
-        if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-package
-          path: target/dist/
-          if-no-files-found: error
       - name: Upload GUI smoke evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -326,42 +292,63 @@ jobs:
           path: measure
           if-no-files-found: ignore
 
-  # Rebuilds the JS/TS sample components from source with the pinned toolchain
-  # and runs the same contract tests on them. The rebuilt files are not
-  # byte-identical to the committed ones (the QuickJS snapshot holds build-time
-  # state), so behaviour is compared, not bytes. A push that changes nothing
-  # under the paths it rebuilds skips it (a manual run always runs it).
-  js-guests:
-    name: JS/TS guests from source (Linux)
-    needs: changes
-    if: needs.changes.outputs.js-guests == 'true' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-24.04
-    env:
-      # Host-triple-scoped as in the check job (this job also builds the
-      # wasm guests): a job-wide RUSTFLAGS would break their links.
-      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
+  # Each system's release package, in a job of its own beside the smoke
+  # rather than after it (it was 17 minutes of the Windows smoke job). The
+  # package is assembled from the guest packages `cargo xtask guests`
+  # builds.
+  package:
+    name: Package (${{ matrix.os }})
+    if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',package,') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            system: linux
+          - os: windows-2025
+            system: windows
+          - os: macos-15
+            system: macos
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install Linux build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
-            libxcb1-dev libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers mold
+      - uses: ./.github/actions/setup
+      - name: Build the guests
+        run: cargo xtask guests
+      # Release, x86_64 on Linux and Windows, aarch64 on macOS.
+      - name: Build the package
+        run: cargo xtask package-${{ matrix.system }}
+      - name: Upload the package and its artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.system }}-package
+          path: target/dist/
+          if-no-files-found: error
+
+  # Rebuilds the JS/TS sample components from source with the pinned
+  # toolchain, then runs the same tests on them (below). The rebuilt files
+  # are not byte-identical to the committed ones (the QuickJS snapshot
+  # holds build-time state), so behaviour is compared, not bytes. A push
+  # that changes nothing under the paths it rebuilds skips both jobs (a
+  # manual run always runs them).
+  js-guests:
+    name: JS/TS guests from source (ubuntu-24.04)
+    needs: changes
+    if: >-
+      (!inputs.only || contains(format(',{0},', inputs.only), ',js-guests,'))
+      && (needs.changes.outputs.js-guests == 'true' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Committed components match their sources and toolchain pins
+        run: python3 tools/componentize-js/pane_js.py check
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Install the pinned Rust toolchain
-        run: rustup toolchain install
-      - name: Committed components match their sources and toolchain pins
-        run: python3 tools/componentize-js/pane_js.py check
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            .
-            guests
+      - uses: ./.github/actions/setup
       # The built toolchain (runtime, componentizer, npm tools) and the pinned
       # downloads, in the default PANE_JS_TOOLCHAIN_DIR; the Rust build
-      # directories are not kept.
+      # directories are not kept. The test shards below restore it too.
       - uses: actions/cache@v4
         with:
           path: |
@@ -371,18 +358,73 @@ jobs:
           key: js-toolchain-${{ runner.os }}-${{ hashFiles('tools/componentize-js/**', 'rust-toolchain.toml') }}
       - name: Rebuild the JS/TS sample components
         run: cargo xtask js-guests
-      # Also development mode's JavaScript and TypeScript builds on save
-      # (crates/pane-core/tests/develop_builds.rs), which need the toolchain.
-      # cargo-nextest, as in the check job, so a flaky failure is retried.
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest@0.9.146
-      - name: Run the tests against the rebuilt components
-        run: cargo nextest run --locked --workspace --retries 2
-        env:
-          PANE_TEST_JS_BUILDS: "1"
       - name: Upload the rebuilt components
         uses: actions/upload-artifact@v4
         with:
           name: js-guests
           path: guests/prebuilt
+
+  # The whole test suite against the rebuilt components, in shards as the
+  # tests job runs it. Also development mode's JavaScript and TypeScript
+  # builds on save (crates/pane-core/tests/develop_builds.rs), which need
+  # the toolchain the job above built.
+  js-guests-tests:
+    name: JS/TS guests from source, tests (ubuntu-24.04, ${{ matrix.shard }})
+    needs: js-guests
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1/3, 2/3, 3/3]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: ./.github/actions/setup
+        with:
+          tests: true
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/pane/componentize-js/bin
+            ~/.cache/pane/componentize-js/downloads
+            ~/.cache/pane/componentize-js/node
+          key: js-toolchain-${{ runner.os }}-${{ hashFiles('tools/componentize-js/**', 'rust-toolchain.toml') }}
+          fail-on-cache-miss: true
+      - name: Use the rebuilt components
+        uses: actions/download-artifact@v4
+        with:
+          name: js-guests
+          path: guests/prebuilt
+      - name: Run this shard of the tests against the rebuilt components
+        run: cargo xtask ci-tests --partition hash:${{ matrix.shard }}
+        env:
+          PANE_TEST_JS_BUILDS: "1"
+
+  # The one check to require, as in ci-branch.yml: green when every job
+  # above passed or was skipped. A job added here is added to `needs`.
+  passed:
+    name: CI passed
+    if: always()
+    needs:
+      - windows-renderer
+      - macos-renderer
+      - licenses
+      - changes
+      - lints
+      - tests
+      - smoke
+      - package
+      - js-guests
+      - js-guests-tests
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Every job passed or was skipped
+        run: |
+          for result in ${{ join(needs.*.result, ' ') }}; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "A job ended with: $result"; exit 1 ;;
+            esac
+          done

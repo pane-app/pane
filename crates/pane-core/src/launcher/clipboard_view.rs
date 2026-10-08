@@ -1,7 +1,7 @@
-//! The Clipboard History split view's projection (#102): a narrow,
+//! The Clipboard History split view's projection (#102, #166): a narrow,
 //! read-only presentation of the clipboard history Pane keeps for its own
 //! registered Clipboard History default extension, for the window to draw
-//! as a list beside a preview.
+//! as a list beside a preview and the record's Information.
 //!
 //! Only that command is projected, identified by its verified package and
 //! command identity — the default extension `clipboard-history` and its
@@ -12,74 +12,317 @@
 //! store ([`crate::clipboard`]); it adds no store, no watcher and no
 //! capture capability, and it changes nothing by being read.
 //!
-//! What the window does with the records — which a query and a filter
-//! keep, how they group by local day, which one is selected — is the
-//! adapter's state over plain functions here ([`ClipboardBrowse`],
-//! [`day_of`], [`time_label`], [`copied_line`]), so the rules are the same
-//! wherever they are drawn.
+//! What the window does with the records — which a query and the type
+//! dropdown keep, how they group by local day, which one is selected — is
+//! the adapter's state over plain functions here ([`ClipboardBrowse`],
+//! [`ClipboardKind::of_text`], [`day_of`], [`time_label`],
+//! [`information`]), so the rules are the same wherever they are drawn.
+//!
+//! A record is text (a link and a colour being text Pane recognizes), a
+//! copied image — drawn from the PNG the history keeps of it
+//! ([`ClipboardImage`]) — or copied files, by their paths (#167).
 //!
 //! The operations are the history's existing ones — copy a record again,
-//! delete it, turn capture on, pause or resume it — and pasting a record
-//! into the application that was in front (#150: Enter), which copies it
-//! instead where Pane cannot paste yet; each revalidates
+//! delete it, pause or resume recording, keep history for another time,
+//! clear it (once the user confirms) — and pasting a record into the
+//! application that was in front (#150: Enter), which copies it instead
+//! where Pane cannot paste yet. The Actions panel lists them for the
+//! selected record ([`ClipboardHistoryView::actions`]); each revalidates
 //! the [reading](ClipboardHistoryView) it was made from first: the same
 //! screen, the same verified command, the same generation of the package's
 //! code, and a record still kept. A reading the user left, of a package
 //! disabled, replaced or uninstalled since, or of a record deleted or
-//! expired since, changes nothing it should not. The rest of the history's
-//! management (retention, exclusions, clearing, turning off and deleting)
-//! stays the command's own list, which the window routes to.
+//! expired since, changes nothing it should not. The extension's Settings
+//! page has the same controls, as preferences whose values are the
+//! history's own (see `clipboard_settings`).
 
+use std::borrow::Cow;
 use std::fmt;
 use std::future::Future;
+use std::path::{Path, PathBuf};
 
 use super::own_actions::COPIED;
 use super::{Launcher, Screen, State, Status, owner};
 use crate::clipboard::history::PackageHistory;
-use crate::clipboard::{self, CaptureState, Commands};
+use crate::clipboard::{self, CaptureState, Commands, program_file_name};
 use crate::extension_data::PackageData;
-use crate::feedback::{Hud, ToastStyle};
+use crate::feedback::{Caller, GivenConfirmation, Hud, ToastStyle};
+use crate::icons::{Icon, IconSource};
 use crate::packages::PackageIdentity;
 
 /// The id of Pane's Clipboard History default extension, and of its one
 /// command in its manifest.
 pub const CLIPBOARD_HISTORY: &str = "clipboard-history";
 
-/// One kept text, as the split view shows it.
+/// The retentions the Actions panel and the Settings page offer, in
+/// seconds, with what they are called: 1 hour, 1 day, 7 days, 30 days and
+/// 90 days (the host accepts any from 1 minute to 365 days).
+pub const RETENTIONS: [(u64, &str); 5] = [
+    (3600, "1 Hour"),
+    (86_400, "1 Day"),
+    (7 * 86_400, "7 Days"),
+    (30 * 86_400, "30 Days"),
+    (90 * 86_400, "90 Days"),
+];
+
+/// What a kept record is, as the type dropdown and the Information say.
+/// Links and colours are text Pane recognizes as a URL or a colour value
+/// ([`ClipboardKind::of_text`]); an image and files are what the history
+/// kept them as (#167).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ClipboardKind {
+    /// Plain text.
+    #[default]
+    Text,
+    /// Text that is one URL (`https://…`, `mailto:…`, `www.…`).
+    Link,
+    /// Text that is one colour value (`#ff8800`, `rgb(…)`, `hsl(…)`).
+    Color,
+    /// A copied image, kept as a PNG.
+    Image,
+    /// Copied files and folders, kept as their paths.
+    Files,
+}
+
+impl ClipboardKind {
+    /// The kind `text` is: a link or a colour when the whole text, trimmed,
+    /// is one URL or one colour value; plain text otherwise.
+    pub fn of_text(text: &str) -> ClipboardKind {
+        let text = text.trim();
+        if is_link(text) {
+            ClipboardKind::Link
+        } else if is_color(text) {
+            ClipboardKind::Color
+        } else {
+            ClipboardKind::Text
+        }
+    }
+
+    /// Its name in the Information: "Text", "Link", "Color", "Image",
+    /// "File".
+    pub fn label(self) -> &'static str {
+        match self {
+            ClipboardKind::Text => "Text",
+            ClipboardKind::Link => "Link",
+            ClipboardKind::Color => "Color",
+            ClipboardKind::Image => "Image",
+            ClipboardKind::Files => "File",
+        }
+    }
+
+    /// Whether a record of this kind is text: plain text, a link or a
+    /// colour; an image and files are not.
+    pub fn is_text(self) -> bool {
+        matches!(
+            self,
+            ClipboardKind::Text | ClipboardKind::Link | ClipboardKind::Color
+        )
+    }
+}
+
+/// Whether `text` (trimmed) is one URL: a scheme and `//` with something
+/// after it (`https://example.com`), a `mailto:` address, or a `www.` host;
+/// with no white space anywhere.
+fn is_link(text: &str) -> bool {
+    if text.is_empty() || text.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let lower = text.to_lowercase();
+    if let Some(address) = lower.strip_prefix("mailto:") {
+        return address.contains('@');
+    }
+    if let Some(host) = lower.strip_prefix("www.") {
+        return host.contains('.') && !host.starts_with('.') && !host.ends_with('.');
+    }
+    let Some((scheme, rest)) = lower.split_once("://") else {
+        return false;
+    };
+    let mut letters = scheme.chars();
+    letters
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic())
+        && letters.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        && !rest.is_empty()
+}
+
+/// Whether `text` (trimmed) is one colour value: a hex colour of 3, 6 or 8
+/// digits after `#` (`#rgb`, `#rrggbb`, `#rrggbbaa`; four digits stay
+/// text), or a CSS `rgb`, `rgba`, `hsl` or `hsla` function of three or
+/// four numbers (with `%` or `deg`, separated by commas, spaces or a
+/// slash).
+fn is_color(text: &str) -> bool {
+    if let Some(hex) = text.strip_prefix('#') {
+        return matches!(hex.len(), 3 | 6 | 8) && hex.chars().all(|c| c.is_ascii_hexdigit());
+    }
+    let lower = text.to_lowercase();
+    let Some((function, rest)) = lower.split_once('(') else {
+        return false;
+    };
+    if !matches!(function.trim(), "rgb" | "rgba" | "hsl" | "hsla") {
+        return false;
+    }
+    let Some(arguments) = rest.strip_suffix(')') else {
+        return false;
+    };
+    let values: Vec<&str> = arguments
+        .split([',', ' ', '/'])
+        .filter(|value| !value.is_empty())
+        .collect();
+    (3..=4).contains(&values.len())
+        && values.iter().all(|value| {
+            let number = value.trim_end_matches('%').trim_end_matches("deg");
+            !number.is_empty() && number.parse::<f64>().is_ok()
+        })
+}
+
+/// One kept record, as the split view shows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClipboardRecord {
     /// Opaque: identifies the record among its package's, for its
     /// operations; never reused.
     pub id: String,
-    /// The full stored text.
+    /// The full stored text; for an image its title ("Image (1920×1080)"),
+    /// for files their paths, one per line.
     pub text: String,
+    /// What it is: text, a link, a colour, an image or files.
+    pub kind: ClipboardKind,
+    /// The image it is, if it is one (#167).
+    pub image: Option<ClipboardImage>,
+    /// The files it is, by their paths in the order copied, if it is files
+    /// (#167); empty otherwise.
+    pub files: Vec<PathBuf>,
     /// When it was copied, in milliseconds since the Unix epoch.
     pub copied_at: u64,
-    /// The program it was copied from, as the system named it (such as
-    /// `notepad.exe`), if it did.
+    /// The program it was copied from, as the system named it — its path
+    /// on Windows (`C:\Windows\notepad.exe`), else its file name or
+    /// process name (`notepad.exe`) — if it did.
     pub source: Option<String>,
 }
 
+/// A kept image, as the split view draws it: the PNG Pane keeps of it
+/// (its thumbnail and its preview) and its size.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClipboardImage {
+    /// Where its PNG is, in the history's own folder.
+    pub path: PathBuf,
+    pub width: u32,
+    pub height: u32,
+}
+
 impl ClipboardRecord {
-    /// The record's title: its first line with text, trimmed; empty for
-    /// text that is all white space.
-    pub fn title(&self) -> &str {
-        self.text
-            .lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty())
-            .unwrap_or("")
+    /// A record of `text`, its kind recognized from it, with no source.
+    pub fn text(id: impl Into<String>, text: impl Into<String>, copied_at: u64) -> Self {
+        let text = text.into();
+        ClipboardRecord {
+            id: id.into(),
+            kind: ClipboardKind::of_text(&text),
+            text,
+            image: None,
+            files: Vec::new(),
+            copied_at,
+            source: None,
+        }
+    }
+
+    /// A record of the image `image`, titled by its size, with no source.
+    pub fn image(id: impl Into<String>, image: ClipboardImage, copied_at: u64) -> Self {
+        ClipboardRecord {
+            id: id.into(),
+            text: clipboard::history::image_title(image.width, image.height),
+            kind: ClipboardKind::Image,
+            image: Some(image),
+            files: Vec::new(),
+            copied_at,
+            source: None,
+        }
+    }
+
+    /// A record of the files `files`, with no source.
+    pub fn files(id: impl Into<String>, files: Vec<PathBuf>, copied_at: u64) -> Self {
+        ClipboardRecord {
+            id: id.into(),
+            text: files
+                .iter()
+                .map(|file| file.display().to_string())
+                .collect::<Vec<_>>()
+                .join("\n"),
+            kind: ClipboardKind::Files,
+            image: None,
+            files,
+            copied_at,
+            source: None,
+        }
+    }
+
+    /// The record's title: for text, its first line with text, trimmed
+    /// (empty for text that is all white space); for an image "Image
+    /// (1920×1080)"; for files the first one's name, with "+2" for two
+    /// more.
+    pub fn title(&self) -> Cow<'_, str> {
+        if let Some(first) = self.files.first() {
+            let name = file_name(first);
+            return match self.files.len() {
+                1 => Cow::Owned(name),
+                count => Cow::Owned(format!("{name} +{}", count - 1)),
+            };
+        }
+        Cow::Borrowed(
+            self.text
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .unwrap_or(""),
+        )
+    }
+
+    /// How many characters its text has.
+    pub fn characters(&self) -> usize {
+        self.text.chars().count()
+    }
+
+    /// Its image's width and height, if it is an image.
+    pub fn dimensions(&self) -> Option<(u32, u32)> {
+        self.image.as_ref().map(|image| (image.width, image.height))
+    }
+
+    /// The name of the program it was copied from, as the Information's
+    /// Source says it: its file name without the extension (`notepad`,
+    /// `Code`), if the system named it.
+    pub fn source_name(&self) -> Option<String> {
+        let source = self.source.as_deref()?;
+        let file = program_file_name(source).trim();
+        let name = match file.rsplit_once('.') {
+            Some((stem, _)) if !stem.is_empty() => stem,
+            _ => file,
+        };
+        (!name.is_empty()).then(|| name.to_owned())
+    }
+
+    /// The program it was copied from, by its full path, where the system
+    /// gave one (Windows): its system icon is the Source's icon.
+    pub fn source_path(&self) -> Option<PathBuf> {
+        let path = PathBuf::from(self.source.as_deref()?);
+        path.is_absolute().then_some(path)
     }
 
     /// Whether `needle` (lowercased, trimmed, not empty) is in the record's
-    /// text or its source.
+    /// text or its program's file name.
     fn holds(&self, needle: &str) -> bool {
         self.text.to_lowercase().contains(needle)
             || self
                 .source
-                .as_ref()
-                .is_some_and(|source| source.to_lowercase().contains(needle))
+                .as_deref()
+                .is_some_and(|source| program_file_name(source).to_lowercase().contains(needle))
     }
+}
+
+/// The name of the file or folder at `path`, as a files record's title and
+/// its preview name it: its last component, or the whole path for a drive
+/// or the root (`C:\`, `/`).
+pub fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 /// The clipboard history of the open Clipboard History command, as read
@@ -99,14 +342,15 @@ pub struct ClipboardHistoryView {
     /// Now, by the clock the history expires by, in milliseconds since the
     /// Unix epoch.
     pub now: u64,
-    /// Whether what is copied is kept: the actual capture state.
+    /// Whether what is copied is recorded: the actual capture state. Pane's
+    /// own Clipboard History records from the first start.
     pub capture: CaptureState,
     /// Why Pane does not watch the clipboard although it should, or cannot
     /// on this system, if so.
     pub problem: Option<String>,
     /// How long each record is kept after it was copied, in seconds.
     pub retention_seconds: u64,
-    /// How many programs are excluded.
+    /// How many applications are disabled: their copies are not recorded.
     pub excluded: usize,
     /// Why a record cannot be copied again now, if it cannot: this Pane
     /// has no clipboard it can write.
@@ -121,6 +365,9 @@ struct Reading {
     epoch: u64,
     /// The package's data in the generation it was read in.
     data: PackageData,
+    /// The open command's component, for which Clear History asks the
+    /// user to confirm.
+    component: PathBuf,
 }
 
 impl fmt::Debug for ClipboardHistoryView {
@@ -136,13 +383,20 @@ impl fmt::Debug for ClipboardHistoryView {
     }
 }
 
+/// The Actions panel's section over the history's own actions.
+const HISTORY_SECTION: &str = "Clipboard History";
+/// The Actions panel's section over the retentions.
+const KEEP_SECTION: &str = "Keep History For";
+/// The Actions panel's section over the way to the Settings page.
+const SETTINGS_SECTION: &str = "Settings";
+
 impl ClipboardHistoryView {
     /// The record with `id`, if this reading lists it.
     pub fn record(&self, id: &str) -> Option<&ClipboardRecord> {
         self.records.iter().find(|record| record.id == id)
     }
 
-    /// One line on what is kept now, as it actually is (see
+    /// One line on what is recorded now, as it actually is (see
     /// [`capture_summary`]).
     pub fn summary(&self) -> String {
         capture_summary(
@@ -152,13 +406,134 @@ impl ClipboardHistoryView {
             self.excluded,
         )
     }
+
+    /// What the Actions panel lists with the record `selected` (by id;
+    /// `None` with none selected): the record's own actions — Paste, Copy
+    /// to Clipboard, Delete Entry — then the history's — Pause Recording
+    /// (or Resume Recording) and Clear History… — then Keep History For,
+    /// one entry per retention offered (the one in force cannot be chosen
+    /// again), then Disabled Applications…, which opens the extension's
+    /// Settings page. Nothing is listed without a working operation
+    /// behind it: a record's actions only with one selected, Copy
+    /// unavailable where this Pane cannot write the clipboard, Clear
+    /// History only with records kept, and the history's actions only while
+    /// it can be read.
+    pub fn actions(&self, selected: Option<&str>) -> Vec<ClipboardActionItem> {
+        let item =
+            |action: ClipboardAction, label: &str, available: bool, section: Option<&str>| {
+                ClipboardActionItem {
+                    action,
+                    label: label.to_owned(),
+                    available,
+                    destructive: matches!(
+                        action,
+                        ClipboardAction::Delete | ClipboardAction::ClearHistory
+                    ),
+                    section: section.map(str::to_owned),
+                }
+            };
+        let mut items = Vec::new();
+        if selected.is_some_and(|id| self.record(id).is_some()) {
+            items.push(item(ClipboardAction::Paste, "Paste", true, None));
+            items.push(item(
+                ClipboardAction::Copy,
+                "Copy to Clipboard",
+                self.copy_unavailable.is_none(),
+                None,
+            ));
+            items.push(item(ClipboardAction::Delete, "Delete Entry", true, None));
+        }
+        if self.unreadable.is_some() {
+            return items;
+        }
+        items.push(match self.capture {
+            CaptureState::On => item(
+                ClipboardAction::PauseRecording,
+                "Pause Recording",
+                true,
+                Some(HISTORY_SECTION),
+            ),
+            // Where Pane cannot watch the clipboard, resuming is refused
+            // with the reason: it is offered, to say so.
+            CaptureState::Paused | CaptureState::Off => item(
+                ClipboardAction::ResumeRecording,
+                "Resume Recording",
+                true,
+                Some(HISTORY_SECTION),
+            ),
+        });
+        items.push(item(
+            ClipboardAction::ClearHistory,
+            "Clear History…",
+            !self.records.is_empty(),
+            Some(HISTORY_SECTION),
+        ));
+        for (seconds, label) in RETENTIONS {
+            let current = seconds == self.retention_seconds;
+            items.push(ClipboardActionItem {
+                action: ClipboardAction::KeepFor(seconds),
+                label: if current {
+                    format!("{label} (current)")
+                } else {
+                    label.to_owned()
+                },
+                available: !current,
+                destructive: false,
+                section: Some(KEEP_SECTION.to_owned()),
+            });
+        }
+        items.push(item(
+            ClipboardAction::DisabledApplications,
+            "Disabled Applications…",
+            true,
+            Some(SETTINGS_SECTION),
+        ));
+        items
+    }
 }
 
-/// One line on what clipboard history keeps: `problem`, if there is one;
-/// otherwise whether history is off, paused or on, and on for how long
-/// (`retention_seconds`) and with how many programs `excluded`. It
-/// promises nothing the history does not do: copies an application marks
-/// as not to be kept are skipped, and excluded programs are counted.
+/// One action the Actions panel offers in the Clipboard History view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClipboardAction {
+    /// Pastes the selected record (Enter).
+    Paste,
+    /// Copies the selected record again.
+    Copy,
+    /// Deletes the selected record.
+    Delete,
+    /// Stops recording what is copied until it is resumed.
+    PauseRecording,
+    /// Records what is copied again.
+    ResumeRecording,
+    /// Deletes every kept record, once the user confirms.
+    ClearHistory,
+    /// Keeps each record this many seconds after it was copied.
+    KeepFor(u64),
+    /// Opens the extension's Settings page, where the applications whose
+    /// copies are not recorded are chosen (the window does).
+    DisabledApplications,
+}
+
+/// One entry of the Actions panel in the Clipboard History view.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClipboardActionItem {
+    pub action: ClipboardAction,
+    /// What the entry says.
+    pub label: String,
+    /// Whether it can run now.
+    pub available: bool,
+    /// Whether it deletes something: drawn in the destructive style.
+    pub destructive: bool,
+    /// The label of its section; the record's own actions have none.
+    pub section: Option<String>,
+}
+
+/// One line on what clipboard history records: `problem`, if there is
+/// one; otherwise whether recording is off, paused or on, and on for how
+/// long (`retention_seconds`) and with how many applications disabled
+/// (`excluded`). It promises nothing the history does not do: copies an
+/// application marks as concealed are skipped, and disabled applications
+/// are counted.
 pub fn capture_summary(
     capture: CaptureState,
     problem: Option<&str>,
@@ -169,17 +544,21 @@ pub fn capture_summary(
         return problem.to_owned();
     }
     match capture {
-        CaptureState::Off => "Off · nothing you copy is kept until you turn it on".into(),
-        CaptureState::Paused => "Paused · nothing you copy is kept until you resume".into(),
+        CaptureState::Off => {
+            "Recording is off · nothing you copy is kept until you resume it".into()
+        }
+        CaptureState::Paused => {
+            "Recording is paused · nothing you copy is kept until you resume it".into()
+        }
         CaptureState::On => {
             let kept = format!(
-                "Text is kept {} · copies marked private are skipped",
+                "Recording · kept {} · copies marked private are skipped",
                 span(retention_seconds)
             );
             match excluded {
                 0 => kept,
-                1 => format!("{kept} · 1 program excluded"),
-                excluded => format!("{kept} · {excluded} programs excluded"),
+                1 => format!("{kept} · 1 application disabled"),
+                excluded => format!("{kept} · {excluded} applications disabled"),
             }
         }
     }
@@ -199,6 +578,28 @@ fn span(seconds: u64) -> String {
     }
 }
 
+/// What pasting `record` puts on the clipboard for the application in front
+/// to paste: its text, or its one file. An image or several files have no
+/// [`Clip`](crate::system::Clip) the system pastes yet: `None`, and Paste
+/// copies them as what they are instead (#167), as where Pane cannot paste.
+fn pasted_clip(record: &ClipboardRecord) -> Option<crate::system::Clip> {
+    match (&record.image, record.files.as_slice()) {
+        (Some(_), _) => None,
+        (None, []) => Some(crate::system::Clip::Text(record.text.clone())),
+        (None, [file]) => Some(crate::system::Clip::File(file.clone())),
+        (None, _) => None,
+    }
+}
+
+/// "1 kept item", "3 kept items".
+pub(super) fn kept_items(count: usize) -> String {
+    if count == 1 {
+        "1 kept item".into()
+    } else {
+        format!("{count} kept items")
+    }
+}
+
 impl Launcher {
     /// The clipboard history the split view shows, while Pane's registered
     /// Clipboard History command is open on its own list and its package
@@ -209,6 +610,7 @@ impl Launcher {
         let (identity, data) = self.verified_clipboard(&state)?;
         let epoch = state.screen_epoch;
         let title = state.view.title.clone();
+        let component = state.open.clone()?;
         drop(state);
         let (problem, copy_unavailable) = match &self.clipboard {
             Some(capture) => (capture.problem(), capture.system().unavailable()),
@@ -217,21 +619,43 @@ impl Launcher {
                 (unavailable.clone(), unavailable)
             }
         };
-        let (history, now, unreadable) = match data.clipboard_history() {
+        let store = data.clipboard_history();
+        let (history, now, unreadable) = match &store {
             Ok(store) => match store.get(data.owner()) {
                 Ok(history) => (history, store.now(), None),
                 Err(reason) => (PackageHistory::default(), store.now(), Some(reason)),
             },
-            Err(refusal) => (PackageHistory::default(), 0, Some(refusal)),
+            Err(refusal) => (PackageHistory::default(), 0, Some(refusal.clone())),
         };
         let records = history
             .items
             .iter()
-            .map(|item| ClipboardRecord {
-                id: item.id.to_string(),
-                text: item.text.clone(),
-                copied_at: item.copied_at,
-                source: item.source.clone(),
+            .map(|item| {
+                // An image's PNG is where the store keeps it (#167).
+                let image = item.image.as_ref().and_then(|image| {
+                    let store = store.as_ref().ok()?;
+                    Some(ClipboardImage {
+                        path: store.image_path(data.owner(), &image.digest),
+                        width: image.width,
+                        height: image.height,
+                    })
+                });
+                let kind = if image.is_some() {
+                    ClipboardKind::Image
+                } else if !item.files.is_empty() {
+                    ClipboardKind::Files
+                } else {
+                    ClipboardKind::of_text(&item.text)
+                };
+                ClipboardRecord {
+                    id: item.id.to_string(),
+                    kind,
+                    text: item.text.clone(),
+                    image,
+                    files: item.files.clone(),
+                    copied_at: item.copied_at,
+                    source: item.source.clone(),
+                }
             })
             .collect();
         Some(ClipboardHistoryView {
@@ -245,8 +669,32 @@ impl Launcher {
             retention_seconds: history.retention(),
             excluded: history.excluded.len(),
             copy_unavailable,
-            reading: Reading { epoch, data },
+            reading: Reading {
+                epoch,
+                data,
+                component,
+            },
         })
+    }
+
+    /// The icon of the program or file at `path` (a record's
+    /// [`ClipboardRecord::source_path`], or one of its
+    /// [`ClipboardRecord::files`], #167) as the Information's Source, a
+    /// files record's row and its preview show it now: the system's icon
+    /// once Pane extracted it (#142), which it starts doing now if it has
+    /// not; a neutral placeholder until then, and for good if the system
+    /// has none.
+    pub fn clipboard_source_icon(&self, path: &std::path::Path) -> Icon {
+        let icon = Icon {
+            source: IconSource::File(path.to_path_buf()),
+            tint: None,
+            mask: None,
+            fallback: None,
+            tooltip: None,
+        };
+        let loads = self.lock().icon_loads.clone();
+        loads.want(None, &icon);
+        loads.shown(None, &icon)
     }
 
     /// Puts the record `id` of `view` on the clipboard again, through the
@@ -290,17 +738,17 @@ impl Launcher {
         let now = self
             .clipboard_history()
             .filter(|now| now.reading.epoch == epoch && now.owner == view.owner);
-        let text = match &now {
+        let clip = match &now {
             None => Err("That clipboard history is no longer shown".to_owned()),
             Some(now) => now
                 .record(id)
-                .map(|record| record.text.clone())
+                .map(pasted_clip)
                 .ok_or_else(|| "That item is no longer kept".to_owned()),
         };
         {
             let mut state = self.lock();
             if state.screen_epoch == epoch {
-                state.view.status = match &text {
+                state.view.status = match &clip {
                     Err(why) => Status::Error(why.clone()),
                     // Running until it is pasted, or copied instead.
                     Ok(_) => Status::Running,
@@ -312,7 +760,7 @@ impl Launcher {
         let id = id.to_owned();
         let launcher = self.clone();
         async move {
-            let Ok(text) = text else {
+            let Ok(clip) = clip else {
                 return;
             };
             let copy = move || {
@@ -322,9 +770,7 @@ impl Launcher {
                 }
                 .copy(&id)
             };
-            launcher
-                .paste_or_copy(epoch, crate::system::Clip::Text(text), Box::new(copy))
-                .await;
+            launcher.paste_or_copy(epoch, clip, Box::new(copy)).await;
         }
     }
 
@@ -344,24 +790,100 @@ impl Launcher {
         })
     }
 
-    /// Turns capture on, pauses or resumes it, or turns it off — the
-    /// history's existing capture choice — once `view` is revalidated.
-    /// Turning it on where this Pane cannot watch the clipboard is refused
-    /// with the reason. The outcome shows as the status.
+    /// Pauses or resumes recording — the history's existing capture choice
+    /// — once `view` is revalidated: [`CaptureState::Paused`] pauses it,
+    /// [`CaptureState::On`] resumes it, and [`CaptureState::Off`], which
+    /// Pane's own view no longer offers, turns it off. Resuming where this
+    /// Pane cannot watch the clipboard is refused with the reason. The
+    /// outcome shows as the status.
     pub fn set_clipboard_capture(
         &self,
         view: &ClipboardHistoryView,
         capture: CaptureState,
     ) -> Result<(), String> {
-        let done = match (capture, view.capture) {
-            (CaptureState::On, CaptureState::Paused) => "Clipboard history is on again",
-            (CaptureState::On, _) => "Clipboard history is on",
-            (CaptureState::Paused, _) => "Clipboard history is paused",
-            (CaptureState::Off, _) => "Clipboard history is off",
+        let done = match capture {
+            CaptureState::On => "Recording resumed",
+            CaptureState::Paused => "Recording paused",
+            CaptureState::Off => "Recording is off",
         };
         self.clipboard_operation(view, |commands| {
             commands.set_capture(capture).map(|()| done.to_owned())
         })
+    }
+
+    /// Keeps each record of `view`'s history `seconds` after it was copied
+    /// — the history's existing retention — once `view` is revalidated;
+    /// records already older are deleted at once, and the outcome says how
+    /// many.
+    pub fn set_clipboard_retention(
+        &self,
+        view: &ClipboardHistoryView,
+        seconds: u64,
+    ) -> Result<(), String> {
+        self.clipboard_operation(view, |commands| {
+            let before = commands.status()?.items;
+            commands.set_retention(seconds)?;
+            let after = commands.status()?.items;
+            let kept = format!("History is kept {}", span(seconds));
+            Ok(match before.saturating_sub(after) {
+                0 => kept,
+                deleted => format!("{kept}; deleted {} older", kept_items(deleted)),
+            })
+        })
+    }
+
+    /// Clear History: asks the user to confirm over the view (the
+    /// launcher's confirmation, as a command's `feedback.confirm` is
+    /// shown), then deletes every record of `view`'s history through the
+    /// history's existing clear, once `view` is revalidated; recording does
+    /// not change. Await the returned future for the answer; dismissed, it
+    /// changes nothing. `Err` says why nothing was cleared.
+    pub fn clear_clipboard_history(
+        &self,
+        view: &ClipboardHistoryView,
+    ) -> impl Future<Output = Result<(), String>> + Send + 'static {
+        let shown = {
+            let state = self.lock();
+            state.screen_epoch == view.reading.epoch
+                && self
+                    .verified_clipboard(&state)
+                    .is_some_and(|(id, _)| id == view.owner)
+        };
+        let asking = shown.then(|| {
+            self.ask_to_confirm(
+                &Caller {
+                    component: view.reading.component.clone(),
+                    command: Some(CLIPBOARD_HISTORY.to_owned()),
+                    windowed: true,
+                },
+                GivenConfirmation {
+                    title: "Clear Clipboard History?".into(),
+                    message: Some(format!(
+                        "This deletes the {} you copied. It cannot be undone.",
+                        kept_items(view.records.len())
+                    )),
+                    primary: "Clear History".into(),
+                    destructive: true,
+                    dismiss: None,
+                    remember: None,
+                },
+            )
+        });
+        let launcher = self.clone();
+        let view = view.clone();
+        async move {
+            let Some(asking) = asking else {
+                return Err("That clipboard history is no longer shown".to_owned());
+            };
+            if !asking.await? {
+                return Ok(());
+            }
+            launcher.clipboard_operation(&view, |commands| {
+                commands
+                    .clear()
+                    .map(|deleted| format!("Deleted {}", kept_items(deleted)))
+            })
+        }
     }
 
     /// Runs `operation` on the history `view` was read from, if `view` is
@@ -431,32 +953,72 @@ impl Launcher {
     }
 }
 
-/// Which records the split view's tabs keep. Pane keeps text alone, so
-/// both keep every record; the reference's links, images and colors are
-/// not kinds Pane keeps or guesses.
+/// Which records the type dropdown keeps: All Types, Text, Images, Files,
+/// Links or Colors (#166, #167). Links and colours are text, so Text keeps
+/// them too; an image or files are not text.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ClipboardFilter {
     #[default]
     All,
     Text,
+    Images,
+    Files,
+    Links,
+    Colors,
 }
 
 impl ClipboardFilter {
-    /// The filters, in the tabs' order.
-    pub const ALL: [ClipboardFilter; 2] = [ClipboardFilter::All, ClipboardFilter::Text];
+    /// The filters, in the dropdown's order.
+    pub const ALL: [ClipboardFilter; 6] = [
+        ClipboardFilter::All,
+        ClipboardFilter::Text,
+        ClipboardFilter::Images,
+        ClipboardFilter::Files,
+        ClipboardFilter::Links,
+        ClipboardFilter::Colors,
+    ];
 
-    /// The tab's label.
+    /// The dropdown's label for it.
     pub fn label(self) -> &'static str {
         match self {
-            ClipboardFilter::All => "All",
+            ClipboardFilter::All => "All Types",
             ClipboardFilter::Text => "Text",
+            ClipboardFilter::Images => "Images",
+            ClipboardFilter::Files => "Files",
+            ClipboardFilter::Links => "Links",
+            ClipboardFilter::Colors => "Colors",
         }
     }
 
-    /// Whether the filter keeps `record`: every kept record is text.
-    fn keeps(self, _record: &ClipboardRecord) -> bool {
+    /// Its stable id, as the dropdown names its choice: "all", "text",
+    /// "images", "files", "links", "colors".
+    pub fn id(self) -> &'static str {
         match self {
-            ClipboardFilter::All | ClipboardFilter::Text => true,
+            ClipboardFilter::All => "all",
+            ClipboardFilter::Text => "text",
+            ClipboardFilter::Images => "images",
+            ClipboardFilter::Files => "files",
+            ClipboardFilter::Links => "links",
+            ClipboardFilter::Colors => "colors",
+        }
+    }
+
+    /// The filter whose [`ClipboardFilter::id`] is `id`.
+    pub fn from_id(id: &str) -> Option<ClipboardFilter> {
+        ClipboardFilter::ALL
+            .into_iter()
+            .find(|filter| filter.id() == id)
+    }
+
+    /// Whether the filter keeps `record`.
+    pub fn keeps(self, record: &ClipboardRecord) -> bool {
+        match self {
+            ClipboardFilter::All => true,
+            ClipboardFilter::Text => record.kind.is_text(),
+            ClipboardFilter::Images => record.kind == ClipboardKind::Image,
+            ClipboardFilter::Files => record.kind == ClipboardKind::Files,
+            ClipboardFilter::Links => record.kind == ClipboardKind::Link,
+            ClipboardFilter::Colors => record.kind == ClipboardKind::Color,
         }
     }
 }
@@ -466,16 +1028,19 @@ impl ClipboardFilter {
 pub enum ClipboardDay {
     Today,
     Yesterday,
-    Older,
+    /// An earlier day: its local day number (days since 1970-01-01, local).
+    Earlier(i64),
 }
 
 impl ClipboardDay {
-    /// The day's section label.
-    pub fn label(self) -> &'static str {
+    /// The day's section label, today being local day `today`: "Today",
+    /// "Yesterday", or the date ("Thursday, Oct 1"; "Wednesday, Dec 31,
+    /// 2025" for another year than today's).
+    pub fn label(self, today: i64) -> String {
         match self {
-            ClipboardDay::Today => "Today",
-            ClipboardDay::Yesterday => "Yesterday",
-            ClipboardDay::Older => "Older",
+            ClipboardDay::Today => "Today".into(),
+            ClipboardDay::Yesterday => "Yesterday".into(),
+            ClipboardDay::Earlier(day) => format!("{}, {}", weekday(day), date(day, today)),
         }
     }
 }
@@ -485,13 +1050,16 @@ impl ClipboardDay {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClipboardSection {
     pub day: ClipboardDay,
+    /// The section's label: "Today", "Yesterday", "Thursday, Oct 1".
+    pub label: String,
     /// The index of the run's first record in the listing.
     pub first: usize,
 }
 
-/// The split view's own state over the records: the query typed, the tab
-/// chosen and the record chosen (by id). The window adapter owns it; its
-/// listing follows the rules below whatever the records are now.
+/// The split view's own state over the records: the query typed, the type
+/// chosen in the dropdown and the record chosen (by id). The window
+/// adapter owns it; its listing follows the rules below whatever the
+/// records are now.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ClipboardBrowse {
     pub query: String,
@@ -517,7 +1085,7 @@ pub struct ClipboardListing<'a> {
 
 impl<'a> ClipboardListing<'a> {
     /// The selected record, which the preview shows and the primary action
-    /// copies.
+    /// pastes.
     pub fn selected_record(&self) -> Option<&'a ClipboardRecord> {
         self.selected.map(|index| self.records[index])
     }
@@ -542,11 +1110,16 @@ impl ClipboardBrowse {
         offset_ms: i64,
     ) -> ClipboardListing<'a> {
         let listed = self.visible(records);
+        let today = local_day(now, offset_ms);
         let mut sections: Vec<ClipboardSection> = Vec::new();
         for (index, record) in listed.iter().enumerate() {
             let day = day_of(record.copied_at, now, offset_ms);
             if sections.last().is_none_or(|section| section.day != day) {
-                sections.push(ClipboardSection { day, first: index });
+                sections.push(ClipboardSection {
+                    day,
+                    label: day.label(today),
+                    first: index,
+                });
             }
         }
         let selected = self.position(&listed);
@@ -590,6 +1163,58 @@ impl ClipboardBrowse {
     }
 }
 
+/// The Information the detail pane shows under the selected record's
+/// preview, as Raycast's does: where it was copied from, what it is, how
+/// long a text is or how large an image is, and when it was copied.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClipboardInformation {
+    /// The program it was copied from, by name (`notepad`), if the system
+    /// named it.
+    pub source: Option<String>,
+    /// That program's full path, where the system gave one: its icon is
+    /// drawn beside the name ([`Launcher::clipboard_source_icon`]).
+    pub source_path: Option<PathBuf>,
+    /// "Text", "Link", "Color", "Image", "File".
+    pub kind: &'static str,
+    /// How many characters it has, for text (a link and a colour too);
+    /// `None` for an image or files.
+    pub characters: Option<usize>,
+    /// An image's size, "1920×1080"; `None` for anything else (#167).
+    pub dimensions: Option<String>,
+    /// When it was copied: "Today at 14:02", "Yesterday at 23:59",
+    /// "Thursday at 09:00", "Sep 28 at 16:12".
+    pub copied: String,
+}
+
+/// The Information of `record`, now being `now` at `offset_ms` from UTC.
+pub fn information(record: &ClipboardRecord, now: u64, offset_ms: i64) -> ClipboardInformation {
+    ClipboardInformation {
+        source: record.source_name(),
+        source_path: record.source_path(),
+        kind: record.kind.label(),
+        characters: record.kind.is_text().then(|| record.characters()),
+        dimensions: record
+            .dimensions()
+            .map(|(width, height)| format!("{width}×{height}")),
+        copied: copied_at_label(record.copied_at, now, offset_ms),
+    }
+}
+
+/// When something was copied, as the Information says it: "Today at
+/// 14:02", "Yesterday at 23:59", "Thursday at 09:00" within the week
+/// before, else "Sep 28 at 16:12" ("Dec 31, 2025 at 09:00" for another
+/// year).
+pub fn copied_at_label(copied_at: u64, now: u64, offset_ms: i64) -> String {
+    let (day, today) = (local_day(copied_at, offset_ms), local_day(now, offset_ms));
+    let time = clock_time(copied_at, offset_ms);
+    match today - day {
+        ..=0 => format!("Today at {time}"),
+        1 => format!("Yesterday at {time}"),
+        2..=6 => format!("{} at {time}", weekday(day)),
+        _ => format!("{} at {time}", date(day, today)),
+    }
+}
+
 const DAY_MS: i64 = 86_400_000;
 
 /// The local day number of `at` (milliseconds since the Unix epoch) at
@@ -606,10 +1231,11 @@ fn local_ms(at: u64, offset_ms: i64) -> i64 {
 /// The local day `copied_at` falls on, relative to `now`'s, at `offset_ms`
 /// from UTC. A time after today (a clock set back) counts as today.
 pub fn day_of(copied_at: u64, now: u64, offset_ms: i64) -> ClipboardDay {
-    match local_day(now, offset_ms) - local_day(copied_at, offset_ms) {
+    let day = local_day(copied_at, offset_ms);
+    match local_day(now, offset_ms) - day {
         ..=0 => ClipboardDay::Today,
         1 => ClipboardDay::Yesterday,
-        _ => ClipboardDay::Older,
+        _ => ClipboardDay::Earlier(day),
     }
 }
 
@@ -683,9 +1309,9 @@ pub fn time_label(copied_at: u64, now: u64, offset_ms: i64) -> String {
     }
 }
 
-/// When and where `record` was copied, as the split view's footer says
-/// it: "Copied today, 14:02 from notepad.exe", "Copied on Thursday, 09:00";
-/// the source only when the system named it.
+/// When and where `record` was copied, in one line: "Copied today, 14:02
+/// from notepad.exe", "Copied on Thursday, 09:00"; the source (its
+/// program's file name) only when the system named it.
 pub fn copied_line(record: &ClipboardRecord, now: u64, offset_ms: i64) -> String {
     let (day, today) = (
         local_day(record.copied_at, offset_ms),
@@ -699,7 +1325,7 @@ pub fn copied_line(record: &ClipboardRecord, now: u64, offset_ms: i64) -> String
         _ => format!("on {}, {time}", date(day, today)),
     };
     match &record.source {
-        Some(source) => format!("Copied {when} from {source}"),
+        Some(source) => format!("Copied {when} from {}", program_file_name(source)),
         None => format!("Copied {when}"),
     }
 }
@@ -751,4 +1377,136 @@ fn platform_offset(at: u64) -> Option<i64> {
 #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 fn platform_offset(_at: u64) -> Option<i64> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn links_and_colors_are_recognized_from_the_whole_text() {
+        for link in [
+            "https://example.com/a?b=c",
+            "  http://localhost:8080  ",
+            "ftp://files.example.org",
+            "mailto:hello@example.com",
+            "www.example.com",
+            "vscode://file/c:/a.txt",
+        ] {
+            assert_eq!(ClipboardKind::of_text(link), ClipboardKind::Link, "{link}");
+        }
+        for color in [
+            "#fff",
+            "#FF8800",
+            "#ff880080",
+            "rgb(255, 136, 0)",
+            "rgba(255 136 0 / 50%)",
+            "hsl(30deg 100% 50%)",
+            " HSLA(30, 100%, 50%, 0.5) ",
+        ] {
+            assert_eq!(
+                ClipboardKind::of_text(color),
+                ClipboardKind::Color,
+                "{color}"
+            );
+        }
+        for text in [
+            "see https://example.com",
+            "https://",
+            "www.",
+            "#ggg",
+            "#ff88",
+            "#12345",
+            "rgb(1, 2)",
+            "rgb(a, b, c)",
+            "hello",
+            "mailto:nobody",
+            "",
+        ] {
+            assert_eq!(ClipboardKind::of_text(text), ClipboardKind::Text, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_source_is_named_by_its_programs_file_name() {
+        let mut record = ClipboardRecord::text("1", "x", 0);
+        assert_eq!(record.source_name(), None);
+        assert_eq!(record.source_path(), None);
+        record.source = Some("notepad.exe".into());
+        assert_eq!(record.source_name().as_deref(), Some("notepad"));
+        assert_eq!(record.source_path(), None, "a file name alone is no path");
+        let path = if cfg!(windows) {
+            r"C:\Program Files\Microsoft VS Code\Code.exe"
+        } else {
+            "/usr/share/code/code"
+        };
+        record.source = Some(path.into());
+        let name = if cfg!(windows) { "Code" } else { "code" };
+        assert_eq!(record.source_name().as_deref(), Some(name));
+        assert_eq!(record.source_path(), Some(PathBuf::from(path)));
+        assert!(record.holds(&name.to_lowercase()));
+        assert!(
+            !record.holds("program files"),
+            "only the file name is searched"
+        );
+    }
+
+    /// #167: an image is titled and measured by its size, files by the
+    /// first one's name and how many more; neither counts characters, and
+    /// a search finds them by their title or paths.
+    #[test]
+    fn images_and_files_are_titled_by_size_and_first_name() {
+        let image = ClipboardRecord::image(
+            "1",
+            ClipboardImage {
+                path: PathBuf::from("a.png"),
+                width: 1920,
+                height: 1080,
+            },
+            0,
+        );
+        assert_eq!(image.kind, ClipboardKind::Image);
+        assert_eq!(image.title(), "Image (1920×1080)");
+        let info = information(&image, 0, 0);
+        assert_eq!(info.kind, "Image");
+        assert_eq!(info.dimensions.as_deref(), Some("1920×1080"));
+        assert_eq!(info.characters, None);
+        assert!(image.holds("image"));
+
+        let one = ClipboardRecord::files("2", vec![PathBuf::from("/notes/report.pdf")], 0);
+        assert_eq!(one.kind, ClipboardKind::Files);
+        assert_eq!(one.title(), "report.pdf");
+        let three = ClipboardRecord::files(
+            "3",
+            vec![
+                PathBuf::from("/notes/report.pdf"),
+                PathBuf::from("/notes/b.txt"),
+                PathBuf::from("/notes/photos"),
+            ],
+            0,
+        );
+        assert_eq!(three.title(), "report.pdf +2");
+        assert!(three.holds("photos"));
+        let info = information(&three, 0, 0);
+        assert_eq!(
+            (info.kind, info.characters, info.dimensions),
+            ("File", None, None)
+        );
+        assert_eq!(file_name(Path::new("/")), "/");
+
+        // Paste puts text and one file on the clipboard; an image or
+        // several files are copied instead.
+        assert_eq!(
+            pasted_clip(&one),
+            Some(crate::system::Clip::File(PathBuf::from(
+                "/notes/report.pdf"
+            )))
+        );
+        assert_eq!(pasted_clip(&three), None);
+        assert_eq!(pasted_clip(&image), None);
+        assert_eq!(
+            pasted_clip(&ClipboardRecord::text("4", "hi", 0)),
+            Some(crate::system::Clip::Text("hi".into()))
+        );
+    }
 }

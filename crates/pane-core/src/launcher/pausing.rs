@@ -315,7 +315,7 @@ impl Launcher {
         self.pause(&mut state, &identity, pause);
         state.view.status = Status::Error(format!(
             "{what} and is paused: Pane runs none of its code until you retry it, and keeps its \
-             saved data. Retry it, or see why, in Manage extensions."
+             saved data. Retry it, or see why, in Settings."
         ));
     }
 

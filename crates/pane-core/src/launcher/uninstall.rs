@@ -247,6 +247,11 @@ impl Launcher {
             .map(|removed| removed.package.identity.clone())
             .collect();
         let titles: Vec<String> = removed.iter().map(|r| r.package.title()).collect();
+        // Whether one of them used the file index, which goes with the last
+        // package that uses it (#175).
+        let used_file_index = removed
+            .iter()
+            .position(|r| super::file_search::uses_file_index(&r.package));
         let installation = self
             .installation
             .clone()
@@ -374,6 +379,12 @@ impl Launcher {
             .await;
             self.lock().retained = retained;
             problems.push(found);
+        }
+        if let Some(at) = used_file_index
+            && let Err(error) = self.forget_file_index_if_unused().await
+            && let Some(found) = problems.get_mut(at)
+        {
+            found.push(error);
         }
         for (found, left) in problems.iter_mut().zip(leftovers) {
             match left {

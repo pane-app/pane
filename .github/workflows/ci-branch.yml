@@ -1,152 +1,144 @@
 name: CI (branch)
 
-# The branch tier of CI: every push to a working branch that is not
-# main and not a pi-subagent worktree is verified here. Linux runs the
-# full check leg of the release matrix as two jobs beside each other:
-# `lints` checks formatting, the prebuilt JS/TS samples and clippy
-# (`cargo xtask ci-lints`), and `tests` builds the guests and runs the
-# tests (`cargo xtask ci-tests`, under cargo-nextest, which retries a
-# flaky failure instead of failing the run for it) — so a push's wall
-# time on Linux is the slower of the two, not their sum. The other
-# operating systems run the quick compile check (formatting plus
-# `cargo clippy --all-targets`): one full test run per push is the
-# verification an iterating branch needs (the single-platform pattern
-# the Cargo book recommends), and the quick legs keep the
-# platform-specific compile errors caught everywhere at a fraction of
-# the cost. The full suite on every operating system still runs: at
-# the verify tier of ci-fast.yml on the ticket branches, and in
-# ci.yml's release matrix where a release is at stake (pushes to main,
-# and on demand). pi-subagent/** worktrees
-# keep their own two-tier workflow in ci-fast.yml.
+# The branch tier of CI: every push to a working branch that is not main
+# and not a pi-subagent worktree (those take ci-fast.yml), and every pull
+# request from a fork (whose pushes run no workflow here). Linux runs the
+# full check leg of the release matrix: the lints (`cargo xtask
+# ci-lints`: formatting, the prebuilt JS/TS samples, clippy) beside the
+# tests, split into three shards that run at once (`cargo xtask ci-tests
+# --partition hash:N/3`, under cargo-nextest, which retries a flaky
+# failure instead of failing the run for it), so a push's wall time is
+# the slowest shard's. Windows and macOS run the same lints, which
+# type-check and lint the code only they compile (the cfg-gating class of
+# error) in minutes: one full test run per push is the verification an
+# iterating branch needs, and the full suite on every operating system
+# runs at ci-fast.yml's verify tier and in ci.yml's release matrix. A
+# push that changes only documentation runs nothing but the summary.
+# docs/agents/ci.md describes the tiers.
 on:
   push:
     branches-ignore:
       - main
       - "pi-subagent/**"
+  # A pull request from this repository's own branches is already
+  # verified by its branch's push run; the gate job skips the rest.
+  pull_request:
 
 # As in ci.yml: one run per branch, a superseded run cancelled.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  # The paths filter reads a pull request's files through the API.
+  pull-requests: read
+
 jobs:
-  # The Linux jobs match ci.yml's check job step for step (same
-  # commands, same environment, same caches) so a green Linux leg means
-  # exactly what a green check leg means there: this workflow runs the
-  # one job's `cargo xtask ci` — the lints, then the tests — as a
-  # `lints` job and a `tests` job beside each other instead, so the
-  # wall time is the slower of the two. Keep both in sync with those
-  # workflows; the other legs match ci-fast's quick tier.
+  # Whether this run verifies anything: not for a pull request from this
+  # repository (its push run does), and not for a push that changes only
+  # documentation. A push is compared with its branch's merge base with
+  # main, not with the push before it: that run may have been cancelled
+  # as superseded, so the newest run must answer for the whole branch.
+  changes:
+    name: What changed
+    runs-on: ubuntu-24.04
+    outputs:
+      verify: ${{ steps.decide.outputs.verify }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'push'
+        with:
+          fetch-depth: 50
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+        with:
+          base: main
+          # A file counts unless it is documentation: under docs/, or a
+          # Markdown file at the top of the repository. Everything else
+          # (code, guests, tools, workflows, a crate added later) counts
+          # without this list changing.
+          predicate-quantifier: every
+          filters: |
+            code:
+              - '**'
+              - '!docs/**'
+              - '!*.md'
+      - name: Decide
+        id: decide
+        run: echo "verify=${{ steps.filter.outputs.code == 'true' }}" >> "$GITHUB_OUTPUT"
+
   lints:
-    name: Lints (Linux)
-    runs-on: ubuntu-24.04
-    env:
-      # As in ci.yml's check job: host-triple-scoped, never RUSTFLAGS
-      # (a job-wide RUSTFLAGS would also reach the wasm32-wasip2 guest
-      # builds, whose wasm-component-ld rejects native linker flags;
-      # run 36789533844 failed on "unexpected argument '-f' found").
-      # Kept on this job so both Linux jobs carry the check leg's
-      # environment, though fmt and clippy link nothing.
-      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Linux build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
-            libxcb1-dev libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers \
-            xvfb xdotool imagemagick mold
-      - name: Install the pinned Rust toolchain
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            .
-            guests
-            guests/fixtures/mixed-p2
-      - name: Check formatting, prebuilt samples and lints
-        run: cargo xtask ci-lints
-  tests:
-    name: Tests (Linux)
-    runs-on: ubuntu-24.04
-    env:
-      # As in ci.yml's check job: the many test binaries each link
-      # Pane's whole dependency tree, so they link with mold. The flag
-      # is scoped to the host triple, never RUSTFLAGS: a job-wide
-      # RUSTFLAGS would also reach the wasm32-wasip2 guest builds this
-      # job makes, whose wasm-component-ld rejects native linker flags
-      # (run 36789533844 failed on "unexpected argument '-f' found").
-      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Linux build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
-            libxcb1-dev libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers \
-            xvfb xdotool imagemagick mold
-      - name: Install the pinned Rust toolchain
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            .
-            guests
-            guests/fixtures/mixed-p2
-      # cargo-nextest, which `cargo xtask ci-tests` runs the tests with
-      # (a flaky failure is retried, not fatal to the run); pinned to
-      # an exact version as ci.yml pins cargo-deny.
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest@0.9.146
-      # The Linux tests run without the real-clipboard opt-in (as they
-      # always did on this leg); the one Linux adapter test that needs
-      # it runs under Xvfb below.
-      - name: Build guests and run tests
-        run: cargo xtask ci-tests
-      - name: Run the Linux clipboard adapter test (Xvfb)
-        run: xvfb-run -a cargo test --locked -p pane-core --test clipboard_adapter_linux
-        env:
-          PANE_TEST_REAL_CLIPBOARD: "1"
-  # The quick compile check on the other operating systems: `cargo
-  # clippy --all-targets` type-checks the workspace's libraries,
-  # binaries, tests and examples without codegen or linking, so the
-  # platform-specific compile errors (the cfg-gating class) are caught
-  # on every operating system in minutes, and it lints the code only
-  # that system compiles. A plain `cargo check` here let a macOS-only
-  # lint (a collapsible `if` in tray/macos.rs) through every branch run
-  # to fail main's release matrix (run 37182486287); clippy costs about
-  # what check does.
-  check:
-    name: Check (${{ matrix.os }})
+    name: Lints (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.verify == 'true'
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2025, macos-15]
+        os: [ubuntu-24.04, windows-2025, macos-15]
     runs-on: ${{ matrix.os }}
-    env:
-      # The many test binaries each link Pane's whole dependency tree, so
-      # the Linux legs link them with mold (Windows and macOS link with
-      # their own linkers; the empty value keeps the cache key uniform
-      # per operating system). The flag is scoped to the host triple, never
-      # RUSTFLAGS: a job-wide RUSTFLAGS would also reach the wasm32-wasip2
-      # guest builds, whose wasm-component-ld rejects native linker flags
-      # (run 36789533844 failed on "unexpected argument '-f' found"). The
-      # matrix is what a job-level env may read: the runner context exists
-      # only inside a step; and on these legs the triple never builds, so
-      # the variable is inert there whatever it holds.
-      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ${{ matrix.os == 'ubuntu-24.04' && '-C link-arg=-fuse-ld=mold' || '' }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install the pinned Rust toolchain
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/setup
+      # Clippy, not a plain `cargo check`, on Windows and macOS too: a
+      # macOS-only lint (a collapsible `if` in tray/macos.rs) once passed
+      # every branch run's `cargo check` and failed main's release matrix
+      # (run 37182486287).
+      - name: Check formatting, prebuilt samples and lints
+        run: cargo xtask ci-lints
+
+  tests:
+    name: Tests (${{ matrix.os }}, ${{ matrix.shard }})
+    needs: changes
+    if: needs.changes.outputs.verify == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04]
+        # nextest's hash partition: each test lands in one shard by its
+        # name, so a test added later needs no list kept up to date. Each
+        # shard builds the tests itself from the cache main saved: the
+        # builds run at once, where building once and passing an archive
+        # of the test binaries on would put its upload and download on the
+        # critical path.
+        shard: [1/3, 2/3, 3/3]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
         with:
-          workspaces: |
-            .
-            guests
-            guests/fixtures/mixed-p2
-      - name: Quick compile and lint check
+          tests: true
+      - name: Build guests and run this shard of the tests
+        run: cargo xtask ci-tests --partition hash:${{ matrix.shard }}
+      # The Linux (X11) clipboard adapter's test replaces what is on the
+      # clipboard and needs a display to watch: opted in and run under
+      # Xvfb here, in one shard, reusing its build (the shards run it
+      # without a display, where it skips itself).
+      - name: Run the Linux clipboard adapter test (Xvfb)
+        if: runner.os == 'Linux' && matrix.shard == '1/3'
+        run: xvfb-run -a cargo nextest run --locked --workspace --retries 2 -E 'binary(clipboard_adapter_linux)'
+        env:
+          PANE_TEST_REAL_CLIPBOARD: "1"
+
+  # The one check to require: green when every job above passed or was
+  # skipped, red when one failed or was cancelled, so jobs and shards may
+  # change without the branch protection changing with them. A job added
+  # to this workflow is added to `needs`.
+  passed:
+    # A same-repository pull request's run verifies nothing (its push run
+    # does), so its summary takes another name and never stands in for
+    # the push run's.
+    name: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && 'CI passed (see the push run)' || 'CI passed' }}
+    if: always()
+    needs: [changes, lints, tests]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Every job passed or was skipped
         run: |
-          cargo fmt --all --check
-          cargo clippy --locked --workspace --all-targets -- -D warnings
+          for result in ${{ join(needs.*.result, ' ') }}; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "A job ended with: $result"; exit 1 ;;
+            esac
+          done

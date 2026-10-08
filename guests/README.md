@@ -13,7 +13,12 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   the same color picker, compute the same root result ("reverse <text>"), and
   give the same answers and errors; the contract
   tests in `crates/pane-core/tests/samples.rs` and `crates/pane/tests/window.rs`
-  hold each of them to that.
+  hold each of them to that. None of the samples is built into Pane or
+  acquired as a default extension: install one by hand with
+  `pane --install target/guests/packages/<name>` (from a checkout,
+  `cargo run -p pane -- --install target/guests/packages/sample-rust`), into
+  a data folder of your own with `PANE_DATA_DIR` if you like; the tests and
+  smokes that drive the samples register or install them themselves.
 - `sample-settings`, `sample-settings-js`, `sample-settings-ts`: the same
   command in Rust, JavaScript and TypeScript, which keeps a chosen greeting
   style in Pane's settings ([Keeping settings](#keeping-settings)) and one
@@ -37,14 +42,19 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   ([Root results supplied ahead of the query](#root-results-supplied-ahead-of-the-query),
   [applications](../docs/applications.md)). Its package is
   `packages/applications`; held by `crates/pane-core/tests/applications.rs`.
-- `files`: Pane's file search, a default extension in Rust: the user grants
-  it a folder through Pane's own row, and root search finds its files by
-  name and opens one ([Files of a granted folder](#files-of-a-granted-folder),
-  [files](../docs/files.md)).
-  Its package is `packages/files`; held by `crates/pane-core/tests/files.rs`.
-- `sample-files-js`, `sample-files-ts`: the same host import and `open-file`
-  results in JavaScript and TypeScript; held by
-  `crates/pane-core/tests/files.rs`.
+- `files`: Pane's file search, a default extension in Rust: root search
+  and its Search Files command find the files and folders of the home
+  folder in Pane's file index by name, and Enter opens one
+  ([Pane's file index](#panes-file-index), [files](../docs/files.md)).
+  Its package is `packages/files`; held by
+  `crates/pane-core/tests/file_index.rs` and `file_actions.rs`.
+- `sample-files`, `sample-files-js`, `sample-files-ts`: the same host
+  import and `open-file` results in Rust, JavaScript and TypeScript; held by
+  `crates/pane-core/tests/file_actions.rs`.
+- `fixtures/folder-files`: what Files was before #175, over the folder the
+  user grants its package ([Files of a granted folder](#files-of-a-granted-folder)),
+  keeping that capability covered; held by `crates/pane-core/tests/files.rs`,
+  which writes its `pane.json`.
 - `sample-clipboard-js`, `sample-clipboard-ts`: the Clipboard History
   command in JavaScript and TypeScript, over the same host import
   ([Clipboard history](#clipboard-history)); held by
@@ -57,12 +67,17 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   helper, and a slow run that disabling or reloading stops. Their packages
   are `packages/sample-helper`, `packages/sample-helper-js` and
   `packages/sample-helper-ts`; held alike by
-  `crates/pane-core/tests/helpers.rs`.
+  `crates/pane-core/tests/helpers.rs`. The helper sample is no default
+  extension (it was one in development builds until #162); a Pane that
+  acquired it before keeps it as an ordinary installed package, which its
+  page in Settings uninstalls.
 - `sample-applications-js`, `sample-applications-ts`: the same host import
   and indexed results in JavaScript and TypeScript: "Launch <name>" for each
-  installed application, and a command listing and opening them
+  installed application, also found as "Launch <alternate title>" and by
+  the application's keywords, and a command listing and opening them
   ([Root results supplied ahead of the query](#root-results-supplied-ahead-of-the-query));
-  held by `crates/pane-core/tests/applications.rs`.
+  held by `crates/pane-core/tests/applications.rs`,
+  `application_identity.rs` and `application_names.rs`.
 - `sample-operations`, `sample-operations-js`, `sample-operations-ts`: each
   package publishes the operation `greet` and has a command that calls
   another's, Rust calling JavaScript and TypeScript and they calling Rust
@@ -208,11 +223,21 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   (`pane.d.ts`) and the WIT world JS/TS commands are built against.
 - `prebuilt`: the JS and TS sample components (both samples in each
   language), committed so that tests and
-  `cargo run -p pane` need no JavaScript toolchain, with `manifest.json`
+  installing a sample need no JavaScript toolchain, with `manifest.json`
   recording their hashes and build inputs.
 - `packages`: the samples', the calculator's and applications' package manifests (`pane.json`). `cargo xtask
   guests` puts each one with its built component in
-  `target/guests/packages/<name>/`, a ready-to-install package.
+  `target/guests/packages/<name>/`, a ready-to-install package. The
+  default extensions' packages (`calculator`, `applications`, `files`,
+  `clipboard-history`, `quicklinks`) also hold their tile icons (#163):
+  `icon.svg`, the package's, which a command without an icon of its own
+  shows, and the tiles of Search Files (`files/search.svg`) and of
+  Quicklinks' four commands (`quicklinks/search.svg`, `create.svg`,
+  `import.svg`, `export.svg`). Each is a 28 by 28 SVG, a coloured rounded
+  square (radius 7, the row tile's) with a white symbol, one colour per
+  extension; they read on both themes, so none has `@light` or `@dark`
+  variants. The artwork is Pane's own, under this folder's licences, and
+  is held by `crates/pane/tests/default_icons.rs`.
 - `fixtures/faulty`: test fixture whose actions, form, custom view and root
   results return an error or trap, and whose actions grow its memory to
   just under the 128 MiB cap or past it.
@@ -297,10 +322,10 @@ cargo xtask guests
 cd guests && cargo build --release --target wasm32-wasip2
 ```
 
-To try a rebuilt sample in the launcher, `cargo run -p pane` from the root; set
-`PANE_EXTENSIONS_DIR` to a directory containing `sample_rust.wasm`,
-`sample_js.wasm` and `sample_ts.wasm` to use different builds. To run your
-own command, make it a package and install it; see
+To try a rebuilt sample in the launcher, install its assembled package from
+the root: `cargo run -p pane -- --install target/guests/packages/sample-rust`
+(or `sample-js`, `sample-ts`), then Enter; Pane builds no sample in. To run
+your own command, make it a package and install it the same way; see
 [Packaging and installing a local extension](#packaging-and-installing-a-local-extension).
 
 Toolchain used: Rust 1.98.1, `wit-bindgen` 0.62.0, `wasip3` 0.9.0+wasi-0.3.0;
@@ -376,7 +401,7 @@ cache.set("last-greeting", greeting);
 - They behave like settings: owned by the source identity, kept while the
   package is disabled or updated, refused while it is disabled, and each kept
   in its own file (`content.json`, `cache.json`, `credentials.json`).
-- The user can clear an extension's cache in Manage extensions at any time,
+- The user can clear an extension's cache in Settings › Extensions at any time,
   without the extension running: expect any cache value to be missing. Its
   settings, content and credentials are kept.
 - Uninstalling removes the cache and credentials; the user chooses whether
@@ -613,7 +638,7 @@ different: a Rust panic, or in JS/TS resolving with a value of the wrong
 type (or a custom view's `render` throwing), traps the guest. Pane reports it and starts a fresh instance for the next
 call; after three crashes within five minutes, or a component that cannot
 start, Pane pauses the whole package until the user chooses Retry in
-**Manage extensions…** (where "Why <title> is paused" shows the details),
+**Settings › Extensions** (where "Why <title> is paused" shows the details),
 keeping its data ([pausing](../docs/pausing.md)).
 So report expected failures, such as a missing sign-in, as errors, never by
 crashing. The settings samples' **Crash** item shows a crash in each
@@ -747,6 +772,74 @@ module or struct state kept between queries is lost and the next query
 starts a fresh instance. Keep what must last in [settings](#keeping-settings)
 or the [cache](#keeping-content-cache-and-credentials).
 
+### Pane's file index
+
+A command can search the index Pane keeps of the names of the files and
+folders under the user's home folder (and the folders the user adds in
+Settings), which a WASI guest could not walk itself, through
+`pane:extension/file-index` ([`wit/file-index.wit`](../wit/file-index.wit)),
+and answer results that open an entry (`open-file`). The package's
+`pane.json` sets `"fileIndex": true`: Pane keeps the index open, caught up
+and watched exactly while such a package is enabled and not paused, and only
+such a package may search it. `search(query, options)` answers at once from
+what is indexed (it never waits for a walk): the entries whose name, or the
+folders they are in, match the query's words, best first, or for a blank
+query the most recently modified; `options` filter by kind (file, folder,
+link) and by category (documents, images, audio, video, archives,
+applications, text, and other for a file of none of these), sort by relevance or by modified time, and page with `limit`
+(at most 200 per call) and `offset`. Each entry carries the `id` Pane gave
+it for this package, its absolute `path`, `name`, `folder` (below the home
+folder as `~/…`), `kind`, whether opening it would run a `program`, `size`,
+`modified` (seconds since 1970) and `volume`. `status()` says whether the
+index is off, being built (with how many entries it has `found`), current or
+stopped, and why. The path is the extension's to show and copy; Pane opens
+only by the id, which it checks again first (it still exists, is the kind
+indexed, is not a link, is still in the folders file search covers). An
+`open-file` result or a command search result's `file` gives the id; Pane
+shows the entry's own name, its folder and the system's icon in the row,
+and gives it its [file actions](../docs/files.md#the-file-actions): Enter
+opens a document or a folder, and shows a program in the file manager
+(never runs it); only the explicit Run runs one.
+
+```rust
+use pane_guest::file_index::{self, SearchOptions};
+use pane_guest::root::{RootAction, RootResult};
+
+async fn results_for(query: String) -> Result<Vec<RootResult>, String> {
+    Ok(file_index::search(&query, SearchOptions::first(5))?
+        .into_iter()
+        .map(|entry| RootResult {
+            id: entry.path,
+            title: entry.name,
+            subtitle: None,
+            action: RootAction::OpenFile(entry.id),
+        })
+        .collect())
+}
+```
+
+JavaScript or TypeScript: add `"fileIndex": true` to the `"pane"` options
+of `package.json`, so the build imports the interface (a command without it
+does not), and import it (`search` throws an object whose `payload` is the
+reason; WIT's `u64` numbers are `bigint`; declarations in
+[`js/file-index.d.ts`](js/file-index.d.ts)):
+
+```ts
+import { search } from "pane:extension/file-index@0.1.0";
+
+return search(query, { sort: "relevance", limit: 20, offset: 0 }).map((entry) => ({
+  id: entry.path,
+  title: entry.name,
+  action: { tag: "open-file", val: entry.id },
+}));
+```
+
+The [Files](files) default extension works this way (its command, Search
+Files, answers both root search and its own field);
+[`sample-files`](sample-files), [`sample-files-js`](sample-files-js) and
+[`sample-files-ts`](sample-files-ts) do the same in Rust, JavaScript and
+TypeScript.
+
 ### Files of a granted folder
 
 A command can find the files of the one folder the user granted its
@@ -764,18 +857,18 @@ of root search, whose files have an `id` and a `relative` path. An
 Pane shows the file's own name and folder in the row, whatever the result's
 title says, drops an id it did not give, and gives the file its own
 [file actions](../docs/files.md#the-file-actions): Open (Enter), Show in
-Explorer (Ctrl+Enter), Open With…, Copy Path, Copy File and Move to Recycle
-Bin (confirmed), each checking it again first, then closing the window and
+Explorer (Ctrl+Enter), Open With…, Copy Path, Copy Name, Copy File and Move
+to Recycle Bin (confirmed), each checking it again first, then closing the window and
 saying what it did in a HUD; for a program or script, Enter shows it in
 Explorer and only Run runs it. The command is never called for
 them.
 Pane lists the folder under its [scan policy](../docs/files.md#the-scan-policy)
 (`files.limits()` gives its limits); file results are listed after the
-results root search finds by title. The [Files](files) default extension,
-in Rust, works this way (its command, Search Files, answers both root
-search and its own field); [`sample-files-js`](sample-files-js) and
-[`sample-files-ts`](sample-files-ts) do the same in JavaScript and
-TypeScript.
+results root search finds by title. File search itself uses
+[Pane's file index](#panes-file-index) since #175; the granted folder stays
+for a package that wants an exhaustive listing of one folder the user
+chooses (the test fixture [`fixtures/folder-files`](fixtures/folder-files)
+is what Files was before).
 
 In a command's own search field, the result names the file in `file`:
 
@@ -863,14 +956,33 @@ impl pane_guest::indexed::Guest for Apps {
                 action: IndexedAction::OpenApplication(app.id.clone()),
                 id: app.id,
                 title: app.name,
-                subtitle: Some("Application".into()),
+                subtitle: Some(app.distinction.unwrap_or_else(|| "Application".into())),
+                alternate_titles: app.alternate_titles,
+                keywords: app.keywords,
             })
             .collect())
     }
 }
 ```
 
-`applications::open(&id)` opens one from a command's own action.
+An indexed result's `alternate_titles` find it as its title does and its
+`keywords` as its subtitle does (empty lists for none); the row shows its
+title whichever matched.
+
+`applications::open(&id)` opens one from a command's own action. An
+application's `id` is opaque and stable across its updates and Pane's
+restarts (several shortcuts to one program are one application), so a
+command may keep it in its data and open the application later; do not
+parse it. Its `name` is the one the system shows in the user's language;
+`alternate_titles` holds its other names (untranslated, its program's,
+such as `code`), `keywords` the words that find it (a desktop entry's
+`Keywords`), and `distinction`, when another application has its name,
+what tells it apart (its program's name, folder or path).
+Its `icon` is a reference to the application's own icon, which
+Pane extracts and keeps: a command's list shows it with
+`Item::new(..).icon(Icon::application(app.icon))` (`icon: { application:
+app.icon }` in JavaScript and TypeScript), and root search draws it for every result that opens an
+application ([applications](../docs/applications.md#icons)).
 
 JavaScript or TypeScript: add `"pane": { "indexedResults": true }` to
 `package.json`, so the build exports the interface, import the host's
@@ -886,6 +998,9 @@ export const indexedResults: IndexedResults = {
     return installed().map((app) => ({
       id: app.id,
       title: `Launch ${app.name}`,
+      // Optional: other titles and words that find the result.
+      alternateTitles: app.alternateTitles.map((name) => `Launch ${name}`),
+      keywords: app.keywords,
       action: { tag: "open-application", val: app.id },
     }));
   },
@@ -896,6 +1011,36 @@ The [JavaScript](sample-applications-js) and
 [TypeScript](sample-applications-ts) applications samples do this, and
 their commands list the applications and open one with `open(id)`; their
 packages in [`packages/`](packages) set `indexedResults`.
+
+## Root providers
+
+A command whose only job is to answer root search, as the
+[calculator](calculator) and [applications](applications) extensions'
+are, declares `"mode": "provider"` in `pane.json` (#164). A **root
+provider** has no row of its own: it is never launched, so it cannot be
+pinned, has no alias, fallback or hotkey, and neither the Actions panel nor
+the Shortcuts page offers it; root search learns nothing about it. Its
+results still answer as a command's would: computed from the query
+(`"rootResults": true`) or supplied ahead of it (`"indexedResults": true`),
+each a root result of its own. Its extension's card in Settings lists it
+under the extension's switch, which turns its results off and on.
+
+```json
+{ "id": "calculator", "title": "Calculator", "component": "calculator.wasm",
+  "mode": "provider", "rootResults": true }
+```
+
+A provider must declare `rootResults` or `indexedResults`, and may not
+declare what only a launched command uses (`search`, `takesQuery`,
+`arguments` or a `schedule`); otherwise the install is refused with the
+reason. It may run a continuing `service` and declare preferences. Its
+component exports the root-results or indexed-results interface beside
+`command` as any other does, but Pane never opens or runs it, so it needs no
+`render` or `run` of its own: in Rust, `impl pane_guest::Command` with only
+`type CustomView = pane_guest::NoCustomView`; in JavaScript or TypeScript,
+`export const command: Command = {}`. Pins, aliases, fallbacks and hotkeys
+recorded for a command before it became a provider (an update that changes
+its mode) are dropped at the next start, with a toast naming them.
 
 ## Scheduled work
 
@@ -1054,6 +1199,11 @@ it was copied (7 days unless `set-retention(seconds)` chose 1 minute to
 not: `entries()` never lists an expired item, so a command needs no expiry
 of its own. The [Clipboard History](clipboard-history)
 default extension is the example; see [clipboard history](../docs/clipboard-history.md).
+It is the one package whose history records from the first start, without
+calling `set-capture` (ADR 0042), and Pane draws its command in a view of
+its own, whose controls (pause, retention, disabled applications, clearing)
+are Pane's; its own list is only Pause or Resume Recording and the items.
+The JavaScript and TypeScript samples show the whole contract's controls.
 Only Windows has a clipboard adapter so far, so its package declares
 `"platforms": ["windows"]`.
 
@@ -1470,7 +1620,11 @@ command that needs setup; its row in root search says "Needs setup", and
 none of this counts as a failure.
 
 The user changes the values later on the extension's card in Settings ›
-Extensions, saved as they change; "Configure Command…" and "Configure
+Extensions, saved as they change and applied without a restart: a text
+or password in a field, a checkbox as a switch, a dropdown as a select
+(its value on a button that opens the options under a "Search choices"
+field, as Settings' own choices are), a file, folder or application in a
+field with "Choose…". "Configure Command…" and "Configure
 Extension…" in root search's Actions panel open it there. Values are the
 package's [extension data](../docs/extension-data.md): a password is a
 local credential, every other value an extension setting, so disabling
@@ -1527,7 +1681,7 @@ copies answer the same.
 
 ## A command that takes a query
 
-The user can give any installed command an alias in Manage extensions, and
+The user can give any installed command an alias in Settings › Extensions, and
 typing it in root search lists the command first; nothing is needed of the
 command for that. A command that **takes a query** can also be sent text
 from root search: the user types its alias, a space and the text ("ec
@@ -1583,10 +1737,10 @@ longer needs (the text changed, the user left) where it waits, dropping the
 instance with its web request: code after that `await` never runs and
 in-memory state is lost, so make result ids say which result they are. An
 error it answers with (a service down or unreachable) is shown in place of
-results and never pauses the extension. A result may name a file of the
-package's [granted folder](#files-of-a-granted-folder) by its id instead
-(`file`, #150): Pane then lists that file and performs its file actions
-itself. A command may set both `"search"` and `"rootResults"`; root search
+results and never pauses the extension. A result may name an entry of
+[Pane's file index](#panes-file-index) or a file of the package's
+[granted folder](#files-of-a-granted-folder) by its id instead (`file`,
+#150): Pane then lists that file and performs its file actions itself. A command may set both `"search"` and `"rootResults"`; root search
 then asks it too. See [docs/command-search.md](../docs/command-search.md).
 
 **Web requests** go through `wasi:http@0.3.0`'s client, which Pane links for
@@ -1596,7 +1750,7 @@ request, whatever its options ask: 10 s to connect, 20 s for the response
 head, 10 s between two pieces of the body, 30 s in all, a body of at most
 4 MiB, and four connections open at once per package; past a limit the
 request fails with an error saying so. Any address is allowed, this
-computer's and the local network's too; Manage extensions shows which
+computer's and the local network's too; Settings › Extensions shows which
 packages use the network and the addresses each tried to reach this
 session. The SDKs wrap it:
 
@@ -1786,7 +1940,7 @@ try {
 ```
 
 `source` is the target's identity exactly as installed: `local:` and the
-absolute folder path it was installed from, the path Manage extensions shows
+absolute folder path it was installed from, the path Settings › Extensions shows
 after "local folder" (the samples ask for it in their form), or the id of a
 dependency your `pane.json` declares ([below](#dependencies-on-other-extensions)),
 which is how a package names the extensions it is written for. Pane starts the target only when it is called, never enables a disabled one,
@@ -2136,22 +2290,25 @@ What installing does:
   guest runs until you open a command or another extension calls one of the
   package's [operations](#operations). A damaged installed copy stays listed
   with its problem.
-- **Disabling.** **Manage extensions…**, the last row of root search once a
-  package is installed, lists every installed package with whether it is
-  enabled and its source, so copies with the same title can be told apart.
-  Enter disables or enables the selected one; only that installation
-  changes. A disabled package's commands leave root search (they are not
+- **Disabling.** Pane's Settings window lists every installed package
+  under its sidebar's **Extensions** group, each with a page of its own
+  (root search's **Manage Extensions** opens it there): the page shows
+  whether the package is enabled and its source, so copies with the same
+  title can be told apart, and its switch disables or enables it; only
+  that installation changes. A single command can be turned off with its
+  own switch on the page, which leaves the rest of the package working. A disabled package's commands leave root search (they are not
   shown greyed out), an open command of it closes, its running instances are
   dropped and it can no longer save settings, so none of its code runs. This
-  happens as soon as you press Enter, before the choice is written; if it
-  cannot be written, the package is enabled again with the reason. Pressing
-  Enter again while the choice is being written does nothing. The choice is
+  happens as soon as you switch it, before the choice is written; if it
+  cannot be written, the package is enabled again with the reason. Switching
+  again while the choice is being written does nothing. The choice is
   recorded in
   `installed.json` (`"disabled": true`) and holds after restarting Pane and
   after an Update. Its settings are kept, and enabling it brings its
   commands back with them. The package stays installed at the same identity;
   choosing its folder again shows it as disabled.
-- **Uninstalling.** **Uninstall <title>** in Manage extensions asks first,
+- **Uninstalling.** **Uninstall** in the Actions menu of the package's page
+  in Settings asks first,
   showing how many settings and content records the package keeps, and
   offers **Uninstall and keep saved data**, **Uninstall and delete saved
   data** or **Cancel**. Either way Pane removes the installed copy, the
@@ -2164,9 +2321,9 @@ What installing does:
 ### Reloading a package while Pane stays open
 
 After rebuilding a component, reload the package instead of restarting
-Pane: in **Manage extensions…**, after the rows that enable or disable each
-package, every enabled package has a **Reload <title>** row. Enter (or a
-click) on it reads the package's source folder again and replaces only that
+Pane: on the package's page in Settings (its sidebar's **Extensions**
+group), the Actions menu of every enabled package from a folder has
+**Reload**. Choosing it reads the package's source folder again and replaces only that
 package; Pane and every other package keep running, including a custom view
 of another package that is open. It works the same for Rust, JavaScript and
 TypeScript packages, since Pane sees only components. A reload goes through
@@ -2212,7 +2369,7 @@ What a reload keeps and what it does not:
 ### Developing a package: build and reload on save
 
 Instead of rebuilding and pressing Reload after each change, choose
-**Develop <title>** in **Manage extensions…** (the last rows, one per
+**Develop** in the Actions menu of the package's page in Settings (one per
 enabled package). Pane then watches the package's source folder and, after
 each save, runs its build there and reloads the package when the build
 succeeds:

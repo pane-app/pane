@@ -13,13 +13,18 @@ mod platforms;
 #[path = "support/settle.rs"]
 mod settle;
 
+// Pane registers no sample command (#162): the tests that drive the
+// samples register them themselves.
+#[path = "support/samples.rs"]
+mod samples;
+
 #[path = "support/paint.rs"]
 mod paint;
 
 #[path = "../../pane-core/tests/support/artifacts.rs"]
 mod artifacts;
 
-use settle::{settle, settle_shown, until};
+use settle::{enter_flow, settle, settle_shown, until};
 
 #[path = "support/wait.rs"]
 mod wait;
@@ -591,7 +596,7 @@ fn assistive_technology_sees_the_forms_labelled_controls_and_values(cx: &mut Tes
 
 #[gpui::test]
 fn the_launcher_offers_the_rust_javascript_and_typescript_samples(cx: &mut TestAppContext) {
-    let (window, cx) = open_with(cx, pane::sample_commands());
+    let (window, cx) = open_with(cx, samples::sample_commands());
     let root = settle(&window, cx);
     let titles: Vec<&str> = root.rows.iter().map(|row| row.title.as_str()).collect();
     // Pane's own Settings row is listed last, whatever is installed (its
@@ -639,10 +644,13 @@ fn selector(name: &str) -> &'static str {
 }
 
 /// Whether the element with debug selector `element` (such as `row-<title>`)
-/// lies wholly inside the list.
+/// lies wholly inside the list. The list draws only the rows in view and a
+/// few past its edges (#165): a row it did not draw is not visible.
 fn row_is_visible(cx: &mut VisualTestContext, element: &str) -> bool {
     let list = cx.debug_bounds("rows").expect("the list is rendered");
-    let element = cx.debug_bounds(selector(element)).expect("it is rendered");
+    let Some(element) = cx.debug_bounds(selector(element)) else {
+        return false;
+    };
     element.top() >= list.top() && element.bottom() <= list.bottom()
 }
 
@@ -652,7 +660,7 @@ fn row_is_visible(cx: &mut VisualTestContext, element: &str) -> bool {
 /// (the panel's inner edge is an inset ring that takes no layout space).
 #[gpui::test]
 fn the_launcher_divides_its_reference_client_edge_to_edge(cx: &mut TestAppContext) {
-    let (window, cx) = open_with(cx, pane::sample_commands());
+    let (window, cx) = open_with(cx, samples::sample_commands());
     cx.simulate_resize(pane::launcher_client_size());
     let view = settle(&window, cx);
     assert_eq!(view.status, Status::Idle);
@@ -951,6 +959,74 @@ fn open_color(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) {
     assert_eq!(view.title, "Choose a color");
 }
 
+/// Asserts that the screen shown has no heading line above its content
+/// and that the footer's left, at rest, names it: the command's icon and
+/// the screen's title, inside the footer strip and left of its buttons
+/// (#162).
+fn assert_named_in_the_footer(cx: &mut VisualTestContext, what: &str) {
+    assert!(
+        cx.debug_bounds("screen-heading").is_none(),
+        "{what}: a heading line above the content"
+    );
+    let lead = cx
+        .debug_bounds("footer-command")
+        .unwrap_or_else(|| panic!("{what}: the footer names no command"));
+    let strip = cx
+        .debug_bounds("status-idle")
+        .unwrap_or_else(|| panic!("{what}: the footer is not at rest"));
+    assert!(
+        strip.contains(&lead.center()),
+        "{what}: the command's name is not in the footer: {lead:?} outside {strip:?}"
+    );
+    assert!(
+        lead.center().x < strip.center().x,
+        "{what}: the command's name is not on the footer's left"
+    );
+    assert!(
+        cx.debug_bounds("footer-command-title").is_some(),
+        "{what}: the footer shows no title"
+    );
+}
+
+/// An extension's views start with their content (#162): its list, a form
+/// and a custom view opened from it draw no heading line, and the footer's
+/// left names the open command instead, as Raycast's footer does. Root
+/// search has neither, and its section label stays.
+#[gpui::test]
+fn an_extension_view_has_no_heading_and_the_footer_names_it(cx: &mut TestAppContext) {
+    let (window, cx) = open(cx, &RUST);
+    settle(&window, cx);
+    assert!(cx.debug_bounds("screen-heading").is_none());
+    assert!(
+        cx.debug_bounds("footer-command").is_none(),
+        "root search names no command in its footer"
+    );
+    assert!(
+        cx.debug_bounds("section-Commands").is_some(),
+        "root search's section label stays"
+    );
+
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert_eq!(view.screen, Screen::Command);
+    assert_named_in_the_footer(cx, "the command's list");
+
+    cx.simulate_keystrokes("down down down down enter");
+    let view = settle(&window, cx);
+    assert!(matches!(view.screen, Screen::Form(_)), "{:?}", view.screen);
+    assert_eq!(view.title, "Greet someone");
+    assert_named_in_the_footer(cx, "a form");
+}
+
+/// A custom view opened from an extension's list has no heading line
+/// either; the footer's left names it (#162).
+#[gpui::test]
+fn a_custom_view_has_no_heading_and_the_footer_names_it(cx: &mut TestAppContext) {
+    let (window, cx) = open(cx, &RUST);
+    open_color(&window, cx);
+    assert_named_in_the_footer(cx, "a custom view");
+}
+
 /// Waits until the open view shows `expected` as its value, which it does
 /// once the guest's answer to the last event has arrived.
 fn wait_for_color(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, expected: &str) {
@@ -1128,7 +1204,7 @@ fn query_has_focus(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) 
 fn typing_in_root_search_narrows_the_results_and_enter_opens_the_best_match(
     cx: &mut TestAppContext,
 ) {
-    let (window, cx) = open_with(cx, pane::sample_commands());
+    let (window, cx) = open_with(cx, samples::sample_commands());
     assert!(
         query_has_focus(&window, cx),
         "root search opens ready to type"
@@ -1151,7 +1227,7 @@ fn typing_in_root_search_narrows_the_results_and_enter_opens_the_best_match(
 
 #[gpui::test]
 fn arrow_keys_move_through_the_matches_while_the_query_keeps_focus(cx: &mut TestAppContext) {
-    let (window, cx) = open_with(cx, pane::sample_commands());
+    let (window, cx) = open_with(cx, samples::sample_commands());
     cx.simulate_input("script");
     assert_eq!(
         row_titles(&window, cx),
@@ -1179,7 +1255,7 @@ fn the_production_scenario_edits_searches_selects_opens_and_back_navigates(
     // launcher, its query field, its search, its selection and its
     // navigation — edits, searches, selects, opens and back-navigates
     // through the real sample components.
-    let (window, cx) = open_with(cx, pane::sample_commands());
+    let (window, cx) = open_with(cx, samples::sample_commands());
     assert!(
         query_has_focus(&window, cx),
         "root search opens ready to type"
@@ -1221,7 +1297,7 @@ fn the_production_scenario_edits_searches_selects_opens_and_back_navigates(
 
 #[gpui::test]
 fn a_query_that_matches_nothing_says_so_and_escape_clears_it(cx: &mut TestAppContext) {
-    let (window, cx) = open_with(cx, pane::sample_commands());
+    let (window, cx) = open_with(cx, samples::sample_commands());
     cx.simulate_input("zzz");
     let view = settle(&window, cx);
     assert!(view.rows.is_empty());
@@ -1234,7 +1310,7 @@ fn a_query_that_matches_nothing_says_so_and_escape_clears_it(cx: &mut TestAppCon
     let nodes = accessible_nodes(cx);
     let notice = node(&nodes, "Note", "Nothing matches “zzz”");
     let description = notice["description"].as_str().unwrap_or_default();
-    assert!(description.contains("Manage extensions"), "{description}");
+    assert!(description.contains("in Settings"), "{description}");
     cx.simulate_keystrokes("enter");
     assert_eq!(settle(&window, cx).status, Status::Idle);
     assert!(cx.debug_bounds("status-idle").is_some(), "nothing failed");
@@ -1251,7 +1327,7 @@ fn a_query_that_matches_nothing_says_so_and_escape_clears_it(cx: &mut TestAppCon
 
 #[gpui::test]
 fn coming_back_to_root_search_starts_an_empty_search_with_focus(cx: &mut TestAppContext) {
-    let (window, cx) = open_with(cx, pane::sample_commands());
+    let (window, cx) = open_with(cx, samples::sample_commands());
     cx.simulate_input("rust");
     cx.simulate_keystrokes("enter");
     assert_eq!(settle(&window, cx).screen, Screen::Command);
@@ -1307,7 +1383,7 @@ fn input_method_composition_searches_root(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn assistive_technology_sees_the_search_field_and_the_selected_result(cx: &mut TestAppContext) {
-    let (window, cx) = open_with(cx, pane::sample_commands());
+    let (window, cx) = open_with(cx, samples::sample_commands());
     cx.simulate_input("script");
     settle(&window, cx);
 
@@ -1463,6 +1539,7 @@ impl pane_core::applications::Applications for TwoApplications {
                 id: format!("/apps/{name}.desktop"),
                 name: name.into(),
                 location: "/apps".into(),
+                ..Default::default()
             })
             .into())
     }
@@ -1503,6 +1580,78 @@ fn typing_an_applications_name_shows_it_and_enter_opens_it(cx: &mut TestAppConte
     assert_eq!(view.status, Status::Result("Opened Firefox".into()));
     assert_eq!(*system.opened.lock().unwrap(), ["/apps/Firefox.desktop"]);
     assert!(query_has_focus(&window, cx), "typing goes on in the field");
+}
+
+/// A system with two applications of one name, which the host tells apart
+/// by their distinctions.
+struct TwoPythons;
+
+impl pane_core::applications::Applications for TwoPythons {
+    fn installed(&self) -> Result<Vec<pane_core::applications::Application>, String> {
+        Ok(["Python311", "Python312"]
+            .map(|folder| pane_core::applications::Application {
+                id: format!("python-{folder}"),
+                name: "Python".into(),
+                location: format!(r"C:\{folder}"),
+                distinction: Some(folder.into()),
+                ..Default::default()
+            })
+            .into())
+    }
+
+    fn open(&self, _id: &str) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// A pinned application sharing its name with another says what tells it
+/// apart: as its tile's tooltip, and with its name to assistive
+/// technology.
+#[gpui::test]
+fn a_pin_sharing_its_title_says_what_tells_it_apart(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let runtime = Runtime::start().unwrap();
+    runtime.set_applications(std::sync::Arc::new(TwoPythons));
+    let folder =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/applications");
+    let launcher = Launcher::with_packages(Ok(runtime), vec![], data.path().join("extensions"))
+        .with_quick_slots(data.path());
+    cx.executor().allow_parking();
+    cx.foreground_executor()
+        .block_on(launcher.install_package(&folder));
+    launcher.back();
+    // Pin the second Python, found by its name.
+    cx.foreground_executor()
+        .block_on(launcher.set_query("python"));
+    let rows = launcher.view().rows;
+    let index = rows
+        .iter()
+        .position(|row| row.subtitle.as_deref() == Some("Python312"))
+        .unwrap_or_else(|| panic!("no second Python in {rows:?}"));
+    launcher.select(index);
+    let (change, recorded) =
+        launcher.change_quick_slots(&rows[index].id, pane_core::ResultAction::Pin);
+    assert!(
+        matches!(change, pane_core::SlotChange::Changed(_)),
+        "{change:?}"
+    );
+    cx.foreground_executor().block_on(recorded);
+    cx.foreground_executor().block_on(launcher.set_query(""));
+    let (window, cx) = open_launcher(cx, launcher);
+    settle(&window, cx);
+
+    let nodes = accessible_nodes(cx);
+    let pin = node(&nodes, "Button", "Pinned 1: Python");
+    assert_eq!(pin["description"], "Python312", "{pin:#}");
+
+    let tile = cx.debug_bounds("slot-1").expect("the pin's tile");
+    cx.simulate_mouse_move(tile.center(), None::<MouseButton>, Modifiers::none());
+    cx.executor().advance_clock(Duration::from_millis(700));
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("tooltip-Python312").is_some(),
+        "the tile's tooltip"
+    );
 }
 
 #[gpui::test]
@@ -1755,7 +1904,7 @@ fn the_footer_button_submits_the_form_like_enter(cx: &mut TestAppContext) {
 /// would be — but a click dispatches nothing.
 #[gpui::test]
 fn the_footer_button_cannot_run_an_action_with_nothing_selected(cx: &mut TestAppContext) {
-    let (window, cx) = open_with(cx, pane::sample_commands());
+    let (window, cx) = open_with(cx, samples::sample_commands());
     cx.simulate_input("zzz");
     let view = settle(&window, cx);
     assert_eq!(view.selected, None);
@@ -1846,14 +1995,11 @@ fn a_running_action_cannot_be_dispatched_again_through_the_footer_button(cx: &mu
     cx.foreground_executor()
         .block_on(launcher.install_package(&folder));
     launcher.back();
+    // The install's result owns the strip; showing root search afresh
+    // leaves the launcher idle, so the strip is the action. (Applications
+    // is a root provider, with no command row to open and leave, #164.)
+    launcher.show_root_search();
     let (window, cx) = open_launcher(cx, launcher);
-
-    // The install's result owns the strip; open the command and come back
-    // so the launcher is idle again and the strip is the action.
-    cx.simulate_keystrokes("enter");
-    settle(&window, cx);
-    cx.simulate_keystrokes("escape");
-    settle(&window, cx);
 
     cx.simulate_input("fire");
     wait_for_rows(&window, cx, &["Firefox"]);
@@ -1916,15 +2062,9 @@ fn the_footer_button_labels_the_action_from_identity_not_the_row_title(cx: &mut 
     let launcher = installed_hello(cx, data.path(), source.path());
     let (window, cx) = open_launcher(cx, launcher);
 
-    let manage = cx
-        .debug_bounds("row-Manage extensions…")
-        .expect("the row is rendered");
-    // The pointer moves onto the row, which selects it, and the click
-    // runs it.
-    arrive(cx, manage.center() - gpui::point(px(1.), px(0.)));
-    cx.simulate_mouse_move(manage.center(), None::<MouseButton>, Modifiers::none());
-    cx.simulate_click(manage.center(), Modifiers::none());
-    settle(&window, cx);
+    // The extension list, which Settings enters (#168): the launcher
+    // window draws its screens while the launcher holds them.
+    enter_flow(&window, cx);
 
     let nodes = accessible_nodes(cx);
     node(&nodes, "ListBoxOption", "Hello");
@@ -1943,16 +2083,7 @@ fn the_footer_button_labels_the_action_from_identity_not_the_row_title(cx: &mut 
     // owned the strip until then) offers to enable it now.
     cx.simulate_keystrokes("escape");
     settle(&window, cx);
-    let manage = cx
-        .debug_bounds("row-Manage extensions…")
-        .expect("the row is rendered");
-    cx.simulate_mouse_move(
-        manage.center() + gpui::point(px(3.), px(0.)),
-        None::<MouseButton>,
-        Modifiers::none(),
-    );
-    cx.simulate_click(manage.center(), Modifiers::none());
-    settle(&window, cx);
+    enter_flow(&window, cx);
 
     let nodes = accessible_nodes(cx);
     node(&nodes, "ListBoxOption", "Hello");
@@ -2987,10 +3118,14 @@ fn a_window_that_stops_drawing_settles_its_arrival_on_the_next_frame_it_draws(
     assert_eq!(settle_frames(cx), 0, "the shown frame asked for nothing");
 }
 
-/// Pane's Clipboard History in the split view (#102), through the window:
-/// the real default extension from `cargo xtask guests`, acquired from an
-/// artifact source on 127.0.0.1, over a fake system clipboard that never
-/// touches the real one.
+/// Pane's Clipboard History in the split view (#102, #166), through the
+/// window: the real default extension from `cargo xtask guests`, acquired
+/// from an artifact source on 127.0.0.1, over a fake system clipboard that
+/// never touches the real one. It records from the first start; the search
+/// field has no badge and no tabs follow it, a type dropdown at its right
+/// filters by kind, rows are grouped by day, the detail shows the record's
+/// Information, and the Actions panel (Ctrl+K) holds the record's and the
+/// history's actions.
 mod clipboard_split {
     use std::fs;
     use std::sync::{Arc, Mutex};
@@ -3012,6 +3147,10 @@ mod clipboard_split {
     struct Kept {
         sink: Option<Arc<dyn Sink>>,
         written: Vec<String>,
+        /// The images Pane put on the clipboard, as PNGs (#167).
+        images: Vec<Vec<u8>>,
+        /// The files Pane put on the clipboard, a list per write (#167).
+        files: Vec<Vec<std::path::PathBuf>>,
     }
 
     /// A system clipboard that records what Pane writes and reports only
@@ -3045,8 +3184,34 @@ mod clipboard_split {
             true
         }
 
+        /// `content` (an image or files, #167) copied from `source`:
+        /// whether Pane watched.
+        fn copy_content(&self, content: Content, source: Option<&str>) -> bool {
+            let Some(sink) = self.0.lock().unwrap().sink.clone() else {
+                return false;
+            };
+            let ticket = sink.reading();
+            sink.observed(
+                ticket,
+                Observation {
+                    content,
+                    markers: Markers::default(),
+                    source: source.map(str::to_owned),
+                },
+            );
+            true
+        }
+
         fn written(&self) -> Vec<String> {
             self.0.lock().unwrap().written.clone()
+        }
+
+        fn written_images(&self) -> Vec<Vec<u8>> {
+            self.0.lock().unwrap().images.clone()
+        }
+
+        fn written_files(&self) -> Vec<Vec<std::path::PathBuf>> {
+            self.0.lock().unwrap().files.clone()
         }
     }
 
@@ -3062,6 +3227,16 @@ mod clipboard_split {
 
         fn write_text(&self, text: &str) -> Result<(), String> {
             self.0.lock().unwrap().written.push(text.into());
+            Ok(())
+        }
+
+        fn write_image(&self, png: &[u8]) -> Result<(), String> {
+            self.0.lock().unwrap().images.push(png.to_vec());
+            Ok(())
+        }
+
+        fn write_files(&self, paths: &[std::path::PathBuf]) -> Result<(), String> {
+            self.0.lock().unwrap().files.push(paths.to_vec());
             Ok(())
         }
     }
@@ -3126,7 +3301,8 @@ mod clipboard_split {
         }
 
         /// Pane with Clipboard History acquired as its default extension,
-        /// history on and `texts` copied in order (the last newest).
+        /// recording from the first start, and `texts` copied in order (the
+        /// last newest), a minute apart.
         fn launcher(&self, cx: &mut TestAppContext, texts: &[&str]) -> Launcher {
             cx.executor().allow_parking();
             let launcher = Launcher::with_packages(
@@ -3145,11 +3321,6 @@ mod clipboard_split {
             .with_clipboard(Arc::new(self.clipboard.clone()));
             cx.foreground_executor()
                 .block_on(launcher.acquire_defaults());
-            open_command(cx, &launcher, COMMAND);
-            let view = launcher.clipboard_history().expect("the history is shown");
-            launcher
-                .set_clipboard_capture(&view, CaptureState::On)
-                .unwrap();
             for text in texts {
                 assert!(self.clipboard.copy(text, Some("notepad.exe")));
                 self.clock.advance(std::time::Duration::from_secs(60));
@@ -3247,8 +3418,8 @@ mod clipboard_split {
         click(cx, "clip-first");
         settle(&window, cx);
         assert!(world.clipboard.written().is_empty(), "a click only selects");
-        // Paste is the primary action, beside Copy and Delete.
-        for button in ["clipboard-paste", "clipboard-copy", "clipboard-delete"] {
+        // Paste is the primary action, beside Actions.
+        for button in ["clipboard-paste", "clipboard-actions"] {
             assert!(cx.debug_bounds(button).is_some(), "{button} is drawn");
         }
 
@@ -3262,6 +3433,34 @@ mod clipboard_split {
         assert_eq!(
             cx.read_entity(&window, |window, _| window.hud()).as_deref(),
             Some(pane_core::system::PASTE_FALLBACK)
+        );
+    }
+
+    /// Clipboard History draws no heading line above its content (#162):
+    /// the footer's left names the command by its icon and title, as
+    /// Raycast's does, and when the selected record was copied is said in
+    /// its Information under the preview (#166). Its day's section label
+    /// stays.
+    #[gpui::test]
+    fn the_footer_names_clipboard_history_and_no_heading_is_drawn(cx: &mut TestAppContext) {
+        let world = World::new();
+        let launcher = world.launcher(cx, &["first"]);
+        let (_window, cx) = open_history(cx, launcher);
+        assert!(cx.debug_bounds("screen-heading").is_none());
+        assert!(cx.debug_bounds("section-Today").is_some());
+        let lead = cx
+            .debug_bounds("footer-command")
+            .expect("the footer names the command");
+        let strip = cx.debug_bounds("status-idle").expect("the footer at rest");
+        assert!(strip.contains(&lead.center()), "{lead:?} outside {strip:?}");
+        assert!(lead.center().x < strip.center().x, "on the footer's left");
+        assert!(
+            cx.debug_bounds("icon-footer-command").is_some(),
+            "the command's own icon, drawn as its package ships it"
+        );
+        assert!(
+            cx.debug_bounds("clipboard-info-Copied").is_some(),
+            "when it was copied, in the Information under the preview"
         );
     }
 
@@ -3280,7 +3479,7 @@ mod clipboard_split {
     }
 
     #[gpui::test]
-    fn the_keys_move_the_selection_and_the_footer_copies_and_deletes(cx: &mut TestAppContext) {
+    fn the_keys_move_the_selection_and_the_actions_copy_and_delete(cx: &mut TestAppContext) {
         let world = World::new();
         let launcher = world.launcher(cx, &["first", "second", "third"]);
         let (window, cx) = open_history(cx, launcher);
@@ -3291,8 +3490,11 @@ mod clipboard_split {
         cx.simulate_keystrokes("down down down up ctrl-d");
         settle(&window, cx);
         assert_eq!(listed(&window, cx), ["third", "first"]);
-        // The footer's Delete does the same.
-        click(cx, "clipboard-delete");
+        // The Actions panel's Delete Entry does the same.
+        cx.simulate_keystrokes(super::OPEN_ACTIONS);
+        settle(&window, cx);
+        assert!(cx.debug_bounds("actions-panel").is_some());
+        click(cx, "action-Delete Entry");
         settle(&window, cx);
         assert_eq!(listed(&window, cx), ["first"]);
 
@@ -3308,7 +3510,9 @@ mod clipboard_split {
         });
         settle(&window, cx);
         assert!(split_shown(&window, cx), "the view is restored");
-        click(cx, "clipboard-copy");
+        cx.simulate_keystrokes(super::OPEN_ACTIONS);
+        settle(&window, cx);
+        click(cx, "action-Copy to Clipboard");
         copied(&window, cx);
         assert_eq!(world.clipboard.written(), ["first", "first"]);
     }
@@ -3329,7 +3533,7 @@ mod clipboard_split {
         assert!(cx.debug_bounds("clipboard-empty").is_some());
         assert!(cx.debug_bounds("clipboard-preview-text").is_none());
         assert!(
-            cx.debug_bounds("clipboard-copy").is_none(),
+            cx.debug_bounds("clipboard-paste").is_none(),
             "no primary action"
         );
         cx.simulate_keystrokes("enter");
@@ -3347,7 +3551,7 @@ mod clipboard_split {
     }
 
     #[gpui::test]
-    fn the_capture_button_pauses_and_resumes_the_actual_history(cx: &mut TestAppContext) {
+    fn the_actions_panel_pauses_and_resumes_recording(cx: &mut TestAppContext) {
         let world = World::new();
         let launcher = world.launcher(cx, &["kept"]);
         let (window, cx) = open_history(cx, launcher);
@@ -3359,8 +3563,22 @@ mod clipboard_split {
                     .map(|view| view.capture)
             })
         };
+        assert_eq!(capture(&window, cx), Some(CaptureState::On));
 
-        click(cx, "clipboard-capture");
+        cx.simulate_keystrokes(super::OPEN_ACTIONS);
+        settle(&window, cx);
+        // The history's own actions, beside the record's.
+        for entry in [
+            "action-Paste",
+            "action-Copy to Clipboard",
+            "action-Delete Entry",
+            "action-Pause Recording",
+            "action-Clear History…",
+            "action-Disabled Applications…",
+        ] {
+            assert!(cx.debug_bounds(entry).is_some(), "{entry} is listed");
+        }
+        click(cx, "action-Pause Recording");
         settle(&window, cx);
         assert_eq!(capture(&window, cx), Some(CaptureState::Paused));
         assert!(
@@ -3368,37 +3586,228 @@ mod clipboard_split {
             "nothing is watched"
         );
 
-        click(cx, "clipboard-capture");
+        cx.simulate_keystrokes(super::OPEN_ACTIONS);
+        settle(&window, cx);
+        click(cx, "action-Resume Recording");
         settle(&window, cx);
         assert_eq!(capture(&window, cx), Some(CaptureState::On));
         assert!(world.clipboard.copy("again", None));
     }
 
     #[gpui::test]
-    fn manage_routes_to_the_commands_own_controls_and_escape_comes_back(cx: &mut TestAppContext) {
+    fn the_actions_filter_runs_recording_actions_with_enter(cx: &mut TestAppContext) {
         let world = World::new();
         let launcher = world.launcher(cx, &["kept"]);
         let (window, cx) = open_history(cx, launcher);
 
+        for (label, selector, expected) in [
+            (
+                "Pause Recording",
+                "action-Pause Recording",
+                CaptureState::Paused,
+            ),
+            (
+                "Resume Recording",
+                "action-Resume Recording",
+                CaptureState::On,
+            ),
+        ] {
+            cx.simulate_keystrokes(super::OPEN_ACTIONS);
+            settle(&window, cx);
+            cx.simulate_input(label);
+            settle(&window, cx);
+            assert!(cx.debug_bounds(selector).is_some());
+            assert!(cx.debug_bounds("action-Paste").is_none());
+            cx.simulate_keystrokes("enter");
+            settle(&window, cx);
+            let capture = cx.read_entity(&window, |window, _| {
+                window.launcher().clipboard_history().unwrap().capture
+            });
+            assert_eq!(capture, expected);
+            assert!(world.clipboard.written().is_empty(), "Enter must not paste");
+        }
+    }
+
+    /// Clear History asks first, over the view, then deletes every record.
+    #[gpui::test]
+    fn clear_history_asks_then_clears(cx: &mut TestAppContext) {
+        let world = World::new();
+        let launcher = world.launcher(cx, &["one", "two"]);
+        let (window, cx) = open_history(cx, launcher);
         cx.simulate_keystrokes(super::OPEN_ACTIONS);
         settle(&window, cx);
-        assert!(!split_shown(&window, cx));
-        // The extension's own rows: retention, exclusions, clearing.
-        for row in [
-            "row-Exclude a program",
-            "row-Clear clipboard history",
-            "row-Turn off and delete clipboard history",
-        ] {
-            assert!(cx.debug_bounds(row).is_some(), "{row} is drawn");
-        }
-
-        cx.simulate_keystrokes("escape");
+        click(cx, "action-Clear History…");
         settle(&window, cx);
-        assert!(split_shown(&window, cx), "Escape returns to the split view");
-        assert_eq!(
-            cx.read_entity(&window, |window, _| window.launcher().view().screen),
-            Screen::Command
+        assert!(cx.debug_bounds("confirmation").is_some(), "it asks first");
+        click(cx, "confirmation-primary");
+        settle(&window, cx);
+        assert!(listed(&window, cx).is_empty());
+        assert!(cx.debug_bounds("clipboard-empty").is_some());
+    }
+
+    /// No badge on the search field and no tabs under it (#166): the
+    /// footer names the command (#162), and the type dropdown at the
+    /// field's right keeps All Types, Text, Links or Colors.
+    #[gpui::test]
+    fn the_type_dropdown_filters_and_the_field_has_no_badge_or_tabs(cx: &mut TestAppContext) {
+        let world = World::new();
+        let launcher = world.launcher(cx, &["alpha", "https://example.com", "#ff8800"]);
+        let (window, cx) = open_history(cx, launcher);
+        for gone in [
+            "clipboard-tab-All",
+            "clipboard-tab-Text",
+            "clipboard-capture",
+        ] {
+            assert!(cx.debug_bounds(gone).is_none(), "{gone} is gone");
+        }
+        let lead = cx
+            .debug_bounds("footer-command")
+            .expect("the footer names the command");
+        let back = cx.debug_bounds("clipboard-back").expect("the back button");
+        assert!(
+            lead.origin.y > back.origin.y + back.size.height,
+            "the command is named in the footer, not on the search field"
         );
+        assert!(cx.debug_bounds("clipboard-type").is_some());
+
+        click(cx, "clipboard-type");
+        settle(&window, cx);
+        click(cx, "clipboard-type-links");
+        settle(&window, cx);
+        assert_eq!(
+            cx.read_entity(&window, |window, _| window.clipboard_filter()),
+            Some(pane_core::clipboard_view::ClipboardFilter::Links)
+        );
+        assert!(cx.debug_bounds("clip-https://example.com").is_some());
+        assert!(cx.debug_bounds("clip-alpha").is_none());
+        assert!(cx.debug_bounds("clip-#ff8800").is_none());
+
+        click(cx, "clipboard-type");
+        settle(&window, cx);
+        click(cx, "clipboard-type-colors");
+        settle(&window, cx);
+        assert!(cx.debug_bounds("clip-#ff8800").is_some());
+        assert!(cx.debug_bounds("clip-https://example.com").is_none());
+
+        click(cx, "clipboard-type");
+        settle(&window, cx);
+        click(cx, "clipboard-type-all");
+        settle(&window, cx);
+        for row in ["clip-alpha", "clip-https://example.com", "clip-#ff8800"] {
+            assert!(cx.debug_bounds(row).is_some(), "{row} is listed");
+        }
+    }
+
+    /// Rows are grouped by day, and the detail shows the selected record's
+    /// Information: Source, Type, Characters and Copied.
+    #[gpui::test]
+    fn rows_are_grouped_by_day_and_the_detail_shows_the_information(cx: &mut TestAppContext) {
+        let world = World::new();
+        let launcher = world.launcher(cx, &["yesterday's"]);
+        world.clock.advance(std::time::Duration::from_secs(86_400));
+        assert!(world.clipboard.copy("today's", Some("notepad.exe")));
+        let (window, cx) = open_history(cx, launcher);
+        assert!(cx.debug_bounds("section-Today").is_some());
+        assert!(cx.debug_bounds("section-Yesterday").is_some());
+        assert!(cx.debug_bounds("clipboard-information").is_some());
+        for row in [
+            "clipboard-info-Source",
+            "clipboard-info-Type",
+            "clipboard-info-Characters",
+            "clipboard-info-Copied",
+        ] {
+            assert!(cx.debug_bounds(row).is_some(), "{row} is shown");
+        }
+        settle(&window, cx);
+    }
+
+    /// #167: a copied image's row shows its thumbnail and its detail the
+    /// image with its Dimensions; copied files' row shows the first file's
+    /// system icon, titled by its name and how many more, and its detail
+    /// lists them; the dropdown's Images and Files keep each; and Copy puts
+    /// each back as what it was.
+    #[gpui::test]
+    fn images_and_files_show_a_thumbnail_and_a_preview_and_filter_by_type(cx: &mut TestAppContext) {
+        let world = World::new();
+        let launcher = world.launcher(cx, &["alpha"]);
+        let pixels: Vec<u8> = [0, 128, 255, 255].repeat(3 * 2);
+        let png = pane_core::icons::encode_png(3, 2, &pixels).unwrap();
+        let image = pane_core::clipboard::CopiedImage::from_png(png.clone()).unwrap();
+        assert!(
+            world
+                .clipboard
+                .copy_content(Content::Image(image), Some("mspaint.exe"))
+        );
+        world.clock.advance(std::time::Duration::from_secs(60));
+        let files = vec![
+            world.data.path().join("report.pdf"),
+            world.data.path().join("photos"),
+        ];
+        assert!(
+            world
+                .clipboard
+                .copy_content(Content::Files(files.clone()), Some("explorer.exe"))
+        );
+        let (window, cx) = open_history(cx, launcher);
+        settle(&window, cx);
+
+        // The files, newest, selected: the first file's icon on the row,
+        // and the files listed in the preview; no Characters.
+        for drawn in [
+            "clip-report.pdf +1",
+            "icon-clip-file",
+            "clipboard-preview-files",
+            "clipboard-preview-file-report.pdf",
+            "clipboard-preview-file-photos",
+            "clip-Image (3×2)",
+            "clip-thumbnail",
+        ] {
+            assert!(cx.debug_bounds(drawn).is_some(), "{drawn} is drawn");
+        }
+        assert!(cx.debug_bounds("clipboard-info-Characters").is_none());
+        assert!(cx.debug_bounds("clipboard-preview-text").is_none());
+
+        // The image: previewed, with its Dimensions.
+        click(cx, "clip-Image (3×2)");
+        settle(&window, cx);
+        assert!(cx.debug_bounds("clipboard-preview-image").is_some());
+        assert!(cx.debug_bounds("clipboard-info-Dimensions").is_some());
+        assert!(cx.debug_bounds("clipboard-info-Characters").is_none());
+
+        // The dropdown keeps the images, then the files.
+        click(cx, "clipboard-type");
+        settle(&window, cx);
+        click(cx, "clipboard-type-images");
+        settle(&window, cx);
+        assert!(cx.debug_bounds("clip-Image (3×2)").is_some());
+        assert!(cx.debug_bounds("clip-report.pdf +1").is_none());
+        assert!(cx.debug_bounds("clip-alpha").is_none());
+        click(cx, "clipboard-type");
+        settle(&window, cx);
+        click(cx, "clipboard-type-files");
+        settle(&window, cx);
+        assert!(cx.debug_bounds("clip-report.pdf +1").is_some());
+        assert!(cx.debug_bounds("clip-Image (3×2)").is_none());
+        assert!(cx.debug_bounds("clip-alpha").is_none());
+
+        // Copy (Ctrl+Enter) puts the files back as files.
+        cx.simulate_keystrokes("ctrl-enter");
+        copied(&window, cx);
+        assert_eq!(world.clipboard.written_files(), [files]);
+        assert!(world.clipboard.written().is_empty());
+
+        // Shown again, the image copies back as an image.
+        window.update_in(cx, |window, w, cx| {
+            window.tray_selected(TrayAction::OpenPane, w, cx)
+        });
+        settle(&window, cx);
+        click(cx, "clipboard-type");
+        settle(&window, cx);
+        click(cx, "clipboard-type-images");
+        settle(&window, cx);
+        cx.simulate_keystrokes("ctrl-enter");
+        copied(&window, cx);
+        assert_eq!(world.clipboard.written_images(), [png]);
     }
 
     #[gpui::test]
@@ -3416,7 +3825,7 @@ mod clipboard_split {
         let (window, cx) = open_launcher(cx, launcher);
         settle(&window, cx);
         assert!(!split_shown(&window, cx));
-        assert!(cx.debug_bounds("row-Turn on clipboard history").is_some());
+        assert!(cx.debug_bounds("row-Resume Recording").is_some());
         assert!(cx.debug_bounds("clipboard-list").is_none());
     }
 }

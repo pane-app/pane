@@ -4,7 +4,11 @@
 # GitHub macOS runners grant) and captures and checks the screen.
 # Requires Python 3 with Pillow for the screenshot checks. Pane keeps
 # installed packages in <output-dir>/data, not the user's data folder.
+# Settings is driven through its accessibility tree too (see `a11y`). The
+# clipboard phases serve the artifacts the #52 phase's package build leaves
+# in target/dist/artifacts, so they run after it.
 # Usage: scripts/smoke-macos.sh <output-dir> [pane-binary]
+
 set -euo pipefail
 # Behavior captures use a fixed palette without desktop-dependent glass.
 export PANE_THEME=dark PANE_MATERIAL=opaque
@@ -36,6 +40,31 @@ capture_until() {
     sleep 0.5
   done
 }
+# Waits, for at most $2 seconds, until the Pane window no longer shows text
+# in color $1: a toast leaves 3 seconds after it shows (#141), but a slow
+# runner can still show it after a fixed wait, and the next answer's toast,
+# of the same color, would then be taken for it (release run 37725624283's
+# macOS frame 91 showed the earlier answer).
+until_toast_gone() {
+  # Hover pauses the toast's timer. Move off the window without clicking
+  # or changing which control has the keyboard.
+  python3 - <<'PY'
+import ctypes
+class CGPoint(ctypes.Structure): _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+cg = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+cg.CGEventCreateMouseEvent.restype = ctypes.c_void_p
+cg.CGEventCreateMouseEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint32, CGPoint, ctypes.c_uint32]
+cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+cg.CGEventPost(0, cg.CGEventCreateMouseEvent(None, 5, CGPoint(1, 40), 0))
+PY
+  local deadline=$((SECONDS + $2))
+  while :; do
+    capture toast-wait.png
+    python3 "$(dirname "$0")/check_screenshot.py" --absent "$out/toast-wait.png" "$1" >/dev/null 2>&1 && return 0
+    [ "$SECONDS" -lt "$deadline" ] || { echo "the $1 toast did not leave within $2 seconds"; exit 1; }
+    sleep 0.5
+  done
+}
 # Prints "x y": where the screenshot shows the given color.
 locate() { python3 "$(dirname "$0")/check_screenshot.py" --locate "$out/$1" "$2"; }
 # Clicks the primary button at x y in the pixels of screenshot $3: Quartz
@@ -64,18 +93,178 @@ key() {  # macOS virtual key codes: 36 Return, 125 Down, 126 Up, 124 Right, 53 E
 type_text() { osascript -e "tell application \"System Events\" to keystroke \"$1\""; }
 command_key() { osascript -e "tell application \"System Events\" to keystroke \"$1\" using command down"; }
 
-# Opens Manage extensions from root search. A blind run of Downs to root's
-# end was the way in until #72's Settings… root result made itself last of
-# all (it is listed whatever is installed, so every phase's root ends with
-# it): the run now opens the Settings window instead. Searching for the row
-# by its title is order-proof: "manage" matches only the Manage extensions…
-# row, which is selected when the list narrows to it, and Return opens it.
-# Cmd+A first, so a query an earlier step left in the field is replaced,
-# not extended.
+# Clicks the primary button at x y in points (where System Events places
+# an element), as click_at does.
+click_points() {
+  python3 - "$1" "$2" <<'PY'
+import ctypes, sys
+class CGPoint(ctypes.Structure): _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+cg = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+cg.CGEventCreateMouseEvent.restype = ctypes.c_void_p
+cg.CGEventCreateMouseEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint32, CGPoint, ctypes.c_uint32]
+cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+at = CGPoint(float(sys.argv[1]), float(sys.argv[2]))
+for event in (1, 2):  # left mouse down, left mouse up
+    cg.CGEventPost(0, cg.CGEventCreateMouseEvent(None, event, at, 0))
+PY
+}
+# Back to a blank root search from wherever the launcher is, with the
+# return to root key (Command+Escape): Escape at a blank root search hides
+# the launcher since the redesign (1e61793), so it cannot be pressed blind.
+to_root() {
+  osascript -e 'tell application "System Events" to key code 53 using command down'
+  sleep 1
+}
+
+# Extensions are managed in Settings (#168): root search's "Manage
+# Extensions" command opens the Settings window at its Extensions group,
+# one page per installed extension, and the launcher has no screen for
+# them any more. Settings' switches, menus and confirmation rows answer
+# the pointer, not the keyboard, so the smoke finds them by their
+# accessible names (Pane's own labels, which AccessKit gives the macOS
+# accessibility API; System Events reads them with the Accessibility
+# permission the key events already need) in the Settings window and
+# presses them; an element that offers no press is clicked at its center.
+# The names used: an extension's sidebar entry and its group-page item are
+# its title, its page's switch is its title too (the one that is an
+# AXCheckBox), its menu button "Actions for <title>" and the
+# menu's items Reload, Retry, Why Paused, Clear Cache, Develop, Stop
+# Developing and Uninstall; a confirmation's or a details screen's rows are
+# their titles; a command's alias and hotkey cells "Alias for <command>: …"
+# and "Hotkey for <command>: …", its fallback switch "Offer <command> as a
+# fallback"; the page's status line is the operation's outcome.
+#
+# a11y <verb> <name> [prefix]: finds what the Settings window of the
+# running Pane names <name> (its title, description or value; whose name
+# starts with it, with "prefix"), waiting up to a minute for it to be
+# drawn. "press" presses it, "toggle" the switch of that name, "shown" only
+# waits for it, and "absent" asserts that, settled, nothing of that name is
+# shown.
+a11y() {
+  local at
+  at=$(osascript - "$pid" "$@" <<'APPLESCRIPT'
+on run argv
+	set thePid to (item 1 of argv) as integer
+	set verb to item 2 of argv
+	set wanted to item 3 of argv
+	set prefix to ((count of argv) > 3)
+	set patience to 60
+	if verb is "absent" then
+		delay 1
+		set patience to 0
+	end if
+	set started to current date
+	set found to missing value
+	repeat
+		set found to my find(thePid, verb, wanted, prefix)
+		if found is not missing value then exit repeat
+		if (current date) - started > patience then exit repeat
+		delay 0.25
+	end repeat
+	if verb is "absent" then
+		if found is missing value then return ""
+		error "Settings still shows " & wanted
+	end if
+	if found is missing value then error "Settings shows nothing named " & wanted
+	if verb is "press" or verb is "toggle" then
+		tell application "System Events"
+			try
+				perform action "AXPress" of found
+			on error
+				set {x, y} to position of found
+				set {w, h} to size of found
+				return ((x + w div 2) as text) & " " & ((y + h div 2) as text)
+			end try
+		end tell
+	end if
+	return ""
+end run
+
+on find(thePid, verb, wanted, prefix)
+	tell application "System Events"
+		set proc to first process whose unix id is thePid
+		if not (exists window "Settings" of proc) then return missing value
+		set everything to entire contents of window "Settings" of proc
+		repeat with candidate in everything
+			set theRole to ""
+			try
+				set theRole to role of candidate
+			end try
+			-- A switch is a checkbox to the macOS accessibility API (AccessKit
+			-- gives a switch and a toggle button AXCheckBox), never the sidebar
+			-- entry (AXStaticText), the group page's item (AXLink) or the page's
+			-- heading of the same name, whose role AccessKit gives as "Heading",
+			-- not AXHeading (release run 37689872256 pressed the heading).
+			if verb is not "toggle" or theRole is "AXCheckBox" then
+				repeat with attributeName in {"AXTitle", "AXDescription", "AXValue"}
+					try
+						set theLabel to value of attribute (contents of attributeName) of candidate
+
+						if theLabel is not missing value then
+							set theLabel to theLabel as text
+							considering case
+								if prefix then
+									if theLabel starts with wanted then return contents of candidate
+								else
+									if theLabel is wanted then return contents of candidate
+								end if
+							end considering
+						end if
+					end try
+				end repeat
+			end if
+		end repeat
+	end tell
+	return missing value
+end find
+APPLESCRIPT
+  ) || exit 1
+  if [ -n "$at" ]; then click_points $at; fi
+  case $1 in press|toggle) sleep 1;; esac
+}
+# Whether Settings is open.
+settings_open() {
+  [ "$(osascript -e "tell application \"System Events\" to exists window \"Settings\" of (first process whose unix id is $pid)")" = true ]
+}
+# Gives the Settings window the keyboard: Pane in front, Settings raised.
+focus_settings() {
+  osascript -e "tell application \"System Events\" to tell (first process whose unix id is $pid)" \
+    -e 'set frontmost to true' -e 'perform action "AXRaise" of window "Settings"' -e 'end tell'
+  sleep 1
+}
+# Closes Settings (its close shortcut, Command+W) and goes back to a blank
+# root search in the launcher, its only window then.
+close_settings() {
+  if settings_open; then
+    focus_settings
+    command_key w; sleep 1
+  fi
+  focus_pane
+  to_root
+}
+# Opens Settings at the Extensions group from root search: "manage" finds
+# the Manage Extensions command, the only root row it matches, and Return
+# runs it. Settings is closed first, so the launcher has the keyboard, and
+# the launcher is brought back to a blank root search: it is wherever the
+# user left it, a Settings operation leaving it there (#168).
 manage_extensions() {
+  close_settings
   command_key a
   type_text manage; sleep 1
-  key 36; sleep 1
+  key 36; sleep 2
+  a11y shown Extensions
+}
+# Opens the Settings page of the installed extension titled $1.
+open_extension() {
+  manage_extensions
+  a11y press "$1"
+  a11y shown "Actions for $1"
+}
+# Opens the Actions menu of the page of the extension titled $1 and
+# chooses its item $2.
+extension_action() {
+  a11y press "Actions for $1"
+  a11y press "$2"
 }
 
 # Brings the running Pane to the front, so that key events reach it.
@@ -116,6 +305,32 @@ stop_pane() {
   pid=
 }
 
+# Waits until file $1 contains text $2 ("present") or no longer does
+# ("absent"), up to a tenth of a second times $4 (100 by default).
+wait_for() {
+  local tries=${4:-100}
+  for _ in $(seq "$tries"); do
+    if grep -q "$2" "$1" 2>/dev/null; then [ "$3" = present ] && return; else [ "$3" = absent ] && return; fi
+    sleep 0.1
+  done
+  echo "$1: $2 is not $3"; exit 1
+}
+
+# The Rust, JavaScript and TypeScript samples are no commands of Pane's
+# own (#162): installed with `pane --install` into a data folder of their
+# own, they are root's first three rows, in install order (Rust sample,
+# JavaScript sample, TypeScript sample), then Pane's install rows. The
+# first phase and the root search phase run there.
+export PANE_DATA_DIR=$out/samples-data
+rm -rf "$PANE_DATA_DIR"
+for sample in sample-rust sample-js sample-ts; do
+  start_pane --install "target/guests/packages/$sample"
+  key 36   # Install
+  # 120 s: the install reads and checks the whole package, which a loaded
+  # runner can take past the 10 s default.
+  wait_for "$PANE_DATA_DIR/extensions/installed.json" "$sample" present 1200; sleep 1
+  stop_pane
+done
 start_pane
 capture 1-root.png
 check 1-root.png hint   # the hint line: text renders
@@ -151,9 +366,33 @@ check 8-form-result.png success   # the guest's answer
 key 53; key 53; sleep 1
 stop_pane
 
+# Root search, over the samples' data folder still: typing narrows root to
+# the matching commands and Enter opens the best match. "typescr" matches
+# only TypeScript sample, whose "Wait briefly" answers exactly as in step
+# 4. A query that matches nothing shows no results, and Enter then opens
+# nothing.
+start_pane
+type_text typescr; sleep 1
+capture 24-search.png
+key 36; sleep 3
+key 125; key 36; sleep 2
+capture 25-search-result.png
+check 25-search-result.png success   # the TypeScript guest's answer
+python3 "$(dirname "$0")/check_screenshot.py" --same "$out/4-result-2.png" "$out/25-search-result.png"
+key 53; sleep 1
+type_text zzz; sleep 1
+key 36; sleep 1
+capture 26-no-results.png
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{1-root,24-search,25-search-result,26-no-results}.png
+stop_pane
+
+# The phases below share $out/data, which starts with nothing installed:
+# root lists no sample until one is installed.
+export PANE_DATA_DIR=$out/data
+
 # Install the assembled Rust sample package (the folder the picker would
-# return), then run its command. Root lists the three samples, the installed
-# command, then the install and Manage extensions… rows.
+# return), then run its command. Root lists the installed command, then
+# the install and Manage Extensions rows.
 start_pane --install target/guests/packages/sample-rust
 capture 9-package.png
 check 9-package.png details   # the package's identity and compatibility lines
@@ -166,7 +405,7 @@ capture 11-installed-result.png
 check 11-installed-result.png success   # the installed guest's answer
 stop_pane
 
-# The installed command is still listed after a restart.
+# The installed command is still listed after a restart, root's first row.
 start_pane
 capture 12-restarted.png
 check 12-restarted.png hint
@@ -206,10 +445,9 @@ capture 15-no-compatible-package.png
 check 15-no-compatible-package.png error   # "Not available on macOS: ..."
 stop_pane
 
-# Install the settings sample, save a choice with it, then disable it in
-# Manage extensions. Root lists the three samples, Rust sample, Greeting, the
-# install rows, then Manage extensions… and Settings… last; the extension
-# list holds Rust sample, then Settings sample.
+# Install the settings sample, save a choice with it, then disable it with
+# the switch on its page in Settings (#168). Root lists Rust sample,
+# Greeting, the install rows, then Manage Extensions and Settings… last.
 start_pane --install target/guests/packages/sample-settings
 key 36; sleep 2   # Install; Greeting is selected
 key 36; sleep 3   # open Greeting
@@ -217,10 +455,10 @@ key 36; sleep 2   # "Use a formal greeting"
 capture 16-setting-saved.png
 check 16-setting-saved.png success   # "Saved the formal greeting"
 key 53; sleep 1
-manage_extensions
-key 125; key 36; sleep 2
-capture 17-disabled.png
-check 17-disabled.png success   # "Disabled Settings sample"
+open_extension "Settings sample"
+a11y toggle "Settings sample"   # its switch: off
+a11y shown "Disabled Settings sample"
+capture 17-disabled.png   # Settings: the page's status says so
 stop_pane
 grep -q '"disabled": true' "$out/data/extensions/installed.json" || { echo "disabled state not recorded"; exit 1; }
 grep -q '"greeting-style": "formal"' "$out/data/extensions/settings.json" || { echo "setting not saved"; exit 1; }
@@ -233,12 +471,12 @@ start_pane
 capture 18-restarted-disabled.png
 check 18-restarted-disabled.png hint
 python3 "$(dirname "$0")/check_screenshot.py" --same "$out/12-restarted.png" "$out/18-restarted-disabled.png"
-manage_extensions
-key 125; key 36; sleep 2
+open_extension "Settings sample"
+a11y toggle "Settings sample"   # its switch: on
+a11y shown "Enabled Settings sample"
 capture 19-enabled.png
-check 19-enabled.png success   # "Enabled Settings sample"
-key 53; sleep 1
-for ((i = 0; i < 4; i++)); do key 125; done   # Greeting
+close_settings
+key 125   # Greeting, after Rust sample
 key 36; sleep 3
 key 125; key 125; key 36; sleep 2   # "Greet me"
 capture 20-greeted.png
@@ -266,25 +504,6 @@ click_at "$x" "$y" 22-color-key.png; sleep 1
 capture 23-color-click.png
 check 23-color-click.png 1b5e20 3000   # dark green
 key 53; key 53; sleep 1
-stop_pane
-
-# Root search: typing narrows root to the matching commands and Enter opens
-# the best match. "typescr" matches only TypeScript sample, whose "Wait
-# briefly" answers exactly as in step 4. A query that matches nothing shows
-# no results, and Enter then opens nothing.
-start_pane
-type_text typescr; sleep 1
-capture 24-search.png
-key 36; sleep 3
-key 125; key 36; sleep 2
-capture 25-search-result.png
-check 25-search-result.png success   # the TypeScript guest's answer
-python3 "$(dirname "$0")/check_screenshot.py" --same "$out/4-result-2.png" "$out/25-search-result.png"
-key 53; sleep 1
-type_text zzz; sleep 1
-key 36; sleep 1
-capture 26-no-results.png
-python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{1-root,24-search,25-search-result,26-no-results}.png
 stop_pane
 
 # The calculator, a default extension: an expression typed into root search
@@ -329,11 +548,11 @@ python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{31-operations-t
 stop_pane
 
 # Reload a development package while Pane stays open. Its command starts as
-# the Rust sample; a new build of it is the JavaScript sample. Root lists the
-# three samples, Rust sample, Greeting, Calculator, Call from JavaScript, Call
-# from Rust, Dev sample (the ninth row), the install row, then Manage
-# extensions… last; the extension list holds the six packages (Dev is the
-# sixth), then their six Reload rows (Reload Dev is the twelfth).
+# the Rust sample; a new build of it is the JavaScript sample. Root lists
+# Rust sample, Greeting, Call from JavaScript, Call from Rust, Dev sample
+# (the fifth row: Calculator only answers root search), the install row,
+# then Manage Extensions and Settings… last. Reload is an item of the
+# Actions menu on Dev's page in Settings.
 mkdir -p "$out/dev"
 cp target/guests/sample_rust.wasm "$out/dev/command.wasm"
 cat >"$out/dev/pane.json" <<'JSON'
@@ -352,13 +571,12 @@ capture 33-dev-before.png
 check 33-dev-before.png success   # "Hello from the Rust guest"
 key 53; sleep 1
 cp target/guests/sample_js.wasm "$out/dev/command.wasm"
-manage_extensions
-for ((i = 0; i < 11; i++)); do key 125; done   # Reload Dev
-key 36; sleep 3
+open_extension Dev
+extension_action Dev Reload
+a11y shown "Reloaded Dev"
 capture 34-reloaded.png
-check 34-reloaded.png success   # "Reloaded Dev"
-key 53; sleep 1
-for ((i = 0; i < 8; i++)); do key 125; done   # Dev sample
+close_settings
+for ((i = 0; i < 4; i++)); do key 125; done   # Dev sample
 key 36; sleep 3
 key 36; sleep 2   # "Say hello"
 capture 35-dev-after.png
@@ -369,30 +587,29 @@ key 53; sleep 1
 # A build that fails the install checks (here its component is missing) is
 # not reloaded: the working code keeps running, exactly as before.
 rm "$out/dev/command.wasm"
-manage_extensions
-for ((i = 0; i < 11; i++)); do key 125; done
-key 36; sleep 2
+open_extension Dev
+extension_action Dev Reload
+a11y shown "Dev was not reloaded" prefix
 capture 36-not-reloaded.png
-check 36-not-reloaded.png error   # "Dev was not reloaded: ..."
-key 53; sleep 1
-for ((i = 0; i < 8; i++)); do key 125; done
+close_settings
+for ((i = 0; i < 4; i++)); do key 125; done
 key 36; sleep 3
 key 36; sleep 2
 capture 37-still-running.png
 python3 "$(dirname "$0")/check_screenshot.py" --same "$out/35-dev-after.png" "$out/37-still-running.png"
 key 53; sleep 1
 
-# A build whose start fails is reported with Retry, after Reload Dev; this
-# one saves a setting and fails its first start only, so Retry starts it.
+# A build whose start fails is reported with Retry, an item of the same
+# Actions menu; this one saves a setting and fails its first start only,
+# so Retry starts it.
 cp target/guests/failing_start.wasm "$out/dev/command.wasm"
-manage_extensions
-for ((i = 0; i < 11; i++)); do key 125; done
-key 36; sleep 3
+open_extension Dev
+extension_action Dev Reload
+a11y shown "Reloaded Dev, but it failed to start" prefix
 capture 38-start-failed.png
-check 38-start-failed.png error   # "Reloaded Dev, but it failed to start; ..."
-key 125; key 36; sleep 3   # Retry starting Dev
+extension_action Dev Retry   # Retry starting Dev
+a11y shown "Started Dev"
 capture 39-retried.png
-check 39-retried.png success   # "Started Dev"
 stop_pane
 grep -q '"start-attempted": "yes"' "$out/data/extensions/settings.json" || { echo "the failed start's setting was not kept"; exit 1; }
 
@@ -401,7 +618,7 @@ grep -q '"start-attempted": "yes"' "$out/data/extensions/settings.json" || { ech
 # fifth items save a note (content) and sign in (a local credential), and its
 # sixth shows all four.
 start_pane
-for ((i = 0; i < 4; i++)); do key 125; done   # Greeting
+key 125   # Greeting, after Rust sample
 key 36; sleep 3
 for ((i = 0; i < 3; i++)); do key 125; done
 key 36; sleep 2   # "Save a note"
@@ -415,20 +632,19 @@ grep -q '"note": "Water the plants"' "$out/data/extensions/content.json" || { ec
 grep -q '"token": "sample-token"' "$out/data/extensions/credentials.json" || { echo "credential not saved"; exit 1; }
 grep -q '"last-greeting": "Good day to you"' "$out/data/extensions/cache.json" || { echo "greeting not cached"; exit 1; }
 
-# Clear the settings sample's cache in Manage extensions: its row follows the
-# six package rows, their six Reload rows and "Clear cache of Rust sample". Pane asks first, then deletes only the cached
-# greeting, without running the extension.
+# Clear the settings sample's cache from its page in Settings: Clear Cache,
+# an item of its Actions menu. Pane asks first, on the page, then deletes
+# only the cached greeting, without running the extension.
 start_pane
-manage_extensions
-for ((i = 0; i < 13; i++)); do key 125; done
-key 36; sleep 1   # "Clear cache of Settings sample"
+open_extension "Settings sample"
+extension_action "Settings sample" "Clear Cache"
+a11y shown "Clear cache"   # the confirmation's row: what is deleted and what is kept above it
 capture 41-confirm-clear-cache.png
-check 41-confirm-clear-cache.png details   # what is deleted and what is kept
-key 36; sleep 2   # "Clear cache"
+a11y press "Clear cache"
+a11y shown "Cleared the cache of Settings sample"
 capture 42-cache-cleared.png
-check 42-cache-cleared.png success   # "Cleared the cache of Settings sample"
-key 53; sleep 1
-for ((i = 0; i < 4; i++)); do key 125; done   # Greeting
+close_settings
+key 125   # Greeting, after Rust sample
 key 36; sleep 3
 for ((i = 0; i < 5; i++)); do key 125; done
 key 36; sleep 2   # "Show what Pane keeps"
@@ -503,19 +719,19 @@ check 47-quicklink-found.png selected 3000   # the selected quicklink row
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{46-quicklink-saved,47-quicklink-found}.png
 stop_pane
 
-# Uninstall the settings sample, keeping its saved data: its row follows the
-# eight Clear cache rows. Pane asks first, showing its saved data, and the first
-# choice keeps its settings and content while its copy and credential go.
-# Installing the same folder again finds its formal style and note, signed out.
+# Uninstall the settings sample, keeping its saved data: Uninstall, the last
+# item of its page's Actions menu. Pane asks first, showing its saved data,
+# and the first choice keeps its settings and content while its copy and
+# credential go. Installing the same folder again finds its formal style
+# and note, signed out.
 start_pane
-manage_extensions
-for ((i = 0; i < 25; i++)); do key 125; done
-key 36; sleep 1   # "Uninstall Settings sample"
+open_extension "Settings sample"
+extension_action "Settings sample" Uninstall
+a11y shown "Uninstall and keep saved data"   # the confirmation: what is removed and the saved data
 capture 49-confirm-uninstall.png
-check 49-confirm-uninstall.png details   # what is removed and the saved data
-key 36; sleep 2   # "Uninstall and keep saved data"
+a11y press "Uninstall and keep saved data"
+a11y shown "Uninstalled Settings sample" prefix   # "...; its settings and content are kept"
 capture 50-uninstalled.png
-check 50-uninstalled.png success   # "Uninstalled Settings sample; its settings and content are kept"
 stop_pane
 grep -q '"retained"' "$out/data/extensions/installed.json" || { echo "kept data not recorded"; exit 1; }
 if grep -q 'sample-token' "$out/data/extensions/credentials.json"; then echo "credential not removed"; exit 1; fi
@@ -533,14 +749,13 @@ key 53; sleep 1
 stop_pane
 if grep -q '"retained"' "$out/data/extensions/installed.json"; then echo "retained record not dropped"; exit 1; fi
 
-# Global hotkeys: in Manage extensions, the settings sample's command,
-# Greeting, is given Control+Option+G by pressing it on its hotkey screen
-# (its row follows the package's state, Reload, Clear cache and Uninstall
-# rows). With Finder in front, pressing the hotkey brings Pane to the front
-# with Greeting open, also after a restart; once the extension is disabled, pressing it
-# does nothing. Carbon hot keys need no permission of Pane's own. A data
-# folder of its own keeps the rows in a known order. (Screenshot 48 is the
-# Linux smoke's opened quicklink.)
+# Global hotkeys: on the settings sample's page in Settings, its command,
+# Greeting, is given Control+Option+G by pressing it in the command's
+# hotkey recorder (its Commands section, #168). With Finder in front,
+# pressing the hotkey brings Pane to the front with Greeting open, also
+# after a restart; once the extension is disabled, pressing it does
+# nothing. Carbon hot keys need no permission of Pane's own. A data folder
+# of its own. (Screenshot 48 is the Linux smoke's opened quicklink.)
 frontmost() { osascript -e 'tell application "System Events" to get unix id of first process whose frontmost is true'; }
 unfocus_pane() {   # another application in front
   osascript -e 'tell application "Finder" to activate'; sleep 2
@@ -557,14 +772,16 @@ export PANE_DATA_DIR=$out/hotkeys-data
 rm -rf "$PANE_DATA_DIR"
 start_pane --install target/guests/packages/sample-settings
 key 36; sleep 2   # Install; Greeting is selected
-manage_extensions
-key 125; key 125; key 125; key 125; key 36; sleep 1   # "Hotkey for Greeting"
+open_extension "Settings sample"
+a11y press "Hotkey for Greeting:" prefix   # the recorder listens
+a11y shown "Recording; Hotkey for Greeting" prefix
 capture 52-hotkey-screen.png
-check 52-hotkey-screen.png details   # "Press the keys that should open Greeting ..."
-press_hotkey   # Pane is in front: this assigns it
-capture 53-hotkey-assigned.png
-check 53-hotkey-assigned.png success   # "Control+Option+G now opens Greeting"
-key 53; sleep 1   # root search
+focus_settings
+press_hotkey   # Settings is in front: the recorder takes it
+wait_for "$PANE_DATA_DIR/extensions/hotkeys.json" '"ctrl+alt+g"' present
+a11y absent "Hotkey for Greeting: none"
+capture 53-hotkey-assigned.png   # the recorder shows Control+Option+G
+close_settings   # root search
 unfocus_pane
 capture 54-unfocused.png
 press_hotkey
@@ -582,9 +799,10 @@ capture 56-hotkey-after-restart.png
 check 56-hotkey-after-restart.png selected 3000   # Greeting's first item, selected
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{53-hotkey-assigned,56-hotkey-after-restart}.png
 key 53; sleep 1
-manage_extensions
-key 36; sleep 2   # disable Settings sample
-key 53; sleep 1
+open_extension "Settings sample"
+a11y toggle "Settings sample"   # disable Settings sample
+a11y shown "Disabled Settings sample"
+close_settings
 capture 57-disabled.png   # root search
 unfocus_pane
 press_hotkey
@@ -597,10 +815,9 @@ stop_pane
 # Pausing a broken extension: the settings sample's last item, Crash, crashes
 # on purpose; the third crash within five minutes pauses the package and
 # returns to root search, where Greeting stays listed with why it does not
-# run. The pause holds after a restart. In Manage extensions, the package's
-# "Why ... is paused" row (after its Reload and Retry rows) shows the
-# details, whose only row, Retry, starts it again. A data folder of its own
-# keeps the rows in a known order.
+# run. The pause holds after a restart. On its page in Settings, Why
+# Paused (an item of its Actions menu) shows the details, whose only row,
+# Retry, starts it again. A data folder of its own.
 export PANE_DATA_DIR=$out/pausing-data
 rm -rf "$PANE_DATA_DIR"
 start_pane --install target/guests/packages/sample-settings
@@ -619,35 +836,25 @@ type_text greet; sleep 1
 capture 60-paused-after-restart.png
 check 60-paused-after-restart.png warning   # Greeting is still paused
 key 53; sleep 1   # Escape clears the query
-manage_extensions
-key 125; key 125; key 125; key 36; sleep 1   # "Why Settings sample is paused"
+open_extension "Settings sample"
+extension_action "Settings sample" "Why Paused"
+a11y shown "Retry Settings sample"   # "Why Settings sample is paused": the details, then Retry
 capture 61-pause-details.png
-check 61-pause-details.png details   # the details
-key 36; sleep 2   # Retry Settings sample
+a11y press "Retry Settings sample"
+a11y shown "Started Settings sample"
 capture 62-pause-retried.png
-check 62-pause-retried.png success   # "Started Settings sample"
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{61-pause-details,62-pause-retried}.png
 stop_pane
 if grep -q '"paused"' "$PANE_DATA_DIR/extensions/installed.json"; then echo "pause not cleared"; exit 1; fi
 
 # Delete retained data: with a data folder of its own, the settings sample
-# saves a note and is uninstalled keeping it (its Uninstall row follows its
-# state, Reload and Clear cache rows); its retained data, the extension
-# list's first row with nothing else installed, already selected when the
-# list opens, is deleted after confirming (Cancel is selected first, so Down
-# then Return), without the extension. Installing the same folder again finds
-# nothing. Steps that change Pane's files wait for the change instead of a
-# fixed time.
+# saves a note and is uninstalled keeping it (Uninstall, on its page in
+# Settings); its retained data, a row of the Extensions group's own page
+# once nothing is installed, is deleted after confirming, without the
+# extension. Installing the same folder again finds nothing. Steps that
+# change Pane's files wait for the change instead of a fixed time.
 export PANE_DATA_DIR=$out/retained-data
 rm -rf "$PANE_DATA_DIR"
-# Waits until file $1 contains text $2 ("present") or no longer does ("absent").
-wait_for() {
-  for _ in $(seq 100); do
-    if grep -q "$2" "$1" 2>/dev/null; then [ "$3" = present ] && return; else [ "$3" = absent ] && return; fi
-    sleep 0.1
-  done
-  echo "$1: $2 is not $3"; exit 1
-}
 registry=$PANE_DATA_DIR/extensions/installed.json
 start_pane --install target/guests/packages/sample-settings
 key 36   # Install; Greeting is selected
@@ -657,25 +864,23 @@ for ((i = 0; i < 3; i++)); do key 125; done
 key 36   # "Save a note"
 wait_for "$PANE_DATA_DIR/extensions/content.json" '"note": "Water the plants"' present
 key 53; sleep 1   # root search
-manage_extensions
-for ((i = 0; i < 3; i++)); do key 125; done
-key 36; sleep 1   # "Uninstall Settings sample"
-key 36   # "Uninstall and keep saved data"
+open_extension "Settings sample"
+extension_action "Settings sample" Uninstall
+a11y press "Uninstall and keep saved data"
 wait_for "$registry" '"retained"' present; sleep 1
-key 36; sleep 1   # "Delete retained data of Settings sample" (the list's first row, already selected)
+manage_extensions
+a11y press "Delete retained data of Settings sample"   # a row of the group's page
+# The confirmation itself, found by its row, not by a color: the group's
+# page shows hint lines too, so a color alone let the wrong screen pass
+# once (#58).
+a11y shown "Delete retained data"   # what is kept and what is not touched, above it
 capture 63-confirm-delete-retained.png
-check 63-confirm-delete-retained.png details   # what is kept and what is not touched
-# The confirmation's status line is the idle hint, not a result: the
-# extension list also shows hint subtitles, so that color alone let the
-# wrong screen pass (#58: Down to the list's end had landed on the
-# automatic-update row, whose Enter toggles it and leaves its result on
-# screen). No result color on screen says the right screen is up.
-python3 "$(dirname "$0")/check_screenshot.py" --absent "$out/63-confirm-delete-retained.png" success
-key 125; key 36   # "Delete retained data"
+a11y press "Delete retained data"
 wait_for "$registry" '"retained"' absent; sleep 1
+a11y shown "Deleted the retained data of Settings sample"
 capture 64-retained-deleted.png
-check 64-retained-deleted.png success   # "Deleted the retained data of Settings sample"
 stop_pane
+
 if grep -q 'Water the plants' "$PANE_DATA_DIR/extensions/content.json"; then echo "note not deleted"; exit 1; fi
 start_pane --install target/guests/packages/sample-settings
 key 36   # Install; Greeting is selected
@@ -689,9 +894,9 @@ python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out/51-reinstalled.pn
 key 53; sleep 1
 stop_pane
 
-# Aliases and fallbacks: in Manage extensions, the query sample's command,
-# Echo, is given the alias "ec" (its row follows the package's state, Reload,
-# Clear cache, Uninstall and hotkey rows) and made a fallback (the next row).
+# Aliases and fallbacks: on the query sample's page in Settings, its
+# command, Echo, is given the alias "ec" in its alias cell and made a
+# fallback with its fallback switch (its Commands section, #168).
 # In root search, "ec hello" lists the row that sends "hello" to Echo,
 # selected, and Enter shows Echo's answer; text nothing matches lists "No
 # results" with Echo below it, not selected, until Down selects it and Enter
@@ -702,24 +907,25 @@ export PANE_DATA_DIR=$out/aliases-data
 rm -rf "$PANE_DATA_DIR"
 start_pane --install target/guests/packages/sample-query
 key 36; sleep 2   # Install; Echo is selected
-manage_extensions
-for ((i = 0; i < 5; i++)); do key 125; done   # "Alias for Echo"
-key 36; sleep 1
+open_extension "Query sample"
+a11y press "Alias for Echo:" prefix   # its inline editor takes the keyboard
+focus_settings
 type_text ec
-key 36; sleep 2
+key 36
+a11y shown "Alias for Echo: ec"
 capture 66-alias-saved.png
-check 66-alias-saved.png success   # "Typing “ec” now finds Echo"
-key 125; key 36; sleep 2   # "Fallback: Echo"
+a11y press "Offer Echo as a fallback"
+a11y shown "Echo is now offered" prefix   # "... for any text typed in root search"
 capture 67-fallback-on.png
-check 67-fallback-on.png success   # "Echo is now offered for any text typed in root search"
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{66-alias-saved,67-fallback-on}.png
-key 53; sleep 1   # root search
+close_settings   # root search
 type_text 'ec hello'; sleep 1
 capture 68-alias-row.png
 check 68-alias-row.png selected 3000   # Echo, sending “hello”, selected
-key 36; sleep 3
-capture 69-alias-answer.png
-check 69-alias-answer.png success   # "Echo heard “hello”"
+# Echo answers in a toast (#141), which leaves the footer 3 seconds after
+# it appears: waited for, not slept past (run 37612772185 missed frame 72's).
+key 36; sleep 0.5
+capture_until 69-alias-answer.png success 15   # "Echo heard “hello”"
 key 53; sleep 1   # clears the query
 type_text zqx; sleep 1
 capture 70-fallback-listed.png   # "No results for “zqx”", then Echo, not selected
@@ -727,17 +933,17 @@ key 125; sleep 1
 capture 71-fallback-chosen.png
 check 71-fallback-chosen.png selected 3000   # Echo, now selected
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{70-fallback-listed,71-fallback-chosen}.png
-key 36; sleep 3
-capture 72-fallback-answer.png
-check 72-fallback-answer.png success   # "Echo heard “zqx”"
+key 36; sleep 0.5
+capture_until 72-fallback-answer.png success 15   # Echo's toast: "Echo heard “zqx”"
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{69-alias-answer,72-fallback-answer}.png
 stop_pane
 grep -q '"ec"' "$PANE_DATA_DIR/extensions/aliases.json" || { echo "alias not recorded"; exit 1; }
 grep -q '#echo"' "$PANE_DATA_DIR/extensions/aliases.json" || { echo "fallback not recorded"; exit 1; }
 start_pane
-manage_extensions
-key 36; sleep 2   # disable Query sample
-key 53; sleep 1
+open_extension "Query sample"
+a11y toggle "Query sample"   # disable Query sample
+a11y shown "Disabled Query sample"
+close_settings
 type_text 'ec hello'; sleep 1
 capture 73-alias-disabled.png   # "No results for “ec hello”"
 stop_pane
@@ -766,9 +972,8 @@ key 36; sleep 3   # Install; Greet through dependencies is selected
 capture 76-dependencies-installed.png
 check 76-dependencies-installed.png success   # "Installed Dependencies sample with JavaScript operations sample, which it requires"
 key 36; sleep 3   # open Greet through dependencies
-key 36; sleep 5   # Greet through the required greeter
-capture 77-dependency-answer.png
-check 77-dependency-answer.png success   # the JavaScript guest's answer
+key 36; sleep 0.5   # Greet through the required greeter
+capture_until 77-dependency-answer.png success 20   # the JavaScript guest's answer, in a toast
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{75-dependencies-preview,76-dependencies-installed,77-dependency-answer}.png
 stop_pane
 grep -q '"id": "greeter"' "$PANE_DATA_DIR/extensions/installed.json" || { echo "dependency not recorded"; exit 1; }
@@ -778,10 +983,10 @@ grep -q '"id": "greeter"' "$PANE_DATA_DIR/extensions/installed.json" || { echo "
 # package ships for this system (built by `cargo xtask guests`). Its first
 # item shows the helper's answer, naming the system; its third races the
 # helper against a one-second timer and cancels it. Its second has the
-# helper wait ten seconds: disabling the package meanwhile (its row is the
-# first in Manage extensions) ends the helper's process at once, and the
-# note it saved before is kept. A data folder of its own keeps the rows in a
-# known order; the helper runs from its managed copy there.
+# helper wait ten seconds: disabling the package meanwhile (the switch on
+# its page in Settings) ends the helper's process at once, and the note it
+# saved before is kept. A data folder of its own; the helper runs from its
+# managed copy there.
 export PANE_DATA_DIR=$out/helper-data
 rm -rf "$PANE_DATA_DIR"
 # Pane's helper processes: pane-echo run from this data folder.
@@ -795,19 +1000,26 @@ key 36   # Echo through the helper
 # captured the answer's absence after two seconds), so the answer is
 # waited for, whenever it lands.
 capture_until 90-helper-echoed.png success 15   # 'Echoed "hello from Pane" on macOS arm64'
-key 125; key 125; key 36; sleep 3   # Echo within a second
-capture 91-helper-cancelled.png
-check 91-helper-cancelled.png success   # "Stopped the helper after one second"
+until_toast_gone success 20   # that answer's toast leaves, so the next one is the next answer's
+key 125; key 125; key 36; sleep 0.5   # Echo within a second
+capture_until 91-helper-cancelled.png success 15   # its toast: "Stopped the helper after one second"
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{90-helper-echoed,91-helper-cancelled}.png
 if helpers_running; then echo "a cancelled helper is still running"; exit 1; fi
-key 126; key 36; sleep 2   # Up: Echo after waiting
+key 126; key 36; sleep 1   # Up: Echo after waiting
 helpers_running || { echo "the waiting helper is not running"; exit 1; }
 capture 92-helper-waiting.png
-key 53; sleep 1   # root search; the helper keeps running
-manage_extensions
-key 36; sleep 2   # disable Helper sample
+# The helper waits ten seconds, so the switch must be reached well within
+# them: Settings is opened the shortest way, without open_extension's
+# pauses (release run 37698693722 reached it after the call had finished,
+# the note "finished"). Escape leaves the command for a blank root search;
+# the helper keeps running.
+key 53; sleep 0.5
+type_text manage; sleep 0.5
+key 36   # Manage Extensions: Settings at the Extensions group
+a11y press "Helper sample"   # its sidebar entry, once Settings shows it
+a11y toggle "Helper sample"   # disable Helper sample
+a11y shown "Disabled Helper sample"
 capture 93-helper-disabled.png
-check 93-helper-disabled.png success   # "Disabled Helper sample"
 if helpers_running; then echo "the helper outlived its disabled package"; exit 1; fi
 grep -q '"helper-wait": "started"' "$PANE_DATA_DIR/extensions/settings.json" || { echo "saved note lost"; exit 1; }
 if grep -q '"helper-wait": "finished"' "$PANE_DATA_DIR/extensions/settings.json"; then echo "the stopped call finished"; exit 1; fi
@@ -860,16 +1072,15 @@ beats=$(stat -f %z "$alive"); sleep 0.5
 
 # Development mode (#12, #13): a copy of each development sample
 # (guests/hello-rust, hello-ts, hello-js) is built once, installed and
-# developed from Manage extensions ("Develop <title>", the row above the
-# list's last: #49's global automatic-update choice is last of all now, and
-# the develop row no longer is). Saving
+# developed from its page in Settings (Develop, an item of its Actions
+# menu, #168). Saving
 # an edit of its greeting builds it with the documented command and reloads
 # it while Pane keeps running; a save that does not build keeps the working
 # code and shows the error; two saves in a row (the second while the first
-# builds) end with the newer greeting; after "Stop developing", a save builds
-# nothing. Each sample has a data folder of its own, so root lists the three
-# built-in samples, then its command, the install and Manage extensions…
-# rows. The JavaScript and TypeScript samples need the JS toolchain
+# builds) end with the newer greeting; after "Stop Developing", a save builds
+# nothing. Each sample has a data folder of its own, so root lists its
+# command first, then the install and Manage Extensions rows. The
+# JavaScript and TypeScript samples need the JS toolchain
 # (guests/README.md) and are skipped without it.
 set_greeting() {   # set_greeting <source file> <line replacing the greeting's>
   python3 - "$1" "$2" <<'PY'
@@ -900,8 +1111,8 @@ wait_failed() {   # wait_failed <failures before>
   done
   echo "Pane did not report the failed build"; exit 1
 }
-say_hello() {   # from root: open the developed command, the 4th row, and run its item
-  key 125; key 125; key 125; key 36; sleep 3
+say_hello() {   # from root: open the developed command, the first row, and run its item
+  key 36; sleep 3
   key 36; sleep 2
 }
 develop_sample() {   # develop_sample <sample> <title> <component> <source> <first frame> <greeting line> <broken line>
@@ -927,16 +1138,11 @@ PY
   local built=$copy/$component before=$out/develop-$sample-before.wasm
   start_pane --install "$copy"
   key 36; sleep 2   # Install
-  manage_extensions
-  # "Develop <title>": the row above the list's last, which is the global
-  # automatic-update choice since #49 (the develop row was the last row
-  # before it, and Down to the end now lands on that instead).
-  for ((i = 0; i < 14; i++)); do key 125; done
-  key 126; sleep 0.12   # Up
-  key 36; sleep 2   # Develop <title>
+  open_extension "$title"
+  extension_action "$title" Develop
+  a11y shown "Developing $title:" prefix   # "Developing <title>: each save in ..."
   capture "$n-$sample-develop-started.png"
-  check "$n-$sample-develop-started.png" success   # "Developing <title>: each save in ..."
-  key 53; sleep 1
+  close_settings
   say_hello
   capture "$((n + 1))-$sample-greeting-before.png"
   check "$((n + 1))-$sample-greeting-before.png" success   # "Hello from ..."
@@ -982,13 +1188,10 @@ PY
   key 53; sleep 1
 
   # Stopped: a save builds nothing.
-  manage_extensions
-  # As above: the row above the list's last.
-  for ((i = 0; i < 14; i++)); do key 125; done
-  key 126; sleep 0.12   # Up
-  key 36; sleep 2   # Stop developing <title>
+  open_extension "$title"
+  extension_action "$title" "Stop Developing"
+  a11y shown "Stopped developing $title"
   capture "$((n + 8))-$sample-stopped.png"
-  check "$((n + 8))-$sample-stopped.png" success   # "Stopped developing <title>"
   cp "$built" "$before"
   set_greeting "$copy/$source" "$(printf "$greeting" "Hello unseen")"
   sleep 8
@@ -1009,28 +1212,30 @@ fi
 
 # Disabling a required dependency: installed with the dependencies sample
 # (whose install and data folder are this phase's own), the JavaScript
-# operations sample is the first row of Manage extensions. Enter asks first,
-# listing the Dependencies sample, which requires it, with Disable all and
-# Cancel; Cancel changes nothing, Disable all disables both, and Enter again
+# operations sample's switch on its page in Settings asks first, listing
+# the Dependencies sample, which requires it, with Disable all and Cancel;
+# Cancel changes nothing, Disable all disables both, and the switch again
 # enables the JavaScript operations sample alone: the Dependencies sample
 # stays disabled, on record too.
 export PANE_DATA_DIR=$out/disable-dependents-data
 rm -rf "$PANE_DATA_DIR"
 start_pane --install target/guests/packages/sample-dependencies
 key 36; sleep 3   # Install
-manage_extensions
-key 36; sleep 1   # disable JavaScript operations sample: asks first
+operations="JavaScript operations sample"
+open_extension "$operations"
+a11y toggle "$operations"   # disable it: asks first
+a11y shown "Disable all 2"   # "Dependencies sample, which requires JavaScript operations sample · …", above it
 capture 140-disable-dependents-asked.png
-check 140-disable-dependents-asked.png details   # "Dependencies sample, which requires JavaScript operations sample · …"
-key 125; key 36; sleep 1   # Cancel
-capture 141-disable-dependents-cancelled.png   # both still enabled
-key 36; sleep 1   # asks again
-key 36; sleep 2   # Disable all 2
+a11y press Cancel
+a11y shown "Actions for $operations"   # its page again: both still enabled
+capture 141-disable-dependents-cancelled.png
+a11y toggle "$operations"   # asks again
+a11y press "Disable all 2"
+a11y shown "Disabled JavaScript operations sample and Dependencies sample" prefix   # "..., which requires it"
 capture 142-disable-dependents-disabled.png
-check 142-disable-dependents-disabled.png success   # "Disabled JavaScript operations sample and Dependencies sample, which requires it"
-key 36; sleep 2   # enable JavaScript operations sample
+a11y toggle "$operations"   # enable JavaScript operations sample
+a11y shown "Enabled JavaScript operations sample"   # Dependencies sample stays disabled
 capture 143-disable-dependents-enabled-alone.png
-check 143-disable-dependents-enabled-alone.png success   # "Enabled JavaScript operations sample"; Dependencies sample stays disabled
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{140-disable-dependents-asked,141-disable-dependents-cancelled,142-disable-dependents-disabled,143-disable-dependents-enabled-alone}.png
 stop_pane
 [ "$(grep -c '"disabled": true' "$PANE_DATA_DIR/extensions/installed.json")" = 1 ] || { echo "not exactly the dependent left disabled"; exit 1; }
@@ -1042,9 +1247,9 @@ stop_pane
 # ends the helper, keeps the saved note and restarts the runtime; Count (the
 # settings sample's last item) then saves and loses its answer in a second
 # crash, which stops the runtime: the count is not run again. Root search
-# explains that nothing runs, Manage extensions shows why (its first rows),
-# a disable still works, and Restart runs extensions again, Count only when
-# asked. A data folder of its own keeps the rows in a known order.
+# explains that nothing runs, the Extensions group's page in Settings
+# shows why (its runtime rows), a disable still works, and Restart runs
+# extensions again, Count only when asked. A data folder of its own.
 export PANE_DATA_DIR=$out/runtime-crash-data
 rm -rf "$PANE_DATA_DIR"
 fault=$out/runtime-fault
@@ -1111,19 +1316,23 @@ capture 204-runtime-refused.png
 check 204-runtime-refused.png error   # "Extension runtime unavailable: it stopped after crashing ..."
 key 53; sleep 1   # clears the query
 manage_extensions
-capture 205-runtime-manage.png   # Restart the extension runtime, Why the extension runtime stopped
-key 125; key 36; sleep 1   # Why the extension runtime stopped
+a11y shown "Restart the extension runtime"
+a11y shown "Why the extension runtime stopped"
+capture 205-runtime-manage.png   # the group's page: Restart the extension runtime, Why the extension runtime stopped
+a11y press "Why the extension runtime stopped"
+a11y shown Back   # the details, with the way back
 capture 206-runtime-details.png
-check 206-runtime-details.png details   # the details
-key 53; sleep 1   # back at its row
-key 125; key 36; sleep 2   # disable Helper sample, the first package
+a11y press Back
+open_extension "Helper sample"
+a11y toggle "Helper sample"   # disable Helper sample
+a11y shown "Disabled Helper sample"
 capture 207-runtime-disabled.png
-check 207-runtime-disabled.png success   # "Disabled Helper sample"
-key 126; key 126; key 36; sleep 2   # Restart the extension runtime
+manage_extensions
+a11y press "Restart the extension runtime"
+a11y shown "Restarted the extension runtime"
 capture 208-runtime-restarted.png
-check 208-runtime-restarted.png success   # "Restarted the extension runtime"
 [ "$(count)" = 2 ] || { echo "Count was run again without asking"; exit 1; }
-key 53; sleep 1
+close_settings
 type_text greet; sleep 1
 key 36; sleep 2   # open Greeting
 for ((i = 0; i < 8; i++)); do key 125; done   # Count
@@ -1144,15 +1353,16 @@ if grep -q '"paused"' "$PANE_DATA_DIR/extensions/installed.json"; then echo "a p
 # progress, given up on after 15, and a guest's own computing at first a
 # minute, so that the first Stop responding still computes when frame 240
 # is taken (Pane's standard error has stopped no call yet): meanwhile the
-# window answers keys, Escape returns to root search and Manage extensions
-# opens. The compute limit then becomes 2 seconds, which the running call
+# window answers keys, Escape returns to root search and Manage Extensions
+# opens Settings. The compute limit then becomes 2 seconds, which the running call
 # has passed, so Pane stops it at once; each later call is stopped after 2
 # seconds of its computing, says why, and the third time pauses the
 # package (a failure of its own); Retry starts it again. Then the runtime
 # thread itself is made to hang through the fault file: the status line
 # says it is not responding yet, then Pane gives up on it, names and
-# pauses no extension, and Manage extensions says the runtime stopped
-# responding; a fresh thread runs the next call. A data folder of its own keeps the rows in a known order.
+# pauses no extension, and the Extensions group's page in Settings says
+# the runtime stopped responding; a fresh thread runs the next call. A
+# data folder of its own.
 export PANE_DATA_DIR=$out/unresponsive-data
 rm -rf "$PANE_DATA_DIR"
 fault=$out/unresponsive-fault
@@ -1179,13 +1389,13 @@ key 36; sleep 1   # it computes
 [ "$(saved busy)" = started ] || { echo "Stop responding did not start"; exit 1; }
 key 53; sleep 1   # root search answers meanwhile
 manage_extensions
-capture 240-unresponsive-window-answers.png   # the extension list, while the guest computes
-check 240-unresponsive-window-answers.png subtitle   # its rows' subtitles
+a11y shown "Settings sample"
+capture 240-unresponsive-window-answers.png   # Settings' Extensions page, while the guest computes
 [ "$(stopped_calls)" = 0 ] || { echo "Stop responding was stopped before frame 240"; exit 1; }
 inject limits:2,4,15   # it has computed longer: Pane stops it at its next tick
 for _ in $(seq 300); do [ "$(stopped_calls)" -ge 1 ] && break; sleep 0.1; done
 [ "$(stopped_calls)" -ge 1 ] || { echo "Stop responding was not stopped at the shorter limit"; exit 1; }
-key 53; sleep 1   # its answer is not shown here
+close_settings   # its answer is not shown here
 type_text greet; sleep 1
 key 36; sleep 2   # open Greeting
 for ((i = 0; i < 9; i++)); do key 125; done   # Stop responding
@@ -1199,14 +1409,14 @@ check 242-unresponsive-paused.png error   # "Settings sample stopped responding 
 check 242-unresponsive-paused.png warning   # Greeting: "Settings sample is paused after an error; ..."
 [ "$(saved busy)" = started ] || { echo "Stop responding finished or was lost"; exit 1; }
 key 53; sleep 1   # clears the query
-manage_extensions
-key 125; key 125; key 125; key 36; sleep 1   # "Why Settings sample is paused"
+open_extension "Settings sample"
+extension_action "Settings sample" "Why Paused"
+a11y shown "Retry Settings sample"   # "Why Settings sample is paused": the details, then Retry
 capture 243-unresponsive-pause-details.png
-check 243-unresponsive-pause-details.png details   # the details
-key 36; sleep 2   # Retry Settings sample
+a11y press "Retry Settings sample"
+a11y shown "Started Settings sample"
 capture 244-unresponsive-retried.png
-check 244-unresponsive-retried.png success   # "Started Settings sample"
-key 53; sleep 1
+close_settings
 inject hang
 type_text greet; sleep 1
 key 36; sleep 4   # open Greeting: the stuck runtime is not responding yet
@@ -1217,11 +1427,11 @@ capture 246-unresponsive-runtime.png
 check 246-unresponsive-runtime.png error   # the runtime stopped responding and was started again
 key 53; sleep 1   # clears the query
 manage_extensions
-key 36; sleep 1   # Why the extension runtime stopped, its first row
+a11y press "Why the extension runtime stopped"   # a row of the group's page
+a11y shown Back   # the details, with the way back
 capture 247-unresponsive-runtime-details.png
-check 247-unresponsive-runtime-details.png details   # the details
 inject release
-key 53; key 53; sleep 1
+close_settings
 type_text greet; sleep 1
 key 36; sleep 2   # open Greeting on a fresh runtime thread
 key 36; sleep 2   # Use a formal greeting
@@ -1243,8 +1453,8 @@ PY
 
 # Uninstalling a required dependency: installed with the dependencies sample
 # (whose install and data folder are this phase's own), the JavaScript
-# operations sample's Uninstall row is the seventh of Manage extensions.
-# Enter asks first, listing the Dependencies sample, which requires it, and
+# operations sample's Uninstall (an item of its page's Actions menu in
+# Settings) asks first, listing the Dependencies sample, which requires it, and
 # each one's saved data, with Uninstall all keeping or deleting saved data
 # and Cancel; Cancel changes nothing, Uninstall all 2 (keeping) uninstalls
 # both, and installing the JavaScript operations sample again installs it
@@ -1253,24 +1463,26 @@ export PANE_DATA_DIR=$out/uninstall-dependents-data
 rm -rf "$PANE_DATA_DIR"
 start_pane --install target/guests/packages/sample-dependencies
 key 36; sleep 3   # Install
-manage_extensions
-for ((i = 0; i < 6; i++)); do key 125; done   # Uninstall JavaScript operations sample
-key 36; sleep 1   # asks first
+operations="JavaScript operations sample"
+open_extension "$operations"
+extension_action "$operations" Uninstall   # asks first
+a11y shown "Uninstall all 2 and keep saved data"   # "Dependencies sample, which requires JavaScript operations sample · …", above it
 capture 180-uninstall-dependents-asked.png
-check 180-uninstall-dependents-asked.png details   # "Dependencies sample, which requires JavaScript operations sample · …"
-key 125; key 125; key 36; sleep 1   # Cancel
-capture 181-uninstall-dependents-cancelled.png   # both still installed
-key 36; sleep 1   # asks again
-key 36; sleep 3   # Uninstall all 2 and keep saved data
+a11y press Cancel
+a11y shown "Actions for $operations"   # its page again: both still installed
+capture 181-uninstall-dependents-cancelled.png
+extension_action "$operations" Uninstall   # asks again
+a11y press "Uninstall all 2 and keep saved data"
+a11y shown "Uninstalled JavaScript operations sample and Dependencies sample" prefix   # "..., which requires it; …"
 capture 182-uninstall-dependents-uninstalled.png
-check 182-uninstall-dependents-uninstalled.png success   # "Uninstalled JavaScript operations sample and Dependencies sample, which requires it; …"
 stop_pane
 [ "$(grep -c '"dir"' "$PANE_DATA_DIR/extensions/installed.json")" = 0 ] || { echo "not both uninstalled"; exit 1; }
 start_pane --install target/guests/packages/sample-operations-js
 key 36; sleep 3   # Install the dependency alone
 manage_extensions
+a11y shown "$operations"
+a11y absent "Dependencies sample"
 capture 183-uninstall-dependents-reinstalled-alone.png   # only the JavaScript operations sample is listed
-check 183-uninstall-dependents-reinstalled-alone.png subtitle
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{180-uninstall-dependents-asked,181-uninstall-dependents-cancelled,182-uninstall-dependents-uninstalled,183-uninstall-dependents-reinstalled-alone}.png
 stop_pane
 [ "$(grep -c '"dir"' "$PANE_DATA_DIR/extensions/installed.json")" = 1 ] || { echo "not the dependency alone reinstalled"; exit 1; }
@@ -1280,10 +1492,11 @@ stop_pane
 # the network), with a data folder of its own. Installing the local
 # Dependencies from npm sample shows the npm package it requires and
 # installs both; its command calls the npm package's greet operation. Then
-# "Install extension from npm…" (searched for by title, as manage_extensions
-# does: a blind run of Downs to root's end would open #72's Settings… row,
-# last of all now) asks for the npm package in a form; naming the installed
-# one offers Update, and its command runs: "Hello from the npm package".
+# "Install extension from npm…" (searched for by title, as
+# manage_extensions does) opens Settings at the Extensions group's npm
+# field (#168), which takes the keyboard; Show Package previews the
+# installed package there, offering Update, and its command runs: "Hello
+# from the npm package".
 export PANE_DATA_DIR=$out/npm-data
 rm -rf "$PANE_DATA_DIR"
 rm -f "$out/npm-registry.port"
@@ -1300,21 +1513,27 @@ key 36; sleep 3   # Install; Greet through an npm dependency is selected
 capture 261-npm-dependency-installed.png
 check 261-npm-dependency-installed.png success   # "Installed Dependencies from npm sample with Greeter from npm, which it requires"
 key 36; sleep 3   # open it
-key 36; sleep 3   # "Greet through the required greeter"
-capture 262-npm-dependency-called.png
-check 262-npm-dependency-called.png success   # "Hello, Pane, from the npm package"
+key 36; sleep 0.5   # "Greet through the required greeter"
+capture_until 262-npm-dependency-called.png success 20   # its toast: "Hello, Pane, from the npm package"
 key 53; sleep 1
 command_key a; type_text 'install npm'; sleep 1
-key 36; sleep 1   # Install extension from npm…
+key 36; sleep 2   # Install extension from npm…: Settings, its npm field
+a11y shown "npm package:" prefix   # the field, named by its label
+focus_settings
 capture 263-npm-form.png
-check 263-npm-form.png hint   # the form's hint line
 type_text @pane-samples/greeter
-key 36; sleep 3
+# Typed keys can still be on their way when a button is pressed through the
+# accessibility API (release run 37725624283's Windows leg asked npm for
+# "@pane-samples/gre"): the field's value, all of it, is waited for first.
+a11y shown @pane-samples/greeter   # the field's value
+a11y press "Show Package"
+a11y shown Update   # the preview's row, under "Source: npm package @pane-samples/greeter", "npm version: 0.1.0, the latest", … (lines of text with no accessible name: the screenshot shows them)
 capture 264-npm-preview.png
-check 264-npm-preview.png details   # "Source: npm package @pane-samples/greeter", "npm version: 0.1.0, the latest", …
-key 36; sleep 3   # Update; Greeter from npm is selected
+a11y press Update
+a11y shown "Updated Greeter from npm to 0.1.0"
 capture 265-npm-updated.png
-check 265-npm-updated.png success   # "Updated Greeter from npm to 0.1.0"
+close_settings
+type_text 'greeter from npm'; sleep 1
 key 36; sleep 3   # open Greeter from npm
 key 36; sleep 2   # "Say hello"
 capture 266-npm-command-ran.png
@@ -1338,7 +1557,10 @@ key 36; sleep 3   # open Greeter from npm, the new copy
 key 36; sleep 2   # "Say hello"
 capture 268-npm-new-copy-ran.png
 check 268-npm-new-copy-ran.png success   # "Hello from the npm package"
-python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{260-npm-dependency-preview,261-npm-dependency-installed,262-npm-dependency-called,263-npm-form,264-npm-preview,265-npm-updated,266-npm-command-ran,267-npm-updated-automatically,268-npm-new-copy-ran}.png
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{260-npm-dependency-preview,261-npm-dependency-installed,262-npm-dependency-called,263-npm-form,264-npm-preview,265-npm-updated,266-npm-command-ran,267-npm-updated-automatically}.png
+# 0.2.0 is 0.1.0's code at a newer version (npm_publish.py), so the new
+# copy's command answers exactly as the old one did.
+python3 "$(dirname "$0")/check_screenshot.py" --same "$out/266-npm-command-ran.png" "$out/268-npm-new-copy-ran.png"
 stop_pane
 kill "$npm_registry_pid"; wait "$npm_registry_pid" 2>/dev/null || true; npm_registry_pid=
 unset PANE_NPM_REGISTRY
@@ -1354,11 +1576,10 @@ grep -q '"npmVersion": "0.2.0"' "$PANE_DATA_DIR/extensions/installed.json" || { 
 # folder of its own. `--install git:<address>` names the default branch,
 # which holds the source only: explained, nothing offered. Then "Install
 # extension from Git…" (searched for by title rather than counted to, as
-# manage_extensions does: root's last row is #72's Settings… now, and with
-# nothing installed in this data folder there is no Manage extensions… row
-# to find either) asks for the repository
-# in a form; naming the tag previews the release revision, pinned, and
-# installs it, and its command runs: "Hello from the Git repository".
+# manage_extensions does) opens Settings at the Extensions group's Git
+# field (#168), which takes the keyboard; naming the tag and Show Package
+# previews the release revision, pinned, there, Install installs it, and
+# its command runs: "Hello from the Git repository".
 export PANE_DATA_DIR=$out/git-data
 rm -rf "$PANE_DATA_DIR" "$out/git-repositories"
 python3 "$(dirname "$0")/repository_server.py" make-sample target/guests/git/greeter "$out/git-repositories/greeter"
@@ -1373,17 +1594,22 @@ start_pane --install "git:$repository"
 capture_until 300-git-source-only.png error 60   # "The default branch, main (commit …) of the Git repository … holds only the source of …"
 key 53; sleep 1
 command_key a; type_text 'install git'; sleep 1
-key 36; sleep 1   # Install extension from Git…
+key 36; sleep 2   # Install extension from Git…: Settings, its Git field
+a11y shown "Git repository:" prefix   # the field, named by its label
+focus_settings
 capture 301-git-form.png
-check 301-git-form.png hint   # the form's hint line
 type_text "$repository@v0.1.0"
-key 36; sleep 3
+a11y shown "$repository@v0.1.0"   # the field's value, all of it (see the npm field)
+a11y press "Show Package"
+a11y shown Install   # the preview's row, under "Source: Git repository 127.0.0.1:<port>/greeter", "Revision: tag v0.1.0, which you named: …" (lines of text with no accessible name: the screenshot shows them)
 capture 302-git-preview.png
-check 302-git-preview.png details   # "Source: Git repository 127.0.0.1:<port>/greeter", "Revision: tag v0.1.0, which you named: …"
-key 36; sleep 3   # Install; Greeter from Git is selected
+a11y press Install
+a11y shown "Installed Greeter from Git"
 capture 303-git-installed.png
-check 303-git-installed.png success   # "Installed Greeter from Git"
+close_settings
+type_text 'greeter from git'; sleep 1
 key 36; sleep 3   # open Greeter from Git
+
 key 36; sleep 2   # "Say hello"
 capture 304-git-command-ran.png
 check 304-git-command-ran.png success   # "Hello from the Git repository"
@@ -1427,17 +1653,19 @@ moved=$(python3 "$(dirname "$0")/repository_server.py" commit "$out/git-reposito
 python3 "$(dirname "$0")/check_git_record.py" --ref refs/heads/release --unpinned "$PANE_DATA_DIR/extensions/installed.json" "$moved" || { echo "the tracked Git package was not recorded at its moved branch"; exit 1; }
 [ -z "$(ls -A "$PANE_DATA_DIR/extensions/downloads" 2>/dev/null)" ] || { echo "a Git download was left"; exit 1; }
 
-# File search (#29): Files, a default extension (its data folder is this
-# phase's own; Files is selected once installed, and Pane's own "Choose
-# folder…" row is the first of its command). Enter on it would show the
-# system's folder picker; the smoke names the folder in
-# PANE_TEST_CHOOSE_FOLDER instead (a debug build's hook). The fixture folder's
+# File search (#29, #175): Files, a default extension (its data folder is
+# this phase's own), answers from Pane's file index, which covers the home
+# folder; the smoke names a fixture folder for it to cover instead in
+# PANE_TEST_FILE_INDEX_HOME (a debug build's hook, which also keeps the index
+# in the data folder). Installing Files starts the index, and showing the
+# window lets its first walk start. The fixture folder's
 # path has spaces, and a file in it has non-ASCII letters too; typing "plan"
-# lists that file, selected, and Enter hands it to Pane's handler for files,
+# lists that file under "Files", selected, and Enter hands it to Pane's handler for files,
 # which PANE_TEST_OPEN_FILE_LOG (a debug build's hook) makes record the path
 # instead of asking /usr/bin/open, since any application that opened it would
 # be the user's own. Each file action closes the window after it acts
-# (#150), so Pane is started again (the grant is kept) for the next file.
+# (#150), so Pane is started again (the index is caught up from FSEvents'
+# history) for the next file.
 # An executable script in the folder is found, and Enter reveals it in
 # Finder (ADR 0037: file search's Enter never runs a program; only its
 # explicit Run does): it neither runs nor reaches the handler for files.
@@ -1453,14 +1681,15 @@ printf 'todo\n' >"$files_folder/notes/todo.txt"
 printf '#!/bin/sh\ntouch "%s/runner-ran"\n' "$files_fixture" >"$files_folder/notes/runner.sh"
 chmod +x "$files_folder/notes/runner.sh"
 rm -f "$out/opened-file.txt"
-export PANE_TEST_CHOOSE_FOLDER=$files_folder PANE_TEST_OPEN_FILE_LOG=$out/opened-file.txt
+export PANE_TEST_FILE_INDEX_HOME=$files_folder PANE_TEST_OPEN_FILE_LOG=$out/opened-file.txt
 start_pane --install target/guests/packages/files
-key 36; sleep 2   # Install; Files is selected
-key 36; sleep 3   # open Files; "Choose folder…" is selected
-key 36; sleep 2   # the folder PANE_TEST_CHOOSE_FOLDER names
-capture 220-files-folder-granted.png
-check 220-files-folder-granted.png success   # "Files may now list “Pane smoke files”"
-key 53; sleep 1
+key 36; sleep 3   # Install; the index walks the fixture
+capture 220-files-installed.png
+check 220-files-installed.png success   # "Installed Files"
+# The install lands on a blank root search, where Escape hides the
+# launcher (release run 37698693722's Windows frame 221 was the desktop):
+# the return to root key keeps it.
+to_root
 type_text 'plan'; sleep 3
 capture 221-files-found.png
 check 221-files-found.png selected 3000   # the selected file row, "Résumé plan ü.txt"
@@ -1479,9 +1708,9 @@ capture 224-files-program-revealed.png   # evidence only: Finder, Pane hidden
 [ ! -e "$out/opened-file.txt" ] || { echo "the script was handed to the handler"; exit 1; }
 [ ! -e "$files_fixture/runner-ran" ] || { echo "the script ran"; exit 1; }
 osascript -e 'tell application "Finder" to close every window' || true
-python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{220-files-folder-granted,221-files-found,223-files-program-found}.png
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{220-files-installed,221-files-found,223-files-program-found}.png
 stop_pane
-unset PANE_TEST_CHOOSE_FOLDER PANE_TEST_OPEN_FILE_LOG
+unset PANE_TEST_FILE_INDEX_HOME PANE_TEST_OPEN_FILE_LOG
 rm -rf "$files_fixture"
 
 # Searching an online service inside its command: Package search, the Rust
@@ -1542,21 +1771,22 @@ type_text aurora; sleep 3
 capture 164-search-results.png   # aurora-charts, selected, and aurora-cli
 check 164-search-results.png selected 3000
 grep -q '^GET /search?q=aurora$' "$service_log" || { echo "the command's search did not reach the service"; exit 1; }
-key 125; key 36; sleep 3   # aurora-cli's details
-capture 165-details.png
-check 165-details.png success   # "aurora-cli 0.9.3 (Apache-2.0): Command-line parsing with subcommands"
+key 125; key 36; sleep 1   # aurora-cli's details
+capture_until 165-details.png success 15   # its toast: "aurora-cli 0.9.3 (Apache-2.0): Command-line parsing with subcommands"
 command_key a; type_text slow; sleep 2   # held by the service
 command_key a; type_text ember; sleep 3
 capture 166-newer-search.png   # ember-tz, not what "slow" would list
 check 166-newer-search.png selected 3000
 grep -q '^ABANDONED /search?q=slow$' "$service_log" || { echo "the replaced search was not stopped"; exit 1; }
-command_key a; type_text down; sleep 3
-capture 167-service-error.png
-check 167-service-error.png error   # "... The service answered 503: the registry is down for maintenance"
+# A search error stays in the status line until the query changes.
+command_key a; type_text down; sleep 1
+capture_until 167-service-error.png error 15   # "... The service answered 503: the registry is down for maintenance"
 stop_service
-command_key a; type_text basalt; sleep 3
-capture 168-offline.png
-check 168-offline.png error   # "... Could not reach the service at http://127.0.0.1:<port>: connection refused"
+key 53; sleep 1   # clear the failed search and return to the command's list
+capture 167-service-error-cleared.png
+python3 "$(dirname "$0")/check_screenshot.py" --absent "$out/167-service-error-cleared.png" error
+command_key a; type_text basalt; sleep 1
+capture_until 168-offline.png error 15   # "... Could not reach the service at http://127.0.0.1:<port>: connection refused"
 start_service 2
 command_key a; type_text cobalt; sleep 3
 capture 169-back-online.png   # cobalt-http, selected: not paused
@@ -1565,211 +1795,17 @@ python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{161-root-typed,
 stop_pane
 stop_service
 
-# Clipboard history (#35, #37): the Clipboard History default extension
-# keeps nothing until it is turned on in its command (its first item); then
-# the text this smoke copies is kept; nothing is kept while it is paused or
-# the extension is disabled, also after a restart, and once enabled again
-# it is kept again, also after a restart. Enter on a kept item runs its
-# first action, Paste (#150): Pane cannot paste on macOS yet, so it copies
-# the item again instead, closes the window and says so in a HUD; the copy
-# really is on the pasteboard:
-# pbpaste prints it, and pasting it into root search shows exactly what
-# typing it shows. The smoke copies only text of its own
-# ("pane-smoke-..."), with AppleScript's "set the clipboard to", which
-# replaces what is on the pasteboard without reading or putting it back:
-# run it on CI's runner or a desktop given to it, as the rest of the smoke
-# already takes over the keyboard. macOS marks a copy a password manager
-# makes with the type org.nspasteboard.ConcealedType, which Pane honors
-# (clipboard_adapter_macos.rs checks that on CI's macOS leg); this smoke
-# copies nothing marked, and no program can be excluded here, because the
-# pasteboard never names the program that copied. A data folder of its own.
-export PANE_DATA_DIR=$out/clipboard-data
-rm -rf "$PANE_DATA_DIR"
-extensions=$PANE_DATA_DIR/extensions
-history=$extensions/clipboard-history.json
-# The kept texts, newest first, joined by commas.
-kept_texts() { python3 "$(dirname "$0")/clipboard_history.py" texts "$extensions"; }
-# The newest kept text.
-first_kept() { kept_texts | cut -d, -f1; }
-# Whether `text` is among the kept texts.
-kept_one() { case ",$(kept_texts)," in (*",$1,"*) true;; (*) false;; esac; }
-not_kept() { sleep 2; if kept_one "$1"; then echo "$1 was kept"; exit 1; fi; }
-# Copies `text`: AppleScript puts it on the pasteboard, as a program
-# copying text would (the watcher notices within its poll).
-copy() { osascript -e "set the clipboard to \"$1\""; sleep 1; }
-# Back to a blank root search from wherever the smoke is, with the return
-# to root key (Command+Escape): Escape at a blank root search hides the
-# launcher since the redesign (1e61793), so it cannot be pressed blind.
-to_root() {
-  osascript -e 'tell application "System Events" to key code 53 using command down'
-  sleep 1
-}
-# Opens the Clipboard History command from wherever the smoke is.
-open_history() {
-  to_root
-  type_text clipboard; sleep 1
-  key 36; sleep 2
-}
-start_pane --install target/guests/packages/clipboard-history
-key 36   # Install; Clipboard History is selected
-wait_for "$extensions/installed.json" clipboard-history present; sleep 1
-copy pane-smoke-before   # while history is off
-open_history
-capture 280-clipboard-off.png
-check 280-clipboard-off.png subtitle   # "Off · Pane keeps nothing you copy until you turn it on ..."
-[ ! -e "$history" ] || { echo "clipboard history was kept before it was turned on"; exit 1; }
-key 36   # Turn on clipboard history
-wait_for "$history" '"capture": "on"' present; sleep 1
-capture 281-clipboard-on.png
-check 281-clipboard-on.png success   # "Clipboard history is on"
-copy pane-smoke-kept
-copy pane-smoke-second
-wait_for "$history" pane-smoke-second present
-[ "$(kept_texts)" = pane-smoke-second,pane-smoke-kept ] || { echo "kept: $(kept_texts)"; exit 1; }
-open_history
-capture 282-clipboard-kept.png
-check 282-clipboard-kept.png subtitle   # the two kept items, newest first
-key 36   # Pause clipboard history
-wait_for "$history" '"capture": "paused"' present
-copy pane-smoke-paused
-not_kept pane-smoke-paused
-open_history
-key 36   # Resume clipboard history
-wait_for "$history" '"capture": "on"' present
-copy pane-smoke-resumed
-wait_for "$history" pane-smoke-resumed present
-open_history
-key 125; key 125; key 125; key 125; key 125; key 125; key 125; key 125; sleep 1   # the second kept item, pane-smoke-second, after Pause, Turn off, Keep items for, Exclude, Clear, Turn off and delete, Delete recent and the first
-key 36; sleep 2   # Paste: not available yet, so it copies it again (#150)
-capture 283-clipboard-copied.png   # evidence only: the HUD "Copied — paste is not available here yet", Pane hidden
-[ "$(first_kept)" = pane-smoke-second ] || { echo "the copied item did not move to the front: $(kept_texts)"; exit 1; }
-# The pasteboard really holds the item again: pbpaste prints it, and, with
-# Pane started again (Paste closed its window; the pasteboard keeps what
-# was copied), pasting it over root search shows exactly what typing it
-# shows.
-[ "$(pbpaste)" = pane-smoke-second ] || { echo "the pasteboard holds: $(pbpaste)"; exit 1; }
-stop_pane
-start_pane
-to_root
-command_key a; command_key v; sleep 1
-capture 284-clipboard-pasted.png
-key 53; sleep 1
-type_text pane-smoke-second; sleep 1
-capture 285-clipboard-typed.png
-python3 "$(dirname "$0")/check_screenshot.py" --same "$out"/{284-clipboard-pasted,285-clipboard-typed}.png
-key 53; sleep 1
-type_text manage; sleep 1
-key 36; sleep 1
-key 36; sleep 2   # disable Clipboard History, the first row
-wait_for "$extensions/installed.json" '"disabled": true' present; sleep 1
-capture 286-clipboard-disabled.png
-check 286-clipboard-disabled.png success   # "Disabled Clipboard History"
-copy pane-smoke-disabled
-not_kept pane-smoke-disabled
-stop_pane
-start_pane
-copy pane-smoke-restarted-disabled
-not_kept pane-smoke-restarted-disabled
-type_text manage; sleep 1
-key 36; sleep 1   # Manage extensions…
-key 36; sleep 2   # enable Clipboard History
-wait_for "$extensions/installed.json" '"disabled": true' absent; sleep 1
-copy pane-smoke-enabled
-wait_for "$history" pane-smoke-enabled present
-stop_pane
-start_pane
-copy pane-smoke-after-restart
-wait_for "$history" pane-smoke-after-restart present
-open_history
-capture 287-clipboard-after-restart.png
-check 287-clipboard-after-restart.png subtitle   # kept again after the restart
-python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{280-clipboard-off,281-clipboard-on,282-clipboard-kept,284-clipboard-pasted,286-clipboard-disabled,287-clipboard-after-restart}.png
-stop_pane
-[ "$(kept_texts)" = pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-second,pane-smoke-resumed,pane-smoke-kept ] || { echo "kept: $(kept_texts)"; exit 1; }
-for never in before paused disabled restarted-disabled; do
-  kept_one "pane-smoke-$never" && { echo "pane-smoke-$never was kept"; exit 1; }
-done
-
-# Clipboard history expiry and deletion (#36), on the history just kept.
-# With Pane stopped, the smoke makes pane-smoke-kept 8 days old (past the
-# default 7-day retention) and pane-smoke-enabled 2 hours old, as a
-# downtime would: once Pane starts again, before the command shows
-# anything, pane-smoke-kept is gone from the file and the list. Then, in
-# the command: Delete, pane-smoke-second's third action (Ctrl+Shift+Enter,
-# #150), deletes that
-# item alone; Delete recent items (the last hour) deletes the two copied
-# in this smoke's last minutes and keeps pane-smoke-enabled; keeping items
-# for 1 hour deletes pane-smoke-enabled at once; and after one more copy,
-# "Turn off and delete clipboard history" deletes it and turns history
-# off, so a later copy is not kept, while the pasteboard still holds what
-# was copied last (pbpaste prints it, as on Windows, whose smoke reads the
-# clipboard directly too; on Linux pasting is the only way to see it). The
-# rows: Pause, Turn off, Keep items for…, Exclude a program, Clear, Turn
-# off and delete, Delete recent items, then the items, newest first.
-backdate() { python3 "$(dirname "$0")/clipboard_history.py" backdate "$extensions" "$@"; }
-field() { python3 "$(dirname "$0")/clipboard_history.py" field "$extensions" "$1"; }
-backdate 8 pane-smoke-kept || { echo "could not backdate the history"; exit 1; }
-backdate 0.084 pane-smoke-enabled || { echo "could not backdate the history"; exit 1; }
-start_pane
-sleep 1
-[ "$(kept_texts)" = pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-second,pane-smoke-resumed ] || { echo "kept after starting: $(kept_texts)"; exit 1; }
-open_history
-capture 400-clipboard-expired.png
-check 400-clipboard-expired.png subtitle   # pane-smoke-kept is no longer listed
-key 125; key 125; key 125; key 125; key 125; key 125; key 125; key 125; key 125; sleep 1   # pane-smoke-second: Paste, Copy, Delete
-osascript -e 'tell application "System Events" to key code 36 using {control down, shift down}'; sleep 1   # Delete, its third action
-wait_for "$history" pane-smoke-second absent; sleep 1
-capture 401-clipboard-item-deleted.png
-check 401-clipboard-item-deleted.png success   # "Deleted the kept item"
-[ "$(kept_texts)" = pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-resumed ] || { echo "kept: $(kept_texts)"; exit 1; }
-open_history
-key 125; key 125; key 125; key 125; key 125; key 125; key 36; sleep 1   # Delete recent items: 15 minutes, hour or day
-key 125; key 36; sleep 1   # the last hour
-wait_for "$history" pane-smoke-resumed absent; sleep 1
-capture 402-clipboard-recent-deleted.png
-check 402-clipboard-recent-deleted.png success   # "Deleted 2 kept items"
-[ "$(kept_texts)" = pane-smoke-enabled ] || { echo "kept: $(kept_texts)"; exit 1; }
-key 53; sleep 1
-open_history
-key 125; key 125; key 36; sleep 1   # Keep items for 7 days: 7 days (the retention now, chosen), 1 hour, 1 day, 30 or 90 days
-key 125; key 36; sleep 1   # 1 hour, the second choice
-wait_for "$history" '"retentionSeconds": 3600' present; sleep 1
-capture 403-clipboard-retention-changed.png
-check 403-clipboard-retention-changed.png success   # "Items are kept for 1 hour; deleted 1 older item"
-[ -z "$(kept_texts)" ] || { echo "kept: $(kept_texts)"; exit 1; }
-key 53; sleep 1   # from the retention form to the command's list (it stays open after its answer)
-copy pane-smoke-final
-wait_for "$history" pane-smoke-final present
-open_history
-key 125; key 125; key 125; key 125; key 125; key 36; sleep 1   # Turn off and delete clipboard history
-wait_for "$history" pane-smoke-final absent; sleep 1
-capture 404-clipboard-turned-off-and-deleted.png
-check 404-clipboard-turned-off-and-deleted.png success   # "Clipboard history is off; deleted 1 kept item"
-[ -z "$(field capture)" ] || { echo "history is still $(field capture)"; exit 1; }
-# Deleting history never changes the pasteboard: it still holds what was
-# copied last (pbpaste prints pane-smoke-final).
-[ "$(pbpaste)" = pane-smoke-final ] || { echo "the pasteboard holds: $(pbpaste)"; exit 1; }
-key 53; key 53; sleep 1
-copy pane-smoke-after-off
-not_kept pane-smoke-after-off
-[ "$(pbpaste)" = pane-smoke-after-off ] || { echo "the pasteboard holds: $(pbpaste)"; exit 1; }
-python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{400-clipboard-expired,401-clipboard-item-deleted,402-clipboard-recent-deleted,403-clipboard-retention-changed,404-clipboard-turned-off-and-deleted}.png
-stop_pane
-[ -z "$(kept_texts)" ] || { echo "kept: $(kept_texts)"; exit 1; }
-[ "$(field retentionSeconds)" = 3600 ] || { echo "retention: $(field retentionSeconds)"; exit 1; }
-
 # Installing Pane and acquiring its calculator (#52): the package
 # `cargo xtask package-macos --dev` builds is installed on a clean machine
 # — a fresh home folder, a PATH that holds nothing at all, so no Rust,
 # Node, npm, Git or compiler can be reached — and Pane, started from the
 # Pane.app bundle the install script made in that home's ~/Applications,
-# acquires its default extensions (the calculator, and the prebuilt-helper
-# sample with it) from the artifact source this smoke serves on 127.0.0.1
+# acquires its default extensions (the five of #60; no sample is one,
+# #162) from the artifact source this smoke serves on 127.0.0.1
 # (scripts/artifact_server.py, the payloads `cargo xtask package-macos`
 # assembled; nothing reaches the network or Pane's published downloads).
-# The calculator answers "6*7" with 42, and the helper sample's pane-echo
-# runs: a prebuilt program from the acquired payload, no developer tool
-# anywhere. The package is the development profile, because only a
+# The calculator answers "6*7" with 42, with no developer tool anywhere.
+# The package is the development profile, because only a
 # development build takes its artifact source from PANE_ARTIFACTS; a
 # release build uses Pane's published downloads, which no controlled
 # source may replace. The binaries are built on this machine, so they
@@ -1842,9 +1878,9 @@ wait_recorded() {
   exit 1
 }
 kill -0 "$pid" 2>/dev/null || { echo "the installed Pane exited during setup"; exit 1; }
-# The release's default set (#60): all five, plus the helper sample a
-# development build acquires with them.
-for default_ in calculator applications quicklinks files clipboard-history helper-sample; do
+# The default set (#60): all five, in every build; no sample is
+# acquired (#162).
+for default_ in calculator applications quicklinks files clipboard-history; do
   wait_recorded "\"default\": \"$default_\""
 done
 sleep 1
@@ -1856,26 +1892,226 @@ check 501-calculator-answer.png answer   # "42", the calculator's selected answe
 key 36; sleep 1
 capture 502-calculator-copied.png
 check 502-calculator-copied.png success   # "Copied 42 to the clipboard"
-command_key a; type_text helper; sleep 1
-key 36; sleep 2   # Helper sample
-key 36; sleep 3   # "Echo through the helper"
-capture 503-helper-echoed.png
-check 503-helper-echoed.png success   # "Echoed \"hello from Pane\" on macOS arm64"
-[ -n "$(ls "$installed"/packages/*/helpers/*/pane-echo)" ] \
-  || { echo "the acquired payload's helper was not installed"; exit 1; }
-[ -z "$(pgrep -f pane-echo)" ] || { echo "a helper is still running"; exit 1; }
+if grep -q '"default": "helper-sample"' "$installed/installed.json"; then
+  echo "a sample was acquired as a default extension"; exit 1
+fi
 # The payload the calculator acquired is kept, exactly its one current
 # entry. macOS's wc pads its counts with spaces, which fails a string
 # comparison, so the padding is trimmed.
 [ "$(ls "$installed/acquired/calculator" | wc -l | tr -d ' ')" = 1 ] || { echo "the calculator's payload is not cached"; exit 1; }
 [ -z "$(ls -A "$installed/downloads" 2>/dev/null)" ] || { echo "downloads were left behind"; exit 1; }
-python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{500-installed-root,501-calculator-answer,503-helper-echoed}.png
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{500-installed-root,501-calculator-answer}.png
 stop_pane
 kill "$artifact_server_pid"; wait "$artifact_server_pid" 2>/dev/null || true; artifact_server_pid=
 # The program files go again: the evidence is the screenshots, the
 # installed.json record and the logs.
 record_setup_state
 rm -f "$home/Applications/Pane.app/Contents/MacOS/pane" "$unpack/pane/pane"
+
+# Clipboard history (#35, #37, #166, #167): Pane's own Clipboard History
+# records what is copied from the first start, with nothing to turn on.
+# Only the registered default extension does (a copy installed from its
+# folder starts off and shows the generic list), so this phase acquires
+# the default set from the artifact source the #52 phase built, served on
+# 127.0.0.1 as there, with the smoke's own build; Files' index covers an
+# empty folder of the smoke's (PANE_TEST_FILE_INDEX_HOME), not the
+# runner's home. The text this smoke copies is kept; nothing is kept while
+# recording is paused (Pause Recording and Resume Recording, in the view's
+# Actions panel, Command+K) or the extension is disabled (its switch in
+# Settings), also after a restart, and once enabled again it is kept
+# again, also after a restart. The command opens Pane's split view: the
+# records by day, a type dropdown and the selected record's Information.
+# Enter on a record runs Paste (#150): Pane cannot paste on macOS yet, so
+# it copies the record again instead, closes the window and says so in a
+# HUD; the copy really is on the pasteboard: pbpaste prints it, and
+# pasting it into root search shows exactly what typing it shows. The
+# smoke copies only text of its own ("pane-smoke-...") and a file of its
+# own folder, with AppleScript's "set the clipboard to", which replaces
+# what is on the pasteboard without reading or putting it back: run it on
+# CI's runner or a desktop given to it, as the rest of the smoke already
+# takes over the keyboard. macOS marks a copy a password manager makes
+# with the type org.nspasteboard.ConcealedType, which Pane honors
+# (clipboard_adapter_macos.rs checks that on CI's macOS leg); this smoke
+# copies nothing marked, and no application can be disabled here, because
+# the pasteboard never names the program that copied. A data folder of its
+# own.
+export PANE_DATA_DIR=$out/clipboard-data
+rm -rf "$PANE_DATA_DIR" "$out/clipboard-home"
+mkdir -p "$out/clipboard-home"
+export PANE_TEST_FILE_INDEX_HOME=$(cd "$out/clipboard-home" && pwd)
+extensions=$PANE_DATA_DIR/extensions
+history=$extensions/clipboard-history.json
+rm -f "$out/clipboard-artifact-server.port"
+python3 "$(dirname "$0")/artifact_server.py" target/dist/artifacts "$out/clipboard-artifact-server.port" \
+  2>>"$out/clipboard-artifact-server.log" &
+artifact_server_pid=$!
+for _ in $(seq 600); do [ -s "$out/clipboard-artifact-server.port" ] && break; kill -0 "$artifact_server_pid" 2>/dev/null || break; sleep 0.1; done
+[ -s "$out/clipboard-artifact-server.port" ] \
+  || { echo "the clipboard phase's artifact source did not start (see $out/clipboard-artifact-server.log)"; exit 1; }
+export PANE_ARTIFACTS="http://127.0.0.1:$(cat "$out/clipboard-artifact-server.port")/"
+# The kept texts, newest first, joined by commas.
+kept_texts() { python3 "$(dirname "$0")/clipboard_history.py" texts "$extensions"; }
+# The newest kept text.
+first_kept() { kept_texts | cut -d, -f1; }
+# Whether `text` is among the kept texts.
+kept_one() { case ",$(kept_texts)," in (*",$1,"*) true;; (*) false;; esac; }
+not_kept() { sleep 2; if kept_one "$1"; then echo "$1 was kept"; exit 1; fi; }
+# Copies `text`: AppleScript puts it on the pasteboard, as a program
+# copying text would (the watcher notices within its poll).
+copy() { osascript -e "set the clipboard to \"$1\""; sleep 1; }
+# Copies the file at path $1, as Finder's Copy does (a file URL).
+copy_file() { osascript -e "set the clipboard to (POSIX file \"$1\")"; sleep 1; }
+# Opens Pane's Clipboard History from wherever the smoke is: its split
+# view, the field ("Type to filter entries…") holding the keyboard.
+open_history() {
+  focus_pane
+  to_root
+  type_text 'clipboard history'; sleep 1
+  key 36; sleep 2
+}
+# Runs the entry of the view's Actions panel (Command+K) its filter
+# narrows to with $1.
+history_action() {
+  command_key k; sleep 1
+  type_text "$1"; sleep 0.5
+  key 36; sleep 1
+}
+start_pane
+# The default set (#60), acquired at this first start.
+for default_ in calculator applications quicklinks files clipboard-history; do
+  wait_for "$extensions/installed.json" "\"default\": \"$default_\"" present 1200
+done
+sleep 3   # Clipboard History runs, and the watch with it
+copy pane-smoke-kept   # nothing was turned on
+copy pane-smoke-second
+wait_for "$history" pane-smoke-second present
+[ "$(kept_texts)" = pane-smoke-second,pane-smoke-kept ] || { echo "kept: $(kept_texts)"; exit 1; }
+open_history
+capture 280-clipboard-recording.png
+check 280-clipboard-recording.png hint   # the split view: Today, the two records, the field's placeholder
+history_action 'Pause Recording'
+wait_for "$history" '"capture": "paused"' present
+capture_until 281-clipboard-paused.png success 10   # its toast: "Recording paused"
+copy pane-smoke-paused
+not_kept pane-smoke-paused
+open_history
+history_action 'Resume Recording'
+wait_for "$history" '"capture": "on"' present
+copy pane-smoke-resumed
+wait_for "$history" pane-smoke-resumed present
+open_history
+capture 282-clipboard-kept.png   # evidence only: the three records, newest first
+type_text pane-smoke-second; sleep 1   # the filter leaves that record, selected
+key 36; sleep 2   # Paste: not available yet, so it copies it again (#150)
+capture 283-clipboard-copied.png   # evidence only: the HUD "Copied — paste is not available here yet", Pane hidden
+[ "$(first_kept)" = pane-smoke-second ] || { echo "the copied record did not move to the front: $(kept_texts)"; exit 1; }
+# The pasteboard really holds the record again: pbpaste prints it, and,
+# with Pane started again (Paste closed its window; the pasteboard keeps
+# what was copied), pasting it over root search shows exactly what typing
+# it shows.
+[ "$(pbpaste)" = pane-smoke-second ] || { echo "the pasteboard holds: $(pbpaste)"; exit 1; }
+stop_pane
+start_pane
+to_root
+command_key a; command_key v; sleep 1
+capture 284-clipboard-pasted.png
+key 53; sleep 1
+type_text pane-smoke-second; sleep 1
+capture 285-clipboard-typed.png
+python3 "$(dirname "$0")/check_screenshot.py" --same "$out"/{284-clipboard-pasted,285-clipboard-typed}.png
+open_extension "Clipboard History"
+a11y toggle "Clipboard History"   # disable Clipboard History
+wait_for "$extensions/installed.json" '"disabled": true' present; sleep 1
+a11y shown "Disabled Clipboard History"
+capture 286-clipboard-disabled.png
+close_settings
+copy pane-smoke-disabled
+not_kept pane-smoke-disabled
+stop_pane
+start_pane
+copy pane-smoke-restarted-disabled
+not_kept pane-smoke-restarted-disabled
+open_extension "Clipboard History"
+a11y toggle "Clipboard History"   # enable Clipboard History
+wait_for "$extensions/installed.json" '"disabled": true' absent; sleep 1
+close_settings
+copy pane-smoke-enabled
+wait_for "$history" pane-smoke-enabled present
+stop_pane
+start_pane
+copy pane-smoke-after-restart
+wait_for "$history" pane-smoke-after-restart present
+open_history
+capture 287-clipboard-after-restart.png
+check 287-clipboard-after-restart.png hint   # kept again after the restart
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{280-clipboard-recording,281-clipboard-paused,284-clipboard-pasted,286-clipboard-disabled,287-clipboard-after-restart}.png
+stop_pane
+[ "$(kept_texts)" = pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-second,pane-smoke-resumed,pane-smoke-kept ] || { echo "kept: $(kept_texts)"; exit 1; }
+for never in paused disabled restarted-disabled; do
+  kept_one "pane-smoke-$never" && { echo "pane-smoke-$never was kept"; exit 1; }
+done
+
+# Clipboard history expiry and deletion (#36, #166), on the history just
+# kept. With Pane stopped, the smoke makes pane-smoke-kept 8 days old (past
+# the default 7-day retention) and pane-smoke-enabled 2 hours old, as a
+# downtime would: once Pane starts again, before the command shows
+# anything, pane-smoke-kept is gone from the file and the list. Then, in
+# the view's Actions panel: Delete Entry on pane-smoke-second (the filter
+# leaves it) deletes that record alone; keeping records for 1 Hour deletes
+# pane-smoke-enabled at once; a copied file is kept as a file (#167); and
+# Clear History, once confirmed, deletes every record while recording goes
+# on, so a later copy is kept, while the pasteboard still holds what was
+# copied last (pbpaste prints it, as on Windows, whose smoke reads the
+# clipboard directly too; on Linux pasting is the only way to see it).
+backdate() { python3 "$(dirname "$0")/clipboard_history.py" backdate "$extensions" "$@"; }
+field() { python3 "$(dirname "$0")/clipboard_history.py" field "$extensions" "$1"; }
+backdate 8 pane-smoke-kept || { echo "could not backdate the history"; exit 1; }
+backdate 0.084 pane-smoke-enabled || { echo "could not backdate the history"; exit 1; }
+start_pane
+sleep 1
+[ "$(kept_texts)" = pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-second,pane-smoke-resumed ] || { echo "kept after starting: $(kept_texts)"; exit 1; }
+open_history
+capture 400-clipboard-expired.png
+check 400-clipboard-expired.png hint   # pane-smoke-kept is no longer listed
+type_text pane-smoke-second; sleep 1   # the filter leaves that record, selected
+history_action 'Delete Entry'
+wait_for "$history" pane-smoke-second absent
+capture_until 401-clipboard-item-deleted.png success 10   # its toast: "Deleted the kept item"
+[ "$(kept_texts)" = pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-resumed ] || { echo "kept: $(kept_texts)"; exit 1; }
+open_history
+history_action '1 Hour'   # Keep History For: 1 Hour
+wait_for "$history" '"retentionSeconds": 3600' present
+capture_until 402-clipboard-retention-changed.png success 10   # its toast: "History is kept for 1 hour; deleted 1 kept item older"
+[ "$(kept_texts)" = pane-smoke-after-restart,pane-smoke-resumed ] || { echo "kept: $(kept_texts)"; exit 1; }
+printf 'a file the smoke copies\n' >"$out/clipboard-home/pane-smoke-file.txt"
+copy_file "$PANE_TEST_FILE_INDEX_HOME/pane-smoke-file.txt"
+
+wait_for "$history" pane-smoke-file.txt present
+grep -q '"files"' "$history" || { echo "the copied file was not kept as a file"; exit 1; }
+open_history
+type_text pane-smoke-file; sleep 1   # the filter leaves the file's record, selected
+capture 403-clipboard-file.png   # evidence only: the record, the file's icon and its preview
+copy pane-smoke-final
+wait_for "$history" pane-smoke-final present
+open_history
+history_action 'Clear History'   # asks first
+capture 404-clipboard-clear-asked.png   # evidence only: "Clear Clipboard History?"
+key 36   # Clear History
+wait_for "$history" pane-smoke-final absent; sleep 1
+capture 405-clipboard-cleared.png
+[ -z "$(kept_texts)" ] || { echo "kept: $(kept_texts)"; exit 1; }
+[ "$(field capture)" = on ] || { echo "history is $(field capture) after Clear History"; exit 1; }
+# Deleting history never changes the pasteboard: it still holds what was
+# copied last (pbpaste prints pane-smoke-final).
+[ "$(pbpaste)" = pane-smoke-final ] || { echo "the pasteboard holds: $(pbpaste)"; exit 1; }
+copy pane-smoke-after-clear
+wait_for "$history" pane-smoke-after-clear present
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{400-clipboard-expired,401-clipboard-item-deleted,402-clipboard-retention-changed,403-clipboard-file,405-clipboard-cleared}.png
+stop_pane
+[ "$(kept_texts)" = pane-smoke-after-clear ] || { echo "kept: $(kept_texts)"; exit 1; }
+[ "$(field retentionSeconds)" = 3600 ] || { echo "retention: $(field retentionSeconds)"; exit 1; }
+kill "$artifact_server_pid"; wait "$artifact_server_pid" 2>/dev/null || true; artifact_server_pid=
+unset PANE_ARTIFACTS PANE_TEST_FILE_INDEX_HOME
 
 # Installing a Pane application update by the user's choice (#55, the
 # macOS half of #54): a second package is built with --package-version
@@ -1962,7 +2198,7 @@ update_recorded() {
 start_updated
 kill -0 "$pid" 2>/dev/null || { echo "the installed Pane exited during setup"; exit 1; }
 update_recorded '"default": "calculator"'
-update_recorded '"default": "helper-sample"'
+update_recorded '"default": "clipboard-history"'
 # The check has read the index (its request is the third, after the two
 # acquisitions): the offer is in root search. The status line tells what
 # it found; nothing has been downloaded.
@@ -1983,16 +2219,14 @@ check 601-offered.png selected 3000   # the row, selected
 [ -z "$(grep "\.zip" "$out/update-artifact-server.log")" ] \
   || { echo "a package was downloaded without the user choosing it"; exit 1; }
 
-# Disable the Helper sample first: an extension the user disabled before
-# the update must stay disabled after it.
-command_key a; type_text manage; sleep 1
-key 36; sleep 1   # Manage extensions…
-# The Helper sample is the sixth extension now (#60's set is listed
-# first), so five Downs reach it.
-key 125; key 125; key 125; key 125; key 125; key 36; sleep 2   # Helper sample: disabled
+# Disable Clipboard History first: an extension the user disabled before
+# the update must stay disabled after it (the switch on its page in
+# Settings, #168).
+open_extension "Clipboard History"
+a11y toggle "Clipboard History"   # Clipboard History: disabled
 for _ in $(seq 100); do grep -q '"disabled": true' "$update_registry" 2>/dev/null && break; sleep 0.1; done
-grep -q '"disabled": true' "$update_registry" || { echo "the Helper sample was not disabled"; exit 1; }
-key 53; sleep 1
+grep -q '"disabled": true' "$update_registry" || { echo "Clipboard History was not disabled"; exit 1; }
+close_settings
 
 # A package that does not match the integrity its index gives is
 # explained and not installed: the bytes of the served package are
@@ -2039,7 +2273,7 @@ stop_pane
 
 # The next start runs the new version: it reports 99.0.0, removes what
 # the update left, and the old version's data is kept — the calculator
-# answers and the Helper sample stays disabled.
+# answers and Clipboard History stays disabled.
 env -i HOME="$update_home" PATH="/usr/bin:/bin" "$binary" --version >"$out/update-version.txt" 2>>"$out/update-stderr.log" \
   || { echo "the new pane --version failed"; exit 1; }
 [ "$(cat "$out/update-version.txt")" = "Pane 99.0.0" ] \

@@ -76,8 +76,7 @@ fn settings_files(version: &str, api: &str, dependencies: &str) -> Vec<(&'static
 
 /// The tarball of the sample at `version`, with `component` in place of
 /// its built one, so a test can publish a version whose code behaves
-/// differently: one that fails to start, or one padded out so that
-/// replacing its managed copy takes a while.
+/// differently, such as one that fails to start.
 fn settings_files_of(
     version: &str,
     api: &str,
@@ -101,37 +100,6 @@ fn settings_files_of(
 /// The settings sample's built component.
 fn sample_component() -> Vec<u8> {
     fs::read(guest("packages/sample-settings-js/sample_settings_js.wasm")).unwrap()
-}
-
-/// The sample's component with a custom section of `pad` zero bytes
-/// appended: still the same code to Pane's checks (a custom section is
-/// ignored), but a file slow enough to copy that a test can ask things of
-/// the package while its replacement is being written.
-fn padded_component(pad: usize) -> Vec<u8> {
-    /// `n` as unsigned LEB128, as a section's lengths are written.
-    fn leb128(mut n: usize) -> Vec<u8> {
-        let mut out = Vec::new();
-        loop {
-            let byte = (n & 0x7f) as u8;
-            n >>= 7;
-            if n == 0 {
-                out.push(byte);
-                return out;
-            }
-            out.push(byte | 0x80);
-        }
-    }
-    // A custom section: id 0, its length, the name's length, the name, then
-    // the payload.
-    let name = b"padding".to_vec();
-    let mut body = leb128(name.len());
-    body.extend_from_slice(&name);
-    body.extend_from_slice(&vec![0u8; pad]);
-    let mut component = sample_component();
-    component.push(0);
-    component.extend_from_slice(&leb128(body.len()));
-    component.extend_from_slice(&body);
-    component
 }
 
 struct Dirs {
@@ -417,7 +385,7 @@ fn to_root(launcher: &Launcher) {
 /// Opens Manage extensions from root search.
 fn manage(launcher: &Launcher) {
     to_root(launcher);
-    activate(launcher, "Manage extensions…");
+    activate(launcher, "Manage Extensions");
     assert!(matches!(launcher.view().screen, Screen::Extensions { .. }));
 }
 
@@ -873,22 +841,7 @@ fn an_action_asked_while_the_update_applies_is_refused_not_stopped() {
     let launcher = dirs.launcher();
     dirs.install(&launcher, "0.1.0");
 
-    // A new version whose component is padded out, so applying it — the
-    // unpack, the checks and the copy of the managed folder — takes a
-    // while: the claim the apply holds stays open long enough to ask
-    // something of the package inside it. The pad is 192 MiB: the claim
-    // is read directly (below), from before the copy is written until
-    // after it lands, and that much padding keeps the claim open for
-    // hundreds of milliseconds on even the fastest disk, well past the
-    // test's 20 ms polling, while the stage before it stays quick (the
-    // padded tarball compresses to almost nothing, so the download and
-    // unpack are fast however large the pad is). The wait's failure
-    // explains the state it found, because the three ways it can fail
-    // look alike from the outside: the window missed because the copy
-    // was written between two polls (the record then holds 0.2.0), a
-    // check or stage failure (the status line then explains it), or the
-    // apply deferred or never begun (both then idle at 0.1.0).
-    dirs.publish_component("0.2.0", padded_component(192 * 1024 * 1024));
+    dirs.publish("0.2.0", "0.1");
 
     // An action of the package's command, asked for but not sent yet: as
     // the deferral test holds a command running by not resolving it, this
@@ -901,54 +854,32 @@ fn an_action_asked_while_the_update_applies_is_refused_not_stopped() {
     to_root(&launcher);
 
     // The check: the update is staged, and applying it claims the package
-    // while the replacement is written. The claim is polled directly, from
-    // the moment it is taken — but not at the sleeping cadence: an
-    // M-series writes the whole 192 MiB copy from the page cache in
-    // barely more than one 20 ms sleep, and run 36836762847's macOS leg
-    // missed the window entirely that way (the record already held 0.2.0
-    // when the wait gave up). The claim is due moments after the clock
-    // moves — the stage before it takes a second or so — so the wait
-    // spins with a yield while it is due, polling far faster than any
-    // copy, and falls back to sleeping once ten seconds pass without it:
-    // a claim that late is a slow leg's, and a slow copy is a long window
-    // that sleeping polls cannot miss. The wait explains itself on
-    // timeout: which of the three states above the leg is in.
+    // while the replacement is written. That window lasts as long as the
+    // copy, which is no time at all where the copy is a clone (APFS): run
+    // 37721686998's macOS leg never saw it by polling. So the test holds
+    // the update once it has claimed the package, before the replacement
+    // is written, asks its things inside the claim, and lets it go on.
+    let hold = launcher.hold_update_applies();
     dirs.clock.advance(Duration::from_secs(2));
     let component = component_of(&launcher);
-    eprintln!("polling for the claim of {}", component.display());
     {
-        let start = Instant::now();
-        let deadline = start + Duration::from_secs(120);
-        // A trace a second, so a failure's captured output shows the
-        // timeline: when the record flipped (mid-claim) against the polls.
-        // Both the looked-up claim and the raw claim map are polled, so a
-        // disagreement between them shows in the trace too.
-        let mut told = 0u64;
+        let deadline = Instant::now() + Duration::from_secs(120);
         while !launcher.package_being_updated(&component) {
-            let elapsed = start.elapsed().as_secs();
-            if elapsed >= told {
-                told = elapsed + 1;
-                let (claims, packages) = launcher.claims_now();
-                eprintln!(
-                    "{elapsed:>3} s: the claim is not held ({claims:?}; the packages are \
-                     {packages:?}); the status is {:?}; the record has {}",
-                    launcher.view().status,
-                    dirs.installed_version()
-                );
-            }
+            // Explains which way it failed: a check or stage failure (the
+            // status line says why), or the apply deferred or never begun
+            // (idle at 0.1.0, no claim).
             assert!(
                 Instant::now() < deadline,
-                "the update never claimed the package: the status is {:?}, the record has {}",
+                "the update never claimed the package: the status is {:?}, the record has {}, \
+                 the claims are {:?}",
                 launcher.view().status,
-                dirs.installed_version()
+                dirs.installed_version(),
+                launcher.claims_now()
             );
-            if start.elapsed() < Duration::from_secs(10) {
-                std::thread::yield_now();
-            } else {
-                thread::sleep(Duration::from_millis(20));
-            }
+            thread::sleep(Duration::from_millis(20));
         }
     }
+    assert_eq!(dirs.installed_version(), "0.1.0", "held before the copy");
 
     // The action asked of the updating package now, while the replacement
     // is being applied, is refused with the update's explanation rather
@@ -963,6 +894,7 @@ fn an_action_asked_while_the_update_applies_is_refused_not_stopped() {
     );
 
     // The update lands, and the refused action never ran.
+    drop(hold);
     wait_until("the update applied", Duration::from_secs(120), || {
         dirs.installed_version() == "0.2.0"
     });

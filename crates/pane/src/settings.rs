@@ -1456,7 +1456,7 @@ pub fn attach_tray(tray: Arc<dyn pane_core::tray::Tray>, cx: &mut App) {
 /// notification feeds the system's appearance back into the settings, so
 /// a theme that follows the system re-renders when it changes. Call in a
 /// window's constructor, over the settings [`ensure`] hands back.
-pub(crate) fn follow<T: 'static>(
+pub(crate) fn bind_window_appearance<T: 'static>(
     settings: &Entity<Settings>,
     window: &mut Window,
     cx: &mut Context<T>,

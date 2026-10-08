@@ -451,6 +451,8 @@ impl pane_guest::indexed::Guest for Quicklinks {
                 id: link.id,
                 title: link.name,
                 subtitle: Some(link.target.clone()),
+                alternate_titles: Vec::new(),
+                keywords: Vec::new(),
                 action: IndexedAction::Open(OpenTarget {
                     target: link.target,
                     application: link.application.map(|application| application.id),

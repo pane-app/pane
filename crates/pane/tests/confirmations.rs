@@ -355,9 +355,21 @@ fn open_extensions(cx: &mut VisualTestContext) -> VisualTestContext {
     settings_cx
 }
 
-/// The package's card in Settings › Extensions offers "Reset
-/// confirmations" while answers are remembered; clicked, it forgets them
-/// and leaves the card.
+/// Clicks the element with debug selector `selector` in Settings, the
+/// pointer moving onto it first, as a user's does.
+fn click_in(settings_cx: &mut VisualTestContext, selector: &str) {
+    let at = settings_cx
+        .debug_bounds(Box::leak(selector.to_owned().into_boxed_str()))
+        .unwrap_or_else(|| panic!("{selector} is drawn"))
+        .center();
+    settings_cx.simulate_mouse_move(at, None::<MouseButton>, Modifiers::none());
+    settings_cx.simulate_click(at, Modifiers::none());
+    settings_cx.run_until_parked();
+}
+
+/// The package's page in Settings › Extensions offers "Reset
+/// Confirmations" in its Actions menu while answers are remembered (#168);
+/// chosen, it forgets them and leaves the menu.
 #[gpui::test]
 fn the_extensions_card_resets_the_remembered_answers(cx: &mut TestAppContext) {
     let (window, cx, folders) = opened(cx);
@@ -369,18 +381,23 @@ fn the_extensions_card_resets_the_remembered_answers(cx: &mut TestAppContext) {
     assert_eq!(remembered(&window, cx, &folders.identity), ["delete-note"]);
 
     let mut settings_cx = open_extensions(cx);
-    let reset = settings_cx
-        .debug_bounds(RESET)
-        .expect("the card offers Reset confirmations")
-        .center();
-    settings_cx.simulate_mouse_move(reset, None::<MouseButton>, Modifiers::none());
-    settings_cx.simulate_click(reset, Modifiers::none());
-    settings_cx.run_until_parked();
+    click_in(&mut settings_cx, "extension-entry-Actions sample");
+    click_in(&mut settings_cx, "extension-menu");
+    assert!(
+        settings_cx.debug_bounds(RESET).is_some(),
+        "the Actions menu offers Reset Confirmations"
+    );
+    click_in(&mut settings_cx, RESET);
     assert!(
         remembered(&window, cx, &folders.identity).is_empty(),
         "forgotten"
     );
     settings_cx.run_until_parked();
+    click_in(&mut settings_cx, "extension-menu");
+    assert!(
+        settings_cx.debug_bounds("extension-menu-popup").is_some(),
+        "the menu opened again"
+    );
     assert!(
         settings_cx.debug_bounds(RESET).is_none(),
         "nothing left to reset"

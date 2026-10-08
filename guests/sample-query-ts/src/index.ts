@@ -16,8 +16,8 @@ import { showToast } from "@pane/extension/feedback";
 
 /** What Echo says when it was sent no text. */
 const NOTHING =
-  "Echo heard nothing: give it an alias or make it a fallback in Manage extensions, then send " +
-  "it text from root search";
+  "Echo heard nothing: give it an alias or make it a fallback in Settings, then send it text " +
+  "from root search";
 
 async function run(id: string, launch: LaunchRecord): Promise<void> {
   if (id !== "echo") throw new Error(`unknown command: ${id}`);

@@ -1,28 +1,31 @@
-//! Search Files and the file actions Pane performs itself (#150), through
-//! the launcher's public interface, with the real Files default extension
-//! and the JavaScript and TypeScript files samples, which give the same
-//! answers: the command owns the launcher's search field and lists the
-//! granted folder's files as the user types, a newer text stopping the
-//! search before it; a document's actions are Open (Enter), Show in
-//! Explorer (Ctrl+Enter), Open With…, Copy Path, Copy File and Move to
-//! Recycle Bin (destructive, confirmed), each closing the window and saying
-//! what it did in a HUD; for a program or script, Enter shows it in
-//! Explorer, Ctrl+Enter is Open With… and only Run runs it, in Search Files
-//! and in root search's file results alike.
+//! Search Files and the file actions Pane performs itself (#150), over
+//! Pane's file index (#175), through the launcher's public interface, with
+//! the real Files default extension and the Rust, JavaScript and TypeScript
+//! files samples, which give the same answers: the command owns the
+//! launcher's search field and lists what the index finds as the user
+//! types; a document's actions are Open (Enter), Show in Explorer
+//! (Ctrl+Enter), Open With…, Copy Path, Copy Name, Copy File and Move to Recycle Bin
+//! (destructive, confirmed), each closing the window and saying what it did
+//! in a HUD; for a program or script, Enter shows it in Explorer,
+//! Ctrl+Enter is Open With… and only Run runs it, in Search Files and in
+//! root search's file results alike. Root search lists the files after the
+//! commands, with a row opening the command with the query typed.
 //! Recording fakes stand in for the system's handler of files (the link
 //! opener), the system (reveal, open with an application, the clipboard,
 //! the Recycle Bin and the installed applications) and the window, so
-//! nothing opens, moves or shows. The packages are the ones
-//! `cargo xtask guests` assembles in `target/guests/packages`.
+//! nothing opens, moves or shows; the index is the real one, over a fixture
+//! folder standing for the home folder, kept in the test's own cache
+//! folder. The packages are the ones `cargo xtask guests` assembles in
+//! `target/guests/packages`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
-use pane_core::files::{FolderListing, Folders, Limits, Listed};
+use pane_core::file_index::{IndexerConfig, WalkOptions};
 use pane_core::system::Clip;
 use pane_core::{
     ConfirmAnswer, Launcher, LinkOpener, PackageIdentity, Runtime, Screen, Status, SubmenuState,
@@ -53,7 +56,7 @@ fn built(path: &str) -> PathBuf {
     path
 }
 
-/// A package that searches the files of a granted folder, in one language.
+/// A package that searches Pane's file index, in one language.
 struct Package {
     /// The assembled package under `target/guests/packages`.
     package: &'static str,
@@ -63,10 +66,15 @@ struct Package {
     command: &'static str,
 }
 
-const RUST: Package = Package {
+const FILES: Package = Package {
     package: "files",
     title: "Files",
     command: "Search Files",
+};
+const RUST: Package = Package {
+    package: "sample-files",
+    title: "Rust files sample",
+    command: "Find files (Rust)",
 };
 const JAVASCRIPT: Package = Package {
     package: "sample-files-js",
@@ -134,7 +142,7 @@ fn same_file(reported: &Path, made: &Path) -> bool {
     fs::canonicalize(reported).unwrap() == fs::canonicalize(made).unwrap()
 }
 
-/// A folder of controlled fixtures:
+/// A folder of controlled fixtures, standing for the home folder:
 ///
 /// ```text
 /// Pane files/
@@ -178,8 +186,8 @@ impl Folder {
     }
 }
 
-/// Pane with one files package installed and a folder granted to it, and
-/// the fakes it acts through.
+/// Pane with one files package installed, its file index over the
+/// fixture folder settled, and the fakes it acts through.
 struct Pane {
     _data: TempDir,
     launcher: Launcher,
@@ -191,23 +199,34 @@ struct Pane {
     fixture: &'static Package,
 }
 
+/// The file index over `home`, kept in `cache`'s own folder, with the
+/// system's own change source; its first walk starts at once.
+fn index_config(cache: &Path, home: &Path) -> IndexerConfig {
+    IndexerConfig {
+        first_walk_delay: Duration::ZERO,
+        walk: WalkOptions {
+            background: false,
+            ..WalkOptions::default()
+        },
+        ..IndexerConfig::native(cache, home.to_path_buf(), Vec::new())
+    }
+}
+
 impl Pane {
-    /// Pane with `fixture`'s package installed and the fixture folder
-    /// granted to it, its granted folders listed through `folders` when
-    /// given.
-    fn new(fixture: &'static Package, folders: Option<Arc<dyn Folders>>) -> Pane {
+    /// Pane with `fixture`'s package installed and its file index over the
+    /// fixture folder settled.
+    fn new(fixture: &'static Package) -> Pane {
         let data = tempfile::tempdir().unwrap();
         let runtime = Runtime::start().unwrap();
         let system = Arc::new(RecordingSystem::default());
         runtime.set_applications(system.clone());
-        if let Some(folders) = folders {
-            runtime.set_folders(folders);
-        }
         let opener = FakeOpener::default();
+        let folder = Folder::new();
         let launcher =
             Launcher::with_packages(Ok(runtime.clone()), vec![], data.path().join("extensions"))
                 .with_link_opener(Arc::new(opener.clone()))
-                .with_system(system.clone());
+                .with_system(system.clone())
+                .with_file_index(index_config(&data.path().join("cache"), &folder.root));
         let window = RecordingWindow::attach(&launcher);
         block_on(launcher.install_package(&built(&format!("packages/{}", fixture.package))));
         assert!(
@@ -216,20 +235,17 @@ impl Pane {
             launcher.view().status
         );
         launcher.back();
-        let folder = Folder::new();
-        let identity = launcher
-            .packages()
-            .into_iter()
-            .find(|package| package.title() == fixture.title)
-            .expect("the package is installed")
-            .identity;
-        block_on(launcher.grant_folder(&identity, &folder.root));
         assert!(
-            matches!(launcher.view().status, Status::Result(_)),
-            "{:?}",
-            launcher.view().status
+            launcher
+                .packages()
+                .iter()
+                .any(|package| package.title() == fixture.title)
         );
-        launcher.back();
+        assert!(
+            launcher.wait_for_file_index(Duration::from_secs(30)),
+            "{:?}",
+            launcher.file_index_status()
+        );
         Pane {
             _data: data,
             launcher,
@@ -332,10 +348,10 @@ fn listed(pane: &Pane) -> Vec<(String, Option<String>)> {
 }
 
 fn search_files_lists_the_files_in_the_launchers_own_field(fixture: &'static Package) {
-    let pane = Pane::new(fixture, None);
+    let pane = Pane::new(fixture);
     pane.open();
-    // Its own list: Pane's folder rows, then the command's.
-    assert_eq!(titles(&pane.launcher)[0], "Choose folder…");
+    // Its own list.
+    assert_eq!(titles(&pane.launcher), ["What is searched"]);
 
     pane.search("résumé");
     let view = pane.launcher.view();
@@ -347,26 +363,23 @@ fn search_files_lists_the_files_in_the_launchers_own_field(fixture: &'static Pac
     );
     assert_eq!(
         listed(&pane),
-        [(
-            "Résumé plan ü.txt".to_owned(),
-            Some("File in Pane files".to_owned())
-        )]
+        [("Résumé plan ü.txt".to_owned(), Some("~".to_owned()))]
     );
     pane.search("todo");
     assert_eq!(
         listed(&pane),
-        [(
-            "todo.txt".to_owned(),
-            Some("File in Pane files/notes".to_owned())
-        )]
+        [("todo.txt".to_owned(), Some("~/notes".to_owned()))]
     );
+    // Folders are found too, a name before the files only in it.
+    pane.search("notes");
+    assert_eq!(listed(&pane)[0], ("notes".to_owned(), Some("~".to_owned())));
     // Cleared, the command's own list is back.
     pane.search("");
-    assert_eq!(titles(&pane.launcher)[0], "Choose folder…");
+    assert_eq!(titles(&pane.launcher), ["What is searched"]);
 }
 
 fn a_documents_actions_act_through_the_system_and_close_the_window(fixture: &'static Package) {
-    let pane = Pane::new(fixture, None);
+    let pane = Pane::new(fixture);
     pane.open();
     pane.search("todo");
     pane.select("todo.txt");
@@ -378,13 +391,14 @@ fn a_documents_actions_act_through_the_system_and_close_the_window(fixture: &'st
             reveal(),
             "Open With…".to_owned(),
             "Copy Path".to_owned(),
+            "Copy Name".to_owned(),
             "Copy File".to_owned(),
             trash(),
         ]
     );
     let actions = pane.launcher.item_actions().unwrap();
     assert!(actions.actions[2].submenu, "Open With… opens a submenu");
-    assert!(actions.actions[5].destructive);
+    assert!(actions.actions[6].destructive);
     assert_eq!(pane.launcher.selected_action().label, "Open");
 
     // Enter opens it with the system's handler, and the window closes.
@@ -429,6 +443,19 @@ fn a_documents_actions_act_through_the_system_and_close_the_window(fixture: &'st
         .map(|hud| hud.title)
         .collect();
     assert_eq!(huds, ["Copied to Clipboard"]);
+    assert!(pane.closed());
+    // Copy Name copies the name alone (#177).
+    pane.select("todo.txt");
+    pane.run("Copy Name");
+    match pane.system.take().as_slice() {
+        [
+            Done::Copied {
+                clip: Clip::Text(name),
+                concealed: false,
+            },
+        ] => assert_eq!(name, "todo.txt"),
+        other => panic!("{other:?}"),
+    }
     assert!(pane.closed());
     pane.select("todo.txt");
     pane.run("Copy File");
@@ -504,7 +531,7 @@ fn trash_selected(pane: &Pane, answer: ConfirmAnswer) {
 }
 
 fn move_to_recycle_bin_is_confirmed_first(fixture: &'static Package) {
-    let pane = Pane::new(fixture, None);
+    let pane = Pane::new(fixture);
     pane.open();
     pane.search("todo");
 
@@ -546,6 +573,7 @@ fn a_program_runs_only_through_run(pane: &Pane, name: &str, path: &Path) {
             "Open With…".to_owned(),
             "Run".to_owned(),
             "Copy Path".to_owned(),
+            "Copy Name".to_owned(),
             "Copy File".to_owned(),
             trash(),
         ]
@@ -580,22 +608,49 @@ fn a_program_runs_only_through_run(pane: &Pane, name: &str, path: &Path) {
 }
 
 fn enter_never_runs_a_program_in_search_files(fixture: &'static Package) {
-    let pane = Pane::new(fixture, None);
+    let pane = Pane::new(fixture);
     pane.open();
     pane.search("run plan");
     let path = pane.folder.file("notes/run plan.bat");
     a_program_runs_only_through_run(&pane, "run plan.bat", &path);
+    // A script known by its executable bit alone: its row, told from its
+    // name, has a document's actions (the index reads no file to list
+    // it), but the check before Enter acts finds the bit, so Enter shows
+    // it in the file manager and runs nothing (#175, docs/files.md).
     #[cfg(unix)]
     {
         pane.open();
         pane.search("plan script");
         let script = pane.folder.file("notes/plan script");
-        a_program_runs_only_through_run(&pane, "plan script", &script);
+        pane.select("plan script");
+        assert_eq!(
+            pane.actions(),
+            [
+                "Open".to_owned(),
+                reveal(),
+                "Open With…".to_owned(),
+                "Copy Path".to_owned(),
+                "Copy Name".to_owned(),
+                "Copy File".to_owned(),
+                trash(),
+            ]
+        );
+        block_on(pane.launcher.activate_selected());
+        match pane.system.take().as_slice() {
+            [Done::Revealed(revealed)] => assert!(same_file(revealed, &script)),
+            other => panic!("{other:?}"),
+        }
+        assert!(pane.opener.take().is_empty(), "Enter ran nothing");
+        assert_eq!(
+            pane.huds(),
+            [format!("Showed plan script in {}", manager())]
+        );
+        assert!(pane.closed());
     }
 }
 
 fn root_searchs_file_results_have_the_same_actions(fixture: &'static Package) {
-    let pane = Pane::new(fixture, None);
+    let pane = Pane::new(fixture);
     pane.launcher.show_root_search();
 
     // A program: Enter reveals it.
@@ -603,9 +658,29 @@ fn root_searchs_file_results_have_the_same_actions(fixture: &'static Package) {
     let path = pane.folder.file("notes/run plan.bat");
     a_program_runs_only_through_run(&pane, "run plan.bat", &path);
 
-    // A document: Enter opens it, root search keeping its query.
+    // A document: Enter opens it, root search keeping its query. The
+    // files come after the commands, under "Files", with the row opening
+    // the command with the query typed.
     pane.launcher.show_root_search();
     pane.search("todo");
+    assert_eq!(
+        titles(&pane.launcher),
+        [
+            "todo.txt".to_owned(),
+            format!("{} for “todo”", pane.fixture.command)
+        ]
+    );
+    let presentation = pane.launcher.presentation();
+    assert_eq!(presentation.rows[0].kind, Some(pane_core::RowKind::File));
+    assert!(presentation.rows[0].icon.is_some(), "the system's icon");
+    assert_eq!(
+        presentation
+            .sections
+            .iter()
+            .map(|section| section.label.as_str())
+            .collect::<Vec<_>>(),
+        ["Files"]
+    );
     pane.select("todo.txt");
     assert_eq!(pane.actions()[..2], ["Open".to_owned(), reveal()]);
     block_on(pane.launcher.activate_selected());
@@ -616,118 +691,82 @@ fn root_searchs_file_results_have_the_same_actions(fixture: &'static Package) {
     assert!(pane.closed());
 }
 
-/// A folder lister the test holds up: each listing waits until the test
-/// lets it finish, or until it is cancelled, and finds the files `names`.
-struct HeldFolders {
-    names: Vec<&'static str>,
-    state: Mutex<(usize, bool)>,
-    changed: Condvar,
-}
-
-impl HeldFolders {
-    fn new(names: Vec<&'static str>) -> Arc<HeldFolders> {
-        Arc::new(HeldFolders {
-            names,
-            state: Mutex::new((0, false)),
-            changed: Condvar::new(),
-        })
-    }
-
-    fn release(&self) {
-        self.state.lock().unwrap().1 = true;
-        self.changed.notify_all();
-    }
-
-    fn wait_until_started(&self) {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let mut state = self.state.lock().unwrap();
-        while state.0 == 0 {
-            let left = deadline
-                .checked_duration_since(Instant::now())
-                .expect("the folder was never listed");
-            state = self.changed.wait_timeout(state, left).unwrap().0;
+fn search_files_opens_from_root_search_with_the_query_typed(fixture: &'static Package) {
+    let pane = Pane::new(fixture);
+    pane.launcher.show_root_search();
+    pane.search("plan");
+    let row = format!("{} for “plan”", fixture.command);
+    assert!(
+        titles(&pane.launcher).contains(&row),
+        "{:?}",
+        titles(&pane.launcher)
+    );
+    // At most five files, then the row searching them all.
+    assert!(titles(&pane.launcher).len() <= 6);
+    select_title(&pane.launcher, &row);
+    block_on(pane.launcher.activate_selected());
+    assert_eq!(
+        pane.launcher.view().screen,
+        Screen::CommandSearch {
+            query: "plan".into()
         }
-    }
-
-    fn started(&self) -> usize {
-        self.state.lock().unwrap().0
+    );
+    let found = titles(&pane.launcher);
+    for name in ["Résumé plan ü.txt", "plan.md", "run plan.bat"] {
+        assert!(found.iter().any(|title| title == name), "{found:?}");
     }
 }
 
-impl Folders for HeldFolders {
-    fn list(
-        &self,
-        folder: &Path,
-        _limits: &Limits,
-        cancelled: &dyn Fn() -> bool,
-    ) -> Result<FolderListing, String> {
-        let mut state = self.state.lock().unwrap();
-        state.0 += 1;
-        self.changed.notify_all();
-        while !state.1 {
-            if cancelled() {
-                return Err("cancelled".into());
-            }
-            state = self
-                .changed
-                .wait_timeout(state, Duration::from_millis(10))
-                .unwrap()
-                .0;
+fn a_folder_opens_in_the_file_manager(fixture: &'static Package) {
+    let pane = Pane::new(fixture);
+    pane.launcher.show_root_search();
+    pane.search("notes");
+    pane.select("notes");
+    assert_eq!(
+        pane.launcher.presentation().rows[0].kind,
+        Some(pane_core::RowKind::Folder)
+    );
+    assert_eq!(pane.actions()[..2], ["Open".to_owned(), reveal()]);
+    block_on(pane.launcher.activate_selected());
+    let opened = pane.opener.take();
+    assert_eq!(opened.len(), 1);
+    assert!(same_file(&opened[0], &pane.folder.file("notes")));
+    assert_eq!(pane.huds(), ["Opened notes"]);
+}
+
+fn a_file_created_while_pane_runs_is_found(fixture: &'static Package) {
+    let pane = Pane::new(fixture);
+    let new = pane.folder.file("notes/minutes 2026.txt");
+    fs::write(&new, "minutes").unwrap();
+    // The system's watcher reports it; it is found within a few seconds.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        assert!(pane.launcher.wait_for_file_index(Duration::from_secs(10)));
+        pane.launcher.show_root_search();
+        pane.search("minutes");
+        if titles(&pane.launcher).first().map(String::as_str) == Some("minutes 2026.txt") {
+            break;
         }
-        Ok(FolderListing {
-            files: self
-                .names
-                .iter()
-                .map(|name| Listed {
-                    path: folder.join(name),
-                    relative: (*name).into(),
-                })
-                .collect(),
-            truncated: false,
-        })
+        assert!(Instant::now() < deadline, "{:?}", titles(&pane.launcher));
+        std::thread::sleep(Duration::from_millis(50));
     }
-}
-
-/// Types `query` on a thread of its own; the receiver hears once its
-/// answer is shown (or it was stopped).
-fn search_in_background(launcher: &Launcher, query: &str) -> mpsc::Receiver<()> {
-    let searching = launcher.set_query(query);
-    let (done, finished) = mpsc::channel();
-    std::thread::spawn(move || {
-        block_on(searching);
-        let _ = done.send(());
-    });
-    finished
-}
-
-fn a_newer_text_stops_the_search_before_it(fixture: &'static Package) {
-    let folders = HeldFolders::new(vec!["report late.txt", "report current.txt"]);
-    let pane = Pane::new(fixture, Some(folders.clone()));
-    pane.open();
-
-    // The first text waits for the folder's listing; the newer one stops
-    // it, and only the newer text's files are listed once it is done.
-    let first = search_in_background(&pane.launcher, "late");
-    folders.wait_until_started();
-    let second = search_in_background(&pane.launcher, "current");
-    first
-        .recv_timeout(Duration::from_secs(10))
-        .expect("the stale search ended at once");
-    folders.release();
-    second
-        .recv_timeout(Duration::from_secs(10))
-        .expect("the search finished");
-    assert_eq!(titles(&pane.launcher), ["report current.txt"]);
-    assert_eq!(folders.started(), 1, "one listing for the command");
-    // Later texts filter the kept listing.
-    pane.search("late");
-    assert_eq!(titles(&pane.launcher), ["report late.txt"]);
-    assert_eq!(folders.started(), 1);
+    // A stale row is explained at Enter rather than opened.
+    pane.select("minutes 2026.txt");
+    fs::remove_file(&new).unwrap();
+    block_on(pane.launcher.activate_selected());
+    assert!(pane.opener.take().is_empty());
+    assert_eq!(
+        pane.launcher.view().status,
+        Status::Error("Could not open minutes 2026.txt: it no longer exists".into())
+    );
 }
 
 /// Declares one test per check for each language's files package.
 macro_rules! contract {
     ($($check:ident),* $(,)?) => {
+        mod files {
+            $(#[test] fn $check() { super::$check(&super::FILES) })*
+        }
         mod rust {
             $(#[test] fn $check() { super::$check(&super::RUST) })*
         }
@@ -746,14 +785,16 @@ contract!(
     move_to_recycle_bin_is_confirmed_first,
     enter_never_runs_a_program_in_search_files,
     root_searchs_file_results_have_the_same_actions,
-    a_newer_text_stops_the_search_before_it,
+    search_files_opens_from_root_search_with_the_query_typed,
+    a_folder_opens_in_the_file_manager,
+    a_file_created_while_pane_runs_is_found,
 );
 
 #[test]
 fn the_package_keeps_its_identity_across_the_rework() {
     // The Files command keeps its id, so a hotkey, alias or pin given it
     // before the rework still finds it.
-    let pane = Pane::new(&RUST, None);
+    let pane = Pane::new(&FILES);
     let identity: PackageIdentity = pane.launcher.packages()[0].identity.clone();
     let command = format!("{}#files", identity.key());
     pane.launcher.show_root_search();

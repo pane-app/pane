@@ -1,16 +1,17 @@
 //! Pane's application launcher, a default extension: the applications
-//! installed on the system are found by name in root search, and invoking
-//! one opens it. Its command lists them all. Pane's host finds and opens
-//! them ([`pane_guest::applications`]), since a WASI guest cannot; this
+//! installed on the system are found by name in root search, each its own
+//! result, and invoking one opens it. Pane's host finds and opens them
+//! ([`pane_guest::applications`]), since a WASI guest cannot; this
 //! extension supplies them to root search, so disabling the package removes
-//! them and stops Pane looking for them.
+//! them and stops Pane looking for them. Its command is a root provider
+//! (`"mode": "provider"` in `pane.json`, #164): it has no row and no screen
+//! of its own.
 #![no_std]
 
-use pane_guest::alloc::{format, string::String, vec::Vec};
+use pane_guest::alloc::{string::String, vec::Vec};
 use pane_guest::applications::{self, Application};
-use pane_guest::feedback::{Toast, show_toast};
 use pane_guest::indexed::{IndexedAction, IndexedResult};
-use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
+use pane_guest::{Command, NoCustomView};
 
 struct Applications;
 pane_guest::export!(Applications);
@@ -23,46 +24,18 @@ fn installed() -> Result<Vec<Application>, String> {
     Ok(found)
 }
 
-/// Opens the application `item_id`, the action of its item, and shows a
-/// toast saying so.
-async fn act(item_id: String) -> Result<(), String> {
-    applications::open(&item_id)?;
-    let name = installed()?
-        .into_iter()
-        .find(|application| application.id == item_id)
-        .map_or(item_id, |application| application.name);
-    show_toast(Toast::success(format!("Opened {name}")));
-    Ok(())
-}
-
+/// A root provider: Pane never opens or runs it, so the command keeps the
+/// defaults (opening it is an error).
 impl Command for Applications {
     type CustomView = NoCustomView;
-
-    async fn render() -> Result<List, String> {
-        let items = installed()?.into_iter().map(|application| {
-            let id = application.id;
-            Item::new(id.clone(), application.name)
-                .subtitle(application.location)
-                .on_action(move || act(id))
-        });
-        Ok(List::new("Applications: type a name in root search").items(items))
-    }
-
-    async fn submit_form(_item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {
-        Err(FormError {
-            field: None,
-            message: "Applications has no forms".into(),
-        })
-    }
-
-    async fn open_view(_item_id: String) -> Result<CustomView, String> {
-        Err("Applications has no custom views".into())
-    }
 }
 
 impl pane_guest::indexed::Guest for Applications {
     /// One result per installed application: its name, found in root search
-    /// like a command's title, and opening it when invoked.
+    /// like a command's title, as are its other names (untranslated, its
+    /// program's) and its keywords; subtitled "Application", or with what
+    /// tells it apart from another application of its name; opening it when
+    /// invoked.
     async fn results() -> Result<Vec<IndexedResult>, String> {
         Ok(installed()?
             .into_iter()
@@ -70,7 +43,13 @@ impl pane_guest::indexed::Guest for Applications {
                 action: IndexedAction::OpenApplication(application.id.clone()),
                 id: application.id,
                 title: application.name,
-                subtitle: Some("Application".into()),
+                subtitle: Some(
+                    application
+                        .distinction
+                        .unwrap_or_else(|| "Application".into()),
+                ),
+                alternate_titles: application.alternate_titles,
+                keywords: application.keywords,
             })
             .collect())
     }

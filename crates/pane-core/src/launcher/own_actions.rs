@@ -8,12 +8,15 @@
 //! "Open With…" opening a submenu of the installed applications. Pane
 //! performs them itself; no extension is called.
 //!
-//! **A file** (ADR 0017: the extension names it by the id Pane gave it,
-//! never by a path). Pane checks it again before acting, as it always
-//! did before opening one (`crate::files`). A document's actions are
+//! **A file** (ADR 0017 and ADR 0034: the extension names it by the id
+//! Pane gave it, never by a path). Pane checks it again before acting, as it
+//! always did before opening one (`crate::files`, and for the file index
+//! `crate::file_index::Indexer::checked`). A folder the index found has
+//! Open (Enter: the file manager), Show in Explorer, Copy Path, Copy Name,
+//! Copy File and Move to Recycle Bin. A document's actions are
 //! Open (Enter), Show in Explorer (Ctrl+Enter; Finder or the File Manager
-//! elsewhere), Open With…, Copy Path, Copy File and Move to Recycle Bin
-//! (destructive, confirmed first). File search's own Enter never runs a
+//! elsewhere), Open With…, Copy Path, Copy Name (#177), Copy File and Move
+//! to Recycle Bin (destructive, confirmed first). File search's own Enter never runs a
 //! program by accident (ADR 0037's exception, keeping ADR 0017's intent):
 //! for a program or script, Enter shows it in Explorer, Ctrl+Enter is Open
 //! With…, and only the explicit Run action runs it. Each closes the window
@@ -44,6 +47,7 @@ const REVEAL: &str = "pane.reveal";
 /// Open With…'s submenu; its entries are `pane.open-with/<application id>`.
 const OPEN_WITH: &str = "pane.open-with";
 const COPY_PATH: &str = "pane.copy-path";
+const COPY_NAME: &str = "pane.copy-name";
 const COPY_FILE: &str = "pane.copy-file";
 const TRASH: &str = "pane.trash";
 const COPY_ANSWER: &str = "pane.copy-answer";
@@ -99,12 +103,16 @@ fn open_with() -> Action {
 /// The actions of `file`, in order (see the module docs).
 pub(super) fn file_actions(file: &FileRow) -> Vec<Action> {
     let reveal = action(format!("Show in {}", file_manager()), REVEAL);
-    let mut actions = if file.program {
+    let mut actions = if file.folder {
+        // A folder opens in the file manager.
+        vec![action("Open", OPEN), reveal]
+    } else if file.program {
         vec![reveal, open_with(), action("Run", RUN)]
     } else {
         vec![action("Open", OPEN), reveal, open_with()]
     };
     actions.push(action("Copy Path", COPY_PATH));
+    actions.push(action("Copy Name", COPY_NAME));
     actions.push(action("Copy File", COPY_FILE));
     actions.push(Action {
         style: ActionStyle::Destructive,
@@ -184,6 +192,7 @@ pub(super) enum Work {
         name: String,
     },
     CopyPath(FileRow),
+    CopyName(FileRow),
     CopyFile(FileRow),
     Trash(FileRow),
     Paste(String),
@@ -211,6 +220,7 @@ pub(super) fn work(own: Own, callback: &str, title: &str) -> Option<Work> {
                 RUN => Some(Work::Run(file)),
                 REVEAL => Some(Work::Reveal(file)),
                 COPY_PATH => Some(Work::CopyPath(file)),
+                COPY_NAME => Some(Work::CopyName(file)),
                 COPY_FILE => Some(Work::CopyFile(file)),
                 TRASH => Some(Work::Trash(file)),
                 _ => None,
@@ -271,6 +281,29 @@ impl Launcher {
     /// `epoch` (see the module docs).
     pub(super) async fn do_own(&self, epoch: u64, work: Work) {
         let ended = match work {
+            // Found in the file index: checked again, then opened, or shown
+            // in the file manager if it turned out to be a program (its
+            // executable bit), never run (#175, ADR 0037).
+            Work::Open(file) if file.indexed => {
+                let links = self.links.clone();
+                let system = self.system();
+                let name = file.name.clone();
+                let manager = file_manager();
+                let opened = self
+                    .on_entry(&file, move |checked| {
+                        if checked.program {
+                            system.reveal(&checked.path).map(|()| true)
+                        } else {
+                            links.open_file(&checked.path).map(|()| false)
+                        }
+                    })
+                    .await;
+                match opened {
+                    Ok(false) => Ended::Hud(format!("Opened {name}")),
+                    Ok(true) => Ended::Hud(format!("Showed {name} in {manager}")),
+                    Err(why) => Ended::Failed(format!("Could not open {name}: {why}")),
+                }
+            }
             Work::Open(file) => {
                 let links = self.links.clone();
                 let name = file.name.clone();
@@ -312,8 +345,16 @@ impl Launcher {
             } => {
                 let system = self.system();
                 let name = file.name.clone();
+                let applications = self.runtime().ok().map(|runtime| runtime.applications());
                 let opened = self
                     .on_file(&file, true, move |path| {
+                        // The installed application is opened by its source.
+                        let application = match &applications {
+                            Some(applications) => {
+                                crate::applications::opener(applications.as_ref(), &application)
+                            }
+                            None => application,
+                        };
                         system.open(&path.to_string_lossy(), Some(application.as_str()))
                     })
                     .await;
@@ -335,6 +376,25 @@ impl Launcher {
                     Err(why) => Ended::Failed(format!("Could not copy the path of {name}: {why}")),
                 }
             }
+            // The name as the system has it now, once the entry is
+            // checked again (#177).
+            Work::CopyName(file) => {
+                let system = self.system();
+                let name = file.name.clone();
+                let copied = self
+                    .on_file(&file, true, move |path| {
+                        let named = path
+                            .file_name()
+                            .map(|named| named.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| path.display().to_string());
+                        system.copy(&Clip::Text(named), false)
+                    })
+                    .await;
+                match copied {
+                    Ok(()) => Ended::Hud(COPIED.into()),
+                    Err(why) => Ended::Failed(format!("Could not copy the name of {name}: {why}")),
+                }
+            }
             Work::CopyFile(file) => {
                 let system = self.system();
                 let name = file.name.clone();
@@ -354,7 +414,7 @@ impl Launcher {
                 let copied = text.clone();
                 self.paste_or_copy(
                     epoch,
-                    Clip::Text(text),
+                    Some(Clip::Text(text)),
                     Box::new(move || system.copy(&Clip::Text(copied), false)),
                 )
                 .await;
@@ -418,12 +478,35 @@ impl Launcher {
         programs: bool,
         act: impl FnOnce(PathBuf) -> Result<(), String> + Send + 'static,
     ) -> Result<(), String> {
+        if file.indexed {
+            // Run, Reveal, Open With…, the copies and the bin act on a
+            // program as on any file; only Enter's Open tells them apart.
+            return self.on_entry(file, move |checked| act(checked.path)).await;
+        }
         let files = self.lock().files.clone();
         let (owner, id) = (file.owner.clone(), file.id.clone());
         off_thread(move || {
             let files =
                 files.ok_or_else(|| String::from("Pane's extension runtime is unavailable"))?;
             act(files.checked_file(&owner, &id, programs)?)
+        })
+        .await
+    }
+
+    /// Checks the file index's entry `file` again, off the calling thread
+    /// (see `crate::file_index::Indexer::checked`), then does `act` with
+    /// what the check found there.
+    async fn on_entry<T: Send + 'static>(
+        &self,
+        file: &FileRow,
+        act: impl FnOnce(crate::file_index::Checked) -> Result<T, String> + Send + 'static,
+    ) -> Result<T, String> {
+        let files = self.lock().files.clone();
+        let (owner, id) = (file.owner.clone(), file.id.clone());
+        off_thread(move || {
+            let files =
+                files.ok_or_else(|| String::from("Pane's extension runtime is unavailable"))?;
+            act(files.indexer().checked(&owner, &id)?)
         })
         .await
     }
@@ -452,19 +535,25 @@ impl Launcher {
     /// yet, does `fallback` (a copy) instead and says so in a HUD
     /// ([`PASTE_FALLBACK`]), which closes the window too. A failure is said
     /// in the status line of the screen of `epoch`, and in a HUD once the
-    /// window has closed.
+    /// window has closed. With no `clip` — content the system cannot paste
+    /// through [`Clip`], such as a copied image (#167) — it does `fallback`
+    /// as where Pane cannot paste.
     pub(super) async fn paste_or_copy(
         &self,
         epoch: u64,
-        clip: Clip,
+        clip: Option<Clip>,
         fallback: Box<dyn FnOnce() -> Result<(), String> + Send>,
     ) {
         let system = self.system();
         let asked = system.clone();
         // Asked first, so that a paste this system cannot make leaves the
         // window and the clipboard as they were.
-        let pasted = match off_thread(move || asked.can_paste()).await {
-            Ok(()) => {
+        let can_paste = match clip {
+            Some(clip) => off_thread(move || asked.can_paste()).await.map(|()| clip),
+            None => Err(SystemError::NotAvailable(String::new())),
+        };
+        let pasted = match can_paste {
+            Ok(clip) => {
                 // The application that was in front can only come back
                 // once Pane's window has gone.
                 self.close_after_acting();

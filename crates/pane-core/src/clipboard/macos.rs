@@ -10,9 +10,12 @@
 //! being made. No permission is needed.
 //!
 //! On each change the thread, and only it, reads the pasteboard: first the
-//! markers, then the text (`NSPasteboardTypeString`) only if they allow
-//! it. The de-facto marker of [nspasteboard.org]'s convention,
-//! `org.nspasteboard.ConcealedType`, which password managers such as
+//! markers, then, only if they allow it, what was copied: the files Finder
+//! copied (every item's `public.file-url`), else the text
+//! (`NSPasteboardTypeString`), else an image (`public.png` as it is, else
+//! `public.tiff` made into a PNG; #167). The de-facto marker of
+//! [nspasteboard.org]'s convention, `org.nspasteboard.ConcealedType`,
+//! which password managers such as
 //! 1Password and Strongbox set when they copy a secret, is honored: its
 //! presence alone withholds the text. macOS has no formats answering
 //! Windows' history and cloud questions, so those stay unset. The
@@ -40,15 +43,22 @@
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use std::path::PathBuf;
 
-use objc2::rc::autoreleasepool;
-use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
-use objc2_foundation::{NSData, NSString, NSURL};
+use objc2::rc::{Retained, autoreleasepool};
+use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2_app_kit::{
+    NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardItem,
+    NSPasteboardTypeString, NSPasteboardWriting,
+};
+use objc2_foundation::{NSArray, NSData, NSDictionary, NSString, NSURL};
 
-use super::{ClipboardSystem, Content, Markers, Observation, Sink, Watch};
+use super::{
+    ClipboardSystem, Content, CopiedImage, MAX_FILES, MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, Markers,
+    Observation, Sink, Watch,
+};
 use crate::system::Clip;
 use crate::threads::Joinable;
 
@@ -68,11 +78,23 @@ const CONCEALED_TYPE: &str = "org.nspasteboard.ConcealedType";
 /// copies a file: `public.file-url` (`NSPasteboardTypeFileURL`).
 const FILE_URL_TYPE: &str = "public.file-url";
 
+/// The pasteboard type of a PNG image (`NSPasteboardTypePNG`).
+const PNG_TYPE: &str = "public.png";
+
+/// The pasteboard type of a TIFF image (`NSPasteboardTypeTIFF`), which
+/// most of macOS' own applications copy an image as.
+const TIFF_TYPE: &str = "public.tiff";
+
 /// How often the watcher looks at the pasteboard's change count, and so
-/// the longest a copy takes to be reported: one integer read per look,
+/// the usual delay before a copy is reported: one integer read per look,
 /// with the pasteboard read only when the count moved. Provisional (#37),
 /// pending the user's decision.
 const POLL: Duration = Duration::from_millis(250);
+
+/// Ownership can change before the owner supplies its declared file URL.
+/// Give it a bounded time to finish, while still noticing a newer copy or
+/// a stopped watch at every poll.
+const FILE_READY_WAIT: Duration = Duration::from_secs(2);
 
 /// How long dropping the watch waits for the watcher to end.
 const STOP_WAIT: Duration = Duration::from_secs(1);
@@ -103,6 +125,63 @@ impl ClipboardSystem for MacosClipboard {
     fn write_text(&self, text: &str) -> Result<(), String> {
         put_text(text, false)
     }
+
+    fn write_image(&self, png: &[u8]) -> Result<(), String> {
+        put_image(png)
+    }
+
+    fn write_files(&self, paths: &[PathBuf]) -> Result<(), String> {
+        put_files(paths)
+    }
+}
+
+/// Puts the image `png` on the pasteboard, replacing what was there: as the
+/// PNG itself, and as a TIFF beside it for the applications that read only
+/// that.
+fn put_image(png: &[u8]) -> Result<(), String> {
+    autoreleasepool(|_| {
+        let pasteboard = NSPasteboard::generalPasteboard();
+        pasteboard.clearContents();
+        let data = NSData::with_bytes(png);
+        if !pasteboard.setData_forType(Some(&data), &NSString::from_str(PNG_TYPE)) {
+            return Err("the pasteboard would not take the image".into());
+        }
+        if let Some(tiff) =
+            NSBitmapImageRep::imageRepWithData(&data).and_then(|image| image.TIFFRepresentation())
+        {
+            let _ = pasteboard.setData_forType(Some(&tiff), &NSString::from_str(TIFF_TYPE));
+        }
+        Ok(())
+    })
+}
+
+/// Puts the files `paths` on the pasteboard, replacing what was there, as
+/// Finder copies them: one item per file, each its file URL.
+fn put_files(paths: &[PathBuf]) -> Result<(), String> {
+    autoreleasepool(|_| {
+        let kind = NSString::from_str(FILE_URL_TYPE);
+        let mut items: Vec<Retained<ProtocolObject<dyn NSPasteboardWriting>>> = Vec::new();
+        for path in paths {
+            let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+            let Some(address) = url.absoluteString() else {
+                return Err(format!("{} has no file URL", path.display()));
+            };
+            let item = NSPasteboardItem::new();
+            if !item.setString_forType(&address, &kind) {
+                return Err(format!(
+                    "{} could not be put on the pasteboard",
+                    path.display()
+                ));
+            }
+            items.push(ProtocolObject::from_retained(item));
+        }
+        let pasteboard = NSPasteboard::generalPasteboard();
+        pasteboard.clearContents();
+        if !pasteboard.writeObjects(&NSArray::from_retained_slice(&items)) {
+            return Err("the pasteboard would not take the files".into());
+        }
+        Ok(())
+    })
 }
 
 /// Puts `text` on the pasteboard, replacing what was there, with the
@@ -253,26 +332,59 @@ impl Watcher {
     fn observe(&mut self, count: isize) {
         self.read_through = count;
         let ticket = self.sink.reading();
-        let observation = autoreleasepool(|_| observation());
-        self.sink.observed(ticket, observation);
+        let deadline = Instant::now() + FILE_READY_WAIT;
+        loop {
+            if self.stopping.load(Ordering::SeqCst)
+                || autoreleasepool(|_| NSPasteboard::generalPasteboard().changeCount()) != count
+            {
+                return;
+            }
+            let (observation, waiting_for_file) = autoreleasepool(|_| observation());
+            // A newer owner invalidates the whole reading, including its
+            // markers. Its contents are read on the next poll instead.
+            if autoreleasepool(|_| NSPasteboard::generalPasteboard().changeCount()) != count {
+                return;
+            }
+            if !waiting_for_file || Instant::now() >= deadline {
+                self.sink.observed(ticket, observation);
+                return;
+            }
+            // Keep the first ticket: a Clear History while data is being
+            // supplied must still fence this copy out of the history.
+            std::thread::sleep(POLL);
+        }
     }
 }
 
-/// What is on the pasteboard, read once: the markers first, then the text
-/// only if they allow it. The pasteboard does not name the program that
-/// copied, so the source is unknown.
-fn observation() -> Observation {
-    let markers = markers_of(&type_names());
+/// What is on the pasteboard, read once: the markers first, then, only if
+/// they allow it, the files, else the text, else an image. The pasteboard
+/// does not name the program that copied, so the source is unknown. The
+/// second value says a declared file's data (or the new owner's types)
+/// is not ready yet. AppKit's change count tracks ownership, not later
+/// data writes: https://developer.apple.com/documentation/appkit/nspasteboard/changecount
+fn observation() -> (Observation, bool) {
+    let types = type_names();
+    let markers = markers_of(&types);
+    let mut waiting_for_file = false;
     let content = if markers.allow() {
-        text().map_or(Content::Other, Content::Text)
+        let files = files(&types);
+        waiting_for_file =
+            types.is_empty() || (types.iter().any(|kind| kind == FILE_URL_TYPE) && files.is_none());
+        files
+            .or_else(|| text().map(Content::Text))
+            .or_else(|| image(&types))
+            .unwrap_or(Content::Other)
     } else {
         Content::Withheld
     };
-    Observation {
-        content,
-        markers,
-        source: None,
-    }
+    (
+        Observation {
+            content,
+            markers,
+            source: None,
+        },
+        waiting_for_file,
+    )
 }
 
 /// The names of the pasteboard's types, as it lists them for its current
@@ -299,6 +411,70 @@ fn text() -> Option<String> {
             // SAFETY: the type is AppKit's static constant for text.
             .stringForType(unsafe { NSPasteboardTypeString })
             .map(|string| string.to_string())
+    })
+}
+
+/// The files on the pasteboard, as Finder copies them (each item's file
+/// URL), when `types` says it holds any; more than [`MAX_FILES`] are not
+/// read.
+fn files(types: &[String]) -> Option<Content> {
+    if !types.iter().any(|kind| kind == FILE_URL_TYPE) {
+        return None;
+    }
+    autoreleasepool(|_| {
+        let items = NSPasteboard::generalPasteboard().pasteboardItems()?;
+        if items.count() > MAX_FILES {
+            return Some(Content::TooLarge);
+        }
+        let kind = NSString::from_str(FILE_URL_TYPE);
+        let paths: Vec<PathBuf> = (0..items.count())
+            .filter_map(|index| {
+                let address = items.objectAtIndex(index).stringForType(&kind)?;
+                let url = NSURL::URLWithString(&address)?;
+                if !url.isFileURL() {
+                    return None;
+                }
+                url.path().map(|path| PathBuf::from(path.to_string()))
+            })
+            .collect();
+        (!paths.is_empty()).then_some(Content::Files(paths))
+    })
+}
+
+/// The image on the pasteboard, when `types` says it holds one: its PNG as
+/// it is, else its TIFF made into a PNG. A PNG larger than Pane keeps, or
+/// a TIFF of more than [`MAX_IMAGE_PIXELS`], is too large.
+fn image(types: &[String]) -> Option<Content> {
+    autoreleasepool(|_| {
+        let pasteboard = NSPasteboard::generalPasteboard();
+        if types.iter().any(|kind| kind == PNG_TYPE)
+            && let Some(data) = pasteboard.dataForType(&NSString::from_str(PNG_TYPE))
+        {
+            if data.length() > MAX_IMAGE_BYTES {
+                return Some(Content::TooLarge);
+            }
+            if let Some(image) = CopiedImage::from_png(data.to_vec()) {
+                return Some(Content::Image(image));
+            }
+        }
+        if !types.iter().any(|kind| kind == TIFF_TYPE) {
+            return None;
+        }
+        let tiff = pasteboard.dataForType(&NSString::from_str(TIFF_TYPE))?;
+        let image = NSBitmapImageRep::imageRepWithData(&tiff)?;
+        let pixels = (image.pixelsWide().max(0) as u64) * (image.pixelsHigh().max(0) as u64);
+        if pixels > MAX_IMAGE_PIXELS {
+            return Some(Content::TooLarge);
+        }
+        let properties = NSDictionary::<NSString, AnyObject>::new();
+        // SAFETY: an empty dictionary of properties is of the type asked.
+        let png = unsafe {
+            image.representationUsingType_properties(NSBitmapImageFileType::PNG, &properties)
+        }?;
+        if png.length() > MAX_IMAGE_BYTES {
+            return Some(Content::TooLarge);
+        }
+        CopiedImage::from_png(png.to_vec()).map(Content::Image)
     })
 }
 

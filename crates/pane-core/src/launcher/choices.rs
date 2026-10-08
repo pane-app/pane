@@ -29,6 +29,25 @@ pub(crate) fn split(command: &str) -> (&str, &str) {
     (package, command)
 }
 
+/// The title of the command `command` when it is a root provider of an
+/// installed package (`"mode": "provider"`, #164), which has no alias,
+/// fallback, hotkey or pin; `None` for any other command.
+pub(super) fn provider_title(state: &State, command: &str) -> Option<String> {
+    let (key, manifest_id) = split(command);
+    let package = state
+        .packages
+        .iter()
+        .find(|package| package.identity.key() == key)?;
+    if !package.is_provider(manifest_id) {
+        return None;
+    }
+    package
+        .commands()
+        .into_iter()
+        .find(|registration| registration.id == command)
+        .map(|registration| registration.title)
+}
+
 /// One kind of per-command choices and the file it is recorded in.
 pub(super) trait Choices: Clone + Default + Send + 'static {
     /// The record's file name, beside `installed.json`.

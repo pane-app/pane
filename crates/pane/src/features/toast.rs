@@ -202,7 +202,7 @@ impl LauncherWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let status = self.launcher.view().status;
+        let status = self.launcher.status();
         let Some(shown) = self.footer_toast(&status) else {
             cx.propagate();
             return;
@@ -253,7 +253,7 @@ impl LauncherWindow {
         }
         match self.toast.restore.take() {
             Some(restore) => window.focus(&restore, cx),
-            None if self.launcher.view().search_field().is_some() => self.query.focus(window, cx),
+            None if self.launcher.screen().search_field().is_some() => self.query.focus(window, cx),
             None => window.focus(&self.focus_handle, cx),
         }
     }
@@ -267,7 +267,7 @@ impl LauncherWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let status = self.launcher.view().status;
+        let status = self.launcher.status();
         let Some(shown) = self.footer_toast(&status) else {
             return;
         };
@@ -294,7 +294,7 @@ impl LauncherWindow {
         if self.actions.is_some() || self.menu.is_some() || self.launcher.confirmation().is_some() {
             return;
         }
-        let status = self.launcher.view().status;
+        let status = self.launcher.status();
         let Some(shown) = self.footer_toast(&status) else {
             return;
         };

@@ -1,7 +1,10 @@
 //! Clipboard history through the launcher's public interface, with a fake
-//! system clipboard, for the Clipboard History default extension (Rust) and
-//! the JavaScript and TypeScript clipboard samples alike: nothing is kept
-//! until the user turns it on in the command; then Pane watches the
+//! system clipboard, for the JavaScript and TypeScript clipboard samples,
+//! which keep the whole contract's controls in their own lists: nothing is
+//! kept until the user turns it on in the command (only Pane's own
+//! Clipboard History records from the first start, ADR 0042, which
+//! `clipboard_view.rs` checks with the registered default extension); then
+//! Pane watches the
 //! clipboard and keeps plain text, except what is marked as not to be kept
 //! or comes from an excluded program; pausing, turning it off, disabling
 //! and uninstalling stop the watch at once, and a restart watches again only
@@ -53,7 +56,7 @@ use system::{Done, RecordingSystem};
 /// What a kept item's row says last.
 const ENTER_PASTES: &str = "Enter pastes it";
 
-const MANAGE_ROW: &str = "Manage extensions…";
+const MANAGE_ROW: &str = "Manage Extensions";
 const TURN_ON: &str = "Turn on clipboard history";
 const TURN_OFF: &str = "Turn off clipboard history";
 const PAUSE: &str = "Pause clipboard history";
@@ -438,6 +441,10 @@ fn copy_package(fixture: &Fixture, folder: &Path) {
     .unwrap();
     let manifest = fs::read_to_string(package.join("pane.json")).unwrap();
     let manifest: Value = serde_json::from_str(&manifest).unwrap();
+    // The package icon its manifest names goes with it (#163).
+    if let Some(icon) = manifest["icon"].as_str() {
+        fs::copy(package.join(icon), folder.join(icon)).unwrap();
+    }
     // The packages declare the systems with an adapter (#35 Windows,
     // #38 Linux, #37 macOS); nothing is rewritten here.
     assert_eq!(
@@ -1215,12 +1222,50 @@ fn retained_history_expires_without_the_extension(fixture: &'static Fixture) {
     );
 }
 
-/// Declares one test per check for each language's clipboard package.
+/// The Clipboard History default extension's own list (#166), which a copy
+/// installed from a folder shows (Pane draws its split view only for the
+/// registered default extension): a copy's recording is off until resumed
+/// — only Pane's own Clipboard History records from the first start — then
+/// its items, newest first, under Pause Recording. Its retention, disabled
+/// applications and clearing are Pane's own controls now (the Actions panel
+/// and the extension's Settings page), not rows of its list.
+#[test]
+fn the_rust_package_lists_its_items_under_pause_and_resume_recording() {
+    let pane = Pane::new(&RUST);
+    let launcher = pane.installed();
+    assert!(!pane.clipboard.watching());
+    pane.open(&launcher);
+    assert_eq!(titles(&launcher), ["Resume Recording"]);
+    assert!(!pane.clipboard.copy("before", Some("notepad.exe")));
+
+    assert_eq!(
+        run(&launcher, "Resume Recording"),
+        result("Recording resumed")
+    );
+    assert!(pane.clipboard.watching());
+    assert!(pane.clipboard.copy("hello", Some("notepad.exe")));
+    assert_eq!(pane.listed(&launcher), ["hello"]);
+    assert_eq!(titles(&launcher), ["Pause Recording", "hello"]);
+    assert_eq!(
+        subtitle(&launcher, "hello"),
+        "just now · from notepad.exe · Enter pastes it"
+    );
+    assert_eq!(
+        subtitle(&launcher, "Pause Recording"),
+        "Recording · 1 item kept · Text you copy is kept on this computer"
+    );
+
+    assert_eq!(
+        run(&launcher, "Pause Recording"),
+        result("Recording paused")
+    );
+    assert!(!pane.clipboard.watching());
+    assert_eq!(pane.kept_on_disk(), ["hello"]);
+}
+
+/// Declares one test per check for each sample's clipboard package.
 macro_rules! contract {
     ($($check:ident),* $(,)?) => {
-        mod rust {
-            $(#[test] fn $check() { super::$check(&super::RUST) })*
-        }
         mod javascript {
             $(#[test] fn $check() { super::$check(&super::JAVASCRIPT) })*
         }

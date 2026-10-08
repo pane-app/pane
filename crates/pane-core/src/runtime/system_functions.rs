@@ -142,8 +142,15 @@ impl system_host::Host for GuestState {
             return Err("Nothing to open was named".into());
         }
         let application = application.filter(|application| !application.trim().is_empty());
+        let applications = self.applications();
         self.hosted(off_thread(
-            move || system.open(&target, application.as_deref()),
+            move || {
+                // An installed application's id is opened by its source.
+                let application = application.map(|application| {
+                    crate::applications::opener(applications.as_ref(), &application)
+                });
+                system.open(&target, application.as_deref())
+            },
             || Err(failed()),
         ))
         .await

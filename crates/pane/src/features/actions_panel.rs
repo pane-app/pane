@@ -54,26 +54,30 @@
 //! The panel opens and closes at once: the reference authors no motion for
 //! it.
 
+use std::rc::Rc;
+
 use gpui::{
     AnyElement, App, ClickEvent, Context, Div, Entity, FocusHandle, Focusable, KeyBinding,
-    KeyDownEvent, MouseDownEvent, MouseMoveEvent, Role, SharedString, Stateful, Subscription,
-    Window, actions, div, prelude::*, px,
+    KeyDownEvent, MouseDownEvent, MouseMoveEvent, Pixels, Role, SharedString, Stateful,
+    Subscription, Window, actions, div, prelude::*, px,
 };
 use gpui_elements::editable_text::actions::DEFAULT_INPUT_CONTEXT;
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
+use pane_core::clipboard_view::{ClipboardAction, ClipboardActionItem};
 use pane_core::{
     Icon, ItemActions, KeyboardAction, OpenSubmenu, PinnedLayout, ResultAction, ResultActions,
     RowKind, Screen, SlotChange, SubmenuState,
 };
 
-use crate::app::{LauncherWindow, row_icon};
+use crate::app::LauncherWindow;
 use crate::features::quick_slots;
-use crate::ui::extension_icon::{self, IconSize};
+use crate::ui::extension_icon::{self, IconSize, RowIcon};
 use crate::ui::icon::{Glyph, IconTone, TileSize, glyph, tile_at};
 use crate::ui::input::TextEditingKeys;
 use crate::ui::keycap::{CapStyle, KeySequence, key_sequence};
 use crate::ui::material::{Material, popover_shadows};
 use crate::ui::theme::{Theme, pressed};
+use crate::ui::virtual_list::{self, VirtualList};
 
 actions!(
     actions_panel,
@@ -209,9 +213,26 @@ pub(crate) struct ActionsPanel {
     /// Whether it opened over root search rather than a command's list:
     /// the screen it belongs to (see [`LauncherWindow::actions_belong_to`]).
     on_root: bool,
+    /// The entries' list, drawn virtually (#165): only the entries in view
+    /// are laid out and painted, however many a command gives.
+    list: VirtualList,
+    /// What the list's children are drawn from, as the last frame read it.
+    frame: Option<Rc<PanelFrame>>,
     _filtering: Subscription,
     /// Closes the panel when the window loses activation.
     _deactivation: Subscription,
+}
+
+/// What a frame draws in the panel's list: its children are drawn from it
+/// as the list lays them out.
+struct PanelFrame {
+    /// What the filter lists.
+    listed: Vec<PanelEntry>,
+    /// The list's children: the entries, with their sections' rules and
+    /// labels.
+    children: Vec<PanelChild>,
+    /// The selected entry, an index into `listed`.
+    selected: usize,
 }
 
 struct Opened {
@@ -237,6 +258,9 @@ enum Subject {
     Slot,
     /// The selected item of a command's list.
     Item,
+    /// Pane's own Clipboard History view: its selected record, and the
+    /// history (#166).
+    Clipboard,
 }
 
 impl Subject {
@@ -244,7 +268,7 @@ impl Subject {
     /// action.
     fn group(self) -> &'static str {
         match self {
-            Subject::Result | Subject::Item => PANE_GROUP,
+            Subject::Result | Subject::Item | Subject::Clipboard => PANE_GROUP,
             Subject::Slot => SLOT_GROUP,
         }
     }
@@ -259,6 +283,8 @@ pub(crate) enum EntryKind {
     Item(usize),
     /// The entry at this index of the submenu shown (#140).
     Entry(usize),
+    /// One of the Clipboard History view's actions (#166).
+    Clipboard(ClipboardAction),
     /// What a submenu says instead of entries: that it is loading, or why
     /// the command could not give them. It runs nothing, and the filter
     /// keeps it.
@@ -398,6 +424,55 @@ fn submenu_entries(submenu: &OpenSubmenu) -> Vec<PanelEntry> {
     }
 }
 
+/// The Clipboard History view's `actions` as the panel's entries (#166):
+/// Paste with the invoke binding's accent caps, Copy and Delete with the
+/// view's own keys, the rest under their sections.
+pub(crate) fn clipboard_entries(
+    actions: &[ClipboardActionItem],
+    invoke: &KeySequence,
+) -> Vec<PanelEntry> {
+    actions
+        .iter()
+        .map(|item| {
+            let (glyph, keys) = match item.action {
+                ClipboardAction::Paste => {
+                    (Glyph::ActionRun, Some((invoke.clone(), CapStyle::Accent)))
+                }
+                ClipboardAction::Copy => (
+                    Glyph::Clipboard,
+                    Some((
+                        crate::features::clipboard_history::copy_keys(),
+                        CapStyle::Regular,
+                    )),
+                ),
+                ClipboardAction::Delete => (
+                    Glyph::Delete,
+                    Some((
+                        crate::features::clipboard_history::delete_keys(),
+                        CapStyle::Regular,
+                    )),
+                ),
+                ClipboardAction::PauseRecording => (Glyph::Pause, None),
+                ClipboardAction::ResumeRecording => (Glyph::Record, None),
+                ClipboardAction::ClearHistory => (Glyph::Reset, None),
+                ClipboardAction::KeepFor(_) => (Glyph::Clock, None),
+                ClipboardAction::DisabledApplications => (Glyph::Shield, None),
+            };
+            PanelEntry {
+                kind: EntryKind::Clipboard(item.action),
+                label: item.label.clone(),
+                available: item.available,
+                destructive: item.destructive,
+                submenu: false,
+                section: item.section.clone().map(SharedString::from),
+                glyph,
+                icon: None,
+                keys,
+            }
+        })
+        .collect()
+}
+
 /// The entries whose label holds `query`, ignoring case and the spaces
 /// around it; all of them for a blank one. Filtering flattens the
 /// sections (see [`panel_children`]). A submenu's note stays.
@@ -445,7 +520,7 @@ impl LauncherWindow {
         }
         // A command's list, or a row of root search whose actions Pane
         // performs itself (a file, a computed answer: #150).
-        let screen = self.launcher.view().screen;
+        let screen = self.launcher.screen();
         let own_row =
             matches!(screen, Screen::Root { .. }) && self.launcher.item_actions().is_some();
         if commands_list(&screen) || own_row {
@@ -530,9 +605,40 @@ impl LauncherWindow {
         }
     }
 
+    /// Opens the Actions panel of Pane's own Clipboard History view (#166)
+    /// for the record selected there (`selected`, its id and title), or
+    /// for the history with none: the record's actions and the history's.
+    pub(crate) fn open_clipboard_actions(
+        &mut self,
+        selected: Option<(String, String)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(view) = self.launcher.clipboard_history() else {
+            return;
+        };
+        let (target, title) = match selected {
+            Some((id, title)) => (id, title),
+            None => (String::new(), view.title.clone()),
+        };
+        let record = Some(target.as_str()).filter(|id| !id.is_empty());
+        let entries = clipboard_entries(&view.actions(record), &invoke_keys(cx));
+        self.open_panel(
+            Some(Opened {
+                target,
+                title,
+                kind: None,
+                subject: Subject::Clipboard,
+                entries,
+            }),
+            window,
+            cx,
+        );
+    }
+
     /// Opens the panel over `opened`, with focus in its search field.
     fn open_panel(&mut self, opened: Option<Opened>, window: &mut Window, cx: &mut Context<Self>) {
-        let screen = self.launcher.view().screen;
+        let screen = self.launcher.screen();
         let has_actions = matches!(screen, Screen::Root { .. }) || commands_list(&screen);
         if self.actions.is_some() || !has_actions {
             return;
@@ -562,6 +668,8 @@ impl LauncherWindow {
             keep_selection: None,
             restore,
             on_root: matches!(screen, Screen::Root { .. }),
+            list: VirtualList::new(entry_height(&crate::settings::launcher_visuals(cx).theme)),
+            frame: None,
             _filtering: filtering,
             _deactivation: deactivation,
         });
@@ -639,6 +747,12 @@ impl LauncherWindow {
                     .filter(|live| live.target == opened.target)
                     .map(|live| item_entries(&live, &invoke)),
             },
+            // The history as it is now: a record deleted or expired behind
+            // the panel loses its own actions.
+            Subject::Clipboard => self.launcher.clipboard_history().map(|view| {
+                let record = Some(opened.target.as_str()).filter(|id| !id.is_empty());
+                clipboard_entries(&view.actions(record), &invoke)
+            }),
         };
         Some(live.unwrap_or_else(|| {
             opened
@@ -836,7 +950,7 @@ impl LauncherWindow {
             }
             // On root search, a row's first action is Enter's: the window
             // copies a computed answer itself (#150), as Enter does.
-            EntryKind::Item(0) if matches!(self.launcher.view().screen, Screen::Root { .. }) => {
+            EntryKind::Item(0) if matches!(self.launcher.screen(), Screen::Root { .. }) => {
                 self.close_actions(window, cx);
                 self.press_primary_action(window, cx);
             }
@@ -855,7 +969,7 @@ impl LauncherWindow {
                 self.close_actions(window, cx);
                 self.show_until_done(pending, window, cx);
             }
-            EntryKind::Result(_) | EntryKind::Note => {}
+            EntryKind::Result(_) | EntryKind::Clipboard(_) | EntryKind::Note => {}
         }
     }
 
@@ -875,6 +989,16 @@ impl LauncherWindow {
         };
         let action = match entry.kind {
             EntryKind::Result(action) => action,
+            // The Clipboard History view's own (#166): run on the record the
+            // panel opened for, which the core revalidates.
+            EntryKind::Clipboard(action) => {
+                if entry.available {
+                    self.close_actions(window, cx);
+                    let record = Some(target).filter(|id| !id.is_empty());
+                    self.run_clipboard_action(action, record, window, cx);
+                }
+                return;
+            }
             EntryKind::Item(_) | EntryKind::Entry(_) | EntryKind::Note => {
                 self.choose_item_entry(&target, &entry, window, cx);
                 return;
@@ -883,7 +1007,7 @@ impl LauncherWindow {
         let ready = match subject {
             Subject::Result => self.launcher.result_action_ready(&target, action),
             Subject::Slot => self.launcher.quick_slot_action_ready(&target, action),
-            Subject::Item => false,
+            Subject::Item | Subject::Clipboard => false,
         };
         if !ready {
             return;
@@ -965,59 +1089,103 @@ impl LauncherWindow {
 
     /// The open panel over the footer strip, if it is open: anchored to
     /// the strip's top edge with the reference's 8px between, and its
-    /// right edge 10px in from the window's.
-    pub(crate) fn render_actions_layer(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let panel = self.actions.as_ref()?;
+    /// right edge 10px in from the window's. Its entries are drawn
+    /// virtually (#165), the list as high as they are up to the room the
+    /// window leaves it, the selected entry kept in view.
+    pub(crate) fn render_actions_layer(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let listed = self.listed(cx);
+        let submenu = self.shown_submenu();
+        let panel = self.actions.as_mut()?;
         let visuals = crate::settings::launcher_visuals(cx);
         let theme = &visuals.theme;
         let opened = panel.opened.as_ref();
-        let listed = self.listed(cx);
         let filtering = !panel.query(cx).trim().is_empty();
         let item_without_actions = opened
             .is_some_and(|opened| opened.subject == Subject::Item && opened.entries.is_empty());
         // A submenu names itself in the header, as the panel's context.
-        let submenu = self.shown_submenu();
         let empty_note = match (&submenu, filtering) {
             (Some(_), false) => NO_ENTRIES,
             (None, false) if item_without_actions => NO_ACTIONS,
             _ => NO_MATCH,
         };
+        let title = submenu
+            .as_ref()
+            .map(|submenu| submenu.title.clone())
+            .or_else(|| opened.map(|opened| opened.title.clone()));
+        // The target's icon as its row and its slot draw it: an extension's
+        // or an application's own, else Pane's tile (#163).
+        let icon = opened
+            .filter(|opened| matches!(opened.subject, Subject::Result | Subject::Slot))
+            .map(|opened| {
+                crate::features::icons::row_icon_of(&self.launcher, &opened.target, theme)
+            });
+        let label = match (opened, &submenu) {
+            (Some(opened), Some(submenu)) => {
+                format!("{}, actions for {}", submenu.title, opened.title)
+            }
+            (Some(opened), None) => format!("Actions for {}", opened.title),
+            (None, _) => "Actions".to_owned(),
+        };
+        // The list's frame. It is measured again, from its top, only when
+        // what it lists changed — not as an icon arrives — and keeps the
+        // selected entry in view.
+        let children = panel_children(&listed, filtering);
+        let changed = panel.frame.as_ref().is_none_or(|last| {
+            last.children != children
+                || last.listed.len() != listed.len()
+                || last
+                    .listed
+                    .iter()
+                    .zip(&listed)
+                    .any(|(last, now)| last.label != now.label || last.section != now.section)
+        });
+        let moved = panel
+            .frame
+            .as_ref()
+            .is_none_or(|last| last.selected != panel.selected);
+        if changed || panel.list.count() != children.len() {
+            panel.list.reset(children.len());
+        }
+        if (changed || moved)
+            && let Some(child) = children
+                .iter()
+                .position(|child| *child == PanelChild::Entry(panel.selected))
+        {
+            panel.list.reveal(child);
+        }
+        let room = list_room(window.viewport_size().height, title.is_some(), theme);
+        let height = list_height(&children, theme).min(room);
+        let empty = listed.is_empty();
+        panel.frame = Some(Rc::new(PanelFrame {
+            listed,
+            children,
+            selected: panel.selected,
+        }));
+        let list = (!empty).then(|| {
+            gpui::list(
+                panel.list.state().clone(),
+                cx.processor(|this, index, _: &mut Window, cx| this.render_panel_child(index, cx)),
+            )
+            .w_full()
+            .h(height)
+            .py(theme.geometry.actions.list_padding)
+            .into_any_element()
+        });
         let surface = compose(
             PanelView {
-                title: submenu
-                    .as_ref()
-                    .map(|submenu| submenu.title.as_str())
-                    .or_else(|| opened.map(|opened| opened.title.as_str())),
-                icon: opened
-                    .filter(|opened| opened.subject != Subject::Item)
-                    .map(|opened| row_icon(&opened.target)),
-                listed: &listed,
-                filtering,
-                selected: panel.selected,
+                title: title.as_deref(),
+                icon,
+                empty,
                 empty_note,
                 filter: &panel.filter,
             },
+            list,
             theme,
             visuals.material,
-            |row, index| {
-                row.on_mouse_move(cx.listener(move |this, _: &MouseMoveEvent, _, cx| {
-                    if let Some(panel) = this.actions.as_mut()
-                        && panel.selected != index
-                    {
-                        panel.selected = index;
-                        cx.notify();
-                    }
-                }))
-                .on_click(cx.listener(
-                    move |this, event: &ClickEvent, window, cx| {
-                        // A double click's second click runs nothing more:
-                        // not the entry of the submenu its first one opened.
-                        if event.click_count() <= 1 {
-                            this.run_action(index, window, cx);
-                        }
-                    },
-                ))
-            },
         );
         let surface = surface
             .key_context(CONTEXT)
@@ -1031,14 +1199,44 @@ impl LauncherWindow {
                 cx.stop_propagation();
             }))
             .role(Role::Dialog)
-            .aria_label(match (opened, &submenu) {
-                (Some(opened), Some(submenu)) => {
-                    format!("{}, actions for {}", submenu.title, opened.title)
-                }
-                (Some(opened), None) => format!("Actions for {}", opened.title),
-                (None, _) => "Actions".to_owned(),
-            });
+            .aria_label(label);
         Some(anchored(surface, theme).into_any_element())
+    }
+
+    /// The panel's list child at `index` of the frame laid out, as the
+    /// list draws it: a rule, a section's label or an entry — an available
+    /// one selecting under the moving pointer and running on a click —
+    /// with the gap after it and the list's side padding.
+    fn render_panel_child(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some(frame) = self.actions.as_ref().and_then(|panel| panel.frame.clone()) else {
+            return div().into_any_element();
+        };
+        let theme = crate::settings::launcher_visuals(cx).theme;
+        let child = match frame.children.get(index) {
+            Some(&child) => panel_child(child, &frame.listed, frame.selected, &theme, |row, at| {
+                row.on_mouse_move(cx.listener(move |this, _: &MouseMoveEvent, _, cx| {
+                    if let Some(panel) = this.actions.as_mut()
+                        && panel.selected != at
+                    {
+                        panel.selected = at;
+                        cx.notify();
+                    }
+                }))
+                .on_click(cx.listener(
+                    move |this, event: &ClickEvent, window, cx| {
+                        // A double click's second click runs nothing more:
+                        // not the entry of the submenu its first one opened.
+                        if event.click_count() <= 1 {
+                            this.run_action(at, window, cx);
+                        }
+                    },
+                ))
+            }),
+            None => div().into_any_element(),
+        };
+        let geometry = &theme.geometry.actions;
+        let last = index + 1 >= frame.children.len();
+        virtual_list::item(child, last, geometry.list_gap, geometry.list_padding).into_any_element()
     }
 }
 
@@ -1046,15 +1244,10 @@ impl LauncherWindow {
 pub(crate) struct PanelView<'a> {
     /// The target's title; `None` with nothing selected.
     pub(crate) title: Option<&'a str>,
-    /// The target's tile, as its row draws it; the command glyph without.
-    pub(crate) icon: Option<(IconTone, Glyph)>,
-    /// What the filter lists now.
-    pub(crate) listed: &'a [PanelEntry],
-    /// Whether the filter holds text, which drops the sections' separators
-    /// and labels as the reference's does.
-    pub(crate) filtering: bool,
-    /// The selected entry, an index into `listed`.
-    pub(crate) selected: usize,
+    /// The target's icon, as its row draws it; the command glyph without.
+    pub(crate) icon: Option<RowIcon>,
+    /// Whether the filter lists nothing.
+    pub(crate) empty: bool,
     /// What the list says when nothing is listed for a target.
     pub(crate) empty_note: &'static str,
     /// The search field's text.
@@ -1062,30 +1255,73 @@ pub(crate) struct PanelView<'a> {
 }
 
 /// The panel as `view` describes it: the header (the target's tile and
-/// title), the entries — or the note saying why there are none — and the
-/// search row, in the L2 popover. `attach` gives each available entry its
-/// handlers.
+/// title), the entries' `list` — or the note saying why there are none —
+/// and the search row, in the L2 popover.
 pub(crate) fn compose(
     view: PanelView,
+    list: Option<AnyElement>,
     theme: &Theme,
     material: Material,
-    attach: impl Fn(Stateful<Div>, usize) -> Stateful<Div>,
 ) -> Stateful<Div> {
-    let rows = list_children(view.listed, view.filtering, view.selected, theme, attach);
-    let empty = match (view.title, view.listed.is_empty()) {
+    let empty = match (view.title, view.empty) {
         (None, _) => Some(NOTHING_SELECTED),
         (Some(_), true) => Some(view.empty_note),
         (Some(_), false) => None,
     };
-    let header = view.title.map(|title| header(title, view.icon, theme));
+    let header = view
+        .title
+        .map(|title| header(title, view.icon.as_ref(), theme));
     popup(
         header,
-        rows,
+        list.filter(|_| empty.is_none()),
         empty,
         search_field(view.filter, theme),
         theme,
         material,
     )
+}
+
+/// The height the list's children are taken to have until drawn: an
+/// entry's, with the gap after it.
+fn entry_height(theme: &Theme) -> Pixels {
+    let geometry = &theme.geometry.actions;
+    geometry.row_height + geometry.list_gap
+}
+
+/// The list's height with `children`: each child's own — an entry's, a
+/// section label's and a rule's are fixed — with the gaps between them and
+/// the list's padding above and below.
+fn list_height(children: &[PanelChild], theme: &Theme) -> Pixels {
+    let geometry = &theme.geometry.actions;
+    let own: Pixels = children
+        .iter()
+        .map(|child| match child {
+            PanelChild::Rule => px(1.) + geometry.rule_margin_y * 2.,
+            PanelChild::Group(_) => geometry.group_height,
+            PanelChild::Entry(_) => geometry.row_height,
+        })
+        .fold(px(0.), |total, height| total + height);
+    let gaps = geometry.list_gap * children.len().saturating_sub(1) as f32;
+    own + gaps + geometry.list_padding * 2.
+}
+
+/// The most the list may take in a window `height` high: what is left
+/// between the footer, with the panel's space above it, and the same
+/// space below the window's top edge, after the header (when `titled`)
+/// and the search row. At least one entry's.
+fn list_room(height: Pixels, titled: bool, theme: &Theme) -> Pixels {
+    let geometry = &theme.geometry.actions;
+    let header = if titled {
+        geometry.header_height
+    } else {
+        px(0.)
+    };
+    let room = height
+        - theme.geometry.footer_height
+        - geometry.above_footer * 2.
+        - header
+        - geometry.search_height;
+    room.max(geometry.row_height + geometry.list_padding * 2.)
 }
 
 /// The entry after (or before) `from` in `listed` that can run, if any.
@@ -1176,38 +1412,40 @@ fn action_glyph(action: ResultAction, primary: Glyph) -> Glyph {
     }
 }
 
-/// The list's children for `listed` (see [`panel_children`]). `selected`
-/// indexes `listed`; `attach` gives each available row its handlers (the
-/// launcher's pointer and click). Each entry shows its keys in their caps'
+/// The list's `child` of `listed` (see [`panel_children`]). `selected`
+/// indexes `listed`; `attach` gives an available entry its handlers (the
+/// launcher's pointer and click). An entry shows its keys in their caps'
 /// style: the primary entry the invoke binding in the accent caps, as the
 /// footer's button does.
-pub(crate) fn list_children(
+pub(crate) fn panel_child(
+    child: PanelChild,
     listed: &[PanelEntry],
-    filtering: bool,
     selected: usize,
     theme: &Theme,
-    attach: impl Fn(Stateful<Div>, usize) -> Stateful<Div>,
-) -> Vec<AnyElement> {
-    panel_children(listed, filtering)
-        .into_iter()
-        .map(|child| match child {
-            PanelChild::Rule => rule(theme).into_any_element(),
-            PanelChild::Group(index) => {
-                let label = listed[index].section.clone().unwrap_or_default();
-                group_label(label, theme).into_any_element()
-            }
-            PanelChild::Entry(index) => {
-                let entry = &listed[index];
-                let row = action_row(index, entry, index == selected, theme);
-                let row = if entry.available {
-                    attach(row, index)
-                } else {
-                    row
-                };
-                row.into_any_element()
-            }
-        })
-        .collect()
+    attach: impl FnOnce(Stateful<Div>, usize) -> Stateful<Div>,
+) -> AnyElement {
+    match child {
+        PanelChild::Rule => rule(theme).into_any_element(),
+        PanelChild::Group(index) => {
+            let label = listed
+                .get(index)
+                .and_then(|entry| entry.section.clone())
+                .unwrap_or_default();
+            group_label(label, theme).into_any_element()
+        }
+        PanelChild::Entry(index) => {
+            let Some(entry) = listed.get(index) else {
+                return div().into_any_element();
+            };
+            let row = action_row(index, entry, index == selected, theme);
+            let row = if entry.available {
+                attach(row, index)
+            } else {
+                row
+            };
+            row.into_any_element()
+        }
+    }
 }
 
 /// An entry (`.arow`): 36 high, radius 8, 8px either side, its 16px glyph
@@ -1347,11 +1585,21 @@ pub(crate) fn group_label(label: impl Into<SharedString>, theme: &Theme) -> Div 
         .child(label)
 }
 
-/// The panel's header: the target's 18px tile and its title, 12px/500
-/// muted, 30 high with 8px above and 14px either side.
-pub(crate) fn header(title: &str, icon: Option<(IconTone, Glyph)>, theme: &Theme) -> Div {
+/// The panel's header: the target's icon in an 18px box (Pane's tile, or
+/// an extension's or application's own icon drawn bare) and its title,
+/// 12px/500 muted, 30 high with 8px above and 14px either side.
+pub(crate) fn header(title: &str, icon: Option<&RowIcon>, theme: &Theme) -> Div {
     let geometry = &theme.geometry.actions;
-    let (tone, glyph_of) = icon.unwrap_or((IconTone::Command, Glyph::Prompt));
+    let icon = match icon {
+        Some(icon) => extension_icon::row_icon_at(
+            icon,
+            TileSize::Mini,
+            "actions-header-icon",
+            "actions-header",
+            theme,
+        ),
+        None => tile_at(TileSize::Mini, IconTone::Command, Glyph::Prompt, theme),
+    };
     div()
         .debug_selector(|| "actions-header".into())
         .flex_none()
@@ -1364,7 +1612,7 @@ pub(crate) fn header(title: &str, icon: Option<(IconTone, Glyph)>, theme: &Theme
         .text_size(theme.typography.actions_header_size)
         .font_weight(theme.typography.medium)
         .text_color(theme.text_muted)
-        .child(tile_at(TileSize::Mini, tone, glyph_of, theme))
+        .child(icon)
         .child(
             div()
                 .min_w(px(0.))
@@ -1417,7 +1665,7 @@ pub(crate) fn search_field(filter: &Entity<EditableTextState>, theme: &Theme) ->
 /// soft drop (`0 28px 70px -14px`), which darkens the footer under it.
 pub(crate) fn popup(
     header: Option<Div>,
-    rows: Vec<AnyElement>,
+    rows: Option<AnyElement>,
     empty: Option<&'static str>,
     search: Div,
     theme: &Theme,
@@ -1430,12 +1678,12 @@ pub(crate) fn popup(
         .role(Role::Menu)
         .flex()
         .flex_col()
-        .gap(geometry.list_gap)
-        .p(geometry.list_padding)
+        // The entries' virtualized list pads itself (#165).
         .children(rows)
         .when_some(empty, |list, note| {
             list.child(
                 div()
+                    .m(geometry.list_padding)
                     .debug_selector(|| "actions-empty".into())
                     .py(geometry.empty_padding_y)
                     .px(geometry.empty_padding_x)

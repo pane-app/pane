@@ -2,12 +2,24 @@
 
 Added for [#35](https://github.com/hoangvu12/pane/issues/35) (Windows):
 US65, US66, US70, US71; T10, T21, T22; contributions to G5 and G7, not
-claims that they pass. Once the user turns it on, Pane keeps the text they
-copy on this computer, and the **Clipboard History** default extension lists
-it, newest first; Enter on an item pastes it, and its other actions copy
-or delete it (#150). It starts
-off, can be paused, resumed and turned off again, and disabling the
-extension stops it too.
+claims that they pass. Pane keeps the text the user copies on this
+computer, and the **Clipboard History** default extension lists it, newest
+first; Enter on an item pastes it, and its other actions copy or delete it
+(#150). Since [#166](https://github.com/hoangvu12/pane/issues/166) it
+records **from the first start**, with no step to turn it on
+([ADR 0042](adr/0042-clipboard-history-records-from-the-first-start.md),
+amending ADR 0020): recording can be paused and resumed, disabling the
+extension stops all observation, copies an application marks as concealed
+are skipped as before, and the user can name **Disabled Applications**
+whose copies are never recorded. Its view looks like Raycast's: a type
+dropdown at the search field's right, the records grouped by day, and the
+selected record's Information beside them; its controls are in the Actions
+panel and on the extension's Settings page. Since
+[#167](https://github.com/hoangvu12/pane/issues/167) it keeps **copied
+images and files** as well as text, under the same rules: an image as a PNG
+of at most 10 MiB in the history's own folder, files as their paths; rows
+show an image's thumbnail or a file's system icon, and Paste and Copy put
+back the same kind ([What is kept](#images-and-files)).
 [#36](https://github.com/hoangvu12/pane/issues/36) added expiry and the
 remaining deletion controls (US67, US68, US69; T10, T21; G5, again
 contributions): items are kept for 7 days unless the user chooses another
@@ -18,9 +30,10 @@ of them with history turned off can be deleted ([Deleting](#deleting)).
 adapter and [#37](https://github.com/hoangvu12/pane/issues/37) the macOS
 (pasteboard) adapter, so the package declares Windows, macOS and Linux,
 the three systems with an adapter. The architecture is recorded in
-[ADR 0020](adr/0020-host-keeps-clipboard-history-for-an-extension.md)
-and, for expiry, [ADR 0023](adr/0023-host-expires-clipboard-history-by-its-own-clock.md)
-(both proposed).
+[ADR 0020](adr/0020-host-keeps-clipboard-history-for-an-extension.md),
+for expiry [ADR 0023](adr/0023-host-expires-clipboard-history-by-its-own-clock.md)
+(both proposed), and for recording from the first start
+[ADR 0042](adr/0042-clipboard-history-records-from-the-first-start.md).
 
 ## Where it lives
 
@@ -34,7 +47,11 @@ and, for expiry, [ADR 0023](adr/0023-host-expires-clipboard-history-by-its-own-c
   [extension data](extension-data.md) whatever the extension does.
 - **Default extension**, [`guests/clipboard-history`](../guests/clipboard-history)
   (Rust), package [`guests/packages/clipboard-history`](../guests/packages/clipboard-history):
-  its command, "Clipboard History", shows the controls and the kept items.
+  its command, "Clipboard History", which Pane draws in its own split view
+  ([Behavior](#behavior)); its own list (what a copy installed from
+  another source shows) is Pause or Resume Recording and the kept items.
+  Its `pane.json` declares the three preferences its Settings page shows
+  ([Settings](#settings)).
   It declares the three systems with an adapter
   (`"platforms": ["windows", "macos", "linux"]`), so its command runs
   wherever Pane runs. Rust commands use the import through
@@ -43,9 +60,12 @@ and, for expiry, [ADR 0023](adr/0023-host-expires-clipboard-history-by-its-own-c
   ([`guests/js/clipboard.d.ts`](../guests/js/clipboard.d.ts)), and only
   then, as for `files`. The samples
   [`sample-clipboard-js`](../guests/sample-clipboard-js) and
-  [`sample-clipboard-ts`](../guests/sample-clipboard-ts) implement the same
-  command in JavaScript and TypeScript, and the launcher tests run the same
-  checks on all three.
+  [`sample-clipboard-ts`](../guests/sample-clipboard-ts) implement the
+  whole contract's controls in their own lists (turning on, retention,
+  exclusions, clearing, recent deletion, turning off and deleting) in
+  JavaScript and TypeScript, and the launcher tests run the contract's
+  checks on both; a sample's history starts off, as every package's but
+  Pane's own does.
 - **System adapter** behind one small trait
   ([`pane_core::clipboard`](../crates/pane-core/src/clipboard.rs)), chosen
   by `clipboard::native()`: the Windows listener, the Linux watcher of the
@@ -62,39 +82,90 @@ installed from its folder (`pane --install target/guests/packages/clipboard-hist
 
 ## Behavior
 
-The command's rows, in order:
+Pane's own Clipboard History opens in its split view (#102), as
+Raycast's does (#166):
 
-| Row | Enter |
-| --- | --- |
-| "Turn on clipboard history" (off), "Pause clipboard history" (on) or "Resume clipboard history" (paused), subtitled with the state, the number kept and, if Pane cannot watch the clipboard, why | turns it on, pauses or resumes it; each row does only that, so pressing it again before the command is opened anew changes nothing more |
-| "Turn off clipboard history", while on or paused | turns it off: nothing is kept and Pane stops watching for it; the kept items stay until cleared (or expire) |
-| "Keep items for 7 days" (the retention now), subtitled "Older items are deleted, also while Pane is stopped or the extension is disabled · Enter changes it" | a form choosing 1 hour, 1 day, 7 days, 30 days or 90 days, listing the retention now first, which is chosen when it opens, so submitting it unchanged (Enter twice) changes nothing; items already older are deleted at once ("Items are kept for 1 hour; deleted 1 older item") |
-| "Exclude a program" | a form taking a program's file name, such as `KeePass.exe` |
-| "Stop excluding keepass.exe", one per excluded program | removes the exclusion |
-| "Clear clipboard history", while items are kept | deletes every kept item; whether history is kept does not change |
-| "Turn off and delete clipboard history", while items are kept and history is on or paused | turns history off and deletes every kept item at once ("Clipboard history is off; deleted 2 kept items"): the spec's **Disable and delete history** |
-| "Delete recent items", while items are kept | a form choosing the last 15 minutes, hour or day; deletes the items copied then ("Deleted 2 kept items") |
-| One row per kept item, newest first: its first line with content (at most 80 characters), subtitled "5 min ago · from notepad.exe · 2 lines · Enter pastes it" | its actions (#150), in place of #36's "Copy it again / Delete it" form: **Paste** (Enter) pastes it into the application that was in front before Pane, which closes the window, or, where Pane cannot paste yet (#125), copies it again instead, closes the window and shows "Copied — paste is not available here yet" in a HUD; **Copy** (Ctrl+Enter) puts its text on the clipboard again, closes the window and shows "Copied to Clipboard" (the copy is a change like any other, so it moves to the front); **Delete** (Ctrl+Shift+Enter), destructive and last, deletes that item alone ("Deleted the kept item"), or says "That item is no longer kept" |
-| "Nothing kept yet", while on and empty | nothing |
+- **The header**: the back button, the search field ("Type to filter
+  entries…", matching the text and the program it was copied from), with
+  no badge or chip on it, and a **type dropdown** at its right: All Types,
+  Text, Images, Files, Links, Colors. Links and colours are text Pane
+  recognizes as one URL (`https://…`, `mailto:…`, `www.…`) or one colour
+  value (`#rgb`, `#rrggbb`, `#rrggbbaa`, `rgb(…)`, `hsl(…)`), the whole
+  text trimmed; Text keeps them too. Images and Files keep the copied
+  images and files (#167), which are not text.
+- **The list**: the kept records, newest first, grouped by local day:
+  Today, Yesterday, then each earlier day by its date ("Thursday, Oct 1";
+  "Wednesday, Dec 31, 2025" for another year). A row shows the first line
+  of text and the time (today's and yesterday's as 14:02, the week
+  before's as Thu, older ones as Sep 28); an image's row shows its
+  thumbnail and is titled "Image (1920×1080)", a files row shows the
+  system's icon of the first file and is titled by its name, "+2" for two
+  more. Only the rows in view ask for their icons.
+- **The detail**: the selected record as it was copied — its text, its
+  image fit in the card, or its files, one line each with its icon, name
+  and folder — over its **Information**: Source (the program's name, and
+  its icon where the system gave its path, as Windows does), Type (Text,
+  Link, Color, Image, File), Characters (text) or Dimensions (an image,
+  "1920×1080"), and Copied ("Today at 14:02", "Yesterday at 23:59",
+  "Thursday at 09:00", "Sep 28 at 16:12").
+- **The footer**: the command's chip on the left (or the outcome of what
+  was just done, until the user moves on), then Paste and Actions.
 
-The rows are the command's view when it opens: after an action the status
-line answers, and the rows change the next time the command is opened.
+Its keys are the kept items' actions (#150): **Enter** (the footer's
+Paste) pastes the selected record into the application in front through
+Pane's system, closing the window, or where Pane cannot paste yet copies
+it through the history's own copy and shows "Copied — paste is not
+available here yet"; **Ctrl+Enter** (Copy) copies it again, closes the
+window and shows "Copied to Clipboard" in a HUD, as every Copy action
+does; **Ctrl+D** (Delete) deletes it. **Ctrl+K** (the footer's Actions)
+opens the Actions panel: the record's Paste, Copy to Clipboard and Delete
+Entry; Pause Recording (or Resume Recording) and Clear History…, which
+asks first ("Clear Clipboard History?") and deletes every record while
+recording goes on; Keep History For (1 Hour, 1 Day, 7 Days, 30 Days, 90
+Days, the one in force marked current); and Disabled Applications…, which
+opens the extension's page in Settings. Each revalidates the reading
+first (`Launcher::paste_clipboard_record`, `copy_clipboard_record`,
+`delete_clipboard_record`, `set_clipboard_capture`,
+`set_clipboard_retention`, `clear_clipboard_history`). The command's own
+management list (turn on, retention and exclusion forms, clearing rows) is
+gone. Copy puts an image back as an image and files as files
+(`ClipboardSystem::write_image`, `write_files`); Paste pastes text and a
+single file through Pane's system, and copies an image or several files
+as what they are instead (saying so as where Pane cannot paste), since the
+system's paste takes text or one file.
 
-Pane's own Clipboard History opens in its split view (#102), the records
-beside a preview; its keys are the kept items' actions (#150): **Enter**
-(the footer's Paste) pastes the selected record into the application in
-front through Pane's system, closing the window, or where Pane cannot
-paste yet copies it through the history's own copy and shows "Copied —
-paste is not available here yet"; **Ctrl+Enter** (Copy) copies it again,
-closes the window and shows "Copied to Clipboard" in a HUD, as every Copy
-action does; **Ctrl+D** (Delete) deletes it. Each revalidates the
-reading first (`Launcher::paste_clipboard_record`,
-`copy_clipboard_record`, `delete_clipboard_record`). Manage (Ctrl+K)
-shows the rows above.
+## Settings
 
-- **Off until turned on.** A new package, and one never turned on, keeps
-  nothing and Pane does not watch the clipboard at all: no listener is
-  registered with the system. Turning it on starts the watch at once.
+The extension's page in Settings shows three preferences, which its
+`pane.json` declares and Pane's [preferences](../crates/pane-core/src/preferences.rs)
+controls draw, but whose values are the history's own state, read from it
+and written to it by the host (`launcher::clipboard_settings`), so the
+page, the Actions panel and what the host honours never disagree:
+
+| Preference | Control | Is |
+| --- | --- | --- |
+| Keep History For (`keepHistoryFor`) | a select of 1 Hour, 1 Day, 7 Days, 30 Days, 90 Days (a dropdown preference, as every one is drawn) | the retention ([Expiry](#expiry)) |
+| Recording (`pauseRecording`) | a switch, "Pause Recording" | paused (or off) while on; recording while off |
+| Disabled Applications (`disabledApplications`) | the applications' file names, separated by commas, and "Add…", the system's application picker, which adds the chosen application's file name | the programs whose copies are not recorded ([What is kept](#behavior)) |
+
+`applications` is a preference type of its own (#166): a list of
+applications by their file names. The page's card also has **Clear
+history**, an operation of the extension (the extension list's
+`clear-clipboard-history:<identity key>` row), which asks first, as
+clearing a cache does, and deletes every kept item. Only Pane's registered
+Clipboard History is so: another package declaring preferences of these
+names keeps them as settings. A disabled extension's history cannot be
+changed from its page until it is enabled again.
+
+- **Recording from the first start.** Pane's own Clipboard History records
+  as soon as it is installed and enabled: while `clipboard-history.json`
+  holds no history for it, it is on, and Pane watches the clipboard. Any
+  other package that uses the capability, and a copy of this package
+  installed from another source, starts off and records once it is turned
+  on (`set-capture`). Pausing it stops the watch at once; paused, it stays
+  paused across restarts (the file says so), and so does a history turned
+  off through the contract. Uninstalling it and deleting its saved data
+  forgets that, so a reinstall records again.
 - **Watched exactly while kept.** Pane watches the clipboard while at least
   one installed package's history is on and the package runs (it is enabled
   and not [paused](pausing.md) after a failure). Pausing the history,
@@ -131,10 +202,12 @@ shows the rows above.
   disabled and keeps its history (until it expires).
 - **What is kept** ([`clipboard::accept`](../crates/pane-core/src/clipboard.rs)),
   the same on every system:
-  - plain text only (Windows `CF_UNICODETEXT`, macOS
+  - plain text (Windows `CF_UNICODETEXT`, macOS
     `NSPasteboardTypeString`); a copy with text and other formats keeps
-    the text; images, files and rich formats alone keep
-    nothing;
+    the text; rich formats alone keep nothing; and, for Pane's own
+    Clipboard History only, a copied image or copied files
+    ([below](#images-and-files)) — every other package keeps plain text
+    only, as `wit/clipboard.wit` says;
   - at most 32 KiB of UTF-8 (`MAX_TEXT_BYTES`); longer text is not kept at
     all rather than cut short;
   - not empty or white space only;
@@ -142,10 +215,13 @@ shows the rows above.
     on Linux never: [the X11 clipboard has no such
     formats](#sensitive-markers), so only an excluded program keeps a
     marked copy out);
-  - not copied from an excluded program, matched by the owning process's
-    file name, ignoring case, with or without its extension (`KeePass`
-    excludes `KeePass.exe`) — where the system names the owner: on
-    Windows the process whose window owns the clipboard, on Linux the
+  - not copied from a disabled application (the contract's excluded
+    programs), matched by the owning program's file name, ignoring case,
+    with or without its extension (`KeePass` excludes `KeePass.exe`) —
+    where the system names the owner: on Windows the program of the
+    process whose window owns the clipboard (Pane keeps its full path,
+    which gives the Information its icon; a guest is given its file
+    name), on Linux the
     process the owner window's `_NET_WM_PID` names (the file `/proc`
     shows, or the process's name) or the window's `WM_CLASS` (usually the
     program's name), and a window that says neither has an unknown owner.
@@ -153,8 +229,8 @@ shows the rows above.
     program that copied, so the owner is always unknown (and, as the
     contract says, an unknown owner is never excluded); at most 64
     programs;
-  - one item per text: copying a kept text again moves it to the front with
-    its new time;
+  - one item per text, image (by its PNG) or list of files: copying a
+    kept one again moves it to the front with its new time;
   - at most 100 items per package (`MAX_ITEMS`); beyond that the oldest go.
     This bounds the file; the retention ([Expiry](#expiry)) bounds how long.
 - **Local only.** The history stays in Pane's data folder; Pane sends none
@@ -162,6 +238,47 @@ shows the rows above.
   package that keeps it). This is not a boundary against trusted extensions
   or other programs running as the user
   ([policy](extension-policy-proposal.md#clipboard-history)).
+
+### Images and files
+
+Pane's own Clipboard History keeps what is copied as an image or as files
+too ([#167](https://github.com/hoangvu12/pane/issues/167)), under the same
+markers, disabled applications, pause and expiry as text
+(`clipboard::accept_any`; a package keeping history through the contract
+keeps text only, `clipboard::accept`):
+
+- **What a copy is.** Where a copy holds several, files come first, then
+  text, then an image: copying files often puts their names beside them as
+  text, and copying text in an office application often puts a picture of
+  it beside it.
+- **Files** (Windows `CF_HDROP`, every path; macOS every pasteboard item's
+  `public.file-url`; Linux `text/uri-list`'s `file://` URIs of this
+  computer): kept as their absolute paths, in the order copied, at most
+  1000 (`MAX_FILES`); a larger selection is not kept. The item's text is
+  the paths, one per line, which a search matches and the contract's
+  `entries` gives.
+- **An image** (Windows the registered `PNG` format as it is, else the
+  bitmap `CF_DIBV5` or `CF_DIB` of 24 or 32 bits a pixel made into a PNG;
+  macOS `public.png`, else `public.tiff` made into a PNG; Linux
+  `image/png`): kept as a PNG of at most 10 MiB (`MAX_IMAGE_BYTES`,
+  proposed default); a larger one is not kept, and a bitmap of more than
+  7680×4320 pixels is not even read. Its item names the PNG by its SHA-256
+  and keeps its width and height; its text is its title, "Image (W×H)".
+- **Where the PNG is.** In the history's own folder,
+  `clipboard-images/<owner>/<sha256>.png` beside `clipboard-history.json`,
+  readable by the user only as the file is (ADR 0020's place for the
+  history, its saved data). It is written before its item, and every write
+  of the file then deletes the PNGs no item names any more: an image goes
+  with its item however the item goes — expired by the host's clock (ADR
+  0023), deleted, cleared, dropped past 100 items, or its history removed
+  with the package's saved data — and one left behind by a stop between
+  the PNG and its item goes at the next sweep.
+- **Put back as what it was.** Copy writes an image as an image (Windows:
+  the PNG and a 32-bit `CF_DIB`; macOS: `public.png` and `public.tiff`;
+  Linux: `image/png`) and files as files (Windows: `CF_HDROP` with
+  `Preferred DropEffect` copy; macOS: one file URL per pasteboard item, as
+  Finder; Linux: `text/uri-list`, `x-special/gnome-copied-files` and the
+  paths as text).
 
 ## Expiry
 
@@ -182,8 +299,9 @@ then Pane deletes it ([ADR 0023](adr/0023-host-expires-clipboard-history-by-its-
   so disabling and enabling the package, pausing, turning history off and
   on or restarting Pane does not give it more time. Copying the same text
   again keeps it as a new copy, with its new time.
-- **Configurable and finite.** The command offers 1 hour, 1 day, 7 days,
-  30 days and 90 days; the host accepts any time from 1 minute to 365 days
+- **Configurable and finite.** The Actions panel and the Settings page
+  offer 1 hour, 1 day, 7 days, 30 days and 90 days; the host accepts any
+  time from 1 minute to 365 days
   (`set-retention`), so history never grows without end. A shorter
   retention deletes the items already older at once; a longer one keeps
   the kept items, and those copied later, longer (what expired stays gone).
@@ -197,10 +315,10 @@ then Pane deletes it ([ADR 0023](adr/0023-host-expires-clipboard-history-by-its-
 
 | Control | Deletes | Afterwards |
 | --- | --- | --- |
-| Enter on an item, "Delete it" | that item | history stays as it was |
-| "Delete recent items" | the items copied in the last 15 minutes, hour or day | history stays as it was |
-| "Clear clipboard history" | every item | history stays on (or paused): what is copied next is kept |
-| "Turn off and delete clipboard history" | every item | history is off: nothing more is kept, also after a restart, until it is turned on |
+| Delete Entry (Ctrl+D, or the Actions panel) | that item | history stays as it was |
+| A sample's "Delete recent items" (`delete-items`) | the items copied in the last 15 minutes, hour or day | history stays as it was |
+| Clear History (the Actions panel, or the Settings page's Clear history), once confirmed | every item | recording stays as it was: what is copied next is kept |
+| A sample's "Turn off and delete clipboard history" (`turn-off-and-clear`) | every item | history is off: nothing more is kept, also after a restart, until it is turned on |
 | Expiry | each item once its retention passed | unchanged |
 | Uninstall and delete saved data, Delete retained data | every item and every choice | the package keeps nothing |
 
@@ -283,7 +401,9 @@ capture stays local by default all the same.
   `capture` "on" or "paused" (missing is off), `excluded` lowercase program
   names, `retentionSeconds` the retention the user chose (missing is the
   default), and `items` newest first, each with its `id`, `text`, `copiedAt`
-  (milliseconds since the Unix epoch) and `source`. A package whose items
+  (milliseconds since the Unix epoch) and `source`, and an image's `image`
+  (`width`, `height`, `bytes`, `digest`) or files' `files` (#167; the PNGs
+  are in `clipboard-images/`, [above](#images-and-files)). A package whose items
   all went and that has no choices left keeps only its `nextId`, so its
   ids are never given twice (it counts as keeping nothing). A
   `retentionSeconds` outside 1 minute to 365 days, as only an edited file
@@ -314,8 +434,8 @@ capture stays local by default all the same.
 
 | | Windows (#35) | macOS (#37) | Linux (#38) |
 | --- | --- | --- | --- |
-| Observed with | `AddClipboardFormatListener` on a message-only window of a thread of Pane's own (`WM_CLIPBOARDUPDATE`), reading the markers first, then `CF_UNICODETEXT`, and the owner through `GetClipboardOwner`, `GetWindowThreadProcessId` and `QueryFullProcessImageNameW` | the pasteboard's `changeCount`, looked at by a thread of Pane's own every 250 ms (macOS' own notification needs a run loop Pane's threads do not run), reading the types first, then `stringForType(NSPasteboardTypeString)`; the owner never, because the pasteboard does not name it | XFIXES selection events (`XFixesSelectSelectionInput`) on a window of a thread of Pane's own, then a selection transfer to that window (`ConvertSelection`): the text as `UTF8_STRING`, or `STRING` (Latin-1) if the owner refuses that, read at most a little over 32 KiB, in pieces (`INCR`) if the owner sends them; the owner through its window's `_NET_WM_PID` and `/proc`, or its `WM_CLASS` |
-| Written back with | `SetClipboardData(CF_UNICODETEXT)` | `clearContents` and `setString:forType:` (`NSPasteboardTypeString`); the pasteboard server keeps it, so nothing of Pane's stays behind to serve it | taking the `CLIPBOARD` selection with a window of Pane's own that serves it to whoever pastes until another program copies, and offering it to the clipboard manager when Pane stops |
+| Observed with | `AddClipboardFormatListener` on a message-only window of a thread of Pane's own (`WM_CLIPBOARDUPDATE`), reading the markers first, then `CF_HDROP` (files), `CF_UNICODETEXT`, or the registered `PNG`, `CF_DIBV5` or `CF_DIB` (an image), and the owner through `GetClipboardOwner`, `GetWindowThreadProcessId` and `QueryFullProcessImageNameW` | the pasteboard's `changeCount`, looked at by a thread of Pane's own every 250 ms (macOS' own notification needs a run loop Pane's threads do not run), reading the types first, then every item's `public.file-url` (files), `stringForType(NSPasteboardTypeString)`, or `public.png` or `public.tiff` (an image); the owner never, because the pasteboard does not name it | XFIXES selection events (`XFixesSelectSelectionInput`) on a window of a thread of Pane's own, then selection transfers to that window (`ConvertSelection`): what the owner offers (`TARGETS`), then `text/uri-list` (files), the text as `UTF8_STRING`, or `STRING` (Latin-1) if the owner refuses that, read at most a little over 32 KiB, or `image/png`, read at most a little over 10 MiB, in pieces (`INCR`) if the owner sends them; the owner through its window's `_NET_WM_PID` and `/proc`, or its `WM_CLASS` |
+| Written back with | `SetClipboardData(CF_UNICODETEXT)`; an image as `PNG` and `CF_DIB`, files as `CF_HDROP` | `clearContents` and `setString:forType:` (`NSPasteboardTypeString`); an image as `public.png` and `public.tiff`, files as one file-URL item each (`writeObjects:`); the pasteboard server keeps it, so nothing of Pane's stays behind to serve it | taking the `CLIPBOARD` selection with a window of Pane's own that serves it (an image as `image/png`; files as `text/uri-list`, `x-special/gnome-copied-files` and text) to whoever pastes until another program copies, and offering it to the clipboard manager when Pane stops |
 | Permission | none | none (macOS 15, the baseline written on; newer systems' pasteboard privacy prompts untested) | none |
 | Markers | the four Windows formats ([above](#sensitive-markers)) | the de-facto `org.nspasteboard.ConcealedType` ([above](#sensitive-markers)) | none: X11 has no formats for it, so only an excluded program is kept off |
 | Excluded programs | by the owning process's file name | never: the pasteboard names no program, so the owner is always unknown | by the owner window's `_NET_WM_PID` process or `WM_CLASS` name |
@@ -350,10 +470,39 @@ capture stays local by default all the same.
   reading the store, and ending with it. Tests wait for the expiry thread
   by its own word (a sweep begun after the last change ended), never by
   sleeping or polling.
+- Pane's own Clipboard History through the launcher
+  ([`crates/pane-core/tests/clipboard_view.rs`](../crates/pane-core/tests/clipboard_view.rs),
+  #166), acquired as the default extension over a fake system clipboard:
+  a fresh data folder records the first copy with no turn-on, disabling
+  stops it, and paused it stays paused across a restart; concealed copies
+  and copies from a disabled application (by its file name or its path)
+  are not recorded; the Settings page's preferences read and change the
+  history (pause, keep for 1 hour, disabled applications) and its Clear
+  history row asks, then clears; the Actions panel's entries, Clear
+  History asking first (dismissed, nothing changes); the type dropdown's
+  filters, the day groups with their dates and the Information. For #167:
+  a copied image and copied files kept beside text and listed with their
+  kinds and titles, the image's PNG in `clipboard-images/`, a disabled
+  application's image and oversized copies not kept, Copy putting each
+  back as what it was, Paste copying an image instead, and a deleted or
+  expired image's PNG deleted. The history store's unit tests: Pane's own
+  history on while the file holds none, and off or paused kept so; an
+  image kept beside the file by its digest, once, and deleted with its
+  item however it goes (expired, deleted, cleared, removed, or left
+  behind); files by their paths. The capture rules' unit tests: images and
+  files kept under the rules of text by `accept_any` only, oversized ones
+  skipped, a PNG's size read from its header. The window tests
+  ([`crates/pane/tests/window.rs`](../crates/pane/tests/window.rs)): no
+  badge or tabs, the dropdown filtering by type (Images and Files too),
+  the day sections and the Information, an image's thumbnail row, preview
+  and Dimensions, a files row's icon and preview, Copy putting each back,
+  the Actions panel pausing, resuming, copying, deleting and clearing
+  (after the confirmation).
 - Launcher public interface ([`crates/pane-core/tests/clipboard.rs`](../crates/pane-core/tests/clipboard.rs)),
-  with the real Clipboard History guest and the JavaScript and TypeScript
-  samples alike, and a fake system clipboard (a copy of each package
-  declaring every system): nothing watched or kept until turned on, then
+  with the JavaScript and TypeScript samples, and a fake system clipboard
+  (a copy of each package declaring every system), and the Rust package's
+  own list (a copy: Resume Recording, its items, Pause Recording): for the
+  samples, nothing watched or kept until turned on, then
   kept, on disk too with mode 0600; markers, blank, other and long content;
   excluding and including a program through the form; pause and resume,
   also across a restart; turning it off keeping the items; a read still
@@ -378,9 +527,13 @@ capture stays local by default all the same.
   extension.
 - Windows adapter ([`crates/pane-core/tests/clipboard_adapter.rs`](../crates/pane-core/tests/clipboard_adapter.rs),
   Windows only) against the real clipboard, with text only the test puts
-  there: plain text reported with its owner (the test's own process), each
+  there: plain text reported with its owner (the test's own program, by
+  its full path), each
   of the four markers read and withholding the text, `CanIncludeInClipboardHistory`
-  1 allowing it, a written text reported, and nothing once the watch is
+  1 allowing it, a written text reported, a bitmap alone (as Paint copies
+  one) read as an image and Pane's written image and files read back as
+  what they are (#167; the bitmap and drop-list conversions are unit tests
+  in `windows.rs`), and nothing once the watch is
   dropped. It **replaces what is on the clipboard** and does not put it
   back, so it runs only with `PANE_TEST_REAL_CLIPBOARD=1`, which CI's
   Windows runner sets; elsewhere it passes without doing anything. Its
@@ -392,21 +545,26 @@ capture stays local by default all the same.
   Linux only) against the real X11 clipboard, with text only the test puts
   there: plain text reported with the markers default (X11 has none) and
   its owner (the test's own process, which its window's `_NET_WM_PID`
-  names), a copy no text can be read from (an image) reported as no text
-  with an unknown owner, a written text reported, and nothing once the
+  names), a copy no text can be read from (bytes that are no PNG) reported
+  as no text with an unknown owner, a PNG as an image and a
+  `text/uri-list` as files (#167), a written text, image and files
+  reported, and nothing once the
   watch is dropped; without a display, `clipboard::native` says why. It
   **replaces what is on the clipboard** and does not put it back, so it
   runs only with `PANE_TEST_REAL_CLIPBOARD=1` and an X11 display, which
   CI's Linux runner gives it under Xvfb; elsewhere it passes without doing
   anything. The pure parts (the session's refusals, Latin-1, the WM_CLASS
-  and `/proc` reads) are unit tests that run everywhere Linux builds.
+  and `/proc` reads, the URI list and the targets) are unit tests that run
+  everywhere Linux builds.
 - macOS adapter ([`crates/pane-core/tests/clipboard_adapter_macos.rs`](../crates/pane-core/tests/clipboard_adapter_macos.rs),
   macOS only) against the real pasteboard, with text only the test puts
   there: plain text reported with no marker and no source (the pasteboard
   never names the program that copied, so no excluded program matches), a
   copy marked with `org.nspasteboard.ConcealedType` withheld with its
-  text never read, a copy no text can be read from (an image) reported as
-  no text, a written text reported, and nothing once the watch is dropped.
+  text never read, a copy no text can be read from (bytes that are no
+  PNG) reported as no text, a PNG as an image (#167), a written text,
+  image and files reported as what they are, and nothing once the watch
+  is dropped.
   It **replaces what is on the pasteboard** and does not put it back, so
   it runs only with `PANE_TEST_REAL_CLIPBOARD=1`, which CI's macOS runner
   sets; elsewhere it passes without doing anything. The pure part (the
@@ -455,10 +613,24 @@ capture stays local by default all the same.
   display at all says so. On macOS a copy is noticed within 250 ms (the
   pasteboard is polled) and the text is read whole, the pasteboard offering
   no shorter read, so a longer text is known only after reading it; only
-  the first pasteboard item's text is read (a copy of several files that
-  offers their paths as text keeps the first), and no program can be
-  excluded, because the pasteboard names none.
-- Text only; no images, files or rich text, and no text longer than 32 KiB.
+  the first pasteboard item's text is read (copied files are read from
+  every item's file URL instead, #167), and no program can be excluded,
+  because the pasteboard names none.
+- No rich text, no text longer than 32 KiB, no image whose PNG is larger
+  than 10 MiB and no more than 1000 files in one copy. Images and files are
+  Pane's own Clipboard History's: the contract (`wit/clipboard.wit`) gives
+  other packages text only, and gives Pane's own an image's title and
+  files' paths as their text. An image is put back as a PNG and a bitmap
+  (Windows), a PNG and a TIFF (macOS) or a PNG alone (Linux, served whole:
+  an X server without BIG-REQUESTS may refuse a large one); an image
+  copied as a format other than these (a Windows metafile, a macOS PDF, a
+  Linux `image/jpeg` alone, a bitmap of fewer than 24 bits a pixel or
+  compressed) is not kept. Pasting an image or several files copies them
+  instead, the system's paste taking text or one file; a file copied
+  without its icon known yet shows a neutral placeholder until the system
+  gives it (#142). On macOS a copied image is read whole before its size is
+  known; nothing of the image is kept beyond its PNG (no OCR, which Raycast
+  has).
   On Linux only `UTF8_STRING` and `STRING` (Latin-1) are read: a copy
   offered only as `COMPOUND_TEXT` or a `text/plain` MIME target is kept as
   no text, and text is read lossily and ends at its first NUL, as the
@@ -474,12 +646,21 @@ capture stays local by default all the same.
   ahead is kept until then, and setting the time back keeps items longer.
 - Paste is not available on any system yet (#125 brings it to Windows),
   so Enter copies the item and says so; the native smokes still drive
-  #36's form and need updating to the actions (#150 did not run them).
+  the turn-on row and #36's forms, which #166 removed from Pane's own
+  Clipboard History: they need updating to its recording from the first
+  start and its Actions panel (neither #150 nor #166 ran them).
+- Recording from the first start is Pane's own Clipboard History's alone;
+  the contract's documentation (`wit/clipboard.wit`,
+  `guests/js/clipboard.d.ts`) still says every package starts off, which
+  holds for every other package.
+- A link or colour is recognized from the whole text only: a sentence
+  holding a URL is text.
 - A disabled package's history cannot be deleted without enabling it
   (uninstalling, or its expiry, can); a retained one has Delete retained
   data.
-- The command's rows are read when it opens; they do not change while it is
-  open, even as text is copied.
+- A sample's rows are read when its command opens; they do not change
+  while it is open, even as text is copied. Pane's own view looks again
+  every second.
 - More than one package may keep history; each keeps its own, and Pane
   watches once for all of them.
 - The files are replaced atomically but not locked (as every kind of

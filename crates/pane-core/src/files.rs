@@ -289,7 +289,7 @@ fn plain(path: PathBuf) -> PathBuf {
 }
 
 /// The canonical path of `path`, with no verbatim prefix.
-fn canonical(path: &Path) -> io::Result<PathBuf> {
+pub(crate) fn canonical(path: &Path) -> io::Result<PathBuf> {
     fs::canonicalize(path).map(plain)
 }
 
@@ -354,7 +354,7 @@ pub fn check_grant(folder: &Path) -> Result<PathBuf, String> {
 /// The file types that run a program when the system opens them, on any of
 /// the systems Pane runs on: file search's Enter never opens them, anywhere
 /// (it reveals them; only the explicit Run action runs them).
-const PROGRAM_EXTENSIONS: &[&str] = &[
+pub(crate) const PROGRAM_EXTENSIONS: &[&str] = &[
     // Windows
     "exe", "bat", "cmd", "com", "lnk", "js", "jse", "vbs", "vbe", "wsf", "wsh", "hta", "msi", "msp",
     "scr", "pif", "ps1", "cpl", "reg", "url", // macOS
@@ -385,7 +385,7 @@ pub fn runs_as_program(path: &Path, metadata: &fs::Metadata) -> bool {
 /// Whether `path`'s name alone says that opening it runs a program: its
 /// type is one of [`PROGRAM_EXTENSIONS`], or a folder above it is a macOS
 /// application bundle.
-fn program_named(path: &Path) -> bool {
+pub(crate) fn program_named(path: &Path) -> bool {
     let program_type = |name: &std::ffi::OsStr| {
         Path::new(name)
             .extension()
@@ -453,6 +453,9 @@ struct Access {
     folders: Mutex<Option<Arc<dyn Folders>>>,
     record: Mutex<Option<PathBuf>>,
     state: Mutex<AccessState>,
+    /// The file index (#175), which file search uses instead of a granted
+    /// folder; shared the same way, by the runtime and the launcher.
+    indexer: crate::file_index::Indexer,
 }
 
 #[derive(Default)]
@@ -518,6 +521,11 @@ struct Job {
 impl FileAccess {
     fn state(&self) -> std::sync::MutexGuard<'_, AccessState> {
         lock(&self.0.state)
+    }
+
+    /// The file index, shared with the runtime's guests.
+    pub(crate) fn indexer(&self) -> crate::file_index::Indexer {
+        self.0.indexer.clone()
     }
 
     /// Lists folders with `folders` from now on, instead of this system's

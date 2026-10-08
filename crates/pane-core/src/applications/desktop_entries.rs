@@ -1,13 +1,25 @@
 //! Linux: the applications the XDG desktop entry specification lists, one
 //! `.desktop` file per application in the `applications` folder of each XDG
-//! data folder, opened by running the program its `Exec` key names.
+//! data folder, opened by running the program its `Exec` key names. An
+//! application is identified by its desktop file id, as the Desktop Entry
+//! specification defines it.
+//!
+//! An entry is titled with its `Name` for the user's messages locale, and
+//! found by its `Keywords` for that locale, both chosen by the Desktop
+//! Entry specification's matching rules ([`super::names::locale_keys`]);
+//! its plain `Name` still finds it, and the program its `Exec` runs is the
+//! program whose name may be an alternate title ([`super::names`]).
 
 use std::collections::HashSet;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use super::{Application, Applications, env_dir, has_extension, id_path, sorted_entries};
+use super::names::{arguments_name_something, locale_keys, localized, messages_locale};
+use super::{
+    Changes, Discovery, Key, Source, Watch, env_dir, has_extension, id_path, sorted_entries,
+    watching,
+};
 
 /// How deep Pane looks into subfolders of an `applications` folder.
 const MAX_DEPTH: usize = 8;
@@ -20,23 +32,35 @@ pub struct DesktopEntries {
     folders: Vec<PathBuf>,
     /// The desktops the session runs, for `OnlyShowIn` and `NotShowIn`.
     desktops: Vec<String>,
+    /// The keys localized values are chosen by, best first, for the user's
+    /// messages locale ([`locale_keys`]); none for untranslated values.
+    locale: Vec<String>,
 }
 
 impl DesktopEntries {
     /// The entries in `folders`, the first winning, for a session that runs
-    /// no particular desktop.
+    /// no particular desktop, with untranslated names.
     pub fn new(folders: Vec<PathBuf>) -> DesktopEntries {
         DesktopEntries {
             folders,
             desktops: Vec::new(),
+            locale: Vec::new(),
         }
+    }
+
+    /// These entries, named and found by their values localized for
+    /// `locale`, a POSIX locale such as `vi_VN.UTF-8`.
+    pub fn with_locale(mut self, locale: &str) -> DesktopEntries {
+        self.locale = locale_keys(locale);
+        self
     }
 
     /// The entries in the folders the XDG base directory specification
     /// names: `$XDG_DATA_HOME/applications` (default
     /// `~/.local/share/applications`), then `applications` in each of
     /// `$XDG_DATA_DIRS` (default `/usr/local/share:/usr/share`), for the
-    /// desktops in `$XDG_CURRENT_DESKTOP`.
+    /// desktops in `$XDG_CURRENT_DESKTOP`, localized for the user's
+    /// messages locale (`$LC_ALL`, `$LC_MESSAGES`, `$LANG`).
     pub fn from_env() -> DesktopEntries {
         let home = env_dir("XDG_DATA_HOME")
             .or_else(|| env_dir("HOME").map(|home| home.join(".local/share")));
@@ -59,24 +83,28 @@ impl DesktopEntries {
             .filter(|desktop| !desktop.is_empty())
             .map(str::to_owned)
             .collect();
-        DesktopEntries { folders, desktops }
+        DesktopEntries {
+            folders,
+            desktops,
+            locale: locale_keys(&messages_locale()),
+        }
     }
 
     /// Adds each `.desktop` file under `dir` whose desktop file id (its path
     /// below `root`, `/` becoming `-`) is not `seen` yet.
     fn collect(
         &self,
-        root: &Path,
+        (root, place): (&Path, usize),
         dir: &Path,
         depth: usize,
         seen: &mut HashSet<String>,
-        found: &mut Vec<Application>,
+        found: &mut Vec<Source>,
     ) {
         for entry in sorted_entries(dir) {
             let path = entry.path();
             if path.is_dir() {
                 if depth < MAX_DEPTH {
-                    self.collect(root, &path, depth + 1, seen, found);
+                    self.collect((root, place), &path, depth + 1, seen, found);
                 }
                 continue;
             }
@@ -89,10 +117,10 @@ impl DesktopEntries {
             let id = relative.to_string_lossy().replace(['/', '\\'], "-");
             // The first entry with an id hides the others, even when it is
             // hidden itself: that is how a user removes a system entry.
-            if !seen.insert(id) {
+            if !seen.insert(id.clone()) {
                 continue;
             }
-            let Some(desktop) = Entry::read(&path) else {
+            let Some(desktop) = Entry::read(&path, &self.locale) else {
                 continue;
             };
             if !desktop.listed(&self.desktops) {
@@ -100,32 +128,52 @@ impl DesktopEntries {
             }
             // An entry Pane could not run correctly is not offered.
             let exec = desktop.exec.as_deref().unwrap_or_default();
-            if let Err(problem) = exec_arguments(exec, &desktop, &path) {
-                eprintln!("pane: skipped desktop entry {}: {problem}", path.display());
-                continue;
-            }
-            found.push(Application {
-                id: path.to_string_lossy().into_owned(),
-                name: desktop.name,
-                location: dir.display().to_string(),
+            let arguments = match exec_arguments(exec, &desktop, &path) {
+                Ok(arguments) => arguments,
+                Err(problem) => {
+                    eprintln!("pane: skipped desktop entry {}: {problem}", path.display());
+                    continue;
+                }
+            };
+            let untranslated = desktop
+                .untranslated
+                .clone()
+                .filter(|plain| !plain.trim().is_empty() && *plain != desktop.name);
+            let (program, rest) = match arguments.split_first() {
+                Some((program, rest)) => (Some(program.clone()), rest),
+                None => (None, &[][..]),
+            };
+            found.push(Source {
+                untranslated,
+                keywords: desktop.keywords.clone(),
+                arguments: arguments_name_something(rest),
+                program,
+                ..Source::new(
+                    Key::DesktopFile(id),
+                    path.to_string_lossy(),
+                    desktop.name,
+                    dir.display().to_string(),
+                    place,
+                )
             });
         }
     }
 }
 
-impl Applications for DesktopEntries {
-    fn installed(&self) -> Result<Vec<Application>, String> {
+impl Discovery for DesktopEntries {
+    fn sources(&self) -> Result<Vec<Source>, String> {
         let mut seen = HashSet::new();
         let mut found = Vec::new();
-        for folder in &self.folders {
-            self.collect(folder, folder, 0, &mut seen, &mut found);
+        for (place, folder) in self.folders.iter().enumerate() {
+            self.collect((folder, place), folder, 0, &mut seen, &mut found);
         }
         Ok(found)
     }
 
     fn open(&self, id: &str) -> Result<(), String> {
         let path = id_path(id, "desktop", "a desktop entry")?;
-        let entry = Entry::read(&path).ok_or_else(|| format!("{id} is not an application"))?;
+        let entry = Entry::read(&path, &self.locale)
+            .ok_or_else(|| format!("{id} is not an application"))?;
         let exec = entry
             .exec
             .as_deref()
@@ -169,13 +217,31 @@ impl Applications for DesktopEntries {
         std::thread::spawn(move || child.wait());
         Ok(())
     }
+
+    /// Watches the `applications` folders and their subfolders (inotify on
+    /// Linux); one that does not exist yet is watched for from the nearest
+    /// folder above it that does.
+    fn watch(&self, changes: Changes) -> Result<Watch, String> {
+        watching::watch(
+            self.folders
+                .iter()
+                .map(|folder| watching::Folder::walked(folder.clone()))
+                .collect(),
+            changes,
+        )
+    }
 }
 
 /// The keys of a desktop entry's `[Desktop Entry]` group that Pane uses.
 #[derive(Default)]
 struct Entry {
     kind: Option<String>,
+    /// `Name` for the locale it was read for.
     name: String,
+    /// The plain `Name`, untranslated.
+    untranslated: Option<String>,
+    /// `Keywords` for the locale it was read for.
+    keywords: Vec<String>,
     exec: Option<String>,
     try_exec: Option<String>,
     path: Option<String>,
@@ -188,10 +254,19 @@ struct Entry {
 }
 
 impl Entry {
-    /// The entry in `path`; `None` if it cannot be read.
-    fn read(path: &Path) -> Option<Entry> {
+    /// The entry in `path`, its localized values chosen for the locale
+    /// whose [`locale_keys`] are `locale`; `None` if it cannot be read.
+    fn read(path: &Path, locale: &[String]) -> Option<Entry> {
         let text = std::fs::read_to_string(path).ok()?;
+        Some(Entry::parse(&text, locale))
+    }
+
+    /// The entry `text` holds, its localized values chosen for the locale
+    /// whose [`locale_keys`] are `locale`.
+    fn parse(text: &str, locale: &[String]) -> Entry {
         let mut entry = Entry::default();
+        let mut names: Vec<(Option<String>, String)> = Vec::new();
+        let mut keywords: Vec<(Option<String>, String)> = Vec::new();
         let mut in_group = false;
         for line in text.lines() {
             let line = line.trim();
@@ -213,9 +288,29 @@ impl Entry {
                     .map(str::to_owned)
                     .collect()
             };
-            match key.trim() {
+            // A localized key, `Name[vi]`: its locale apart.
+            let (key, key_locale) = match key.trim().split_once('[') {
+                Some((key, rest)) => match rest.strip_suffix(']') {
+                    Some(key_locale) => (key.trim(), Some(key_locale.to_owned())),
+                    None => continue,
+                },
+                None => (key.trim(), None),
+            };
+            match key {
+                "Name" => {
+                    names.push((key_locale, value));
+                    continue;
+                }
+                "Keywords" => {
+                    keywords.push((key_locale, value));
+                    continue;
+                }
+                // The other keys Pane uses are not localized.
+                _ if key_locale.is_some() => continue,
+                _ => {}
+            }
+            match key {
                 "Type" => entry.kind = Some(value),
-                "Name" => entry.name = value,
                 "Exec" => entry.exec = Some(value),
                 "TryExec" => entry.try_exec = Some(value),
                 "Path" => entry.path = Some(value),
@@ -228,7 +323,19 @@ impl Entry {
                 _ => {}
             }
         }
-        Some(entry)
+        entry.name = localized(&names, locale).unwrap_or_default().to_owned();
+        entry.untranslated = localized(&names, &[]).map(str::to_owned);
+        entry.keywords = localized(&keywords, locale)
+            .map(|value| {
+                value
+                    .split(';')
+                    .map(str::trim)
+                    .filter(|keyword| !keyword.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        entry
     }
 
     /// Whether a launcher lists it, in a session running `desktops`.
@@ -527,6 +634,37 @@ mod tests {
             "its Exec key has an unknown field code %z"
         );
         assert_eq!(invalid("viewer 100%"), "its Exec key ends with a lone %");
+    }
+
+    const FILES: &str = "[Desktop Entry]\n\
+        Type=Application\n\
+        Name=Files\n\
+        Name[vi]=Tệp\n\
+        Name[pt_BR]=Arquivos\n\
+        Keywords=folder;manager; explore ;\n\
+        Keywords[vi]=thư mục;quản lý;\n\
+        Exec[vi]=wrong\n\
+        Exec=nautilus --new-window %U\n\
+        [Desktop Action new]\n\
+        Name[vi]=Cửa sổ mới\n";
+
+    #[test]
+    fn name_and_keywords_are_chosen_for_the_locale_and_the_plain_name_kept() {
+        let vietnamese = Entry::parse(FILES, &locale_keys("vi_VN.UTF-8"));
+        assert_eq!(vietnamese.name, "Tệp");
+        assert_eq!(vietnamese.untranslated.as_deref(), Some("Files"));
+        assert_eq!(vietnamese.keywords, ["thư mục", "quản lý"]);
+        // Only the plain key of what is not localized.
+        assert_eq!(vietnamese.exec.as_deref(), Some("nautilus --new-window %U"));
+
+        // No localized keywords: the plain ones.
+        let brazilian = Entry::parse(FILES, &locale_keys("pt_BR"));
+        assert_eq!(brazilian.name, "Arquivos");
+        assert_eq!(brazilian.keywords, ["folder", "manager", "explore"]);
+
+        let untranslated = Entry::parse(FILES, &[]);
+        assert_eq!(untranslated.name, "Files");
+        assert!(untranslated.listed(&[]));
     }
 
     fn terminal(
