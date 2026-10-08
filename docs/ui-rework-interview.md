@@ -1,6 +1,6 @@
 # UI rework interview log
 
-> Historical: this log scoped the first UI slice (#61). Pinned slots, Actions and Settings, which it deferred, came later with [#70](https://github.com/hoangvu12/pane/issues/70) and the Windows UI port ([#90](https://github.com/hoangvu12/pane/issues/90)).
+> Historical: this log scoped the first UI slice (#61). Pinned slots, Actions and Settings, which it deferred, came later with [#70](https://github.com/pane-app/pane/issues/70) and the Windows UI port ([#90](https://github.com/pane-app/pane/issues/90)).
 
 Dated log of user decisions and open questions for the launcher UI rework.
 This is design continuity, not a spec, ADR or ticket; nothing here changes

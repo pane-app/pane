@@ -4,7 +4,7 @@
 
 ### Issue tracker
 
-Before creating specs or tickets, or fetching work, read `docs/agents/issue-tracker.md`. Work is tracked in GitHub Issues at `hoangvu12/pane`.
+Before creating specs or tickets, or fetching work, read `docs/agents/issue-tracker.md`. Work is tracked in GitHub Issues at `pane-app/pane`.
 
 ### Triage labels
 

@@ -1,6 +1,6 @@
 # Pausing a broken extension
 
-Added for [#16](https://github.com/hoangvu12/pane/issues/16) (US77, US78,
+Added for [#16](https://github.com/pane-app/pane/issues/16) (US77, US78,
 US79, US80, T17, G3; contributions, not a claim that the whole scenario or
 gate passes). When one installed extension keeps failing, Pane pauses it,
 says so, and offers Retry, while the rest of Pane keeps running. No command
@@ -58,7 +58,7 @@ What is **not** a failure of the package:
   says so, and a Retry leaves the pause as it was. Recovering from a crash
   of the runtime thread is described [below](#when-the-extension-runtime-itself-crashes)
   (#17), and so is a runtime thread that stops responding
-  ([#18](https://github.com/hoangvu12/pane/issues/18)).
+  ([#18](https://github.com/pane-app/pane/issues/18)).
 - A **slow call**: a guest waiting (on a clock, a helper, another
   extension) is not computing and is never stopped for it; a native helper
   that runs past its 30-second limit is ended, and the command gets an
@@ -124,13 +124,13 @@ pause and its record forgets that pause.
 | Disable or enable | Ends the pause too (as a disable ended a startup failure before): the package starts afresh. |
 | Uninstall | The record goes with the package. An uninstall that cannot be recorded leaves it installed and still paused. |
 
-A reload whose new code fails to start ([#11](https://github.com/hoangvu12/pane/issues/11))
+A reload whose new code fails to start ([#11](https://github.com/pane-app/pane/issues/11))
 is now one such pause: the Retry and diagnostics it offered are these, and
 it holds across a restart. The earlier code is still not restored.
 
 ## When the extension runtime itself crashes
 
-Added for [#17](https://github.com/hoangvu12/pane/issues/17) (US77, US78,
+Added for [#17](https://github.com/pane-app/pane/issues/17) (US77, US78,
 US80, T18, T19, G3; contributions, not a claim that the whole scenario or
 gate passes). The [extension runtime](../CONTEXT.md) runs every
 extension; it is a thread in Pane's process today (the ticket speaks of
@@ -222,7 +222,7 @@ guest.
 
 ## When an extension stops responding
 
-Added for [#18](https://github.com/hoangvu12/pane/issues/18) (US77, US78,
+Added for [#18](https://github.com/pane-app/pane/issues/18) (US77, US78,
 US80, T18, T19, G3; contributions, not a claim that the whole scenario or
 gate passes). The runtime serves one guest call at a time, so a call that
 never finishes holds every other extension's calls behind it. Pane bounds

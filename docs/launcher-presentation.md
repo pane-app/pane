@@ -1,7 +1,7 @@
 ﻿# Launcher presentation ownership
 
-[#62](https://github.com/hoangvu12/pane/issues/62) establishes the organization
-accepted by [#61](https://github.com/hoangvu12/pane/issues/61) without changing
+[#62](https://github.com/pane-app/pane/issues/62) establishes the organization
+accepted by [#61](https://github.com/pane-app/pane/issues/61) without changing
 appearance or launcher behavior.
 
 | Module in `crates/pane/src` | Responsibility |
@@ -28,7 +28,7 @@ in later slices; the present shared layer contains only already-used code.
 
 ## Control families by consumer (#99)
 
-The UI port ([#90](https://github.com/hoangvu12/pane/issues/90)) gives every
+The UI port ([#90](https://github.com/pane-app/pane/issues/90)) gives every
 screen a family from the reference boards. Only the Appearance page has an
 authored Settings layout; the other pages and the launcher's form are derived
 compositions of the board's families (`ui::controls`), reference-consistent,

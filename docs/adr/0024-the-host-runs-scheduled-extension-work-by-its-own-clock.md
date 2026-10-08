@@ -1,6 +1,6 @@
 # 0024: The host runs scheduled extension work by its own clock
 
-Status: proposed (for [#47](https://github.com/hoangvu12/pane/issues/47);
+Status: proposed (for [#47](https://github.com/pane-app/pane/issues/47);
 the specification's Implementation Decision 13 accepts scheduled work as
 an activation model and leaves intervals and the details open)
 

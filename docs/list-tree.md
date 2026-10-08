@@ -1,7 +1,7 @@
 # A command's list as a tree
 
 A view command's list reaches Pane through the typed envelope of
-[ADR 0036](https://github.com/hoangvu12/pane/blob/2a4f9c43c990656325297a5980f34fa4bddba76e/docs/adr/0036-extension-ui-is-a-tree-pane-renders-written-with-a-gpui-like-api.md)
+[ADR 0036](https://github.com/pane-app/pane/blob/2a4f9c43c990656325297a5980f34fa4bddba76e/docs/adr/0036-extension-ui-is-a-tree-pane-renders-written-with-a-gpui-like-api.md)
 (#135, part of #120). `pane:extension/command` (`wit/extension.wit`) has two
 functions for it:
 

@@ -1,6 +1,6 @@
 # Extension packages from npm
 
-Added for [#45](https://github.com/hoangvu12/pane/issues/45) (US16–US18,
+Added for [#45](https://github.com/pane-app/pane/issues/45) (US16–US18,
 US20–US22, T11, T12, G4, G6; contributions), following
 [ADR 0012](adr/0012-pi-style-source-identity.md)'s npm identity and the
 proposed [ADR 0019](adr/0019-pane-downloads-npm-packages-itself.md). A Pane

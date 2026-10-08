@@ -421,7 +421,7 @@ pub enum Status {
 /// never a display title: the label says what activating that row does
 /// there — "Open command" for a selected extension command in root search,
 /// "Submit" on a form. The labels are the specification's provisional
-/// synthesis ([#70](https://github.com/hoangvu12/pane/issues/70)), named
+/// synthesis ([#70](https://github.com/pane-app/pane/issues/70)), named
 /// here so behavior and wording move together. Dispatch itself stays where
 /// it is: both Enter and the button route through
 /// [`Launcher::activate_selected`], or [`Launcher::submit_form`] on a form.

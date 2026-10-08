@@ -245,7 +245,7 @@ fn create_quicklink_opens_its_form_and_saves_from_the_keyboard(cx: &mut TestAppC
 
     cx.simulate_input("Pane issues");
     cx.simulate_keystrokes("tab");
-    cx.simulate_input("github.com/hoangvu12/pane/issues");
+    cx.simulate_input("github.com/pane-app/pane/issues");
     cx.simulate_keystrokes("enter");
     let view = settle(&window, cx);
     assert_eq!(
@@ -284,7 +284,7 @@ fn create_quicklink_opens_its_form_and_saves_from_the_keyboard(cx: &mut TestAppC
     assert_eq!(
         system.take(),
         [Done::Opened {
-            target: "https://github.com/hoangvu12/pane/issues".into(),
+            target: "https://github.com/pane-app/pane/issues".into(),
             application: None,
         }]
     );

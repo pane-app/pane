@@ -1,6 +1,6 @@
 # Launcher UI review
 
-> Historical: this reviews #61's first slice. The Windows UI port ([#90](https://github.com/hoangvu12/pane/issues/90)) and the redesign that followed it ([ADR 0027](adr/0027-quick-slots-are-an-ordered-list.md), [ADR 0028](adr/0028-the-launcher-draws-a-background-image-the-user-chooses.md)) have since replaced the visuals reviewed here.
+> Historical: this reviews #61's first slice. The Windows UI port ([#90](https://github.com/pane-app/pane/issues/90)) and the redesign that followed it ([ADR 0027](adr/0027-quick-slots-are-an-ordered-list.md), [ADR 0028](adr/0028-the-launcher-draws-a-background-image-the-user-chooses.md)) have since replaced the visuals reviewed here.
 
 Two independent side chats reviewed `748d71e...9c6bfa3` against the repository
 standards and specification #61/tickets #62–65. The user scoped implementation
@@ -36,7 +36,7 @@ native validation record added evidence for the same production source and
 explicitly retained unrun configurations as limitations.
 
 Final all-OS CI is a separate verification step, recorded on
-[PR #69](https://github.com/hoangvu12/pane/pull/69). Native macOS/Linux checks,
+[PR #69](https://github.com/pane-app/pane/pull/69). Native macOS/Linux checks,
 scaled displays, native IME/screen-reader operation and Windows suppressed-effect
 configurations are not claimed from the code review or simulated tests.
 

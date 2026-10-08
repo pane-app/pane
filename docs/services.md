@@ -1,6 +1,6 @@
 # Continuing services
 
-Added for [#48](https://github.com/hoangvu12/pane/issues/48) (US14, US45,
+Added for [#48](https://github.com/pane-app/pane/issues/48) (US14, US45,
 US57, US79; T02, T09, T17; contributions to G3, not a claim that it
 passes). A command can declare, in its package's manifest, that it runs a
 continuing service: Pane runs the service's cycles while the package's

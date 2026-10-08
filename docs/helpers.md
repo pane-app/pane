@@ -1,6 +1,6 @@
 # Native helpers
 
-Added for [#15](https://github.com/hoangvu12/pane/issues/15) (US40, US41,
+Added for [#15](https://github.com/pane-app/pane/issues/15) (US40, US41,
 US42, US64; T09, T22; contributions to G2 and G3, not claims that they
 pass). A command can run a **native helper**
 ([glossary](../CONTEXT.md)): a prebuilt program its package ships for each

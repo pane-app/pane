@@ -1,6 +1,6 @@
 # Extension forms
 
-Added for [#20](https://github.com/hoangvu12/pane/issues/20) (US36, US38, T05,
+Added for [#20](https://github.com/pane-app/pane/issues/20) (US36, US38, T05,
 G2). A form is the first standard control set an extension can use beyond the
 list view. It is deliberately small: a single-line text field, a choice of one
 option, a submit button and a validation/error flow. It is not a widget

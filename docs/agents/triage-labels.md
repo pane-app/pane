@@ -1,6 +1,6 @@
 # Triage labels
 
-Apply these role names as GitHub issue labels in `hoangvu12/pane`.
+Apply these role names as GitHub issue labels in `pane-app/pane`.
 
 | Skill role | Tracker value | Meaning |
 | --- | --- | --- |

@@ -5,13 +5,13 @@ The Windows, macOS and Linux smoke scripts force `PANE_THEME=dark` and
 They record that choice in `system.txt`. This keeps behavior screenshots
 independent of the desktop background and the caller's appearance environment.
 These runs do not establish light-theme readability or native blur; those remain
-separate native acceptance work for [#61](https://github.com/hoangvu12/pane/issues/61).
+separate native acceptance work for [#61](https://github.com/pane-app/pane/issues/61).
 
 The macOS/Linux installed and updated GUI launches explicitly supply both
 appearance variables after `env -i`; exporting them at script startup does not
 survive that environment reset. The clean HOME, empty tool PATH and local
 artifact source remain isolated. In
-[CI run 36952982441](https://github.com/hoangvu12/pane/actions/runs/36952982441),
+[CI run 36952982441](https://github.com/pane-app/pane/actions/runs/36952982441),
 the missing variables caused macOS's installed launch to use default glass.
 Artifact `11206345698`, `installed-stderr.log`, records an abort from
 `gpui_macos/src/window.rs:3794` at fork `2b9e644`: the blurred-view callback
@@ -49,7 +49,7 @@ same roles. `scripts/measure-linux.sh` was missed when the smoke scripts'
 hex colors were translated: its cold-root check still named the retired hint
 color and its calculator check still named the retired selected-row wash
 `364355`. In
-[CI run 36960914528](https://github.com/hoangvu12/pane/actions/runs/36960914528),
+[CI run 36960914528](https://github.com/pane-app/pane/actions/runs/36960914528),
 artifact `resource-measurements` frame `4-calculator-answer.png` held only
 429 pixels near the old wash, under the 3,000 minimum, while the frame itself
 shows the new selected answer row; the cold-root check had passed only
@@ -60,7 +60,7 @@ pixels, a 29,702-pixel selected wash).
 
 The same-frame comparison permits at most one interior pixel whose channels
 each differ by at most one 8-bit level. This bound comes from
-[CI run 36951745142](https://github.com/hoangvu12/pane/actions/runs/36951745142):
+[CI run 36951745142](https://github.com/pane-app/pane/actions/runs/36951745142):
 `4-result-2.png` and `25-search-result.png` both show the same TypeScript
 command and answer, but exact equality failed on each platform. In Windows
 artifact `11204826276`, the only difference within the existing 12-pixel edge
@@ -77,7 +77,7 @@ Windows captures park the pointer in the foreground Pane window's header
 before capturing, then wait briefly for its hover repaint. This does not click,
 restore, refocus or change selection; captures while Pane is not foreground
 leave the pointer alone. The hotkey foreground assertions remain unchanged.
-In [CI run 36952982441](https://github.com/hoangvu12/pane/actions/runs/36952982441),
+In [CI run 36952982441](https://github.com/pane-app/pane/actions/runs/36952982441),
 Windows artifact `11204779190` showed why this is necessary: the color-picker
 click left the pointer at `(263, 292)`, over the JavaScript row in root search.
 Restoring the window after the released-hotkey check repainted that row's
@@ -100,7 +100,7 @@ for display scaling. It is not a general resized-window screen classifier.
 
 The macOS quit-with-helper phase also waits for positive progress evidence
 instead of assuming its two-second delay produced a fresh frame. In
-[CI run 36957014594](https://github.com/hoangvu12/pane/actions/runs/36957014594),
+[CI run 36957014594](https://github.com/pane-app/pane/actions/runs/36957014594),
 artifact `11207102192` frame `94-helper-before-quit.png` shows the correct
 selected wait action but the idle footer, with zero warning pixels anywhere.
 The preceding process check passed and the isolated helper-quit settings

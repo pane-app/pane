@@ -596,7 +596,7 @@ visible.
 ## Installing Pane and acquiring its calculator (#51)
 
 A final phase, after the clipboard-expiry one, proves the whole outcome of
-[#51](https://github.com/hoangvu12/pane/issues/51)
+[#51](https://github.com/pane-app/pane/issues/51)
 ([installer](../installer.md)), the Windows half of what
 [#53](linux.md#installing-pane-and-acquiring-its-calculator-53) proved on
 Linux. `cargo xtask package-windows --dev` builds the Windows package — a
@@ -665,7 +665,7 @@ README answers is answered.
 ## Installing a Pane application update by the user's choice (#54)
 
 A final phase, after the installer one, proves the whole outcome of
-[#54](https://github.com/hoangvu12/pane/issues/54)
+[#54](https://github.com/pane-app/pane/issues/54)
 ([installer](../installer.md)). The same `cargo xtask package-windows
 --dev` builds a **second** package with `--package-version 99.0.0`: a
 program that reports 99.0.0, a package named by it, and an index whose

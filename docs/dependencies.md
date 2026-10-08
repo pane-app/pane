@@ -1,6 +1,6 @@
 # Dependencies on other extensions
 
-Added for [#42](https://github.com/hoangvu12/pane/issues/42) (US25–US29, T12,
+Added for [#42](https://github.com/pane-app/pane/issues/42) (US25–US29, T12,
 T14, G4), following the accepted Q26 direction in the
 [extension policies](extension-policy-proposal.md#dependencies-on-other-extensions).
 A package that calls other packages' [operations](operations.md) declares
@@ -9,14 +9,14 @@ folder shows them first and installs the missing required ones with it;
 optional, disabled, paused and already installed dependencies are left as
 they are. Disabling a required dependency first shows the packages that
 require it, with Disable all and Cancel
-([#43](https://github.com/hoangvu12/pane/issues/43),
+([#43](https://github.com/pane-app/pane/issues/43),
 [below](#disabling-a-required-dependency)), and uninstalling one shows them
 with their saved data, with Uninstall all and Cancel
-([#44](https://github.com/hoangvu12/pane/issues/44),
+([#44](https://github.com/pane-app/pane/issues/44),
 [below](#uninstalling-a-required-dependency)). Since
-[#45](https://github.com/hoangvu12/pane/issues/45) a dependency can also
+[#45](https://github.com/pane-app/pane/issues/45) a dependency can also
 come from npm ([npm](npm.md#dependencies-from-npm)), and since
-[#46](https://github.com/hoangvu12/pane/issues/46) from a Git repository
+[#46](https://github.com/pane-app/pane/issues/46) from a Git repository
 ([Git](git.md#dependencies-from-git)), with the same plan.
 
 ## Declaring
@@ -227,7 +227,7 @@ B (…)"). None of the packages ran meanwhile, so none has data to lose.
 
 ## Disabling a required dependency
 
-Added for [#43](https://github.com/hoangvu12/pane/issues/43) (US30, US31,
+Added for [#43](https://github.com/pane-app/pane/issues/43) (US30, US31,
 T13). Pressing the row of an enabled package in **Settings › Extensions** that
 enabled packages require does not disable it yet. Pane shows "Disable
 <title> and the extensions that require it?" with:
@@ -289,7 +289,7 @@ disables only the package given, without asking.
 
 ## Uninstalling a required dependency
 
-Added for [#44](https://github.com/hoangvu12/pane/issues/44) (US30, US31,
+Added for [#44](https://github.com/pane-app/pane/issues/44) (US30, US31,
 US61, US63, T13, T20, G4, G5; contributions). Choosing "Uninstall <title>"
 in **Settings › Extensions** for a package that installed packages require
 does not show the [single uninstall](extension-data.md#uninstalling-an-extension)

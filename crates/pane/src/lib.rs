@@ -104,7 +104,7 @@ pub const APP_VERSION: &str = match option_env!("PANE_PACKAGE_VERSION") {
 /// Pane's own downloads (see
 /// [`pane_core::defaults`]): the installer carries none of their payloads.
 /// The default extensions are the calculator, applications, quicklinks,
-/// files and clipboard history ([#60](https://github.com/hoangvu12/pane/issues/60),
+/// files and clipboard history ([#60](https://github.com/pane-app/pane/issues/60),
 /// the user's recorded choice), in every build: all five enabled by
 /// default and each individually disableable, clipboard history recording
 /// what is copied from the first start (#166, ADR 0042). The samples are no

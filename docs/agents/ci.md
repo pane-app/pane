@@ -40,12 +40,12 @@ To recheck a fix to the release matrix's other jobs, a smoke for instance, name 
 - A milestone's pull request to `main` lands with a merge commit, so the commits its tickets cite stay reachable; the repository does not offer rebase merging, which would rewrite them. A small pull request that is not a milestone lands squashed.
 - Land ticket merges in waves of 3–4 with a single final push. Pushes to a branch auto-cancel superseded runs, and a green run on the newest commit verifies every ancestor: intermediate pushes cost nothing.
 - Do not dispatch the release matrix on a ticket branch, and do not wait for any release leg during a milestone. The branch tier is the merge gate.
-- Poll runs with small commands (`gh run list --branch <branch> --repo hoangvu12/pane`), never long sleeps.
+- Poll runs with small commands (`gh run list --branch <branch> --repo pane-app/pane`), never long sleeps.
 - When a change alters what a leg runs or how long it takes, update this file with it.
 
 ## Flakes
 
-One test fails occasionally without a code cause: `command_search.rs`'s `a_service_that_stalls_is_given_up_on_within_the_limits` under runner load. The tests run under cargo-nextest with two retries, which absorbs it. (`update.rs`'s claim-window test, once a macOS flake, now holds the update inside its claim and no longer races the copy.) A failure that survives its retries is real: rerun the failed jobs once (`gh run rerun <id> --repo hoangvu12/pane --failed`) before diagnosing.
+One test fails occasionally without a code cause: `command_search.rs`'s `a_service_that_stalls_is_given_up_on_within_the_limits` under runner load. The tests run under cargo-nextest with two retries, which absorbs it. (`update.rs`'s claim-window test, once a macOS flake, now holds the update inside its claim and no longer races the copy.) A failure that survives its retries is real: rerun the failed jobs once (`gh run rerun <id> --repo pane-app/pane --failed`) before diagnosing.
 
 The Linux clipboard adapter test (`clipboard_adapter_linux.rs`'s `the_watcher_reports_this_tests_changes_until_dropped`) runs in its own Xvfb step. Once (release run 37426152516) Xvfb reset the test's first connection ("Pane could not reach the X11 display :99: Connection reset by peer"), before any clipboard work. That panic is the display, not the adapter. The step now runs under cargo-nextest with two retries, which should absorb it; if it still fails, rerun the failed job.
 

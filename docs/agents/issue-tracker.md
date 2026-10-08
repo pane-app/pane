@@ -1,12 +1,12 @@
 # Issue tracker: GitHub Issues
 
-Specs, implementation tickets, planning prerequisites and release checklists live in [hoangvu12/pane](https://github.com/hoangvu12/pane/issues). Use the `gh` CLI with `--repo hoangvu12/pane`, or `gh api` for relationships.
+Specs, implementation tickets, planning prerequisites and release checklists live in [pane-app/pane](https://github.com/pane-app/pane/issues). Use the `gh` CLI with `--repo pane-app/pane`, or `gh api` for relationships.
 
 ## Read and publish
 
-- Read an issue with `gh issue view <number> --repo hoangvu12/pane --json number,title,body,labels,state,assignees,comments`.
-- List work with `gh issue list --repo hoangvu12/pane --state open --limit 100 --json number,title,labels,assignees` and an appropriate label filter.
-- Publish with `gh issue create --repo hoangvu12/pane --title "..." --body-file <file> --label <role>`. Use a UTF-8 body file for multiline creates, edits and comments.
+- Read an issue with `gh issue view <number> --repo pane-app/pane --json number,title,body,labels,state,assignees,comments`.
+- List work with `gh issue list --repo pane-app/pane --state open --limit 100 --json number,title,labels,assignees` and an appropriate label filter.
+- Publish with `gh issue create --repo pane-app/pane --title "..." --body-file <file> --label <role>`. Use a UTF-8 body file for multiline creates, edits and comments.
 - Use the five triage labels in [triage-labels.md](triage-labels.md). Tickets produced by `/to-tickets` use `ready-for-agent`; they need no incoming-issue triage. Readiness does not clear open blockers.
 - Specs use `specification`; implementation tickets use `implementation`; bounded planning work uses `prerequisite`; release checklists use `release-validation`.
 - Add implementation and planning issues as native sub-issues of their specification. Include the parent URL in each body. Keep acceptance checkboxes and a readable `Blocked by` section in each ticket.
@@ -15,13 +15,13 @@ Specs, implementation tickets, planning prerequisites and release checklists liv
 
 ## Dependencies and execution
 
-Use native relationships, with database IDs from `gh api repos/hoangvu12/pane/issues/<number> --jq .id`:
+Use native relationships, with database IDs from `gh api repos/pane-app/pane/issues/<number> --jq .id`:
 
-- Parent: `gh api --method POST repos/hoangvu12/pane/issues/<parent>/sub_issues -F sub_issue_id=<child-db-id>`.
-- Blocker: `gh api --method POST repos/hoangvu12/pane/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`.
-- Inspect blockers with `gh api repos/hoangvu12/pane/issues/<child>/dependencies/blocked_by` and parent children with `gh api --paginate repos/hoangvu12/pane/issues/<parent>/sub_issues`.
+- Parent: `gh api --method POST repos/pane-app/pane/issues/<parent>/sub_issues -F sub_issue_id=<child-db-id>`.
+- Blocker: `gh api --method POST repos/pane-app/pane/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`.
+- Inspect blockers with `gh api repos/pane-app/pane/issues/<child>/dependencies/blocked_by` and parent children with `gh api --paginate repos/pane-app/pane/issues/<parent>/sub_issues`.
 
-Work open, unassigned implementation issues whose blockers are completed, in parent order. Check prerequisite issues and any platform-specific conditions in the body. Claim with `gh issue edit <number> --repo hoangvu12/pane --add-assignee @me`. Parentage alone is not a blocking dependency.
+Work open, unassigned implementation issues whose blockers are completed, in parent order. Check prerequisite issues and any platform-specific conditions in the body. Claim with `gh issue edit <number> --repo pane-app/pane --add-assignee @me`. Parentage alone is not a blocking dependency.
 
 ## Wayfinding
 

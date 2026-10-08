@@ -1,13 +1,13 @@
 # Extension data
 
-Added for [#39](https://github.com/hoangvu12/pane/issues/39) (US60, US64, T20,
+Added for [#39](https://github.com/pane-app/pane/issues/39) (US60, US64, T20,
 G5; contributions, not whole-gate claims). It implements the accepted
 [Clear cache](extension-policy-proposal.md#disable-cache-data-and-uninstall)
 behavior: remove disposable data and keep settings, user content and
 credentials, controlled by Pane rather than by running the extension.
-[#40](https://github.com/hoangvu12/pane/issues/40) adds
+[#40](https://github.com/pane-app/pane/issues/40) adds
 [uninstalling](#uninstalling-an-extension) with a choice to keep or delete
-the saved data, and [#41](https://github.com/hoangvu12/pane/issues/41)
+the saved data, and [#41](https://github.com/pane-app/pane/issues/41)
 [deleting retained data](#deleting-retained-data) afterwards.
 
 ## Four kinds of data
@@ -106,12 +106,12 @@ meanwhile are kept.
 
 ## Uninstalling an extension
 
-Added for [#40](https://github.com/hoangvu12/pane/issues/40) (US61, US63,
+Added for [#40](https://github.com/pane-app/pane/issues/40) (US61, US63,
 US64, T20, G5; contributions). It implements the accepted
 [Uninstall](extension-policy-proposal.md#disable-cache-data-and-uninstall)
 behavior for one package; uninstalling a package that installed packages
 require asks about them first and uninstalls them together, with the same
-choice ([#44](https://github.com/hoangvu12/pane/issues/44),
+choice ([#44](https://github.com/pane-app/pane/issues/44),
 [dependencies](dependencies.md#uninstalling-a-required-dependency)).
 
 Settings › Extensions lists, after the Clear cache rows, a row "Uninstall
@@ -193,7 +193,7 @@ title the package had, so that it stays manageable without the package
 
 ### Deleting retained data
 
-Added for [#41](https://github.com/hoangvu12/pane/issues/41) (US62, US63,
+Added for [#41](https://github.com/pane-app/pane/issues/41) (US62, US63,
 US64, T20, G5; contributions). It implements "Remove retained data later"
 of the accepted
 [data policy](extension-policy-proposal.md#disable-cache-data-and-uninstall)

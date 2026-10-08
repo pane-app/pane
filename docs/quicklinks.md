@@ -1,9 +1,9 @@
 # Quicklinks
 
-Added for [#28](https://github.com/hoangvu12/pane/issues/28) (US03, US07,
+Added for [#28](https://github.com/pane-app/pane/issues/28) (US03, US07,
 US12, US59; T01, T03, T10, T22; G2, G5, G7, as contributions, not claims that
 they pass) and reworked in Raycast's shape for
-[#149](https://github.com/hoangvu12/pane/issues/149) (part of #120). A user
+[#149](https://github.com/pane-app/pane/issues/149) (part of #120). A user
 saves a named link, file, folder or application, finds it by typing into
 [root search](root-search.md), also after restarting Pane, and opens it.
 
@@ -91,7 +91,7 @@ and shows a HUD: "Copied 2 quicklinks as JSON".
 
 ```json
 [
-  { "link": "https://github.com/hoangvu12/pane/issues", "name": "Pane issues" },
+  { "link": "https://github.com/pane-app/pane/issues", "name": "Pane issues" },
   { "link": "C:\\Notes", "name": "Notes", "openWith": "C:\\Program Files\\Zed\\zed.exe" }
 ]
 ```

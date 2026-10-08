@@ -7,11 +7,11 @@ performs itself. Pane's host keeps an index of the names of the files and
 folders under the user's home folder (the **file index**), caught up at
 start from what the file system recorded while Pane was not running and
 kept current while it runs, so a file is found as quickly as a command
-([#126](https://github.com/hoangvu12/pane/issues/126),
-[ADR 0034](https://github.com/hoangvu12/pane/blob/2a4f9c43c990656325297a5980f34fa4bddba76e/docs/adr/0034-file-search-indexes-the-users-home-folder.md); built by
-[#174](https://github.com/hoangvu12/pane/issues/174),
-[#175](https://github.com/hoangvu12/pane/issues/175) and
-[#176](https://github.com/hoangvu12/pane/issues/176)). The feature is a
+([#126](https://github.com/pane-app/pane/issues/126),
+[ADR 0034](https://github.com/pane-app/pane/blob/2a4f9c43c990656325297a5980f34fa4bddba76e/docs/adr/0034-file-search-indexes-the-users-home-folder.md); built by
+[#174](https://github.com/pane-app/pane/issues/174),
+[#175](https://github.com/pane-app/pane/issues/175) and
+[#176](https://github.com/pane-app/pane/issues/176)). The feature is a
 **default extension**, Files, which the user can disable like any package;
 while no enabled package uses the index, Pane neither indexes nor watches
 anything.
@@ -22,8 +22,8 @@ That capability stays for other packages, unchanged
 ([The granted folder](#the-granted-folder)); Files no longer uses it.
 
 Search Files works like Raycast's File Search
-([#177](https://github.com/hoangvu12/pane/issues/177), spec
-[#161](https://github.com/hoangvu12/pane/issues/161)): no folder to choose,
+([#177](https://github.com/pane-app/pane/issues/177), spec
+[#161](https://github.com/pane-app/pane/issues/161)): no folder to choose,
 "Recently Used" before typing, a type dropdown, more rows as the list
 scrolls and a detail with an image's preview and the file's Metadata
 ([Search Files](#search-files)).
@@ -86,8 +86,8 @@ and one index serves every package that uses it:
   [`features/settings/file_search.rs`](../crates/pane/src/features/settings/file_search.rs).
 
 Acquiring the package automatically at setup is
-[#51](https://github.com/hoangvu12/pane/issues/51) to
-[#53](https://github.com/hoangvu12/pane/issues/53); until then it is
+[#51](https://github.com/pane-app/pane/issues/51) to
+[#53](https://github.com/pane-app/pane/issues/53); until then it is
 installed from its folder like the other default extensions
 (`pane --install target/guests/packages/files`).
 
@@ -435,7 +435,7 @@ Ctrl+Shift+Enter the third, and the Actions panel (Ctrl+K) lists them all.
 | **Move to Recycle Bin** (destructive): after a confirmation | **Move to Recycle Bin** | |
 
 File search's own Enter never runs a program by accident
-([ADR 0037](https://github.com/hoangvu12/pane/blob/2a4f9c43c990656325297a5980f34fa4bddba76e/docs/adr/0037-a-command-declares-its-mode-and-host-functions-decide-what-happens-after-it-runs.md)):
+([ADR 0037](https://github.com/pane-app/pane/blob/2a4f9c43c990656325297a5980f34fa4bddba76e/docs/adr/0037-a-command-declares-its-mode-and-host-functions-decide-what-happens-after-it-runs.md)):
 a file that would run a program when opened ([below](#opening)) is shown
 in the file manager, and only its explicit **Run** runs it; choosing Run is
 the confirmation, so nothing more is asked. (On macOS the file manager is
@@ -655,7 +655,7 @@ network mounts on macOS and Linux are not detected.
 
 ## The engine and the walker
 
-The measured first slice of #126 ([#174](https://github.com/hoangvu12/pane/issues/174)),
+The measured first slice of #126 ([#174](https://github.com/pane-app/pane/issues/174)),
 which the coordinator above builds on:
 
 - **The walker** (`file_index/walker.rs`): every folder under the roots the

@@ -1,6 +1,6 @@
 # Launcher appearance
 
-[#64](https://github.com/hoangvu12/pane/issues/64) applies the
+[#64](https://github.com/pane-app/pane/issues/64) applies the
 [retained authored reference and reviewed native proof](evidence/ui-prototype/README.md)
 to the working launcher. The [presentation ownership](launcher-presentation.md)
 from #62 is kept: the app supplies identities and behavior; shared UI owns
@@ -9,7 +9,7 @@ colors, type, geometry, row chrome, glyphs and surfaces.
 ## Choosing the appearance
 
 Pane's appearance is the user's choice, made on the Settings window's
-Appearance page ([#73](https://github.com/hoangvu12/pane/issues/73)):
+Appearance page ([#73](https://github.com/pane-app/pane/issues/73)):
 the theme (system, light or dark) and the material (glass or solid), each
 shown with a live preview and each taking effect in the launcher and the
 Settings window the moment it is chosen — no restart. The choice is kept

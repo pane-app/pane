@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Samples a whole process tree from /proc and checks it against targets.
 
-Resource measurement for [#4](https://github.com/hoangvu12/pane/issues/4):
+Resource measurement for [#4](https://github.com/pane-app/pane/issues/4):
 the workload driver (scripts/measure-linux.sh) runs Pane through a fixed
 sequence and this script watches its process tree — Pane and every helper
 it started — at a fixed cadence, so the record covers the full tree, not

@@ -1188,7 +1188,7 @@ fn the_about_page_shows_the_real_version_and_opens_the_documentation(cx: &mut Te
     });
     assert_eq!(
         links.0.lock().unwrap().as_slice(),
-        ["https://github.com/hoangvu12/pane"],
+        ["https://github.com/pane-app/pane"],
         "the repository documentation was opened"
     );
     // Opening it left the launcher where it was.

@@ -60,9 +60,9 @@ Layout:
 
 ## Project documents
 
-- [Specification](https://github.com/hoangvu12/pane/issues/1)
-- [Implementation tickets](https://github.com/hoangvu12/pane/issues?q=is%3Aissue+label%3Aimplementation)
-- [Cross-platform contributor requirements](https://github.com/hoangvu12/pane/issues/1#cross-platform-contributor-requirement)
+- [Specification](https://github.com/pane-app/pane/issues/1)
+- [Implementation tickets](https://github.com/pane-app/pane/issues?q=is%3Aissue+label%3Aimplementation)
+- [Cross-platform contributor requirements](https://github.com/pane-app/pane/issues/1#cross-platform-contributor-requirement)
 - [Current decisions](docs/current-decisions.md)
 - [Handoff: where the work stands, and evidence limits](docs/HANDOFF.md)
 - [Domain vocabulary](CONTEXT.md)

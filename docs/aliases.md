@@ -1,6 +1,6 @@
 # Aliases and fallbacks
 
-Added for [#31](https://github.com/hoangvu12/pane/issues/31): US10, US11;
+Added for [#31](https://github.com/pane-app/pane/issues/31): US10, US11;
 T03; contributions to G2, not claims that it passes. The user gives an
 installed command an **alias** or makes it a **fallback** in Manage
 extensions or in Settings' Shortcuts page — one record either way, the

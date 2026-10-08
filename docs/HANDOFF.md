@@ -2,7 +2,7 @@
 
 Updated 2026-10-06. This handoff covers Pane, the cross-platform launcher and its extension system.
 
-The project is published at [hoangvu12/pane](https://github.com/hoangvu12/pane). The repository contains a launcher under development with native smoke evidence for its slices; there is a package a clean machine installs on Linux ([#53](https://github.com/hoangvu12/pane/issues/53)) and Windows ([#51](https://github.com/hoangvu12/pane/issues/51)) ([installer](installer.md)), but the artifact source its first setup downloads from is not deployed, and no published installer exists yet.
+The project is published at [pane-app/pane](https://github.com/pane-app/pane). The repository contains a launcher under development with native smoke evidence for its slices; there is a package a clean machine installs on Linux ([#53](https://github.com/pane-app/pane/issues/53)) and Windows ([#51](https://github.com/pane-app/pane/issues/51)) ([installer](installer.md)), but the artifact source its first setup downloads from is not deployed, and no published installer exists yet.
 
 ## Start here
 
@@ -13,12 +13,12 @@ The project is published at [hoangvu12/pane](https://github.com/hoangvu12/pane).
 
 ## Where the work stands
 
-All work is tracked in [GitHub Issues](https://github.com/hoangvu12/pane/issues); open [specifications](https://github.com/hoangvu12/pane/issues?q=is%3Aissue+is%3Aopen+label%3Aspecification) and their native sub-issues are the current plan, and this section only summarizes them.
+All work is tracked in [GitHub Issues](https://github.com/pane-app/pane/issues); open [specifications](https://github.com/pane-app/pane/issues?q=is%3Aissue+is%3Aopen+label%3Aspecification) and their native sub-issues are the current plan, and this section only summarizes them.
 
-- The [Pane specification #1](https://github.com/hoangvu12/pane/issues/1) and its implementation issues are closed: the extension host, the default extensions, local/npm/Git installation, development mode, pausing, schedules, services and the installer packages are on `main`.
-- [Settings and shortcuts #70](https://github.com/hoangvu12/pane/issues/70) is closed and on `main`.
-- [Launcher UI #61](https://github.com/hoangvu12/pane/issues/61) is open for its macOS and Linux halves ([#66](https://github.com/hoangvu12/pane/issues/66), [#67](https://github.com/hoangvu12/pane/issues/67)) and the combined release validation ([#68](https://github.com/hoangvu12/pane/issues/68)).
-- [The Windows UI port #90](https://github.com/hoangvu12/pane/issues/90) is implemented on the `impl/ui-91` branch (#91-#102), with the integrated acceptance (#103) still open. A Raycast-style redesign followed on the same branch, recorded in [ADR 0027](adr/0027-quick-slots-are-an-ordered-list.md) (pins as an ordered list) and [ADR 0028](adr/0028-the-launcher-draws-a-background-image-the-user-chooses.md) (a background image); parts of it supersede #90's contract. [#105](https://github.com/hoangvu12/pane/issues/105) records that redesign and its remaining verification.
+- The [Pane specification #1](https://github.com/pane-app/pane/issues/1) and its implementation issues are closed: the extension host, the default extensions, local/npm/Git installation, development mode, pausing, schedules, services and the installer packages are on `main`.
+- [Settings and shortcuts #70](https://github.com/pane-app/pane/issues/70) is closed and on `main`.
+- [Launcher UI #61](https://github.com/pane-app/pane/issues/61) is open for its macOS and Linux halves ([#66](https://github.com/pane-app/pane/issues/66), [#67](https://github.com/pane-app/pane/issues/67)) and the combined release validation ([#68](https://github.com/pane-app/pane/issues/68)).
+- [The Windows UI port #90](https://github.com/pane-app/pane/issues/90) is implemented on the `impl/ui-91` branch (#91-#102), with the integrated acceptance (#103) still open. A Raycast-style redesign followed on the same branch, recorded in [ADR 0027](adr/0027-quick-slots-are-an-ordered-list.md) (pins as an ordered list) and [ADR 0028](adr/0028-the-launcher-draws-a-background-image-the-user-chooses.md) (a background image); parts of it supersede #90's contract. [#105](https://github.com/pane-app/pane/issues/105) records that redesign and its remaining verification.
 
 Branch CI tiers and pacing are in [agents/ci.md](agents/ci.md).
 

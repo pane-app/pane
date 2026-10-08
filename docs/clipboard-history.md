@@ -1,11 +1,11 @@
 # Clipboard history
 
-Added for [#35](https://github.com/hoangvu12/pane/issues/35) (Windows):
+Added for [#35](https://github.com/pane-app/pane/issues/35) (Windows):
 US65, US66, US70, US71; T10, T21, T22; contributions to G5 and G7, not
 claims that they pass. Pane keeps the text the user copies on this
 computer, and the **Clipboard History** default extension lists it, newest
 first; Enter on an item pastes it, and its other actions copy or delete it
-(#150). Since [#166](https://github.com/hoangvu12/pane/issues/166) it
+(#150). Since [#166](https://github.com/pane-app/pane/issues/166) it
 records **from the first start**, with no step to turn it on
 ([ADR 0042](adr/0042-clipboard-history-records-from-the-first-start.md),
 amending ADR 0020): recording can be paused and resumed, disabling the
@@ -15,19 +15,19 @@ whose copies are never recorded. Its view looks like Raycast's: a type
 dropdown at the search field's right, the records grouped by day, and the
 selected record's Information beside them; its controls are in the Actions
 panel and on the extension's Settings page. Since
-[#167](https://github.com/hoangvu12/pane/issues/167) it keeps **copied
+[#167](https://github.com/pane-app/pane/issues/167) it keeps **copied
 images and files** as well as text, under the same rules: an image as a PNG
 of at most 10 MiB in the history's own folder, files as their paths; rows
 show an image's thumbnail or a file's system icon, and Paste and Copy put
 back the same kind ([What is kept](#images-and-files)).
-[#36](https://github.com/hoangvu12/pane/issues/36) added expiry and the
+[#36](https://github.com/pane-app/pane/issues/36) added expiry and the
 remaining deletion controls (US67, US68, US69; T10, T21; G5, again
 contributions): items are kept for 7 days unless the user chooses another
 time, and Pane deletes them then, whether the extension runs or not
 ([Expiry](#expiry)); an item, the recent ones, all of them (Clear), or all
 of them with history turned off can be deleted ([Deleting](#deleting)).
-[#38](https://github.com/hoangvu12/pane/issues/38) added the Linux (X11)
-adapter and [#37](https://github.com/hoangvu12/pane/issues/37) the macOS
+[#38](https://github.com/pane-app/pane/issues/38) added the Linux (X11)
+adapter and [#37](https://github.com/pane-app/pane/issues/37) the macOS
 (pasteboard) adapter, so the package declares Windows, macOS and Linux,
 the three systems with an adapter. The architecture is recorded in
 [ADR 0020](adr/0020-host-keeps-clipboard-history-for-an-extension.md),
@@ -76,8 +76,8 @@ for expiry [ADR 0023](adr/0023-host-expires-clipboard-history-by-its-own-clock.m
   there.
 
 Acquiring the package automatically at setup is
-[#51](https://github.com/hoangvu12/pane/issues/51) to
-[#53](https://github.com/hoangvu12/pane/issues/53); until then it is
+[#51](https://github.com/pane-app/pane/issues/51) to
+[#53](https://github.com/pane-app/pane/issues/53); until then it is
 installed from its folder (`pane --install target/guests/packages/clipboard-history`).
 
 ## Behavior
@@ -242,7 +242,7 @@ changed from its page until it is enabled again.
 ### Images and files
 
 Pane's own Clipboard History keeps what is copied as an image or as files
-too ([#167](https://github.com/hoangvu12/pane/issues/167)), under the same
+too ([#167](https://github.com/pane-app/pane/issues/167)), under the same
 markers, disabled applications, pause and expiry as text
 (`clipboard::accept_any`; a package keeping history through the contract
 keeps text only, `clipboard::accept`):

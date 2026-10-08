@@ -12,7 +12,7 @@
 //! retries, checked against the sha512 integrity the index gives, exactly
 //! as a default extension's payload is) and installs it; nothing is ever
 //! downloaded, installed or restarted automatically
-//! ([decision](https://github.com/hoangvu12/pane/issues/1): US76).
+//! ([decision](https://github.com/pane-app/pane/issues/1): US76).
 //!
 //! Installing works around the program running from the very file it
 //! would replace: the new program is staged in the install folder and the

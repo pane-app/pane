@@ -1,6 +1,6 @@
 # Scheduled work
 
-Added for [#47](https://github.com/hoangvu12/pane/issues/47) (US14, US45,
+Added for [#47](https://github.com/pane-app/pane/issues/47) (US14, US45,
 US57, US58, US79; T02, T09, T17; contributions to G3, not a claim that it
 passes). A command can declare, in its package's manifest, that it runs on
 a schedule: Pane runs the command's action of the item the schedule names

@@ -4,7 +4,7 @@
 //! (Raycast's export names its fields the same way).
 //!
 //! ```json
-//! [{"name": "Pane issues", "link": "https://github.com/hoangvu12/pane/issues"},
+//! [{"name": "Pane issues", "link": "https://github.com/pane-app/pane/issues"},
 //!  {"name": "Notes", "link": "C:\\Notes", "openWith": "app:Zed"}]
 //! ```
 

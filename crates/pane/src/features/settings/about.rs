@@ -47,7 +47,7 @@ use crate::ui::theme::Theme;
 
 /// The documentation entry's address: Pane's repository, whose README is
 /// the documentation of this build.
-const DOCUMENTATION: &str = "https://github.com/hoangvu12/pane";
+const DOCUMENTATION: &str = "https://github.com/pane-app/pane";
 
 /// The target id of the documentation entry, the control the sidebar's
 /// search jumps to (see [`entries`]).

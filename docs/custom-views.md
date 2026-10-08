@@ -1,6 +1,6 @@
 # Custom views
 
-Added for [#21](https://github.com/hoangvu12/pane/issues/21) (US37, US38, T05,
+Added for [#21](https://github.com/pane-app/pane/issues/21) (US37, US38, T05,
 G2). A custom view is an interactive view the extension draws itself, for
 what standard controls such as [forms](forms.md) cannot show. This slice is
 the minimum a small color picker needs: filled rectangles and text in a

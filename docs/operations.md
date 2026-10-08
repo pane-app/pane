@@ -1,13 +1,13 @@
 # Operations
 
-Added for [#22](https://github.com/hoangvu12/pane/issues/22) (US46–US49, T14,
+Added for [#22](https://github.com/pane-app/pane/issues/22) (US46–US49, T14,
 G2, G4), following [ADR 0011](adr/0011-extension-call-and-result-api.md). An
 **operation** is a named, versioned function an installed package publishes
 for other extensions to call through Pane. This slice is the minimum for one
 extension to reuse another across Rust, JavaScript and TypeScript: one call,
 one JSON input, one JSON result or an explained error. It is not a workflow
 engine; [dependency declarations and installing missing targets](dependencies.md)
-came with [#42](https://github.com/hoangvu12/pane/issues/42).
+came with [#42](https://github.com/pane-app/pane/issues/42).
 
 ## Contract
 

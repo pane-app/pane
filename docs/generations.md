@@ -1,6 +1,6 @@
 # Generations: stopping pending calls
 
-Added for [#14](https://github.com/hoangvu12/pane/issues/14) (US35, US54,
+Added for [#14](https://github.com/pane-app/pane/issues/14) (US35, US54,
 US57, US64, T06, T09, G2, G3; contributions, not a claim that the whole
 scenario or gate passes). Disabling, reloading or updating an extension
 stops the calls into it that are still pending, and their late results never
@@ -117,7 +117,7 @@ resume in the store. So:
 ## What stopping cannot do yet
 
 - ~~A guest computing without yielding cannot be preempted.~~ Since
-  [#18](https://github.com/hoangvu12/pane/issues/18) every guest yields to
+  [#18](https://github.com/pane-app/pane/issues/18) every guest yields to
   the runtime thread at each epoch tick (10 ms, `Config::epoch_interruption`
   and an epoch-deadline callback), so a generation that ends stops a
   computing guest within a tick (one starting too), and a call whose guest

@@ -500,7 +500,7 @@ pasteboard checked directly (`pbpaste`). **Not run on macOS yet.**
 ## Installing Pane and acquiring its calculator (#52)
 
 A final phase, after the clipboard-expiry one, proves the whole outcome of
-[#52](https://github.com/hoangvu12/pane/issues/52)
+[#52](https://github.com/pane-app/pane/issues/52)
 ([installer](../installer.md)), the macOS half of what
 [#53](linux.md#installing-pane-and-acquiring-its-calculator-53) proved on
 Linux and [#51](windows.md#installing-pane-and-acquiring-its-calculator-51)
@@ -574,7 +574,7 @@ runner provides.
 ## Installing a Pane application update by the user's choice (#55)
 
 A final phase, after the installer one, proves the whole outcome of
-[#55](https://github.com/hoangvu12/pane/issues/55)
+[#55](https://github.com/pane-app/pane/issues/55)
 ([installer](../installer.md)), the macOS half of what
 [#54](windows.md#installing-a-pane-application-update-by-the-users-choice-54)
 proved on Windows. The same `cargo xtask package-macos --dev` builds a

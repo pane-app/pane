@@ -1,6 +1,6 @@
 # Clipboard History records from the first start
 
-Accepted 2026-10-07 by the user's decision (spec [#161](https://github.com/hoangvu12/pane/issues/161), "Clipboard History on by default, skipping concealed content"), implemented by [#166](https://github.com/hoangvu12/pane/issues/166). It amends [ADR 0020](0020-host-keeps-clipboard-history-for-an-extension.md), whose Clipboard History was "off until the user turns it on"; the rest of ADR 0020 stands, and so does [ADR 0023](0023-host-expires-clipboard-history-by-its-own-clock.md)'s expiry.
+Accepted 2026-10-07 by the user's decision (spec [#161](https://github.com/pane-app/pane/issues/161), "Clipboard History on by default, skipping concealed content"), implemented by [#166](https://github.com/pane-app/pane/issues/166). It amends [ADR 0020](0020-host-keeps-clipboard-history-for-an-extension.md), whose Clipboard History was "off until the user turns it on"; the rest of ADR 0020 stands, and so does [ADR 0023](0023-host-expires-clipboard-history-by-its-own-clock.md)'s expiry.
 
 Raycast's Clipboard History has no on/off setting: it records from the start, skips what applications mark as concealed, and lets the user name Disabled Applications. A switch the user must find first makes Pane's history empty the first time they look, which is when they need it. So Pane's own Clipboard History default extension records from the first start: a fresh data folder keeps the first copy with no "Turn on clipboard history" step.
 

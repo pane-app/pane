@@ -1,6 +1,6 @@
 # 0025: A continuing service cycles at its own cadence
 
-Status: proposed (for [#48](https://github.com/hoangvu12/pane/issues/48);
+Status: proposed (for [#48](https://github.com/pane-app/pane/issues/48);
 the specification's Implementation Decision 13 accepts "explicit ongoing
 services" as an activation model and leaves their shape open)
 
@@ -8,7 +8,7 @@ services" as an activation model and leaves their shape open)
 
 The specification wants extensions to run work without the user asking in
 three ways (US45): lazily (commands, when used), on a schedule
-([#47](https://github.com/hoangvu12/pane/issues/47), at an interval the
+([#47](https://github.com/pane-app/pane/issues/47), at an interval the
 manifest declares), and as explicit continuing services, which "run while
 the package's code may run" rather than on an interval. Installation
 alone never keeps an executable instance alive (US14), and disabling

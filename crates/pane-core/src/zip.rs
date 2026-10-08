@@ -1,5 +1,5 @@
 //! Reading the zip of Pane's Windows package, which an application update
-//! downloads ([#54](https://github.com/hoangvu12/pane/issues/54)).
+//! downloads ([#54](https://github.com/pane-app/pane/issues/54)).
 //!
 //! A Windows user unzips Pane's package with whatever is at hand —
 //! Explorer, `Expand-Archive`, any unzip — and Windows has no tar a user

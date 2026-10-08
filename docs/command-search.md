@@ -1,6 +1,6 @@
 # Searching an online service inside its command
 
-Added for [#30](https://github.com/hoangvu12/pane/issues/30): US11, US39,
+Added for [#30](https://github.com/pane-app/pane/issues/30): US11, US39,
 US40; T03, T09; contributions to G2 and G3, not claims that they pass. An
 extension command that searches an online service gets a **search field of
 its own** once the user opens it; Pane sends it the text typed there and

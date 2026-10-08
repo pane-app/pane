@@ -1,7 +1,7 @@
 # Development mode: build and reload on save
 
-Added for [#12](https://github.com/hoangvu12/pane/issues/12) (Rust) and
-[#13](https://github.com/hoangvu12/pane/issues/13) (JavaScript and
+Added for [#12](https://github.com/pane-app/pane/issues/12) (Rust) and
+[#13](https://github.com/pane-app/pane/issues/13) (JavaScript and
 TypeScript): US19, US51, US53, T07, T08, G1, G3; contributions, not a claim
 that the whole scenario or gate passes. An author edits an extension, saves,
 and sees the new behavior while Pane stays open ([ADR 0004](adr/0004-reload-extensions-without-restarting-launcher.md),

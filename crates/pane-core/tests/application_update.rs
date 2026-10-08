@@ -3,7 +3,7 @@
 //! source for a newer version of itself when it starts and notifies the
 //! user, who chooses whether to install it — nothing is downloaded,
 //! installed or restarted automatically, ever
-//! ([decision](https://github.com/hoangvu12/pane/issues/1): US76).
+//! ([decision](https://github.com/pane-app/pane/issues/1): US76).
 //!
 //! The check and the install run against an artifact source on 127.0.0.1
 //! (`support/artifacts.rs`; nothing reaches the network or Pane's

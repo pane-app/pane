@@ -1,6 +1,6 @@
 # Contributing to Pane
 
-Work is tracked in [GitHub Issues](https://github.com/hoangvu12/pane/issues). See the [README](README.md) for build, run and test commands on Windows, macOS and Linux; run `cargo xtask ci` before sending a change.
+Work is tracked in [GitHub Issues](https://github.com/pane-app/pane/issues). See the [README](README.md) for build, run and test commands on Windows, macOS and Linux; run `cargo xtask ci` before sending a change.
 
 ## Licensing of contributions
 

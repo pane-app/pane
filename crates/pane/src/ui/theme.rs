@@ -6,7 +6,7 @@
 //! authored reference values, read from the reference's `REFERENCE.md`
 //! and the unchanged authored `launcher.html` beside it (archived with the
 //! retired comparison, ADR 0029:
-//! <https://github.com/hoangvu12/pane/tree/archive/impl-ui-91-2026-10-06/docs/evidence/ui-prototype/reference>).
+//! <https://github.com/pane-app/pane/tree/archive/impl-ui-91-2026-10-06/docs/evidence/ui-prototype/reference>).
 //! The light palette is *derived*, not authored: the reference ships dark
 //! only. Light keeps the reference's geometry and icon gradients and swaps
 //! the neutrals for light-glass counterparts; it is a starting point for

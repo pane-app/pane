@@ -1,19 +1,19 @@
 # Launcher UI implementation and validation
 
-Work follows [specification #61](https://github.com/hoangvu12/pane/issues/61).
+Work follows [specification #61](https://github.com/pane-app/pane/issues/61).
 Application baseline: `748d71e`. Implementation branch: `feat/launcher-ui-spec-61`.
 
 ## Integration order
 
 | Ticket | Scope | Prerequisites |
 | --- | --- | --- |
-| [#62](https://github.com/hoangvu12/pane/issues/62) | Preserve prototype evidence and separate presentation ownership | None |
-| [#63](https://github.com/hoangvu12/pane/issues/63) | Reproducible GPUI CE fork and Windows alpha regression | None |
-| [#64](https://github.com/hoangvu12/pane/issues/64) | Shared dark/light visuals and responsive layouts | #62 |
-| [#65](https://github.com/hoangvu12/pane/issues/65) | Windows native material and validation | #63, #64 |
-| [#66](https://github.com/hoangvu12/pane/issues/66) | macOS native material and validation | #63, #64 |
-| [#67](https://github.com/hoangvu12/pane/issues/67) | Linux opaque appearance and validation | #63, #64 |
-| [#68](https://github.com/hoangvu12/pane/issues/68) | Combined revision validation | #65, #66, #67 |
+| [#62](https://github.com/pane-app/pane/issues/62) | Preserve prototype evidence and separate presentation ownership | None |
+| [#63](https://github.com/pane-app/pane/issues/63) | Reproducible GPUI CE fork and Windows alpha regression | None |
+| [#64](https://github.com/pane-app/pane/issues/64) | Shared dark/light visuals and responsive layouts | #62 |
+| [#65](https://github.com/pane-app/pane/issues/65) | Windows native material and validation | #63, #64 |
+| [#66](https://github.com/pane-app/pane/issues/66) | macOS native material and validation | #63, #64 |
+| [#67](https://github.com/pane-app/pane/issues/67) | Linux opaque appearance and validation | #63, #64 |
+| [#68](https://github.com/pane-app/pane/issues/68) | Combined revision validation | #65, #66, #67 |
 
 ## Evidence rules
 
@@ -113,7 +113,7 @@ the captured revision's `07341bfee05b8549488664cfcbcd9029fd177cc3`. Only commit
 messages/parent identifiers changed. The later review fix centralizes smoke
 color names and removes a redundant local binding when returning a result row;
 it changes no rendered behavior. Final Clippy (`--all-targets -- -D warnings`)
-passes. The all-OS CI result is attached to [PR #69](https://github.com/hoangvu12/pane/pull/69).
+passes. The all-OS CI result is attached to [PR #69](https://github.com/pane-app/pane/pull/69).
 
 - `cargo build --locked -j1 -p pane` passes. The combined application passes
   50 window tests and one command-search test, including the footer regression.

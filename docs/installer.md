@@ -1,11 +1,11 @@
 # Pane's packages and first setup
 
-Added for [#53](https://github.com/hoangvu12/pane/issues/53) (Linux; US15,
+Added for [#53](https://github.com/pane-app/pane/issues/53) (Linux; US15,
 US16, US18, US42; T23; contributions to G6, not a claim that it passes),
-[#51](https://github.com/hoangvu12/pane/issues/51) (Windows) and
-[#52](https://github.com/hoangvu12/pane/issues/52) (macOS): a clean
+[#51](https://github.com/pane-app/pane/issues/51) (Windows) and
+[#52](https://github.com/pane-app/pane/issues/52) (macOS): a clean
 machine installs Pane from one package, and Pane acquires its default
-extensions itself over the network — [#60](https://github.com/hoangvu12/pane/issues/60)'s
+extensions itself over the network — [#60](https://github.com/pane-app/pane/issues/60)'s
 five, with the calculator the feature the installer slices proved —
 with progress, retries and a cache, while the core (the window,
 root search, the install rows, Settings › Extensions) stays usable. This is
@@ -15,13 +15,13 @@ payloads and installs no runtime, and the user installs no Node, Rust,
 npm, Git or compiler: Pane's extension runtime is part of Pane's own
 process (Wasmtime), so nothing is acquired for it.
 
-[#54](https://github.com/hoangvu12/pane/issues/54) adds the other half of
+[#54](https://github.com/pane-app/pane/issues/54) adds the other half of
 the same source: Pane's own updates. Pane checks the artifact source for a
 newer version of itself when it starts and tells the user, who alone
 chooses whether to download and install it — Pane never downloads,
 installs or restarts itself unprompted
-([decision 17](https://github.com/hoangvu12/pane/issues/1), [Q38](current-decisions.md)).
-[#55](https://github.com/hoangvu12/pane/issues/55) wires the macOS half:
+([decision 17](https://github.com/pane-app/pane/issues/1), [Q38](current-decisions.md)).
+[#55](https://github.com/pane-app/pane/issues/55) wires the macOS half:
 the Windows and macOS installs are below; the check, the download, the
 verification and the swap are platform-independent and live in
 `pane-core`, ready for another system's updater to wire to its own
@@ -196,11 +196,11 @@ A default extension ([glossary](../CONTEXT.md)) is identified by its id —
 `installed.json`, with `"defaultVersion"`), whatever version is
 installed. The release's default extensions are the calculator,
 applications, quicklinks, files and clipboard history
-([#60](https://github.com/hoangvu12/pane/issues/60), the user's recorded
+([#60](https://github.com/pane-app/pane/issues/60), the user's recorded
 choice): all five enabled by default and each individually disableable,
 with clipboard history's capture still off until the user turns it on.
 Every build acquires the same five: no sample is a default extension
-([#162](https://github.com/hoangvu12/pane/issues/162)). Until #162 a
+([#162](https://github.com/pane-app/pane/issues/162)). Until #162 a
 development build also acquired the prebuilt-helper sample; an install
 that acquired it keeps it as an ordinary installed package (Pane removes
 nothing it acquired), which the user can uninstall, and no later first
@@ -336,7 +336,7 @@ with why, which tries again.
    only the program, so extensions, their settings, pins and enablement
    are exactly what they were.
 4. **Where the user reaches it.** Root search's rows are one entry point
-   and the Settings window's About page ([#82](https://github.com/hoangvu12/pane/issues/82))
+   and the Settings window's About page ([#82](https://github.com/pane-app/pane/issues/82))
    is the other: the page reads the same state the rows come from —
    `Launcher::application_update` — so the two cannot disagree, and its
    "Check for updates" and "Update Pane to <version>" rows run the same
@@ -353,7 +353,7 @@ The Windows install of an update is this whole path with the program at
 `%LOCALAPPDATA%\Pane\pane.exe` (the install script's target, and the
 shortcut's, which the swap keeps pointing at the right file) — the zip
 package its entry names unpacked by the zip reader. The Linux install
-([#56](https://github.com/hoangvu12/pane/issues/56)) runs the same path
+([#56](https://github.com/pane-app/pane/issues/56)) runs the same path
 with the program at `~/.local/bin/pane` — the install script's target,
 which the desktop entry the script put in `~/.local/share/applications`
 keeps naming (the swap changes only the program, so the entry never
@@ -362,7 +362,7 @@ the tar reader npm tarballs are read by, and Pane's data staying in
 `~/.local/share/pane`, which the install folder does not even hold.
 Each is one call in `pane`'s `main.rs` giving the program's own path.
 
-The macOS install ([#55](https://github.com/hoangvu12/pane/issues/55))
+The macOS install ([#55](https://github.com/pane-app/pane/issues/55))
 is the same call with the program at
 `~/Applications/Pane.app/Contents/MacOS/pane`, so the swap replaces
 **the binary inside the bundle** and the bundle itself stays: replacing a

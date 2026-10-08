@@ -5,8 +5,8 @@
 //! bind for moving through root search's results and leaving screens —
 //! not any extension's actions and not the standard text-editing keys a
 //! focused field owns. The set is closed and small by decision
-//! ([#70](https://github.com/hoangvu12/pane/issues/70),
-//! [#77](https://github.com/hoangvu12/pane/issues/77)): arbitrary
+//! ([#70](https://github.com/pane-app/pane/issues/70),
+//! [#77](https://github.com/pane-app/pane/issues/77)): arbitrary
 //! rebinding of every key is explicitly not promised.
 //!
 //! Nothing here knows the renderer. A [`Binding`] is a keystroke as a

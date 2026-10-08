@@ -1,18 +1,18 @@
 # Applications
 
-Added for [#24](https://github.com/hoangvu12/pane/issues/24) (Windows),
-[#25](https://github.com/hoangvu12/pane/issues/25) (macOS) and
-[#26](https://github.com/hoangvu12/pane/issues/26) (Linux): US03, US05, US12,
+Added for [#24](https://github.com/pane-app/pane/issues/24) (Windows),
+[#25](https://github.com/pane-app/pane/issues/25) (macOS) and
+[#26](https://github.com/pane-app/pane/issues/26) (Linux): US03, US05, US12,
 US44; T01, T03, T22; contributions to G2 and G7, not claims that they pass.
-Stable identities were added for [#169](https://github.com/hoangvu12/pane/issues/169),
+Stable identities were added for [#169](https://github.com/pane-app/pane/issues/169),
 the first slice of "Applications done properly"
-([#124](https://github.com/hoangvu12/pane/issues/124)); localized names,
+([#124](https://github.com/pane-app/pane/issues/124)); localized names,
 alternate titles, keywords and same-name subtitles for
-[#170](https://github.com/hoangvu12/pane/issues/170), its second; the live list
-for [#171](https://github.com/hoangvu12/pane/issues/171), its third; their own
-icons for [#172](https://github.com/hoangvu12/pane/issues/172), its fourth; and
+[#170](https://github.com/pane-app/pane/issues/170), its second; the live list
+for [#171](https://github.com/pane-app/pane/issues/171), its third; their own
+icons for [#172](https://github.com/pane-app/pane/issues/172), its fourth; and
 the Desktops, taskbar pins, internet and ClickOnce shortcuts as sources on
-Windows for [#173](https://github.com/hoangvu12/pane/issues/173), its fifth.
+Windows for [#173](https://github.com/pane-app/pane/issues/173), its fifth.
 Typing an installed application's name into root search lists it, ranked
 with commands by title, and Enter (or a click) opens it. The feature is a
 **default extension**, Applications, which the user can disable like any
@@ -53,8 +53,8 @@ preopened folders) nor start a program. So the split, recorded in
   and lifecycle work (#15 is not built) for no capability the host lacks.
 
 Acquiring the package automatically at setup is
-[#51](https://github.com/hoangvu12/pane/issues/51) to
-[#53](https://github.com/hoangvu12/pane/issues/53); until then it is
+[#51](https://github.com/pane-app/pane/issues/51) to
+[#53](https://github.com/pane-app/pane/issues/53); until then it is
 installed from its folder like the calculator
 (`pane --install target/guests/packages/applications`).
 
@@ -268,7 +268,7 @@ the import gets them; an indexed result takes `alternate-titles` and
 
 Every application row in root search, and a quick slot pinning one, shows
 the application's own icon, drawn bare, without the tile Pane's own rows
-keep (decision 2, [ADR 0035](https://github.com/hoangvu12/pane/blob/2a4f9c43c990656325297a5980f34fa4bddba76e/docs/adr/0035-the-launcher-borrows-raycasts-polish-within-the-accepted-ui.md)).
+keep (decision 2, [ADR 0035](https://github.com/pane-app/pane/blob/2a4f9c43c990656325297a5980f34fa4bddba76e/docs/adr/0035-the-launcher-borrows-raycasts-polish-within-the-accepted-ui.md)).
 The host extracts and keeps the icons (ADR 0038,
 [`icons`](../crates/pane-core/src/applications/icons.rs)):
 
@@ -381,7 +381,7 @@ The host extracts and keeps the icons (ADR 0038,
 
 ## Per platform
 
-| | Windows ([#24](https://github.com/hoangvu12/pane/issues/24)) | macOS ([#25](https://github.com/hoangvu12/pane/issues/25)) | Linux ([#26](https://github.com/hoangvu12/pane/issues/26)) |
+| | Windows ([#24](https://github.com/pane-app/pane/issues/24)) | macOS ([#25](https://github.com/pane-app/pane/issues/25)) | Linux ([#26](https://github.com/pane-app/pane/issues/26)) |
 | --- | --- | --- | --- |
 | Found in | Shortcuts: shell links (`.lnk`), internet shortcuts (`.url`) whose scheme has a registered handler (its key under `HKEY_CLASSES_ROOT` is marked `URL Protocol` and has a `shell` key: a game launcher's `steam://`, `com.epicgames.launcher://`) and ClickOnce application references (`.appref-ms`), in the Start menu's `%APPDATA%\Microsoft\Windows\Start Menu\Programs` then `%ProgramData%\...\Programs`, with subfolders, and without subfolders on the user's Desktop and every user's (`FOLDERID_Desktop`, `FOLDERID_PublicDesktop`, wherever the shell keeps them) and among the taskbar pins (`%APPDATA%\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar`); then the packaged (AppX/MSIX) apps of the shell's Apps folder (`FOLDERID_AppsFolder`), such as Calculator on Windows 11 | Application bundles (`.app`) in `/Applications`, `/System/Applications` and `~/Applications`, and their subfolders two deep (such as `Utilities`), not inside bundles | Desktop entries (`.desktop`) in `$XDG_DATA_HOME/applications` (default `~/.local/share/applications`) then `applications` in each of `$XDG_DATA_DIRS` (default `/usr/local/share:/usr/share`), with subfolders (Flatpak and Snap add their folders to `XDG_DATA_DIRS`) |
 | Name | The name Explorer shows for the shortcut (localized), else its file name; a packaged app's display name | The bundle's display name as Finder shows it (localized), else its folder name | The entry's `Name` for the messages locale (`Name[vi]`), else the plain `Name` |
@@ -588,11 +588,11 @@ and returns `open-application(id)`; only the adapter differs.
   ranked against commands beyond the title rank, and a match on an
   alternate title or keyword highlights nothing in the row (scoring and
   showing them better is "Root search like Raycast",
-  [#122](https://github.com/hoangvu12/pane/issues/122)).
+  [#122](https://github.com/pane-app/pane/issues/122)).
 - A Windows shortcut's localized name is read with what it opens and kept
   until the shortcut file changes, so a changed `desktop.ini` or display
   language shows once the shortcut is read again (the live list,
-  [#171](https://github.com/hoangvu12/pane/issues/171), rescans). On Linux
+  [#171](https://github.com/pane-app/pane/issues/171), rescans). On Linux
   the locale is read once, when Pane starts.
 - The host imports are synchronous: the very first scan runs on the
   runtime thread, so a guest call made meanwhile waits for it (later scans

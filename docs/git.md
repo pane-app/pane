@@ -1,6 +1,6 @@
 # Extension packages from Git repositories
 
-Added for [#46](https://github.com/hoangvu12/pane/issues/46) (US16–US18,
+Added for [#46](https://github.com/pane-app/pane/issues/46) (US16–US18,
 US20–US24, T11, T12, G4, G6; contributions), following
 [ADR 0012](adr/0012-pi-style-source-identity.md)'s Git identity and the
 proposed [ADR 0021](adr/0021-pane-fetches-git-packages-itself.md). A Pane

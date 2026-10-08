@@ -1,27 +1,27 @@
 # Root search
 
-Added for [#23](https://github.com/hoangvu12/pane/issues/23) (US09, US14, T01,
+Added for [#23](https://github.com/pane-app/pane/issues/23) (US09, US14, T01,
 T02, T03, G2, G4). Root search now has a query field: typing narrows root to
 the matching commands, best match first, and Enter invokes the selected one.
 Only command metadata from `pane.json` (and the commands built into Pane) is
 searched; no extension runs until the user invokes one of its commands. This
 is a first matching and ranking, not tuned relevance.
-[#27](https://github.com/hoangvu12/pane/issues/27) (US06, US12, T01, T03)
+[#27](https://github.com/pane-app/pane/issues/27) (US06, US12, T01, T03)
 adds [results computed from the query](#results-computed-from-the-query),
 with [the calculator](#the-calculator) as a default extension.
 [#24, #25 and #26](applications.md) add [results supplied ahead of the
 query](#results-supplied-ahead-of-the-query), with the installed
 applications as a default extension.
-[#28](https://github.com/hoangvu12/pane/issues/28) adds
+[#28](https://github.com/pane-app/pane/issues/28) adds
 [quicklinks](quicklinks.md), which open a saved link, file, folder or
-application; #149 made them indexed results ranked with commands. [#31](https://github.com/hoangvu12/pane/issues/31) adds
+application; #149 made them indexed results ranked with commands. [#31](https://github.com/pane-app/pane/issues/31) adds
 [aliases and fallbacks](aliases.md), which the user gives installed
 commands; [global hotkeys](hotkeys.md) (#32 to #34) open a command from any
-application. [#29](https://github.com/hoangvu12/pane/issues/29) adds
+application. [#29](https://github.com/pane-app/pane/issues/29) adds
 [file search](files.md) within one folder the user chose, whose file
 results are computed results listed after the title matches, and makes a
 search cancel its pending calls for computed results;
-[#175](https://github.com/hoangvu12/pane/issues/175) moves file search to
+[#175](https://github.com/pane-app/pane/issues/175) moves file search to
 the host's [file index](files.md) of the home folder (below).
 
 ## What is searched
@@ -31,7 +31,7 @@ Root search lists **root results**, in this order when the query is empty
 for it come first, once they arrive):
 
 1. the commands built into this Pane build: none in any build since
-   [#162](https://github.com/hoangvu12/pane/issues/162) (the Rust,
+   [#162](https://github.com/pane-app/pane/issues/162) (the Rust,
    JavaScript and TypeScript samples are installed by hand with
    `pane --install`, and a test registers its own);
 2. the commands of each enabled installed package, in install order, and,
@@ -55,7 +55,7 @@ query is, or starts with, comes before everything (computed results
 included), and the [fallbacks](aliases.md#making-a-command-a-fallback)
 after everything; a fallback is never selected by itself.
 
-A **disabled** package contributes nothing ([#10](https://github.com/hoangvu12/pane/issues/10)):
+A **disabled** package contributes nothing ([#10](https://github.com/pane-app/pane/issues/10)):
 its commands leave the results at once, even while the choice is being
 recorded, and come back when it is enabled again. A command
 [unavailable](platform-availability.md) on this system is still found, with
@@ -227,7 +227,7 @@ button, whose keys say how each is pressed. While a status shows, its
 message takes the strip and the buttons step aside.
 
 **An opened command** has no heading line above its content
-([#162](https://github.com/hoangvu12/pane/issues/162)): its list, its
+([#162](https://github.com/pane-app/pane/issues/162)): its list, its
 search, a form or a custom view opened from it, Clipboard History and
 Manage extensions start with their content, as Raycast's views do. The
 footer's left names it instead, after the Pane mark, while no hint or
@@ -303,7 +303,7 @@ comes from the extension, through the same guest boundary as its command:
   extension. Answers for an older query or an earlier search of the same
   query (or after leaving root search) are discarded; until a command
   answers, the new query lists none of its results, never an older
-  query's. Since [#29](https://github.com/hoangvu12/pane/issues/29) the
+  query's. Since [#29](https://github.com/pane-app/pane/issues/29) the
   search owns these calls: once the query changes or root search is left,
   a call still pending is cancelled, never started if it was queued, and
   dropped with the command's instance if it was waiting inside the guest
@@ -311,7 +311,7 @@ comes from the extension, through the same guest boundary as its command:
   for [pausing](pausing.md), and the next query starts a fresh instance
   ([cancelling](files.md#cancelling-a-pending-search)). Calls still run one
   at a time on the runtime thread; since
-  [#18](https://github.com/hoangvu12/pane/issues/18) every guest yields at
+  [#18](https://github.com/pane-app/pane/issues/18) every guest yields at
   each epoch tick, so a computing command is cancelled within a tick too,
   and one that computes for 5 seconds without finishing is stopped as an
   unresponsive call ([pausing](pausing.md#when-an-extension-stops-responding)).
@@ -398,7 +398,7 @@ extension, through the same guest boundary as its command:
 
 A command whose only job is to answer root search declares `"mode":
 "provider"` in its `pane.json` entry
-([#164](https://github.com/hoangvu12/pane/issues/164); the
+([#164](https://github.com/pane-app/pane/issues/164); the
 [author guide](../guests/README.md#root-providers)). Such a **root
 provider** computes results from the query (`"rootResults": true`) or
 supplies them ahead of it (`"indexedResults": true`), and has no row of its
@@ -428,8 +428,8 @@ The calculator ([`guests/calculator`](../guests/calculator)) is a default
 extension in Rust: package `guests/packages/calculator`, a root provider
 whose command, "Calculator", has no row and computes results for root
 search. It is not part of the core and can be disabled like any package. Acquiring it automatically at setup is
-[#51](https://github.com/hoangvu12/pane/issues/51) to
-[#53](https://github.com/hoangvu12/pane/issues/53); until then it is
+[#51](https://github.com/pane-app/pane/issues/51) to
+[#53](https://github.com/pane-app/pane/issues/53); until then it is
 installed from its folder like any package
 (`pane --install target/guests/packages/calculator`).
 
@@ -514,7 +514,7 @@ an online service.
 
 Results computed from the query exist since #27 (above), with discarding of
 late answers but no ranks of their own; since
-[#29](https://github.com/hoangvu12/pane/issues/29) a search cancels their
+[#29](https://github.com/pane-app/pane/issues/29) a search cancels their
 pending calls when the query changes or root search is left, and file
 results are listed after the title matches; since #18 a provider computing
 for 5 seconds without finishing is stopped. Still open: provider ranks.
@@ -525,7 +525,7 @@ text; the text reaches a command only when the user invokes it.
 
 A package's commands and root results leave root search when it is
 disabled or [uninstalled](extension-data.md#uninstalling-an-extension)
-([#40](https://github.com/hoangvu12/pane/issues/40)), and change when it is
+([#40](https://github.com/pane-app/pane/issues/40)), and change when it is
 updated.
 
 ## Accessibility

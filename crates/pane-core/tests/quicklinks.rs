@@ -370,14 +370,14 @@ fn create_quicklink_is_a_form_that_saves_and_returns_to_root_search() {
     create(
         &launcher,
         "Pane issues",
-        "https://github.com/hoangvu12/pane/issues",
+        "https://github.com/pane-app/pane/issues",
         "",
     );
     search(&launcher, "pane iss");
     assert_eq!(titles(&launcher), ["Pane issues"]);
     assert_eq!(
         launcher.view().rows[0].subtitle.as_deref(),
-        Some("https://github.com/hoangvu12/pane/issues")
+        Some("https://github.com/pane-app/pane/issues")
     );
 }
 

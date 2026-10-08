@@ -1,6 +1,6 @@
 # Platform availability
 
-Added for [#19](https://github.com/hoangvu12/pane/issues/19) (US03, US18,
+Added for [#19](https://github.com/pane-app/pane/issues/19) (US03, US18,
 US43, US44, US81, T22, G4, G7; contributions, not whole-gate claims). It
 implements Q34 as accepted: [simple supported-OS metadata and per-action
 availability explanations, preserving functioning actions, with no general

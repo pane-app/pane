@@ -979,7 +979,7 @@ next green Linux run is its evidence.
 ### Installing Pane and acquiring its calculator (#53)
 
 A final phase, after the clipboard-expiry one, proves the whole outcome of
-[#53](https://github.com/hoangvu12/pane/issues/53)
+[#53](https://github.com/pane-app/pane/issues/53)
 ([installer](../installer.md)). `cargo xtask package-linux --dev` builds the
 Linux package (the development profile, so its program accepts the
 controlled artifact source) and the default extensions' payloads; the
@@ -1025,7 +1025,7 @@ runner provides.
 ### Installing a Pane application update by the user's choice (#56)
 
 A final phase, after the installer one, proves the whole outcome of
-[#56](https://github.com/hoangvu12/pane/issues/56)
+[#56](https://github.com/pane-app/pane/issues/56)
 ([installer](../installer.md)), the Linux half of what
 [#54](windows.md#installing-a-pane-application-update-by-the-users-choice-54)
 proved on Windows. The same `cargo xtask package-linux --dev` builds a
@@ -1163,4 +1163,4 @@ The same script runs in GitHub Actions on the fork `wasimysaid/pane`. Run
 `cargo xtask ci` passed (13 window, 9 launcher-model, 1 runtime-cache and 25
 sample-contract tests). The smoke passed all of its screenshot checks, and the
 uploaded screenshots show the Rust, JavaScript and TypeScript results in turn.
-The upstream repository `hoangvu12/pane` still has no configured runner.
+The upstream repository `pane-app/pane` still has no configured runner.

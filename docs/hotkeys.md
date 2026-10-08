@@ -1,8 +1,8 @@
 # Global hotkeys
 
-Added for [#32](https://github.com/hoangvu12/pane/issues/32) (Windows),
-[#33](https://github.com/hoangvu12/pane/issues/33) (macOS) and
-[#34](https://github.com/hoangvu12/pane/issues/34) (Linux): US03, US10, US44,
+Added for [#32](https://github.com/pane-app/pane/issues/32) (Windows),
+[#33](https://github.com/pane-app/pane/issues/33) (macOS) and
+[#34](https://github.com/pane-app/pane/issues/34) (Linux): US03, US10, US44,
 US57; T03, T09, T22; contributions to G2 and G7, not claims that they pass.
 The user gives an installed command a **global hotkey** in Pane, and pressing
 it while any application has focus opens that command in Pane's window. The
@@ -95,7 +95,7 @@ released, reaches Pane no more.
 
 ## Per platform
 
-| | Windows ([#32](https://github.com/hoangvu12/pane/issues/32)) | macOS ([#33](https://github.com/hoangvu12/pane/issues/33)) | Linux ([#34](https://github.com/hoangvu12/pane/issues/34)) |
+| | Windows ([#32](https://github.com/pane-app/pane/issues/32)) | macOS ([#33](https://github.com/pane-app/pane/issues/33)) | Linux ([#34](https://github.com/pane-app/pane/issues/34)) |
 | --- | --- | --- | --- |
 | Registered with | `RegisterHotKey` (`MOD_NOREPEAT`) on a thread of Pane's own with its own message loop | Carbon `RegisterEventHotKey` through the `global-hotkey` crate (0.8, Apache-2.0 OR MIT), on the main run loop | `XGrabKey` on the root window through `x11rb`, on the key whose first level (no Shift) gives the key, with every Caps Lock, Num Lock and Scroll Lock combination (their modifiers read from the server's modifier mapping), XKB detectable auto-repeat; grabs are made again when the keyboard mapping changes (`MappingNotify`) |
 | Conflict with another application | `ERROR_HOTKEY_ALREADY_REGISTERED` → "already uses it" (Windows refuses some of its own shortcuts the same way) | Refused only if another application registered it exclusively ("the system refused it: …"); system shortcuts are covered by Pane's reserved list | `BadAccess` → "already uses it" (also a shortcut the window manager grabs) |

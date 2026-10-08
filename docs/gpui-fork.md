@@ -2,8 +2,8 @@
 
 Pane uses [hoangvu12/gpui-ce](https://github.com/hoangvu12/gpui-ce), branch
 `pane/source-over-alpha`, to carry the Windows alpha correction and macOS startup ABI repair required by
-[#63](https://github.com/hoangvu12/pane/issues/63), under
-[#61](https://github.com/hoangvu12/pane/issues/61). Cargo uses an immutable commit,
+[#63](https://github.com/pane-app/pane/issues/63), under
+[#61](https://github.com/pane-app/pane/issues/61). Cargo uses an immutable commit,
 not the branch tip: `5d27954ce5305447bb97d1d7b89b0db9b7a2c59c`. All four declarations in `crates/pane/Cargo.toml` (including
 the test dependency) move together. The fork's internal path dependencies resolve
 to that same Git source, preserving one GPUI type identity across renderer,
@@ -115,7 +115,7 @@ integration; no native-glass claim is made.
 
 ## macOS default-startup ABI repair
 
-Final CI run [36952982441](https://github.com/hoangvu12/pane/actions/runs/36952982441)
+Final CI run [36952982441](https://github.com/pane-app/pane/actions/runs/36952982441)
 (artifact 11206345698) exposed a default-glass startup abort in the previous pin
 `2b9e644e3f89a38eacebc713fb0d1807c618c76c`. The retained installed-stderr log reports:
 
