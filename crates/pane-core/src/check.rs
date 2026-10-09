@@ -81,6 +81,14 @@ pub const HELPER_FILE: &str = "helper-file";
 /// The package has no description, or nowhere to report its problems: fine
 /// to install, lacking for a published one.
 pub const PUBLICATION: &str = "publication";
+/// The tarball `pane-ext pack` would write, or the folder a release
+/// revision of a Git-distributed package holds, holds what Pane's
+/// unpacking rules refuse: a link, a name some system cannot write, more
+/// entries or bytes than Pane allows (#225).
+pub const PACKED: &str = "packed";
+/// An npm package's `package.json` `files` list does not cover what the
+/// tarball needs (#225).
+pub const FILES: &str = "files";
 
 /// Checks the package in `folder` as Pane's install does, and then as an
 /// author would want: the manifest through Pane's own reading of it
@@ -90,6 +98,21 @@ pub const PUBLICATION: &str = "publication";
 /// declares, and the lint rules above. Every problem is collected — install
 /// stops at the first, but an author wants them all.
 pub fn check_package(folder: &Path) -> CheckReport {
+    check_with(folder, false)
+}
+
+/// As [`check_package`], for a package about to be published (`pane-ext
+/// pack`, #225): the one rule that changes is the icon's — a package with
+/// no icon of its own, or one smaller than a published extension's
+/// 512×512, is an error rather than a warning, because once the package
+/// ships there is no author left to fix it.
+pub fn check_published_package(folder: &Path) -> CheckReport {
+    check_with(folder, true)
+}
+
+/// The checks of [`check_package`], with the icon rule failing when the
+/// package is to be published.
+fn check_with(folder: &Path, published: bool) -> CheckReport {
     let mut report = CheckReport::default();
     let manifest = match Manifest::read(folder) {
         Ok(manifest) => manifest,
@@ -104,7 +127,7 @@ pub fn check_package(folder: &Path) -> CheckReport {
     };
     check_helper_files(&manifest, folder, &mut report);
     check_components(&manifest, folder, &mut report);
-    lint(&manifest, folder, &mut report);
+    lint(&manifest, folder, &mut report, published);
     report
 }
 
@@ -201,8 +224,10 @@ fn check_helper_files(manifest: &Manifest, folder: &Path, report: &mut CheckRepo
 }
 
 /// The authoring lint rules: warnings about what Pane allows but a native
-/// extension would not do.
-fn lint(manifest: &Manifest, folder: &Path, report: &mut CheckReport) {
+/// extension would not do. The icon rule is the one that differs for a
+/// package about to be published: it fails instead of warning (see
+/// [`check_published_package`]).
+fn lint(manifest: &Manifest, folder: &Path, report: &mut CheckReport, published: bool) {
     // Titles are shown among Pane's own, which are in Title Case.
     lint_title(&manifest.title, None, report);
     for command in &manifest.commands {
@@ -210,7 +235,7 @@ fn lint(manifest: &Manifest, folder: &Path, report: &mut CheckReport) {
     }
     // A published extension has its own 512×512 icon; a package without one
     // installs and shows a first-letter tile.
-    lint_icon(manifest.icon.as_ref(), folder, report);
+    lint_icon(manifest.icon.as_ref(), folder, report, published);
     // The Setup screen a required preference without a default shows has
     // the package's HELP.md beside it.
     if !folder.join(HELP_FILE).is_file() {
@@ -272,11 +297,27 @@ fn lint_title(title: &str, command: Option<&ManifestCommand>, report: &mut Check
     });
 }
 
-/// Warns when the package has no icon of its own, or when its image is
-/// smaller than the 512×512 a published extension's icon is.
-fn lint_icon(icon: Option<&Icon>, folder: &Path, report: &mut CheckReport) {
+/// Warns, or fails when the package is to be published, when the package
+/// has no icon of its own, or when its image is smaller than the 512×512
+/// a published extension's icon is.
+fn lint_icon(icon: Option<&Icon>, folder: &Path, report: &mut CheckReport, published: bool) {
+    let Some(problem) = icon_problem(icon, folder) else {
+        return;
+    };
+    if published {
+        report.errors.push(problem);
+    } else {
+        report.warnings.push(problem);
+    }
+}
+
+/// The problem with the package's icon (in `folder`), in the words the npm
+/// and Git installs' caution uses: none at all, or an image smaller than a
+/// published extension's. Whether it fails the package is for the caller
+/// to say.
+fn icon_problem(icon: Option<&Icon>, folder: &Path) -> Option<CheckProblem> {
     let Some(icon) = icon else {
-        report.warnings.push(CheckProblem {
+        return Some(CheckProblem {
             id: ICON,
             file: None,
             message: format!(
@@ -286,17 +327,16 @@ fn lint_icon(icon: Option<&Icon>, folder: &Path, report: &mut CheckReport) {
                 icons::PUBLISHED_ICON_SIZE
             ),
         });
-        return;
     };
     let IconSource::Image { light, dark } = &icon.source else {
-        return;
+        return None;
     };
     for file in [light, dark] {
         if !icons::is_png(file) {
             continue;
         }
         let Some((width, height)) = icons::png_size(&folder.join(file)) else {
-            report.warnings.push(CheckProblem {
+            return Some(CheckProblem {
                 id: ICON,
                 file: Some(file.display().to_string()),
                 message: format!(
@@ -304,10 +344,9 @@ fn lint_icon(icon: Option<&Icon>, folder: &Path, report: &mut CheckReport) {
                     file.display()
                 ),
             });
-            return;
         };
         if width < icons::PUBLISHED_ICON_SIZE || height < icons::PUBLISHED_ICON_SIZE {
-            report.warnings.push(CheckProblem {
+            return Some(CheckProblem {
                 id: ICON,
                 file: Some(file.display().to_string()),
                 message: format!(
@@ -318,9 +357,9 @@ fn lint_icon(icon: Option<&Icon>, folder: &Path, report: &mut CheckReport) {
                     icons::PUBLISHED_ICON_SIZE
                 ),
             });
-            return;
         }
     }
+    None
 }
 
 /// The words that are left lowercase in a title, everywhere but its first

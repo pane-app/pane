@@ -1,7 +1,9 @@
 # `pane-ext`, the command-line tool authors use beside the app (ADR 0047,
 # #128): `pane-ext dev` builds a package folder in the terminal with the
 # build crate development mode uses, and hands each build to the running
-# Pane over the local channel (#217).
+# Pane over the local channel (#217); `pane-ext check` reports everything
+# Pane would refuse at install (#224); `pane-ext pack` builds the release
+# components and assembles what users download (#225).
 [package]
 name = "pane-ext"
 version = "0.1.0"
@@ -23,3 +25,9 @@ serde_json.workspace = true
 # Driving the launcher the tests host as the running Pane.
 futures.workspace = true
 tempfile.workspace = true
+# Reading the tarball pack writes, and serving it with its integrity from
+# the loopback npm registry of the pack tests (#225); already in the
+# workspace's tree.
+tar.workspace = true
+flate2.workspace = true
+sha2.workspace = true

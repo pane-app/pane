@@ -36,6 +36,7 @@ mod links;
 pub mod local_channel;
 pub mod npm;
 mod operations;
+pub mod pack;
 mod packages;
 #[cfg(test)]
 mod peak_memory;

@@ -66,8 +66,9 @@ const GUEST_TARGET: &str = "wasm32-wasip2";
 /// npm's own fixed time for packed files, 1985-10-26T08:15:00Z: the
 /// tarballs this repository packs (the npm sample, the default
 /// extensions' payloads, the Linux package) are the same on every system,
-/// so a source serves one integrity everywhere.
-pub(crate) const PACKED_MTIME: u64 = 499_162_500;
+/// so a source serves one integrity everywhere. `pane-ext pack`'s
+/// tarballs use it too, from where it lives (`pane_core::pack`).
+pub(crate) use pane_core::pack::PACKED_MTIME;
 
 /// Components built by `js-guests` and committed, so that normal builds and
 /// tests need no JavaScript toolchain.

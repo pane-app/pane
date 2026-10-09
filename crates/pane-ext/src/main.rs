@@ -4,18 +4,22 @@
 //! each build to the running Pane (see `dev`); `check [folder]` reports
 //! everything Pane would refuse at install, with Pane's own messages, plus
 //! the authoring lint rules and the package's own eslint (see `check`);
-//! `new` and `pack` are to follow.
+//! `pack [folder]` builds the release components with the same code and
+//! assembles what users will download, checked with Pane's own rules (see
+//! `pack`); `new` is to follow.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 mod check;
 mod dev;
+mod pack;
 mod start;
 
 const USAGE: &str = "\
 Usage: pane-ext dev [folder]
        pane-ext check [folder] [options]
+       pane-ext pack [folder]
 
   dev [folder]  Build the package in folder (the current folder by default)
                 here, hand the build to the running Pane, starting Pane if
@@ -34,6 +38,19 @@ Usage: pane-ext dev [folder]
     --json           Print one machine-readable report instead, with each
                      problem's lint id, for an editor or CI to show inline.
     --deny-warnings  Fail on warnings as well as errors.
+
+  pack [folder]
+                Build the release components of the package in folder (the
+                current folder by default) with the same build development
+                mode uses, then assemble and check what its users will
+                download with Pane's own rules. An npm package (one with a
+                package.json) is packed into the tarball npm pack makes, in
+                the package's dist folder, with its `files` list checked to
+                cover everything pane.json names; a Git-distributed one is
+                checked as the folder its release revision will hold. A
+                package without a 512×512 icon is an error here, not a
+                warning. pack never publishes anything: publishing is the
+                author's step, never pane-ext's.
 
   --version     Print pane-ext's version.
 ";
@@ -59,6 +76,16 @@ fn main() -> ExitCode {
             };
             check::run(folder, json, deny_warnings)
         }
+        Some("pack") => {
+            let folder = match pack_arguments(args) {
+                Ok(folder) => folder,
+                Err(problem) => {
+                    eprintln!("pane-ext: {problem}");
+                    return usage_error();
+                }
+            };
+            pack::run(folder)
+        }
         Some("--version" | "-V") => {
             println!("pane-ext {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
@@ -67,8 +94,10 @@ fn main() -> ExitCode {
             print!("{USAGE}");
             ExitCode::SUCCESS
         }
-        Some(later @ ("new" | "pack")) => {
-            eprintln!("pane-ext: `pane-ext {later}` is not available yet; `dev` and `check` are");
+        Some("new") => {
+            eprintln!(
+                "pane-ext: `pane-ext new` is not available yet; `dev`, `check` and `pack` are"
+            );
             ExitCode::FAILURE
         }
         _ => usage_error(),
@@ -99,6 +128,22 @@ fn check_arguments(
         }
     }
     Ok((folder, json, deny_warnings))
+}
+
+/// The argument of `pack`: one optional package folder.
+fn pack_arguments(args: std::iter::Skip<std::env::ArgsOs>) -> Result<Option<PathBuf>, String> {
+    let mut folder = None;
+    for argument in args {
+        if argument.to_string_lossy().starts_with('-') {
+            return Err(format!(
+                "`{}` is not an argument pack takes: a package folder",
+                argument.to_string_lossy()
+            ));
+        } else if folder.replace(PathBuf::from(&argument)).is_some() {
+            return Err("pack takes one package folder, not several".into());
+        }
+    }
+    Ok(folder)
 }
 
 fn usage_error() -> ExitCode {

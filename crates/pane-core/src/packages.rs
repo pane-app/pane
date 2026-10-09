@@ -3219,7 +3219,7 @@ fn copy_package(package: &SourcePackage, location: &Path) -> io::Result<()> {
 
 /// The source map kept beside the component at `component`, when there is
 /// one: its file name plus `.map` (#214).
-fn map_beside(component: &Path) -> Option<PathBuf> {
+pub(crate) fn map_beside(component: &Path) -> Option<PathBuf> {
     let name = component.file_name()?.to_str()?;
     Some(component.with_file_name(format!("{name}.map")))
 }
