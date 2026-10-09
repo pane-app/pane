@@ -626,13 +626,17 @@ fn segments<T: Copy + PartialEq>(
 /// the compact window, and the pinned items segments. A failed save's
 /// status sits above the cards. `attach` adds each control's behavior;
 /// the composition gives each its identity, its accessibility and its look.
+/// The page's three selects as [`compose`] arranges them: the opening
+/// monitor's, the reopening choice's and the search sensitivity's.
+pub(crate) type Selects = (
+    Option<Stateful<Div>>,
+    Option<Stateful<Div>>,
+    Option<Stateful<Div>>,
+);
+
 pub(crate) fn compose(
     view: &LauncherView,
-    selects: (
-        Option<Stateful<Div>>,
-        Option<Stateful<Div>>,
-        Option<Stateful<Div>>,
-    ),
+    selects: Selects,
     theme: &Theme,
     attach: impl Fn(LauncherControl, Stateful<Div>) -> Stateful<Div>,
 ) -> Stateful<Div> {

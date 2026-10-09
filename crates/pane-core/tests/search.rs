@@ -178,6 +178,7 @@ fn an_abbreviation_finds_the_command_by_its_word_starts() {
 }
 
 #[test]
+#[allow(clippy::single_range_in_vec_init)]
 fn accents_and_diacritics_never_stand_between_the_query_and_the_result() {
     let launcher = without_runtime(vec![
         command("Café", None),

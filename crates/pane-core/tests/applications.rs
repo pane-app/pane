@@ -202,13 +202,22 @@ fn applications_rank_with_commands_by_title() {
     let (launcher, _) = dirs.launcher(&system, &["sample-rust"]);
 
     // Low holds the mid-word containment of "Trusty", which the default
-    // High drops (#193).
+    // High drops — and Pane's own rows, which Low holds too (#193).
     launcher.set_search_sensitivity(pane_core::SearchSensitivity::Low);
     search(&launcher, "rust");
 
     // The exact title first, then the title starting with the query, then
-    // the one containing it.
-    assert_eq!(titles(&launcher), ["Rust", "Rust sample", "Trusty Notes"]);
+    // the one containing it, then the fuzzy matches.
+    assert_eq!(
+        titles(&launcher),
+        [
+            "Rust",
+            "Rust sample",
+            "Trusty Notes",
+            "Manage Extensions",
+            "Install extension from npm…"
+        ]
+    );
 }
 
 #[test]
@@ -255,7 +264,7 @@ fn applications_are_looked_for_once_per_visit_of_root_search() {
     launcher.show_root_search();
 
     search(&launcher, "fire");
-    assert_eq!(titles(&launcher), ["Firefox", "Firewall"]);
+    assert_eq!(titles(&launcher), ["Firefox", "Firewall", "Install extension from Git…"]);
 }
 
 #[test]
@@ -342,7 +351,7 @@ fn disabling_applications_removes_them_and_stops_looking_while_others_still_answ
 
     block_on(launcher.set_enabled(&identity(), true));
     search(&launcher, "fire");
-    assert_eq!(titles(&launcher), ["Firefox"]);
+    assert_eq!(titles(&launcher), ["Firefox", "Install extension from Git…"]);
 }
 
 #[test]

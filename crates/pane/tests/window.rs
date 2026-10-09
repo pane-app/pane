@@ -1272,7 +1272,7 @@ fn typing_in_root_search_narrows_the_results_and_enter_opens_the_best_match(
 #[gpui::test]
 fn arrow_keys_move_through_the_matches_while_the_query_keeps_focus(cx: &mut TestAppContext) {
     let (window, cx) = open_with(cx, samples::sample_commands());
-    cx.simulate_input("scripts");
+    cx.simulate_input("script sample");
     assert_eq!(
         row_titles(&window, cx),
         ["JavaScript sample", "TypeScript sample"]
@@ -1306,9 +1306,9 @@ fn the_production_scenario_edits_searches_selects_opens_and_back_navigates(
     );
 
     // Edits: typing reaches the query field the launcher owns.
-    cx.simulate_input("scripts");
+    cx.simulate_input("script sample");
     let view = settle(&window, cx);
-    assert_eq!(view.query(), Some("scripts"));
+    assert_eq!(view.query(), Some("script sample"));
     // Searches: the real root adapter narrows the real commands.
     assert_eq!(
         row_titles(&window, cx),
@@ -1428,14 +1428,14 @@ fn input_method_composition_searches_root(cx: &mut TestAppContext) {
 #[gpui::test]
 fn assistive_technology_sees_the_search_field_and_the_selected_result(cx: &mut TestAppContext) {
     let (window, cx) = open_with(cx, samples::sample_commands());
-    cx.simulate_input("scripts");
+    cx.simulate_input("script sample");
     settle(&window, cx);
 
     let nodes = accessible_nodes(cx);
     let search = node(&nodes, "EditableComboBox", "Search");
     assert_eq!(
         (&search["value"], &search["placeholder"]),
-        (&"scripts".into(), &"Search apps and commands…".into())
+        (&"script sample".into(), &"Search apps and commands…".into())
     );
     node(&nodes, "ListBox", "Results");
     node(&nodes, "ListBoxOption", "TypeScript sample");
@@ -1642,7 +1642,9 @@ fn typing_an_applications_name_shows_it_and_enter_opens_it(cx: &mut TestAppConte
     // (#132).
     assert_eq!(focused.as_deref(), Some("Search"), "the field");
     typing_settles(cx);
-    until_announced(cx, "Firefox, 1 of 1");
+    // Two rows: the application's prefix match and Pane's install row
+    // (#193).
+    until_announced(cx, "Firefox, 1 of 2");
 
     cx.simulate_keystrokes("enter");
     let view = settle(&window, cx);
