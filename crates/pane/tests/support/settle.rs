@@ -35,7 +35,7 @@ pub fn enter_flow(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -
 /// Runs the window until the launcher is no longer running an action and
 /// the window has drawn what it shows.
 pub fn settle(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> LauncherView {
-    until(window, cx, |view| view.status != Status::Running)
+    until(window, cx, |view| !matches!(view.status, Status::Running { .. }))
 }
 
 /// Runs the window, as [`settle`] does, until its last frame also drew
@@ -54,7 +54,10 @@ pub fn settle_bare(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) 
                 window.drawn_over(),
             )
         });
-        if view.status != Status::Running && drawn.as_ref() == Some(&view) && !over {
+        if !matches!(view.status, Status::Running { .. })
+            && drawn.as_ref() == Some(&view)
+            && !over
+        {
             return view;
         }
         assert!(

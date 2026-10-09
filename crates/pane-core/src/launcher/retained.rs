@@ -18,6 +18,7 @@
 //! its package's again and nothing is deleted.
 
 use std::future::Future;
+use std::time::Instant;
 
 use super::off_thread;
 use super::{Changing, Entry, Launcher, LauncherView, Question, Row, Screen, State, Status};
@@ -133,7 +134,7 @@ impl Launcher {
         if !state.claim(&identity, Changing::DeletingRetained) {
             return None;
         }
-        state.view.status = Status::Running;
+        state.view.status = Status::Running { since: Instant::now() };
         Some(retained)
     }
 

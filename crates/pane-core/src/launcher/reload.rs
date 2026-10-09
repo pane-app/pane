@@ -19,6 +19,7 @@
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use super::{Changing, Launcher, State, Status, off_thread, owner, pausing};
 use crate::packages::{PackageError, PackageIdentity, Pause, PauseCause};
@@ -120,7 +121,7 @@ impl Launcher {
         if !state.claim(&identity, Changing::Reloading) {
             return None;
         }
-        state.view.status = Status::Running;
+        state.view.status = Status::Running { since: Instant::now() };
         Some(Reload {
             identity,
             attempt,

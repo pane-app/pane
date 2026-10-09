@@ -3466,7 +3466,7 @@ mod clipboard_split {
         loop {
             cx.run_until_parked();
             let status = cx.read_entity(window, |window, _| window.launcher().view().status);
-            if status != pane_core::Status::Running {
+            if !matches!(status, pane_core::Status::Running { .. }) {
                 return;
             }
             assert!(std::time::Instant::now() < deadline, "timed out");

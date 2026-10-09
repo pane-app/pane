@@ -62,7 +62,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub use pane_build::{BuildFailure, Development};
 use pane_build::{Claim, Host, MAX_OBSOLETE, Prepared};
@@ -486,7 +486,7 @@ impl Launcher {
             .installation
             .as_ref()
             .expect("changeable checked there is an installation");
-        state.view.status = Status::Running;
+        state.view.status = Status::Running { since: Instant::now() };
         Some(DevelopStart {
             builder,
             folder: folder.to_path_buf(),
@@ -711,7 +711,7 @@ impl Launcher {
         let logged = match &status {
             Status::Progress(text) | Status::Result(text) => Some((LogLevel::Info, text)),
             Status::Error(text) => Some((LogLevel::Error, text)),
-            Status::Idle | Status::Running => None,
+            Status::Idle | Status::Running { .. } => None,
         };
         if let Some((level, text)) = logged {
             self.developing.logs.pane(&identity.key(), 0, level, text);

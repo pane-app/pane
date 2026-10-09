@@ -436,7 +436,7 @@ fn status_tone(status: &Status, theme: &Theme) -> Option<(SharedString, Hsla)> {
         Status::Progress(work) => Some((work.into(), theme.warning)),
         Status::Result(answer) => Some((answer.into(), theme.success)),
         Status::Error(message) => Some((message.into(), theme.danger)),
-        Status::Running => Some(("Running…".into(), theme.warning)),
+        Status::Running { .. } => Some(("Running…".into(), theme.warning)),
     }
 }
 

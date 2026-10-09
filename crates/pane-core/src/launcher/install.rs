@@ -22,6 +22,7 @@
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use super::{
     Changing, Entry, FormField, FormPurpose, FormView, GIT_REPOSITORY_FIELD, Launcher,
@@ -581,7 +582,7 @@ impl Launcher {
             // Planned again, the change is shown.
             Err(Refusal::Changed) => Vec::new(),
         };
-        state.view.status = Status::Running;
+        state.view.status = Status::Running { since: Instant::now() };
         Some(Begun {
             request,
             mode,

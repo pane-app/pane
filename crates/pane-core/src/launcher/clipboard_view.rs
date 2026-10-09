@@ -48,6 +48,7 @@ use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 
 use super::own_actions::COPIED;
 use super::{Launcher, Screen, State, Status, owner};
@@ -928,7 +929,7 @@ impl Launcher {
                 state.view.status = match &clip {
                     Err(why) => Status::Error(why.clone()),
                     // Running until it is pasted, or copied instead.
-                    Ok(_) => Status::Running,
+                    Ok(_) => Status::Running { since: Instant::now() },
                 };
             }
         }

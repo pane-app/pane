@@ -62,6 +62,38 @@ pub fn glyph_package(folder: &Path) -> PathBuf {
     folder.to_path_buf()
 }
 
+/// Writes a package folder whose one command computes root results with
+/// the faulty fixture (the calculator's slow one): the query "0 + 0" is
+/// answered only after about a second of busy work, with one result
+/// titled "Slow answer" — the loading bar's slow case (#248).
+pub fn slow_provider(folder: &Path) -> PathBuf {
+    let guest = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/faulty.wasm");
+    assert!(
+        guest.exists(),
+        "{} is missing; run `cargo xtask guests`",
+        guest.display()
+    );
+    fs::create_dir_all(folder).unwrap();
+    fs::write(
+        folder.join("pane.json"),
+        r#"{
+  "manifestVersion": 1,
+  "title": "Slow",
+  "version": "1.0.0",
+  "apiVersion": "0.1",
+  "commands": [{
+    "id": "command",
+    "title": "Slow answers",
+    "component": "command.wasm",
+    "rootResults": true
+  }]
+}"#,
+    )
+    .unwrap();
+    fs::copy(guest, folder.join("command.wasm")).unwrap();
+    folder.to_path_buf()
+}
+
 /// Copies the assembled sample package `sample` (a folder of
 /// `target/guests/packages`) to `folder`.
 pub fn assembled_package(sample: &str, folder: &Path) -> PathBuf {

@@ -156,7 +156,7 @@ fn search_files<'a>(
     // The files found, once the search answered: each titled with its
     // name and its folder below the home folder.
     until(&window, cx, |view| {
-        view.status != Status::Running
+        !matches!(view.status, Status::Running { .. })
             && view.rows.iter().any(|row| {
                 row.subtitle
                     .as_deref()
@@ -188,7 +188,7 @@ fn until(
 /// Runs the window until the launcher no longer runs an action: a hidden
 /// window draws nothing, so this does not wait for a frame.
 fn done(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> LauncherView {
-    until(window, cx, |view| view.status != Status::Running)
+    until(window, cx, |view| !matches!(view.status, Status::Running { .. }))
 }
 
 fn hidden(window: &Entity<LauncherWindow>, cx: &VisualTestContext) -> bool {

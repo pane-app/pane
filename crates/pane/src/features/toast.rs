@@ -129,7 +129,7 @@ impl LauncherWindow {
     /// The toast the footer shows with the launcher's `status`: the
     /// launcher's, while its status line is idle or running.
     pub(crate) fn footer_toast(&self, status: &Status) -> Option<ShownToast> {
-        if matches!(status, Status::Idle | Status::Running) {
+        if matches!(status, Status::Idle | Status::Running { .. }) {
             self.launcher.toast()
         } else {
             None

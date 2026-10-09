@@ -31,6 +31,7 @@ use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged
 use pane_core::{Keyboard, KeyboardAction};
 
 use crate::app::LauncherWindow;
+use crate::features::loading;
 use crate::ui::icon::{Glyph, glyph};
 use crate::ui::input::TextEditingKeys;
 use crate::ui::theme::Theme;
@@ -164,7 +165,9 @@ impl LauncherWindow {
     /// `placeholder` while empty, above `list`, the results — the content
     /// that arrives with a view transition, wrapped by the caller (see
     /// [`crate::app::LauncherWindow::render`]); the field above it is the
-    /// shell's search header and never moves.
+    /// shell's search header and never moves. `loading` is what the
+    /// loading bar draws along the header's rule while waited-for work
+    /// has outlasted its threshold (#248).
     ///
     /// The field's chrome is the reference's search header: a 64px row with
     /// the magnifier, 20px padding, a 14px gap and a hairline below — no
@@ -175,6 +178,7 @@ impl LauncherWindow {
         &self,
         query: String,
         placeholder: &'static str,
+        loading: Option<loading::LoadingBar>,
         list: impl gpui::IntoElement,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -196,7 +200,7 @@ impl LauncherWindow {
             .min_h(px(0.))
             .flex()
             .flex_col()
-            .child(search_header(input, placeholder, &visuals.theme))
+            .child(search_header(input, placeholder, loading, &visuals.theme))
             .child(list)
             .into_any_element()
     }
@@ -225,11 +229,17 @@ impl LauncherWindow {
 /// Over a background image (ADR 0028, `Theme::frost`) the same field is a
 /// frosted pill inside the 64px row, with no hairline below it.
 ///
+/// `loading` is the loading bar's frame (#248, ADR 0035): the line it
+/// says to draw lies along the header's rule — over the hairline, or
+/// along the frosted pill's bottom rim where there is no hairline —
+/// placed by [`loading::line`].
+///
 /// The launcher's search screens ([`LauncherWindow::render_search`])
 /// compose this header.
 pub(crate) fn search_header(
     input: &Entity<EditableTextState>,
     placeholder: &'static str,
+    loading: Option<loading::LoadingBar>,
     theme: &Theme,
 ) -> Div {
     let geometry = &theme.geometry;
@@ -272,14 +282,31 @@ pub(crate) fn search_header(
                 .overflow_x_scroll(),
         );
     match theme.frost {
-        None => field
+        // The header's own rule carries the loading bar: the wrapper holds
+        // the bordered row and the 1px line over its border — a child of
+        // the row itself would paint beneath the border, which the row
+        // paints after its children (#248).
+        None => div()
             .flex_none()
-            .h(geometry.search_height)
-            .px(geometry.search_padding_x)
-            .border_b_1()
-            .border_color(theme.separator),
+            .relative()
+            .flex()
+            .flex_col()
+            .child(
+                field
+                    .flex_none()
+                    .h(geometry.search_height)
+                    .px(geometry.search_padding_x)
+                    .border_b_1()
+                    .border_color(theme.separator),
+            )
+            .when_some(loading, |header, bar| {
+                header.child(loading::line(&bar, px(0.), theme))
+            }),
         // Over a background image (ADR 0028), the field is a frosted pill
-        // inside the header's row, with no hairline under it.
+        // inside the header's row, with no hairline under it. The loading
+        // bar lies along the pill's bottom rim, inset by its corner radius
+        // — the straight part of the rim — so it follows the pill's
+        // rounded shape (#248).
         Some(frost) => {
             let (top, bottom, side) = frost.pill_margin;
             div()
@@ -292,11 +319,15 @@ pub(crate) fn search_header(
                 .child(
                     field
                         .flex_1()
+                        .relative()
                         .px(frost.pill_padding_x)
                         .rounded(frost.pill_radius)
                         .backdrop_blur(frost.blur)
                         .bg(frost.tint)
-                        .shadow(frost.edges()),
+                        .shadow(frost.edges())
+                        .when_some(loading, |pill, bar| {
+                            pill.child(loading::line(&bar, frost.pill_radius, theme))
+                        }),
                 )
         }
     }

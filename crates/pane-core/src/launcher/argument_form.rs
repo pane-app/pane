@@ -33,6 +33,7 @@
 //! form and the launch record.
 
 use std::collections::BTreeMap;
+use std::time::Instant;
 
 use serde_json::{Map, Value};
 
@@ -395,7 +396,7 @@ impl Launcher {
         if opening.no_view {
             Launcher::begin_run(state);
         } else {
-            state.view.status = Status::Running;
+            state.view.status = Status::Running { since: Instant::now() };
         }
         let data = self.data_in(state, &opening.component);
         Some(Submitted {

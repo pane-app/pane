@@ -96,6 +96,16 @@
 //!   property the same way in every state, so a hover fade would have
 //!   delayed the press too.) Keyboard focus and an option's active
 //!   state stay rest styles: the focus ring and the selected wash.
+//! - **The loading bar** — the one-pixel line along the rule under the
+//!   search field's, or an opened command's search field's, rule while
+//!   waited-for work has outlasted [`LOADING_AFTER`] (#248, ADR 0035) —
+//!   sweeps a soft highlight across itself, one pass every
+//!   [`LOADING_SWEEP`], fading in over [`LOADING_FADE`] once the work has
+//!   outlasted the threshold and out again once it ends. It is the one
+//!   animation that runs for as long as its cause does: while such work
+//!   is pending, the window keeps asking for frames, and it stops asking
+//!   on the frame the fading bar reaches nothing. Under reduced motion
+//!   the line is still, at partial strength (see [`LOADING_STILL`]).
 //!
 //! Reduced motion: [`App::reduce_motion`] decides, and
 //! [`observe_reduced_motion`] connects that flag to what the operating
@@ -115,7 +125,9 @@
 //! is idle. Since progress is measured on a clock rather than counted in
 //! frames, a window that was hidden mid-transition settles on the first
 //! frame it is shown again and then stops; there is no ambient animation
-//! of any kind. The functional scroll relayout in
+//! of any kind — the loading bar's sweep is not ambient: it runs only
+//! while work the user waits for is pending, and ends with it. The
+//! functional scroll relayout in
 //! [`crate::app::LauncherWindow::keep_selected_visible`] is untouched: it
 //! keeps its own, separate request for one more frame.
 //!
@@ -409,6 +421,28 @@ pub(crate) const REVEAL_IN: Duration = Duration::from_millis(160);
 /// entrance.
 pub(crate) const REVEAL_OUT: Duration = Duration::from_millis(120);
 
+/// How long waited-for work must run before the loading bar under the
+/// search field's rule shows at all (#248, ADR 0035: "a loading bar that
+/// flashes for an instant answer is noise"): an answer that comes
+/// quickly shows none, and the busy state is announced only once it has
+/// passed too. The loading module keeps the rest of the bar's policy;
+/// this span is also the moment the window waits before it speaks the
+/// busy state, so the two are one threshold.
+pub(crate) const LOADING_AFTER: Duration = Duration::from_millis(300);
+
+/// How long the loading bar takes to fade in once waited-for work has
+/// outlasted [`LOADING_AFTER`], and to fade away once the work ends: the
+/// same span either way, so the line leaves as softly as it comes.
+pub(crate) const LOADING_FADE: Duration = Duration::from_millis(300);
+
+/// How often the loading bar's soft highlight sweeps across the rule
+/// under the search field: one full pass, left to right, each time.
+pub(crate) const LOADING_SWEEP: Duration = Duration::from_millis(1500);
+
+/// The loading bar's strength under reduced motion, where nothing
+/// sweeps: the line shows at partial strength, still.
+pub(crate) const LOADING_STILL: f32 = 0.5;
+
 /// Advances a reveal — the number hints' look, 0 hidden, 1 shown — over
 /// the reveal spans, as [`advance_disclosure`] advances a group's.
 /// `shown` is the hints' state this frame and `changed` says it flipped
@@ -427,6 +461,23 @@ pub(crate) fn advance_reveal(
         (0., REVEAL_OUT)
     };
     advance_tween(reveal, target, 1. - target, duration, changed, reduced, now)
+}
+
+/// Advances the loading bar's strength toward `target` — 0 hidden, 1
+/// shown, [`LOADING_STILL`] under reduced motion — over the fade span,
+/// as [`advance_reveal`] advances the number hints' look: `changed` says
+/// the target moved since the last drawn frame. Returns the strength
+/// while a fade is in flight; `None` when settled, which draws `target`
+/// and requests no frame for the fade — the sweep is what keeps asking
+/// while the bar is shown (see `crate::features::loading`).
+pub(crate) fn advance_loading(
+    fade: &mut Option<Tween>,
+    target: f32,
+    changed: bool,
+    reduced: bool,
+    now: Instant,
+) -> Option<f32> {
+    advance_tween(fade, target, 1. - target, LOADING_FADE, changed, reduced, now)
 }
 
 /// Advances a popup's entrance or exit — the popup's look, 0 closed, 1

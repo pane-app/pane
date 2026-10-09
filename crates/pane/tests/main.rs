@@ -29,6 +29,7 @@ mod install;
 mod item_actions;
 mod keyboard;
 mod launcher_settings;
+mod loading;
 mod no_view;
 mod npm;
 mod open_pane;

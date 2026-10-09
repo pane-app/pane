@@ -617,7 +617,7 @@ impl Launcher {
         if !self.return_from_actions_flow(state) {
             self.show_extensions_at(state, at);
         }
-        state.view.status = Status::Running;
+        state.view.status = Status::Running { since: Instant::now() };
         ChoiceChange {
             command: command.to_owned(),
             done,

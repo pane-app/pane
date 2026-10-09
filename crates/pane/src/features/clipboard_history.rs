@@ -958,11 +958,13 @@ impl LauncherWindow {
             let (selector, color) = super::toast::style_look(shown.toast.style, &theme);
             (selector, shown.toast.text(), color)
         });
-        let outcome = super::announcer::says_message(&view.status, toast.is_some());
+        let outcome = super::announcer::says_message(&view.status, toast.is_some(), false);
         let status = match &view.status {
             _ if toast.is_some() => toast,
             Status::Idle => None,
-            Status::Running => Some(("status-running", "Running…".to_owned(), theme.warning)),
+            Status::Running { .. } => {
+                Some(("status-running", "Running…".to_owned(), theme.warning))
+            }
             Status::Progress(work) => Some(("status-progress", work.clone(), theme.warning)),
             Status::Result(answer) => Some(("status-result", answer.clone(), theme.success)),
             Status::Error(message) => Some(("status-error", message.clone(), theme.danger)),

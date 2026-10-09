@@ -98,7 +98,7 @@ fn done(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> Launcher
     loop {
         cx.run_until_parked();
         let view = cx.read_entity(window, |window, _| window.launcher().view());
-        if view.status != Status::Running {
+        if !matches!(view.status, Status::Running { .. }) {
             return view;
         }
         assert!(Instant::now() < deadline, "timed out: {view:?}");
