@@ -834,7 +834,10 @@ fn a_change_that_cannot_be_kept_never_brings_back_an_uninstalled_packages_choice
     search(&launcher, "ec hi");
     // The command's row is gone; Pane's install row matches the letters
     // fuzzily (#193).
-    assert_eq!(titles(&launcher), ["Echo", "Install extension from folder…"]);
+    assert_eq!(
+        titles(&launcher),
+        ["Echo", "Install extension from folder…"]
+    );
 }
 
 /// Echo opened from its row, with no text sent: it runs without a screen

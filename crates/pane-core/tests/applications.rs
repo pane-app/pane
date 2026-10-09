@@ -264,7 +264,10 @@ fn applications_are_looked_for_once_per_visit_of_root_search() {
     launcher.show_root_search();
 
     search(&launcher, "fire");
-    assert_eq!(titles(&launcher), ["Firefox", "Firewall", "Install extension from Git…"]);
+    assert_eq!(
+        titles(&launcher),
+        ["Firefox", "Firewall", "Install extension from Git…"]
+    );
 }
 
 #[test]
@@ -351,7 +354,10 @@ fn disabling_applications_removes_them_and_stops_looking_while_others_still_answ
 
     block_on(launcher.set_enabled(&identity(), true));
     search(&launcher, "fire");
-    assert_eq!(titles(&launcher), ["Firefox", "Install extension from Git…"]);
+    assert_eq!(
+        titles(&launcher),
+        ["Firefox", "Install extension from Git…"]
+    );
 }
 
 #[test]
