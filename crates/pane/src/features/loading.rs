@@ -69,7 +69,7 @@ pub(crate) struct Loading {
     /// [`crate::app::LauncherWindow::loading_presentation`]). Test and
     /// debug builds only.
     #[cfg(any(test, debug_assertions))]
-    drawn_bar: Option<LoadingBar>,
+    pub(crate) drawn_bar: Option<LoadingBar>,
     /// When the window must draw again for the bar, if it waits: the
     /// threshold, while work runs beneath it. Kept beside its task, as
     /// the announcer keeps its wake.
