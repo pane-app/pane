@@ -775,10 +775,7 @@ fn a_call_of_a_waiting_package_already_running_finishes() {
 
     // The call finishes with its answer, not with an error.
     calling.join().unwrap();
-    assert_eq!(
-        shown(&launcher),
-        Status::Result("answered: true".into())
-    );
+    assert_eq!(shown(&launcher), Status::Result("answered: true".into()));
     assert_eq!(b_saved(&dirs, "waiting").as_deref(), Some("finished"));
 }
 
