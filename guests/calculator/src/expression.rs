@@ -364,7 +364,7 @@ pub(super) fn percentage(query: &str) -> Option<f64> {
                 // not part of the arithmetic either.
                 let word = ["of", "off", "on", "as", "a"]
                     .into_iter()
-                    .find(|word| query[start..end] == *word)?;
+                    .find(|word| &query[start..end] == *word)?;
                 parts.push(Part::Word(word));
             }
             _ => return None,

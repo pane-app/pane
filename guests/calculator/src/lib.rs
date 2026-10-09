@@ -49,7 +49,7 @@ impl pane_extension::root::Guest for Calculator {
                 action: RootAction::Copy(hex.clone()),
                 answer: Some(AnswerDetail {
                     section: "Color".into(),
-                    swatch: Some(hex),
+                    swatch: Some(hex.clone()),
                     copies: vec![
                         copy("Copy as Hex", &hex),
                         copy("Copy as RGB", &colour.rgb()),

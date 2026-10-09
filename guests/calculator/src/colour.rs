@@ -146,17 +146,17 @@ fn percent(text: &str) -> Option<f64> {
 
 /// `value` as a channel, clamped to 0-255 and rounded.
 fn byte(value: f64) -> u8 {
-    value.clamp(0.0, 255.0).round() as u8
+    math::round(value.clamp(0.0, 255.0)) as u8
 }
 
 /// `value` as an alpha's byte.
 fn alpha_byte(alpha: f64) -> u8 {
-    (alpha.clamp(0.0, 1.0) * 255.0).round() as u8
+    math::round(alpha.clamp(0.0, 1.0) * 255.0) as u8
 }
 
 /// `hue` in degrees, wrapped into [0, 360).
 fn degrees(hue: f64) -> f64 {
-    hue.rem_euclid(360.0)
+    math::remainder(hue, 360.0)
 }
 
 /// The colour of the HSL values (hue in degrees, saturation and
@@ -168,7 +168,7 @@ fn from_hsl(hue: f64, saturation: f64, lightness: f64, alpha: f64) -> Colour {
     );
     let chroma = (1.0 - (2.0 * lightness - 1.0).abs()) * saturation;
     let sector = degrees(hue) / 60.0;
-    let secondary = chroma * (1.0 - (sector.rem_euclid(2.0) - 1.0).abs());
+    let secondary = chroma * (1.0 - (math::remainder(sector, 2.0) - 1.0).abs());
     let [red, green, blue] = match sector as u32 {
         0 => [chroma, secondary, 0.0],
         1 => [secondary, chroma, 0.0],
@@ -192,9 +192,9 @@ fn from_oklch(lightness: f64, chroma: f64, hue: f64, alpha: f64) -> Colour {
     let radians = degrees(hue).to_radians();
     let (a, b) = (chroma * math::cos(radians), chroma * math::sin(radians));
     // OKLab to linear sRGB, through the cone-like LMS response.
-    let long = (lightness + 0.3963377774 * a + 0.2158037573 * b).powi(3);
-    let medium = (lightness - 0.1055613458 * a - 0.0638541728 * b).powi(3);
-    let short = (lightness - 0.0894841775 * a - 1.2914855480 * b).powi(3);
+    let long = math::power(lightness + 0.3963377774 * a + 0.2158037573 * b, 3);
+    let medium = math::power(lightness - 0.1055613458 * a - 0.0638541728 * b, 3);
+    let short = math::power(lightness - 0.0894841775 * a - 1.2914855480 * b, 3);
     let channel = |value: f64| {
         // Linear light to a gamma-encoded channel, clipped to [0, 1]:
         // a value outside sRGB's gamut becomes its nearest channel.
@@ -259,9 +259,9 @@ impl Colour {
         };
         format!(
             "hsl({}, {}%, {}%)",
-            degrees(hue).round() as i64,
-            (saturation * 100.0).round() as i64,
-            (lightness * 100.0).round() as i64,
+            math::round(degrees(hue)) as i64,
+            math::round(saturation * 100.0) as i64,
+            math::round(lightness * 100.0) as i64,
         )
     }
 
@@ -290,13 +290,13 @@ impl Colour {
         let lightness = 0.2104542553 * long + 0.7936177850 * medium - 0.0040720468 * short;
         let a = 1.9779984951 * long - 2.4285922050 * medium + 0.4505937099 * short;
         let b = 0.0259040371 * long + 0.7827717662 * medium - 0.8086757660 * short;
-        let chroma = (a * a + b * b).sqrt();
+        let chroma = math::sqrt(a * a + b * b);
         let hue = math::atan2(b, a).to_degrees();
         let chroma = rounded(chroma);
         let hue = if chroma == "0" {
             0
         } else {
-            degrees(hue).round() as i64
+            math::round(degrees(hue)) as i64
         };
         format!("oklch({} {} {})", rounded(lightness), chroma, hue)
     }
