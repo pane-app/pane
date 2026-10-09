@@ -658,7 +658,10 @@ fn a_view_the_guest_refuses_to_open_is_an_error() {
     // The guest's refusal is shown once its answer reaches the launcher.
     let deadline = Instant::now() + Duration::from_secs(10);
     while !matches!(launcher.view().status, Status::Error(_)) {
-        assert!(Instant::now() < deadline, "no error was shown for the refusal");
+        assert!(
+            Instant::now() < deadline,
+            "no error was shown for the refusal"
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
     assert_eq!(
