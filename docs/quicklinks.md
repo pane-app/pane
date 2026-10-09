@@ -109,7 +109,7 @@ clipboard until forms gain file fields (#121).
 ### Storage
 
 The quicklinks are the package's **content**, its durable
-[extension data](extension-data.md) (`pane_guest::content`): one value,
+[extension data](extension-data.md) (`pane_extension::content`): one value,
 `quicklinks`, holding one line per quicklink in creation order: its name,
 target, id, application id and application name, separated by tabs (none of
 them can hold a control character). The first version's lines hold only a

@@ -14,8 +14,8 @@
 // and says so in a HUD; Copy copies it again; Delete, destructive and last,
 // deletes it.
 // @ts-check
-import { closeMainWindow, showHUD, showToast } from "@pane/extension/feedback";
-import { NotAvailableError, PASTE_FALLBACK, paste } from "@pane/extension/system";
+import { closeMainWindow, showHUD, showToast } from "@pane-app/extension/feedback";
+import { NotAvailableError, PASTE_FALLBACK, paste } from "@pane-app/extension/system";
 import * as history from "pane:extension/clipboard-history@0.1.0";
 
 /** The longest title of a kept item, in characters. */
@@ -74,7 +74,7 @@ function forForm(call) {
  * @param {string} id
  * @param {string} title
  * @param {string} subtitle
- * @returns {import("@pane/extension").Item}
+ * @returns {import("@pane-app/extension").Item}
  */
 const item = (id, title, subtitle) => ({ id, title, subtitle });
 
@@ -83,7 +83,7 @@ const item = (id, title, subtitle) => ({ id, title, subtitle });
  * @param {string} id
  * @param {string} title
  * @param {string} subtitle
- * @returns {import("@pane/extension").Item}
+ * @returns {import("@pane-app/extension").Item}
  */
 const action = (id, title, subtitle) => ({ ...item(id, title, subtitle), onAction: () => act(id) });
 
@@ -118,7 +118,7 @@ function span(seconds) {
  * @param {string} label
  * @param {[string, string][]} choices
  * @param {string} submitLabel
- * @returns {import("@pane/extension").Form}
+ * @returns {import("@pane-app/extension").Form}
  */
 function choiceForm(title, id, label, choices, submitLabel) {
   return {
@@ -172,7 +172,7 @@ function age(seconds) {
 
 /**
  * @param {history.Entry} entry
- * @returns {import("@pane/extension").Item}
+ * @returns {import("@pane-app/extension").Item}
  */
 function entryItem(entry) {
   const about = [age(entry.ageSeconds)];
@@ -270,7 +270,7 @@ async function outcome(itemId) {
   throw new Error(`unknown item: ${itemId}`);
 }
 
-/** @type {import("@pane/extension").Command} */
+/** @type {import("@pane-app/extension").Command} */
 export const command = {
   async render() {
     const status = host(history.status);

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
-// Declarations for `@pane/extension/programs` (programs.js): programs
+// Declarations for `@pane-app/extension/programs` (programs.js): programs
 // installed on the system, which Pane runs for the command, through
 // `pane:extension/programs@0.1.0` (programs-host.d.ts, wit/programs.wit).
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
 // Pane's programs sample in TypeScript: a command that runs programs
-// installed on the system with `@pane/extension/programs` (ADR 0033). Its
+// installed on the system with `@pane-app/extension/programs` (ADR 0033). Its
 // program is `pane-echo` (guests/helpers/echo), named by its bare name, so
 // Pane finds it on the user's search path at the time of the call. Items,
 // answers and errors match the Rust sample (guests/sample-programs) and the
@@ -11,8 +11,8 @@
 // promise cannot be cancelled, so the run is left behind when the timer
 // wins; Pane ends its program, and the one that program started, as soon
 // as the call that started it returns.
-import type { Command, Item } from "@pane/extension";
-import { showToast } from "@pane/extension/feedback";
+import type { Command, Item } from "@pane-app/extension";
+import { showToast } from "@pane-app/extension/feedback";
 import {
   cmd,
   run,
@@ -21,7 +21,7 @@ import {
   type InputOptions,
   type Output,
   type ProgramError,
-} from "@pane/extension/programs";
+} from "@pane-app/extension/programs";
 import { set } from "pane:extension/settings@0.1.0";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
 

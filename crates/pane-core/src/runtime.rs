@@ -171,6 +171,7 @@ use root_bindings::exports::pane::extension::root_results;
 use crate::applications::Applications;
 use crate::clipboard::{self, Capture, CaptureState};
 use crate::extension_data::{DataKind, PackageData};
+use crate::extension_log::{CurrentCommand, ExtensionLogs, LogLevel, LogStream};
 use crate::feedback::HostFunctions;
 use crate::files::{FileAccess, Folders};
 use crate::generation::{End, Fence, Generation, Registration};
@@ -1723,6 +1724,12 @@ impl Runtime {
         *lock(&self.shared.health) = Some(health);
     }
 
+    /// Every package's extension log, which guests' output and the
+    /// runtime's messages about their packages go to.
+    pub(crate) fn logs(&self) -> ExtensionLogs {
+        self.shared.logs.clone()
+    }
+
     /// How many runtime threads Pane gave up on, because they stopped
     /// responding, are still stuck, holding what they held. A diagnostic
     /// for tests and logs, like [`Runtime::running`].
@@ -2009,8 +2016,11 @@ pub(crate) struct GuestState {
     /// Carries out the window and feedback host functions the guest calls.
     host_functions: SharedHostFunctions,
     /// What the call the guest runs now is for, as its host functions see
-    /// it.
+    /// it. Set through [`GuestState::set_call`].
     call: CallFor,
+    /// The command the guest's output is logged under: the call's, else
+    /// the one last noted.
+    log_command: CurrentCommand,
     /// The runtime's helper processes and system programs; those of this
     /// instance are ended with it.
     helpers: Helpers,
@@ -2038,6 +2048,15 @@ impl Drop for GuestState {
 }
 
 impl GuestState {
+    /// Notes what the call the guest runs now is for: its host functions
+    /// see it, and its output is logged under its command (else the one
+    /// last noted).
+    fn set_call(&mut self, call: CallFor) {
+        self.log_command
+            .set(call.command.clone().or_else(|| self.command.clone()));
+        self.call = call;
+    }
+
     /// Starts the helper `name` of the guest's own package with `args` and
     /// `input`. Its process belongs to this instance and to the generation
     /// of its code.
@@ -2645,6 +2664,8 @@ struct Host {
     helpers: Helpers,
     /// Told of each failure of a call into an installed package's code.
     health: Arc<Mutex<Option<HealthReport>>>,
+    /// Where guests' output, and the failures reported, are logged.
+    logs: ExtensionLogs,
     /// Faults injected into this thread, to check recovery.
     faults: Arc<Faults>,
     /// What the watchdog knows of this thread; whether Pane gave up on it.
@@ -2907,6 +2928,7 @@ impl Host {
             host_functions: shared.host_functions.clone(),
             helpers: shared.helpers.clone(),
             health: shared.health.clone(),
+            logs: shared.logs.clone(),
             faults,
             watch,
             limits: shared.limits.clone(),
@@ -3315,7 +3337,7 @@ impl Host {
         let launch = launch_record(launch, named);
         let result = self
             .run_guest(path, chain, async |instance| {
-                instance.store.data_mut().call = call;
+                instance.store.data_mut().set_call(call);
                 let command = instance.bindings.pane_extension_command();
                 instance
                     .store
@@ -3346,7 +3368,7 @@ impl Host {
         let launch = launch_record(launch, Some(&command));
         let result = self
             .run_guest(path, &chain, async |instance| {
-                instance.store.data_mut().call = call;
+                instance.store.data_mut().set_call(call);
                 let exported = instance.bindings.pane_extension_command();
                 instance
                     .store
@@ -3388,7 +3410,7 @@ impl Host {
         self.instance(path, data).await?;
         let result = self
             .run_guest(path, chain, async |instance| {
-                instance.store.data_mut().call = call;
+                instance.store.data_mut().set_call(call);
                 let command = instance.bindings.pane_extension_command();
                 instance
                     .store
@@ -3453,7 +3475,7 @@ impl Host {
             .collect();
         let result = self
             .run_guest(path, &chain, async |instance| {
-                instance.store.data_mut().call = CallFor::in_window(None);
+                instance.store.data_mut().set_call(CallFor::in_window(None));
                 let command = instance.bindings.pane_extension_command();
                 instance
                     .store
@@ -3482,7 +3504,7 @@ impl Host {
         self.instance(path, data).await?;
         let result = self
             .run_guest(path, &chain, async |instance| {
-                instance.store.data_mut().call = CallFor::in_window(None);
+                instance.store.data_mut().set_call(CallFor::in_window(None));
                 let command = instance.bindings.pane_extension_command();
                 instance
                     .store
@@ -3524,7 +3546,7 @@ impl Host {
         let resource = open.resource;
         let result = self
             .run_guest(&path, &chain, async |instance| {
-                instance.store.data_mut().call = CallFor::in_window(None);
+                instance.store.data_mut().set_call(CallFor::in_window(None));
                 let custom_view = instance.bindings.pane_extension_command().custom_view();
                 instance
                     .store
@@ -3795,7 +3817,10 @@ impl Host {
                 path,
                 &chain,
                 async |instance| {
-                    instance.store.data_mut().call = CallFor::in_window(Some(id.clone()));
+                    instance
+                        .store
+                        .data_mut()
+                        .set_call(CallFor::in_window(Some(id.clone())));
                     instance
                         .store
                         .run_concurrent(async |store| search.call_search(store, id, query).await)
@@ -3962,7 +3987,7 @@ impl Host {
         instance.store.data_mut().serving = true;
         // No command and no window unless the call says otherwise (see
         // `CallFor`): an operation's or a root search's call has none.
-        instance.store.data_mut().call = CallFor::default();
+        instance.store.data_mut().set_call(CallFor::default());
         let mut cancelled = std::pin::pin!(cancelled);
         let faults = self.faults.clone();
         let watch = self.watch.clone();
@@ -4251,8 +4276,20 @@ impl Host {
         if self.watch.given_up() {
             return;
         }
+        let Some(data) = data else {
+            return;
+        };
+        // The package's log has each failure, with a crash's backtrace.
+        let (Health::Crashed(error) | Health::Unresponsive(error) | Health::FailedToStart(error)) =
+            &health;
+        self.logs.pane(
+            data.owner(),
+            data.generation().number(),
+            LogLevel::Error,
+            &error.to_string(),
+        );
         let report = lock(&self.health).clone();
-        if let (Some(report), Some(data)) = (report, data) {
+        if let Some(report) = report {
             report(path, data, health);
         }
     }
@@ -4265,7 +4302,11 @@ impl Host {
         if let Some(command) = command
             && let Some(instance) = self.instances.borrow_mut().get_mut(path)
         {
-            instance.store.data_mut().command = Some(command.to_owned());
+            let state = instance.store.data_mut();
+            state.command = Some(command.to_owned());
+            if state.call.command.is_none() {
+                state.log_command.set(state.command.clone());
+            }
         }
     }
 
@@ -4317,10 +4358,23 @@ impl Host {
         let generation = data.as_ref().map(|data| data.generation().clone());
         let mut end = std::pin::pin!(first_end(generation.as_slice()));
         let (calls, calls_received) = operations::channel();
+        // What an installed package's code writes goes to its extension log;
+        // a command built into Pane writes nowhere.
+        let log_command = CurrentCommand::default();
+        let mut wasi = WasiCtx::builder();
+        if let Some(data) = &data {
+            let generation = data.generation().number();
+            let output = |stream| {
+                self.logs
+                    .output(data.owner(), generation, stream, log_command.clone())
+            };
+            wasi.stdout(output(LogStream::Stdout))
+                .stderr(output(LogStream::Stderr));
+        }
         let mut store = Store::new(
             &self.code.engine,
             GuestState {
-                wasi: WasiCtx::builder().build(),
+                wasi: wasi.build(),
                 table: ResourceTable::new(),
                 http: WasiHttpCtx::new(),
                 sender: http::Sender::new(data.clone(), self.network.clone(), watch.clone()),
@@ -4336,6 +4390,7 @@ impl Host {
                 launches: self.launches.clone(),
                 host_functions: self.host_functions.clone(),
                 call: CallFor::default(),
+                log_command,
                 owner: self.helpers.new_owner(),
                 programs: crate::programs::Processes::default(),
                 helpers: self.helpers.clone(),

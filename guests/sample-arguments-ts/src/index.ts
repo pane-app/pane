@@ -23,8 +23,8 @@
 // A command launched in the background does its work but shows no toast.
 import { launch } from "pane:extension/commands@0.1.0";
 import { get, set } from "pane:extension/settings@0.1.0";
-import type { ArgumentValue, Command, LaunchRecord } from "@pane/extension";
-import { showToast } from "@pane/extension/feedback";
+import type { ArgumentValue, Command, LaunchRecord } from "@pane-app/extension";
+import { showToast } from "@pane-app/extension/feedback";
 
 /** The settings key holding how many times "Greet" ran. */
 const RUNS = "greet-runs";

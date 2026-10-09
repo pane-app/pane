@@ -23,17 +23,17 @@
 //! the file manager and only Run runs it.
 #![no_std]
 
-use pane_guest::alloc::{format, string::String, vec::Vec};
-use pane_guest::feedback::{Toast, show_toast};
-use pane_guest::file_index::{self, FileEntry, IndexState, SearchOptions};
-use pane_guest::root::{RootAction, RootResult};
-use pane_guest::search::SearchResult;
-use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
+use pane_extension::alloc::{format, string::String, vec::Vec};
+use pane_extension::feedback::{Toast, show_toast};
+use pane_extension::file_index::{self, FileEntry, IndexState, SearchOptions};
+use pane_extension::root::{RootAction, RootResult};
+use pane_extension::search::SearchResult;
+use pane_extension::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
 
 struct Files;
-pane_guest::export!(Files);
-pane_guest::root::export!(Files);
-pane_guest::search::export!(Files);
+pane_extension::export!(Files);
+pane_extension::root::export!(Files);
+pane_extension::search::export!(Files);
 
 /// The most files root search lists (Pane lists 5 at most, then a row
 /// searching them all).
@@ -104,7 +104,7 @@ impl Command for Files {
     }
 }
 
-impl pane_guest::search::Guest for Files {
+impl pane_extension::search::Guest for Files {
     /// The entries the text typed in Search Files' field finds, each named
     /// by the id Pane gave it: Pane lists it with its own name and folder,
     /// and gives it its file actions.
@@ -121,7 +121,7 @@ impl pane_guest::search::Guest for Files {
     }
 }
 
-impl pane_guest::root::Guest for Files {
+impl pane_extension::root::Guest for Files {
     /// The best few entries the query typed in root search finds, each
     /// opening the entry (Pane gives it the same actions as in Search
     /// Files).

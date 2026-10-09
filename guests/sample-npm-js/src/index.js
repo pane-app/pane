@@ -10,9 +10,9 @@
 // `{"greeting": "Hello, <name>, from the npm package"}`, or the error "a
 // name is needed".
 // @ts-check
-import { showToast } from "@pane/extension/feedback";
+import { showToast } from "@pane-app/extension/feedback";
 
-/** @type {import("@pane/extension").Command} */
+/** @type {import("@pane-app/extension").Command} */
 export const command = {
   async render() {
     return {
@@ -39,7 +39,7 @@ export const command = {
   },
 };
 
-/** @type {import("@pane/extension").PublishedOperations} */
+/** @type {import("@pane-app/extension").PublishedOperations} */
 export const publishedOperations = {
   async runOperation(operation, input) {
     if (operation !== "greet") {

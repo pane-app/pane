@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
 // Pane's programs sample in JavaScript: a command that runs programs
-// installed on the system with `@pane/extension/programs` (ADR 0033). Its
+// installed on the system with `@pane-app/extension/programs` (ADR 0033). Its
 // program is `pane-echo` (guests/helpers/echo), named by its bare name, so
 // Pane finds it on the user's search path at the time of the call. Items,
 // answers and errors match the Rust sample (guests/sample-programs) and the
@@ -12,8 +12,8 @@
 // the timer wins; Pane ends its program, and the one that program started,
 // as soon as the call that started it returns.
 // @ts-check
-import { showToast } from "@pane/extension/feedback";
-import { cmd, run, sh, spawn } from "@pane/extension/programs";
+import { showToast } from "@pane-app/extension/feedback";
+import { cmd, run, sh, spawn } from "@pane-app/extension/programs";
 import { set } from "pane:extension/settings@0.1.0";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
 
@@ -38,7 +38,7 @@ const code = (exit) => (exit === null ? "none" : String(exit));
 /**
  * Runs `pane-echo` with `args`.
  * @param {string[]} args
- * @param {import("@pane/extension/programs").InputOptions} [options]
+ * @param {import("@pane-app/extension/programs").InputOptions} [options]
  */
 const echo = (args, options = {}) => run(ECHO, args, options);
 
@@ -126,7 +126,7 @@ async function outcome(itemId) {
         return `It finished first, with exit code ${code(output.exitCode)}`;
       } catch (error) {
         if (kindOf(error) !== "timed-out") throw error;
-        const { reason } = /** @type {import("@pane/extension/programs").ProgramError} */ (error);
+        const { reason } = /** @type {import("@pane-app/extension/programs").ProgramError} */ (error);
         return `The timeout ended it: ${reason}`;
       }
     }
@@ -207,11 +207,11 @@ async function outcome(itemId) {
  * @param {string} id
  * @param {string} title
  * @param {string} subtitle
- * @returns {import("@pane/extension").Item}
+ * @returns {import("@pane-app/extension").Item}
  */
 const item = (id, title, subtitle) => ({ id, title, subtitle, onAction: () => act(id) });
 
-/** @type {import("@pane/extension").Command} */
+/** @type {import("@pane-app/extension").Command} */
 export const command = {
   async render() {
     return {

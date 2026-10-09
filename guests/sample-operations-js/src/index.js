@@ -46,7 +46,7 @@ async function greet(source, name) {
   return greeting;
 }
 
-/** @type {import("@pane/extension").Form} */
+/** @type {import("@pane-app/extension").Form} */
 const greetForm = {
   title: "Greet through another extension",
   fields: [
@@ -71,7 +71,7 @@ const greetForm = {
   submitLabel: "Greet",
 };
 
-/** @type {import("@pane/extension").Form} */
+/** @type {import("@pane-app/extension").Form} */
 const waitForm = {
   title: "Wait in another extension",
   fields: [
@@ -84,7 +84,7 @@ const waitForm = {
   submitLabel: "Wait",
 };
 
-/** @type {import("@pane/extension").Command} */
+/** @type {import("@pane-app/extension").Command} */
 export const command = {
   async render() {
     return {
@@ -143,7 +143,7 @@ export const command = {
   },
 };
 
-/** @type {import("@pane/extension").PublishedOperations} */
+/** @type {import("@pane-app/extension").PublishedOperations} */
 export const publishedOperations = {
   async runOperation(operation, input) {
     if (operation === "wait") {

@@ -179,6 +179,7 @@ fn opened_by_operation(screen: &Screen) -> bool {
             | Screen::NetworkDetails { .. }
             | Screen::ProgramDetails { .. }
             | Screen::BuildDetails { .. }
+            | Screen::ExtensionLog { .. }
             | Screen::RuntimeDetails { .. }
             | Screen::Hotkey { .. }
     )
@@ -219,6 +220,8 @@ pub enum OperationKind {
     StopDeveloping,
     /// Shows why its last build failed.
     WhyNotBuilt,
+    /// Shows its extension log while it is developed: "Logs for <title>".
+    Logs,
     /// Records the keys of a command's hotkey (on the page, the Shortcuts
     /// columns do).
     Hotkey,
@@ -255,6 +258,7 @@ impl OperationKind {
             OperationKind::Develop => "Develop",
             OperationKind::StopDeveloping => "Stop Developing",
             OperationKind::WhyNotBuilt => "Why the Build Failed",
+            OperationKind::Logs => "Logs",
             OperationKind::Hotkey => "Hotkey",
             OperationKind::Alias => "Alias",
             OperationKind::Fallback => "Fallback",
@@ -429,6 +433,7 @@ fn operation(state: &State, row: Row, entry: &Entry) -> Option<ExtensionOperatio
             None,
             None,
         ),
+        Entry::ExtensionLog(identity) => (OperationKind::Logs, Some(identity.clone()), None, None),
         Entry::AskHotkey(command) => (
             OperationKind::Hotkey,
             package_of_command(command),

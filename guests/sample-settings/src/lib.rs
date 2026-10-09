@@ -1,5 +1,5 @@
 //! Pane's settings sample: a command whose choice Pane keeps between runs.
-//! The chosen greeting style is saved with [`pane_guest::settings`], so it
+//! The chosen greeting style is saved with [`pane_extension::settings`], so it
 //! survives restarting Pane and disabling and re-enabling the package. It also
 //! keeps one value of each other kind of data: a note ([`content`]), the last
 //! greeting ([`cache`]) and a sign-in token ([`credentials`]), so clearing its
@@ -18,11 +18,16 @@
 //! finished: Pane stops a call that computes for 5 seconds without waiting,
 //! so it never finishes, and it counts towards pausing the package as a
 //! crash does.
+//! "Write to the log" writes a line at each level and a printed line to
+//! each output, which Pane keeps in the package's extension log; "Flood the
+//! log" writes a line longer than Pane keeps, then more lines in a second
+//! than Pane keeps. "Fail" fails with an error the extension answers
+//! with.
 #![no_std]
 
-use pane_guest::alloc::{format, string::String, vec::Vec};
-use pane_guest::feedback::{Toast, show_toast};
-use pane_guest::{
+use pane_extension::alloc::{format, string::String, vec::Vec};
+use pane_extension::feedback::{Toast, show_toast};
+use pane_extension::{
     Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, cache, content,
     credentials, settings,
 };
@@ -46,9 +51,15 @@ const BUSY: &str = "busy";
 /// How long "Stop responding" computes at most, in nanoseconds: bounded, so
 /// that even without Pane stopping it, it ends.
 const BUSY_FOR: u64 = 60_000_000_000;
+/// How long a line "Flood the log" writes first, in bytes: more than Pane
+/// keeps of a line.
+const FLOOD_LINE: usize = 5_000;
+/// How many lines "Flood the log" writes then: more than Pane keeps of a
+/// second's.
+const FLOOD_LINES: u32 = 1_500;
 
 struct Greeting;
-pane_guest::export!(Greeting);
+pane_extension::export!(Greeting);
 
 /// Runs the action of the item `id` and shows a toast with what [`outcome`]
 /// answers; each item's action is this with its id.
@@ -123,6 +134,23 @@ async fn outcome(id: &str) -> Result<String, String> {
             settings::set(BUSY, "finished")?;
             Ok("Finished computing after a minute".into())
         }
+        "log" => {
+            pane_extension::debug!("a debug line");
+            pane_extension::info!("an info line");
+            pane_extension::warn!("a warning line");
+            pane_extension::error!("an error line");
+            pane_extension::println!("a printed line");
+            pane_extension::eprintln!("a printed error");
+            Ok("Wrote to the log".into())
+        }
+        "flood" => {
+            pane_extension::println!("{}", "x".repeat(FLOOD_LINE));
+            for n in 0..FLOOD_LINES {
+                pane_extension::println!("line {n}");
+            }
+            Ok("Flooded the log".into())
+        }
+        "fail" => Err("failed on purpose".into()),
         // A panic traps the guest: Pane reports a crash, not an error
         // the extension answered with.
         "crash" => panic!("crashed on purpose"),
@@ -177,10 +205,27 @@ impl Command for Greeting {
                 "Crashes on purpose; three crashes within five minutes pause the extension",
             ),
             item("count", "Count", "Adds one to a count kept in its content"),
+            // The smokes reach "Stop responding" by its place: items added
+            // later go after it.
             item(
                 "busy",
                 "Stop responding",
                 "Computes without waiting for up to a minute; Pane stops it after 5 seconds",
+            ),
+            item(
+                "log",
+                "Write to the log",
+                "A line at each level, and one printed to each output",
+            ),
+            item(
+                "flood",
+                "Flood the log",
+                "A line too long to keep, then too many lines in a second",
+            ),
+            item(
+                "fail",
+                "Fail",
+                "Fails with an error, which the extension answers with",
             ),
         ]))
     }

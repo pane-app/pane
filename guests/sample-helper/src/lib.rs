@@ -1,5 +1,5 @@
 //! Pane's helper sample: a command that runs a native helper its package
-//! ships ([`pane_guest::helpers::run`]). The helper, `pane-echo`
+//! ships ([`pane_extension::helpers::run`]). The helper, `pane-echo`
 //! (`guests/helpers/echo`), is an ordinary program built for each system;
 //! the package's `pane.json` names its file for each target under
 //! `helpers`, and Pane runs the one for the system it runs on. The command
@@ -28,10 +28,12 @@ use core::future::Future;
 use core::pin::pin;
 use core::task::Poll;
 
-use pane_guest::alloc::{format, string::String, vec::Vec};
-use pane_guest::feedback::{Toast, show_toast};
-use pane_guest::helpers::{self, HelperError};
-use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, settings};
+use pane_extension::alloc::{format, string::String, vec::Vec};
+use pane_extension::feedback::{Toast, show_toast};
+use pane_extension::helpers::{self, HelperError};
+use pane_extension::{
+    Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, settings,
+};
 
 /// The helper's name in the package's `pane.json`.
 const ECHO: &str = "echo";
@@ -43,7 +45,7 @@ const LONG_WAIT: &str = "helper-long-wait";
 const LIMIT: u64 = 1_000_000_000;
 
 struct HelperSample;
-pane_guest::export!(HelperSample);
+pane_extension::export!(HelperSample);
 
 /// `<kind>: <message>`, such as "failed: helper `echo` failed (exit code 3)".
 fn explain(error: HelperError) -> String {

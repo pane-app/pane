@@ -3,7 +3,7 @@
 //! TypeScript samples. Its package's `pane.json` sets `"fileIndex": true`,
 //! so Pane keeps its file index of the home folder current while the
 //! sample is enabled, and the sample searches it with
-//! `pane_guest::file_index`. Once open, the command owns the launcher's
+//! `pane_extension::file_index`. Once open, the command owns the launcher's
 //! search field (`"search": true`) and answers each text typed with the
 //! entries the index finds, named by the ids Pane gave them; root search
 //! gets the same entries as `open-file` results (`"rootResults": true`).
@@ -13,16 +13,16 @@
 //! which it performs itself.
 #![no_std]
 
-use pane_guest::alloc::{format, string::String, vec::Vec};
-use pane_guest::file_index::{self, FileEntry, IndexState, SearchOptions};
-use pane_guest::root::{RootAction, RootResult};
-use pane_guest::search::SearchResult;
-use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
+use pane_extension::alloc::{format, string::String, vec::Vec};
+use pane_extension::file_index::{self, FileEntry, IndexState, SearchOptions};
+use pane_extension::root::{RootAction, RootResult};
+use pane_extension::search::SearchResult;
+use pane_extension::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
 
 struct Sample;
-pane_guest::export!(Sample);
-pane_guest::root::export!(Sample);
-pane_guest::search::export!(Sample);
+pane_extension::export!(Sample);
+pane_extension::root::export!(Sample);
+pane_extension::search::export!(Sample);
 
 /// The most entries one query lists.
 const MAX_RESULTS: u32 = 20;
@@ -69,7 +69,7 @@ impl Command for Sample {
     }
 }
 
-impl pane_guest::search::Guest for Sample {
+impl pane_extension::search::Guest for Sample {
     async fn search(_command: String, query: String) -> Result<Vec<SearchResult>, String> {
         Ok(found(&query)?
             .into_iter()
@@ -83,7 +83,7 @@ impl pane_guest::search::Guest for Sample {
     }
 }
 
-impl pane_guest::root::Guest for Sample {
+impl pane_extension::root::Guest for Sample {
     async fn results_for(query: String) -> Result<Vec<RootResult>, String> {
         Ok(found(&query)?
             .into_iter()

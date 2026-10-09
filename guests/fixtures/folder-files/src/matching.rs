@@ -1,7 +1,7 @@
 //! Which of a folder's files a query finds, best first.
 
-use pane_guest::alloc::{string::String, vec::Vec};
-use pane_guest::files::FoundFile;
+use pane_extension::alloc::{string::String, vec::Vec};
+use pane_extension::files::FoundFile;
 
 /// The most files one query lists.
 pub const MAX_RESULTS: usize = 20;

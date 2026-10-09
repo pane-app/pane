@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
-// Declarations for `@pane/extension/system` (system.js): the clipboard,
+// Declarations for `@pane-app/extension/system` (system.js): the clipboard,
 // opening anything, revealing a path in the file manager, moving paths to
 // the Recycle Bin, pasting into the application that was in front before
 // Pane, that application and its selected text, through

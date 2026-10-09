@@ -75,6 +75,16 @@ impl VirtualList {
         self.hinted_width.set(self.viewport().size.width);
     }
 
+    /// Has the list hold `added` more children after the ones it holds,
+    /// whose content did not change: the list stays where it is scrolled,
+    /// and the new ones are taken to be a row high until each is drawn.
+    pub(crate) fn append(&self, added: usize) {
+        let count = self.count();
+        self.state.splice(count..count, added);
+        // The state is shared: hinting a clone hints the list.
+        let _ = self.state.clone().with_uniform_item_height(self.row_height);
+    }
+
     /// Scrolls the least that shows the child at `index` whole.
     ///
     /// A child not yet drawn is taken to be a row high here: were it taken

@@ -8,7 +8,7 @@ package pane:extension@0.1.0;
 // Kept apart from extension.wit so a command that runs none is unchanged:
 // only a command whose `pane.json` entry sets `"service": true` exports
 // this interface, beside `command`. Rust commands export it through
-// pane-guest (`pane_guest::service::export!`). The header follows
+// pane-extension (`pane_extension::service::export!`). The header follows
 // `package`: comments above it would document the package, which
 // extension.wit already does.
 

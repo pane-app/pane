@@ -5,7 +5,7 @@ package pane:extension@0.1.0;
 // Extension data: settings and the other values an extension keeps between
 // runs. Kept apart from extension.wit so a component built for the
 // `extension` world alone is unchanged. Rust commands import them through
-// pane-guest, JS/TS commands as the modules "pane:extension/settings@0.1.0",
+// pane-extension, JS/TS commands as the modules "pane:extension/settings@0.1.0",
 // ".../content@0.1.0", ".../cache@0.1.0" and ".../credentials@0.1.0"
 // (guests/js/data.d.ts).
 //

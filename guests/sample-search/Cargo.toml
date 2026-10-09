@@ -9,6 +9,6 @@ license.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
-pane-guest.workspace = true
+pane-extension.workspace = true
 serde = { version = "1", default-features = false, features = ["alloc", "derive"] }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }

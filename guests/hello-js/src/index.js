@@ -8,7 +8,7 @@
 // guests/README.md.
 // @ts-check
 
-import { showToast } from "@pane/extension/feedback";
+import { showToast } from "@pane-app/extension/feedback";
 
 /**
  * What "Say hello" shows in a toast.
@@ -16,7 +16,7 @@ import { showToast } from "@pane/extension/feedback";
  */
 const GREETING = "Hello from JavaScript";
 
-/** @type {import("@pane/extension").Command} */
+/** @type {import("@pane-app/extension").Command} */
 export const command = {
   async render() {
     return {

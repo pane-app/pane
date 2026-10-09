@@ -7,15 +7,15 @@
 
 mod expression;
 
-use pane_guest::alloc::{format, string::String, vec, vec::Vec};
-use pane_guest::root::{RootAction, RootResult};
-use pane_guest::{Command, NoCustomView};
+use pane_extension::alloc::{format, string::String, vec, vec::Vec};
+use pane_extension::root::{RootAction, RootResult};
+use pane_extension::{Command, NoCustomView};
 
 use expression::Outcome;
 
 struct Calculator;
-pane_guest::export!(Calculator);
-pane_guest::root::export!(Calculator);
+pane_extension::export!(Calculator);
+pane_extension::root::export!(Calculator);
 
 /// A root provider: Pane never opens or runs it, so the command keeps the
 /// defaults (opening it is an error).
@@ -23,7 +23,7 @@ impl Command for Calculator {
     type CustomView = NoCustomView;
 }
 
-impl pane_guest::root::Guest for Calculator {
+impl pane_extension::root::Guest for Calculator {
     /// The answer to `query` if it is an expression with one, else nothing:
     /// ordinary words and incomplete or invalid expressions are not errors.
     async fn results_for(query: String) -> Result<Vec<RootResult>, String> {

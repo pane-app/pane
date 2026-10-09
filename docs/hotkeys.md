@@ -156,8 +156,8 @@ cannot assign, read or declare one (no WIT or manifest change).
 ## Limits
 
 - One hotkey per command, only for installed packages' commands (not the
-  samples this build supplies), and no hotkey of Pane's own to summon its
-  window: a summon hotkey is a separate choice (root search itself).
+  samples this build supplies). Pane's own hotkey that summons its window,
+  the Open Pane hotkey (#74), is set on the Settings window's General page.
 - Only the listed keys. On X11 the key is the one the current layout gives
   without Shift; a key the layout gives only with Shift (the digits of a
   French AZERTY keyboard) is refused for a hotkey without Shift ("on this

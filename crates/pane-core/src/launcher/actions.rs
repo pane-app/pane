@@ -415,6 +415,7 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         (_, Some(Entry::StopDeveloping(_))) => acting("Stop developing"),
         (_, Some(Entry::BuildDetails(_))) => acting("Show details"),
         (_, Some(Entry::BuildAgain(_))) => acting("Build again"),
+        (_, Some(Entry::ExtensionLog(_))) => acting("Show logs"),
         (_, Some(Entry::AskClearCache(_))) => acting("Clear cache"),
         (_, Some(Entry::ResetConfirmations(_))) => acting("Reset confirmations"),
         (_, Some(Entry::AskHotkey(_))) => acting("Set hotkey"),
@@ -457,5 +458,8 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         (Screen::PauseDetails { .. }, None) => unusable("Retry"),
         (Screen::RuntimeDetails { .. }, None) => unusable("Restart"),
         (Screen::BuildDetails { .. }, None) => unusable("Build again"),
+        // The Logs screen's lines are the window's: Enter copies the one
+        // it has selected.
+        (Screen::ExtensionLog { .. }, None) => acting("Copy line"),
     }
 }

@@ -10,8 +10,8 @@ drawing, other controls).
 ## Contract
 
 Defined in [`wit/extension.wit`](../wit/extension.wit), identically for Rust
-([`pane-guest`](../guests/pane-guest/src/lib.rs)) and JavaScript/TypeScript
-([`@pane/extension`](../guests/js/pane.d.ts)):
+([`pane-extension`](../guests/pane-extension/src/lib.rs)) and JavaScript/TypeScript
+([`@pane-app/extension`](../guests/js/pane.d.ts)):
 
 - An item may carry a `form` (title, fields, submit label; the WIT record
   `form`, carried in the list's tree, see [list-tree.md](list-tree.md)).

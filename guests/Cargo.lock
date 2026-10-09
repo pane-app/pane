@@ -12,7 +12,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 name = "applications"
 version = "0.1.0"
 dependencies = [
- "pane-guest",
+ "pane-extension",
 ]
 
 [[package]]
@@ -25,7 +25,7 @@ checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 name = "calculator"
 version = "0.1.0"
 dependencies = [
- "pane-guest",
+ "pane-extension",
 ]
 
 [[package]]
@@ -38,7 +38,7 @@ checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 name = "clipboard_history"
 version = "0.1.0"
 dependencies = [
- "pane-guest",
+ "pane-extension",
 ]
 
 [[package]]
@@ -62,14 +62,14 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 name = "failing-start"
 version = "0.1.0"
 dependencies = [
- "pane-guest",
+ "pane-extension",
 ]
 
 [[package]]
 name = "faulty"
 version = "0.1.0"
 dependencies = [
- "pane-guest",
+ "pane-extension",
  "wasip3",
 ]
 
@@ -77,14 +77,14 @@ dependencies = [
 name = "files"
 version = "0.1.0"
 dependencies = [
- "pane-guest",
+ "pane-extension",
 ]
 
 [[package]]
 name = "folder-files"
 version = "0.1.0"
 dependencies = [
- "pane-guest",
+ "pane-extension",
 ]
 
 [[package]]
@@ -169,7 +169,7 @@ dependencies = [
 name = "git-greeter"
 version = "0.1.0"
 dependencies = [
- "pane-guest",
+ "pane-extension",
  "serde_json",
 ]
 
@@ -257,13 +257,13 @@ name = "operations-fixture"
 version = "0.1.0"
 dependencies = [
  "futures",
- "pane-guest",
+ "pane-extension",
  "serde_json",
  "wasip3",
 ]
 
 [[package]]
-name = "pane-guest"
+name = "pane-extension"
 version = "0.1.0"
 dependencies = [
  "dlmalloc",
@@ -301,7 +301,7 @@ dependencies = [
 name = "quicklinks"
 version = "0.1.0"
 dependencies = [
- "pane-guest",
+ "pane-extension",
  "serde_json",
 ]
 
@@ -318,28 +318,28 @@ dependencies = [
 name = "refusing-view"
 version = "0.1.0"
 dependencies = [
- "pane-guest",
+ "pane-extension",
 ]
 
 [[package]]
 name = "sample-actions"
 version = "0.1.0"
 dependencies = [
- "pane-guest",
+ "pane-extension",
 ]
 
 [[package]]
 name = "sample-arguments"
 version = "0.1.0"
 dependencies = [
- "pane-guest",
+ "pane-extension",
 ]
 
 [[package]]
 name = "sample-dependencies"
 version = "0.1.0"
 dependencies = [
- "pane-guest",
+ "pane-extension",
  "serde_json",
 ]
 
@@ -347,14 +347,14 @@ dependencies = [
 name = "sample-files"
 version = "0.1.0"
 dependencies = [
- "pane-guest",
+ "pane-extension",
 ]
 
 [[package]]
 name = "sample-helper"
 version = "0.1.0"
 dependencies = [
- "pane-guest",
+ "pane-extension",
  "wasip3",
 ]
 
@@ -362,14 +362,14 @@ dependencies = [
 name = "sample-icons"
 version = "0.1.0"
 dependencies = [
- "pane-guest",
+ "pane-extension",
 ]
 
 [[package]]
 name = "sample-no-view"
 version = "0.1.0"
 dependencies = [
- "pane-guest",
+ "pane-extension",
 ]
 
 [[package]]
@@ -377,7 +377,7 @@ name = "sample-operations"
 version = "0.1.0"
 dependencies = [
  "futures",
- "pane-guest",
+ "pane-extension",
  "serde_json",
  "wasip3",
 ]
@@ -386,7 +386,7 @@ dependencies = [
 name = "sample-preferences"
 version = "0.1.0"
 dependencies = [
- "pane-guest",
+ "pane-extension",
  "serde",
 ]
 
@@ -394,7 +394,7 @@ dependencies = [
 name = "sample-programs"
 version = "0.1.0"
 dependencies = [
- "pane-guest",
+ "pane-extension",
  "wasip3",
 ]
 
@@ -402,14 +402,14 @@ dependencies = [
 name = "sample-query"
 version = "0.1.0"
 dependencies = [
- "pane-guest",
+ "pane-extension",
 ]
 
 [[package]]
 name = "sample-rust"
 version = "0.1.0"
 dependencies = [
- "pane-guest",
+ "pane-extension",
  "wasip3",
 ]
 
@@ -417,7 +417,7 @@ dependencies = [
 name = "sample-schedule"
 version = "0.1.0"
 dependencies = [
- "pane-guest",
+ "pane-extension",
  "wasip3",
 ]
 
@@ -425,7 +425,7 @@ dependencies = [
 name = "sample-search"
 version = "0.1.0"
 dependencies = [
- "pane-guest",
+ "pane-extension",
  "serde",
  "serde_json",
 ]
@@ -434,7 +434,7 @@ dependencies = [
 name = "sample-service"
 version = "0.1.0"
 dependencies = [
- "pane-guest",
+ "pane-extension",
  "wasip3",
 ]
 
@@ -442,7 +442,7 @@ dependencies = [
 name = "sample-settings"
 version = "0.1.0"
 dependencies = [
- "pane-guest",
+ "pane-extension",
  "wasip3",
 ]
 

@@ -1213,10 +1213,10 @@ develop_sample() {   # develop_sample <sample> <title> <component> <source> <fir
   (cd "guests/$sample" && tar cf - --exclude=target --exclude=dist --exclude=node_modules .) | (cd "$copy" && tar xf -)
   if [ -f "$copy/Cargo.toml" ]; then
     cp rust-toolchain.toml "$copy/"
-    python3 - "$copy/Cargo.toml" "$PWD/guests/pane-guest" <<'PY'
+    python3 - "$copy/Cargo.toml" "$PWD/guests/pane-extension" <<'PY'
 import sys
 path, guest = sys.argv[1], sys.argv[2]
-text = open(path, encoding="utf-8").read().replace('path = "../pane-guest"', "path = '%s'" % guest)
+text = open(path, encoding="utf-8").read().replace('path = "../pane-extension"', "path = '%s'" % guest)
 open(path, "w", encoding="utf-8").write(text)
 PY
     (cd "$copy" && cargo build --release --target wasm32-wasip2 --quiet)

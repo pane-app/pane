@@ -18,7 +18,7 @@
 //! percentages. Arithmetic is IEEE double precision; answers are shown with
 //! at most 15 significant digits.
 
-use pane_guest::alloc::{format, string::String, vec::Vec};
+use pane_extension::alloc::{format, string::String, vec::Vec};
 
 /// What the calculator makes of a query.
 #[derive(Debug, PartialEq)]

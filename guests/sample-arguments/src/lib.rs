@@ -21,10 +21,10 @@
 //! The JavaScript and TypeScript arguments samples show the same.
 #![no_std]
 
-use pane_guest::alloc::{format, string::String, vec::Vec};
-use pane_guest::commands::{self, ArgumentValue, CommandRef, launch_type_name, source_name};
-use pane_guest::feedback::{Toast, show_toast};
-use pane_guest::{Command, LaunchRecord, LaunchType, NoCustomView, settings};
+use pane_extension::alloc::{format, string::String, vec::Vec};
+use pane_extension::commands::{self, ArgumentValue, CommandRef, launch_type_name, source_name};
+use pane_extension::feedback::{Toast, show_toast};
+use pane_extension::{Command, LaunchRecord, LaunchType, NoCustomView, settings};
 
 /// The settings key holding how many times "Greet" ran.
 const RUNS: &str = "greet-runs";
@@ -32,7 +32,7 @@ const RUNS: &str = "greet-runs";
 const STAMP: &str = "stamp";
 
 struct Arguments;
-pane_guest::export!(Arguments);
+pane_extension::export!(Arguments);
 
 /// What "Greet" shows for `launch`, counting the run.
 fn greet(launch: &LaunchRecord) -> Result<String, String> {

@@ -18,9 +18,9 @@
 //! counts that as a crash too.
 #![no_std]
 
-use pane_guest::alloc::{format, string::String, vec::Vec};
-use pane_guest::feedback::{Toast, show_toast};
-use pane_guest::{
+use pane_extension::alloc::{format, string::String, vec::Vec};
+use pane_extension::feedback::{Toast, show_toast};
+use pane_extension::{
     Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, content, settings,
 };
 
@@ -35,7 +35,7 @@ const SLOW_WAIT: u64 = 10_000_000_000;
 const BUSY_FOR: u64 = 60_000_000_000;
 
 struct Counting;
-pane_guest::export!(Counting);
+pane_extension::export!(Counting);
 
 /// The count kept in the command's content.
 fn count() -> Result<u64, String> {

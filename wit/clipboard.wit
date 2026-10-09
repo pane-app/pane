@@ -6,7 +6,7 @@ package pane:extension@0.1.0;
 // guest cannot watch the system's clipboard, and the history must be kept
 // while the extension is not running). Kept apart from the other files so a
 // command that does not use it is unchanged. Rust commands use it through
-// pane-guest (`pane_guest::clipboard_history`), and JavaScript and
+// pane-extension (`pane_extension::clipboard_history`), and JavaScript and
 // TypeScript commands whose package.json sets
 // `"pane": { "clipboardHistory": true }` import it
 // (guests/js/clipboard.d.ts).

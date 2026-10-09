@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
-// The system Pane runs on, for a JS/TS command (`@pane/extension/system`):
+// The system Pane runs on, for a JS/TS command (`@pane-app/extension/system`):
 // the clipboard, opening anything, revealing a path in the file manager
 // and moving paths to the Recycle Bin, pasting into the application that
 // was in front before Pane, that application and the text selected in it,
@@ -11,7 +11,7 @@
 // any npm module.
 //
 // The host functions do only what they name. A standard action is a
-// composition of them with `@pane/extension/feedback` (feedback.js), not
+// composition of them with `@pane-app/extension/feedback` (feedback.js), not
 // part of Pane's contract (ADR 0037): an author can compose the steps
 // differently.
 

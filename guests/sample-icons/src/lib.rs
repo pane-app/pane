@@ -53,10 +53,10 @@
 //! action's.
 #![no_std]
 
-use pane_guest::alloc::{format, string::String, vec::Vec};
-use pane_guest::feedback::{Toast, show_toast};
-use pane_guest::icon::{avatar, favicon, file_icon, progress_ring};
-use pane_guest::{
+use pane_extension::alloc::{format, string::String, vec::Vec};
+use pane_extension::feedback::{Toast, show_toast};
+use pane_extension::icon::{avatar, favicon, file_icon, progress_ring};
+use pane_extension::{
     Accessory, Action, Color, Command, CustomView, FieldValue, FormError, Icon, Item, List, Mask,
     NoCustomView, Tint, Tone, settings,
 };
@@ -66,7 +66,7 @@ use pane_guest::{
 const NEW_YEAR: i64 = 1_767_225_600_000;
 
 struct Icons;
-pane_guest::export!(Icons);
+pane_extension::export!(Icons);
 
 /// The setting naming the server the web images come from, and its
 /// default.

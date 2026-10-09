@@ -11,8 +11,14 @@
 //!   toolchain in `tools/componentize-js` (prerequisites: guests/README.md),
 //!   then run `guests`.
 //! - `ci`: the lints of `ci-lints`, then the tests of `ci-tests`.
-//! - `ci-lints`: check formatting, the prebuilt JS/TS samples and
-//!   clippy: the half of `ci` that builds no guests and runs no tests.
+//! - `ci-lints`: check formatting, the prebuilt JS/TS samples, the SDKs'
+//!   packages (`sdks`) and clippy: the half of `ci` that runs no tests and
+//!   builds no guest but the Rust SDK.
+//! - `sdks`: check that the SDKs package as they would be published,
+//!   publishing nothing: the Rust SDK's copy of the WIT is `wit/`, `cargo
+//!   publish --dry-run` packages `pane-extension` and builds it from the
+//!   package alone, and `npm pack` packs `@pane-app/extension` into
+//!   `target/sdks/`. Publishing them is a person's step, never CI's (#128).
 //! - `ci-tests`: build the guests, then run the workspace's tests with
 //!   cargo-nextest, which retries a failing test twice before the run
 //!   fails for it, so one flaky failure costs time, not the run. Options
@@ -41,6 +47,7 @@
 mod package;
 mod zip;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
@@ -136,12 +143,13 @@ fn main() -> ExitCode {
         (Some("guests"), _) => guests(),
         (Some("js-guests"), _) => js_guests(),
         (Some("ci-lints"), _) => ci_lints(),
+        (Some("sdks"), _) => sdks(),
         (Some("package-linux"), Ok(version)) => package::linux(dev, version),
         (Some("package-windows"), Ok(version)) => package::windows(dev, version),
         (Some("package-macos"), Ok(version)) => package::macos(dev, version),
         (_, Err(why)) => Err(why),
         _ => Err("usage: cargo xtask \
-             <guests|js-guests|ci-lints|package-linux|package-windows|package-macos> \
+             <guests|js-guests|ci-lints|sdks|package-linux|package-windows|package-macos> \
              [--dev] [--package-version <version>], cargo xtask <ci|ci-tests> \
              [nextest options], or cargo xtask file-index-bench [options]"
             .into()),
@@ -488,8 +496,9 @@ fn pane_js(subcommand: &str) -> Command {
 }
 
 /// The lints half of `ci`: the formatting checks, the prebuilt-samples
-/// check and clippy — everything that builds no guests and runs no
-/// tests. `ci-branch.yml` runs this as a job beside `ci-tests`, so the
+/// check, the SDKs' packages and clippy — everything that runs no tests
+/// and builds no guest but the Rust SDK, which `sdks` builds from its
+/// package. `ci-branch.yml` runs this as a job beside `ci-tests`, so the
 /// lints and the tests of a push finish in the time of the slower one.
 fn ci_lints() -> Result<(), String> {
     // Formatting first: it is free, so a formatting error is seen at once
@@ -508,6 +517,7 @@ fn ci_lints() -> Result<(), String> {
     }
     // The prebuilt JS/TS samples must match their sources and pins.
     run(&mut pane_js("check"))?;
+    sdks()?;
     let clippy = [
         "clippy",
         "--locked",
@@ -522,6 +532,71 @@ fn ci_lints() -> Result<(), String> {
     run(cargo()
         .current_dir(root.join("guests/helpers/echo"))
         .args(clippy))
+}
+
+/// Checks that the SDKs package as they would be published, publishing
+/// nothing: the WIT the Rust SDK carries, and is generated from, is a copy
+/// of `wit/`; `cargo publish --dry-run` packages `pane-extension` and
+/// builds it from its package alone, as crates.io would; and `npm pack`
+/// packs `@pane-app/extension` into `target/sdks/`. Publishing them is a
+/// person's step, never CI's (#128).
+fn sdks() -> Result<(), String> {
+    let root = root();
+    same_files(&root.join("wit"), &root.join("guests/pane-extension/wit"))?;
+    let guests = root.join("guests");
+    run(cargo().current_dir(&guests).args([
+        "publish",
+        "--dry-run",
+        "--allow-dirty",
+        "-p",
+        "pane-extension",
+        "--target",
+        GUEST_TARGET,
+    ]))?;
+    let out = root.join("target/sdks");
+    std::fs::create_dir_all(&out).map_err(|error| error.to_string())?;
+    // npm is a batch file on Windows, which is started by its full name.
+    let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
+    run(Command::new(npm)
+        .current_dir(root.join("guests/js"))
+        .arg("pack")
+        .arg("--pack-destination")
+        .arg(&out))
+}
+
+/// Checks that the folder `copy` holds the files `original` holds, with the
+/// same contents, and nothing else.
+fn same_files(original: &Path, copy: &Path) -> Result<(), String> {
+    if files_under(original)? == files_under(copy)? {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} is not a copy of {}: copy the folder over it again",
+            copy.display(),
+            original.display()
+        ))
+    }
+}
+
+/// Every file under `dir`, by its path relative to `dir`, with its contents.
+fn files_under(dir: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, String> {
+    let mut files = BTreeMap::new();
+    let mut folders = vec![dir.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        let entries = std::fs::read_dir(&folder)
+            .map_err(|error| format!("read {} failed: {error}", folder.display()))?;
+        for entry in entries {
+            let path = entry.map_err(|error| error.to_string())?.path();
+            if path.is_dir() {
+                folders.push(path);
+            } else {
+                let contents = std::fs::read(&path)
+                    .map_err(|error| format!("read {} failed: {error}", path.display()))?;
+                files.insert(path.strip_prefix(dir).unwrap().to_path_buf(), contents);
+            }
+        }
+    }
+    Ok(files)
 }
 
 /// The tests half of `ci`: build the guests the tests use, then run the

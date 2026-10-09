@@ -1,0 +1,31 @@
+# How a package is built from its source folder, once or on each save
+# (development mode): shared by Pane's core and `pane-ext`, so that the two
+# never build a package differently (ADR 0047, #216).
+[package]
+name = "pane-build"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# Reading cargo's JSON messages for the components a Rust build made.
+serde_json.workspace = true
+# The native file watcher of development mode (inotify, FSEvents,
+# ReadDirectoryChangesW), which builds a local package on save.
+notify = "8.2"
+
+# The Job Object that stops a build or a system program with every process
+# it started, and the thread list that lets a program started suspended
+# run; already in the dependency tree through GPUI CE.
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Security", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Threading"] }
+
+# Stopping a build with the processes it started (a process group); already
+# in the dependency tree.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile.workspace = true

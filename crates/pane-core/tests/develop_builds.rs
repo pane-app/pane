@@ -51,7 +51,7 @@ struct Sample {
 impl Sample {
     /// A fresh copy of the sample's sources in Cargo's test folder, keeping
     /// what earlier runs built there; for Rust, with the path to
-    /// `pane-guest` and the repository's toolchain file.
+    /// `pane-extension` and the repository's toolchain file.
     fn copy(&self) -> PathBuf {
         self.copy_as(&format!("develop-{}", self.name))
     }
@@ -66,9 +66,9 @@ impl Sample {
             fs::copy(from.join(file), to.join(file)).unwrap();
         }
         if to.join("Cargo.toml").exists() {
-            let guest = repository().join("guests/pane-guest");
+            let guest = repository().join("guests/pane-extension");
             let manifest = fs::read_to_string(to.join("Cargo.toml")).unwrap().replace(
-                r#"path = "../pane-guest""#,
+                r#"path = "../pane-extension""#,
                 &format!("path = {:?}", guest.to_str().unwrap()),
             );
             fs::write(to.join("Cargo.toml"), manifest).unwrap();

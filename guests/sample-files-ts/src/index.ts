@@ -21,7 +21,7 @@ import type {
   RootResult,
   RootResults,
   SearchResult,
-} from "@pane/extension";
+} from "@pane-app/extension";
 
 /** The most entries one query lists. */
 const MAX_RESULTS = 20;

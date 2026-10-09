@@ -11,14 +11,14 @@
 // the TypeScript one. "fail" is refused, to show how an error looks;
 // "crash" crashes on purpose, and three crashes within five minutes pause
 // the extension.
-import { showToast } from "@pane/extension/feedback";
+import { showToast } from "@pane-app/extension/feedback";
 
 /** What Echo says when it was sent no text. */
 const NOTHING =
   "Echo heard nothing: give it an alias or make it a fallback in Settings, then send it text " +
   "from root search";
 
-/** @type {import("@pane/extension").Command} */
+/** @type {import("@pane-app/extension").Command} */
 export const command = {
   async run(id, launch) {
     if (id !== "echo") throw new Error(`unknown command: ${id}`);

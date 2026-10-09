@@ -14,7 +14,7 @@
 // without waiting for up to a minute, so Pane stops it after five seconds
 // of its own computing and counts that as a crash too.
 // @ts-check
-import { showToast } from "@pane/extension/feedback";
+import { showToast } from "@pane-app/extension/feedback";
 import { get, set } from "pane:extension/settings@0.1.0";
 import * as content from "pane:extension/content@0.1.0";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
@@ -110,11 +110,11 @@ async function outcome(itemId) {
  * @param {string} id
  * @param {string} title
  * @param {string} subtitle
- * @returns {import("@pane/extension").Item}
+ * @returns {import("@pane-app/extension").Item}
  */
 const item = (id, title, subtitle) => ({ id, title, subtitle, onAction: () => act(id) });
 
-/** @type {import("@pane/extension").Command} */
+/** @type {import("@pane-app/extension").Command} */
 export const command = {
   async render() {
     return {

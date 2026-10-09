@@ -1,5 +1,5 @@
 # Test fixture: a command that answers Pane's `render` and `handle-event`
-# with JSON of its own, written by hand rather than by pane-guest, so that
+# with JSON of its own, written by hand rather than by pane-extension, so that
 # Pane's reading of the tree is checked against trees the SDKs never write:
 # unknown fields, a newer version, a view Pane cannot show, and trees and
 # answers that are not ones Pane can read.

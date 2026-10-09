@@ -6,15 +6,15 @@
 //! guests/README.md.
 #![no_std]
 
-use pane_guest::alloc::{format, string::String, vec::Vec};
-use pane_guest::feedback::{Toast, show_toast};
-use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
+use pane_extension::alloc::{format, string::String, vec::Vec};
+use pane_extension::feedback::{Toast, show_toast};
+use pane_extension::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
 
 /// What "Say hello" shows.
 const GREETING: &str = "Hello from Rust";
 
 struct Hello;
-pane_guest::export!(Hello);
+pane_extension::export!(Hello);
 
 /// Runs the action of the item `id`.
 async fn act(id: &str) -> Result<(), String> {

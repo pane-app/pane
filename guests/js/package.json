@@ -1,9 +1,30 @@
 {
-  "name": "@pane/extension",
+  "name": "@pane-app/extension",
   "version": "0.1.0",
-  "private": true,
-  "description": "TypeScript declarations for Pane's extension contract (wit/extension.wit), web requests (@pane/extension/http), toasts, HUDs and the window (@pane/extension/feedback), the clipboard, opening, revealing and recycling with the standard actions (@pane/extension/system), preferences (@pane/extension/preferences), icon helpers (@pane/extension/icons) and system programs (@pane/extension/programs)",
+  "description": "Write Pane extensions in JavaScript or TypeScript: the types of Pane's extension contract (wit/extension.wit), web requests (@pane-app/extension/http), toasts, HUDs and the window (@pane-app/extension/feedback), the clipboard, opening, revealing and recycling with the standard actions (@pane-app/extension/system), preferences (@pane-app/extension/preferences), icon helpers (@pane-app/extension/icons) and system programs (@pane-app/extension/programs)",
+  "keywords": [
+    "pane",
+    "launcher",
+    "extension",
+    "wasm",
+    "component-model"
+  ],
+  "homepage": "https://github.com/pane-app/pane/tree/main/guests/js#readme",
+  "bugs": "https://github.com/pane-app/pane/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pane-app/pane.git",
+    "directory": "guests/js"
+  },
   "license": "Apache-2.0 OR MIT",
+  "type": "module",
+  "files": [
+    "*.js",
+    "*.d.ts",
+    "wit/world.wit",
+    "LICENSE-APACHE",
+    "LICENSE-MIT"
+  ],
   "types": "pane.d.ts",
   "exports": {
     ".": {

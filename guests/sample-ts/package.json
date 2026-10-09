@@ -13,6 +13,6 @@
     "zod": "4.6.5"
   },
   "devDependencies": {
-    "@pane/extension": "file:../js"
+    "@pane-app/extension": "file:../js"
   }
 }

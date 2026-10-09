@@ -32,6 +32,30 @@ this page is for maintaining the toolchain.
   TypeScript 7.0.2.
 - [`bundle.mjs`](bundle.mjs) and [`pane_js.py`](pane_js.py): the build.
 
+## Every platform
+
+`pane-ext` will ship the componentizer for Windows, macOS and Linux on x64
+and arm64 (spec [#128](https://github.com/pane-app/pane/issues/128)), so
+[`componentizer.yml`](../../.github/workflows/componentizer.yml) builds it
+for all six whenever this folder changes, or on demand. The wasm parts are
+built once, on Linux: `pane_js.py wasm-parts` builds `runtime.wasm` with the
+pinned nightly and takes wasi-sdk's WASI 0.3 `libc.so`, recording their
+digests in `wasm-parts.json`. Then each platform runs
+`pane_js.py componentizer` on its own runner, which checks those digests and
+builds `p3_build` against them with the stable Rust alone (no nightly, no
+wasi-sdk). It uploads the binary as `componentizer-<target>`, componentizes
+the TypeScript sample with it (`PANE_JS_PREBUILT`), and runs `pane-core`'s
+TypeScript sample checks and package-install tests on the result.
+
+The first run (37840978895, 2026-10-08) passed on all six with nothing
+platform-specific in the build. Each runner image already has rustup, the
+MSVC or Xcode linker, Python and Node. Building `p3_build` took 5–10 minutes
+cold (20 on `macos-15-intel`), and the sample componentized in under a second
+(1.5 seconds on `macos-15-intel`). Wasmtime,
+which the componentizer runs to snapshot the runtime, works on Windows
+arm64 (`windows-11-arm`) as on the other five. macOS x64 runs on
+`macos-15-intel`.
+
 ## Updating
 
 1. Change the commit and archive digest in `pins.json` (and the nightly or

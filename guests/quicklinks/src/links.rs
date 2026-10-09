@@ -3,13 +3,13 @@
 //! optional application to open it with, saved in its content (extension
 //! data) as one value, and checked before they are saved.
 
-use pane_guest::alloc::{
+use pane_extension::alloc::{
     borrow::ToOwned,
     format,
     string::{String, ToString},
     vec::Vec,
 };
-use pane_guest::content;
+use pane_extension::content;
 
 /// The content key holding every quicklink.
 const KEY: &str = "quicklinks";
@@ -228,7 +228,7 @@ pub fn target_problem(target: &str) -> Option<String> {
 /// none is given, `Err` with why when no application has that name.
 pub fn application(
     given: &str,
-    installed: &[pane_guest::applications::Application],
+    installed: &[pane_extension::applications::Application],
 ) -> Result<Option<Application>, String> {
     if given.is_empty() {
         return Ok(None);

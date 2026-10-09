@@ -12,7 +12,7 @@
 // the timer wins; Pane ends the helper's process as soon as the call that
 // started it returns.
 // @ts-check
-import { showToast } from "@pane/extension/feedback";
+import { showToast } from "@pane-app/extension/feedback";
 import { run } from "pane:extension/helpers@0.1.0";
 import { set } from "pane:extension/settings@0.1.0";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
@@ -99,11 +99,11 @@ async function outcome(itemId) {
  * @param {string} id
  * @param {string} title
  * @param {string} subtitle
- * @returns {import("@pane/extension").Item}
+ * @returns {import("@pane-app/extension").Item}
  */
 const item = (id, title, subtitle) => ({ id, title, subtitle, onAction: () => act(id) });
 
-/** @type {import("@pane/extension").Command} */
+/** @type {import("@pane-app/extension").Command} */
 export const command = {
   async render() {
     return {

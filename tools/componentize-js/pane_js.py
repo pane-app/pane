@@ -4,6 +4,10 @@
 
 Usage:
   pane_js.py toolchain                  fetch and build the pinned toolchain
+  pane_js.py wasm-parts <dir>           build runtime.wasm and copy wasi-sdk's P3 libc.so
+                                        into <dir>, their digests in wasm-parts.json
+  pane_js.py componentizer <dir>        build this host's componentizer into <dir>
+                                        against the wasm parts there
   pane_js.py build <package> <out.wasm> type-check, bundle and componentize one command
   pane_js.py samples                    rebuild guests/prebuilt/ and its manifest
   pane_js.py check                      verify guests/prebuilt/ against its manifest
@@ -15,6 +19,12 @@ and esbuild/TypeScript from package-lock.json. Downloads and builds are cached
 in PANE_JS_TOOLCHAIN_DIR, by default the user cache directory
 (pane/componentize-js). Nothing outside that directory and the output paths is
 written, except that rustup installs the pinned toolchains.
+
+The wasm parts are the same on every host, so CI builds them once and each
+host's componentizer against them (`wasm-parts`, then `componentizer`; the
+componentizer needs only the stable Rust). With PANE_JS_PREBUILT naming a
+folder they left, `build` and `samples` use its componentizer, runtime and
+libc instead of building their own.
 
 Prerequisites on every OS: Python 3.12+, git, Node.js 22+ with npm, and rustup.
 """
@@ -165,7 +175,10 @@ def tree_files(root: Path) -> list[Path]:
     for directory, dirs, names in os.walk(root):
         dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
         files += [Path(directory) / name for name in names]
-    return sorted(files)
+    # By their parts, which compare case-sensitively everywhere: Windows
+    # paths compare ignoring case, which would order `README.md` and
+    # `adapt.js` otherwise than Linux does, and so digest them differently.
+    return sorted(files, key=lambda path: path.parts)
 
 
 def inputs_digest(paths: list[Path]) -> str:
@@ -236,22 +249,33 @@ class Toolchain:
         self.componentizer = self.bin / f"componentize-qjs-p3{EXE}"
         self.node = CACHE / "node"
         self.stamp = self.bin / "toolchain.json"
-
-    @property
-    def libc(self) -> Path:
-        return self.sdk / "share" / "wasi-sysroot" / "lib" / "wasm32-wasip3" / "libc.so"
+        self.sdk_libc = self.sdk / "share" / "wasi-sysroot" / "lib" / "wasm32-wasip3" / "libc.so"
+        self.libc = self.sdk_libc
+        prebuilt = os.environ.get("PANE_JS_PREBUILT")
+        self.prebuilt = Path(prebuilt).resolve() if prebuilt else None
+        if self.prebuilt:
+            self.runtime = self.prebuilt / "runtime.wasm"
+            self.libc = self.prebuilt / "libc.so"
+            self.componentizer = self.prebuilt / f"componentize-qjs-p3{EXE}"
+            self.stamp = self.prebuilt / "toolchain.json"
 
     def ensure(self) -> dict:
         """Makes the toolchain ready, building only what the cache lacks."""
-        self.ensure_sdk()
-        if not self.stamp.exists():
-            self.build()
+        if self.prebuilt:
+            missing = [path.name for path in [self.runtime, self.libc, self.componentizer, self.stamp]
+                       if not path.exists()]
+            if missing:
+                raise SystemExit(f"pane-js: PANE_JS_PREBUILT ({self.prebuilt}) lacks {', '.join(missing)}")
+        else:
+            self.ensure_sdk()
+            if not self.stamp.exists():
+                self.build()
         self.ensure_node()
         return json.loads(self.stamp.read_text(encoding="utf-8"))
 
     def ensure_sdk(self) -> None:
         """wasi-sdk: its compiler builds the runtime; its P3 libc is linked into every component."""
-        if self.libc.exists():
+        if self.sdk_libc.exists():
             return
         sdk = PINS["wasi_sdk"]
         archive = CACHE / "downloads" / f"{self.sdk_name}.tar.gz"
@@ -261,7 +285,15 @@ class Toolchain:
 
     def build(self) -> None:
         log(f"building the componentize-qjs toolchain into {CACHE}")
-        qjs, sdk = PINS["componentize_qjs"], PINS["wasi_sdk"]
+        self.fetch_source()
+        self.build_runtime(self.runtime)
+        self.build_componentizer(self.runtime, self.componentizer)
+        versions = {**self.wasm_versions(self.runtime, self.libc), **self.componentizer_versions()}
+        self.stamp.write_text(json.dumps(versions, indent=2) + "\n", encoding="utf-8")
+
+    def fetch_source(self) -> None:
+        """A fresh copy of the pinned componentize-qjs with the patch queue applied."""
+        qjs = PINS["componentize_qjs"]
         repo_path = qjs["repository"].removeprefix("https://github.com/")
         archive = CACHE / "downloads" / f"componentize-qjs-{qjs['commit']}.tar.gz"
         download(f"https://codeload.github.com/{repo_path}/tar.gz/{qjs['commit']}", archive, qjs["archive_sha256"])
@@ -282,14 +314,14 @@ class Toolchain:
         examples.mkdir(exist_ok=True)
         shutil.copyfile(HERE / "p3_build.rs", examples / "p3_build.rs")
 
-        nightly, stable = PINS["rust_nightly"], rust_stable()
+    def build_runtime(self, out: Path) -> None:
+        """The QuickJS runtime, for wasm32-wasip3 against the SDK's P3 libc,
+        with the pinned nightly; needs `fetch_source` and `ensure_sdk`."""
+        nightly = PINS["rust_nightly"]
         rustup = tool("rustup")
         run([rustup, "toolchain", "install", nightly, "--profile", "minimal", "--component", "rust-src"])
-        run([rustup, "toolchain", "install", stable, "--profile", "minimal"])
-
-        # The QuickJS runtime, for wasm32-wasip3 against the SDK's P3 libc.
         clang = str(self.sdk / "bin" / f"clang{EXE}")
-        sysroot_lib = self.libc.parent
+        sysroot_lib = self.sdk_libc.parent
         runtime_target = CACHE / "runtime-target"
         env = clean_env(
             CARGO_TARGET_DIR=str(runtime_target),
@@ -316,32 +348,48 @@ class Toolchain:
         run([rustup, "run", nightly, "cargo", "build", "--release", "--locked", "--target", "wasm32-wasip3",
              "-Zbuild-std=std,panic_abort", "--manifest-path", self.source / "Cargo.toml",
              "-p", "componentize-qjs-runtime"], env=env)
-        self.bin.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(runtime_target / "wasm32-wasip3" / "release" / "componentize_qjs_runtime.wasm", self.runtime)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(runtime_target / "wasm32-wasip3" / "release" / "componentize_qjs_runtime.wasm", out)
 
-        # The componentizer. Its build script requires four prebuilt runtimes;
-        # Pane always passes the runtime explicitly, so copies satisfy it.
+    def build_componentizer(self, runtime: Path, out: Path) -> None:
+        """This host's componentizer, with the stable Rust; needs `fetch_source`.
+        Its build script requires four prebuilt runtimes; Pane always passes
+        the runtime explicitly, so copies of `runtime` satisfy it."""
+        stable = rust_stable()
+        rustup = tool("rustup")
+        run([rustup, "toolchain", "install", stable, "--profile", "minimal"])
         prebuilt = self.source / "crates" / "core" / "prebuilt"
         prebuilt.mkdir(exist_ok=True)
         for name in ["runtime.wasm", "runtime-opt-size.wasm", "runtime-sync.wasm", "runtime-opt-size-sync.wasm"]:
-            shutil.copyfile(self.runtime, prebuilt / name)
+            shutil.copyfile(runtime, prebuilt / name)
         componentizer_target = CACHE / "componentizer-target"
         run([rustup, "run", stable, "cargo", "build", "--release", "--locked", "--manifest-path",
              self.source / "Cargo.toml", "-p", "componentize-qjs", "--example", "p3_build"],
             env=clean_env(CARGO_TARGET_DIR=str(componentizer_target)))
-        shutil.copyfile(componentizer_target / "release" / "examples" / f"p3_build{EXE}", self.componentizer)
-        self.componentizer.chmod(0o755)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(componentizer_target / "release" / "examples" / f"p3_build{EXE}", out)
+        out.chmod(0o755)
 
-        versions = {
+    def wasm_versions(self, runtime: Path, libc: Path) -> dict:
+        """What the wasm parts were built from, and their digests."""
+        qjs = PINS["componentize_qjs"]
+        rustup = tool("rustup")
+        return {
             "componentize_qjs": {k: qjs[k] for k in ["repository", "version", "commit"]},
-            "patches": {name: sha256_file(HERE / "patches" / name) for name in PINS["patches"]},
-            "runtime_rustc": run([rustup, "run", nightly, "rustc", "-V"], capture=True).strip(),
-            "componentizer_rustc": run([rustup, "run", stable, "rustc", "-V"], capture=True).strip(),
-            "wasi_sdk": sdk["version"],
-            "runtime_sha256": sha256_file(self.runtime),
+            "patches": patch_digests(),
+            "runtime_rustc": run([rustup, "run", PINS["rust_nightly"], "rustc", "-V"], capture=True).strip(),
+            "wasi_sdk": PINS["wasi_sdk"]["version"],
+            "runtime_sha256": sha256_file(runtime),
+            "libc_sha256": sha256_file(libc),
+        }
+
+    def componentizer_versions(self) -> dict:
+        """What this host's componentizer was built with, and where."""
+        rustup = tool("rustup")
+        return {
+            "componentizer_rustc": run([rustup, "run", rust_stable(), "rustc", "-V"], capture=True).strip(),
             "built_on": "-".join(host_platform()),
         }
-        self.stamp.write_text(json.dumps(versions, indent=2) + "\n", encoding="utf-8")
 
     def ensure_node(self) -> None:
         """esbuild and TypeScript at the versions in package-lock.json."""
@@ -360,6 +408,45 @@ class Toolchain:
         return {name: lock[f"node_modules/{name}"]["version"] for name in ["esbuild", "typescript"]}
 
 
+def patch_digests() -> dict[str, str]:
+    return {name: sha256_file(HERE / "patches" / name) for name in PINS["patches"]}
+
+
+def wasm_parts(into: Path) -> None:
+    """Builds the runtime and copies the SDK's P3 libc into `into`, with
+    what they were built from and their digests in `wasm-parts.json`."""
+    toolchain = Toolchain()
+    toolchain.ensure_sdk()
+    toolchain.fetch_source()
+    runtime, libc = into / "runtime.wasm", into / "libc.so"
+    toolchain.build_runtime(runtime)
+    shutil.copyfile(toolchain.sdk_libc, libc)
+    record = toolchain.wasm_versions(runtime, libc)
+    (into / "wasm-parts.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    log(f"runtime.wasm {record['runtime_sha256']}, libc.so {record['libc_sha256']}")
+
+
+def componentizer(into: Path) -> None:
+    """Builds this host's componentizer into `into` against the wasm parts
+    `wasm_parts` left there, and records the whole toolchain in
+    `toolchain.json`, so that `into` can be PANE_JS_PREBUILT."""
+    record = json.loads((into / "wasm-parts.json").read_text(encoding="utf-8"))
+    runtime, libc = into / "runtime.wasm", into / "libc.so"
+    for path, key in [(runtime, "runtime_sha256"), (libc, "libc_sha256")]:
+        if sha256_file(path) != record[key]:
+            raise SystemExit(f"pane-js: {path} does not match its digest in wasm-parts.json")
+    if (record["componentize_qjs"]["commit"] != PINS["componentize_qjs"]["commit"]
+            or record["patches"] != patch_digests()):
+        raise SystemExit("pane-js: the wasm parts were built from other pins or patches")
+    toolchain = Toolchain()
+    toolchain.fetch_source()
+    out = into / f"componentize-qjs-p3{EXE}"
+    toolchain.build_componentizer(runtime, out)
+    record.update(toolchain.componentizer_versions())
+    (into / "toolchain.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    log(f"built {out} ({sha256_file(out)})")
+
+
 def npm_ci(directory: Path) -> None:
     # Install scripts are not needed by these packages and are not run.
     run([tool("npm"), "ci", "--ignore-scripts", "--no-audit", "--no-fund"], cwd=directory)
@@ -372,7 +459,7 @@ def build(package: Path, out: Path, toolchain: Toolchain) -> dict:
     entry = manifest.get("main")
     if not entry:
         raise SystemExit(f"pane-js: {package / 'package.json'} needs a `main` entry naming the command module")
-    # Stage the package beside Pane's types (`@pane/extension` is `file:../js`),
+    # Stage the package beside Pane's types (`@pane-app/extension` is `file:../js`),
     # so dependencies install into the cache rather than the source tree.
     work = CACHE / "work" / f"{package.name}-{hashlib.sha256(str(package).encode()).hexdigest()[:8]}"
     staged, types = work / package.name, work / "js"
@@ -434,9 +521,12 @@ ADAPTED_PROVIDERS = {
 def adapted_entry(entry: Path, adapter: Path, options: dict) -> str:
     """The module bundled for `entry`: its exports, with the ones Pane calls
     wrapped by `adapter` so that what a handler throws is an error, not a
-    crash."""
+    crash, and `console` installed before the command's module loads."""
     entry_js, adapter_js = json.dumps(entry.as_posix()), json.dumps(adapter.as_posix())
+    # `console` first, so that the command's own module has it as it loads.
+    console_js = json.dumps((adapter.parent / "console.js").as_posix())
     lines = [
+        f"import {console_js};",
         f"import * as extension from {entry_js};",
         f"import {{ adaptCommand, adaptProvider }} from {adapter_js};",
         f"export * from {entry_js};",
@@ -449,7 +539,7 @@ def adapted_entry(entry: Path, adapter: Path, options: dict) -> str:
 
 
 # `wasi:http`'s client, which a command imports only if its bundle uses it
-# (itself, or through `@pane/extension/http`), as a Rust command's component
+# (itself, or through `@pane-app/extension/http`), as a Rust command's component
 # imports only what its code calls: Pane lists a package whose component
 # imports it as one that uses the network.
 HTTP_IMPORT = "wasi:http/client@0.3.0"
@@ -461,7 +551,7 @@ def uses_http(bundle: str) -> bool:
 
 
 # Pane's system programs (wit/programs.wit), which a command imports only if
-# its bundle uses them (itself, or through `@pane/extension/programs`), as a
+# its bundle uses them (itself, or through `@pane-app/extension/programs`), as a
 # Rust command's component imports only what its code calls: Pane lists a
 # package whose component imports them as one that runs system programs.
 PROGRAMS_IMPORT = "pane:extension/programs@0.1.0"
@@ -564,6 +654,10 @@ def main(argv: list[str]) -> None:
         case ["toolchain"]:
             Toolchain().ensure()
             log(f"toolchain ready in {CACHE}")
+        case ["wasm-parts", into]:
+            wasm_parts(Path(into).resolve())
+        case ["componentizer", into]:
+            componentizer(Path(into).resolve())
         case ["build", package, out]:
             toolchain = Toolchain()
             toolchain.ensure()

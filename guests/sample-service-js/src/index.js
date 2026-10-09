@@ -24,7 +24,7 @@
 // 31-day cadence" make the next cycle answer cadences beyond Pane's
 // bounds, which it clamps to its 1-second minimum and 30-day maximum.
 // @ts-check
-import { showToast } from "@pane/extension/feedback";
+import { showToast } from "@pane-app/extension/feedback";
 import { get, set } from "pane:extension/settings@0.1.0";
 import * as content from "pane:extension/content@0.1.0";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
@@ -121,11 +121,11 @@ async function outcome(itemId) {
  * @param {string} id
  * @param {string} title
  * @param {string} subtitle
- * @returns {import("@pane/extension").Item}
+ * @returns {import("@pane-app/extension").Item}
  */
 const item = (id, title, subtitle) => ({ id, title, subtitle, onAction: () => act(id) });
 
-/** @type {import("@pane/extension").Command} */
+/** @type {import("@pane-app/extension").Command} */
 export const command = {
   async render() {
     return {
@@ -152,7 +152,7 @@ export const command = {
   },
 };
 
-/** @type {import("@pane/extension").Service} */
+/** @type {import("@pane-app/extension").Service} */
 export const service = {
   // One cycle of the service: it counts itself (in its content for all
   // time, in this module for this run) and answers the status to show and
@@ -176,7 +176,7 @@ export const service = {
      * is the cadence it asks for.
      * @param {boolean} waited
      * @param {number} next
-     * @returns {import("@pane/extension").Cycle}
+     * @returns {import("@pane-app/extension").Cycle}
      */
     const answer = (waited, next) => ({
       status:
@@ -198,7 +198,7 @@ export const service = {
       case "crash":
         // Resolving with something other than a cycle is a crash, unlike
         // throwing. The cycle is counted, as the Rust sample's is.
-        return /** @type {import("@pane/extension").Cycle} */ (
+        return /** @type {import("@pane-app/extension").Cycle} */ (
           /** @type {unknown} */ (undefined)
         );
       case "busy": {

@@ -5,15 +5,15 @@
 
 use core::cell::Cell;
 
-use pane_guest::alloc::{format, string::String, vec, vec::Vec};
-use pane_guest::feedback::{Toast, show_toast};
-use pane_guest::{
+use pane_extension::alloc::{format, string::String, vec, vec::Vec};
+use pane_extension::feedback::{Toast, show_toast};
+use pane_extension::{
     Command, CustomView, CustomViewInfo, CustomViewRole, Field, FieldKind, FieldValue, Form,
     FormError, Frame, GuestCustomView, Item, Key, List, Shape, Text, TextField, ViewEvent,
 };
 
 struct Faulty;
-pane_guest::export!(Faulty);
+pane_extension::export!(Faulty);
 
 /// A WebAssembly page, the unit memory grows by.
 const PAGE: usize = 64 * 1024;
@@ -65,11 +65,11 @@ async fn outcome(id: &str) -> Result<String, String> {
         "hold" => {
             let (writer, reader) = wasip3::wit_stream::new::<u8>();
             let written = wasip3::cli::stdout::write_via_stream(reader);
-            pane_guest::settings::set("holding", "started")?;
+            pane_extension::settings::set("holding", "started")?;
             wasip3::clocks::monotonic_clock::wait_for(10_000_000_000).await;
             drop(writer);
             let _ = written.await;
-            pane_guest::settings::set("holding", "finished")?;
+            pane_extension::settings::set("holding", "finished")?;
             Ok("held".into())
         }
         "error" => Err("the guest refused".into()),
@@ -198,40 +198,40 @@ impl Command for Faulty {
     }
 }
 
-pane_guest::root::export!(Faulty);
+pane_extension::root::export!(Faulty);
 
 /// Root results that fail: the query "error" is refused and "trap" traps.
 /// The query "0 + 0" is answered slowly, after about a second of busy work,
 /// with one result titled "Slow answer". Any other query has no results.
-impl pane_guest::root::Guest for Faulty {
-    async fn results_for(query: String) -> Result<Vec<pane_guest::root::RootResult>, String> {
+impl pane_extension::root::Guest for Faulty {
+    async fn results_for(query: String) -> Result<Vec<pane_extension::root::RootResult>, String> {
         match query.as_str() {
             "error" => Err("the guest refused the query".into()),
-            "file link" => Ok(vec![pane_guest::root::RootResult {
+            "file link" => Ok(vec![pane_extension::root::RootResult {
                 id: "file".into(),
                 title: "A local file".into(),
                 subtitle: None,
-                action: pane_guest::root::RootAction::OpenUrl("file:///etc/hosts".into()),
+                action: pane_extension::root::RootAction::OpenUrl("file:///etc/hosts".into()),
             }]),
             // Files it names by a path of its own, not an id Pane gave it:
             // Pane must list and open neither.
-            "forged file" => Ok(vec![pane_guest::root::RootResult {
+            "forged file" => Ok(vec![pane_extension::root::RootResult {
                 id: "forged".into(),
                 title: "hosts".into(),
                 subtitle: None,
-                action: pane_guest::root::RootAction::OpenFile("/etc/hosts".into()),
+                action: pane_extension::root::RootAction::OpenFile("/etc/hosts".into()),
             }]),
             // Each file of its granted folder under a harmless title: Pane
             // must show the file's own name instead.
-            "spoof" => match pane_guest::files::list_folder()? {
-                pane_guest::files::FolderState::Ready(listing) => Ok(listing
+            "spoof" => match pane_extension::files::list_folder()? {
+                pane_extension::files::FolderState::Ready(listing) => Ok(listing
                     .files
                     .into_iter()
-                    .map(|file| pane_guest::root::RootResult {
+                    .map(|file| pane_extension::root::RootResult {
                         id: file.relative,
                         title: "harmless.txt".into(),
                         subtitle: Some("File in Documents".into()),
-                        action: pane_guest::root::RootAction::OpenFile(file.id),
+                        action: pane_extension::root::RootAction::OpenFile(file.id),
                     })
                     .collect()),
                 _ => Ok(Vec::new()),
@@ -242,11 +242,11 @@ impl pane_guest::root::Guest for Faulty {
                 for step in 0..1u64 << 32 {
                     sum = core::hint::black_box(sum.wrapping_add(step));
                 }
-                Ok(vec![pane_guest::root::RootResult {
+                Ok(vec![pane_extension::root::RootResult {
                     id: "slow".into(),
                     title: "Slow answer".into(),
                     subtitle: Some(format!("after {sum} steps")),
-                    action: pane_guest::root::RootAction::Copy("slow".into()),
+                    action: pane_extension::root::RootAction::Copy("slow".into()),
                 }])
             }
             _ => Ok(Vec::new()),

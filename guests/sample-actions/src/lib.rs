@@ -40,7 +40,7 @@
 //! and "Keep me.txt" in a `pane-sample` folder, which do not exist unless
 //! the user makes them, so a real Recycle Bin reports them both). The
 //! paths are this system's (`places`). "Standard actions" has every
-//! standard action of `pane_guest::actions`: Copy (Enter), a concealed
+//! standard action of `pane_extension::actions`: Copy (Enter), a concealed
 //! Copy, a Copy that keeps the window open, a Copy of a file, Open, Open
 //! With… (the installed applications), Show in Explorer and Move to
 //! Recycle Bin; each closes the window after it acts.
@@ -72,15 +72,15 @@
 use core::cell::Cell;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use pane_guest::actions;
-use pane_guest::alloc::{format, string::String, vec::Vec};
-use pane_guest::commands::{CommandRef, LaunchType, launch, set_subtitle};
-use pane_guest::feedback::{
+use pane_extension::actions;
+use pane_extension::alloc::{format, string::String, vec::Vec};
+use pane_extension::commands::{CommandRef, LaunchType, launch, set_subtitle};
+use pane_extension::feedback::{
     Confirmation, ShownToast, Toast, ToastAction, ToastStyle, confirm, show_hud, show_toast,
 };
-use pane_guest::system::{self, Clip, HostSystem, SystemError};
-use pane_guest::window::{PopToRootType, clear_search, close, pop_to_root};
-use pane_guest::{
+use pane_extension::system::{self, Clip, HostSystem, SystemError};
+use pane_extension::window::{PopToRootType, clear_search, close, pop_to_root};
+use pane_extension::{
     Action, Command, CustomView, FieldValue, FormError, Item, LaunchRecord, List, Modifier,
     NoCustomView, Shortcut, Submenu,
 };
@@ -88,7 +88,7 @@ use pane_guest::{
 use Modifier::{Cmd, Ctrl, Shift};
 
 struct Actions;
-pane_guest::export!(Actions);
+pane_extension::export!(Actions);
 
 /// What the action titled `title` of the item titled `item` shows.
 async fn answer(title: &str, item: &str) -> Result<(), String> {

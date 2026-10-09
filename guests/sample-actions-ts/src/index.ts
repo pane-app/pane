@@ -39,7 +39,7 @@
 // named application, a reveal and a trash of two files ("Delete me.txt" and
 // "Keep me.txt" in a `pane-sample` folder, which do not exist unless the
 // user makes them). The paths are this system's (`places`). "Standard
-// actions" has every standard action of `@pane/extension/system`: Copy
+// actions" has every standard action of `@pane-app/extension/system`: Copy
 // (Enter), a concealed Copy, a Copy that keeps the window open, a Copy of a
 // file, Open, Open With… (the installed applications), Show in Explorer and
 // Move to Recycle Bin; each closes the window after it acts.
@@ -62,7 +62,7 @@
 // web for the selected text and says when nothing is selected. Where Pane
 // cannot do one yet, a failure toast says "Not available here yet" with
 // Pane's reason; a failure is an error the command answers with.
-import type { Action, Command, CustomView, Item, List, Shortcut } from "@pane/extension";
+import type { Action, Command, CustomView, Item, List, Shortcut } from "@pane-app/extension";
 import {
   clearSearchBar,
   closeMainWindow,
@@ -73,7 +73,7 @@ import {
   showToast,
   type Toast,
   type ToastOptions,
-} from "@pane/extension/feedback";
+} from "@pane-app/extension/feedback";
 import { launch } from "pane:extension/commands@0.1.0";
 import {
   copy,
@@ -92,7 +92,7 @@ import {
   showInFileManager,
   showInFileManagerAction,
   trash,
-} from "@pane/extension/system";
+} from "@pane-app/extension/system";
 
 /** What an action may say besides its title. */
 type More = { section?: string; style?: "destructive"; shortcut?: Shortcut };

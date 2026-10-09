@@ -1,5 +1,7 @@
 # 0024: The host runs scheduled extension work by its own clock
 
+**Amended:** [ADR 0041](0041-extensions-compose-through-capabilities-that-pane-brokers.md) (accepted 2026-10-06) adds a condition to "while the code may run". A schedule whose command waits for a required capability or dependency that is missing, disabled, paused or waiting runs nothing. It starts again by itself, from a full interval and without replaying anything, when what it needs returns. ADR 0041 also adds owned timers that an extension registers at run time, which end with their generation. They exist beside the declared schedule and do not replace it. "Deliberately not chosen: guest-side timers" below therefore no longer holds for timers a guest registers itself. Preserve the original text below; use ADR 0041 for waiting and timers.
+
 Status: proposed (for [#47](https://github.com/pane-app/pane/issues/47);
 the specification's Implementation Decision 13 accepts scheduled work as
 an activation model and leaves intervals and the details open)

@@ -5,7 +5,7 @@
 //! The service is the fixture service, a made-up package registry on this
 //! computer (`cargo run -p pane-core --example fixture_service`, port
 //! 8740 by default; `crates/pane-core/tests/support/service.rs`). The
-//! command reaches it through `wasi:http` with [`pane_guest::http::get`]
+//! command reaches it through `wasi:http` with [`pane_extension::http::get`]
 //! and reads its JSON with `serde_json`, an ordinary `no_std` library. Its
 //! address is a setting the command's form changes, so the same sample
 //! works against a service on another port.
@@ -18,11 +18,11 @@
 //! JavaScript and TypeScript samples.
 #![no_std]
 
-use pane_guest::alloc::{borrow::ToOwned, format, string::String, vec, vec::Vec};
-use pane_guest::feedback::{Toast, show_toast};
-use pane_guest::http;
-use pane_guest::search::SearchResult;
-use pane_guest::{
+use pane_extension::alloc::{borrow::ToOwned, format, string::String, vec, vec::Vec};
+use pane_extension::feedback::{Toast, show_toast};
+use pane_extension::http;
+use pane_extension::search::SearchResult;
+use pane_extension::{
     Command, CustomView, Field, FieldKind, FieldValue, Form, FormError, Item, List, NoCustomView,
     TextField, settings,
 };
@@ -36,8 +36,8 @@ const SERVICE: &str = "service";
 const COMMAND: &str = "packages";
 
 struct Packages;
-pane_guest::export!(Packages);
-pane_guest::search::export!(Packages);
+pane_extension::export!(Packages);
+pane_extension::search::export!(Packages);
 
 #[derive(Deserialize)]
 struct Found {
@@ -187,7 +187,7 @@ impl Command for Packages {
     }
 }
 
-impl pane_guest::search::Guest for Packages {
+impl pane_extension::search::Guest for Packages {
     async fn search(command: String, query: String) -> Result<Vec<SearchResult>, String> {
         if command != COMMAND {
             return Err(format!("unknown command: {command}"));

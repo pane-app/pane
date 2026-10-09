@@ -6,8 +6,8 @@ package pane:extension@0.1.0;
 // Every command receives one launch record on every way in: a view command
 // through `render`, a no-view command through `run` (wit/extension.wit).
 // Every command may also launch another command, of its own package or of
-// another, with `launch`. Rust commands use them through pane-guest
-// (`pane_guest::launch`), JavaScript and TypeScript ones through the
+// another, with `launch`. Rust commands use them through pane-extension
+// (`pane_extension::launch`), JavaScript and TypeScript ones through the
 // `launch` argument of `render` and `run` and
 // `pane:extension/commands@0.1.0`'s `launch`. The header follows `package`:
 // comments above it would document the package, which extension.wit

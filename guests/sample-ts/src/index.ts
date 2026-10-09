@@ -18,8 +18,8 @@ import type {
   RootResults,
   Shape,
   ViewEvent,
-} from "@pane/extension";
-import { showToast } from "@pane/extension/feedback";
+} from "@pane-app/extension";
+import { showToast } from "@pane-app/extension/feedback";
 import { waitFor }from "wasi:clocks/monotonic-clock@0.3.0";
 import * as z from "zod/mini";
 

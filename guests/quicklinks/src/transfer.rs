@@ -8,7 +8,7 @@
 //!  {"name": "Notes", "link": "C:\\Notes", "openWith": "app:Zed"}]
 //! ```
 
-use pane_guest::alloc::{
+use pane_extension::alloc::{
     borrow::ToOwned,
     format,
     string::{String, ToString},

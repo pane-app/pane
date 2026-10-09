@@ -8,8 +8,8 @@ package pane:extension@0.1.0;
 // the extension's card in Settings › Extensions. Pane stores them (a
 // password as a local credential, every other value as an extension
 // setting); a command only reads them. Rust commands read them through
-// pane-guest (`pane_guest::preferences::values`, deserialized with serde),
-// JavaScript and TypeScript ones through `@pane/extension/preferences`
+// pane-extension (`pane_extension::preferences::values`, deserialized with serde),
+// JavaScript and TypeScript ones through `@pane-app/extension/preferences`
 // (`getPreferenceValues`). The header follows `package`: comments above it
 // would document the package, which extension.wit already does.
 

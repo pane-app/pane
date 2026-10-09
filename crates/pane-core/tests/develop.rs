@@ -433,7 +433,7 @@ fn a_build_that_fails_keeps_the_working_code_and_shows_its_diagnostics() {
         details.contains(&format!("The whole output is in {}", log.display())),
         "{details:?}"
     );
-    assert_eq!(titles(&dev.launcher), ["Build Dev again"]);
+    assert_eq!(titles(&dev.launcher), ["Build Dev again", "Logs for Dev"]);
     block_on(dev.launcher.activate_selected());
     dev.finished(&identity, 2);
     assert_eq!(dev.probe.runs(), 2);

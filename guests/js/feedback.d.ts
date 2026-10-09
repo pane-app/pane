@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
-// Declarations for `@pane/extension/feedback` (feedback.js): what a
+// Declarations for `@pane-app/extension/feedback` (feedback.js): what a
 // command does after it acts, through `pane:extension/feedback@0.1.0` and
 // `pane:extension/window@0.1.0` (feedback-host.d.ts, wit/feedback.wit).
 // Pane shows nothing of what an action, a run or a search result resolves

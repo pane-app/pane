@@ -1,5 +1,7 @@
 # Extensions reach the network through wasi:http, sent by Pane
 
+**Partly superseded:** the extension commands specification lowers the cap on a guest's linear memory from 512 MiB to 128 MiB, by the user's decision of 2026-10-06 ([Raycast deep dive](../research/raycast-deep-dive.md#decisions-needed), its decision 9). No ADR records it. Everything else here still holds. Preserve the original text below; the guest memory cap is 128 MiB.
+
 Proposed 2026-09-28 by the implementation of #30, revised 2026-09-29 after its review; not yet confirmed by the user. An online search command must reach a web service. Before #30 a guest had no network access at all: the WASI context granted no sockets and no `wasi:http` was linked.
 
 Pane links `wasi:http@0.3.0` (the `client` and `types` interfaces, from wasmtime-wasi-http 49.0.1's experimental p3 implementation) for every command, JS/TS and Rust alike. The requests are sent by Pane's own code in the host (`crates/pane-core/src/http.rs`: hyper over HTTP/1.1, TLS with rustls and the ring provider, trusting the system's certificates through rustls-native-certs), not the crate's default sender, whose bundled root list (webpki-roots) carries a license outside deny.toml. The guest SDKs wrap the client in a small `get` (`pane_guest::http`, `@pane/extension/http`); the standard bindings stay available. A request belongs to the guest call that made it: dropping the call (a stopped search, an ended generation) drops the request and closes its connection, and code of an ended generation cannot start one.

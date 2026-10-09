@@ -1,7 +1,7 @@
 //! Pane's preferences sample: a package that declares preferences of every
 //! type in `pane.json`, for the whole extension and for single commands,
 //! and commands that read their effective values through
-//! `pane_guest::preferences` as types of their own (serde).
+//! `pane_extension::preferences` as types of their own (serde).
 //!
 //! - The package declares an API key (a password, required, no default),
 //!   units (a dropdown, required, with a default), a greeting (text,
@@ -24,10 +24,10 @@
 //! show the same.
 #![no_std]
 
-use pane_guest::alloc::{format, string::String};
-use pane_guest::commands::source_name;
-use pane_guest::feedback::{Toast, show_toast};
-use pane_guest::{
+use pane_extension::alloc::{format, string::String};
+use pane_extension::commands::source_name;
+use pane_extension::feedback::{Toast, show_toast};
+use pane_extension::{
     Command, Item, LaunchRecord, LaunchType, List, NoCustomView, preferences, settings,
 };
 use serde::Deserialize;
@@ -62,7 +62,7 @@ struct ReportPreferences {
 }
 
 struct Preferences;
-pane_guest::export!(Preferences);
+pane_extension::export!(Preferences);
 
 /// "none" for a value that is absent.
 fn or_none(value: &Option<String>) -> &str {

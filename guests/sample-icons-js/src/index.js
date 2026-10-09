@@ -14,8 +14,8 @@
 // icons in the Actions panel, "Copy Name" and "Open Image", and every row's
 // action and each of these tells the user "Chose <title>" in a toast.
 // @ts-check
-import { showToast } from "@pane/extension/feedback";
-import { avatar, favicon, fileIcon, progressRing } from "@pane/extension/icons";
+import { showToast } from "@pane-app/extension/feedback";
+import { avatar, favicon, fileIcon, progressRing } from "@pane-app/extension/icons";
 import { get } from "pane:extension/settings@0.1.0";
 
 /** The setting naming the server the web images come from. */
@@ -53,8 +53,8 @@ async function chose(title) {
  * The row `id` titled `title`, whose action tells the user "Chose <title>".
  * @param {string} id
  * @param {string} title
- * @param {Partial<import("@pane/extension").Item>} more
- * @returns {import("@pane/extension").Item}
+ * @param {Partial<import("@pane-app/extension").Item>} more
+ * @returns {import("@pane-app/extension").Item}
  */
 function row(id, title, more) {
   return { id, title, onAction: () => chose(title), ...more };
@@ -64,14 +64,14 @@ function row(id, title, more) {
  * The action titled `title` with `icon` beside it in the Actions panel,
  * which tells the user "Chose <title>".
  * @param {string} title
- * @param {import("@pane/extension").Icon} icon
- * @returns {import("@pane/extension").Action}
+ * @param {import("@pane-app/extension").Icon} icon
+ * @returns {import("@pane-app/extension").Action}
  */
 function action(title, icon) {
   return { title, icon, onAction: () => chose(title) };
 }
 
-/** @type {import("@pane/extension").Command} */
+/** @type {import("@pane-app/extension").Command} */
 export const command = {
   async render() {
     const server = setting(IMAGE_SERVER, "http://127.0.0.1:8741").replace(/\/+$/, "");

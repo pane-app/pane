@@ -9,8 +9,8 @@ package pane:extension@0.1.0;
 // walking the disk itself (a pure WASI guest has no folders to read). A
 // package whose pane.json sets `"fileIndex": true` may search it; Pane keeps
 // the index open, caught up and watched exactly while such a package is
-// enabled and not paused. Rust commands use it through pane-guest
-// (`pane_guest::file_index`), JS/TS commands as the module
+// enabled and not paused. Rust commands use it through pane-extension
+// (`pane_extension::file_index`), JS/TS commands as the module
 // "pane:extension/file-index@0.1.0" (guests/js/file-index.d.ts), imported
 // only by a command whose package.json sets `"pane": { "fileIndex": true }`.
 // Kept apart from the other files so a command that uses none is unchanged.

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
-// Declarations for `@pane/extension/preferences` (preferences.js): the
+// Declarations for `@pane-app/extension/preferences` (preferences.js): the
 // preferences the command's package declares in `pane.json`, as the user
 // set them in Pane.
 

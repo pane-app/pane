@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
 // Icons, accessories and tooltips of a list's items (#139), and the icon
-// helpers of `@pane/extension/icons` (icons.js). The shapes are the
+// helpers of `@pane-app/extension/icons` (icons.js). The shapes are the
 // tree's (docs/list-tree.md, "Icons" and "Accessories"), which the
 // adapter writes as they are given.
 

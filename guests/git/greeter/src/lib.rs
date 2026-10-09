@@ -10,14 +10,16 @@
 //! error "a name is needed".
 #![no_std]
 
-use pane_guest::alloc::{format, string::String, string::ToString, vec::Vec};
-use pane_guest::feedback::{Toast, show_toast};
-use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, publish};
+use pane_extension::alloc::{format, string::String, string::ToString, vec::Vec};
+use pane_extension::feedback::{Toast, show_toast};
+use pane_extension::{
+    Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, publish,
+};
 use serde_json::{Value, json};
 
 struct Greeter;
-pane_guest::export!(Greeter);
-pane_guest::publish::export!(Greeter);
+pane_extension::export!(Greeter);
+pane_extension::publish::export!(Greeter);
 
 /// Runs the action of the item `item_id`: a toast greeting the user.
 async fn act(item_id: &str) -> Result<(), String> {

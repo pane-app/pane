@@ -7,17 +7,17 @@
 
 use core::cell::Cell;
 
-use pane_guest::alloc::{format, string::String, vec, vec::Vec};
-use pane_guest::feedback::{Toast, show_toast};
-use pane_guest::root::{RootAction, RootResult};
-use pane_guest::{
+use pane_extension::alloc::{format, string::String, vec, vec::Vec};
+use pane_extension::feedback::{Toast, show_toast};
+use pane_extension::root::{RootAction, RootResult};
+use pane_extension::{
     Choice, Command, CustomView, CustomViewInfo, CustomViewRole, Field, FieldKind, FieldValue,
     Form, FormError, Frame, GuestCustomView, Item, Key, List, Platform, Rect, Shape, Text,
     TextField, ViewEvent,
 };
 
 struct Sample;
-pane_guest::export!(Sample);
+pane_extension::export!(Sample);
 
 /// Settings the "validate" item checks; the port is out of range on purpose.
 struct Settings {
@@ -337,13 +337,13 @@ impl Command for Sample {
     }
 }
 
-pane_guest::root::export!(Sample);
+pane_extension::root::export!(Sample);
 
 /// The query that lists [`WEBSITE`], which invoking opens.
 const WEBSITE_QUERY: &str = "pane website";
 const WEBSITE: &str = "https://github.com/hoangvu12/pane";
 
-impl pane_guest::root::Guest for Sample {
+impl pane_extension::root::Guest for Sample {
     /// "reverse <text>" typed into root search lists the text reversed,
     /// which Enter copies, and "pane website" lists Pane's website, which
     /// Enter opens; other queries have no results.

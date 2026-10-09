@@ -23,17 +23,17 @@
 #![no_std]
 
 use futures::FutureExt;
-use pane_guest::alloc::{format, string::String, string::ToString, vec::Vec};
-use pane_guest::feedback::{Toast, show_toast};
-use pane_guest::operations::call;
-use pane_guest::{
+use pane_extension::alloc::{format, string::String, string::ToString, vec::Vec};
+use pane_extension::feedback::{Toast, show_toast};
+use pane_extension::operations::call;
+use pane_extension::{
     Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, publish, settings,
 };
 use serde_json::{Value, json};
 
 struct Fixture;
-pane_guest::export!(Fixture);
-pane_guest::publish::export!(Fixture);
+pane_extension::export!(Fixture);
+pane_extension::publish::export!(Fixture);
 
 /// Each item: (title, the package it calls: a name in `sources` or a source
 /// as written, operation, version, input).

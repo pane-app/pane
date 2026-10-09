@@ -11,8 +11,8 @@ contract.
 ## Contract
 
 Defined in [`wit/extension.wit`](../wit/extension.wit), identically for Rust
-([`pane-guest`](../guests/pane-guest/src/lib.rs)) and JavaScript/TypeScript
-([`@pane/extension`](../guests/js/pane.d.ts)):
+([`pane-extension`](../guests/pane-extension/src/lib.rs)) and JavaScript/TypeScript
+([`@pane-app/extension`](../guests/js/pane.d.ts)):
 
 - An item may carry a `customView` (screen title, accessible label, role;
   the WIT record `custom-view-info`, carried in the list's tree, see
@@ -72,7 +72,7 @@ Defined in [`wit/extension.wit`](../wit/extension.wit), identically for Rust
   contract: a synchronous `render` came back with the frame's first field
   overwritten (the width read as the `value` string's length), and a
   non-`async` implementation of another `async` export traps when called
-  ("The extension crashed: ..."). `@pane/extension` types both methods as
+  ("The extension crashed: ..."). `@pane-app/extension` types both methods as
   returning a `Promise`, so the build's type check (TypeScript, or
   JavaScript with `// @ts-check` and a typed `command`) reports a
   synchronous one before anything runs: "The types returned by 'render()'

@@ -1153,9 +1153,9 @@ function Develop-Sample($sample, $title, $component, $source, $n, $greeting, $br
     Get-ChildItem "guests/$sample" -Exclude target, dist, node_modules | Copy-Item -Destination $copy -Recurse
     if (Test-Path (Join-Path $copy "Cargo.toml")) {
         Copy-Item rust-toolchain.toml $copy
-        $guest = (Resolve-Path "guests/pane-guest").Path -replace '\\', '/'
+        $guest = (Resolve-Path "guests/pane-extension").Path -replace '\\', '/'
         $manifest = Join-Path $copy "Cargo.toml"
-        $text = [IO.File]::ReadAllText($manifest).Replace('path = "../pane-guest"', "path = '$guest'")
+        $text = [IO.File]::ReadAllText($manifest).Replace('path = "../pane-extension"', "path = '$guest'")
         [IO.File]::WriteAllText($manifest, $text)
         Push-Location $copy
         cargo build --release --target wasm32-wasip2 --quiet

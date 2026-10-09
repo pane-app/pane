@@ -1,5 +1,5 @@
 //! Pane's programs sample: a command that runs programs installed on the
-//! system ([`pane_guest::programs`], ADR 0033). Its program is `pane-echo`
+//! system ([`pane_extension::programs`], ADR 0033). Its program is `pane-echo`
 //! (guests/helpers/echo), named by its bare name, so Pane finds it on the
 //! user's search path at the time of the call; the tests put the folder
 //! holding it on the search path they give Pane.
@@ -48,10 +48,10 @@ use core::future::Future;
 use core::pin::pin;
 use core::task::Poll;
 
-use pane_guest::alloc::{format, string::String, vec::Vec};
-use pane_guest::feedback::{Toast, show_toast};
-use pane_guest::programs::{self, Options, ProgramError, ProgramErrorKind};
-use pane_guest::{Command, Item, LaunchRecord, List, NoCustomView, settings};
+use pane_extension::alloc::{format, string::String, vec::Vec};
+use pane_extension::feedback::{Toast, show_toast};
+use pane_extension::programs::{self, Options, ProgramError, ProgramErrorKind};
+use pane_extension::{Command, Item, LaunchRecord, List, NoCustomView, settings};
 
 /// The program every item runs, by its bare name.
 const ECHO: &str = "pane-echo";
@@ -73,7 +73,7 @@ const ARGS: [&str; 7] = [
 ];
 
 struct ProgramsSample;
-pane_guest::export!(ProgramsSample);
+pane_extension::export!(ProgramsSample);
 
 /// `<kind>: <message>`, such as "not-found: there is no program …".
 fn explain(error: ProgramError) -> String {

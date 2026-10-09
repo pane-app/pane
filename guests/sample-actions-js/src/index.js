@@ -39,7 +39,7 @@
 // named application, a reveal and a trash of two files ("Delete me.txt" and
 // "Keep me.txt" in a `pane-sample` folder, which do not exist unless the
 // user makes them). The paths are this system's (`places`). "Standard
-// actions" has every standard action of `@pane/extension/system`: Copy
+// actions" has every standard action of `@pane-app/extension/system`: Copy
 // (Enter), a concealed Copy, a Copy that keeps the window open, a Copy of a
 // file, Open, Open With… (the installed applications), Show in Explorer and
 // Move to Recycle Bin; each closes the window after it acts.
@@ -71,7 +71,7 @@ import {
   setSubtitle,
   showHUD,
   showToast,
-} from "@pane/extension/feedback";
+} from "@pane-app/extension/feedback";
 import { launch } from "pane:extension/commands@0.1.0";
 import {
   copy,
@@ -90,7 +90,7 @@ import {
   showInFileManager,
   showInFileManagerAction,
   trash,
-} from "@pane/extension/system";
+} from "@pane-app/extension/system";
 
 /**
  * Toasts `yes` or `no`, as the user answered.
@@ -106,8 +106,8 @@ function said(answer, yes, no) {
  * The action titled `title` of the item titled `item`: it shows both.
  * @param {string} title
  * @param {string} item
- * @param {{ section?: string, style?: "destructive", shortcut?: import("@pane/extension").Shortcut }} [more]
- * @returns {import("@pane/extension").Action}
+ * @param {{ section?: string, style?: "destructive", shortcut?: import("@pane-app/extension").Shortcut }} [more]
+ * @returns {import("@pane-app/extension").Action}
  */
 function action(title, item, more = {}) {
   return answering(title, title, item, more);
@@ -119,8 +119,8 @@ function action(title, item, more = {}) {
  * @param {string} title
  * @param {string} said
  * @param {string} item
- * @param {{ section?: string, style?: "destructive", shortcut?: import("@pane/extension").Shortcut }} [more]
- * @returns {import("@pane/extension").Action}
+ * @param {{ section?: string, style?: "destructive", shortcut?: import("@pane-app/extension").Shortcut }} [more]
+ * @returns {import("@pane-app/extension").Action}
  */
 function answering(title, said, item, more = {}) {
   return {
@@ -145,7 +145,7 @@ function windowed(shown) {
  * The "Window" item's action titled `title`, which runs `run`.
  * @param {string} title
  * @param {() => boolean} run
- * @returns {import("@pane/extension").Action}
+ * @returns {import("@pane-app/extension").Action}
  */
 function windowAction(title, run) {
   return {
@@ -159,13 +159,13 @@ function windowAction(title, run) {
 /**
  * The upload toast "Start Upload" showed, which "Finish Upload" and "Hide
  * Toast" change.
- * @type {import("@pane/extension/feedback").Toast | null}
+ * @type {import("@pane-app/extension/feedback").Toast | null}
  */
 let upload = null;
 
 /**
  * Starts the upload: an animated toast, remembered.
- * @returns {import("@pane/extension/feedback").Toast}
+ * @returns {import("@pane-app/extension/feedback").Toast}
  */
 function startUpload() {
   const shown = showToast({ style: "animated", title: "Uploading…" });
@@ -175,7 +175,7 @@ function startUpload() {
 
 /**
  * The upload's toast once it is done: a success with Open and Retry.
- * @returns {import("@pane/extension/feedback").ToastOptions}
+ * @returns {import("@pane-app/extension/feedback").ToastOptions}
  */
 function uploaded() {
   return {
@@ -242,7 +242,7 @@ function places() {
  * it is done in a toast.
  * @param {string} title
  * @param {() => void} run
- * @returns {import("@pane/extension").Action}
+ * @returns {import("@pane-app/extension").Action}
  */
 function systemAction(title, run) {
   return {
@@ -256,7 +256,7 @@ function systemAction(title, run) {
 
 /**
  * "System": each host function on its own.
- * @returns {import("@pane/extension").Item}
+ * @returns {import("@pane-app/extension").Item}
  */
 function systemItem() {
   return {
@@ -297,7 +297,7 @@ function systemItem() {
 /**
  * "Standard actions": every standard action, each closing the window after
  * it acts but the one that keeps it open.
- * @returns {import("@pane/extension").Item}
+ * @returns {import("@pane-app/extension").Item}
  */
 function standardItem() {
   const { file, trash: [deleteMe] } = places();
@@ -356,7 +356,7 @@ function pasteTitle() {
 
 /**
  * "Paste": the standard Paste, the front application and the selected text.
- * @returns {import("@pane/extension").Item}
+ * @returns {import("@pane-app/extension").Item}
  */
 function pasteItem() {
   return {
@@ -413,7 +413,7 @@ let listsAsked = 0;
 
 /**
  * "Delta note": its submenus.
- * @returns {import("@pane/extension").Item}
+ * @returns {import("@pane-app/extension").Item}
  */
 function delta() {
   return {
@@ -472,7 +472,7 @@ function delta() {
   };
 }
 
-/** @type {import("@pane/extension").Command} */
+/** @type {import("@pane-app/extension").Command} */
 export const command = {
   async render() {
     return {

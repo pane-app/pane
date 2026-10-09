@@ -11,8 +11,8 @@
 // the JavaScript one. "fail" is refused, to show how an error looks;
 // "crash" crashes on purpose, and three crashes within five minutes pause
 // the extension.
-import type { Command, LaunchRecord } from "@pane/extension";
-import { showToast } from "@pane/extension/feedback";
+import type { Command, LaunchRecord } from "@pane-app/extension";
+import { showToast } from "@pane-app/extension/feedback";
 
 /** What Echo says when it was sent no text. */
 const NOTHING =

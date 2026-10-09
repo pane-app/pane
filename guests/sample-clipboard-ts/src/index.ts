@@ -15,9 +15,9 @@
 // deletes it.
 import * as history from "pane:extension/clipboard-history@0.1.0";
 import type { Capture, Entry, HistoryStatus } from "pane:extension/clipboard-history@0.1.0";
-import type { Command, CustomView, FieldValue, Form, Item, List } from "@pane/extension";
-import { closeMainWindow, showHUD, showToast } from "@pane/extension/feedback";
-import { NotAvailableError, PASTE_FALLBACK, paste } from "@pane/extension/system";
+import type { Command, CustomView, FieldValue, Form, Item, List } from "@pane-app/extension";
+import { closeMainWindow, showHUD, showToast } from "@pane-app/extension/feedback";
+import { NotAvailableError, PASTE_FALLBACK, paste } from "@pane-app/extension/system";
 
 /** The longest title of a kept item, in characters. */
 const TITLE_CHARS = 80;

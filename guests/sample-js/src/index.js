@@ -6,7 +6,7 @@
 // (guests/sample-rust) and the TypeScript sample. The JSDoc types let
 // TypeScript check this file against Pane's contract; they are optional.
 // @ts-check
-import { showToast } from "@pane/extension/feedback";
+import { showToast } from "@pane-app/extension/feedback";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
 import * as z from "zod/mini";
 
@@ -24,7 +24,7 @@ const GREETINGS = { hello: "Hello", morning: "Good morning", welcome: "Welcome" 
 
 /**
  * The "form" item's form: a name to greet and a greeting to choose.
- * @type {import("@pane/extension").Form}
+ * @type {import("@pane-app/extension").Form}
  */
 const GREETING_FORM = {
   title: "Greet someone",
@@ -102,7 +102,7 @@ class ColorPicker {
     const [hue, ...shades] = COLORS[this.column];
     const chosen = shades[this.row];
     const shade = SHADES[this.row];
-    /** @type {import("@pane/extension").Shape[]} */
+    /** @type {import("@pane-app/extension").Shape[]} */
     const shapes = [
       // A light frame around the chosen swatch.
       { tag: "rect", val: { x: this.column * STEP, y: this.row * STEP, width: STEP, height: STEP, fill: 0xf1f3f5 } },
@@ -127,7 +127,7 @@ class ColorPicker {
     };
   }
 
-  /** @param {import("@pane/extension").ViewEvent} event */
+  /** @param {import("@pane-app/extension").ViewEvent} event */
   async handleEvent(event) {
     switch (event.tag) {
       case "key":
@@ -207,7 +207,7 @@ async function outcome(itemId) {
   }
 }
 
-/** @type {import("@pane/extension").Command} */
+/** @type {import("@pane-app/extension").Command} */
 export const command = {
   async render() {
     return {
@@ -267,7 +267,7 @@ export const command = {
   },
 };
 
-/** @type {import("@pane/extension").RootResults} */
+/** @type {import("@pane-app/extension").RootResults} */
 export const rootResults = {
   // "reverse <text>" typed into root search lists the text reversed, which
   // Enter copies, and "pane website" lists Pane's website, which Enter

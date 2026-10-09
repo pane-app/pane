@@ -6,14 +6,14 @@
 // search. The service is the fixture service, a made-up package registry on
 // this computer (`cargo run -p pane-core --example fixture_service`, port
 // 8740 by default); the command reaches it with `get` from
-// `@pane/extension/http` (`wasi:http` underneath) and its address is a
+// `@pane-app/extension/http` (`wasi:http` underneath) and its address is a
 // setting the command's form changes. A search Pane no longer needs is
 // stopped where it waits; an unreachable or failing service is an error
 // shown in place of results, not a crash. Items, toasts and errors match
 // the Rust sample (guests/sample-search) and the TypeScript one.
 
-import { showToast } from "@pane/extension/feedback";
-import { get as fetchUrl } from "@pane/extension/http";
+import { showToast } from "@pane-app/extension/feedback";
+import { get as fetchUrl } from "@pane-app/extension/http";
 import { get, set } from "pane:extension/settings@0.1.0";
 
 /** The address used until the user sets another. */
@@ -72,7 +72,7 @@ async function fetchJson(path) {
   }
 }
 
-/** @type {import("@pane/extension").Form} */
+/** @type {import("@pane-app/extension").Form} */
 const SERVICE_FORM = {
   title: "Service address",
   fields: [{ id: "address", label: "Address", kind: { tag: "text", val: { placeholder: DEFAULT_SERVICE } } }],
@@ -107,7 +107,7 @@ async function outcome(itemId) {
   return `${details.name} ${details.version} (${details.license}): ${details.summary}`;
 }
 
-/** @type {import("@pane/extension").Command} */
+/** @type {import("@pane-app/extension").Command} */
 export const command = {
   async render() {
     return {
@@ -143,7 +143,7 @@ export const command = {
   },
 };
 
-/** @type {import("@pane/extension").CommandSearch} */
+/** @type {import("@pane-app/extension").CommandSearch} */
 export const commandSearch = {
   async search(command, query) {
     if (command !== COMMAND) throw new Error(`unknown command: ${command}`);

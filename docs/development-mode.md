@@ -18,8 +18,8 @@ package would.
 
 1. Build it once, from the repository root:
    `cd guests/hello-rust && cargo build --release --target wasm32-wasip2`.
-   (Outside this repository, copy the folder, point `pane-guest`'s `path`
-   in `Cargo.toml` at `guests/pane-guest` of a Pane checkout and copy
+   (Outside this repository, copy the folder, point `pane-extension`'s `path`
+   in `Cargo.toml` at `guests/pane-extension` of a Pane checkout and copy
    `rust-toolchain.toml` beside it.)
 2. `cargo run -p pane -- --install guests/hello-rust`, and Enter on
    **Install**.
@@ -166,6 +166,30 @@ Development is turned on per installed, enabled package, from its **Develop
    another screen (an open command, a form, a query's results) it does not
    replace what that screen says; the newest is shown when the user returns
    to Settings › Extensions or root search.
+7. **The extension log.** While the package is developed, what its code
+   writes to standard output and standard error, and Pane's own messages
+   about it (each status above, its crashes with their backtraces, calls
+   that stopped responding, pauses), are kept as its extension log: the
+   most recent 5,000 lines in memory, which the launcher hands to whoever
+   follows the log, and every line in `extensions/develop/<hash>/extension.log`
+   beside the build's log, rotated at 5 MiB into `extension.log.1`. The
+   file starts afresh with each development session and is kept when it
+   ends. A package not developed keeps only its most recent 500 lines in
+   memory, never on disk. Lines are cut at 4 KiB, and a package writing
+   more than 1,000 lines in a second loses the rest of that second, with a
+   note of how many ([printing and logging](../guests/README.md#printing-and-logging)).
+8. **Logs for <title>.** The package's Actions menu in Settings ›
+   Extensions offers **Logs for <title>** beside Stop developing, and so do
+   a failed build's details; it opens the log in the launcher window, which
+   comes forward. Each line shows its local time, its level (errors and
+   warnings in their colours, debug lines muted) and who wrote it: the
+   extension, or Pane, whose lines carry an accent mark. The list follows
+   new lines while it is at its end, the newest selected; scrolling up or
+   moving the selection up stops following, and End, the last line or
+   scrolling back to the end follows again. Enter (or Ctrl+C) copies the
+   selected line and Ctrl+Shift+C every line, as the log file writes them;
+   Ctrl+L clears the lines Pane keeps, not the file; Ctrl+O opens the log
+   file (Command instead of Ctrl on macOS).
 
 Only the developed package is built and reloaded; Pane and every other
 package keep running.
@@ -261,15 +285,21 @@ These are implementation choices of #12/#13, not user decisions:
   build is refused. The Rust tests run in `cargo xtask ci`; the JavaScript
   and TypeScript ones need the JS toolchain and run with
   `PANE_TEST_JS_BUILDS=1` (CI's JS/TS job sets it).
-- Unit tests in [`develop.rs`](../crates/pane-core/src/develop.rs): the
-  adapters' commands (paths with spaces quoted) and ignored paths, a folder
-  without a known build or tool, the first error (not `thiserror`),
-  cargo's artifact messages, which variables are removed, the bounded
-  output and its log, whole lines from both pipes, and (Unix) stopping a
-  command kills what it started at once, a command whose child keeps the
-  pipes open still returns, and one whose daemon (outside the group) keeps
-  them open returns after the 2-second drain.
-- Unit tests in [`sources.rs`](../crates/pane-core/src/launcher/developing/sources.rs):
+- Unit tests in Pane's core's [`develop.rs`](../crates/pane-core/src/develop.rs):
+  the adapters' commands (paths with spaces quoted) and ignored paths, a
+  folder without a known build or tool, and staging `pane.json` with this
+  system's helper files.
+- Unit tests in the shared build crate's
+  [`build.rs`](../crates/pane-build/src/build.rs) (`pane-build`, which
+  holds the builds, the session that runs them after each save and the
+  process trees; `pane-ext` builds with it too, ADR 0047): a package built
+  once returns its staged components or why it failed, the first error
+  (not `thiserror`), cargo's artifact messages, which variables are
+  removed, the bounded output and its log, whole lines from both pipes,
+  and (Unix) stopping a command kills what it started at once, a command
+  whose child keeps the pipes open still returns, and one whose daemon
+  (outside the group) keeps them open returns after the 2-second drain.
+- Unit tests in [`sources.rs`](../crates/pane-build/src/sources.rs):
   what was already there, a read and a change of permissions are not
   saves; other bytes of the same size written at once are, once; a file or
   folder appearing or going is, and a folder that appears is watched;

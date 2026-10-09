@@ -1,5 +1,7 @@
 # 0025: A continuing service cycles at its own cadence
 
+**Amended:** [ADR 0041](0041-extensions-compose-through-capabilities-that-pane-brokers.md) (accepted 2026-10-06) adds a condition to "while the package's code may run". A service whose command waits for a required capability or dependency that is missing, disabled, paused or waiting runs no cycle. It starts again by itself, at once, when what it needs returns. On a Reload or an Update, its task may hand its state to the new code through ADR 0041's opt-in state handoff. Preserve the original text below; use ADR 0041 for waiting and handoff.
+
 Status: proposed (for [#48](https://github.com/pane-app/pane/issues/48);
 the specification's Implementation Decision 13 accepts "explicit ongoing
 services" as an activation model and leaves their shape open)

@@ -6,8 +6,8 @@ package pane:extension@0.1.0;
 // opens for an extension (a pure WASI guest cannot), and root results an
 // extension supplies ahead of the query, which root search matches by title
 // like commands. Kept apart from the other files so a command that uses
-// neither is unchanged. Rust commands use them through pane-guest
-// (`pane_guest::applications`, `pane_guest::indexed::export!`), JS/TS
+// neither is unchanged. Rust commands use them through pane-extension
+// (`pane_extension::applications`, `pane_extension::indexed::export!`), JS/TS
 // commands as the module "pane:extension/applications@0.1.0"
 // (guests/js/applications.d.ts) and by exporting `indexedResults` with
 // `"pane": { "indexedResults": true }` in their package.json.

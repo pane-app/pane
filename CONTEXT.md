@@ -45,8 +45,16 @@ An installed extension's page in Pane's Settings, under the sidebar's Extensions
 _Avoid_: Manage extensions screen (removed), extension card, extension list (the core's list of operations, shown as a screen only in tests)
 
 **Extension settings**:
-Values an installed package's commands save through Pane, owned by its package identity and kept while it is disabled, updated or Pane is stopped.
-_Avoid_: Preferences, cache
+Values Pane keeps for an installed package: those its commands save, and the values the user set for its preferences (a password's is a local credential instead). They are owned by its package identity and kept while it is disabled, updated or Pane is stopped.
+_Avoid_: Preferences (the declared fields whose values these include), cache
+
+**Preference**:
+A typed field (text, password, checkbox, dropdown, file, folder or application) a package manifest declares for the whole package or for one command, whose value the user sets in Pane, on the extension's card in Settings or at setup, and the command reads. A preference can be required, and a declared default satisfies that.
+_Avoid_: Extension settings (where the value is kept, beside what commands save), option, configuration
+
+**Setup**:
+The screen Pane shows before a user-initiated launch of a command whose required preferences have neither a value nor a default: only those fields, with the package's `HELP.md` beside them. Submitting saves the values and launches the command; cancelling launches nothing. A launch that is not the user's does not run instead, and the command's row says it needs setup.
+_Avoid_: First setup (Pane acquiring its default extensions), onboarding, configuration screen
 
 **Extension data**:
 Values an installed package's commands keep through Pane, of four kinds (settings, content, cache and local credentials), owned by its package identity; the kind decides what a management action such as clearing its cache removes. Pane removes them itself, never by running the extension.
@@ -89,8 +97,16 @@ What invoking a root result reaches, shown on its row: Command, Application, Fil
 _Avoid_: Type, category
 
 **Result section**:
-A labelled run of root results: "Commands" over a blank query's results, "Results" with their count over a query's, then "Fallbacks"; a run of computed answers sits under the title of the command that computed them ("Calculator"), and the files found for the query, with the row searching them all, under "Files". Sections only label the list; they never reorder or filter it, and none claims recent use.
+A labelled run of root results: "Commands" over a blank query's commands and applications, below the pinned home; "Results" with their count over a query's, then "Fallbacks"; a run of computed answers sits under the title of the command that computed them ("Calculator"), and the files found for the query, with the row searching them all, under "Files". Sections only label the list; they never reorder or filter it, and none claims recent use: learning orders the list (frecency orders the blank query's), never a section.
 _Avoid_: Group (a shortcut group is a Settings term), suggestions
+
+**Learned query**:
+A query the user had typed when they chose a root result from root search, which Pane remembers by the result's identity (the last few distinct ones), never by its title or row. Typing it again ranks that result above how well titles match, after only an alias and an exact title, while the result was used recently (ADR 0030).
+_Avoid_: Search history (the queries Up recalls), alias (the user's own word for a command), suggestion
+
+**Frecency**:
+A root result's score of uses from root search that decays with time (halving every ten days, never below an unused result's), kept by identity in Pane's own record. It breaks ties between equally good matches and orders the blank query's commands and applications. A global hotkey's use, a computed answer and a file earn none.
+_Avoid_: Recent use, popularity, usage count
 
 **Quick slot**:
 One pin in the ordered list of root results the user pins to root search's pinned home, to invoke with one click or, for the first five, its Ctrl+digit chord (see Number hints). The list has no gaps and no limit: pinning adds at the end, unpinning closes the gap, moving swaps a pin with its neighbour. It holds the result's identity — a registered command by its id, or an indexed result under the command that supplies it — never its row, title or a computed answer, and Pane keeps the list as its own record (`quick-slots.json`), not extension data. A target that is disabled, paused, missing or not listed yet keeps its slot and says why it cannot run.
@@ -98,7 +114,7 @@ _Avoid_: Favorite, bookmark, shortcut, dock
 
 **Pinned home**:
 What root search shows above its results while the query is blank: the "Pinned" label and the quick slots, as a five-column grid of tiles that wraps, with a "+ Pin" hint in the last row's next free cell (horizontal), or as result rows of the pinned results only, nothing without pins (vertical), as the Launcher page chooses. A query hides it; clearing the query brings it back.
-_Avoid_: Start page, dashboard, recents (Pane shows no recent use)
+_Avoid_: Start page, dashboard, recents (frecency orders the results below it, but no section shows recent use)
 
 **Number hints**:
 The numbers the launcher's items show while Ctrl is held alone for a moment, naming the Ctrl+digit chord that picks each: under the pinned home, the first five quick slots in order from 1 (later ones have none) and then the first rows, up to 9; or 1 to 9 the first rows of a query's results or a command's list. They show only while Ctrl is held; at rest nothing names the chords.
@@ -109,8 +125,12 @@ How much of the launcher shows while root search's query is blank, as the Launch
 _Avoid_: Size, density
 
 **Actions panel**:
-The panel, opened from the launcher's footer or its Open actions binding, that lists what can be done with root search's selected result: its primary action, then pinning it to the quick slots or unpinning it, then the alias and hotkey configuration of an installed command. A quick slot has one of its own, opening, unpinning and moving it. It lists only operations Pane can perform, and holds the result it opened for.
+The panel, opened from the launcher's footer or its Open actions binding, that lists what can be done with the selected root result or item. For root search's result: its primary action, then pinning it to the quick slots or unpinning it, then the alias and hotkey configuration of an installed command. For an item of a command's list: the item's actions, with their sections, submenus and shortcuts, filtered as the user types. A quick slot has one of its own, opening, unpinning and moving it. It lists only what can be done, and holds the result or item it opened for.
 _Avoid_: Context menu, app menu (the Pane menu is separate)
+
+**Action**:
+One thing an item of a command's list, or a toast, offers to do. It has a title, an optional icon, shortcut and section, a default or destructive style, and either a callback the command answers or a submenu. The item's first action is its primary action (Enter) and its second the secondary action (Ctrl+Enter); the Actions panel lists them all.
+_Avoid_: Operation (published for other extensions to call), command (what the user opens), menu item
 
 **Appearance**:
 How Pane's windows look, as the user chooses it on Settings' Appearance page: a theme (System, which follows the system's light or dark appearance as it changes, Light or Dark) and a material (Glass, a translucent tint over the system's blur where the platform provides it, or Solid, an opaque window), and, for the launcher alone, a background image with its background effect. Both windows render a choice at once, and Pane keeps it in its own settings record; a development override (`PANE_THEME`, `PANE_MATERIAL`) wins for its process, disables the choices and is never saved. The page's preview is a picture of the launcher in the appearance in effect, not the user's results. Accent colors, blur and tint strength, density, tip visibility and pinned visibility outside compact mode are not Pane settings.
@@ -141,7 +161,7 @@ A computed result whose action copies text, such as the calculator's answer: roo
 _Avoid_: Calculation, conversion, answer card (the card is how it is drawn)
 
 **No-results notice**:
-What root search shows above its fallbacks when nothing else is listed for a query that is not blank: the query, and what the user can do — pick a fallback, install an extension, or offer a command as one on its extension's page in Settings. It selects nothing: a fallback is chosen only by the user.
+What root search shows above its fallbacks when nothing else is listed for a query that is not blank: the query, and what the user can do — pick a fallback, install an extension, or offer a command as one on its extension's page in Settings. The notice selects nothing itself; root search preselects the first fallback below it, so Enter sends it the query (ADR 0031).
 _Avoid_: Empty state (a screen's own line when it has no rows), zero state
 
 **File index**:
@@ -158,11 +178,11 @@ _Avoid_: Limit (a valve is a reaction to what happens, not a bound the user sets
 
 **Granted folder**:
 The one folder the user grants a package through Pane's own "Choose folder…" row, which Pane records itself (not as extension data) and lists for that package's commands under the scan policy; they name its files only by the ids Pane gave them, and Pane opens one after checking it again. No longer what file search uses (that is the file index, since #175): it stays for a package that wants an exhaustive listing of one folder the user chooses.
-_Avoid_: Search scope, library, preopen, the extension's folder setting
+_Avoid_: Search scope, index scope (the file index's), library, preopen, the extension's folder setting
 
 **Scan policy**:
 Pane's fixed bounds on listing a granted folder, the same on every system: regular files only, breadth first in name order, at most 8 folders deep, 5,000 files and 20,000 entries, skipping hidden entries, links and unreadable subfolders; a listing that reaches a bound or skips a subfolder says it is partial. A listing is kept for one visit of root search. It bounds a granted folder only, not the file index.
-_Avoid_: Indexer, crawl, whole-disk search
+_Avoid_: Index scope (the file index's rules), crawl, whole-disk search
 
 **Indexed result**:
 A root result an extension command supplies ahead of the query, such as an installed application; Pane asks for them once root search is used, keeps them, and matches and ranks them by title like commands, for a query that is not blank. It may also carry alternate titles, matched as its title is, and keywords, matched as its subtitle is; its row still shows its title.
@@ -209,12 +229,40 @@ A word the user gives an installed command in Pane; typing it in root search lis
 _Avoid_: Keyword (an author's search term), shortcut, nickname
 
 **Fallback**:
-A query-taking command the user chose to have offered below root search's results for any text typed; it is never chosen by itself, so the text reaches it only when the user invokes it.
+A query-taking command the user chose to have offered below root search's results for any text typed. Typing sends it nothing; the text reaches it only when the user invokes it. When a query lists nothing but fallbacks, root search preselects the first, so Enter sends it the text (ADR 0031).
 _Avoid_: Default action, catch-all
 
 **Query-taking command**:
-An extension command that declares it takes a query: text typed in root search, which Pane sends it only when the user invokes it through its alias or as a fallback, and whose answer Pane shows.
-_Avoid_: Argument (Raycast's per-field input), search provider (a provider is asked while the user types)
+An extension command that declares it takes a query: text typed in root search, which Pane sends it only when the user invokes it through its alias or as a fallback, as the fallback text of its launch record (and its first text argument, when it declares arguments).
+_Avoid_: Argument (one declared field, which the text may fill), search provider (a provider is asked while the user types)
+
+**Argument**:
+One of up to three typed fields (text, password or dropdown) a command declares for input before each run. Root search shows them after the query, and a launch without them asks for the required ones that are empty. Their values reach the command in its launch record; a password's is never recorded.
+_Avoid_: Query (root search's text), parameter, preference (set once, not for each run)
+
+**Launch record**:
+The one record a command receives on every way in: how it was launched (by the user or in the background, and from where), its arguments' values, any fallback text sent through its alias or as a fallback, and any context another command passed when launching it.
+_Avoid_: Launch props (Raycast's name), arguments (one part of it)
+
+**Command mode**:
+What a command declares in its package manifest entry: `view`, it opens a screen, or `no-view`, invoking it runs it and opens none (ADR 0037). Pane reads it before running anything, to decide at Enter whether to open a screen.
+_Avoid_: Command type, menu-bar command (not offered)
+
+**No-view command**:
+A command whose mode is `no-view`: invoking it, by Enter, its alias, a fallback, its global hotkey or another command, calls its run entry point with its launch record and opens no screen; its hotkey runs it without showing Pane's window. What follows is what it asks for through host functions.
+_Avoid_: Background command (a background launch is a kind of launch), script command, action
+
+**Host function**:
+A function Pane gives every command, whatever its mode, through which the command decides what happens after it runs: close the window, pop to root, clear the search field, show a HUD or a toast, ask for confirmation, use the clipboard, paste into the previous application, open or reveal a path or URL, move to the Recycle Bin, launch another command or run a system program (ADR 0037, ADR 0033). Pane does nothing after a run that the command did not ask for.
+_Avoid_: Built-in outcome, convenience action (an SDK helper composed of host functions)
+
+**Toast**:
+A short message a command shows in the launcher's footer, where the status line was: animated (in progress), success or failure, updatable, with up to two actions. Success and failure toasts hide after 3 seconds, pausing while hovered or focused; an animated one stays until updated or hidden. While the window is hidden, a toast is shown as a HUD.
+_Avoid_: Status line (what it replaces), notification (the system's), HUD (outside the launcher)
+
+**HUD**:
+A small message in a window of its own over other applications, which never takes focus: showing one closes the launcher first, and it leaves after 1.2 seconds, or 3 for a failure.
+_Avoid_: Toast (inside the launcher), notification (the system's), tooltip
 
 **Command search**:
 The search field an opened command has when it searches as the user types, such as one searching an online service; Pane sends the text typed there only to that command, stops a search the text has replaced, and never asks the command from root search.
@@ -289,7 +337,7 @@ Replacing the managed copy of an installed package from its source while keeping
 _Avoid_: Reinstall
 
 **Reload**:
-Replacing an installed package's code from its source folder while Pane and other packages keep running: the replacement is checked as an install would check it, then replaces the managed copy, the old instances stop and the new code starts. Settings are kept; live state is not carried over.
+Replacing an installed package's code from its source folder while Pane and other packages keep running: the replacement is checked as an install would check it, then replaces the managed copy, the old instances stop and the new code starts. Settings are kept; live state is not carried over, except a snapshot a package opts in to hand over to its new code (ADR 0041).
 _Avoid_: Restart, hot swap, update (an update does not start the new code)
 
 **Automatic updates**:
@@ -324,6 +372,10 @@ _Avoid_: Build failure, rollback
 An enabled extension Pane stopped running after a failure attributable to it: it could not start, or it crashed or stopped responding three times within five minutes (an error it answers with is not a failure, nor a call stopped because a generation ended). Its commands stay listed, saying why they do not run; its saved data is kept, and the pause holds across restarts until the user retries, reloads, updates, disables or enables it. Distinct from a disabled extension, which is the user's choice.
 _Avoid_: Crashed extension, quarantined, disabled (by Pane)
 
+**Waiting command**:
+A command of an enabled package that needs a required capability or required dependency which is missing, disabled, paused or waiting itself. It stays listed and says what it needs ("Needs DeepL Translate, which is disabled"). Pane runs none of its work: not its view, schedule, continuing service, or root or indexed results. A capability its package provides waits with it. It comes back by itself when what it needs returns (ADR 0041). Waiting ends no generation and is not a failure. An optional capability or dependency never makes a command wait.
+_Avoid_: Pending (Cordis's word), paused extension (stopped after its own failure), disabled extension (the user's choice), unavailable action (excluded by its platforms)
+
 **Extension runtime**:
 The part of Pane that runs every installed extension's code (the Wasmtime engine; the runtime is a thread in Pane's process today), shared by all extensions; the window, root search's own rows and the extension pages in Settings do not depend on it.
 _Avoid_: Engine (one part of it)
@@ -344,6 +396,10 @@ _Avoid_: Unresponsive call (an extension's own), freeze of Pane (the window keep
 One run of an installed package's code, from when it is installed, enabled or Pane starts until it is disabled, paused or its code is replaced by a reload or an update. Every call into the package belongs to the generation current when it was asked for, and is stopped when that generation ends; its late result is discarded.
 _Avoid_: Version (a package's version is its manifest's), session, instance (one generation can start several), screen or search epoch (the launcher's counters of screens and searches, which decide whether an answer is shown; a search also cancels its own pending calls for computed results)
 
+**Owned registration**:
+Something an extension registers imperatively at run time, held as a WIT resource it owns. Examples are a dynamic root item or command, a timer, a subscription, a watcher, and a provider registered for a capability its manifest declares. Dropping the resource undoes the registration, and so does the instance holding it going away or its generation ending (ADR 0041). Pane tags each registration with its owner and generation and refuses a handle of an ended generation. Declarations in `pane.json` are contributions, not owned registrations.
+_Avoid_: Listener, hook, effect (Cordis's word), contribution (declared in the manifest)
+
 **Scheduled work**:
 Work Pane runs for an installed package without the user asking: a command's `pane.json` entry declares a schedule, an interval and the item whose action runs, and Pane runs that action each interval while the package's code may run, taking the generation current when the run is due. A disable, an uninstall, a pause or a code replacement ends it; enabling the package, replacing its code or restarting Pane starts it again, from a full interval, never replaying work that fell due meanwhile.
 _Avoid_: Timer, cron job, trigger, background service (an explicit continuing service is another activation model), watcher
@@ -361,7 +417,7 @@ An action whose supported platforms exclude the current system; Pane keeps it li
 _Avoid_: Hidden action, disabled extension
 
 **Operation**:
-A named, versioned function an installed package publishes in its package manifest for other extensions to call through Pane, with JSON input and result; only published operations are callable, so a command is never one implicitly.
+A named, versioned function an installed package publishes in its package manifest for other extensions to call through Pane, with JSON input and result, addressed by the package or as part of a capability it provides; only published operations are callable, so a command is never one implicitly.
 _Avoid_: API, command (a command is what the user opens), endpoint
 
 **Dependency**:
@@ -380,6 +436,14 @@ _Avoid_: Reverse dependency, child extension
 A dependency a package uses only when the user installed it; installing the package lists it but never installs it.
 _Avoid_: Soft dependency, suggestion, recommended extension
 
+**Capability**:
+A named, versioned set of operations, written `<namespace>:<name>@<major>` (such as `acme:translate@1`), that any installed package may provide and other packages use by its name rather than by a package's identity. Pane brokers every call to it: to the provider the user chose in Settings (until the user chooses, the first one installed, which may be the default a consumer names for Pane to install when none is), or to all of them when the consumer declares that it uses every provider. A use is required or optional, like a dependency. A required capability without an available provider makes its consumer's commands wait (ADR 0041). Pane keeps no registry of namespaces, and the major version changes when a change breaks consumers.
+_Avoid_: Service (Cordis's word, and Pane's continuing service), interface, permission or grant (ADR 0002's rejected capability grants), dependency (on one particular package)
+
+**Provider**:
+An installed package that provides a capability, declared in its package manifest, or registered at run time as an owned registration for a capability its manifest declares. It serves the capability's operations as it serves published operations. When several packages provide one capability, the user picks which one serves it. A provider that is disabled, paused, missing or waiting serves nothing.
+_Avoid_: Search provider (a source of root results), implementation, plugin, vendor
+
 **Call chain**:
 The operation calls waiting on one another at one moment, from the command that made the first; each package in it is busy until its call returns, so a call back into one is refused rather than waited on.
 _Avoid_: Call stack (of one guest), workflow
@@ -397,5 +461,17 @@ A set of fields an extension command asks the user to fill in and submit; the la
 _Avoid_: Dialog, custom view
 
 **Custom view**:
-An interactive view an extension draws itself from shapes the launcher paints, receiving the user's key and pointer input while it is open; the launcher keeps focus and its accessible representation.
-_Avoid_: Canvas, webview, custom control
+An interactive view an extension draws itself from shapes the launcher paints, receiving the user's key and pointer input while it is open; the launcher keeps focus and its accessible representation. It is now a canvas: a leaf node of a UI tree, beside components (ADR 0036).
+_Avoid_: Webview, custom control (a UI component is Pane's own)
+
+**UI tree**:
+What a command's view renders: a tree of layout nodes (row, column, stack, scroll, wrap) and UI components that Pane renders and runs (ADR 0036). Authors write it with a GPUI-like builder in Rust or JSX in JavaScript and TypeScript; the SDKs carry it as versioned JSON the author never sees. Pane keeps each node's state by the key the author gave it, and asks for the tree again after an event.
+_Avoid_: DOM, webview, view model
+
+**UI component**:
+One of Pane's shared building blocks that a UI tree names, the same ones Pane's own UI draws: rich row, icon tile, keycap, tag, button, input, select, toggle, Markdown and others, and the standard views built from them (List, Detail, Grid, Form). They are versioned as a set; a node Pane does not know draws the author's fallback or its children.
+_Avoid_: Component alone (a package's built WebAssembly component), widget, custom view (drawn by the extension)
+
+**Theme token**:
+A named value of Pane's theme that an extension's UI uses instead of a raw value: a tone, text style, text level, space, radius or icon size. Tokens follow the user's appearance and background image. Raw values (hex colours, pixel sizes) are allowed beside them, and Pane corrects a raw colour's contrast against what it is drawn on.
+_Avoid_: Theme (the user's light or dark choice, part of Appearance), style, CSS variable

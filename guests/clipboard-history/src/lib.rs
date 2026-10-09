@@ -18,21 +18,23 @@
 //! another source.
 #![no_std]
 
-use pane_guest::actions::PASTE_FALLBACK;
-use pane_guest::alloc::{
+use pane_extension::actions::PASTE_FALLBACK;
+use pane_extension::alloc::{
     format,
     string::{String, ToString},
     vec,
     vec::Vec,
 };
-use pane_guest::clipboard_history::{self as history, Capture, Entry, HistoryStatus};
-use pane_guest::feedback::{Toast, ToastStyle, show_hud, show_toast};
-use pane_guest::system::{self, Clip, SystemError};
-use pane_guest::window::{PopToRootType, close};
-use pane_guest::{Action, Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
+use pane_extension::clipboard_history::{self as history, Capture, Entry, HistoryStatus};
+use pane_extension::feedback::{Toast, ToastStyle, show_hud, show_toast};
+use pane_extension::system::{self, Clip, SystemError};
+use pane_extension::window::{PopToRootType, close};
+use pane_extension::{
+    Action, Command, CustomView, FieldValue, FormError, Item, List, NoCustomView,
+};
 
 struct ClipboardHistory;
-pane_guest::export!(ClipboardHistory);
+pane_extension::export!(ClipboardHistory);
 
 /// The item that pauses recording, and the one that resumes it. Each does
 /// only that, so running one again (only a stale callback can) changes

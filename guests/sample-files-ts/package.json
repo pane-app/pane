@@ -12,6 +12,6 @@
     "fileIndex": true
   },
   "devDependencies": {
-    "@pane/extension": "file:../js"
+    "@pane-app/extension": "file:../js"
   }
 }

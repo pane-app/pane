@@ -13,11 +13,11 @@
 // world declares. WASI's own WIT (wit/deps: clocks, and `wasi:http` for web
 // requests, with the packages it names) is copied into deps/ too. The host
 // bindings are unchanged. `wasi:http`'s client is imported only by a command
-// whose bundle uses it (itself or through `@pane/extension/http`): the build
+// whose bundle uses it (itself or through `@pane-app/extension/http`): the build
 // adds it to `js-command`, so a command that makes no web requests does not
 // import it, and Pane does not list it as using the network. Pane's system
 // programs (wit/programs.wit) are added the same way, only for a command
-// whose bundle uses them (itself or through `@pane/extension/programs`).
+// whose bundle uses them (itself or through `@pane-app/extension/programs`).
 //
 // A command whose package.json sets `"pane": { ... }` options also exports
 // the interfaces they name: `rootResults` (wit/root-results.wit),

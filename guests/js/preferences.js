@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
-// The preferences of JS/TS commands (`@pane/extension/preferences`): the
+// The preferences of JS/TS commands (`@pane-app/extension/preferences`): the
 // typed values the package's `pane.json` declares under `preferences`, for
 // the whole extension or for one command, which the user sets in Pane (on
 // the Setup screen before the command's first run, and on the extension's

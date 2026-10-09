@@ -3,7 +3,7 @@
 //! has no `platforms` and it exports no custom views.
 //! Pane's type check must refuse it before any of its code runs.
 //!
-//! It cannot use `pane-guest`, which binds the current contract, so it
+//! It cannot use `pane-extension`, which binds the current contract, so it
 //! supplies the allocator, panic handler and `cabi_realloc` itself.
 #![no_std]
 

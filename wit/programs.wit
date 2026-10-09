@@ -6,8 +6,8 @@ package pane:extension@0.1.0;
 // PowerShell, winget, git or any executable, which Pane starts for a
 // command (a WASI 0.3 guest cannot start a process). Native helpers
 // (wit/helpers.wit) stay for programs a package ships. Rust commands use
-// them through pane-guest (`pane_guest::programs`), JavaScript and
-// TypeScript ones through `@pane/extension/programs` (guests/js). A
+// them through pane-extension (`pane_extension::programs`), JavaScript and
+// TypeScript ones through `@pane-app/extension/programs` (guests/js). A
 // command whose component imports this interface is noted when it is
 // installed, updated or reloaded, and the extension list says it runs
 // system programs and which it ran this session; nothing else is asked

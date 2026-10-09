@@ -2623,6 +2623,40 @@ fn the_page_follows_a_background_build_failure_by_itself(cx: &mut TestAppContext
 }
 
 #[gpui::test]
+fn the_page_opens_a_developed_extension_s_logs_in_the_launcher(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = hello_package(&sources.path().join("hello"));
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let (sender, changes) = pane_core::changes::channel();
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"))
+            .with_development(Arc::new(FakeBuilder), sender);
+    install(&launcher, &folder);
+    let (launcher, cx) = cx.add_window_view(|window, cx| {
+        let mut launcher = LauncherWindow::new(launcher, window, cx);
+        launcher.follow_changes(changes, window, cx);
+        launcher
+    });
+    let (_settings, mut settings_cx) = open_extensions(cx);
+    open_page(&mut settings_cx, "Hello");
+    choose_in_menu(&mut settings_cx, "extension-row-Develop Hello");
+    until_text(&mut settings_cx, "Developing Hello");
+
+    // Its Logs, from the page's menu, beside Stop Developing: the launcher
+    // window shows them, following the lines as they come.
+    choose_in_menu(&mut settings_cx, "extension-row-Logs for Hello");
+    let view = settle::until(&launcher, cx, |view| {
+        matches!(view.screen, Screen::ExtensionLog { .. })
+    });
+    assert_eq!(view.title, "Logs for Hello");
+    let shown = cx.read_entity(&launcher, |window, _| window.extension_log_shown());
+    let (lines, selected, following) = shown.expect("the Logs screen shows");
+    assert!(lines > 0 && following);
+    assert_eq!(selected, Some(lines - 1));
+}
+
+#[gpui::test]
 fn the_settings_window_keeps_its_layout_at_small_sizes(cx: &mut TestAppContext) {
     let (_launcher, _links, cx) = open_launcher(cx);
     cx.simulate_keystrokes(settings_shortcut());

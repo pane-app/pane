@@ -4,7 +4,7 @@
 // clipboard, opening anything, revealing a path in the file manager,
 // moving paths to the Recycle Bin, pasting into the application in front,
 // that application and its selected text. Most commands use them through
-// `@pane/extension/system` (system.d.ts), which also has the standard
+// `@pane-app/extension/system` (system.d.ts), which also has the standard
 // actions built from them.
 
 /** `pane:extension/system@0.1.0`. */

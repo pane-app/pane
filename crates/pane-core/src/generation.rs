@@ -103,6 +103,8 @@ pub(crate) struct Generation(Arc<Shared>);
 
 /// What every clone of one generation shares.
 struct Shared {
+    /// Its number, unique among the generations of this process.
+    number: u64,
     end: watch::Sender<Option<End>>,
     undo: Mutex<UndoList>,
 }
@@ -136,7 +138,9 @@ struct UndoList {
 impl Generation {
     /// A generation that has not ended.
     pub fn new() -> Generation {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         Generation(Arc::new(Shared {
+            number: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             end: watch::channel(None).0,
             undo: Mutex::default(),
         }))
@@ -163,6 +167,12 @@ impl Generation {
         let mut list = self.list();
         list.done = true;
         Undo(std::mem::take(&mut list.entries))
+    }
+
+    /// Its number, unique among the generations of this process: which run
+    /// of a package's code an extension log line came from.
+    pub fn number(&self) -> u64 {
+        self.0.number
     }
 
     /// Why it ended, if it has.

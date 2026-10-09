@@ -41,7 +41,7 @@ function found(query) {
   }
 }
 
-/** @type {import("@pane/extension").Command} */
+/** @type {import("@pane-app/extension").Command} */
 export const command = {
   async render() {
     const { state, entries } = status();
@@ -67,7 +67,7 @@ export const command = {
   },
 };
 
-/** @type {import("@pane/extension").CommandSearch} */
+/** @type {import("@pane-app/extension").CommandSearch} */
 export const commandSearch = {
   async search(_command, query) {
     return found(query).map((entry) => ({
@@ -78,7 +78,7 @@ export const commandSearch = {
   },
 };
 
-/** @type {import("@pane/extension").RootResults} */
+/** @type {import("@pane-app/extension").RootResults} */
 export const rootResults = {
   async resultsFor(query) {
     return found(query).map((entry) => ({

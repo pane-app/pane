@@ -20,7 +20,7 @@ component; Pane never compiles a helper.
   package's helper `helper` with `args`, writes `input` to its standard input
   and closes it, and answers with what it wrote to its standard output once
   it exits with success. Rust commands call it as
-  `pane_guest::helpers::run` ([pane-guest](../guests/pane-guest/src/lib.rs));
+  `pane_extension::helpers::run` ([pane-extension](../guests/pane-extension/src/lib.rs));
   JavaScript and TypeScript commands import `run` from
   `pane:extension/helpers@0.1.0` ([declarations](../guests/js/helpers.d.ts)),
   whose promise rejects with the error as its `payload`.

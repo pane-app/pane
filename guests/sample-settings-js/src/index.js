@@ -14,8 +14,13 @@
 // finished: Pane stops a call that computes for 5 seconds without waiting,
 // so it never finishes, and it counts towards pausing the package as a
 // crash does.
+// "Write to the log" writes a line at each level and a printed line to
+// each output, which Pane keeps in the package's extension log; "Flood the
+// log" writes a line longer than Pane keeps, then more lines in a second
+// than Pane keeps; "Fail" throws, which the extension answers with as an
+// error and logs with its stack.
 // @ts-check
-import { showToast } from "@pane/extension/feedback";
+import { showToast } from "@pane-app/extension/feedback";
 import { get, set } from "pane:extension/settings@0.1.0";
 import * as cache from "pane:extension/cache@0.1.0";
 import * as content from "pane:extension/content@0.1.0";
@@ -38,13 +43,17 @@ const SLOW_WAIT = 10_000_000_000;
 const BUSY = "busy";
 /** How long "Stop responding" computes at most, in milliseconds: bounded, so that even without Pane stopping it, it ends. */
 const BUSY_FOR = 60_000;
+/** How long a line "Flood the log" writes first: more than Pane keeps. */
+const FLOOD_LINE = 5_000;
+/** How many lines "Flood the log" writes then: more than Pane keeps of a second's. */
+const FLOOD_LINES = 1_500;
 
 /**
  * An item whose action is `act` with its id.
  * @param {string} id
  * @param {string} title
  * @param {string} subtitle
- * @returns {import("@pane/extension").Item}
+ * @returns {import("@pane-app/extension").Item}
  */
 const item = (id, title, subtitle) => ({ id, title, subtitle, onAction: () => act(id) });
 
@@ -127,6 +136,22 @@ async function outcome(itemId) {
       set(BUSY, "finished");
       return "Finished computing after a minute";
     }
+    case "log":
+      console.debug("a debug line");
+      console.info("an info line");
+      console.warn("a warning line");
+      console.error("an error line");
+      console.log("a printed line");
+      console.log("%s line with %d substitutions", "a formatted", 2);
+      return "Wrote to the log";
+    case "flood":
+      console.log("x".repeat(FLOOD_LINE));
+      for (let n = 0; n < FLOOD_LINES; n++) {
+        console.log(`line ${n}`);
+      }
+      return "Flooded the log";
+    case "fail":
+      throw new Error("failed on purpose");
     case "crash":
       return null;
     default:
@@ -134,7 +159,7 @@ async function outcome(itemId) {
   }
 }
 
-/** @type {import("@pane/extension").Command} */
+/** @type {import("@pane-app/extension").Command} */
 export const command = {
   async render() {
     // A settings error (get throws) is shown to the user as the command's error.
@@ -151,6 +176,9 @@ export const command = {
         item("slow", "Save after waiting", "Waits 10 seconds, then saves; disabling or reloading stops it"),
         item("crash", "Crash", "Crashes on purpose; three crashes within five minutes pause the extension"),
         item("busy", "Stop responding", "Computes without waiting for up to a minute; Pane stops it after 5 seconds"),
+        item("log", "Write to the log", "A line at each level, and one printed to each output"),
+        item("flood", "Flood the log", "A line too long to keep, then too many lines in a second"),
+        item("fail", "Fail", "Throws an error, which the extension answers with"),
       ],
     };
   },

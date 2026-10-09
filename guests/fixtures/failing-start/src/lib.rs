@@ -3,15 +3,17 @@
 //! every later start, such as a Retry, finds the setting and starts.
 #![no_std]
 
-use pane_guest::alloc::{format, string::String, vec::Vec};
-use pane_guest::feedback::{Toast, show_toast};
-use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, settings};
+use pane_extension::alloc::{format, string::String, vec::Vec};
+use pane_extension::feedback::{Toast, show_toast};
+use pane_extension::{
+    Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, settings,
+};
 
 /// The settings key recording that a start was attempted.
 const ATTEMPTED: &str = "start-attempted";
 
 struct FailingStart;
-pane_guest::export!(FailingStart);
+pane_extension::export!(FailingStart);
 
 /// Runs the action `id`: shows a toast saying that it ran.
 async fn act(id: &str) -> Result<(), String> {

@@ -3,7 +3,7 @@
 // Pane's preferences sample in JavaScript: a package that declares
 // preferences of every type in `pane.json`, for the whole extension and for
 // single commands, and commands that read their effective values with
-// `getPreferenceValues` from `@pane/extension/preferences`. Commands and
+// `getPreferenceValues` from `@pane-app/extension/preferences`. Commands and
 // toasts match the Rust preferences sample (guests/sample-preferences) and
 // the TypeScript one.
 //
@@ -25,8 +25,8 @@
 // A command launched in the background (a schedule's run) does its work but
 // shows no toast.
 // @ts-check
-import { showToast } from "@pane/extension/feedback";
-import { getPreferenceValues } from "@pane/extension/preferences";
+import { showToast } from "@pane-app/extension/feedback";
+import { getPreferenceValues } from "@pane-app/extension/preferences";
 import { get, set } from "pane:extension/settings@0.1.0";
 
 /** The settings key holding how many times "Tick" ran. */
@@ -52,7 +52,7 @@ function characters(text) {
 
 /**
  * What "Report preferences" shows, launched as `record` says.
- * @param {import("@pane/extension").LaunchRecord} record
+ * @param {import("@pane-app/extension").LaunchRecord} record
  * @returns {string}
  */
 function report(record) {
@@ -83,7 +83,7 @@ function last() {
   return `Ticks: ${get(TICKS) ?? "0"}`;
 }
 
-/** @type {import("@pane/extension").Command} */
+/** @type {import("@pane-app/extension").Command} */
 export const command = {
   async render() {
     const values = getPreferenceValues();

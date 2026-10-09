@@ -24,10 +24,10 @@
 //! and TypeScript no-view samples show the same.
 #![no_std]
 
-use pane_guest::alloc::{format, string::String, vec::Vec};
-use pane_guest::commands::{self, CommandRef, launch_type_name, source_name};
-use pane_guest::feedback::{Toast, show_toast};
-use pane_guest::{Command, Item, LaunchRecord, LaunchType, List, NoCustomView, settings};
+use pane_extension::alloc::{format, string::String, vec::Vec};
+use pane_extension::commands::{self, CommandRef, launch_type_name, source_name};
+use pane_extension::feedback::{Toast, show_toast};
+use pane_extension::{Command, Item, LaunchRecord, LaunchType, List, NoCustomView, settings};
 
 /// The settings key holding the last launch record "Report launch" ran
 /// with.
@@ -40,7 +40,7 @@ const TICK: &str = "tick";
 const CONTEXT: &str = r#"{"from":"launch"}"#;
 
 struct NoView;
-pane_guest::export!(NoView);
+pane_extension::export!(NoView);
 
 /// `launch` in words: its type and source, then what it was given.
 fn describe(launch: &LaunchRecord) -> String {

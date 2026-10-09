@@ -109,16 +109,16 @@ registered default extension, is the one command Pane searches for
 itself: Pane lists the file index in its [Search Files view](files.md#search-files)
 (#177), and neither the command's list nor its `search` is shown; a copy
 installed from a folder searches as any command does. Rust:
-`pane_guest::search::Guest` and `pane_guest::search::export!`; JS/TS:
+`pane_extension::search::Guest` and `pane_extension::search::export!`; JS/TS:
 export `commandSearch` with `"pane": { "search": true }` in `package.json`.
 
-Web requests: Rust `pane_guest::http::get(url, headers)`, JS/TS
-`get(url, headers)` from `@pane/extension/http`, each returning the status,
+Web requests: Rust `pane_extension::http::get(url, headers)`, JS/TS
+`get(url, headers)` from `@pane-app/extension/http`, each returning the status,
 headers and whole body; errors are readable ("connection refused"). Both
 are thin wrappers over the standard `wasi:http@0.3.0` client
 (`wasi:http/client.send`), whose bindings are available for anything else
 (other methods, bodies, streaming). A JS/TS command imports `wasi:http`
-only if its bundle uses it (itself or through `@pane/extension/http`).
+only if its bundle uses it (itself or through `@pane-app/extension/http`).
 Libraries that build on `wasi:http` or on these helpers work; ones that open
 sockets themselves or need Node.js's or a browser's `fetch` do not. The
 samples read JSON with `serde_json` (`no_std` + `alloc`) in Rust and
@@ -201,6 +201,6 @@ No test or smoke reaches beyond 127.0.0.1.
 - HTTP/1.1 only; no proxy settings; no redirects followed. Wasmtime's
   `wasi:http` 0.3 is marked experimental upstream.
 - `wasi:http` types are not declared in TypeScript (`wasi.d.ts`); use
-  `@pane/extension/http` or type them yourself.
+  `@pane-app/extension/http` or type them yourself.
 - HTTPS against a real service, and the macOS and Windows smokes, have not
   been run.

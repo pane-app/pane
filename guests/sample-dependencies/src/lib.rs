@@ -15,18 +15,18 @@
 //! manifest names for it.
 #![no_std]
 
-use pane_guest::alloc::{format, string::String, string::ToString, vec::Vec};
-use pane_guest::feedback::{Toast, show_toast};
-use pane_guest::operations::{CallErrorKind, call};
-use pane_guest::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
+use pane_extension::alloc::{format, string::String, string::ToString, vec::Vec};
+use pane_extension::feedback::{Toast, show_toast};
+use pane_extension::operations::{CallErrorKind, call};
+use pane_extension::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
 use serde_json::{Value, json};
 
 struct Dependencies;
-pane_guest::export!(Dependencies);
+pane_extension::export!(Dependencies);
 
 /// Calls `greet` version 1 of the dependency with id `dependency` for
 /// "Pane", and returns its greeting.
-async fn greet(dependency: &str) -> Result<String, pane_guest::operations::CallError> {
+async fn greet(dependency: &str) -> Result<String, pane_extension::operations::CallError> {
     let input = json!({ "name": "Pane" }).to_string();
     let result = call(dependency.into(), "greet".into(), 1, input).await?;
     let result: Value = serde_json::from_str(&result).unwrap_or(Value::Null);

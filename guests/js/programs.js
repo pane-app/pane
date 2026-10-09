@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
-// System programs for JS/TS commands (`@pane/extension/programs`), through
+// System programs for JS/TS commands (`@pane-app/extension/programs`), through
 // `pane:extension/programs@0.1.0` (wit/programs.wit): programs installed on
 // the system, such as PowerShell, winget, git or any executable, which Pane
 // runs for the command. Bundled into the command that imports it, like any

@@ -27,9 +27,9 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use pane_guest::alloc::{format, string::String, vec::Vec};
-use pane_guest::feedback::{Toast, show_toast};
-use pane_guest::{
+use pane_extension::alloc::{format, string::String, vec::Vec};
+use pane_extension::feedback::{Toast, show_toast};
+use pane_extension::{
     Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, content, settings,
 };
 
@@ -68,8 +68,8 @@ const TOO_FAR: u64 = 31 * 86_400;
 static THIS_RUN: AtomicU64 = AtomicU64::new(0);
 
 struct Watching;
-pane_guest::export!(Watching);
-pane_guest::service::export!(Watching);
+pane_extension::export!(Watching);
+pane_extension::service::export!(Watching);
 
 /// The count kept in the command's content.
 fn counted(key: &str) -> Result<u64, String> {
@@ -193,12 +193,12 @@ impl Command for Watching {
     }
 }
 
-impl pane_guest::service::Guest for Watching {
+impl pane_extension::service::Guest for Watching {
     /// One cycle of the service: it counts itself (in its content for all
     /// time, in its instance for this run) and answers the status to show
     /// and when to run the next. The mode an item armed makes this cycle
     /// wait, answer an error, crash or stop responding instead.
-    async fn run_cycle(command: String) -> Result<pane_guest::service::Cycle, String> {
+    async fn run_cycle(command: String) -> Result<pane_extension::service::Cycle, String> {
         if command != "watching" {
             return Err(format!("unknown command: {command}"));
         }
@@ -218,7 +218,7 @@ impl pane_guest::service::Guest for Watching {
             } else {
                 ""
             };
-            Ok(pane_guest::service::Cycle {
+            Ok(pane_extension::service::Cycle {
                 status: format!(
                     "Watching: {events} events (cycle {cycles}, {this_run} this run){wait}"
                 ),

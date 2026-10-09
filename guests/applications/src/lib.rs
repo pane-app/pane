@@ -1,21 +1,21 @@
 //! Pane's application launcher, a default extension: the applications
 //! installed on the system are found by name in root search, each its own
 //! result, and invoking one opens it. Pane's host finds and opens them
-//! ([`pane_guest::applications`]), since a WASI guest cannot; this
+//! ([`pane_extension::applications`]), since a WASI guest cannot; this
 //! extension supplies them to root search, so disabling the package removes
 //! them and stops Pane looking for them. Its command is a root provider
 //! (`"mode": "provider"` in `pane.json`, #164): it has no row and no screen
 //! of its own.
 #![no_std]
 
-use pane_guest::alloc::{string::String, vec::Vec};
-use pane_guest::applications::{self, Application};
-use pane_guest::indexed::{IndexedAction, IndexedResult};
-use pane_guest::{Command, NoCustomView};
+use pane_extension::alloc::{string::String, vec::Vec};
+use pane_extension::applications::{self, Application};
+use pane_extension::indexed::{IndexedAction, IndexedResult};
+use pane_extension::{Command, NoCustomView};
 
 struct Applications;
-pane_guest::export!(Applications);
-pane_guest::indexed::export!(Applications);
+pane_extension::export!(Applications);
+pane_extension::indexed::export!(Applications);
 
 /// The installed applications, by name.
 fn installed() -> Result<Vec<Application>, String> {
@@ -30,7 +30,7 @@ impl Command for Applications {
     type CustomView = NoCustomView;
 }
 
-impl pane_guest::indexed::Guest for Applications {
+impl pane_extension::indexed::Guest for Applications {
     /// One result per installed application: its name, found in root search
     /// like a command's title, as are its other names (untranslated, its
     /// program's) and its keywords; subtitled "Application", or with what

@@ -9,9 +9,10 @@ license = "Apache-2.0 OR MIT"
 crate-type = ["cdylib"]
 
 [dependencies]
-# Pane's Rust bindings; outside this repository, point `path` at
-# guests/pane-guest in a Pane checkout.
-pane-guest = { path = "../pane-guest" }
+# Pane's Rust SDK; outside this repository, depend on the crate on
+# crates.io once it is published (`pane-extension = "0.1"`), or until then
+# point `path` at guests/pane-extension in a Pane checkout.
+pane-extension = { path = "../pane-extension" }
 
 # A package of its own, built in its own folder with the documented command
 # `cargo build --release --target wasm32-wasip2`, so that its component is

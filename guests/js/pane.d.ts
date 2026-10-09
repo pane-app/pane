@@ -7,6 +7,7 @@
 // envelope (`render` and `handle-event`, docs/list-tree.md); the SDK's
 // adapter (adapt.js) writes the tree and runs the actions, so a command
 // never sees the JSON or the callback ids.
+/// <reference path="./console.d.ts" />
 /// <reference path="./wasi.d.ts" />
 /// <reference path="./commands.d.ts" />
 /// <reference path="./feedback-host.d.ts" />
@@ -49,7 +50,7 @@ export interface Item {
    * Runs when the user chooses the item: an untitled action before the
    * item's `actions`, which Pane names "Run item". Pane shows nothing of
    * what it resolves with: it tells the user what happened itself, with a
-   * toast or a HUD (`@pane/extension/feedback`); throwing shows the error
+   * toast or a HUD (`@pane-app/extension/feedback`); throwing shows the error
    * as a failure toast. Pane then asks for the list again (`render`).
    * Omitted or `null` for none.
    */
@@ -111,7 +112,7 @@ export type Platform = "windows" | "macos" | "linux";
 /**
  * One of an item's actions, or an entry of a submenu. Choosing it runs
  * `onAction`, which tells the user what happened itself, with a toast or a
- * HUD (`@pane/extension/feedback`); throwing shows the error as a failure
+ * HUD (`@pane-app/extension/feedback`); throwing shows the error as a failure
  * toast. Pane then asks for the list again (`render`). An action with a
  * `submenu` instead opens that submenu in the Actions panel.
  */
@@ -399,7 +400,7 @@ export interface Command {
    * sent through its alias or as a fallback, and any context another
    * command passed. Pane shows nothing of what it resolves with: it tells
    * the user what happened with a toast or a HUD
-   * (`@pane/extension/feedback`). Throwing shows the error as a failure
+   * (`@pane-app/extension/feedback`). Throwing shows the error as a failure
    * toast with a "Copy Error" action, which never counts towards pausing
    * the extension, and a toast left animated is hidden once it ends. Pane
    * calls it only for a command whose `pane.json` entry says `"mode":
@@ -520,7 +521,7 @@ export interface SearchResult {
  * it as `commandSearch`:
  *
  * ```ts
- * import { get } from "@pane/extension/http";
+ * import { get } from "@pane-app/extension/http";
  *
  * export const commandSearch: CommandSearch = {
  *   async search(command, query) {
@@ -551,7 +552,7 @@ export interface CommandSearch {
  * with `id`, as `open` in `pane:extension/applications@0.1.0` does;
  * `{ tag: "open", val: { target, application } }` opens `target` (a URL of
  * any scheme, a file, a folder or an application) with the system's
- * handler, or with `application`, as `open` in `@pane/extension/system`
+ * handler, or with `application`, as `open` in `@pane-app/extension/system`
  * does.
  */
 export type IndexedAction =

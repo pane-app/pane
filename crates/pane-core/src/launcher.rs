@@ -245,6 +245,11 @@ pub enum Screen {
         identity: PackageIdentity,
         details: Vec<String>,
     },
+    /// The extension log of an installed package, as its title says it
+    /// ("Logs for <title>"): what its code wrote and Pane's messages about
+    /// it, which the window reads ([`Launcher::extension_log`]) and follows
+    /// as they come. It has no rows.
+    ExtensionLog { identity: PackageIdentity },
     /// `question` about an installed package before Pane acts on it, with
     /// lines of information under the title, answered by choosing a row.
     Confirm {
@@ -1203,6 +1208,9 @@ enum Entry {
     BuildDetails(PackageIdentity),
     /// Build this developed package now (build details).
     BuildAgain(PackageIdentity),
+    /// Show the extension log of this developed package (extension list,
+    /// build details).
+    ExtensionLog(PackageIdentity),
     /// Ask whether to clear this installed package's cache (extension list).
     AskClearCache(PackageIdentity),
     /// Forget the answers remembered for this installed package's
@@ -1411,7 +1419,8 @@ impl Launcher {
             .as_ref()
             .and_then(|installation| updates::UpdateControls::open(&installation.dir))
             .unwrap_or_default();
-        let developing = Arc::new(Developing::new(None, None));
+        let logs = runtime.as_ref().map(Runtime::logs).unwrap_or_default();
+        let developing = Arc::new(Developing::new(None, None, logs));
         // A web image, a system icon or an application's icon that loaded
         // redraws its row: the window is told through development's shared
         // configuration, as the launcher's other background work tells it.
@@ -1901,6 +1910,13 @@ impl Launcher {
     /// open.
     pub fn show_error(&self, message: impl Into<String>) {
         self.lock().view.status = Status::Error(message.into());
+    }
+
+    /// Shows `status` as the outcome of what the window did itself, such as
+    /// copying a line of a Logs screen, or the status line at rest again
+    /// once the user moved on.
+    pub fn show_status(&self, status: Status) {
+        self.lock().view.status = status;
     }
 
     /// Moves the selection by `delta` rows, clamped to the list.
@@ -2488,6 +2504,13 @@ impl Launcher {
                     |entry| matches!(entry, Entry::BuildDetails(shown) if *shown == identity),
                 );
             }
+            Screen::ExtensionLog { identity } => {
+                let identity = identity.clone();
+                self.show_extensions_at(
+                    &mut state,
+                    |entry| matches!(entry, Entry::ExtensionLog(shown) if *shown == identity),
+                );
+            }
             Screen::RuntimeDetails { .. } => {
                 self.show_extensions_at(&mut state, |entry| matches!(entry, Entry::RuntimeDetails));
             }
@@ -2726,6 +2749,10 @@ impl Launcher {
             }
             Entry::BuildAgain(identity) => {
                 self.build_again(state, &identity);
+                Pending::Nothing
+            }
+            Entry::ExtensionLog(identity) => {
+                self.show_extension_log(state, &identity);
                 Pending::Nothing
             }
             Entry::AskUninstall(identity) => {
@@ -3293,6 +3320,9 @@ impl Launcher {
             | Screen::CustomView(_)
             | Screen::Confirm { .. }
             | Screen::Hotkey { .. } => {}
+            // Its lines stay, also once development ended: the window reads
+            // them as they are.
+            Screen::ExtensionLog { .. } => {}
             Screen::RuntimeDetails { .. } => self.keep_runtime_details(state),
             // Once the build succeeded or development ended, the extension
             // list; else the latest failure. The screen epoch is kept.

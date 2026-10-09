@@ -89,7 +89,7 @@ declare module "pane:extension/commands@0.1.0" {
    * `pane.json` entry declares. Pane keeps it across restarts and updates,
    * and forgets it on uninstall. A refusal (a call Pane does not know the
    * command of, such as an operation's) throws an object whose `payload`
-   * is the reason. `@pane/extension/feedback`'s `setSubtitle` calls it.
+   * is the reason. `@pane-app/extension/feedback`'s `setSubtitle` calls it.
    */
   export function setSubtitle(subtitle?: string | null): void;
 }

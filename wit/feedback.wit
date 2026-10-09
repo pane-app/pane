@@ -6,9 +6,9 @@ package pane:extension@0.1.0;
 // back to root search, clear the search field, and tell the user what
 // happened with a HUD or a toast. Every command imports them, whatever its
 // mode, through the `extension` world (wit/extension.wit). Rust commands
-// use them through pane-guest (`pane_guest::window`,
-// `pane_guest::feedback`), JavaScript and TypeScript ones through
-// `@pane/extension/feedback` or the modules
+// use them through pane-extension (`pane_extension::window`,
+// `pane_extension::feedback`), JavaScript and TypeScript ones through
+// `@pane-app/extension/feedback` or the modules
 // "pane:extension/window@0.1.0" and "pane:extension/feedback@0.1.0"
 // (guests/js/feedback.d.ts). None of them is a reason to pause an
 // extension: a refusal is an answer, and the time spent in them is not

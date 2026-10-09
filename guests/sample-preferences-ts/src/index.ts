@@ -3,7 +3,7 @@
 // Pane's preferences sample in TypeScript: a package that declares
 // preferences of every type in `pane.json`, for the whole extension and for
 // single commands, and commands that read their effective values with
-// `getPreferenceValues` from `@pane/extension/preferences`, as interfaces
+// `getPreferenceValues` from `@pane-app/extension/preferences`, as interfaces
 // of their own. Commands and toasts match the Rust preferences sample
 // (guests/sample-preferences) and the JavaScript one.
 //
@@ -24,10 +24,10 @@
 //
 // A command launched in the background (a schedule's run) does its work but
 // shows no toast.
-import { showToast } from "@pane/extension/feedback";
-import { getPreferenceValues } from "@pane/extension/preferences";
+import { showToast } from "@pane-app/extension/feedback";
+import { getPreferenceValues } from "@pane-app/extension/preferences";
 import { get, set } from "pane:extension/settings@0.1.0";
-import type { Command, LaunchRecord, List } from "@pane/extension";
+import type { Command, LaunchRecord, List } from "@pane-app/extension";
 
 /** The settings key holding how many times "Tick" ran. */
 const TICKS = "ticks";

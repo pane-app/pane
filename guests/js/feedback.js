@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
-// What a JS/TS command does after it acts (`@pane/extension/feedback`):
+// What a JS/TS command does after it acts (`@pane-app/extension/feedback`):
 // tell the user what happened with a toast or a HUD, ask them to confirm
 // first, close Pane's window, pop back to root search, clear the search
 // field, and set its row's subtitle, through `pane:extension/feedback@0.1.0`,

@@ -15,7 +15,7 @@ the saved data, and [#41](https://github.com/pane-app/pane/issues/41)
 An installed package's commands keep string values by key through Pane, one
 `pane:extension` interface per kind ([`wit/data.wit`](../wit/data.wit), world
 `extension-with-data`;
-Rust `pane_guest::{settings, content, cache, credentials}`, JS/TS modules
+Rust `pane_extension::{settings, content, cache, credentials}`, JS/TS modules
 `pane:extension/<kind>@0.1.0`, typed in
 [`guests/js/data.d.ts`](../guests/js/data.d.ts)). Each interface has
 the same `get` and `set`; the kind is what decides what Pane's management

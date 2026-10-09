@@ -1,5 +1,5 @@
 //! Test fixture: a command whose tree and answers are JSON written by hand
-//! against Pane's current contract (`wit/extension.wit`), not by pane-guest,
+//! against Pane's current contract (`wit/extension.wit`), not by pane-extension,
 //! so that Pane's reading of them is checked on its own (see
 //! `crates/pane-core/tests/list_tree.rs`).
 //!
@@ -24,7 +24,7 @@
 //! - "Answer nothing" shows no toast and answers an object with no text to
 //!   show, only a field Pane does not know yet.
 //!
-//! It cannot use `pane-guest`, which writes the tree itself, so it supplies
+//! It cannot use `pane-extension`, which writes the tree itself, so it supplies
 //! the allocator, panic handler, byte comparisons and `cabi_realloc`.
 #![no_std]
 

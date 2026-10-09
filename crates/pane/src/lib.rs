@@ -78,6 +78,7 @@ pub(crate) fn bind_keys_with(
     extension_views::form::bind_keys(cx, &text_editing);
     features::root_search::bind_keys(cx, &text_editing, keyboard);
     features::clipboard_history::bind_keys(cx, &text_editing, keyboard);
+    features::extension_log::bind_keys(cx);
     features::quick_slots::bind_keys(cx);
     features::footer_menu::bind_keys(cx);
     features::toast::bind_keys(cx);

@@ -6,7 +6,10 @@
 //! system's file watcher. After a save (and a short pause, so that an
 //! editor's several writes are one save) it runs the package's build (see
 //! `crate::develop`), which puts the package's components in a staging
-//! folder of its own under Pane's data folder:
+//! folder of its own under Pane's data folder. The watching, the builds and
+//! what follows a build are the `pane-build` crate's development session,
+//! which `pane-ext` runs too; the launcher is its host (`Reloader`), which
+//! reloads each build that succeeds:
 //!
 //! - A build that fails replaces nothing: the package keeps running its
 //!   installed code, and the diagnostics are shown ("Why <title> did not
@@ -48,86 +51,33 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use notify::event::{EventKind, MetadataKind, ModifyKind};
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+pub use pane_build::{BuildFailure, Development};
+use pane_build::{Claim, Host, MAX_OBSOLETE, Prepared};
 
 use super::reload::Reload;
 use super::{
     Changing, Entry, Launcher, LauncherView, Row, Screen, State, Status, WeakLauncher, off_thread,
 };
 use crate::changes::ChangeSender;
-use crate::develop::{
-    Build, BuildJob, BuildOutcome, BuildOutput, BuildStop, Builder, components, first_error,
-    is_save, stage_package,
-};
-use crate::packages::{InstalledPackage, Manifest, PackageIdentity, canonical};
-
-mod sources;
-
-use sources::Sources;
-
-/// How long the folder must stay unchanged after a save before it is built,
-/// so that an editor's several writes are one save.
-const SETTLE: Duration = Duration::from_millis(150);
-
-/// How often a build that waits for another change of its package to end
-/// checks again.
-const CLAIM_RETRY: Duration = Duration::from_millis(100);
-
-/// How many builds in a row may be obsolete before Pane stops building
-/// until the next save.
-pub(super) const MAX_OBSOLETE: u64 = 3;
+use crate::develop::{Builder, PaneManifest};
+use crate::extension_log::{ExtensionLogs, LogLevel, LogLine};
+use crate::packages::{InstalledPackage, PackageIdentity};
 
 /// How many lines of a failed build's output its details show; the log
 /// file has all of it.
 const DETAIL_LINES: usize = 60;
 
-/// The log of the running build, and of the last one that failed, in the
-/// package's development folder.
-const BUILD_LOG: &str = "build.log";
-const FAILED_LOG: &str = "failed-build.log";
+/// The extension log of the development session, beside the build's.
+pub(super) const EXTENSION_LOG: &str = "extension.log";
 
-/// A package being developed, as [`Launcher::development`] reports it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Development {
-    /// The source folder watched.
-    pub folder: PathBuf,
-    /// The build command run after each save.
-    pub command: String,
-    /// Whether a build is running.
-    pub building: bool,
-    /// Whether a save arrived while the running build ran, which makes it
-    /// obsolete.
-    pub pending: bool,
-    /// Whether a finished build waits for another change of the package,
-    /// such as a Reload, to end before it reloads it.
-    pub waiting: bool,
-    /// How many saves have been acted on: their build reloaded, reported as
-    /// failed, or given up after too many obsolete builds.
-    pub finished: u64,
-    /// How many builds were obsolete when they ended, because the source
-    /// was saved again meanwhile; they were not reloaded.
-    pub obsolete: u64,
-    /// Why the last build failed, if it did; `None` after one succeeds.
-    pub failure: Option<Arc<BuildFailure>>,
-}
-
-/// Why a development build failed.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BuildFailure {
-    /// Its first error, or why it failed.
-    pub summary: String,
-    /// The end of what it printed, then why it failed.
-    pub output: Vec<String>,
-    /// How many earlier lines it printed; they are only in `log`.
-    pub earlier: usize,
-    /// The file holding everything it printed, if Pane could write one.
-    pub log: Option<PathBuf>,
-}
+/// How long the lines a developed package writes close together are
+/// gathered before the window is told its Logs screen has more: one redraw
+/// for them all, however fast it writes.
+const LOG_REDRAW: Duration = Duration::from_millis(50);
 
 /// What [`Launcher::begin_developing`] found: how to build the package, and
 /// where.
@@ -153,6 +103,9 @@ pub(super) struct Developing {
     /// The id of the next session, so that a session's thread can tell
     /// whether its package is still developed by it.
     next: AtomicU64,
+    /// Every package's extension log, which a developed package's also
+    /// writes to a file.
+    pub(super) logs: ExtensionLogs,
 }
 
 /// The builder local packages are built with on save, and the sender that
@@ -167,28 +120,15 @@ struct DevelopmentConfig {
 /// One developed package.
 struct Session {
     id: u64,
-    report: Development,
-    /// Reaches the session's thread.
-    signals: Sender<Signal>,
-    /// Stops the session's build.
-    stop: BuildStop,
-}
-
-/// What the session's thread is told.
-enum Signal {
-    /// A file in the folder was saved.
-    Saved,
-    /// A folder was created at the top of the source folder, or moved
-    /// there; it is watched too.
-    Folder(PathBuf),
-    /// The running build ended.
-    Built(BuildOutcome),
-    /// Development ends.
-    Stop,
+    session: pane_build::Session,
 }
 
 impl Developing {
-    pub(super) fn new(builder: Option<Arc<dyn Builder>>, changes: Option<ChangeSender>) -> Self {
+    pub(super) fn new(
+        builder: Option<Arc<dyn Builder>>,
+        changes: Option<ChangeSender>,
+        logs: ExtensionLogs,
+    ) -> Self {
         // The configuration is held behind a lock so that
         // `with_development`, which runs after the launcher was built,
         // reconfigures this same Arc rather than replacing it: the
@@ -198,6 +138,7 @@ impl Developing {
             config: Mutex::new(DevelopmentConfig { builder, changes }),
             sessions: Mutex::new(HashMap::new()),
             next: AtomicU64::new(1),
+            logs,
         }
     }
 
@@ -215,7 +156,7 @@ impl Developing {
     fn report(&self, identity: &PackageIdentity) -> Option<Development> {
         self.sessions()
             .get(identity)
-            .map(|session| session.report.clone())
+            .map(|session| session.session.report())
     }
 
     fn is_developed(&self, identity: &PackageIdentity) -> bool {
@@ -230,31 +171,24 @@ impl Developing {
             .is_some_and(|session| session.id == id)
     }
 
-    /// Changes the report of session `id`, if it still develops its
-    /// package.
-    fn update(&self, identity: &PackageIdentity, id: u64, change: impl FnOnce(&mut Development)) {
-        if let Some(session) = self.sessions().get_mut(identity)
-            && session.id == id
-        {
-            change(&mut session.report);
-        }
-    }
-
     /// Ends the development of the package with `identity`, or of every
     /// package: the processes of a running build are killed before this
     /// returns, and each session's thread drops its watcher. Never waits
     /// for a build. Returns whether a package was developed.
     pub(super) fn end(&self, which: Option<&PackageIdentity>) -> bool {
-        let ended: Vec<Session> = {
+        let ended: Vec<(PackageIdentity, Session)> = {
             let mut sessions = self.sessions();
             match which {
-                Some(identity) => sessions.remove(identity).into_iter().collect(),
-                None => sessions.drain().map(|(_, session)| session).collect(),
+                Some(identity) => sessions.remove_entry(identity).into_iter().collect(),
+                None => sessions.drain().collect(),
             }
         };
-        for session in &ended {
-            session.stop.stop();
-            let _ = session.signals.send(Signal::Stop);
+        for (identity, session) in &ended {
+            session.session.end();
+            let owner = identity.key();
+            self.logs
+                .pane(&owner, 0, LogLevel::Info, "Development stopped");
+            self.logs.stop_developing(&owner);
         }
         !ended.is_empty()
     }
@@ -352,6 +286,112 @@ impl Launcher {
         self.developing.report(identity)
     }
 
+    /// The lines Pane keeps of the extension log of the package with
+    /// `identity`, oldest first: what its code wrote and Pane's messages
+    /// about it. While it is developed, its most recent
+    /// [`DEVELOPED_LINES`](crate::extension_log::DEVELOPED_LINES); otherwise
+    /// only a small window of them, for diagnostics.
+    pub fn extension_log(&self, identity: &PackageIdentity) -> Vec<LogLine> {
+        self.developing.logs.lines(&identity.key())
+    }
+
+    /// Each line added to the extension log of the package with `identity`
+    /// from now on, while it is developed; the receiver ends when its
+    /// development does. A package not developed sends nothing.
+    pub fn follow_extension_log(&self, identity: &PackageIdentity) -> Receiver<LogLine> {
+        self.developing.logs.follow(&identity.key())
+    }
+
+    /// Forgets the lines kept of the package's extension log; its log file
+    /// keeps them.
+    pub fn clear_extension_log(&self, identity: &PackageIdentity) {
+        self.developing.logs.clear(&identity.key());
+    }
+
+    /// The log file of the package's development session, while it is
+    /// developed: every line of its extension log, rotated at
+    /// [`FILE_LIMIT`](crate::extension_log::FILE_LIMIT).
+    pub fn extension_log_file(&self, identity: &PackageIdentity) -> Option<PathBuf> {
+        self.developing.logs.file(&identity.key())
+    }
+
+    /// Opens the log file of the developed package with `identity` with
+    /// the system's handler for it, as its Logs screen's Open Log File
+    /// does, through the launcher's opener (off the calling thread: a
+    /// handler may take a moment to start). What was done, or why it
+    /// could not be.
+    pub fn open_extension_log_file(
+        &self,
+        identity: &PackageIdentity,
+    ) -> impl Future<Output = Result<String, String>> + Send + 'static {
+        let file = self.extension_log_file(identity);
+        let title = self.title_of(identity);
+        let links = self.links.clone();
+        async move {
+            let Some(file) = file else {
+                return Err(format!(
+                    "{title} has no log file: it is not being developed"
+                ));
+            };
+            let opened = file.clone();
+            off_thread(move || links.open_file(&file))
+                .await
+                .map(|()| format!("Opened {}", opened.display()))
+                .map_err(|why| format!("Could not open {}: {why}", opened.display()))
+        }
+    }
+
+    /// Shows the extension log of the package with `identity`, "Logs for
+    /// <title>", in place of whatever the launcher showed (Settings opens it
+    /// too, over an open command, which is left): the window reads its
+    /// lines ([`Launcher::extension_log`]) and draws them as they come.
+    pub(super) fn show_extension_log(&self, state: &mut State, identity: &PackageIdentity) {
+        let title = state.title_of(identity);
+        self.leave_command(state);
+        state.entries = Vec::new();
+        let screen = Screen::ExtensionLog {
+            identity: identity.clone(),
+        };
+        state.view = LauncherView::new(screen, logs_title(&title));
+    }
+
+    /// Whether the Logs screen of the package with `identity` is on show.
+    fn shows_log_of(&self, identity: &PackageIdentity) -> bool {
+        matches!(
+            &self.lock().view.screen,
+            Screen::ExtensionLog { identity: shown } if shown == identity
+        )
+    }
+
+    /// Tells the window whenever the log of the developed package with
+    /// `identity` grows while its Logs screen is on show, so the screen
+    /// draws the new lines: once for the lines written within
+    /// [`LOG_REDRAW`] of each other. A thread of its own waits for them,
+    /// until the package's development ends and lets the log's followers
+    /// go.
+    fn redraw_log_as_it_grows(&self, identity: &PackageIdentity) {
+        let lines = self.developing.logs.follow(&identity.key());
+        let weak = self.downgrade();
+        let followed = identity.clone();
+        let spawned = std::thread::Builder::new()
+            .name("pane-extension-log".into())
+            .spawn(move || {
+                while lines.recv().is_ok() {
+                    std::thread::sleep(LOG_REDRAW);
+                    while lines.try_recv().is_ok() {}
+                    let Some(launcher) = weak.upgrade() else {
+                        return;
+                    };
+                    if launcher.shows_log_of(&followed) {
+                        launcher.developing.changed();
+                    }
+                }
+            });
+        if let Err(error) = spawned {
+            eprintln!("pane: the Logs screen of {identity} will not follow its lines: {error}");
+        }
+    }
+
     /// Checks that the package can be developed now, explaining why not.
     pub(super) fn begin_developing(
         &self,
@@ -408,24 +448,14 @@ impl Launcher {
             folder,
             work,
         } = start;
-        let (signals, received) = mpsc::channel();
         let prepared = {
-            let signals = signals.clone();
             let work = work.clone();
-            off_thread(move || {
-                // FSEvents reports canonical paths.
-                let folder = canonical(&folder).unwrap_or(folder);
-                let build = builder.build_for(&folder)?;
-                let (watcher, sources) = watch(&folder, build.clone(), signals)?;
-                // What an earlier session left, such as after a crash.
-                let _ = std::fs::remove_dir_all(&work);
-                Ok::<_, String>((folder, build, watcher, sources))
-            })
-            .await
+            off_thread(move || Prepared::new(&*builder, Arc::new(PaneManifest), &folder, work))
+                .await
         };
         let mut state = self.lock();
         let title = state.title_of(&identity);
-        let (folder, build, watcher, sources) = match prepared {
+        let prepared = match prepared {
             Ok(prepared) => prepared,
             Err(reason) => {
                 state.view.status = Status::Error(format!("Cannot develop {title}: {reason}"));
@@ -437,48 +467,36 @@ impl Launcher {
             return;
         }
         let id = self.developing.next.fetch_add(1, Ordering::SeqCst);
-        let stop = BuildStop::default();
-        let report = Development {
-            folder: folder.clone(),
-            command: build.command(),
-            building: false,
-            pending: false,
-            waiting: false,
-            finished: 0,
-            obsolete: 0,
-            failure: None,
-        };
-        self.developing.sessions().insert(
-            identity.clone(),
-            Session {
-                id,
-                report,
-                signals: signals.clone(),
-                stop: stop.clone(),
-            },
+        let folder = prepared.folder().to_path_buf();
+        let command = prepared.command();
+        let (session, worker) = prepared.begin();
+        self.developing
+            .sessions()
+            .insert(identity.clone(), Session { id, session });
+        // Its log is kept beside its builds' from now on.
+        let owner = identity.key();
+        self.developing
+            .logs
+            .develop(&owner, work.join(EXTENSION_LOG));
+        self.developing.logs.pane(
+            &owner,
+            0,
+            LogLevel::Info,
+            &format!(
+                "Developing: each save in {} runs `{command}`, then reloads it",
+                folder.display(),
+            ),
         );
-        let worker = Worker {
+        self.redraw_log_as_it_grows(&identity);
+        worker.start(Reloader {
             launcher: self.downgrade(),
             identity,
             id,
-            folder: folder.clone(),
-            build: build.clone(),
-            watcher,
-            sources,
-            signals,
-            received,
-            stop,
-            work,
-            builds: 0,
-        };
-        std::thread::Builder::new()
-            .name("pane-develop".into())
-            .spawn(move || worker.run())
-            .expect("the development thread could not start");
+            executor: None,
+        });
         state.view.status = Status::Result(format!(
-            "Developing {title}: each save in {} runs `{}`, then reloads it",
+            "Developing {title}: each save in {} runs `{command}`, then reloads it",
             folder.display(),
-            build.command()
         ));
         self.refresh(&mut state);
     }
@@ -538,6 +556,7 @@ impl Launcher {
                         },
                         Entry::StopDeveloping(identity.clone()),
                     ));
+                    rows.push(logs_row(id("logs"), identity, &title));
                     if development.failure.is_some() {
                         rows.push((
                             Row {
@@ -557,8 +576,8 @@ impl Launcher {
 
     /// Shows why the last build of the package with `identity` failed: the
     /// command, the folder, where the whole output is and the end of it,
-    /// with a row that builds it again. Without a failure (it built
-    /// meanwhile), the extension list.
+    /// with a row that builds it again and one that shows its log. Without
+    /// a failure (it built meanwhile), the extension list.
     pub(super) fn show_build_details(&self, state: &mut State, identity: &PackageIdentity) {
         let report = self.developing.report(identity);
         let Some((development, failure)) =
@@ -597,22 +616,23 @@ impl Launcher {
             subtitle: Some(format!("Run `{}` now", development.command)),
             unavailable: None,
         };
+        let id = format!("build-logs:{}", identity.key());
+        let (logs, show_logs) = logs_row(id, identity, &title);
         state.next_screen();
-        state.entries = vec![Entry::BuildAgain(identity.clone())];
+        state.entries = vec![Entry::BuildAgain(identity.clone()), show_logs];
         let screen = Screen::BuildDetails {
             identity: identity.clone(),
             details,
         };
-        state.view = LauncherView::new(screen, build_details_title(&title)).with_rows(vec![again]);
+        state.view =
+            LauncherView::new(screen, build_details_title(&title)).with_rows(vec![again, logs]);
     }
 
     /// Builds the developed package with `identity` now, as a save would.
     pub(super) fn build_again(&self, state: &mut State, identity: &PackageIdentity) {
         let sessions = self.developing.sessions();
         match sessions.get(identity) {
-            Some(session) => {
-                let _ = session.signals.send(Signal::Saved);
-            }
+            Some(session) => session.session.build_now(),
             None => {
                 drop(sessions);
                 state.view.status = Status::Error(format!(
@@ -629,6 +649,15 @@ impl Launcher {
     /// kept for when the user returns to one of those, so it does not
     /// replace what that screen says.
     fn show_development(&self, identity: &PackageIdentity, status: Status) {
+        // The package's log has each step of its development.
+        let logged = match &status {
+            Status::Progress(text) | Status::Result(text) => Some((LogLevel::Info, text)),
+            Status::Error(text) => Some((LogLevel::Error, text)),
+            Status::Idle | Status::Running => None,
+        };
+        if let Some((level, text)) = logged {
+            self.developing.logs.pane(&identity.key(), 0, level, text);
+        }
         let mut state = self.lock();
         self.refresh(&mut state);
         let shown = match &state.view.screen {
@@ -658,47 +687,15 @@ impl Launcher {
     }
 
     /// Reports that the developed package's build failed: its code is not
-    /// replaced. The build's log is kept as the failed build's.
-    fn build_failed(
-        &self,
-        identity: &PackageIdentity,
-        id: u64,
-        build: &dyn Build,
-        reason: String,
-        output: BuildOutput,
-        work: &Path,
-    ) {
+    /// replaced. Its session's report already says why.
+    fn build_failed(&self, identity: &PackageIdentity, failure: &BuildFailure, command: &str) {
         let title = self.title_of(identity);
-        output.line(&reason);
-        let (output, earlier) = {
-            let output = output;
-            output.tail()
-        };
-        let log = std::fs::rename(work.join(BUILD_LOG), work.join(FAILED_LOG))
-            .ok()
-            .map(|()| work.join(FAILED_LOG));
-        let summary = first_error(output.iter().map(String::as_str))
-            .unwrap_or(&reason)
-            .trim_end_matches('.')
-            .to_owned();
-        let whole = match &log {
+        let summary = &failure.summary;
+        let whole = match &failure.log {
             Some(log) => format!("the whole output is in {}", log.display()),
             None => "Pane could not keep its output".into(),
         };
-        eprintln!(
-            "pane: {title} did not build with `{}`: {summary} ({whole})",
-            build.command()
-        );
-        let failure = BuildFailure {
-            summary: summary.clone(),
-            output,
-            earlier,
-            log,
-        };
-        self.developing.update(identity, id, |d| {
-            d.failure = Some(Arc::new(failure));
-            d.building = false;
-        });
+        eprintln!("pane: {title} did not build with `{command}`: {summary} ({whole})");
         self.show_development(
             identity,
             Status::Error(format!(
@@ -723,6 +720,23 @@ pub(super) fn build_details_title(title: &str) -> String {
     format!("Why {title} did not build")
 }
 
+/// "Logs for <title>".
+fn logs_title(title: &str) -> String {
+    format!("Logs for {title}")
+}
+
+/// The row with `id` that shows the Logs screen of the package with
+/// `identity`, titled `title`: in the extension list and a build's details.
+fn logs_row(id: String, identity: &PackageIdentity, title: &str) -> (Row, Entry) {
+    let row = Row {
+        id,
+        title: logs_title(title),
+        subtitle: Some("What it writes, and Pane's messages about it".into()),
+        unavailable: None,
+    };
+    (row, Entry::ExtensionLog(identity.clone()))
+}
+
 /// The name of the development folder of the package with `identity`: a
 /// hash of its identity, so that it is short and a valid file name.
 fn slot(identity: &PackageIdentity) -> String {
@@ -736,163 +750,27 @@ fn slot(identity: &PackageIdentity) -> String {
     format!("{hash:016x}")
 }
 
-/// Copies the components named by `from`'s `pane.json` from `from` to the
-/// same paths in `to`, replacing each file rather than writing through it
-/// (a Rust build's component is a hard link into `target`). Returns their
-/// paths, relative to both.
-fn copy_components(from: &Path, to: &Path) -> Vec<PathBuf> {
-    let Ok((manifest, _)) = Manifest::read_parsed(from) else {
-        return Vec::new();
-    };
-    let components = components(&manifest);
-    for component in &components {
-        let target = to.join(component);
-        if let Some(parent) = target.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = std::fs::remove_file(&target);
-        let _ = std::fs::copy(from.join(component), &target);
-    }
-    components
-}
-
-/// `path`, from an event of a watcher of `root` (canonical), relative to
-/// `root`; FSEvents may report it through another path to the same place.
-fn relative_to(root: &Path, path: &Path) -> Option<PathBuf> {
-    if let Ok(relative) = path.strip_prefix(root) {
-        return Some(relative.to_path_buf());
-    }
-    let resolved = canonical(path).ok().or_else(|| {
-        // Removed: its folder still exists.
-        let parent = canonical(path.parent()?).ok()?;
-        Some(parent.join(path.file_name()?))
-    })?;
-    resolved.strip_prefix(root).ok().map(Path::to_path_buf)
-}
-
-/// Watches `root` (canonical) for saves, as `build` tells them from its
-/// output: the folder itself and every top-level folder that is not the
-/// build's (not `target`, `node_modules`, `dist` or hidden ones), so the
-/// build's own writes are mostly not watched; saves deeper in the tree are
-/// still told apart by [`is_save`], and an event is a save only if its path
-/// changed since last seen (see [`Sources`]), which is returned with the
-/// watcher. Each save is sent to `signals`, and each folder that appeared at
-/// the top, to be watched too.
-fn watch(
-    root: &Path,
-    build: Arc<dyn Build>,
-    signals: Sender<Signal>,
-) -> Result<(RecommendedWatcher, Arc<Mutex<Sources>>), String> {
-    let watched = root.to_path_buf();
-    let filter = build.clone();
-    // Seen before watching, so that FSEvents telling of earlier writes is
-    // not a save.
-    let sources = Arc::new(Mutex::new(Sources::new(root, build.clone())));
-    let seen = sources.clone();
-    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-        let Ok(event) = event else { return };
-        // Reading a file (as the build does) is not a save.
-        let read = matches!(
-            event.kind,
-            EventKind::Access(_)
-                | EventKind::Modify(ModifyKind::Metadata(MetadataKind::AccessTime))
-        );
-        if read {
-            return;
-        }
-        let mut sources = seen.lock().unwrap_or_else(|p| p.into_inner());
-        let saved = if event.need_rescan() {
-            sources.rescan()
-        } else {
-            let mut saved = false;
-            for relative in event
-                .paths
-                .iter()
-                .filter_map(|path| relative_to(&watched, path))
-                .filter(|relative| is_save(relative, &*filter))
-            {
-                saved |= sources.changed(&relative);
-            }
-            saved
-        };
-        for folder in sources.take_new_folders() {
-            let _ = signals.send(Signal::Folder(folder));
-        }
-        drop(sources);
-        if saved {
-            let _ = signals.send(Signal::Saved);
-        }
-    })
-    .map_err(|error| format!("Pane could not watch {}: {error}", root.display()))?;
-    let watch = |watcher: &mut RecommendedWatcher, path: &Path, mode| {
-        watcher
-            .watch(path, mode)
-            .map_err(|error| format!("Pane could not watch {}: {error}", path.display()))
-    };
-    watch(&mut watcher, root, RecursiveMode::NonRecursive)?;
-    let entries = std::fs::read_dir(root)
-        .map_err(|error| format!("Pane could not read {}: {error}", root.display()))?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = PathBuf::from(entry.file_name());
-        if path.is_dir() && is_save(&name, &*build) {
-            watch(&mut watcher, &path, RecursiveMode::Recursive)?;
-        }
-    }
-    Ok((watcher, sources))
-}
-
-/// A developed package's thread: waits for saves, builds, and reloads.
-struct Worker {
+/// The launcher as the host of a developed package's session: it reloads
+/// the package from each build that succeeds, as the Reload row reloads
+/// the source folder.
+struct Reloader {
     launcher: WeakLauncher,
     identity: PackageIdentity,
-    /// The session this thread belongs to.
+    /// The session this host belongs to.
     id: u64,
-    /// The source folder, canonical.
-    folder: PathBuf,
-    build: Arc<dyn Build>,
-    watcher: RecommendedWatcher,
-    /// What the watcher last saw of the folder.
-    sources: Arc<Mutex<Sources>>,
-    signals: Sender<Signal>,
-    received: Receiver<Signal>,
-    stop: BuildStop,
-    /// The package's development folder: staging folders and logs.
-    work: PathBuf,
-    /// How many builds this session ran.
-    builds: u64,
+    /// Runs the reloads, which are futures, on the session's thread; made
+    /// there, for the first.
+    executor: Option<tokio::runtime::Runtime>,
 }
 
-/// How a wait for the folder to settle ended.
-enum Waited {
-    Settled,
-    Stopped,
+/// A build the launcher claimed: its package is being reloaded.
+struct Reloading {
+    launcher: Launcher,
+    /// What the reload reported.
+    status: Status,
 }
 
-/// How acting on a successful build ended.
-enum Concluded {
-    /// It was reloaded, or found failed.
-    Done,
-    /// The folder was saved before it could be reloaded: it is obsolete.
-    Saved,
-    /// Development ended.
-    Stopped,
-}
-
-impl Worker {
-    fn run(mut self) {
-        // Reloads are futures; this thread waits for them.
-        let Ok(executor) = tokio::runtime::Builder::new_current_thread().build() else {
-            return;
-        };
-        while self.wait_for_save() {
-            if !self.develop(&executor) {
-                break;
-            }
-        }
-        let _ = std::fs::remove_dir_all(self.work.join("staging"));
-    }
-
+impl Reloader {
     /// The launcher, if the package is still developed by this session.
     fn current(&self) -> Option<Launcher> {
         let launcher = self.launcher.upgrade()?;
@@ -901,247 +779,108 @@ impl Worker {
             .is_current(&self.identity, self.id)
             .then_some(launcher)
     }
+}
 
-    /// Changes this session's report, if the package is still developed
-    /// by it.
-    fn update(&self, change: impl FnOnce(&mut Development)) {
-        if let Some(launcher) = self.launcher.upgrade() {
-            launcher.developing.update(&self.identity, self.id, change);
-        }
+impl Host for Reloader {
+    type Claim = Reloading;
+
+    fn is_current(&self) -> bool {
+        self.current().is_some()
     }
 
-    /// Builds after a save until a build ends with no newer save, and acts
-    /// on it. Returns false once development ended.
-    fn develop(&mut self, executor: &tokio::runtime::Runtime) -> bool {
-        let mut obsolete = 0;
-        loop {
-            if let Waited::Stopped = self.settle() {
-                return false;
-            }
-            let Some(launcher) = self.current() else {
-                return false;
-            };
+    fn building(&self, command: &str) {
+        if let Some(launcher) = self.launcher.upgrade() {
             let title = launcher.title_of(&self.identity);
-            self.update(|d| {
-                d.building = true;
-                d.pending = false;
-            });
             launcher.show_development(
                 &self.identity,
-                Status::Progress(format!("Building {title}: {}…", self.build.command())),
+                Status::Progress(format!("Building {title}: {command}…")),
             );
-            drop(launcher);
-            self.builds += 1;
-            let staging = self
-                .work
-                .join("staging")
-                .join(format!("build-{}", self.builds));
-            let output = BuildOutput::new(Some(&self.work.join(BUILD_LOG)));
-            let built = match stage_package(&self.folder, &staging) {
-                Ok(()) => self.build_once(&staging, &output),
-                Err(error) => Some((
-                    BuildOutcome::Failed(format!(
-                        "Pane could not stage the package in {}: {error}",
-                        staging.display()
-                    )),
-                    false,
-                )),
-            };
-            let concluded = match built {
-                None => Concluded::Stopped,
-                Some((_, true)) => Concluded::Saved,
-                Some((BuildOutcome::Stopped, false)) => Concluded::Stopped,
-                Some((BuildOutcome::Failed(reason), false)) => {
-                    if let Some(launcher) = self.current() {
-                        launcher.build_failed(
-                            &self.identity,
-                            self.id,
-                            &*self.build,
-                            reason,
-                            output,
-                            &self.work,
-                        );
-                    }
-                    Concluded::Done
-                }
-                Some((BuildOutcome::Built, false)) => self.reload(executor, &staging),
-            };
-            let _ = std::fs::remove_dir_all(&staging);
-            match concluded {
-                Concluded::Stopped => return false,
-                Concluded::Done => {
-                    self.finished();
-                    return true;
-                }
-                Concluded::Saved => {
-                    obsolete += 1;
-                    self.update(|d| d.obsolete += 1);
-                    let Some(launcher) = self.current() else {
-                        return false;
-                    };
-                    if let Some(installed) = launcher.installed_location(&self.identity) {
-                        self.write_components(&installed);
-                    }
-                    if obsolete >= MAX_OBSOLETE {
-                        let title = launcher.title_of(&self.identity);
-                        self.update(|d| d.building = false);
-                        launcher.show_development(
-                            &self.identity,
-                            Status::Error(format!(
-                                "{title} was not reloaded: its sources kept changing during \
-                                 {MAX_OBSOLETE} builds in a row. Save again to build it."
-                            )),
-                        );
-                        self.finished();
-                        return true;
-                    }
-                }
-            }
         }
     }
 
-    /// Notes that a save was acted on.
-    fn finished(&self) {
-        self.update(|d| {
-            d.building = false;
-            d.waiting = false;
-            d.finished += 1;
-        });
+    fn failed(&self, failure: &BuildFailure, command: &str) {
         if let Some(launcher) = self.launcher.upgrade() {
-            launcher.developing.changed();
+            launcher.build_failed(&self.identity, failure, command);
         }
     }
 
-    /// Reloads the package from the build staged in `staging`, once nothing
-    /// else changes it, and copies the components to the source folder.
-    fn reload(&mut self, executor: &tokio::runtime::Runtime, staging: &Path) -> Concluded {
-        let launcher = loop {
-            let Some(launcher) = self.current() else {
-                return Concluded::Stopped;
-            };
-            {
-                // Checked under the lock that disabling, uninstalling and
-                // stopping take, so that none is overtaken.
-                let mut state = launcher.lock();
-                if !launcher.developing.is_current(&self.identity, self.id)
-                    || launcher
-                        .changeable(&state, &self.identity, "reload")
-                        .is_err()
-                {
-                    return Concluded::Stopped;
-                }
-                if !state.changing.contains_key(&self.identity) {
-                    state.claim(&self.identity, Changing::Reloading);
-                    break launcher.clone();
-                }
-            }
-            drop(launcher);
-            // A Reload or update is changing it: wait for it to end.
-            self.update(|d| d.waiting = true);
-            match self.received.recv_timeout(CLAIM_RETRY) {
-                Ok(Signal::Saved) => return Concluded::Saved,
-                Ok(Signal::Folder(folder)) => self.watch_folder(&folder),
-                Ok(Signal::Built(_)) | Err(RecvTimeoutError::Timeout) => {}
-                Ok(Signal::Stop) | Err(RecvTimeoutError::Disconnected) => {
-                    return Concluded::Stopped;
-                }
-            }
+    fn claim(&self) -> Claim<Reloading> {
+        let Some(launcher) = self.current() else {
+            return Claim::Ended;
         };
-        self.update(|d| {
-            d.building = false;
-            d.waiting = false;
-            d.failure = None;
-        });
-        launcher.developing.changed();
+        // Checked under the lock that disabling, uninstalling and stopping
+        // take, so that none is overtaken.
+        let mut state = launcher.lock();
+        if !launcher.developing.is_current(&self.identity, self.id)
+            || launcher
+                .changeable(&state, &self.identity, "reload")
+                .is_err()
+        {
+            return Claim::Ended;
+        }
+        // A Reload or update is changing it: the session waits for it to
+        // end.
+        if state.changing.contains_key(&self.identity) {
+            return Claim::Busy;
+        }
+        state.claim(&self.identity, Changing::Reloading);
+        drop(state);
+        Claim::Claimed(Reloading {
+            launcher,
+            status: Status::Idle,
+        })
+    }
+
+    fn deliver(&mut self, claim: &mut Reloading, staging: &Path) -> bool {
+        let launcher = &claim.launcher;
+        let executor = match &mut self.executor {
+            Some(executor) => executor,
+            empty => match tokio::runtime::Builder::new_current_thread().build() {
+                Ok(executor) => empty.insert(executor),
+                Err(error) => {
+                    let title = launcher.title_of(&self.identity);
+                    claim.status = Status::Error(format!("Pane could not reload {title}: {error}"));
+                    return false;
+                }
+            },
+        };
         let epoch = launcher.lock().screen_epoch;
         let reload = Reload::staged(self.identity.clone(), staging.to_path_buf());
         let reloaded = executor.block_on(launcher.carry_out(epoch, reload));
-        if reloaded.replaced {
-            self.write_components(staging);
-        }
+        claim.status = reloaded.status;
+        reloaded.replaced
+    }
+
+    fn delivered(&self, claim: Reloading) {
+        let Reloading { launcher, status } = claim;
         {
             let mut state = launcher.lock();
             state.release(&self.identity);
             launcher.refresh(&mut state);
         }
-        launcher.show_development(&self.identity, reloaded.status);
-        Concluded::Done
+        launcher.show_development(&self.identity, status);
     }
 
-    /// Waits for a save; returns false if development ends first.
-    fn wait_for_save(&mut self) -> bool {
-        loop {
-            match self.received.recv() {
-                Ok(Signal::Saved) => return true,
-                Ok(Signal::Folder(folder)) => self.watch_folder(&folder),
-                Ok(Signal::Built(_)) => {}
-                Ok(Signal::Stop) | Err(_) => return false,
-            }
+    fn installed(&self) -> Option<PathBuf> {
+        self.launcher.upgrade()?.installed_location(&self.identity)
+    }
+
+    fn gave_up(&self) {
+        if let Some(launcher) = self.launcher.upgrade() {
+            let title = launcher.title_of(&self.identity);
+            launcher.show_development(
+                &self.identity,
+                Status::Error(format!(
+                    "{title} was not reloaded: its sources kept changing during \
+                     {MAX_OBSOLETE} builds in a row. Save again to build it."
+                )),
+            );
         }
     }
 
-    /// Waits until no save arrived for [`SETTLE`].
-    fn settle(&mut self) -> Waited {
-        loop {
-            match self.received.recv_timeout(SETTLE) {
-                Ok(Signal::Saved | Signal::Built(_)) => {}
-                Ok(Signal::Folder(folder)) => self.watch_folder(&folder),
-                Err(RecvTimeoutError::Timeout) => return Waited::Settled,
-                Ok(Signal::Stop) | Err(RecvTimeoutError::Disconnected) => return Waited::Stopped,
-            }
+    fn changed(&self) {
+        if let Some(launcher) = self.launcher.upgrade() {
+            launcher.developing.changed();
         }
-    }
-
-    /// Runs the build, staging into `staging`, on a thread of its own while
-    /// listening for saves. Returns its outcome and whether a save arrived
-    /// meanwhile, or `None` if development ended; its processes are then
-    /// already killed, and the build is not waited for.
-    fn build_once(&mut self, staging: &Path, output: &BuildOutput) -> Option<(BuildOutcome, bool)> {
-        let build = self.build.clone();
-        let job = BuildJob::with(self.stop.clone(), staging.to_path_buf(), output.clone());
-        let signals = self.signals.clone();
-        let running = std::thread::Builder::new()
-            .name("pane-build".into())
-            .spawn(move || {
-                let _ = signals.send(Signal::Built(build.run(&job)));
-            })
-            .expect("the build thread could not start");
-        let mut saved = false;
-        loop {
-            match self.received.recv() {
-                Ok(Signal::Saved) => {
-                    if !saved {
-                        saved = true;
-                        self.update(|d| d.pending = true);
-                    }
-                }
-                Ok(Signal::Folder(folder)) => self.watch_folder(&folder),
-                Ok(Signal::Built(outcome)) => {
-                    let _ = running.join();
-                    if self.stop.is_stopped() {
-                        return None;
-                    }
-                    return Some((outcome, saved));
-                }
-                Ok(Signal::Stop) | Err(_) => {
-                    self.stop.stop();
-                    return None;
-                }
-            }
-        }
-    }
-
-    /// Copies the components in `from` to the source folder; the copies
-    /// are not saves.
-    fn write_components(&self, from: &Path) {
-        // Held while writing, so that the watcher sees them as written.
-        let mut sources = self.sources.lock().unwrap_or_else(|p| p.into_inner());
-        for component in copy_components(from, &self.folder) {
-            sources.wrote(&component);
-        }
-    }
-
-    fn watch_folder(&mut self, folder: &Path) {
-        let _ = self.watcher.watch(folder, RecursiveMode::Recursive);
     }
 }

@@ -188,6 +188,8 @@ impl Launcher {
             installation.data.uninstall(identity);
             // Its development ends, with a build that is running.
             self.developing.end(Some(identity));
+            // So does what Pane kept of its log.
+            self.developing.logs.forget(&identity.key());
             let commands: Vec<PathBuf> = package
                 .commands()
                 .into_iter()

@@ -2,7 +2,7 @@
 //
 // Declarations for `pane:extension/programs` in wit/programs.wit: running
 // programs installed on the system. Most commands use them through
-// `@pane/extension/programs` (programs.d.ts). A command imports the
+// `@pane-app/extension/programs` (programs.d.ts). A command imports the
 // interface only if its bundle uses it.
 
 /** `pane:extension/programs@0.1.0`. */

@@ -7,7 +7,7 @@
   "type": "module",
   "main": "src/index.ts",
   "devDependencies": {
-    "@pane/extension": "file:../js"
+    "@pane-app/extension": "file:../js"
   },
   "pane": {
     "indexedResults": true

@@ -8,12 +8,12 @@
 //! was while its toast shows.
 #![no_std]
 
-use pane_guest::alloc::{format, string::String};
-use pane_guest::feedback::{Toast, show_toast};
-use pane_guest::{Command, LaunchRecord, LaunchType, NoCustomView};
+use pane_extension::alloc::{format, string::String};
+use pane_extension::feedback::{Toast, show_toast};
+use pane_extension::{Command, LaunchRecord, LaunchType, NoCustomView};
 
 struct Echo;
-pane_guest::export!(Echo);
+pane_extension::export!(Echo);
 
 /// The text Echo answers with an error, to show how a failure looks.
 const REFUSED: &str = "fail";

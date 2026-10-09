@@ -4,7 +4,7 @@
 [workspace]
 resolver = "3"
 members = [
-    "pane-guest",
+    "pane-extension",
     "sample-rust",
     "sample-settings",
     "calculator",
@@ -41,13 +41,15 @@ members = [
 # package built in its own folder, as an author's is.
 exclude = ["fixtures/mixed-p2", "helpers/echo", "hello-rust"]
 
+# Every guest is private but the SDK, `pane-extension`, which does not
+# inherit `publish`.
 [workspace.package]
 edition = "2024"
 publish = false
 license = "Apache-2.0 OR MIT"
 
 [workspace.dependencies]
-pane-guest = { path = "pane-guest" }
+pane-extension = { path = "pane-extension" }
 
 [profile.release]
 panic = "abort"

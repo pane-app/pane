@@ -2,7 +2,7 @@
 //
 // Declarations for `pane:extension/window` and `pane:extension/feedback` in
 // wit/feedback.wit: closing Pane's window, and toasts and HUDs. Most
-// commands use them through `@pane/extension/feedback` (feedback.d.ts),
+// commands use them through `@pane-app/extension/feedback` (feedback.d.ts),
 // whose toast actions are functions.
 
 /** `pane:extension/window@0.1.0`. */

@@ -6,8 +6,8 @@
 // builds the package with tools/componentize-js/pane_js.py and reloads it
 // while it keeps running; "Say hello" then shows the new text in a toast.
 // See guests/README.md.
-import type { Command } from "@pane/extension";
-import { showToast } from "@pane/extension/feedback";
+import type { Command } from "@pane-app/extension";
+import { showToast } from "@pane-app/extension/feedback";
 
 /** What "Say hello" shows in a toast. */
 const GREETING: string = "Hello from TypeScript";

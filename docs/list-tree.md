@@ -24,17 +24,17 @@ Grid, Form, navigation and the canvas to the same envelope without
 redefining it. Forms (#20) and custom views (#21) keep their own functions,
 `submit-form` and `open-view`, which take the item's id.
 
-Authors never see the JSON or the callback ids. In Rust (`pane-guest`) a
-command implements `pane_guest::Command`, whose `render` returns a
-`pane_guest::List` of `pane_guest::Item`s with closures as actions
+Authors never see the JSON or the callback ids. In Rust (`pane-extension`) a
+command implements `pane_extension::Command`, whose `render` returns a
+`pane_extension::List` of `pane_extension::Item`s with closures as actions
 (`Item::new(id, title).action(Action::new("Open", || async { Ok("Done".into()) }))`,
 or an untitled `.on_action(..)`). In JavaScript and TypeScript
-(`@pane/extension`) the exported `command`'s `render` resolves with
+(`@pane-app/extension`) the exported `command`'s `render` resolves with
 `{ title, items }`, each item with `actions` (objects with a `title` and an
 `onAction` function) or an untitled `onAction` function; the SDK's adapter
 (`guests/js/adapt.js`) writes the tree. A Rust command whose screen is a
 form returns `List::form(id, form)`, its fields filled in with
-`.value(field, value)`; `pane_guest::commands::current().command` says which
+`.value(field, value)`; `pane_extension::commands::current().command` says which
 of a component's commands is opened (the launch record's `command`), so one
 component can draw several view commands' screens. The JavaScript SDK does
 not write form screens yet. Both SDKs name an item's first
@@ -353,10 +353,10 @@ out.
 }
 ```
 
-In Rust, `pane_guest::{Icon, Accessory, Tone, Color, Tint, Mask}` build them
+In Rust, `pane_extension::{Icon, Accessory, Tone, Color, Tint, Mask}` build them
 (`Item::new(..).icon(Icon::builtin("user").tint(Tone::Blue))
 .accessory(Accessory::tag("Open").color(Tone::Green))`), and
-`pane_guest::icon::{avatar, progress_ring}` build an avatar of initials and
+`pane_extension::icon::{avatar, progress_ring}` build an avatar of initials and
 a progress ring. In JavaScript and TypeScript, an item's `icon` and
 `accessories` take these shapes as they are (a `date` may be a `Date`), and
-`@pane/extension/icons` exports `avatar` and `progressRing`.
+`@pane-app/extension/icons` exports `avatar` and `progressRing`.

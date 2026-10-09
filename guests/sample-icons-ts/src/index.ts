@@ -13,9 +13,9 @@
 // icon" has two more actions with icons in the Actions panel, "Copy Name"
 // and "Open Image", and every row's action and each of these tells the
 // user "Chose <title>" in a toast.
-import type { Accessory, Action, Command, CustomView, Icon, Item, List } from "@pane/extension";
-import { showToast } from "@pane/extension/feedback";
-import { avatar, favicon, fileIcon, progressRing } from "@pane/extension/icons";
+import type { Accessory, Action, Command, CustomView, Icon, Item, List } from "@pane-app/extension";
+import { showToast } from "@pane-app/extension/feedback";
+import { avatar, favicon, fileIcon, progressRing } from "@pane-app/extension/icons";
 import { get } from "pane:extension/settings@0.1.0";
 
 /** 2026-01-01T00:00:00Z: the "Packaged image" row's date. */

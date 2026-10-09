@@ -207,6 +207,9 @@ pub(super) struct Shared {
     /// What the window and feedback host functions do: the launcher's.
     pub(super) host_functions: SharedHostFunctions,
     pub(super) health: Arc<Mutex<Option<HealthReport>>>,
+    /// Every package's extension log: what guests print, and the runtime's
+    /// own messages about their packages.
+    pub(super) logs: crate::extension_log::ExtensionLogs,
     /// Custom view ids, never reused, even by a restarted thread: a view
     /// the window still shows from a crashed one must not name a new view.
     pub(super) next_view: Arc<AtomicU64>,
@@ -339,6 +342,7 @@ impl Shared {
             launches: SharedLaunches::default(),
             host_functions: SharedHostFunctions::default(),
             health: Arc::default(),
+            logs: Default::default(),
             next_view: Arc::default(),
             network: Arc::default(),
             #[cfg(any(test, debug_assertions))]

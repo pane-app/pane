@@ -47,6 +47,7 @@ use std::time::Instant;
 
 use super::{Launcher, State, Status, owner};
 use crate::extension_data::PackageData;
+use crate::extension_log::LogLevel;
 use crate::generation::End;
 use crate::packages::{PackageError, PackageIdentity, Pause, PauseCause, Store};
 use crate::runtime::{CallError, Health};
@@ -323,6 +324,12 @@ impl Launcher {
     /// of it: its generation ends, which stops its calls and drops its
     /// instances, and a command of it that is open closes.
     pub(super) fn pause(&self, state: &mut State, identity: &PackageIdentity, pause: Pause) {
+        self.developing.logs.pane(
+            &identity.key(),
+            0,
+            LogLevel::Warn,
+            &format!("Pane paused the extension: {}", pause.why),
+        );
         if let Some(installation) = &self.installation {
             installation.data.pause(identity);
             installation.records.record(identity, Some(pause.clone()));

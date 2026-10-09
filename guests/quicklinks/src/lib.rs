@@ -22,14 +22,14 @@
 mod links;
 mod transfer;
 
-use pane_guest::alloc::{format, string::String, vec, vec::Vec};
-use pane_guest::commands::{self, CommandRef, LaunchType};
-use pane_guest::feedback::{self, Confirmation, Toast, ToastStyle};
-use pane_guest::icon::{self, Accessory, Icon, Tone};
-use pane_guest::indexed::{IndexedAction, IndexedResult, OpenTarget};
-use pane_guest::system::{self, Clip};
-use pane_guest::window;
-use pane_guest::{
+use pane_extension::alloc::{format, string::String, vec, vec::Vec};
+use pane_extension::commands::{self, CommandRef, LaunchType};
+use pane_extension::feedback::{self, Confirmation, Toast, ToastStyle};
+use pane_extension::icon::{self, Accessory, Icon, Tone};
+use pane_extension::indexed::{IndexedAction, IndexedResult, OpenTarget};
+use pane_extension::system::{self, Clip};
+use pane_extension::window;
+use pane_extension::{
     Action, Command, Field, FieldKind, FieldValue, Form, FormError, Item, LaunchRecord, List,
     Modifier, NoCustomView, Shortcut, TextField, actions, applications,
 };
@@ -37,8 +37,8 @@ use pane_guest::{
 use links::Quicklink;
 
 struct Quicklinks;
-pane_guest::export!(Quicklinks);
-pane_guest::indexed::export!(Quicklinks);
+pane_extension::export!(Quicklinks);
+pane_extension::indexed::export!(Quicklinks);
 
 /// The commands' ids in `pane.json`.
 const SEARCH: &str = "quicklinks";
@@ -440,7 +440,7 @@ impl Command for Quicklinks {
     }
 }
 
-impl pane_guest::indexed::Guest for Quicklinks {
+impl pane_extension::indexed::Guest for Quicklinks {
     /// One result per quicklink: its name, found in root search like a
     /// command's title, its target as the subtitle, and Pane opening the
     /// target (with its application, if it has one) when invoked.

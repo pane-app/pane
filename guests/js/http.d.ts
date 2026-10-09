@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
-// Declarations for `@pane/extension/http` (http.js): web requests through
+// Declarations for `@pane-app/extension/http` (http.js): web requests through
 // `wasi:http@0.3.0`'s client, which Pane sends for the command.
 
 /** A response read to its end. */

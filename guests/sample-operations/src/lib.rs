@@ -1,7 +1,7 @@
 //! Pane's operations sample in Rust. Its package publishes the operation
 //! `greet` (under `operations` in its pane.json), served by
 //! [`publish::Guest::run_operation`], and its command calls the `greet`
-//! operation of another package, with [`pane_guest::operations::call`]:
+//! operation of another package, with [`pane_extension::operations::call`]:
 //! a form asks for that package's source (its identity, as Pane shows it:
 //! `local:` and the folder it was installed from), a name, and whether to
 //! ask once or twice at once. Items, titles, results and errors match the
@@ -17,17 +17,17 @@
 //! meanwhile stops it; the "wait" item calls it.
 #![no_std]
 
-use pane_guest::alloc::{format, string::String, string::ToString, vec, vec::Vec};
-use pane_guest::operations::call;
-use pane_guest::{
+use pane_extension::alloc::{format, string::String, string::ToString, vec, vec::Vec};
+use pane_extension::operations::call;
+use pane_extension::{
     Choice, Command, CustomView, Field, FieldKind, FieldValue, Form, FormError, Item, List,
     NoCustomView, TextField, publish, settings,
 };
 use serde_json::{Value, json};
 
 struct Operations;
-pane_guest::export!(Operations);
-pane_guest::publish::export!(Operations);
+pane_extension::export!(Operations);
+pane_extension::publish::export!(Operations);
 
 /// Calls `greet` version 1 of the package with `source` for `name`, and
 /// returns its greeting, or why there is none ("<kind>: <message>").

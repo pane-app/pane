@@ -57,7 +57,7 @@ declare module "pane:extension/credentials@0.1.0" {
 /**
  * `pane:extension/preferences@0.1.0` (wit/preferences.wit): the effective
  * values of the preferences the command's package declares in `pane.json`,
- * as JSON text. Use `getPreferenceValues` from `@pane/extension/preferences`,
+ * as JSON text. Use `getPreferenceValues` from `@pane-app/extension/preferences`,
  * which parses it.
  */
 declare module "pane:extension/preferences@0.1.0" {

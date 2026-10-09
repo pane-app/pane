@@ -524,7 +524,7 @@ JavaScript and TypeScript) ([author guide](../guests/README.md#panes-file-index)
 - `status` answers the state (off, building, current, stopped), the
   entries indexed, the entries the walk in progress found and why.
 
-Rust: `pane_guest::file_index::{search, status}` and
+Rust: `pane_extension::file_index::{search, status}` and
 `RootAction::OpenFile(entry.id)`; JavaScript and TypeScript: `search` and
 `status` from `"pane:extension/file-index@0.1.0"`
 ([`guests/js/file-index.d.ts`](../guests/js/file-index.d.ts); WIT's `u64`

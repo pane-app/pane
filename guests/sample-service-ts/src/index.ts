@@ -26,8 +26,8 @@
 import { get, set } from "pane:extension/settings@0.1.0";
 import * as content from "pane:extension/content@0.1.0";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
-import type { Cycle, Item, List, Service } from "@pane/extension";
-import { showToast } from "@pane/extension/feedback";
+import type { Cycle, Item, List, Service } from "@pane-app/extension";
+import { showToast } from "@pane-app/extension/feedback";
 
 /** The content key holding how many cycles the service has run, ever. */
 const CYCLES = "cycles";

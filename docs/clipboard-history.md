@@ -55,7 +55,7 @@ for expiry [ADR 0023](adr/0023-host-expires-clipboard-history-by-its-own-clock.m
   It declares the three systems with an adapter
   (`"platforms": ["windows", "macos", "linux"]`), so its command runs
   wherever Pane runs. Rust commands use the import through
-  `pane_guest::clipboard_history`; JavaScript and TypeScript commands import
+  `pane_extension::clipboard_history`; JavaScript and TypeScript commands import
   it when their package.json sets `"pane": { "clipboardHistory": true }`
   ([`guests/js/clipboard.d.ts`](../guests/js/clipboard.d.ts)), and only
   then, as for `files`. The samples

@@ -1,5 +1,7 @@
 # The UI is accepted as built, and the reference comparison is retired
 
+**Amended:** [ADR 0035](0035-the-launcher-borrows-raycasts-polish-within-the-accepted-ui.md) (accepted 2026-10-06) takes a few details from Raycast within the accepted design: selection without an edge, bare application icons, a late loading indicator, toasts and HUDs that leave by themselves, and text levels by alpha. The acceptance, the retired reference comparison and judging the UI in the app still hold. Preserve the original text below; use ADR 0035 for those details.
+
 Accepted 2026-10-06 by the user's decision: the user is happy with the launcher and Settings UI as they now are, after the Windows port of #90 and the Raycast-style redesign of #105. The UI's acceptance is the user's judgement of the app itself, no longer a measured match to the authored reference.
 
 So the reference comparison is gone. The visual fixture (the `pane-visual-fixture` program and its scenes), the workbench that captured the reference's boards and the fixture side by side and compared them (`scripts/visual-workbench*`, `docs/visual-workbench.md`), the re-extracted reference boards (`docs/research/ui-port/reference/`) and the retained authored page (`docs/evidence/ui-prototype/reference/`) are removed, with the UI code only the fixture drew. The theme's values stay as they are. Comments that name the reference as where a value came from stay, as its history; links to the removed files lead to the archived copy (tag `archive/impl-ui-91-2026-10-06`).

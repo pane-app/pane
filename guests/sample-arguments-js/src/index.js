@@ -22,7 +22,7 @@
 //
 // A command launched in the background does its work but shows no toast.
 // @ts-check
-import { showToast } from "@pane/extension/feedback";
+import { showToast } from "@pane-app/extension/feedback";
 import { launch } from "pane:extension/commands@0.1.0";
 import { get, set } from "pane:extension/settings@0.1.0";
 
@@ -33,7 +33,7 @@ const STAMP = "stamp";
 
 /**
  * The value of the argument `name` in `record`, if it has one.
- * @param {import("@pane/extension").LaunchRecord} record
+ * @param {import("@pane-app/extension").LaunchRecord} record
  * @param {string} name
  * @returns {string | undefined}
  */
@@ -43,7 +43,7 @@ function argument(record, name) {
 
 /**
  * What "Greet" shows for `record`, counting the run.
- * @param {import("@pane/extension").LaunchRecord} record
+ * @param {import("@pane-app/extension").LaunchRecord} record
  * @returns {string}
  */
 function greet(record) {
@@ -63,7 +63,7 @@ function greet(record) {
 
 /**
  * What "Stamp" shows for `record`, keeping what it stamped.
- * @param {import("@pane/extension").LaunchRecord} record
+ * @param {import("@pane-app/extension").LaunchRecord} record
  * @returns {string}
  */
 function stamp(record) {
@@ -106,7 +106,7 @@ function relay(text) {
   return background ? `Relayed ${named} in the background` : `Relayed ${named}`;
 }
 
-/** @type {import("@pane/extension").Command} */
+/** @type {import("@pane-app/extension").Command} */
 export const command = {
   async run(id, record) {
     /** @type {string} */

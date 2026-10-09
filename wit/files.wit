@@ -11,7 +11,7 @@ package pane:extension@0.1.0;
 // files against root search's query and answers `open-file` results
 // (wit/root-results.wit) with the ids Pane gave the files, which Pane opens
 // with the system's handler once it has checked them again. Rust commands
-// use it through pane-guest (`pane_guest::files`), JS/TS commands as the
+// use it through pane-extension (`pane_extension::files`), JS/TS commands as the
 // module "pane:extension/files@0.1.0" (guests/js/files.d.ts), imported only
 // by a command whose package.json sets `"pane": { "files": true }`. Kept
 // apart from the other files so a command that lists none is unchanged.

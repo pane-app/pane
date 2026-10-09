@@ -86,6 +86,9 @@ pub struct LauncherWindow {
     /// Pane's Search Files in the split view, while its command is open;
     /// see [`features::search_files`].
     pub(crate) files: Option<crate::features::search_files::SearchFiles>,
+    /// A package's Logs screen, while the launcher shows it; see
+    /// [`features::extension_log`].
+    pub(crate) log: Option<crate::features::extension_log::ExtensionLogView>,
     /// The footer toast's focus and time; see [`features::toast`].
     pub(crate) toast: toast::ToastControls,
     /// The HUD's window, while one shows; see [`features::hud`].
@@ -208,6 +211,7 @@ impl LauncherWindow {
             actions: None,
             clipboard: None,
             files: None,
+            log: None,
             toast: toast::ToastControls::new(cx),
             hud: hud::HudWindow::default(),
             confirmation: confirmation::ConfirmationControls::new(cx),
@@ -505,6 +509,11 @@ impl LauncherWindow {
     /// opens the Actions panel at the submenu an item's primary action
     /// opens (#140), or activates the row.
     fn invoke_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // The Logs screen's lines are its own: the selected one is copied.
+        if self.extension_log_open() {
+            self.copy_log_line(cx);
+            return;
+        }
         let primary_submenu = actions_panel::item_list(&self.launcher.screen())
             && self
                 .launcher
@@ -819,7 +828,7 @@ impl LauncherWindow {
     /// of the launcher — the hotkey's show path, a command's hotkey, an
     /// entry point that reaches the launcher from Settings — must find a
     /// visible window, opened on the display the placement resolves.
-    fn unhide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn unhide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.launcher.set_window_presence(WindowPresence::Shown);
         if self.presence.show() {
             window.set_visible(true);
@@ -1232,6 +1241,9 @@ impl LauncherWindow {
         self.sync_clipboard_history(window, cx);
         // Search Files keeps root search's field, in its split view.
         self.sync_search_files(window, cx);
+        // A package's Logs screen reads its lines again, and takes the
+        // focus as it opens.
+        self.sync_extension_log(window, cx);
         self.sync_home(cx);
         // Last of all: a confirmation a command waits on keeps the focus
         // over whatever screen is shown (#146).
@@ -1722,7 +1734,8 @@ impl Render for LauncherWindow {
             | Screen::Hotkey { .. }
             | Screen::PauseDetails { .. }
             | Screen::RuntimeDetails { .. }
-            | Screen::BuildDetails { .. } => "",
+            | Screen::BuildDetails { .. }
+            | Screen::ExtensionLog { .. } => "",
         };
         // The footer's left at rest on a screen with no heading line: the
         // open command (#162). Read before the rows move out of the view.
@@ -1932,6 +1945,12 @@ impl Render for LauncherWindow {
                 );
                 self.render_search(query, root_search::COMMAND_PLACEHOLDER, results, cx)
             }
+            // A package's Logs screen draws its lines itself, and holds the
+            // keyboard focus (#213).
+            Screen::ExtensionLog { .. } => match self.render_extension_log(cx) {
+                Some(log) => motion::arriving(log, arriving).into_any_element(),
+                None => div().into_any_element(),
+            },
             // The list holds keyboard focus; the selected row is its active
             // descendant, and key actions bubble to the root. A command's
             // list is dimmed under its open Actions panel, as root search is.

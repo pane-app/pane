@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
-// Web requests for JS/TS commands (`@pane/extension/http`), through
+// Web requests for JS/TS commands (`@pane-app/extension/http`), through
 // `wasi:http@0.3.0`'s client, which Pane sends for the command (`http` and
 // `https`, over HTTP/1.1, trusting the system's certificates). Bundled into
 // the command that imports it, like any npm module.

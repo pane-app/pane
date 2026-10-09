@@ -30,7 +30,7 @@ use crate::runtime::{CallError, Exports};
 use pane_target::Target;
 
 /// The manifest file at the root of every package.
-pub const MANIFEST_FILE: &str = "pane.json";
+pub const MANIFEST_FILE: &str = pane_build::MANIFEST_FILE;
 
 /// The manifest format version this Pane reads.
 pub const MANIFEST_VERSION: u64 = 1;
@@ -324,28 +324,7 @@ pub(crate) fn folder_name(folder: &Path) -> String {
         .unwrap_or_else(|| folder.display().to_string())
 }
 
-/// `path` resolved as a package identity's folder is: canonical, in the
-/// ordinary spelling on Windows.
-pub(crate) fn canonical(path: &Path) -> io::Result<PathBuf> {
-    fs::canonicalize(path).map(without_verbatim_prefix)
-}
-
-/// Windows' canonical paths carry a `\\?\` prefix; the identity uses the
-/// ordinary spelling (`C:\…`, `\\server\share\…`) that users recognise.
-fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
-    let Some(text) = path.to_str() else {
-        return path;
-    };
-    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
-        PathBuf::from(format!(r"\\{rest}"))
-    } else if let Some(rest) = text.strip_prefix(r"\\?\")
-        && rest.as_bytes().get(1) == Some(&b':')
-    {
-        PathBuf::from(rest)
-    } else {
-        path
-    }
-}
+use pane_build::without_verbatim_prefix;
 
 /// A package's manifest, `pane.json`.
 #[derive(Clone, Debug, PartialEq, Eq)]

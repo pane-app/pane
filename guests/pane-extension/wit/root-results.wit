@@ -1,0 +1,69 @@
+package pane:extension@0.1.0;
+
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// Results a command computes from root search's query, such as a
+// calculator's answer. Kept apart from extension.wit so a command that
+// computes none is unchanged: only a command whose `pane.json` entry sets
+// `"rootResults": true` exports this interface, beside `command`. A command
+// whose only job is this, such as the calculator, also says `"mode":
+// "provider"` (a root provider, #164): it has no row of its own, and Pane
+// never calls its `render` or `run` to open or run it. Rust
+// commands export it through pane-extension (`pane_extension::root::export!`).
+// The header follows `package`: comments above it would document the package,
+// which extension.wit already does.
+
+interface root-results {
+  /// What invoking a root result does. Pane performs it; the extension is
+  /// not called again.
+  variant root-action {
+    /// Copies this text to the clipboard.
+    copy(string),
+    /// Opens this web address, an absolute `http://` or `https://` URL, with
+    /// the system's handler for web links, normally the default browser.
+    /// Pane refuses any other kind of address and explains a system that
+    /// cannot open it.
+    open-url(string),
+    /// Opens the entry with this id, as `file-index.search` gave it to the
+    /// package (wit/file-index.wit), or as `files.list-folder` gave it in
+    /// the package's latest listing of its granted folder, with the
+    /// system's handler for its type (a folder in the file manager). Pane
+    /// shows the entry's own name and folder in the row, whatever the
+    /// result's title and subtitle say, and checks it again when it is
+    /// invoked: still there, of the kind found, not a link, inside the
+    /// folders file search covers (or the granted folder). Enter on a
+    /// program the index found shows it in the file manager and never runs
+    /// it; the granted folder's programs are refused. Root search lists
+    /// these results after the results it finds by title, at most 5 of the
+    /// index's per command, then a row opening the command with the query.
+    open-file(string),
+  }
+
+  /// One result for the query, listed above the results root search finds
+  /// by title (below them for an `open-file` result).
+  record root-result {
+    /// Identifies the result among this command's results for the query.
+    id: string,
+    title: string,
+    subtitle: option<string>,
+    action: root-action,
+  }
+
+  /// The results for `query`, the text typed into root search, never empty
+  /// or blank, best first. A query the command has no answer for, such as
+  /// ordinary words or an incomplete or invalid expression, has no results:
+  /// that is not an error. An error is the extension failing; Pane shows it
+  /// as a result explaining the failure. Pane asks again on every change of
+  /// the query. Once the query changes or root search is left, Pane
+  /// cancels a call still pending: one not started is not started, and one
+  /// waiting inside the extension (on an async import) is dropped with the
+  /// extension's instance, whose memory is lost; the next call starts a
+  /// fresh one.
+  results-for: async func(query: string) -> result<list<root-result>, string>;
+}
+
+/// The root results export alone: a command component that computes root
+/// results exports it besides the `extension` world's `command`.
+world root-results-provider {
+  export root-results;
+}

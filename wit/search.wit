@@ -9,13 +9,13 @@ package pane:extension@0.1.0;
 // its service. Kept apart from extension.wit so a command that does not
 // search is unchanged: only a command whose `pane.json` entry sets
 // `"search": true` exports this interface, beside `command`. Rust commands
-// export it through pane-guest (`pane_guest::search::export!`), JS/TS
+// export it through pane-extension (`pane_extension::search::export!`), JS/TS
 // commands by exporting `commandSearch` with `"search": true` in their
 // package.json's `"pane"` options.
 //
 // A command reaches a web service through `wasi:http@0.3.0`'s client
 // (wit/deps/http.wit), which Pane hosts for every command; the `http-user`
-// world below imports it alone for guest bindings (`pane_guest::http`).
+// world below imports it alone for guest bindings (`pane_extension::http`).
 // The header follows `package`: comments above it would document the package,
 // which extension.wit already does.
 
@@ -72,4 +72,14 @@ world command-search-provider {
 /// certificates).
 world http-user {
   import wasi:http/client@0.3.0;
+}
+
+/// `wasi:cli`'s standard output and standard error alone, for guest
+/// bindings: what a command writes to them goes to its package's extension
+/// log, which its author sees while developing it. A line may start with a
+/// level, `<3>` error, `<4>` warning, `<6>` info or `<7>` debug; an untagged
+/// line is info on standard output and an error on standard error.
+world output-user {
+  import wasi:cli/stdout@0.3.0;
+  import wasi:cli/stderr@0.3.0;
 }

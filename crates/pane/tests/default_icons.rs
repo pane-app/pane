@@ -60,6 +60,13 @@ const DEFAULTS: [DefaultPackage; 5] = [
 /// A row tile's side in the reference (the theme's `tile`): 28.
 const ROW_TILE: Pixels = px(28.);
 
+/// Open actions' default binding on this system.
+const OPEN_ACTIONS: &str = if cfg!(target_os = "macos") {
+    "cmd-k"
+} else {
+    "ctrl-k"
+};
+
 /// The launcher window in `theme` (`light` or `dark`) with every default
 /// extension installed from a copy of its assembled package, on root
 /// search; the folders it keeps.
@@ -125,6 +132,14 @@ fn search(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, query: &s
     }
     cx.simulate_input(query);
     settle(window, cx);
+}
+
+/// The selected row's title.
+fn selected_title(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> Option<String> {
+    cx.read_entity(window, |window, _| {
+        let view = window.launcher().view();
+        Some(view.rows.get(view.selected?)?.title.clone())
+    })
 }
 
 /// Where the row titled `title` starts its title, from the row's left.
@@ -208,7 +223,7 @@ fn the_actions_panel_names_a_default_command_with_its_tile(cx: &mut TestAppConte
     for (_, _, rows) in DEFAULTS {
         for (title, file) in rows {
             search(&window, cx, title);
-            cx.simulate_keystrokes("ctrl-k");
+            cx.simulate_keystrokes(OPEN_ACTIONS);
             settle(&window, cx);
             assert!(drawn(cx, "actions-header"), "{title}'s actions are open");
             assert!(
@@ -219,8 +234,19 @@ fn the_actions_panel_names_a_default_command_with_its_tile(cx: &mut TestAppConte
             settle(&window, cx);
         }
     }
+    // Applications lists the system's own Settings app on Windows and
+    // macOS ("System Settings"), which can rank above Pane's row.
     search(&window, cx, "settings");
-    cx.simulate_keystrokes("ctrl-k");
+    let rows = cx.read_entity(&window, |window, _| window.launcher().view().rows.len());
+    for _ in 0..rows {
+        if selected_title(&window, cx).as_deref() == Some("Settings…") {
+            break;
+        }
+        cx.simulate_keystrokes("down");
+        settle(&window, cx);
+    }
+    assert_eq!(selected_title(&window, cx).as_deref(), Some("Settings…"));
+    cx.simulate_keystrokes(OPEN_ACTIONS);
     settle(&window, cx);
     assert!(drawn(cx, "actions-header"));
     assert!(

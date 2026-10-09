@@ -38,8 +38,8 @@ The component named there serves calls through
 `published-operations` interface of
 [`wit/operations.wit`](../wit/operations.wit), which it exports beside
 `command`, like a command computing [root results](root-search.md) exports
-`root-results`: in Rust it implements `pane_guest::publish::Guest` and calls
-`pane_guest::publish::export!`; a JS/TS package sets
+`root-results`: in Rust it implements `pane_extension::publish::Guest` and calls
+`pane_extension::publish::export!`; a JS/TS package sets
 `"pane": { "operations": true }` in its `package.json` and its module exports
 `publishedOperations`. Pane calls it only for an operation the manifest
 publishes, naming it. Installing checks the export, without running guest
@@ -90,7 +90,7 @@ call: async func(source: string, operation: string, version: u32, input: string)
   it. The samples show `<kind>: <message>`, such as "failed: a name is
   needed".
 
-In Rust, `pane_guest::operations::call(source, operation, version, input)`
+In Rust, `pane_extension::operations::call(source, operation, version, input)`
 is an `async fn` returning `Result<String, CallError>`; `CallError::explain()`
 gives `<kind>: <message>`. In JavaScript and TypeScript,
 `call` from `"pane:extension/operations@0.1.0"` returns a `Promise<string>`

@@ -4,11 +4,11 @@
 //! failure to start.
 #![no_std]
 
-use pane_guest::alloc::{format, string::String, vec::Vec};
-use pane_guest::{Command, CustomView, FieldValue, FormError, List, NoCustomView};
+use pane_extension::alloc::{format, string::String, vec::Vec};
+use pane_extension::{Command, CustomView, FieldValue, FormError, List, NoCustomView};
 
 struct RefusingView;
-pane_guest::export!(RefusingView);
+pane_extension::export!(RefusingView);
 
 impl Command for RefusingView {
     type CustomView = NoCustomView;

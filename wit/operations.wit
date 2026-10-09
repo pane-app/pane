@@ -5,10 +5,10 @@ package pane:extension@0.1.0;
 // Operations: named, versioned functions an installed package publishes for
 // other extensions to call through Pane. Any command may call one through
 // `operations`, imported by the world Pane hosts: Rust commands through
-// pane-guest, JS/TS commands as the module "pane:extension/operations@0.1.0"
+// pane-extension, JS/TS commands as the module "pane:extension/operations@0.1.0"
 // (guests/js/operations.d.ts). A package publishes an operation by listing
 // it under `operations` in its pane.json; the component named there exports
-// `published-operations` beside `command` (`pane_guest::publish::export!`
+// `published-operations` beside `command` (`pane_extension::publish::export!`
 // in Rust, `"pane": { "operations": true }` in a JS/TS package.json), and a
 // component that publishes none is unchanged.
 // The header follows `package`: comments above it would document the package,

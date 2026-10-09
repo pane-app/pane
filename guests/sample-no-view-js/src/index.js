@@ -26,7 +26,7 @@
 // A command launched in the background (a schedule's run, or one another
 // command launched so) does its work but shows no toast.
 // @ts-check
-import { showToast } from "@pane/extension/feedback";
+import { showToast } from "@pane-app/extension/feedback";
 import { launch } from "pane:extension/commands@0.1.0";
 import { get, set } from "pane:extension/settings@0.1.0";
 
@@ -41,7 +41,7 @@ const CONTEXT = '{"from":"launch"}';
 
 /**
  * `record` in words: its type and source, then what it was given.
- * @param {import("@pane/extension").LaunchRecord} record
+ * @param {import("@pane-app/extension").LaunchRecord} record
  * @returns {string}
  */
 function describe(record) {
@@ -57,7 +57,7 @@ function describe(record) {
 /**
  * What "Report launch" shows for `record` (sent "crash", it crashes
  * instead: see `run`).
- * @param {import("@pane/extension").LaunchRecord} record
+ * @param {import("@pane-app/extension").LaunchRecord} record
  * @returns {string}
  */
 function report(record) {
@@ -69,7 +69,7 @@ function report(record) {
 
 /**
  * What "Tick" would show for `record`, counting the run.
- * @param {import("@pane/extension").LaunchRecord} record
+ * @param {import("@pane-app/extension").LaunchRecord} record
  * @returns {string}
  */
 function tick(record) {
@@ -120,7 +120,7 @@ function launchNamed(text) {
   return background ? `Launched ${named} in the background` : `Launched ${named}`;
 }
 
-/** @type {import("@pane/extension").Command} */
+/** @type {import("@pane-app/extension").Command} */
 export const command = {
   async render(record) {
     return {

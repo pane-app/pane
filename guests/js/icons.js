@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
-// Icon helpers for JS/TS commands (`@pane/extension/icons`, #139, #142):
+// Icon helpers for JS/TS commands (`@pane-app/extension/icons`, #139, #142):
 // an avatar of initials and a progress ring, built from the icons Pane
 // draws (an SVG image by `data:` URL, a mask, a tint), a website's favicon
 // (a web image Pane downloads, with a fallback) and a file's or
 // application's system icon. Bundled into the command that imports it,
-// like any npm module. The Rust SDK's `pane_guest::icon` has the same
+// like any npm module. The Rust SDK's `pane_extension::icon` has the same
 // helpers, drawing the same.
 
 /** The colours `avatar` picks from, by name. */
