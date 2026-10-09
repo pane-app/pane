@@ -298,10 +298,12 @@ impl Pane {
             .join("clipboard-history.json")
     }
 
-    /// Every package's clipboard history as Pane keeps it on disk.
+    /// Every package's clipboard history as Pane keeps it on disk, each
+    /// item with the text it holds (on Windows the file holds it encrypted,
+    /// #130).
     fn history_file(&self) -> Option<Value> {
         let text = fs::read_to_string(self.history_path()).ok()?;
-        Some(serde_json::from_str(&text).unwrap())
+        Some(pane_core::clipboard::revealed_history(&text).unwrap())
     }
 
     /// The texts kept on disk, newest first, for the only package that
@@ -310,7 +312,8 @@ impl Pane {
         let Some(file) = self.history_file() else {
             return Vec::new();
         };
-        assert_eq!(file["version"], 1);
+        // Version 2 where the items are protected (#130).
+        assert_eq!(file["version"], if cfg!(windows) { 2 } else { 1 });
         let packages = file["packages"].as_object().unwrap();
         assert!(packages.len() <= 1, "{packages:?}");
         let Some(history) = packages.values().next() else {
@@ -1263,6 +1266,82 @@ fn the_rust_package_lists_its_items_under_pause_and_resume_recording() {
     assert_eq!(pane.kept_on_disk(), ["hello"]);
 }
 
+/// #130, Windows: a kept item reads back while the history file holds no
+/// plain text of it; an earlier Pane's file (version 1) is converted at
+/// start with every item kept; an item whose protected bytes are damaged
+/// is explained in its place while the others still read, and later
+/// writes keep it as it was.
+#[cfg(windows)]
+fn the_history_is_encrypted_on_disk_and_a_damaged_item_is_explained(fixture: &'static Fixture) {
+    let pane = Pane::new(fixture);
+    let launcher = pane.installed();
+    pane.turn_on(&launcher);
+    pane.clipboard.copy("a secret copied", None);
+    pane.clipboard.copy("another copy", None);
+    let both = ["another copy", "a secret copied"];
+    assert_eq!(pane.listed(&launcher), both);
+    let raw = || fs::read_to_string(pane.history_path()).unwrap();
+    let file = raw();
+    assert!(
+        !file.contains("a secret copied") && !file.contains("another copy"),
+        "{file}"
+    );
+    assert_eq!(pane.kept_on_disk(), both);
+    drop(launcher);
+    let launcher = pane.start();
+    assert_eq!(pane.listed(&launcher), both);
+    drop(launcher);
+
+    // As an earlier Pane left it: version 1, every item as it is.
+    let mut earlier = pane.history_file().unwrap();
+    earlier["version"] = 1.into();
+    fs::write(pane.history_path(), earlier.to_string()).unwrap();
+    assert!(raw().contains("a secret copied"));
+    let launcher = pane.start();
+    let file = raw();
+    assert!(!file.contains("a secret copied"), "{file}");
+    assert_eq!(serde_json::from_str::<Value>(&file).unwrap()["version"], 2);
+    assert_eq!(pane.listed(&launcher), both);
+    drop(launcher);
+
+    // The older item's protected bytes damaged.
+    let mut file: Value = serde_json::from_str(&raw()).unwrap();
+    let history = file["packages"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+        .next()
+        .unwrap();
+    history["items"][1]["protected"]["dpapi"] = "AAAA".into();
+    fs::write(pane.history_path(), file.to_string()).unwrap();
+    let launcher = pane.start();
+    let listed = pane.listed(&launcher);
+    assert_eq!(listed.len(), 2, "{listed:?}");
+    assert_eq!(listed[0], "another copy");
+    assert!(
+        listed[1].starts_with("Pane cannot read this copy"),
+        "{listed:?}"
+    );
+    // A later copy is written beside it; it is kept as it was.
+    assert!(pane.clipboard.copy("a third copy", None));
+    let file: Value = serde_json::from_str(&raw()).unwrap();
+    let history = file["packages"]
+        .as_object()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap();
+    assert_eq!(history["items"].as_array().unwrap().len(), 3);
+    assert_eq!(history["items"][2]["protected"]["dpapi"], "AAAA");
+    assert_eq!(
+        pane.listed(&launcher)[..2],
+        ["a third copy", "another copy"]
+    );
+}
+
+#[cfg(not(windows))]
+fn the_history_is_encrypted_on_disk_and_a_damaged_item_is_explained(_fixture: &'static Fixture) {}
+
 /// Declares one test per check for each sample's clipboard package.
 macro_rules! contract {
     ($($check:ident),* $(,)?) => {
@@ -1299,4 +1378,5 @@ contract!(
     recent_items_can_be_deleted_together,
     turning_off_and_deleting_keeps_nothing_more,
     retained_history_expires_without_the_extension,
+    the_history_is_encrypted_on_disk_and_a_damaged_item_is_explained,
 );

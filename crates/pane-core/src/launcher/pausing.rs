@@ -225,7 +225,7 @@ impl Recorder {
                             match store.set_paused(&identity, pause) {
                                 // Uninstalled meanwhile: nothing to record.
                                 Ok(()) | Err(PackageError::NotInstalled(_)) => {}
-                                Err(error) => eprintln!(
+                                Err(error) => crate::diagnostic!(
                                     "pane: could not record whether {identity} is paused: {error}"
                                 ),
                             }

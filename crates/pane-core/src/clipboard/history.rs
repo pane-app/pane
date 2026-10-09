@@ -35,12 +35,33 @@
 //! ([`HistoryStore::prune_images`]): those of items that expired, were
 //! deleted or cleared, or dropped past [`MAX_ITEMS`], and an owner's whole
 //! folder once its history is removed. A files item keeps only the paths.
+//!
+//! On Windows each item's text and files are written encrypted (#130, see
+//! `protection`), in version 2 of the file:
+//!
+//! ```json
+//! { "version": 2, "packages": { "local:/…": {
+//!     "items": [{ "id": 7, "protected": { "dpapi": "AQAAANCMnd8B…" },
+//!                 "copiedAt": 1790000000000, "source": "notepad.exe" }] } } }
+//! ```
+//!
+//! The rest stays readable — an item's id, when it was copied, the program
+//! it came from and an image's size and digest, and each package's choices
+//! — so items expire, are deleted and are counted without being decrypted,
+//! and an image's PNG (kept as it was, readable by the user only) goes with
+//! its item. An item is encrypted once, when it is first written, and later
+//! writes reuse what that made ([`Item`]). A version-1 file is converted
+//! when Pane starts, in one atomic write; if that write fails, it is read
+//! as it is and converted at the next start. An item Windows cannot decrypt
+//! is explained in its place ([`Item::unreadable`]) and kept as the file
+//! holds it until it expires or is deleted. macOS and Linux keep writing
+//! version 1, as before.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -51,6 +72,7 @@ use super::{
 };
 use crate::atomic::{Readers, write_atomically};
 use crate::extension_data::Removal;
+use crate::protection::{self, Stored};
 
 /// The history file's name, beside `installed.json`.
 pub(crate) const FILE: &str = "clipboard-history.json";
@@ -59,8 +81,12 @@ pub(crate) const FILE: &str = "clipboard-history.json";
 /// per owner.
 pub(crate) const IMAGES_DIR: &str = "clipboard-images";
 
-/// The version of the history file's format.
+/// The version of the history file's format whose items are all written as
+/// they are.
 const VERSION: u64 = 1;
+/// The version of the history file's format in which an item may be
+/// protected (#130).
+const PROTECTED_VERSION: u64 = 2;
 
 /// Whether the package whose identity key is `owner` records what is
 /// copied before anyone turned its history on: only Pane's own Clipboard
@@ -121,36 +147,195 @@ fn forgettable(owner: &str, history: &PackageHistory) -> bool {
 }
 
 /// One kept copy: a text, an image or a list of files.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+///
+/// What it holds never changes once it is kept, so the encrypted form the
+/// file holds of its text and files (#130) is made once, when it is first
+/// written on a system that protects clipboard history, and shared by its
+/// clones: every later write reuses it.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(try_from = "ItemJson", into = "ItemJson")]
 pub struct Item {
     /// Identifies it among the package's items; later items have greater
     /// ids.
     pub id: u64,
     /// The text copied; for an image its title ([`image_title`]), for
     /// files their paths, one per line: what a command lists of it
-    /// through `entries` (`wit/clipboard.wit`).
+    /// through `entries` (`wit/clipboard.wit`). For an item that cannot be
+    /// read on this computer, why ([`Item::unreadable`]).
     pub text: String,
     /// The image copied, if it is one (#167).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<StoredImage>,
     /// The files copied, by their paths, if it is a list of files (#167).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<PathBuf>,
     /// When it was copied, in milliseconds since the Unix epoch.
     pub copied_at: u64,
     /// The program it was copied from, if the system said.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// Why Pane cannot read what it holds on this computer, if it cannot
+    /// (#130): "Pane cannot read this copy on this computer: Windows could
+    /// not decrypt it (…)", which is its text too. It is neither copied
+    /// nor pasted, and the file keeps it as it was until it expires or is
+    /// deleted.
+    pub unreadable: Option<String>,
+    /// Its text and files as the file holds them protected, once made.
+    sealed: Sealed,
 }
+
+/// An item's text and files as the file holds them protected (#130):
+/// made once, and shared by the item's clones, so that every later write
+/// reuses them (see [`Item`]).
+#[derive(Clone, Debug, Default)]
+struct Sealed {
+    stored: Arc<OnceLock<Stored>>,
+    /// Read from the file and not decrypted yet ([`Item::open`]).
+    unopened: bool,
+}
+
+impl PartialEq for Item {
+    /// The same item holding the same: how the file protects it is made
+    /// from the rest, and not compared.
+    fn eq(&self, other: &Item) -> bool {
+        self.id == other.id
+            && self.text == other.text
+            && self.image == other.image
+            && self.files == other.files
+            && self.copied_at == other.copied_at
+            && self.source == other.source
+            && self.unreadable == other.unreadable
+    }
+}
+
+impl Eq for Item {}
 
 impl Item {
     /// Whether it holds what `other` holds: the same text, image or files.
+    /// An item that cannot be read holds nothing known.
     fn same_copy(&self, other: &Item) -> bool {
-        self.text == other.text
+        self.unreadable.is_none()
+            && other.unreadable.is_none()
+            && self.text == other.text
             && self.files == other.files
             && self.image.as_ref().map(|image| &image.digest)
                 == other.image.as_ref().map(|image| &image.digest)
+    }
+
+    /// Encrypts its text and files for the file, once, where this system
+    /// protects clipboard history (#130); nothing elsewhere.
+    fn seal(&self) -> Result<(), String> {
+        if !protection::PROTECTS || self.sealed.stored.get().is_some() {
+            return Ok(());
+        }
+        let copy = SealedCopy {
+            text: self.text.clone(),
+            files: self.files.clone(),
+        };
+        let copy = serde_json::to_string(&copy).map_err(|error| error.to_string())?;
+        // A write on another thread may have sealed it meanwhile: either
+        // holds the same.
+        let _ = self.sealed.stored.set(Stored::protect(&copy)?);
+        Ok(())
+    }
+
+    /// Decrypts the text and files the file held protected, once read
+    /// (see [`HistoryJson::open_items`]); if they cannot be read on this
+    /// computer, says why instead ([`Item::unreadable`]).
+    fn open(&mut self) {
+        if !std::mem::take(&mut self.sealed.unopened) {
+            return;
+        }
+        let Some(stored) = self.sealed.stored.get() else {
+            return;
+        };
+        let copy = stored.open().and_then(|copy| {
+            serde_json::from_str::<SealedCopy>(&copy)
+                .map_err(|error| format!("what it holds is damaged ({error})"))
+        });
+        match copy {
+            Ok(copy) => {
+                self.text = copy.text;
+                self.files = copy.files;
+            }
+            Err(why) => {
+                let why = protection::cannot_read("copy", &why);
+                self.text = why.clone();
+                self.files = Vec::new();
+                self.unreadable = Some(why);
+            }
+        }
+    }
+}
+
+/// What an item's protected form holds: its text and files.
+#[derive(Serialize, Deserialize)]
+struct SealedCopy {
+    text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    files: Vec<PathBuf>,
+}
+
+/// An item as the file holds it: its text and files as they are, or, where
+/// they are protected (#130), in `protected` instead.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ItemJson {
+    id: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    image: Option<StoredImage>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    files: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    protected: Option<Stored>,
+    copied_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+}
+
+impl From<Item> for ItemJson {
+    fn from(item: Item) -> ItemJson {
+        let protected = item.sealed.stored.get().cloned();
+        let (text, files) = match protected {
+            Some(_) => (None, Vec::new()),
+            None => (Some(item.text), item.files),
+        };
+        ItemJson {
+            id: item.id,
+            text,
+            image: item.image,
+            files,
+            protected,
+            copied_at: item.copied_at,
+            source: item.source,
+        }
+    }
+}
+
+impl TryFrom<ItemJson> for Item {
+    type Error = String;
+
+    fn try_from(json: ItemJson) -> Result<Item, String> {
+        let (text, sealed) = match (json.text, json.protected) {
+            (_, Some(stored)) => {
+                let sealed = Sealed {
+                    stored: Arc::new(OnceLock::from(stored)),
+                    unopened: true,
+                };
+                (String::new(), sealed)
+            }
+            (Some(text), None) => (text, Sealed::default()),
+            (None, None) => return Err(format!("the item {} holds no text", json.id)),
+        };
+        Ok(Item {
+            id: json.id,
+            text,
+            image: json.image,
+            files: json.files,
+            copied_at: json.copied_at,
+            source: json.source,
+            unreadable: None,
+            sealed,
+        })
     }
 }
 
@@ -302,6 +487,8 @@ impl PackageHistory {
             files,
             copied_at: now,
             source: source.map(str::to_owned),
+            unreadable: None,
+            sealed: Sealed::default(),
         };
         self.items.retain(|kept| !kept.same_copy(&item));
         let id = self
@@ -348,8 +535,98 @@ impl PackageHistory {
 
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 struct HistoryJson {
+    /// As read; a write decides it again ([`HistoryJson::to_json`]).
     version: u64,
     packages: BTreeMap<String, PackageHistory>,
+}
+
+/// The history file as written.
+#[derive(Serialize)]
+struct WrittenJson<'a> {
+    version: u64,
+    packages: &'a BTreeMap<String, PackageHistory>,
+}
+
+impl HistoryJson {
+    /// Every package's items.
+    fn items(&self) -> impl Iterator<Item = &Item> {
+        self.packages
+            .values()
+            .flat_map(|history| history.items.iter())
+    }
+
+    /// Decrypts every item read protected ([`Item::open`]).
+    fn open_items(&mut self) {
+        for history in self.packages.values_mut() {
+            for item in &mut history.items {
+                item.open();
+            }
+        }
+    }
+
+    /// Whether a package keeps something here as an earlier Pane wrote it,
+    /// unprotected (version 1, or an item written as it is), on a system
+    /// that protects clipboard history (#130): converted when Pane starts.
+    fn holds_unprotected(&self) -> bool {
+        protection::PROTECTS
+            && !self.packages.is_empty()
+            && (self.version < PROTECTED_VERSION
+                || self.items().any(|item| item.sealed.stored.get().is_none()))
+    }
+
+    /// The file's text, its items protected where this system protects
+    /// clipboard history (#130): version 2 there, or where an item is
+    /// protected (as one written on Windows and read elsewhere, which is
+    /// kept as it was); version 1 otherwise. An item that cannot be
+    /// protected there is left out of this write, with a diagnostic, and
+    /// never written as it is; it stays in memory, and the next write tries
+    /// again. The rest, deletions included, is written.
+    fn to_json(&self) -> Result<String, String> {
+        let mut failed = None;
+        for item in self.items() {
+            if let Err(why) = item.seal() {
+                failed = Some(why);
+            }
+        }
+        let sealed_only: BTreeMap<String, PackageHistory>;
+        let packages = match failed {
+            None => &self.packages,
+            Some(why) => {
+                crate::diagnostic!(
+                    "Pane could not protect a clipboard history item: {why}. It is left out of \
+                     the file, and kept until a later write can protect it."
+                );
+                sealed_only = self
+                    .packages
+                    .iter()
+                    .map(|(owner, history)| {
+                        let mut history = history.clone();
+                        history
+                            .items
+                            .retain(|item| item.sealed.stored.get().is_some());
+                        (owner.clone(), history)
+                    })
+                    .collect();
+                &sealed_only
+            }
+        };
+        let protected = self.items().any(|item| item.sealed.stored.get().is_some());
+        let file = WrittenJson {
+            version: if protection::PROTECTS || protected {
+                PROTECTED_VERSION
+            } else {
+                VERSION
+            },
+            packages,
+        };
+        serde_json::to_string_pretty(&file).map_err(|error| error.to_string())
+    }
+}
+
+/// Writes `file` to `path`, as [`HistoryJson::to_json`] makes it.
+fn write_file(path: &Path, file: &HistoryJson) -> io::Result<()> {
+    let text = file.to_json().map_err(io::Error::other)?;
+    write_atomically(path, text.as_bytes(), Readers::OwnerOnly)
 }
 
 /// The longest the expiry thread waits before looking again, so that a
@@ -414,10 +691,24 @@ impl Drop for HistoryStore {
 
 impl HistoryStore {
     /// Opens the history kept in `dir`, telling the time by the system's
-    /// clock. Nothing is written until something is read or changed.
+    /// clock. Nothing is written until something is read or changed, but
+    /// for a file an earlier Pane wrote unprotected, on a system that
+    /// protects clipboard history (#130): it is converted now, every item
+    /// kept, in one atomic write. If that write fails, the file is read as
+    /// it is and converted at the next start.
     pub fn open(dir: &Path) -> HistoryStore {
         let path = dir.join(FILE);
         let file = read(&path);
+        if let Ok(held) = &file
+            && held.holds_unprotected()
+            && let Err(error) = write_file(&path, held)
+        {
+            crate::diagnostic!(
+                "Pane could not protect the clipboard history in {}: {error}. It reads it as it is \
+                 and tries again when it next starts.",
+                path.display()
+            );
+        }
         HistoryStore {
             path,
             images: dir.join(IMAGES_DIR),
@@ -581,7 +872,7 @@ impl HistoryStore {
                     left += 1;
                 } else if let Err(error) = fs::remove_file(&path) {
                     left += 1;
-                    eprintln!(
+                    crate::diagnostic!(
                         "Pane could not delete a clipboard image no longer kept, {}: {error}",
                         path.display()
                     );
@@ -805,7 +1096,8 @@ impl HistoryStore {
     /// read.
     pub fn counts_now(&self) -> Result<BTreeMap<String, usize>, String> {
         let now = self.now();
-        Ok(read(&self.path)?
+        // Counted without decrypting any item (#130).
+        Ok(read_unopened(&self.path)?
             .packages
             .into_iter()
             .filter_map(|(owner, mut history)| {
@@ -849,7 +1141,7 @@ impl HistoryStore {
             .name("pane-clipboard-expiry".into())
             .spawn(move || expire_until_dropped(&store, &wake));
         if let Err(error) = started {
-            eprintln!("Pane cannot expire clipboard history in the background: {error}");
+            crate::diagnostic!("Pane cannot expire clipboard history in the background: {error}");
         }
     }
 
@@ -867,7 +1159,7 @@ impl HistoryStore {
         if let Some(pending) = pending
             && let Err(error) = self.write(pending)
         {
-            eprintln!(
+            crate::diagnostic!(
                 "Pane could not save the clipboard history in {}: {error}",
                 self.path.display()
             );
@@ -883,8 +1175,7 @@ impl HistoryStore {
         if pending.change <= *written {
             return Ok(());
         }
-        let text = serde_json::to_string_pretty(&pending.file).map_err(io::Error::other)?;
-        write_atomically(&self.path, text.as_bytes(), Readers::OwnerOnly)?;
+        write_file(&self.path, &pending.file)?;
         *written = pending.change;
         // The images no item written names any more go with it.
         self.prune_images(&pending.file);
@@ -1039,17 +1330,27 @@ impl State {
     }
 }
 
-/// Reads the history file; a missing file holds none.
+/// Reads the history file, decrypting its protected items (#130); a
+/// missing file holds none.
 fn read(path: &Path) -> Result<HistoryJson, String> {
+    let mut file = read_unopened(path)?;
+    file.open_items();
+    Ok(file)
+}
+
+/// Reads the history file without decrypting any item: the text and files
+/// of a protected one are empty. Version 1 and 2 are read; any other is
+/// refused, so a file a newer Pane wrote is never overwritten.
+fn read_unopened(path: &Path) -> Result<HistoryJson, String> {
     match fs::read_to_string(path) {
         Ok(text) => serde_json::from_str::<HistoryJson>(&text)
             .map_err(|error| error.to_string())
             .and_then(|file| {
-                if file.version == VERSION {
+                if file.version == VERSION || file.version == PROTECTED_VERSION {
                     Ok(file)
                 } else {
                     Err(format!(
-                        "it has version {}, this Pane reads {VERSION}",
+                        "it has version {}, this Pane reads {VERSION} and {PROTECTED_VERSION}",
                         file.version
                     ))
                 }
@@ -1063,6 +1364,41 @@ fn read(path: &Path) -> Result<HistoryJson, String> {
     .map_err(|reason| format!("Cannot read {}: {reason}", path.display()))
 }
 
+/// The clipboard history file's text `text` as JSON, each protected item's
+/// text and files (#130) put back as an unprotected item holds them, and
+/// `protected` left out: for tests, which check what the file keeps. Fails
+/// for an item that cannot be decrypted on this computer.
+#[doc(hidden)]
+pub fn revealed(text: &str) -> Result<serde_json::Value, String> {
+    use serde_json::Value;
+    let mut file: Value = serde_json::from_str(text).map_err(|error| error.to_string())?;
+    let packages = file.get_mut("packages").and_then(Value::as_object_mut);
+    for history in packages
+        .into_iter()
+        .flat_map(|packages| packages.values_mut())
+    {
+        let items = history.get_mut("items").and_then(Value::as_array_mut);
+        for item in items.into_iter().flatten() {
+            let Some(item) = item.as_object_mut() else {
+                continue;
+            };
+            let Some(protected) = item.remove("protected") else {
+                continue;
+            };
+            let stored: Stored =
+                serde_json::from_value(protected).map_err(|error| error.to_string())?;
+            let copy: SealedCopy =
+                serde_json::from_str(&stored.open()?).map_err(|error| error.to_string())?;
+            item.insert("text".into(), Value::String(copy.text));
+            if !copy.files.is_empty() {
+                let files = serde_json::to_value(&copy.files).map_err(|error| error.to_string())?;
+                item.insert("files".into(), files);
+            }
+        }
+    }
+    Ok(file)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1071,9 +1407,10 @@ mod tests {
 
     const DAY: u64 = 86_400_000;
 
-    /// The history file in `dir`, parsed.
+    /// The history file in `dir`, parsed, each item with the text it holds
+    /// (on Windows the file holds it encrypted, #130).
     fn on_disk(dir: &Path) -> Value {
-        serde_json::from_str(&fs::read_to_string(dir.join(FILE)).unwrap()).unwrap()
+        revealed(&fs::read_to_string(dir.join(FILE)).unwrap()).unwrap()
     }
 
     /// A store of `dir` whose clock shows `now` until advanced.
@@ -1090,6 +1427,33 @@ mod tests {
             .iter()
             .map(|item| item.text.as_str())
             .collect()
+    }
+
+    /// A history that cannot be saved is reported in Pane's log, which
+    /// never holds what was copied (#133).
+    #[test]
+    fn a_failed_save_is_logged_without_what_was_copied() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = tempfile::tempdir().unwrap();
+        let captured =
+            crate::diagnostics::capture_into(logs.path(), crate::diagnostics::Redactor::none());
+        let (store, _clock) = store_at(dir.path(), DAY);
+        // The history's file cannot be replaced: a folder holding a file
+        // stands where it goes.
+        fs::create_dir_all(dir.path().join(FILE).join("taken")).unwrap();
+        store.capture(store.deletions(), |packages, now| {
+            let history = packages
+                .get_mut(&default_owner())
+                .expect("Pane's own history");
+            history.add("my secret clipboard text", None, now);
+            true
+        });
+        let text = captured.text();
+        assert!(
+            text.contains("Pane could not save the clipboard history in"),
+            "{text}"
+        );
+        assert!(!text.contains("secret"), "{text}");
     }
 
     #[test]
@@ -1160,16 +1524,138 @@ mod tests {
         assert_eq!(names, ["keepass.exe", "1password"]);
         assert_eq!(history.items[0].text, "hi");
 
-        fs::write(dir.path().join(FILE), r#"{ "version": 2, "packages": {} }"#).unwrap();
+        // A newer Pane's file.
+        fs::write(dir.path().join(FILE), r#"{ "version": 3, "packages": {} }"#).unwrap();
         let store = HistoryStore::open(dir.path());
-        assert!(store.get("local:/x").unwrap_err().contains("version 2"));
+        assert!(
+            store
+                .get("local:/x")
+                .unwrap_err()
+                .ends_with("it has version 3, this Pane reads 1 and 2")
+        );
         // Nothing overwrites a file of another version.
         assert!(store.update("local:/x", |_| Ok(())).is_err());
-        assert!(
-            fs::read_to_string(dir.path().join(FILE))
-                .unwrap()
-                .contains("\"version\": 2")
+        assert_eq!(
+            fs::read_to_string(dir.path().join(FILE)).unwrap(),
+            r#"{ "version": 3, "packages": {} }"#
         );
+    }
+
+    /// #130: on Windows an item's text and files are written encrypted
+    /// (version 2), once: later writes reuse them. Its id, time, source and
+    /// an image's digest stay readable. Elsewhere the file is version 1,
+    /// as before.
+    #[test]
+    fn an_item_is_written_as_this_system_protects_it_and_encrypted_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = store_at(dir.path(), DAY);
+        store
+            .update("a", |history| {
+                history.add("a secret copied", Some("notepad.exe"), DAY);
+                Ok(())
+            })
+            .unwrap();
+        let raw = || -> Value {
+            serde_json::from_str(&fs::read_to_string(dir.path().join(FILE)).unwrap()).unwrap()
+        };
+        let first = raw();
+        let item = &first["packages"]["a"]["items"][0];
+        assert_eq!(item["copiedAt"], DAY);
+        assert_eq!(item["source"], "notepad.exe");
+        if protection::PROTECTS {
+            assert_eq!(first["version"], 2);
+            assert!(item.get("text").is_none(), "{item}");
+            assert!(item["protected"]["dpapi"].is_string(), "{item}");
+        } else {
+            assert_eq!(first["version"], 1);
+            assert_eq!(item["text"], "a secret copied");
+        }
+        // Another item kept: the first is written as it was.
+        store
+            .update("a", |history| {
+                history.add("another", None, DAY);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(raw()["packages"]["a"]["items"][1], *item);
+        // Read back after a restart.
+        let (reopened, _) = store_at(dir.path(), DAY);
+        assert_eq!(
+            texts(&reopened.get("a").unwrap()),
+            ["another", "a secret copied"]
+        );
+    }
+
+    /// #130: an item that cannot be decrypted on this computer (damaged, or
+    /// written by Windows and read elsewhere) is explained in its place,
+    /// while the others read; it is kept as the file holds it by every
+    /// later write, is never copied again, and goes when it is deleted.
+    #[test]
+    fn an_item_that_cannot_be_read_is_explained_and_kept_as_it_was() {
+        let dir = tempfile::tempdir().unwrap();
+        let damaged = serde_json::json!({ "dpapi": "AAAA" });
+        fs::write(
+            dir.path().join(FILE),
+            serde_json::json!({ "version": 2, "packages": { "a": { "items": [
+                { "id": 2, "text": "readable", "copiedAt": DAY },
+                { "id": 1, "protected": damaged, "copiedAt": DAY, "source": "notepad.exe" },
+            ], "nextId": 3 } } })
+            .to_string(),
+        )
+        .unwrap();
+        let (store, _) = store_at(dir.path(), DAY);
+        let history = store.get("a").unwrap();
+        assert_eq!(history.items[0].text, "readable");
+        assert_eq!(history.items[0].unreadable, None);
+        let why = history.items[1].unreadable.clone().expect("unreadable");
+        assert!(
+            why.starts_with("Pane cannot read this copy on this computer: "),
+            "{why}"
+        );
+        assert_eq!(history.items[1].text, why);
+        assert_eq!(history.items[1].source.as_deref(), Some("notepad.exe"));
+        // The same text copied again is a new item: what it held is not known.
+        store
+            .update("a", |history| {
+                history.add(&why, None, DAY);
+                Ok(())
+            })
+            .unwrap();
+        let written: Value =
+            serde_json::from_str(&fs::read_to_string(dir.path().join(FILE)).unwrap()).unwrap();
+        let items = &written["packages"]["a"]["items"];
+        assert_eq!(items.as_array().unwrap().len(), 3);
+        assert_eq!(items[2]["protected"], damaged);
+        // Deleted, it goes.
+        store
+            .update("a", |history| Ok(history.delete(&[1])))
+            .unwrap();
+        let history = store_at(dir.path(), DAY).0.get("a").unwrap();
+        assert!(history.items.iter().all(|item| item.unreadable.is_none()));
+        assert_eq!(history.items.len(), 2);
+    }
+
+    /// #130: on Windows a history file an earlier Pane wrote (version 1) is
+    /// protected when Pane starts, with every item kept.
+    #[cfg(windows)]
+    #[test]
+    fn a_version_1_history_is_protected_at_start() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join(FILE),
+            format!(
+                r#"{{ "version": 1, "packages": {{ "a": {{ "capture": "on", "items": [
+                    {{ "id": 1, "text": "copied before", "copiedAt": {DAY} }} ],
+                    "nextId": 2 }} }} }}"#
+            ),
+        )
+        .unwrap();
+        let (store, _) = store_at(dir.path(), DAY);
+        let raw = fs::read_to_string(dir.path().join(FILE)).unwrap();
+        assert!(!raw.contains("copied before"), "{raw}");
+        assert_eq!(on_disk(dir.path())["version"], 2);
+        assert_eq!(texts(&store.get("a").unwrap()), ["copied before"]);
+        assert_eq!(store.get("a").unwrap().capture, CaptureState::On);
     }
 
     /// ADR 0042: Pane's own Clipboard History records from the first start,

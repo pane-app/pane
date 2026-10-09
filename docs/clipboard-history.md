@@ -408,6 +408,30 @@ capture stays local by default all the same.
   ids are never given twice (it counts as keeping nothing). A
   `retentionSeconds` outside 1 minute to 365 days, as only an edited file
   can hold, is taken as the nearest bound.
+- On Windows each item's text and files are encrypted on disk
+  ([#130](https://github.com/hoangvu12/pane/issues/130)) with the same
+  DPAPI protector as [local credentials](extension-data.md#protected-credentials),
+  for the current Windows user: the file is version 2, and an item holds
+  `"protected": {"dpapi": "<base64>"}` in place of `text` and `files`. Its
+  `id`, `copiedAt`, `source` and an image's `image` stay readable, so items
+  expire, are deleted and are counted without decrypting anything, and an
+  image's PNG goes with its item; the PNGs themselves are not encrypted
+  (readable by the user only, as before). An item is encrypted once, when it
+  is first written, and later writes reuse those bytes. An item Windows
+  cannot encrypt is never written as it is: it is left out of that write
+  (the log says so), kept in memory, and tried again at the next write,
+  while the rest of the change, deletions included, is written. A version-1
+  file is converted when Pane starts, every item kept, in one atomic write;
+  if that write fails, Pane reads it as it is and tries again at the next
+  start. An older Pane refuses a version-2 file and never overwrites it. An
+  item that
+  cannot be decrypted (the user's password reset by an administrator, a
+  folder from another user or computer, damaged bytes) is listed in its
+  place as "Pane cannot read this copy on this computer: Windows could not
+  decrypt it (<reason>)", is neither copied nor pasted, and is kept as it
+  was until it expires or is deleted; the others still read. Programs
+  running as the same user can decrypt the file as Pane does. On macOS and
+  Linux the file stays version 1, as before.
 - It is written after each change, outside the lock that captures and
   commands share, so a copy never waits on another's write. A change is on
   disk when the call that made it returns; a crash before that loses only
@@ -444,6 +468,19 @@ capture stays local by default all the same.
 
 ## Checks
 
+- Protection on disk (#130): unit tests in
+  [`history.rs`](../crates/pane-core/src/clipboard/history.rs) for an item
+  written as the system protects it and encrypted once, an item that cannot
+  be decrypted explained and kept as it was, a version-1 file converted at
+  start (Windows) and a version-3 file refused and kept; and
+  [`clipboard.rs`](../crates/pane-core/tests/clipboard.rs)'s
+  `the_history_is_encrypted_on_disk_and_a_damaged_item_is_explained`
+  (Windows, with the recording clipboard): kept items read back, also after
+  a restart, with no plain text in the file; an earlier file converted at
+  start with every item kept; a damaged item listed as its explanation while
+  the others still read, and kept by a later write. The Windows smoke reads
+  the kept texts through `scripts/clipboard_history.py`, which decrypts them
+  as the same user.
 - Capture rules ([`clipboard.rs`](../crates/pane-core/src/clipboard.rs) unit
   tests): plain, marked, withheld, other, blank and long content; excluded
   programs; program names, lowercased also when read from the file; newest

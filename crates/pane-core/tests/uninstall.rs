@@ -117,21 +117,22 @@ impl Dirs {
     }
 
     /// The values of kind `file` (such as `settings.json`) kept for the
-    /// package in `folder`, by key.
+    /// package in `folder`, by key: a protected local credential (Windows,
+    /// #130) as its JSON.
     fn values(&self, file: &str, folder: &Path) -> BTreeMap<String, String> {
         let Ok(text) = fs::read_to_string(self.packages_dir().join(file)) else {
             return BTreeMap::new();
         };
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
         let key = PackageIdentity::local(folder).unwrap().key();
+        let text = |value: &serde_json::Value| {
+            value
+                .as_str()
+                .map_or_else(|| value.to_string(), str::to_owned)
+        };
         json["packages"][&key]
             .as_object()
-            .map(|values| {
-                values
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.as_str().unwrap().to_owned()))
-                    .collect()
-            })
+            .map(|values| values.iter().map(|(k, v)| (k.clone(), text(v))).collect())
             .unwrap_or_default()
     }
 

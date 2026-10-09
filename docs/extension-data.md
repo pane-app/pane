@@ -26,8 +26,8 @@ actions do with a value.
 | Settings | The user's choices for the extension | `settings.json` | kept | the user's choice |
 | Content | The extension's own durable records, such as notes or history | `content.json` | kept | the user's choice |
 | Cache | Values the extension can compute or download again | `cache.json` | removed | removed |
-| Local credentials (`credentials`) | Secrets kept on this computer, such as a sign-in token | `credentials.json`, readable only by the user (mode 0600 on macOS and Linux; on Windows a protected DACL for the user and SYSTEM only) | kept | removed |
-| Clipboard history (`clipboard-history`, since #35) | The text the user copied while the package kept [clipboard history](clipboard-history.md), and whether it keeps it (and, for Pane's own Clipboard History, copied images and files, #167); written by Pane only | `clipboard-history.json`, readable only by the user, as `credentials.json`; typed and versioned, not key-value; the images' PNGs in `clipboard-images/`, likewise | kept | the user's choice |
+| Local credentials (`credentials`) | Secrets kept on this computer, such as a sign-in token | `credentials.json`, readable only by the user (mode 0600 on macOS and Linux; on Windows a protected DACL for the user and SYSTEM only, and each value encrypted with DPAPI, [below](#protected-credentials)) | kept | removed |
+| Clipboard history (`clipboard-history`, since #35) | The text the user copied while the package kept [clipboard history](clipboard-history.md), and whether it keeps it (and, for Pane's own Clipboard History, copied images and files, #167); written by Pane only | `clipboard-history.json`, readable only by the user, as `credentials.json`, each item's text and files encrypted on Windows as credentials are; typed and versioned, not key-value; the images' PNGs in `clipboard-images/`, readable only by the user, not encrypted | kept | the user's choice |
 
 Clipboard history is not a `get`/`set` interface: Pane itself watches the
 clipboard and writes the items for the package, which reads and controls
@@ -67,15 +67,78 @@ me") and a token ("Sign in"). "Show what Pane keeps" answers with all four.
 
 ## Migration
 
-- Pane migrates the files' format: each has a `version` (now 1). A file of
-  another version, or one that cannot be read, is reported to the extension
-  by `get` and `set` and never overwritten.
+- Pane migrates the files' format: each has a `version` (1; on Windows
+  `credentials.json` is version 2, [below](#protected-credentials)). A file
+  of another version, or one that cannot be read, is reported to the
+  extension by `get` and `set` and never overwritten. An older Pane refuses
+  a version-2 credentials file the same way.
 - The extension migrates its own values when their meaning changes between
   its versions, in its own code. Pane keeps values across an update and does
   not transform them.
 - A cache needs no migration: an extension should treat a cache value it
   cannot use as missing and make it again, since the user can clear it at any
   time.
+
+## Protected credentials
+
+Added for [#130](https://github.com/hoangvu12/pane/issues/130) (the first
+slice of [#129](https://github.com/hoangvu12/pane/issues/129)). Extension
+data has one credential protector per system, between the values in memory
+and the file. Values stay plain in memory while Pane runs; only the file
+changes, and `credentials.get` and `credentials.set` are unchanged, so no
+extension is rebuilt.
+
+| System | How `credentials.json` holds a value |
+|---|---|
+| Windows | Encrypted with DPAPI (`CryptProtectData`) for the current Windows user, with fixed entropy of Pane's own and the flag that forbids any prompt; the file also keeps its protected DACL |
+| macOS | As it is, in a file only the user can read (mode 0600). The macOS Keychain is a later slice of #129, waiting for Pane to be signed |
+| Linux | As it is, in a file only the user can read (mode 0600). The Secret Service is a later slice of #129 |
+
+- **The file.** On Windows `credentials.json` is version 2, in which each
+  value records how it is protected:
+  `{"version": 2, "packages": {"local:/…": {"token": {"dpapi": "AQAAANCMnd8B…"}}}}`
+  (a value written as it is reads `{"plain": "…"}`). Only values are
+  protected: package identities and keys stay readable, so Clear cache,
+  uninstall, deleting retained data and the counts on Manage extensions and
+  the uninstall confirmation work without decrypting anything. On macOS and
+  Linux the file stays version 1, as before. The other kinds of extension
+  data stay at version 1 everywhere.
+- **Conversion.** When Pane starts on Windows, a version-1 file (as an
+  earlier Pane wrote it) is converted to version 2, every value protected,
+  in one atomic write. If that write fails, Pane keeps reading the version-1
+  file and tries again at the next start; no value is lost. A later write
+  of the file (an uninstall or a deletion, which reads the file again
+  first) protects the values it still holds as they are before writing it.
+  If Windows could encrypt none of them, the file is written as version 1
+  again, never as plain values in a version-2 file. An older Pane
+  refuses a version-2 file, as it refuses any other version, and never
+  overwrites it.
+- **A value that cannot be decrypted** — an administrator reset the
+  Windows password, so the user's DPAPI key was lost; the data folder came
+  from another user or computer; the bytes were damaged — is explained,
+  never dropped or regenerated. `credentials.get` returns an error the
+  extension can turn into "sign in again": "Pane cannot read this credential
+  on this computer: Windows could not decrypt it (<reason>). Sign in again."
+  `credentials.set` replaces it. Pane keeps it as it was through every other
+  write. Its other values still read. Manage extensions counts it, as in
+  "keeps 2 credentials, 1 unreadable": the counts themselves need no
+  decryption, and only the row that describes an identity tries that
+  identity's values to say which cannot be read. Confirmations count
+  without decrypting anything. A password
+  preference that cannot be read is as if it was never set, so its Settings
+  page asks for it again.
+- **What it protects against:** another user of the computer, a copy of the
+  file (a backup, a synced or roamed profile, a disk read outside Windows)
+  and an administrator reading the file without the user's sign-in.
+- **What it does not protect against:** programs running as the same user.
+  They can call DPAPI too, and Pane's entropy is in its program. The [data
+  policy](extension-policy-proposal.md#disable-cache-data-and-uninstall)'s
+  "lifecycle behavior, not secret isolation from trusted code" stands.
+- **Clipboard history** gets the same protector on Windows: each item's
+  text and files are encrypted, and the file moves to version 2, converted
+  at start in the same way ([clipboard
+  history](clipboard-history.md#ownership-and-deletion)).
+- The Windows Credential Manager is not used.
 
 ## Clearing an extension's cache
 
@@ -310,6 +373,24 @@ The record is dropped only once every kind is deleted:
   another Pane's cache write between reading and clearing kept; the running
   instance note; `credentials.json` created, and rewritten, with mode 0600
   (Unix).
+- [Protected credentials](#protected-credentials) (#130),
+  `crates/pane-core/tests/credentials.rs`, for each language's settings
+  sample: a token read back after a restart, the file's bytes without the
+  token's text and the value recorded as DPAPI (Windows; on macOS and Linux
+  version 1 as before); a version-1 file converted at start, its token
+  still read; a conversion whose write fails (the file held open without
+  sharing deletion) leaving the version-1 file readable and converted at
+  the next start; a damaged token explained through `credentials.get`
+  while the other kinds still read, kept by Pane across restarts and
+  replaced by Sign in; Manage extensions counting "2 credentials, 1
+  unreadable" for retained data and deleting it; and, on every system, a
+  file of an unknown version refused by `get`, `set` and uninstall and
+  left byte for byte. The Clear cache and uninstall checks above run
+  unchanged over the protected file on Windows. Unit tests in
+  `protection.rs` and `extension_data.rs`: a value protected and read
+  back, damaged bytes explained, a value that cannot be read counted,
+  kept by other writes and replaced by `set`, and a password preference
+  that cannot be read treated as unset.
 - `crates/pane/tests/install.rs`: the rows, confirmation text, Esc and the
   outcome in the native window.
 - The native GUI smokes, screenshots 40 to 43: every kind shown, the
@@ -319,15 +400,17 @@ The record is dropped only once every kind is deleted:
 ## Limits
 
 - `get` and `set` only: an extension cannot delete one value or list its keys.
-- Local credentials are plain text in Pane's data folder, not in the
-  system's keychain ([decision](current-decisions.md#cross-cutting-details-preserved)).
-  On macOS and Linux `credentials.json` is created with mode 0600, so other
-  users of the computer cannot read it; on Windows (since #35's review) each
-  version of it is created with a protected DACL giving full control to the
-  user Pane runs as and SYSTEM only, inheriting nothing from its folder
-  (`atomic.rs`, checked by a Windows unit test). `clipboard-history.json`
-  is written the same way. Nothing protects them from
-  other extensions or programs running as the same user: the policy is
+- Local credentials are kept in Pane's data folder, not in the system's
+  keychain ([decision](current-decisions.md#cross-cutting-details-preserved)).
+  On macOS and Linux `credentials.json` holds them as they are, created with
+  mode 0600, so other users of the computer cannot read it; on Windows (since
+  #35's review) each version of it is created with a protected DACL giving
+  full control to the user Pane runs as and SYSTEM only, inheriting nothing
+  from its folder (`atomic.rs`, checked by a Windows unit test), and since
+  #130 each value in it is encrypted with DPAPI for the user
+  ([above](#protected-credentials)). `clipboard-history.json` is written
+  the same way. Nothing protects them from other extensions or programs
+  running as the same user, which can call DPAPI as Pane does: the policy is
   lifecycle behavior, not secret isolation. Deleting a local credential never
   revokes a remote session.
 - Clear cache covers `cache.json` only; an extension that writes cache files

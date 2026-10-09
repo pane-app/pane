@@ -243,7 +243,7 @@ impl IconLoads {
             .spawn(move || shared.work());
         if let Err(error) = started {
             state.workers -= 1;
-            eprintln!("pane: could not start a thread loading icons: {error}");
+            crate::diagnostic!("pane: could not start a thread loading icons: {error}");
         }
     }
 
@@ -348,6 +348,39 @@ impl super::Launcher {
     }
 }
 
+/// Writes the diagnostic of a web image `url` that shows its fallback
+/// because of `why`. The image is named by the address it was asked of
+/// only: the rest of an extension's URL can carry what the user typed (a
+/// search's query), which Pane's log never holds (#133). `why` names the
+/// URL in its own way at times (escaped, or the one a redirect led to), so
+/// beyond the URL itself, every URL-like text in it is left out.
+fn report_fallback(url: &str, why: &str) {
+    let address =
+        http::address_of(url).unwrap_or_else(|| "an address that is not a web one".into());
+    let why = without_urls(&why.replace(url, &address));
+    crate::diagnostic!("pane: a web image from {address} shows its fallback: {why}");
+}
+
+/// `text` with every URL-like text in it (a scheme, `://` and what follows
+/// up to a space, a quote or a bracket) replaced by `<url>`.
+fn without_urls(text: &str) -> String {
+    let scheme = |c: char| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.');
+    let ends = |c: char| c.is_whitespace() || "`\"'<>()".contains(c);
+    let mut kept = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("://") {
+        let start = rest[..at].trim_end_matches(scheme).len();
+        let end = rest[at..]
+            .find(ends)
+            .map_or(rest.len(), |length| at + length);
+        kept.push_str(&rest[..start]);
+        kept.push_str("<url>");
+        rest = &rest[end..];
+    }
+    kept.push_str(rest);
+    kept
+}
+
 /// What an icon shows while its image loads, or when it failed, if it has
 /// no fallback: a neutral image glyph in the secondary tone.
 fn placeholder() -> Icon {
@@ -387,7 +420,7 @@ impl Shared {
                 } => {
                     let loaded = self.download(&owner, &url, &folder, &generation);
                     if let Err(why) = &loaded {
-                        eprintln!("pane: the web image {url} shows its fallback: {why}");
+                        report_fallback(&url, why);
                     }
                     let load = loaded.map_or(Load::Failed, Load::Ready);
                     self.lock().web.insert((owner, url), load);
@@ -489,6 +522,55 @@ mod tests {
 
     fn loads() -> IconLoads {
         IconLoads::new(None, None, Arc::new(|| {}))
+    }
+
+    /// A web image an extension built from the user's query fails: the
+    /// log names the address it was asked of, never the query.
+    #[test]
+    fn a_failed_web_image_is_logged_by_its_address_without_the_users_query() {
+        let folder = tempfile::tempdir().unwrap();
+        let captured =
+            crate::diagnostics::capture_into(folder.path(), crate::diagnostics::Redactor::none());
+        let query = "my-secret-search";
+        let url = format!("https://images.example.com/search?q={query}");
+        report_fallback(&url, &format!("`{url}` answered nothing"));
+        report_fallback(
+            &format!("weird:{query}"),
+            &format!("`weird:{query}` is not a web address"),
+        );
+        // The error names the URL otherwise: escaped, or another a redirect
+        // led to.
+        report_fallback(
+            &url,
+            "error sending request for url (https://images.example.com/search?q=my%2Dsecret)",
+        );
+        report_fallback(
+            &url,
+            &format!("redirected to HTTP://cdn.example.com/{query}.png and failed"),
+        );
+        let text = captured.text();
+        assert!(
+            text.contains("pane: a web image from images.example.com"),
+            "{text}"
+        );
+        assert!(!text.contains("secret"), "{text}");
+        assert!(
+            text.contains("shows its fallback: redirected to <url> and failed"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn url_like_text_is_left_out() {
+        assert_eq!(
+            without_urls("a (https://a.example/x?q=1) and `git+ssh://b/c`, then d://e f"),
+            "a (<url>) and `<url>`, then <url> f"
+        );
+        assert_eq!(without_urls("no address here: a:b"), "no address here: a:b");
+        assert_eq!(
+            without_urls("ends with https://x.example/y"),
+            "ends with <url>"
+        );
     }
 
     #[test]

@@ -255,13 +255,14 @@ pub(super) fn rows(retained: &[RetainedData], data: &ExtensionData) -> (Vec<Row>
     if retained.is_empty() {
         return (Vec::new(), Vec::new());
     }
-    // Each kind's file is read once for every row.
+    // Each kind's file is read once for every row; each row says how many
+    // of its identity's values cannot be read on this computer (#130).
     let kept = data.kept_now(&DataKind::ALL);
     retained
         .iter()
         .map(|retained| {
             let kept = kept
-                .describe(&retained.identity)
+                .describe_unreadable(&retained.identity)
                 .unwrap_or_else(|| "nothing".into());
             let row = Row {
                 id: format!("delete-retained:{}", retained.identity.key()),

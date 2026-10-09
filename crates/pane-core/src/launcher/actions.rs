@@ -48,7 +48,14 @@ pub enum ResultAction {
     /// Opens the extension's preferences on its card in Settings ›
     /// Extensions (the window does).
     ConfigureExtension,
+    /// Takes away the notice that Pane quit unexpectedly last time
+    /// ([`Launcher::dismiss_crash_notice`]).
+    DismissNotice,
 }
+
+/// The Actions panel's entry that dismisses the notice that Pane quit
+/// unexpectedly last time.
+pub const DISMISS_NOTICE: &str = "Dismiss Notice";
 
 impl ResultAction {
     /// The action's name in records and reports: "invoke", "hotkey",
@@ -64,6 +71,7 @@ impl ResultAction {
             ResultAction::MovePinDown => "move-pin-down",
             ResultAction::ConfigureCommand => "configure-command",
             ResultAction::ConfigureExtension => "configure-extension",
+            ResultAction::DismissNotice => "dismiss-notice",
         }
     }
 
@@ -80,7 +88,8 @@ impl ResultAction {
             | ResultAction::Hotkey
             | ResultAction::Alias
             | ResultAction::ConfigureCommand
-            | ResultAction::ConfigureExtension => None,
+            | ResultAction::ConfigureExtension
+            | ResultAction::DismissNotice => None,
         }
     }
 
@@ -97,7 +106,8 @@ impl ResultAction {
                 | ResultAction::Pin
                 | ResultAction::Unpin
                 | ResultAction::MovePinUp
-                | ResultAction::MovePinDown,
+                | ResultAction::MovePinDown
+                | ResultAction::DismissNotice,
                 _,
             ) => None,
             (ResultAction::Hotkey, false) => Some("Assign Hotkey…"),
@@ -237,6 +247,15 @@ fn result_actions(launcher: &Launcher, state: &State) -> Option<ResultActions> {
     if quick_slots::pin_of_selected(state).is_some() {
         items.push(quick_slots::pin_item(state));
     }
+    // The notice that Pane quit unexpectedly last time can be dismissed
+    // (see `crash_notice`).
+    if matches!(state.entries.get(index), Some(Entry::OpenLogFolder)) {
+        items.push(ResultActionItem {
+            action: ResultAction::DismissNotice,
+            label: DISMISS_NOTICE.into(),
+            available: true,
+        });
+    }
     // An installed command's own row — not one that sends text through
     // an alias, and not this build's samples, which take no configuration.
     let command = matches!(
@@ -367,6 +386,7 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         (_, Some(Entry::Acquire(_))) => acting("Set up extension"),
         (_, Some(Entry::InstallUpdate)) => acting("Install update"),
         (_, Some(Entry::CheckUpdate)) => acting("Check for update"),
+        (_, Some(Entry::OpenLogFolder)) => acting("Open log folder"),
         (_, Some(Entry::Manage)) => acting("Manage Extensions"),
         // Pane's Settings row opens the Settings window, exactly as its
         // ellipsis menu entry and the local shortcut do (the window, not

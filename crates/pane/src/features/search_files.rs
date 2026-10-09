@@ -46,6 +46,7 @@ use pane_core::search_files::{FileDetails, FileType, SearchFilesView};
 use pane_core::{LauncherView, Screen, Status};
 
 use crate::app::{KEY_CONTEXT, LauncherWindow};
+use crate::features::announcer::{self, Listing, Noun, Opening, Selected, Target};
 use crate::features::root_search;
 use crate::ui::extension_icon::{self, IconSize};
 use crate::ui::footer;
@@ -420,6 +421,30 @@ impl LauncherWindow {
                 .reveal(virtual_list::child_of_row(false, &frame.sections, selected));
         }
         state.revealed = selected;
+        // The list as the window's announcer follows it (#132): opening
+        // with the command's title and count, root search's field the
+        // typing, settled once the field's search and the page it asked
+        // for have arrived.
+        let target = match selected {
+            Some(index) => Target::Row(Selected {
+                id: view.rows[index].id.clone(),
+                title: view.rows[index].title.clone(),
+                position: index + 1,
+                unavailable: view.rows[index].unavailable.is_some(),
+                section: announcer::section_at(&frame.sections, index),
+            }),
+            None if view.rows.is_empty() => Target::NoResults,
+            None => Target::Nothing,
+        };
+        let followed = Listing {
+            over: false,
+            key: format!("files {}", files.title),
+            opening: Opening::Named(files.title.clone(), Noun::Results),
+            count: view.rows.len(),
+            target,
+            query: Some(files.query.clone()),
+            settled: self.announcer.settled() && !files.loading,
+        };
         state.frame = Some(Rc::new(frame));
         let types = state.types.clone();
         let list_state = state.list.state().clone();
@@ -608,6 +633,7 @@ impl LauncherWindow {
             let (selector, color) = super::toast::style_look(shown.toast.style, &theme);
             (selector, shown.toast.text(), color)
         });
+        let outcome = super::announcer::says_message(&view.status, toast.is_some());
         let status = match &view.status {
             _ if toast.is_some() => toast,
             Status::Idle => None,
@@ -616,6 +642,12 @@ impl LauncherWindow {
             Status::Result(answer) => Some(("status-result", answer.clone(), theme.success)),
             Status::Error(message) => Some(("status-error", message.clone(), theme.danger)),
         };
+        // The window's announcer says it too (#132), when it is a toast or
+        // an outcome.
+        let said = status
+            .as_ref()
+            .filter(|_| outcome)
+            .map(|(_, text, _)| text.clone());
         let (selector, lead) = match &status {
             Some((selector, text, color)) => (
                 *selector,
@@ -656,6 +688,10 @@ impl LauncherWindow {
             detail,
             footer.into_any_element(),
         );
+        // The window's live region (#132): the open Actions panel's list,
+        // else the files'.
+        let followed = self.panel_listing(cx).or(Some(followed));
+        let announcer = self.announce(followed, said.as_deref(), cx);
         let root = div()
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(Self::select_next))
@@ -684,7 +720,8 @@ impl LauncherWindow {
             .font_family(theme.typography.family.clone())
             .font_features(theme.typography.features.clone())
             .text_color(theme.text_title)
-            .child(content);
+            .child(content)
+            .child(announcer);
         Some(visuals.material.panel(&theme, root))
     }
 
@@ -747,11 +784,11 @@ impl LauncherWindow {
                     .aria_selected(on)
                     .aria_position_in_set(row + 1)
                     .aria_size_of_set(frame.rows.len())
-                    .when(on, |line| line.aria_active_descendant())
                     // A click selects; a double click runs the primary
                     // action, as Enter does.
                     .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                         this.launcher.select(row);
+                        this.announcer.user_moved();
                         if event.click_count() >= 2 {
                             this.activate_selected(window, cx);
                         }

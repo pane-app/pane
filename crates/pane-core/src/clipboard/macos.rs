@@ -99,11 +99,10 @@ const FILE_READY_WAIT: Duration = Duration::from_secs(2);
 /// How long dropping the watch waits for the watcher to end.
 const STOP_WAIT: Duration = Duration::from_secs(1);
 
-/// Writes `message` to standard error, if there is one; never what was
-/// copied. Unlike `eprintln!`, it cannot panic.
+/// Writes `message` to standard error, if there is one, and to Pane's log
+/// (see `crate::diagnostics`); never what was copied. It cannot panic.
 fn log(message: &str) {
-    use std::io::Write;
-    let _ = writeln!(std::io::stderr(), "{message}");
+    crate::diagnostics::report_line(message);
 }
 
 /// The general pasteboard on macOS.

@@ -52,6 +52,8 @@ Layout:
 - `wit/extension.wit`: the host/guest contract for one extension command: a list view, item actions, [forms](docs/forms.md) and [custom views](docs/custom-views.md).
 - `crates/pane-core`: the launcher model (the public host interface the tests drive), extension packages (manifest, identity, managed copies) and the extension runtime, a Wasmtime 49.0.1 engine registering only WASI 0.3.
 - `crates/pane`: the GPUI CE window, with [root search](docs/root-search.md) as its first screen, and the Settings window.
+- `crates/pane-build`: how a package is built from its source folder, once or after each save; development mode and `pane-ext` both build with it.
+- `crates/pane-ext`: `pane-ext`, the command-line tool beside the app; `pane-ext dev` builds a package in the terminal and hands each build to the running Pane ([development mode](docs/development-mode.md#from-the-terminal-pane-ext-dev)).
 - `crates/pane-target`: the operating-system and processor names shared by the core, `xtask` and native helpers.
 - `xtask/`: the `cargo xtask` build, CI and packaging commands above.
 - `guests/`: extension guests, including [the Rust, JavaScript and TypeScript sample commands](guests/README.md) (installed by hand, as above), TypeScript declarations for the contract, the prebuilt JS/TS components and test fixtures.

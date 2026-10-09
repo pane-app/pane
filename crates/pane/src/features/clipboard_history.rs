@@ -63,6 +63,7 @@ use pane_core::clipboard_view::{
 use pane_core::{Binding, Keyboard, KeyboardAction, LauncherView, Screen, Status};
 
 use crate::app::{KEY_CONTEXT, LauncherWindow};
+use crate::features::announcer::{self, Listing, Noun, Opening, Selected, Target};
 use crate::ui::extension_icon::{self, IconSize};
 use crate::ui::footer::{self, ButtonWash};
 use crate::ui::icon::{Glyph, IconTone, TileSize};
@@ -88,6 +89,9 @@ pub(crate) const DELETE_BINDING: &str = "ctrl-d";
 
 /// The search field's placeholder, Raycast's.
 pub(crate) const PLACEHOLDER: &str = "Type to filter entries…";
+
+/// The search field's accessible name.
+pub(crate) const SEARCH_LABEL: &str = "Search clipboard history";
 
 /// The type dropdown's debug selector: its trigger is this, a choice's row
 /// `clipboard-type-<id>` (`all`, `text`, `images`, `files`, `links`,
@@ -471,6 +475,7 @@ impl LauncherWindow {
         if let Some(history) = self.clipboard.as_mut() {
             history.browse.step(&view.records, delta);
             history.moved();
+            self.announcer.user_moved();
             cx.notify();
         }
     }
@@ -723,6 +728,31 @@ impl LauncherWindow {
             }
             state.reveal = false;
         }
+        // The list as the window's announcer follows it (#132): opening
+        // with the command's title and count, its search the typing.
+        let chosen = frame
+            .selected
+            .and_then(|index| Some((index, frame.rows.get(index)?)));
+        let target = match chosen {
+            Some((index, record)) => Target::Row(Selected {
+                id: record.id.clone(),
+                title: record.title.clone(),
+                position: index + 1,
+                unavailable: false,
+                section: announcer::section_at(&frame.sections, index),
+            }),
+            None if frame.rows.is_empty() => Target::NoResults,
+            None => Target::Nothing,
+        };
+        let followed = Listing {
+            over: false,
+            key: format!("clipboard {}", history.title),
+            opening: Opening::Named(history.title.clone(), Noun::Results),
+            count: frame.rows.len(),
+            target,
+            query: Some(state.browse.query.clone()),
+            settled: true,
+        };
         state.frame = Some(Rc::new(frame));
         let selected = listing.selected_record();
         let show_outcome = state.outcome;
@@ -742,7 +772,20 @@ impl LauncherWindow {
                     this.back(&Back, window, cx);
                 }))
                 .into_any_element(),
-            split_view::search_field(&query, PLACEHOLDER, &theme).into_any_element(),
+            // The field's accessibility node, as root search's: it tracks
+            // the field's focus, which stays there while the selection
+            // moves (#132).
+            div()
+                .id("clipboard-search")
+                .flex_1()
+                .min_w(px(0.))
+                .track_focus(&query.focus_handle(cx))
+                .role(Role::EditableComboBox)
+                .aria_label(SEARCH_LABEL)
+                .aria_value(query.read(cx).as_str().to_owned())
+                .aria_placeholder(PLACEHOLDER)
+                .child(split_view::search_field(&query, PLACEHOLDER, &theme))
+                .into_any_element(),
             types.into_any_element(),
             &theme,
         );
@@ -876,6 +919,7 @@ impl LauncherWindow {
             let (selector, color) = super::toast::style_look(shown.toast.style, &theme);
             (selector, shown.toast.text(), color)
         });
+        let outcome = super::announcer::says_message(&view.status, toast.is_some());
         let status = match &view.status {
             _ if toast.is_some() => toast,
             Status::Idle => None,
@@ -885,6 +929,12 @@ impl LauncherWindow {
             Status::Error(message) => Some(("status-error", message.clone(), theme.danger)),
         }
         .filter(|_| show_outcome);
+        // The window's announcer says it too (#132), when it is a toast or
+        // an outcome.
+        let said = status
+            .as_ref()
+            .filter(|_| outcome)
+            .map(|(_, text, _)| text.clone());
         let (selector, lead) = match &status {
             Some((selector, text, color)) => (
                 *selector,
@@ -968,6 +1018,10 @@ impl LauncherWindow {
         .key_context(CONTEXT)
         .on_action(cx.listener(Self::clipboard_delete))
         .on_action(cx.listener(Self::clipboard_copy));
+        // The window's live region (#132): the open Actions panel's list,
+        // else the history's.
+        let followed = self.panel_listing(cx).or(Some(followed));
+        let announcer = self.announce(followed, said.as_deref(), cx);
         let root = div()
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(Self::clipboard_next))
@@ -988,7 +1042,8 @@ impl LauncherWindow {
             .font_family(theme.typography.family.clone())
             .font_features(theme.typography.features.clone())
             .text_color(theme.text_title)
-            .child(content);
+            .child(content)
+            .child(announcer);
         Some(visuals.material.panel(&theme, root))
     }
 }
@@ -1066,11 +1121,11 @@ impl LauncherWindow {
                     .aria_selected(on)
                     .aria_position_in_set(row + 1)
                     .aria_size_of_set(frame.rows.len())
-                    .when(on, |row| row.aria_active_descendant())
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         if let Some(history) = this.clipboard.as_mut() {
                             history.browse.select(id.clone());
                             history.outcome = false;
+                            this.announcer.user_moved();
                             cx.notify();
                         }
                     }))

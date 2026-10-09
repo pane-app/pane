@@ -81,8 +81,20 @@ Extension data Pane keeps for a package identity that is not installed, recorded
 _Avoid_: Orphaned data, leftovers (a leftover is a managed folder awaiting removal)
 
 **Local credential**:
-A secret an extension keeps on this computer through Pane, such as a sign-in token. Deleting it does not revoke a remote session.
+A secret an extension keeps on this computer through Pane, such as a sign-in token. Deleting it does not revoke a remote session. On Windows its value is encrypted on disk for the current user (DPAPI); on macOS and Linux it is kept as it is in a file only the user can read.
 _Avoid_: Account, session
+
+**Unreadable credential**:
+A local credential, or a clipboard history item, that Pane cannot decrypt on this computer: the user's password was reset by an administrator, the data folder came from another user or computer, or its bytes were damaged. It is explained to the extension that reads it ("Sign in again") and counted as unreadable on its extension's row, and kept as it was until the extension replaces it or it is deleted; Pane never drops or regenerates it.
+_Avoid_: Corrupt credential, lost credential (it is kept)
+
+**Pane's log**:
+The file in Pane's logs folder where everything Pane writes to standard error also goes, redacted (the home folder, the user's and the computer's names), size-capped and rate-limited. It never leaves the computer, and holds no extension data, credentials, clipboard text or query text.
+_Avoid_: Telemetry, crash report (nothing is sent), extension log
+
+**Crash notice**:
+"Pane quit unexpectedly last time": the root result, status line and About page notice a start shows when the run before ended without a clean quit, found from the marker that run left in the logs folder. It opens the logs folder, and goes when dismissed, when the folder is opened, or after the next clean quit.
+_Avoid_: Crash dialog, crash report
 
 **Root search**:
 The launcher's main search and result view before a specific command is opened.
@@ -163,6 +175,10 @@ _Avoid_: Calculation, conversion, answer card (the card is how it is drawn)
 **No-results notice**:
 What root search shows above its fallbacks when nothing else is listed for a query that is not blank: the query, and what the user can do — pick a fallback, install an extension, or offer a command as one on its extension's page in Settings. The notice selects nothing itself; root search preselects the first fallback below it, so Enter sends it the query (ADR 0031).
 _Avoid_: Empty state (a screen's own line when it has no rows), zero state
+
+**Announcer**:
+The launcher window's one hidden, polite live region, which tells a screen reader what the selection does while the focus stays in a field, a menu or a list: "<title>, <i> of <n>" for a move, a list's name and count as it opens, "No results", and the footer's toasts and outcomes before the selection that came with them.
+_Avoid_: Active descendant (rows no longer claim the focus), notification
 
 **File index**:
 The host's index of the names of the files and folders under the index scope, kept in Pane's cache folder, readable by the user only and locked against a second Pane, caught up at start from what the system recorded and kept current from its change notifications while a package that uses it (`"fileIndex": true`) is enabled and not paused. It answers file search: root search's file rows, Search Files, and any package's search through `pane:extension/file-index`, each entry named by an id Pane gave it and checked again before Pane acts on it. Disabling the last package that uses it stops watching at once and keeps it on disk; uninstalling it deletes it.
@@ -345,7 +361,7 @@ Pane replacing the managed copy of an eligible installed package with a newer co
 _Avoid_: App update (the application's own, #54–56), forced update
 
 **Development mode**:
-An installed local package whose source folder Pane watches while its author works on it: each save runs the package's documented build command in that folder, staging the components under Pane's data folder, and a build that succeeds reloads the package from there, while one that fails keeps its working code and shows the build's diagnostics. It lasts until the author stops it, the package is disabled or uninstalled, or Pane quits, each of which kills a running build with the processes it started; another installed copy of the package is never affected.
+An installed local package whose source folder Pane watches while its author works on it: each save runs the package's documented build command in that folder, staging the components under Pane's data folder, and a build that succeeds reloads the package from there, while one that fails keeps its working code and shows the build's diagnostics. Under `pane-ext dev` the watching and the builds are `pane-ext`'s, in the author's terminal, and Pane reloads each build it hands over the local channel. It lasts until the author stops it, the package is disabled or uninstalled, or Pane quits, each of which kills a running build with the processes it started; another installed copy of the package is never affected.
 _Avoid_: Watch mode, hot reload, dev copy (a copy is an installation)
 
 **Extension log**:
@@ -355,6 +371,10 @@ _Avoid_: Console, debug output
 **pane-ext**:
 The command-line tool authors use beside the app to create, develop, check and pack an extension package; it builds with the same code as development mode and hands the result to the running Pane. Distinct from `pane`, the application's executable.
 _Avoid_: Pane CLI, `pane` (the application)
+
+**Local channel**:
+The endpoint the running Pane listens on for `pane-ext`, which only the same user can open: a named pipe on Windows, a Unix-domain socket in a folder of the user's own elsewhere. `pane-ext dev` hands its builds over it and receives the package's development status and extension log back; closing it stops the development.
+_Avoid_: IPC, socket (one of its forms), single-instance channel
 
 **Build failure**:
 A development build that did not succeed: nothing is replaced, and the package keeps running its installed code. Distinct from a startup failure, whose replacement was installed.

@@ -438,7 +438,9 @@ impl Launcher {
             let launcher = self.clone();
             let saved = off_thread(move || launcher.save::<ArgumentChoices>(Some(&command))).await;
             if let Err(problem) = saved {
-                eprintln!("Pane could not remember a command's dropdown choices: {problem}");
+                crate::diagnostic!(
+                    "Pane could not remember a command's dropdown choices: {problem}"
+                );
             }
         }
         self.launch_ready(epoch, opening, data).await

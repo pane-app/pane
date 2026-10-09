@@ -351,7 +351,7 @@ fn undo_one(what: &'static str, teardown: Teardown) -> Option<String> {
         Ok(Err(why)) => format!("undoing {what} at the end of its generation failed: {why}"),
         Err(_) => format!("undoing {what} at the end of its generation panicked"),
     };
-    eprintln!("pane: {failure}");
+    crate::diagnostic!("pane: {failure}");
     Some(failure)
 }
 

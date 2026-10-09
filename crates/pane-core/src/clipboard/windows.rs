@@ -30,7 +30,6 @@
 
 use std::cell::RefCell;
 use std::ffi::OsString;
-use std::io::Write;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -195,10 +194,10 @@ thread_local! {
     static LISTENER: RefCell<Option<Listener>> = const { RefCell::new(None) };
 }
 
-/// Writes `message` to standard error, if there is one; never what was
-/// copied. Unlike `eprintln!`, it cannot panic.
+/// Writes `message` to standard error, if there is one, and to Pane's log
+/// (see `crate::diagnostics`); never what was copied. It cannot panic.
 fn log(message: &str) {
-    let _ = writeln!(std::io::stderr(), "{message}");
+    crate::diagnostics::report_line(message);
 }
 
 /// The registered formats that carry an application's markers.

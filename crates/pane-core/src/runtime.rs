@@ -1084,7 +1084,9 @@ impl Runtime {
                         None => match parse_limits(text) {
                             Some(limits) => runtime.set_limits(limits),
                             None => {
-                                eprintln!("PANE_TEST_RUNTIME_FAULTS: unknown fault {text:?}")
+                                crate::diagnostic!(
+                                    "PANE_TEST_RUNTIME_FAULTS: unknown fault {text:?}"
+                                )
                             }
                         },
                     }
@@ -4074,7 +4076,7 @@ impl Host {
                     Halt::Cancelled => Err(CallError::Cancelled),
                     Halt::Unresponsive(why) => {
                         let error = CallError::Unresponsive(why);
-                        eprintln!("pane: {} stopped responding: {error}", path.display());
+                        crate::diagnostic!("pane: {} stopped responding: {error}", path.display());
                         self.report(path, data.as_ref(), Health::Unresponsive(error.clone()));
                         Err(error)
                     }

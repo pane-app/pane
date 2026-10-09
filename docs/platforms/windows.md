@@ -445,7 +445,12 @@ read and withholding the text, a written text reported, and nothing once
 the watch is dropped; it too replaces the clipboard, so it runs only with
 `PANE_TEST_REAL_CLIPBOARD=1`, which CI's Windows job sets. `atomic.rs`'s
 Windows unit test checks the owner-only DACL of `clipboard-history.json`
-and `credentials.json`.
+and `credentials.json`. Since #130 each local credential and each kept clipboard item's
+text and files are also encrypted in those files with DPAPI for the current
+user ([protected credentials](../extension-data.md#protected-credentials)),
+so the smoke checks the token by its `dpapi` value, never its text, and
+reads the kept texts through `scripts/clipboard_history.py`, which
+decrypts them as the same user.
 
 The adapter, the shared message thread (also the hotkey adapter's), the
 DACL and these tests were only compile- and lint-checked for

@@ -25,9 +25,11 @@
 //! so nothing of a closed menu intercepts a click. Reopening during the
 //! exit retargets the same transition from the presentation on screen.
 //!
-//! While the menu is open its list holds focus (the selected item is its
-//! active descendant), so the launcher's keys — the query field's
-//! editing, the list's selection — stay inert behind it.
+//! While the menu is open its list holds focus, so the launcher's keys —
+//! the query field's editing, the list's selection — stay inert behind it.
+//! The list is what assistive technology reports as focused; its selected
+//! item is said by the window's announcer, "Settings, 1 of 1"
+//! ([`crate::features::announcer`], #132).
 
 use gpui::{
     AnyElement, App, BoxShadow, ClickEvent, Context, Div, FocusHandle, KeyBinding, MouseDownEvent,
@@ -36,6 +38,7 @@ use gpui::{
 use pane_core::KeyboardAction;
 
 use crate::app::LauncherWindow;
+use crate::features::announcer::{Listing, Opening, Selected, Target};
 use crate::features::settings;
 use crate::ui;
 use crate::ui::footer;
@@ -178,6 +181,7 @@ impl LauncherWindow {
             && menu.selected + 1 < ITEMS.len()
         {
             menu.selected += 1;
+            self.announcer.user_moved();
             cx.notify();
         }
     }
@@ -187,8 +191,32 @@ impl LauncherWindow {
             && menu.selected > 0
         {
             menu.selected -= 1;
+            self.announcer.user_moved();
             cx.notify();
         }
+    }
+
+    /// The open menu as the window's announcer follows it (#132): over the
+    /// screen, saying only its selected item as it opens, since the screen
+    /// reader reads the menu's name as the menu takes the focus.
+    pub(crate) fn menu_listing(&self) -> Option<Listing> {
+        let menu = self.menu.as_ref()?;
+        let item = ITEMS.get(menu.selected)?;
+        Some(Listing {
+            over: true,
+            key: MENU_NAME.to_owned(),
+            opening: Opening::Selection,
+            count: ITEMS.len(),
+            target: Target::Row(Selected {
+                id: item.title.to_owned(),
+                title: item.title.to_owned(),
+                position: menu.selected + 1,
+                unavailable: false,
+                section: None,
+            }),
+            query: None,
+            settled: true,
+        })
     }
 
     /// Activates the menu's selected entry, closing the menu.
@@ -334,9 +362,10 @@ fn menu_list(
         .min_w(px(200.));
     let inert = focus.is_none();
     // The interactive list: the open menu's focus, semantics and
-    // handlers — its key context over the window's, the selected entry
-    // as the list's active descendant, and the outside dismissal that
-    // consumes the click so nothing underneath is activated.
+    // handlers — its key context over the window's, the focus that stays
+    // on it (the announcer says the selected entry, #132), and the outside
+    // dismissal that consumes the click so nothing underneath is
+    // activated.
     let list = match focus {
         Some(focus) => list
             .key_context(CONTEXT)
@@ -399,15 +428,14 @@ fn menu_list(
                 });
                 item.active(move |item| item.bg(press))
             })
-            .when(item_selected, |item| {
-                item.bg(theme.action_selected)
-                    .when(!inert, |item| item.aria_active_descendant())
-            })
+            .when(item_selected, |item| item.bg(theme.action_selected))
             .when(!inert, |entry| {
                 entry
                     .role(Role::MenuItem)
                     .aria_label(item.title)
                     .aria_selected(item_selected)
+                    .aria_position_in_set(index + 1)
+                    .aria_size_of_set(ITEMS.len())
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                         if let Some(item) = ITEMS.get(index) {
                             (item.activate)(this, window, cx);

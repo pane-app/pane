@@ -24,12 +24,19 @@
 //! opening does, and what it reported is shown as the page's status.
 //!
 //! The diagnostics the page can copy are what Pane already knows — its
-//! version, the system it runs on, where its data lives and what its
-//! update check last found — nothing invented, nothing uploaded, no
-//! credentials and no extension's settings or data. The copy is the
+//! version, the system it runs on, where its data and its log live and
+//! what its update check last found — nothing invented, nothing uploaded,
+//! no credentials and no extension's settings or data. The copy is the
 //! user's explicit choice, to the clipboard of this computer only; the
 //! clipboard write has no failure path, so what the copy reports is its
 //! completion.
+//!
+//! Beside the diagnostics, the Log row (#133) names the folder of Pane's
+//! log, says when Pane quit unexpectedly last time — the same notice root
+//! search lists, read from the launcher ([`pane_core::Launcher::log_notice`])
+//! — and opens the folder with the system's file manager
+//! ([`pane_core::Launcher::open_log_folder`]), which takes the notice away
+//! in both places.
 
 use std::future::Future;
 
@@ -59,12 +66,18 @@ pub(crate) const ABOUT: &str = "Version, updates and documentation";
 
 /// What the rows say under their names.
 pub(crate) const DOCUMENTATION_NOTE: &str = "Pane's README on GitHub";
-pub(crate) const DIAGNOSTICS_NOTE: &str = "Your version, system and data folder";
+pub(crate) const DIAGNOSTICS_NOTE: &str = "Your version, system, data folder and log folder";
+pub(crate) const LOG_NOTE: &str = "Pane's own diagnostics, kept on this computer only";
+
+/// The notice that the run before this one ended unexpectedly (#133), as
+/// root search's row says it.
+pub(crate) const CRASH_NOTICE: &str = pane_core::diagnostics::CRASH_NOTICE;
 
 /// The buttons' labels.
 pub(crate) const CHECK_LABEL: &str = "Check for updates";
 pub(crate) const DOCUMENTATION_LABEL: &str = "Open";
 pub(crate) const DIAGNOSTICS_LABEL: &str = "Copy";
+pub(crate) const LOG_FOLDER_LABEL: &str = "Open log folder";
 pub(crate) const COPIED: &str = "Copied to the clipboard";
 
 /// The About page, registered last in the window's page list: the spec's
@@ -239,6 +252,9 @@ fn render(
             ),
         }),
         copied,
+        // Pane's log, and whether the run before ended unexpectedly: the
+        // same notice root search lists (#133).
+        log: this.launcher.log_notice().map(log_view),
     };
     let documentation = this.search_anchor(DOCUMENTATION_ROW);
     compose(&view, &theme, |control, element| match control {
@@ -280,10 +296,29 @@ fn render(
             element.on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
                 // The report is what the launcher holds as of this click,
                 // not as of the frame that drew the button.
-                let report = diagnostics(&this.launcher.application_update());
+                let report = diagnostics(
+                    &this.launcher.application_update(),
+                    this.launcher.log_notice().as_ref(),
+                );
                 cx.write_to_clipboard(ClipboardItem::new_string(report));
                 this.about.copied = true;
                 cx.notify();
+            }))
+        }
+        AboutControl::LogFolder => {
+            element.on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                // The folder opens with the system's file manager, off the
+                // window's thread; the notice goes, here and in root
+                // search, and the status line says whether it opened.
+                let opening = this.launcher.open_log_folder();
+                launcher_changed_outside(cx);
+                cx.notify();
+                cx.spawn(async move |this, cx| {
+                    opening.await;
+                    cx.update(launcher_changed_outside);
+                    this.update(cx, |_, cx| cx.notify()).ok();
+                })
+                .detach();
             }))
         }
     })
@@ -304,6 +339,23 @@ pub(crate) struct AboutView {
     pub(crate) opened: Option<(SharedString, Hsla)>,
     /// Whether the diagnostics were copied.
     pub(crate) copied: bool,
+    /// Pane's log (#133), when this launcher keeps one.
+    pub(crate) log: Option<LogView>,
+}
+
+/// Pane's log, as the About page shows it: its folder, and whether the run
+/// before this one ended unexpectedly (the notice root search lists too).
+pub(crate) struct LogView {
+    pub(crate) folder: String,
+    pub(crate) quit_unexpectedly: bool,
+}
+
+/// The Log row's view of what the launcher knows of Pane's log.
+fn log_view(notice: pane_core::LogNotice) -> LogView {
+    LogView {
+        folder: notice.folder.display().to_string(),
+        quit_unexpectedly: notice.quit_unexpectedly,
+    }
 }
 
 /// Which of the About page's controls an element is, for the caller of
@@ -318,6 +370,8 @@ pub(crate) enum AboutControl {
     Documentation,
     /// "Copy diagnostics".
     Diagnostics,
+    /// "Open log folder".
+    LogFolder,
 }
 
 /// The About page's composition: one card of rows (#99) — the version, the updates (the
@@ -416,19 +470,42 @@ pub(crate) fn compose(
         action_button(
             "about-diagnostics",
             DIAGNOSTICS_LABEL,
-            "Copies your version, system and data folder",
+            "Copies your version, system, data folder and log folder",
             theme,
         ),
     ));
-    let card = controls::card(
-        [
-            version.into_any_element(),
-            updates.into_any_element(),
-            documentation.into_any_element(),
-            diagnostics.into_any_element(),
-        ],
-        theme,
-    );
+    // Pane's log beside the diagnostics (#133): where it is, the notice
+    // that Pane quit unexpectedly last time, and the folder opened with the
+    // system's file manager.
+    let log = view.log.as_ref().map(|log| {
+        let mut lines = vec![
+            controls::row_line(LOG_NOTE, theme.text_muted, theme),
+            controls::row_line(log.folder.clone(), theme.text_muted, theme),
+        ];
+        if log.quit_unexpectedly {
+            lines.push(
+                status_note("about-crash-notice", CRASH_NOTICE, theme.warning, theme)
+                    .into_any_element(),
+            );
+        }
+        controls::setting_row("Log", lines, theme).child(attach(
+            AboutControl::LogFolder,
+            action_button(
+                "about-log-folder",
+                LOG_FOLDER_LABEL,
+                "Opens the folder of Pane's log in the file manager",
+                theme,
+            ),
+        ))
+    });
+    let mut rows = vec![
+        version.into_any_element(),
+        updates.into_any_element(),
+        documentation.into_any_element(),
+    ];
+    rows.extend(log.map(|log| log.into_any_element()));
+    rows.push(diagnostics.into_any_element());
+    let card = controls::card(rows, theme);
     let page = controls::page(theme).child(controls::section(None, card, theme));
     div()
         .id("about")
@@ -503,16 +580,30 @@ fn install_progress(status: &Status, version: &str) -> SharedString {
 
 /// The report the diagnostics copy holds: what Pane already knows of this
 /// installation — its version, the system it runs on, where its data
-/// lives and what its update check last found — and nothing else (see the
-/// module docs).
-fn diagnostics(update: &ApplicationUpdate) -> String {
+/// lives, where its log is (and whether the run before ended
+/// unexpectedly) and what its update check last found — and nothing else
+/// (see the module docs). The folders are redacted as the log redacts
+/// (#133): the home folder is `~`, and the user's and the computer's names
+/// are left out, so the report can be pasted into a public bug report.
+fn diagnostics(update: &ApplicationUpdate, log: Option<&pane_core::LogNotice>) -> String {
+    let folder =
+        |path: &std::path::Path| pane_core::diagnostics::redacted(&path.display().to_string());
     let mut report = format!("Pane {}", crate::APP_VERSION);
     if let Some(target) = pane_core::Target::current() {
         report.push_str(&format!("\nBuilt for {}", target.id()));
     }
     match crate::data_dir() {
-        Some(dir) => report.push_str(&format!("\nData folder: {}", dir.display())),
+        Some(dir) => report.push_str(&format!("\nData folder: {}", folder(&dir))),
         None => report.push_str("\nData folder: none"),
+    }
+    match log {
+        Some(log) => {
+            report.push_str(&format!("\nLog folder: {}", folder(&log.folder)));
+            if log.quit_unexpectedly {
+                report.push_str("\nLast run: Pane quit unexpectedly");
+            }
+        }
+        None => report.push_str("\nLog folder: none"),
     }
     report.push_str(&format!("\nUpdate check: {}", update_line(update)));
     report

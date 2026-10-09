@@ -747,10 +747,11 @@ fn a_fresh_data_folder_records_the_first_copy_with_no_turn_on() {
     assert!(pane.clipboard.copy("the first copy", Some("notepad.exe")));
     open(&launcher, COMMAND);
     assert_eq!(listed(&launcher), ["the first copy"]);
-    let file: Value = serde_json::from_str(
-        &fs::read_to_string(pane.data.path().join("extensions/clipboard-history.json")).unwrap(),
-    )
-    .unwrap();
+    let text =
+        fs::read_to_string(pane.data.path().join("extensions/clipboard-history.json")).unwrap();
+    // On Windows the file holds the copy encrypted (#130).
+    assert_eq!(text.contains("the first copy"), !cfg!(windows), "{text}");
+    let file: Value = pane_core::clipboard::revealed_history(&text).unwrap();
     let own = PackageIdentity::default_extension("clipboard-history").key();
     assert_eq!(file["packages"][&own]["items"][0]["text"], "the first copy");
 

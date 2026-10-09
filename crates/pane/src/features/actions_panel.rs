@@ -70,6 +70,7 @@ use pane_core::{
 };
 
 use crate::app::LauncherWindow;
+use crate::features::announcer::{Listing, Noun, Opening, Selected, Target};
 use crate::features::quick_slots;
 use crate::ui::extension_icon::{self, IconSize, RowIcon};
 use crate::ui::icon::{Glyph, IconTone, TileSize, glyph, tile_at};
@@ -89,6 +90,8 @@ pub(crate) const CONTEXT: &str = "ActionsPanel";
 
 /// The search field's placeholder, the reference's.
 pub(crate) const PLACEHOLDER: &str = "Search actions…";
+/// The search field's accessible name.
+pub(crate) const SEARCH_LABEL: &str = "Search actions";
 /// What the list says when the filter leaves nothing, the reference's.
 pub(crate) const NO_MATCH: &str = "No actions match";
 /// What the list says when no result is selected: nothing to act on.
@@ -148,7 +151,8 @@ impl SlotKeys {
             | ResultAction::Hotkey
             | ResultAction::Alias
             | ResultAction::ConfigureCommand
-            | ResultAction::ConfigureExtension => None,
+            | ResultAction::ConfigureExtension
+            | ResultAction::DismissNotice => None,
         }
     }
 }
@@ -471,6 +475,19 @@ pub(crate) fn clipboard_entries(
             }
         })
         .collect()
+}
+
+/// The panel's accessible name, which the announcer says as it opens (#132):
+/// "Actions for <target>", or "<submenu>, actions for <target>" while a
+/// submenu is shown.
+fn panel_label(opened: Option<&Opened>, submenu: Option<&OpenSubmenu>) -> String {
+    let Some(opened) = opened else {
+        return "Actions".to_owned();
+    };
+    match submenu {
+        Some(submenu) => format!("{}, actions for {}", submenu.title, opened.title),
+        None => format!("Actions for {}", opened.title),
+    }
 }
 
 /// The entries whose label holds `query`, ignoring case and the spaces
@@ -801,8 +818,40 @@ impl LauncherWindow {
             && let Some(next) = next_available(&listed, panel.selected, forward)
         {
             panel.selected = next;
+            self.announcer.user_moved();
             cx.notify();
         }
+    }
+
+    /// The open panel as the window's announcer follows it (#132): over
+    /// the screen, opening with its name and how many entries it lists,
+    /// its search field's text the typing, and each level of a submenu a
+    /// list of its own.
+    pub(crate) fn panel_listing(&self, cx: &App) -> Option<Listing> {
+        let panel = self.actions.as_ref()?;
+        let listed = self.listed(cx);
+        let submenu = self.shown_submenu();
+        let label = panel_label(panel.opened.as_ref(), submenu.as_ref());
+        let target = match listed.get(panel.selected) {
+            Some(entry) => Target::Row(Selected {
+                id: entry.label.clone(),
+                title: entry.label.clone(),
+                position: panel.selected + 1,
+                unavailable: !entry.available && entry.kind != EntryKind::Note,
+                section: entry.section.as_ref().map(SharedString::to_string),
+            }),
+            None if listed.is_empty() => Target::NoResults,
+            None => Target::Nothing,
+        };
+        Some(Listing {
+            over: true,
+            key: label.clone(),
+            opening: Opening::Named(label, Noun::Commands),
+            count: listed.len(),
+            target,
+            query: Some(panel.query(cx)),
+            settled: true,
+        })
     }
 
     /// A key pressed while the panel is open, before its search field sees
@@ -1072,6 +1121,13 @@ impl LauncherWindow {
                     self.focus_slot(slot, window, cx);
                 }
             }
+            // The notice that Pane quit unexpectedly last time (#133): its
+            // row leaves root search.
+            ResultAction::DismissNotice => {
+                self.close_actions(window, cx);
+                self.launcher.dismiss_crash_notice();
+                self.show_until_done(std::future::ready(()), window, cx);
+            }
         }
     }
 
@@ -1123,13 +1179,7 @@ impl LauncherWindow {
             .map(|opened| {
                 crate::features::icons::row_icon_of(&self.launcher, &opened.target, theme)
             });
-        let label = match (opened, &submenu) {
-            (Some(opened), Some(submenu)) => {
-                format!("{}, actions for {}", submenu.title, opened.title)
-            }
-            (Some(opened), None) => format!("Actions for {}", opened.title),
-            (None, _) => "Actions".to_owned(),
-        };
+        let label = panel_label(opened, submenu.as_ref());
         // The list's frame. It is measured again, from its top, only when
         // what it lists changed — not as an icon arrives — and keeps the
         // selected entry in view.
@@ -1182,6 +1232,8 @@ impl LauncherWindow {
                 empty,
                 empty_note,
                 filter: &panel.filter,
+                focus: panel.filter.focus_handle(cx),
+                query: panel.query(cx),
             },
             list,
             theme,
@@ -1219,6 +1271,7 @@ impl LauncherWindow {
                         && panel.selected != at
                     {
                         panel.selected = at;
+                        this.announcer.user_moved();
                         cx.notify();
                     }
                 }))
@@ -1252,6 +1305,10 @@ pub(crate) struct PanelView<'a> {
     pub(crate) empty_note: &'static str,
     /// The search field's text.
     pub(crate) filter: &'a Entity<EditableTextState>,
+    /// The search field's focus, which its accessibility node tracks.
+    pub(crate) focus: FocusHandle,
+    /// The search field's text, as its accessibility node's value.
+    pub(crate) query: String,
 }
 
 /// The panel as `view` describes it: the header (the target's tile and
@@ -1275,7 +1332,7 @@ pub(crate) fn compose(
         header,
         list.filter(|_| empty.is_none()),
         empty,
-        search_field(view.filter, theme),
+        search_field(view.filter, &view.focus, view.query, theme),
         theme,
         material,
     )
@@ -1409,6 +1466,7 @@ fn action_glyph(action: ResultAction, primary: Glyph) -> Glyph {
         | ResultAction::MovePinUp
         | ResultAction::MovePinDown => Glyph::ActionPin,
         ResultAction::ConfigureCommand | ResultAction::ConfigureExtension => Glyph::Sliders,
+        ResultAction::DismissNotice => Glyph::Delete,
     }
 }
 
@@ -1437,7 +1495,9 @@ pub(crate) fn panel_child(
             let Some(entry) = listed.get(index) else {
                 return div().into_any_element();
             };
-            let row = action_row(index, entry, index == selected, theme);
+            let row = action_row(index, entry, index == selected, theme)
+                .aria_position_in_set(index + 1)
+                .aria_size_of_set(listed.len());
             let row = if entry.available {
                 attach(row, index)
             } else {
@@ -1623,10 +1683,26 @@ pub(crate) fn header(title: &str, icon: Option<&RowIcon>, theme: &Theme) -> Div 
 
 /// The panel's search field in its row: 44 high, a rule above, the 15px
 /// magnifier and the 13px field 10px after it, centered in the row.
-pub(crate) fn search_field(filter: &Entity<EditableTextState>, theme: &Theme) -> Div {
+///
+/// For assistive technology the row is the field's node, as root search's
+/// is: an editable combo box tracking `focus` (the filter's), with `query`
+/// as its value. The focus stays there while the selection moves, and the
+/// window's announcer says the selected entry (#132).
+pub(crate) fn search_field(
+    filter: &Entity<EditableTextState>,
+    focus: &FocusHandle,
+    query: String,
+    theme: &Theme,
+) -> Stateful<Div> {
     let geometry = &theme.geometry.actions;
     div()
+        .id("actions-search")
         .debug_selector(|| "actions-search".into())
+        .track_focus(focus)
+        .role(Role::EditableComboBox)
+        .aria_label(SEARCH_LABEL)
+        .aria_value(query)
+        .aria_placeholder(PLACEHOLDER)
         .flex_none()
         .flex()
         .items_center()
@@ -1667,7 +1743,7 @@ pub(crate) fn popup(
     header: Option<Div>,
     rows: Option<AnyElement>,
     empty: Option<&'static str>,
-    search: Div,
+    search: Stateful<Div>,
     theme: &Theme,
     material: Material,
 ) -> Stateful<Div> {

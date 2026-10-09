@@ -26,10 +26,11 @@ mod session;
 mod sources;
 
 pub use build::{
-    Build, BuildJob, BuildOutcome, Builder, Toolchains, build_package, is_save, stage_package,
+    Build, BuildJob, BuildOutcome, Builder, Echo, Toolchains, build_package, is_save, stage_package,
 };
 pub use session::{
     BuildFailure, Claim, Development, Host, MAX_OBSOLETE, Prepared, Session, Worker,
+    copy_components,
 };
 
 /// The name of a package's manifest, in its folder.

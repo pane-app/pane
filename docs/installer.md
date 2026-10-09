@@ -347,7 +347,11 @@ with why, which tries again.
    the state rather than promising a release), and why installing the
    offer last failed, since the offer stays, ready to be chosen again.
    A check the user asks for from either entry point answers even when
-   there is nothing to offer.
+   there is nothing to offer. The same page's **Log** row and root
+   search's **Pane quit unexpectedly last time** row, which follows the
+   update's rows, work the same way for Pane's local crash record (#133,
+   [pausing](pausing.md#when-pane-itself-ends-its-log-and-the-crash-notice)),
+   and the diagnostics the page copies name the log's folder.
 
 The Windows install of an update is this whole path with the program at
 `%LOCALAPPDATA%\Pane\pane.exe` (the install script's target, and the

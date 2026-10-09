@@ -6,3 +6,6 @@ tools/componentize-js/patches/*.patch text eol=lf
 # binary file are byte counts, so neither file may change on checkout.
 crates/pane-core/assets/reicon/icons.bin binary
 crates/pane-core/assets/reicon/index.tsv text eol=lf
+# The tray's icons (crates/pane-core/assets/tray), embedded in the program
+# byte for byte.
+crates/pane-core/assets/tray/* binary

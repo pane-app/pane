@@ -4498,6 +4498,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pane-ext"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "pane-build",
+ "pane-core",
+ "tempfile",
+]
+
+[[package]]
 name = "pane-target"
 version = "0.1.0"
 

@@ -12,18 +12,26 @@
 //! nothing else may own it), and the item is removed from the status bar
 //! when the adapter is dropped or Pane quits.
 //!
-//! The item's button carries Pane's name as its title — honest and
-//! legible where an icon would be blank in a development build, which is
-//! what the application icon would be there. The native validation
-//! records how a run sees it.
+//! The item's button shows Pane's mark as a template image (#131): black
+//! on transparency, which the system tints for light and dark menu bars
+//! and for the selected state, as it tints its own items. The mark is
+//! embedded in the program (`assets/tray/mark-template.png`, drawn by
+//! `scripts/icons/tray-icons.py`), so a development build shows it too; a
+//! mark that cannot be read leaves the button with Pane's name as its
+//! title. The item has an autosave name, so the place the user
+//! Command-dragged it to is remembered across restarts. The item belongs
+//! to Pane's process, so a restart of the system's menu bar needs nothing
+//! from Pane; the native validation confirms it.
 
 use std::sync::Mutex;
 
 use objc2::rc::Retained;
 use objc2::runtime::NSObject;
-use objc2::{ClassType, DefinedClass, MainThreadMarker, define_class, msg_send, sel};
-use objc2_app_kit::{NSMenu, NSMenuItem, NSStatusBar, NSStatusItem, NSVariableStatusItemLength};
-use objc2_foundation::{NSObjectProtocol, NSString};
+use objc2::{AnyThread, ClassType, DefinedClass, MainThreadMarker, define_class, msg_send, sel};
+use objc2_app_kit::{
+    NSImage, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
+};
+use objc2_foundation::{NSData, NSObjectProtocol, NSSize, NSString};
 
 use super::{SelectionSender, Tray, TrayAction, TrayError};
 
@@ -33,6 +41,14 @@ use super::{SelectionSender, Tray, TrayAction, TrayError};
 // links AppKit for them.
 #[link(name = "AppKit", kind = "framework")]
 unsafe extern "C" {}
+
+/// Pane's mark for the menu bar: black on transparency, 36 pixels square,
+/// drawn at [`MARK_POINTS`] — twice the pixels, for Retina displays.
+static MARK_TEMPLATE: &[u8] = include_bytes!("../../assets/tray/mark-template.png");
+/// The size the mark is drawn at, in points: a menu bar item's image.
+const MARK_POINTS: f64 = 18.0;
+/// The name the system remembers the item's place in the menu bar under.
+const AUTOSAVE_NAME: &str = "PaneStatusItem";
 
 /// The adapter: the status bar, the target that owns the menu's
 /// selections, and the item while it is in the menu bar. The mutex is
@@ -132,6 +148,17 @@ impl MacTray {
     }
 }
 
+/// Pane's mark as a template image, which the system tints for the menu
+/// bar's appearance and the item's state; `None` if it cannot be read.
+fn mark() -> Option<Retained<NSImage>> {
+    let data = NSData::with_bytes(MARK_TEMPLATE);
+    let image = NSImage::initWithData(NSImage::alloc(), &data)?;
+    image.setSize(NSSize::new(MARK_POINTS, MARK_POINTS));
+    image.setTemplate(true);
+    image.setAccessibilityDescription(Some(&NSString::from_str("Pane")));
+    Some(image)
+}
+
 /// One menu item: the platform's own label, the target's action, no key
 /// equivalent — the tray's menu claims no keyboard binding of its own.
 /// Called on the main thread.
@@ -198,13 +225,18 @@ impl Tray for MacTray {
                 ] {
                     menu.addItem(&menu_item(marker, label, action, &state.target));
                 }
-                // The item itself: as wide as its title asks, in the menu
-                // bar's system status area, with that menu.
+                // The item itself: as wide as its mark asks, in the menu
+                // bar's system status area, with that menu. Its autosave
+                // name is set before it shows, so it shows where the user
+                // last put it.
                 let item = state.bar.statusItemWithLength(NSVariableStatusItemLength);
+                item.setAutosaveName(Some(&NSString::from_str(AUTOSAVE_NAME)));
                 item.setMenu(Some(&menu));
                 if let Some(button) = item.button(marker) {
-                    let title = NSString::from_str("Pane");
-                    button.as_super().setTitle(&title);
+                    match mark() {
+                        Some(image) => button.as_super().setImage(Some(&image)),
+                        None => button.as_super().setTitle(&NSString::from_str("Pane")),
+                    }
                 }
                 item.setVisible(true);
                 state.item = Some(item);

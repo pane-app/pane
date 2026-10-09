@@ -281,7 +281,9 @@ impl Updates {
             .name("pane-updates".into())
             .spawn(move || update_until_stopped(launcher, updates));
         if let Err(error) = started {
-            eprintln!("Pane cannot check for extension updates in the background: {error}");
+            crate::diagnostic!(
+                "Pane cannot check for extension updates in the background: {error}"
+            );
         }
     }
 

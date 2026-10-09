@@ -46,6 +46,15 @@
 //! the tools its build runs, with the author's own rights and Pane's
 //! environment. That is what the author asked for by developing the
 //! package, for this session only.
+//!
+//! `pane-ext dev` develops a package from the author's terminal instead
+//! (#217): it runs the same session itself, so the builds run there and print
+//! there, and hands each build to Pane over the local channel
+//! (`crate::local_channel`). Pane then develops the package without watching
+//! or building it ([`Remote`]): each build handed over is reloaded as one of
+//! Pane's own would be, and the package's rows, status, build details and
+//! extension log are the same. It ends as Pane's own development does, and
+//! also when `pane-ext` stops or its connection closes.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -120,7 +129,50 @@ struct DevelopmentConfig {
 /// One developed package.
 struct Session {
     id: u64,
-    session: pane_build::Session,
+    driver: Driver,
+}
+
+/// Asks `pane-ext` to build a package it develops now, as a save would.
+pub(crate) type BuildNow = Arc<dyn Fn() + Send + Sync>;
+
+/// Who builds a developed package.
+enum Driver {
+    /// Pane, after each save.
+    Own(pane_build::Session),
+    /// `pane-ext dev`, which hands each build over the local channel.
+    Remote {
+        /// What Pane was told of its builds.
+        report: Arc<Mutex<Development>>,
+        build: BuildNow,
+    },
+}
+
+impl Driver {
+    fn report(&self) -> Development {
+        match self {
+            Driver::Own(session) => session.report(),
+            Driver::Remote { report, .. } => lock_report(report).clone(),
+        }
+    }
+
+    fn build_now(&self) {
+        match self {
+            Driver::Own(session) => session.build_now(),
+            Driver::Remote { build, .. } => build(),
+        }
+    }
+
+    /// Ends Pane's own session; `pane-ext`'s learns that it ended from the
+    /// package's extension log, which stops being followed.
+    fn end(&self) {
+        if let Driver::Own(session) = self {
+            session.end();
+        }
+    }
+}
+
+fn lock_report(report: &Mutex<Development>) -> MutexGuard<'_, Development> {
+    report.lock().unwrap_or_else(|p| p.into_inner())
 }
 
 impl Developing {
@@ -156,7 +208,7 @@ impl Developing {
     fn report(&self, identity: &PackageIdentity) -> Option<Development> {
         self.sessions()
             .get(identity)
-            .map(|session| session.session.report())
+            .map(|session| session.driver.report())
     }
 
     fn is_developed(&self, identity: &PackageIdentity) -> bool {
@@ -184,7 +236,7 @@ impl Developing {
             }
         };
         for (identity, session) in &ended {
-            session.session.end();
+            session.driver.end();
             let owner = identity.key();
             self.logs
                 .pane(&owner, 0, LogLevel::Info, "Development stopped");
@@ -388,7 +440,9 @@ impl Launcher {
                 }
             });
         if let Err(error) = spawned {
-            eprintln!("pane: the Logs screen of {identity} will not follow its lines: {error}");
+            crate::diagnostic!(
+                "pane: the Logs screen of {identity} will not follow its lines: {error}"
+            );
         }
     }
 
@@ -470,9 +524,13 @@ impl Launcher {
         let folder = prepared.folder().to_path_buf();
         let command = prepared.command();
         let (session, worker) = prepared.begin();
-        self.developing
-            .sessions()
-            .insert(identity.clone(), Session { id, session });
+        self.developing.sessions().insert(
+            identity.clone(),
+            Session {
+                id,
+                driver: Driver::Own(session),
+            },
+        );
         // Its log is kept beside its builds' from now on.
         let owner = identity.key();
         self.developing
@@ -632,7 +690,7 @@ impl Launcher {
     pub(super) fn build_again(&self, state: &mut State, identity: &PackageIdentity) {
         let sessions = self.developing.sessions();
         match sessions.get(identity) {
-            Some(session) => session.session.build_now(),
+            Some(session) => session.driver.build_now(),
             None => {
                 drop(sessions);
                 state.view.status = Status::Error(format!(
@@ -695,7 +753,7 @@ impl Launcher {
             Some(log) => format!("the whole output is in {}", log.display()),
             None => "Pane could not keep its output".into(),
         };
-        eprintln!("pane: {title} did not build with `{command}`: {summary} ({whole})");
+        crate::diagnostic!("pane: {title} did not build with `{command}`: {summary} ({whole})");
         self.show_development(
             identity,
             Status::Error(format!(
@@ -704,6 +762,89 @@ impl Launcher {
                 build_details_title(&title)
             )),
         );
+    }
+
+    /// Develops the installed package with `identity` with the builds
+    /// `pane-ext` hands over the local channel, built with `command`: Pane
+    /// neither watches nor builds it, and `build` asks `pane-ext` to build it
+    /// now, as the row "Build <title> again" does. A development of the
+    /// package already going on, Pane's own or another `pane-ext`'s, ends
+    /// first. It lasts until the returned handle is dropped, or ends as
+    /// Pane's own development does. Returned with the handle: each line of
+    /// the package's extension log from the first of its development, which
+    /// ends when the development does.
+    pub(crate) fn develop_remotely(
+        &self,
+        identity: &PackageIdentity,
+        command: &str,
+        build: BuildNow,
+    ) -> Result<(Remote, Receiver<LogLine>), String> {
+        let mut state = self.lock();
+        self.changeable(&state, identity, "develop")?;
+        let title = state.title_of(identity);
+        if let Some(busy) = state.changing.get(identity) {
+            return Err(format!("{title} {}", busy.doing()));
+        }
+        let Some(folder) = identity.local_folder().map(Path::to_path_buf) else {
+            let message = format!("Cannot develop {title}: it has no local source folder");
+            return Err(message);
+        };
+        let installation = self
+            .installation
+            .as_ref()
+            .expect("changeable checked there is an installation");
+        let work = installation.dir.join("develop").join(slot(identity));
+        self.developing.end(Some(identity));
+        let id = self.developing.next.fetch_add(1, Ordering::SeqCst);
+        let report = Arc::new(Mutex::new(Development {
+            folder: folder.clone(),
+            command: command.to_owned(),
+            building: false,
+            pending: false,
+            waiting: false,
+            finished: 0,
+            obsolete: 0,
+            failure: None,
+        }));
+        self.developing.sessions().insert(
+            identity.clone(),
+            Session {
+                id,
+                driver: Driver::Remote {
+                    report: report.clone(),
+                    build,
+                },
+            },
+        );
+        let owner = identity.key();
+        self.developing
+            .logs
+            .develop(&owner, work.join(EXTENSION_LOG));
+        let lines = self.developing.logs.follow(&owner);
+        let developing = format!(
+            "Developing {title} with pane-ext: each save in {} runs `{command}` in its terminal, \
+             then reloads it",
+            folder.display(),
+        );
+        self.developing
+            .logs
+            .pane(&owner, 0, LogLevel::Info, &developing);
+        self.redraw_log_as_it_grows(identity);
+        state.view.status = Status::Result(developing);
+        self.refresh(&mut state);
+        drop(state);
+        self.developing.changed();
+        let remote = Remote {
+            reloader: Reloader {
+                launcher: self.downgrade(),
+                identity: identity.clone(),
+                id,
+                executor: None,
+            },
+            report,
+            command: command.to_owned(),
+        };
+        Ok((remote, lines))
     }
 
     /// Where the installed copy of the package with `identity` is.
@@ -749,6 +890,111 @@ fn slot(identity: &PackageIdentity) -> String {
         });
     format!("{hash:016x}")
 }
+
+/// A package `pane-ext` develops, as the local channel holds it: what it is
+/// told of `pane-ext`'s builds, and the builds it hands over (see
+/// [`Launcher::develop_remotely`]). Dropping it ends the development, as
+/// Stop developing does, if it has not ended otherwise.
+pub(crate) struct Remote {
+    /// Reloads each build handed over, as Pane's own session's host does.
+    reloader: Reloader,
+    report: Arc<Mutex<Development>>,
+    command: String,
+}
+
+impl Remote {
+    /// The developed package.
+    pub(crate) fn identity(&self) -> &PackageIdentity {
+        &self.reloader.identity
+    }
+
+    /// The package's title.
+    pub(crate) fn title(&self) -> String {
+        match self.reloader.launcher.upgrade() {
+            Some(launcher) => launcher.title_of(&self.reloader.identity),
+            None => self.reloader.identity.to_string(),
+        }
+    }
+
+    /// Whether Pane still develops the package with this handle.
+    pub(crate) fn is_current(&self) -> bool {
+        self.reloader.is_current()
+    }
+
+    /// Where the installed copy is, whose components replace what an
+    /// obsolete build left in the source folder.
+    pub(crate) fn installed(&self) -> Option<PathBuf> {
+        self.reloader.installed()
+    }
+
+    /// A build began.
+    pub(crate) fn building(&self) {
+        if !self.is_current() {
+            return;
+        }
+        lock_report(&self.report).building = true;
+        self.reloader.building(&self.command);
+    }
+
+    /// The build failed: nothing is replaced, and its diagnostics are shown
+    /// as for Pane's own builds.
+    pub(crate) fn failed(&self, failure: BuildFailure) {
+        if !self.is_current() {
+            return;
+        }
+        let failure = Arc::new(failure);
+        {
+            let mut report = lock_report(&self.report);
+            report.building = false;
+            report.failure = Some(failure.clone());
+            report.finished += 1;
+        }
+        self.reloader.failed(&failure, &self.command);
+        self.reloader.changed();
+    }
+
+    /// Reloads the package from the build staged in `staging`, once nothing
+    /// else changes it (a Reload, an update). Returns whether it replaced
+    /// the package, or why it could not take the build.
+    pub(crate) fn deliver(&mut self, staging: &Path) -> Result<bool, String> {
+        let mut claim = loop {
+            match self.reloader.claim() {
+                Claim::Claimed(claim) => break claim,
+                Claim::Busy => {
+                    lock_report(&self.report).waiting = true;
+                    std::thread::sleep(CLAIM_RETRY);
+                }
+                Claim::Ended => {
+                    return Err(format!("Pane no longer develops {}", self.title()));
+                }
+            }
+        };
+        {
+            let mut report = lock_report(&self.report);
+            report.building = false;
+            report.waiting = false;
+            report.failure = None;
+        }
+        self.reloader.changed();
+        let replaced = self.reloader.deliver(&mut claim, staging);
+        self.reloader.delivered(claim);
+        lock_report(&self.report).finished += 1;
+        self.reloader.changed();
+        Ok(replaced)
+    }
+}
+
+impl Drop for Remote {
+    fn drop(&mut self) {
+        if let Some(launcher) = self.reloader.current() {
+            launcher.stop_developing(&self.reloader.identity);
+        }
+    }
+}
+
+/// How often a build handed over by `pane-ext` while the package is being
+/// changed otherwise checks again whether it can be reloaded.
+const CLAIM_RETRY: Duration = Duration::from_millis(100);
 
 /// The launcher as the host of a developed package's session: it reloads
 /// the package from each build that succeeds, as the Reload row reloads

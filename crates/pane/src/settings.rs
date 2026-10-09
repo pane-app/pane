@@ -87,7 +87,7 @@ use gpui::{
 };
 use pane_core::autostart::{Autostart, Registration};
 use pane_core::hotkeys::Shortcut;
-use pane_core::tray::Tray;
+use pane_core::tray::{Tray, TrayError};
 use pane_core::{
     BackgroundEffect, Binding, HostSettings, Keyboard, KeyboardAction, Launcher,
     MaterialPreference, ThemePreference,
@@ -788,7 +788,14 @@ impl Settings {
         if let Err(error) = tray.set_visible(visible) {
             // A refused change is the page's rejection, reported by the
             // caller — not the entry's standing state, which a retry may
-            // still fix.
+            // still fix. The adapter is told the preference again, so the
+            // visibility it keeps for later (the Windows icon added again
+            // when Explorer restarts) is the preference's, not the refused
+            // change's; the entry is already in that state, so nothing
+            // else changes.
+            if matches!(error, TrayError::Refused(_)) {
+                let _ = tray.set_visible(self.chosen.tray_visible);
+            }
             return Err(error.to_string());
         }
         // The change took: the entry's state matches the choice now.

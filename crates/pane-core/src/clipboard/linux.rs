@@ -122,11 +122,10 @@ fn read_units(limit: usize) -> u32 {
 /// bytes.
 type Served = Vec<(Atom, Vec<u8>)>;
 
-/// Writes `message` to standard error, if there is one; never what was
-/// copied. Unlike `eprintln!`, it cannot panic.
+/// Writes `message` to standard error, if there is one, and to Pane's log
+/// (see `crate::diagnostics`); never what was copied. It cannot panic.
 fn log(message: &str) {
-    use std::io::Write;
-    let _ = writeln!(std::io::stderr(), "{message}");
+    crate::diagnostics::report_line(message);
 }
 
 /// Connects to the X11 display `display`, saying why as Pane's own words

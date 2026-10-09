@@ -17,8 +17,10 @@
 //!
 //! For assistive technology the field and the result list form one
 //! `EditableComboBox` node, which tracks the field's focus and carries the
-//! query as its value; the selected result is its active descendant, so it
-//! is reported as focused, and with no result the combo box itself is.
+//! query as its value. It stays the focused node while the selection moves,
+//! so a screen reader echoes what is typed: no result reports itself as
+//! focused, and the window's announcer says the selected one instead
+//! ([`crate::features::announcer`], #132).
 
 use gpui::{
     AnyElement, App, Context, Div, Entity, Focusable, KeyBinding, Role, Subscription, Window,
@@ -93,12 +95,18 @@ impl QueryField {
         input.focus_handle(cx).tab_stop(true);
         let changes = cx.subscribe(&input, |this, input, _: &TextChanged, cx| {
             // Results computed from the query (the calculator's answer)
-            // arrive later, without holding up typing.
+            // arrive later, without holding up typing. The announcer waits
+            // for them before it says the selected row (#132).
             let computed = this.launcher.set_query(input.read(cx).as_str());
+            this.announcer.search_started();
             cx.notify();
             cx.spawn(async move |this, cx| {
                 computed.await;
-                this.update(cx, |_, cx| cx.notify()).ok();
+                this.update(cx, |this, cx| {
+                    this.announcer.search_ended();
+                    cx.notify();
+                })
+                .ok();
             })
             .detach();
         });

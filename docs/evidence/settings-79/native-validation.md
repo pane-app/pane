@@ -49,13 +49,32 @@ record field's defaults and failures are unit-tested in `pane-core`.
 | macOS | `NSStatusItem` in the menu bar's status area (`pane-core/src/tray/macos.rs`), its `NSMenu` items sending to a target class of Pane's own (Open Pane, Settings, Quit Pane) | Implemented. **Not compiled by this branch's CI** (the fast tier runs Linux and Windows only); it is written against the checked-out `objc2-app-kit` 0.3 / `objc2` 0.6 sources and must be compile-checked on macOS by the merge or #84 before native validation. |
 | Linux | No entry: the desktop's tray speaks StatusNotifierItem over DBus, which Pane does not speak yet (an XEmbed tray would be legacy and unimplemented too) | Honestly unavailable: the adapter explains on the General page, the preference stays recorded, never represented as a working toggle. A StatusNotifierItem implementation is separate work. |
 
-The icon the Windows adapter shows is the one the packaging embeds in
-Pane's program (resource id 1, the same resource the window icon loads);
-a build without one falls back to the system's application icon. The
-macOS item's button carries the title "Pane" — an icon would be blank in
-a development build, which is what the application icon would be there.
-Both choices are honest placeholders recorded here, not confirmed product
-decisions: #84's native pass should capture how each actually reads.
+Since [#131](https://github.com/hoangvu12/pane/issues/131), both entries
+show Pane's mark, embedded in the program, so a development build shows
+it too (`crates/pane-core/assets/tray`, drawn from the footer's mark by
+`scripts/icons/tray-icons.py`):
+
+- Windows: a black or a white variant of the mark, as an `.ico` of every
+  small-icon size from 100% to 400% scaling. The adapter picks the variant
+  from the taskbar's theme (`SystemUsesLightTheme`, not the applications'
+  theme and not Pane's Appearance choice), swaps it in place when the
+  theme changes, and makes it at the notification area's small-icon size
+  for the display's DPI. Under high contrast it picks the variant from
+  the high-contrast theme's window colour (proposed). The icon is added
+  with a GUID derived from the program's canonical path, so Windows keeps
+  the user's "always show" choice across restarts and updates; a refused
+  GUID falls back to the numeric id with a diagnostic. When Explorer
+  restarts and broadcasts `TaskbarCreated`, the icon is added again if
+  Pane last asked for it to show, and stays hidden otherwise.
+- macOS: the mark as a template image, which the system tints for light
+  and dark menu bars and the selected state, instead of the title "Pane"
+  (kept only as the fallback if the image cannot be read). The item has
+  an autosave name, so a place the user Command-dragged it to is kept.
+
+The unit tests in `crates/pane-core/src/tray/windows.rs` check the
+Windows behaviour through a fake of the adapter's inner shell seam. What
+they cannot show is the real notification area and menu bar, which the
+Explorer restart and theme phases below capture.
 
 ## What the harness cannot observe (why native evidence is required)
 
@@ -93,8 +112,9 @@ scratch data folder.
 ### Windows first
 
 1. Start Pane with a scratch data dir: the tray icon appears (capture the
-   notification area, `01-tray-icon.png`). Record which icon a development
-   build fell back to, if it did.
+   notification area, `01-tray-icon.png`). It is Pane's mark, in the
+   variant for the taskbar's theme; record it if standard error says the
+   system's application icon was shown instead.
 2. Right-click the icon: the menu shows Open Pane, Settings, Exit
    (`02-tray-menu.png`). Choose Open Pane with the launcher hidden by the
    hotkey: the launcher comes up focused with the query caret (type a
@@ -115,13 +135,55 @@ scratch data folder.
 7. (If a refusal can be produced — an add while Explorer is restarting,
    say) capture the General page's explanation and the record unchanged.
 
+#### Windows: Explorer restart, identity and theme (#131)
+
+These phases restart Explorer and change the taskbar's theme, which the
+phases above do not. Run them on a release-validation machine or runner,
+not on someone's working desktop, and put the theme back at the end. They
+are release-validation evidence, not a merge gate.
+
+8. Explorer restart, icon shown: with the icon shown, capture the
+   notification area (`08-before-restart.png`), then restart Explorer
+   (`Stop-Process -Name explorer -Force`; Windows starts it again, or
+   `Start-Process explorer.exe` after 5 s if it does not). Wait until the
+   taskbar is back and capture the notification area again: Pane's icon
+   is there without Pane restarting (`09-after-restart.png`), and its
+   menu and left click still work (step 2 and 3, once). Pane's standard
+   error has no refusal for the re-add.
+9. Explorer restart, icon hidden: toggle Show in tray off, restart
+   Explorer the same way: no Pane icon comes back
+   (`10-hidden-after-restart.png`), the General page's switch is still
+   off, and the scratch `settings.json` is unchanged.
+10. Identity: toggle the icon back on, and in Settings > Personalization >
+    Taskbar > Other system tray icons turn Pane on, so the icon sits on
+    the taskbar rather than in the overflow (`11-always-show.png`). Quit
+    and start Pane again from the same program path: the icon is still on
+    the taskbar, not in the overflow (`12-kept-after-restart.png`).
+    Replace the program at the same path with another build (an update)
+    and start it: still on the taskbar (`13-kept-after-update.png`).
+    Record that standard error shows no "refused Pane's tray icon
+    identity" diagnostic.
+11. Theme: in Settings > Personalization > Colors, set "Choose your
+    mode" to Custom with Windows mode Dark and app mode Light: the icon
+    is the white mark on the dark taskbar while Pane's own Appearance is
+    left alone (`14-dark-taskbar.png`). Switch Windows mode to Light: the
+    icon becomes the black mark in place, without disappearing
+    (`15-light-taskbar.png`). Set Pane's Appearance to the opposite of
+    the taskbar and confirm the icon does not change.
+12. Scaling: at 150% (or the highest the display offers), capture the
+    icon at 1:1 (`16-scaled.png`): sharp edges, no blur from scaling a
+    smaller image up. Turn high contrast on (Aquatic, then Desert) and
+    capture the icon on each (`17-high-contrast-*.png`): the mark is the
+    one that stands out from the theme's background.
+
 ### macOS (compile-check first)
 
 1. Compile the branch on macOS (the adapter is uncompiled by this
    branch's CI): `cargo check --workspace --all-targets`, fixing anything
    the objc2 wiring got wrong.
 2. Start Pane with a scratch data dir: the status item appears in the
-   menu bar with the title "Pane" (`01-status-item.png`).
+   menu bar showing Pane's mark, not the title "Pane"
+   (`01-status-item.png`).
 3. Click the item: the menu shows Open Pane, Settings, Quit Pane
    (`02-status-menu.png`); each item does what the Windows row above
    captures for its own platform.
@@ -129,6 +191,17 @@ scratch data folder.
    with it (`03-quit.png`).
 5. The visibility toggle hides and shows the item, and the record keeps
    the choice across a restart.
+6. Template image (#131): capture the item in a light menu bar
+   (`04-light-menu-bar.png`), in a dark one (System Settings >
+   Appearance > Dark, `05-dark-menu-bar.png`) and with its menu open, the
+   selected state (`06-selected.png`): the system tints the mark each
+   time, as it tints its own items.
+7. Autosave name (#131): Command-drag the item to another place in the
+   menu bar, quit Pane and start it again: the item comes back where it
+   was put (`07-kept-place.png`).
+8. Restart the menu bar (`killall SystemUIServer`, and `killall
+   ControlCenter` on macOS 11 and later): the item is still there, with
+   no action from Pane (`08-after-menu-bar-restart.png`).
 
 ### Linux
 

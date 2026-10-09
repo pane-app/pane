@@ -131,13 +131,13 @@ impl Launcher {
             .name("pane-subtitle".into())
             .spawn(move || {
                 if let Err(error) = launcher.save::<Subtitles>(None) {
-                    eprintln!("Pane could not record a command's subtitle: {error}");
+                    crate::diagnostic!("Pane could not record a command's subtitle: {error}");
                 }
                 ended.end();
             });
         if let Err(error) = saving {
             saves.end();
-            eprintln!("Pane could not record a command's subtitle: {error}");
+            crate::diagnostic!("Pane could not record a command's subtitle: {error}");
         }
         self.changed();
         Ok(())

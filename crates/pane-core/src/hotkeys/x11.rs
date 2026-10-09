@@ -499,7 +499,7 @@ impl Receiver {
                     shared.grabs.insert(shortcut, grab);
                 }
                 Err(error) => {
-                    eprintln!(
+                    crate::diagnostic!(
                         "Pane: the hotkey {shortcut} was released after the keyboard mapping changed: {error}"
                     );
                 }

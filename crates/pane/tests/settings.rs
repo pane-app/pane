@@ -53,7 +53,7 @@ mod setup;
 #[path = "support/wait.rs"]
 mod wait;
 
-use a11y::{accessibility, focused_label};
+use a11y::{accessibility, announcement, focused_label};
 use setup::settings_shortcut;
 use wait::{frame, settle_frames, until};
 
@@ -766,8 +766,8 @@ fn the_footer_menu_opens_traverses_dismisses_and_restores_focus(cx: &mut TestApp
     );
     assert_eq!(
         focused_label(cx).as_deref(),
-        Some("Rust sample"),
-        "root search's selected result has focus"
+        Some("Search"),
+        "root search's field has focus, not its selected result (#132)"
     );
 
     // The keyboard reaches the menu: Tab from the query field, past the
@@ -781,8 +781,10 @@ fn the_footer_menu_opens_traverses_dismisses_and_restores_focus(cx: &mut TestApp
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     assert!(cx.debug_bounds("menu").is_some(), "the menu is open");
-    // Focus moved into it, onto its one item.
-    assert_eq!(focused_label(cx).as_deref(), Some("Settings"));
+    // Focus moved into it: the menu keeps it, and the announcer says its
+    // selected item (#132).
+    assert_eq!(focused_label(cx).as_deref(), Some("Pane menu"));
+    assert_eq!(announcement(cx), "Settings, 1 of 1");
 
     // The popup overlays the list: it sits above the footer strip, over
     // the results. Its entrance has settled (the frames it asked for
@@ -819,7 +821,7 @@ fn the_footer_menu_opens_traverses_dismisses_and_restores_focus(cx: &mut TestApp
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     assert!(cx.debug_bounds("menu").is_some(), "the menu is open again");
-    assert_eq!(focused_label(cx).as_deref(), Some("Settings"));
+    assert_eq!(focused_label(cx).as_deref(), Some("Pane menu"));
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     let settings = settings_windows(cx)

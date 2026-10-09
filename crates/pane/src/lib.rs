@@ -317,6 +317,38 @@ pub fn data_dir() -> Option<PathBuf> {
     })
 }
 
+/// Where Pane keeps its own log and the marker of the run in progress
+/// (#133, [`pane_core::diagnostics`]): `logs` in `PANE_DATA_DIR` when set
+/// (tests and smokes), otherwise `%LOCALAPPDATA%\Pane\logs` on Windows,
+/// `~/Library/Logs/Pane` on macOS (where Console shows it) and
+/// `$XDG_STATE_HOME/pane/logs` (default `~/.local/state/pane/logs`)
+/// elsewhere.
+pub fn logs_dir() -> Option<PathBuf> {
+    if let Some(data) = env_dir("PANE_DATA_DIR") {
+        return Some(data.join("logs"));
+    }
+    let dir = platform_dir(
+        r"Pane\logs",
+        "Library/Logs/Pane",
+        ("XDG_STATE_HOME", ".local/state"),
+    )?;
+    if cfg!(any(target_os = "windows", target_os = "macos")) {
+        Some(dir)
+    } else {
+        Some(dir.join("logs"))
+    }
+}
+
+/// Opens Pane's log in [`logs_dir`] and this run's crash record, which the
+/// binary does first thing: every diagnostic and panic goes to the log from
+/// then on, and the record says whether the run before ended unexpectedly.
+/// `None` when no logs folder can be named.
+pub fn start_crash_record() -> Option<std::sync::Arc<pane_core::diagnostics::CrashRecord>> {
+    let folder = logs_dir()?;
+    let record = pane_core::diagnostics::start(&folder, APP_VERSION);
+    Some(std::sync::Arc::new(record))
+}
+
 /// A per-user folder: `windows` under `%LOCALAPPDATA%`, `macos` under
 /// `$HOME`, and elsewhere `pane` under the XDG variable `xdg.0`, or under
 /// `$HOME/xdg.1` when that is unset.

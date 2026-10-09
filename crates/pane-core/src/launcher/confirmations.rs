@@ -476,13 +476,15 @@ impl Launcher {
             .name("pane-confirmations".into())
             .spawn(move || {
                 if let Err(error) = launcher.save::<Confirmations>(None) {
-                    eprintln!("Pane could not record the remembered confirmations: {error}");
+                    crate::diagnostic!(
+                        "Pane could not record the remembered confirmations: {error}"
+                    );
                 }
                 ended.end();
             });
         if let Err(error) = saving {
             saves.end();
-            eprintln!("Pane could not record the remembered confirmations: {error}");
+            crate::diagnostic!("Pane could not record the remembered confirmations: {error}");
         }
     }
 

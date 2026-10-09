@@ -569,7 +569,7 @@ impl Launcher {
             );
         });
         if let Err(problem) = carried {
-            eprintln!(
+            crate::diagnostic!(
                 "pane: could not carry the preferences of {identity} over its update: {problem}"
             );
         }

@@ -104,7 +104,7 @@ pub(crate) fn create_owner_only_dir(dir: &Path) -> io::Result<()> {
 
 /// Files only the user Pane runs as (and SYSTEM) can open, on Windows.
 #[cfg(windows)]
-mod owner_only {
+pub(crate) mod owner_only {
     use std::fs::File;
     use std::io;
     use std::os::windows::io::FromRawHandle;
@@ -130,7 +130,7 @@ mod owner_only {
     }
 
     /// The SID of the user this process runs as, in its string form.
-    pub(super) fn user_sid() -> io::Result<String> {
+    pub(crate) fn user_sid() -> io::Result<String> {
         let mut token = HANDLE::default();
         // SAFETY: the current process's pseudo handle; `token` is writable
         // and closed below.
@@ -170,6 +170,36 @@ mod owner_only {
         sid
     }
 
+    /// Runs `with` on security attributes holding the security descriptor
+    /// `sddl` describes, which last for the call: for a file, a folder or
+    /// the local channel's pipe (#217) only this user may open.
+    pub(crate) fn with_attributes<T>(
+        sddl: &str,
+        with: impl FnOnce(&SECURITY_ATTRIBUTES) -> T,
+    ) -> io::Result<T> {
+        let sddl = crate::util::wide(sddl);
+        let mut descriptor = PSECURITY_DESCRIPTOR::default();
+        // SAFETY: `sddl` is NUL-terminated; the descriptor is freed below.
+        unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                PCWSTR(sddl.as_ptr()),
+                SDDL_REVISION_1,
+                &mut descriptor,
+                None,
+            )
+        }
+        .map_err(failed)?;
+        let attributes = SECURITY_ATTRIBUTES {
+            nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: descriptor.0,
+            bInheritHandle: false.into(),
+        };
+        let done = with(&attributes);
+        // SAFETY: allocated by the conversion above with LocalAlloc.
+        unsafe { LocalFree(Some(HLOCAL(descriptor.0))) };
+        Ok(done)
+    }
+
     /// Creates the folder at `path`, which must not exist yet (its parent
     /// must), with a protected DACL giving full control to this user and
     /// SYSTEM only, inherited by everything created in it: the file
@@ -177,30 +207,13 @@ mod owner_only {
     pub(crate) fn create_dir(path: &Path) -> io::Result<()> {
         use ::windows::Win32::Storage::FileSystem::CreateDirectoryW;
         let sddl = format!("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;{})", user_sid()?);
-        let sddl = crate::util::wide(&sddl);
-        let mut descriptor = PSECURITY_DESCRIPTOR::default();
-        // SAFETY: `sddl` is NUL-terminated; the descriptor is freed below.
-        unsafe {
-            ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                PCWSTR(sddl.as_ptr()),
-                SDDL_REVISION_1,
-                &mut descriptor,
-                None,
-            )
-        }
-        .map_err(failed)?;
-        let attributes = SECURITY_ATTRIBUTES {
-            nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
-            lpSecurityDescriptor: descriptor.0,
-            bInheritHandle: false.into(),
-        };
         let wide = crate::util::wide(path);
-        // SAFETY: `wide` is NUL-terminated and `attributes` valid for the
-        // call.
-        let created = unsafe { CreateDirectoryW(PCWSTR(wide.as_ptr()), Some(&attributes)) };
-        // SAFETY: allocated by the conversion above with LocalAlloc.
-        unsafe { LocalFree(Some(HLOCAL(descriptor.0))) };
-        created.map_err(failed)
+        with_attributes(&sddl, |attributes| {
+            // SAFETY: `wide` is NUL-terminated and `attributes` valid for
+            // the call.
+            unsafe { CreateDirectoryW(PCWSTR(wide.as_ptr()), Some(attributes)) }
+        })?
+        .map_err(failed)
     }
 
     /// Creates the file at `path`, which must not exist yet, for writing,
@@ -208,39 +221,22 @@ mod owner_only {
     /// only.
     pub(super) fn create_new(path: &Path) -> io::Result<File> {
         let sddl = format!("D:P(A;;FA;;;SY)(A;;FA;;;{})", user_sid()?);
-        let sddl = crate::util::wide(&sddl);
-        let mut descriptor = PSECURITY_DESCRIPTOR::default();
-        // SAFETY: `sddl` is NUL-terminated; the descriptor is freed below.
-        unsafe {
-            ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                PCWSTR(sddl.as_ptr()),
-                SDDL_REVISION_1,
-                &mut descriptor,
-                None,
-            )
-        }
-        .map_err(failed)?;
-        let attributes = SECURITY_ATTRIBUTES {
-            nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
-            lpSecurityDescriptor: descriptor.0,
-            bInheritHandle: false.into(),
-        };
         let wide = crate::util::wide(path);
-        // SAFETY: `wide` is NUL-terminated and `attributes` valid for the
-        // call; the handle is owned by the returned file.
-        let created = unsafe {
-            CreateFileW(
-                PCWSTR(wide.as_ptr()),
-                GENERIC_WRITE.0,
-                FILE_SHARE_NONE,
-                Some(&attributes),
-                CREATE_NEW,
-                FILE_ATTRIBUTE_NORMAL,
-                None,
-            )
-        };
-        // SAFETY: allocated by the conversion above with LocalAlloc.
-        unsafe { LocalFree(Some(HLOCAL(descriptor.0))) };
+        let created = with_attributes(&sddl, |attributes| {
+            // SAFETY: `wide` is NUL-terminated and `attributes` valid for
+            // the call; the handle is owned by the returned file.
+            unsafe {
+                CreateFileW(
+                    PCWSTR(wide.as_ptr()),
+                    GENERIC_WRITE.0,
+                    FILE_SHARE_NONE,
+                    Some(attributes),
+                    CREATE_NEW,
+                    FILE_ATTRIBUTE_NORMAL,
+                    None,
+                )
+            }
+        })?;
         let handle = created.map_err(failed)?;
         // SAFETY: a new, valid handle nothing else owns.
         Ok(unsafe { File::from_raw_handle(handle.0) })

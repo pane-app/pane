@@ -206,7 +206,9 @@ impl Schedules {
             .name("pane-schedules".into())
             .spawn(move || schedule_until_stopped(launcher, schedules));
         if let Err(error) = started {
-            eprintln!("Pane cannot run scheduled extension work in the background: {error}");
+            crate::diagnostic!(
+                "Pane cannot run scheduled extension work in the background: {error}"
+            );
         }
     }
 
@@ -421,7 +423,7 @@ fn start_run(schedules: &Arc<Schedules>, launcher: &WeakLauncher, key: String, r
         .name("pane-scheduled-run".into())
         .spawn(move || run_once(weak, launcher, key, run));
     if let Err(error) = started {
-        eprintln!("Pane could not run scheduled extension work: {error}");
+        crate::diagnostic!("Pane could not run scheduled extension work: {error}");
         schedules.run_ended(&retry);
     }
 }

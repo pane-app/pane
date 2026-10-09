@@ -204,7 +204,9 @@ impl Services {
             .name("pane-services".into())
             .spawn(move || serve_until_stopped(launcher, services));
         if let Err(error) = started {
-            eprintln!("Pane cannot run continuing extension services in the background: {error}");
+            crate::diagnostic!(
+                "Pane cannot run continuing extension services in the background: {error}"
+            );
         }
     }
 
@@ -483,7 +485,7 @@ fn start_run(services: &Arc<Services>, launcher: &WeakLauncher, key: String, run
         .name("pane-service-cycle".into())
         .spawn(move || run_once(weak, launcher, key, run));
     if let Err(error) = started {
-        eprintln!("Pane could not run a continuing extension service: {error}");
+        crate::diagnostic!("Pane could not run a continuing extension service: {error}");
         services.run_ended(&retry, token);
     }
 }

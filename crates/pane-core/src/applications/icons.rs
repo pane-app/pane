@@ -821,7 +821,9 @@ impl IconCache {
             });
         if let Err(error) = started {
             state.working = false;
-            eprintln!("pane: could not start the thread refreshing application icons: {error}");
+            crate::diagnostic!(
+                "pane: could not start the thread refreshing application icons: {error}"
+            );
         }
     }
 
@@ -894,7 +896,7 @@ impl Shared {
                         });
                     match written {
                         Ok(()) => state.dirty = false,
-                        Err(why) => eprintln!(
+                        Err(why) => crate::diagnostic!(
                             "pane: could not keep the application icons' index in {}: {why}",
                             self.folder.display()
                         ),
@@ -924,7 +926,7 @@ impl Shared {
         let mut index = match read {
             Some(index) => index,
             None => {
-                eprintln!(
+                crate::diagnostic!(
                     "pane: the application icons' cache in {} could not be read; it is rebuilt",
                     self.folder.display()
                 );
@@ -1009,7 +1011,7 @@ impl Shared {
                 state.session.insert(job.id, Session::Refreshed);
             }
             Err(why) => {
-                eprintln!("pane: no icon for the application {source}: {why}");
+                crate::diagnostic!("pane: no icon for the application {source}: {why}");
                 state.session.insert(job.id, Session::Failed);
             }
         }

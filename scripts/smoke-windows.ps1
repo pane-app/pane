@@ -295,6 +295,18 @@ function Stop-Pane($process) {
     if ($process.HasExited) { throw "Pane exited during the smoke" }
     Stop-Process -Id $process.Id
     $process.WaitForExit()
+    Remove-Crash-Marker $process.Id
+}
+# Stop-Process ends Pane as a crash would, so the marker its start wrote in
+# the logs folder stays (#133), and the next start on the same data would
+# list "Pane quit unexpectedly last time" in root search and say it in the
+# status line, shifting the rows and the outcome the phases check. A clean
+# quit removes the marker; after Stop-Process the smoke removes it. The
+# logs folder is `logs` in PANE_DATA_DIR when that is set, as Pane's own
+# logs_dir says, and %LOCALAPPDATA%\Pane\logs otherwise.
+function Remove-Crash-Marker($id) {
+    $logs = if ($env:PANE_DATA_DIR) { Join-Path $env:PANE_DATA_DIR "logs" } else { Join-Path $env:LOCALAPPDATA "Pane\logs" }
+    Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $logs "running-$id.json")
 }
 
 # Waits until $file contains $text ($present) or no longer does (-not
@@ -632,8 +644,19 @@ Capture "40-kept.png"
 Check "40-kept.png" "success"   # every value, the cached greeting included
 Send "{ESC}"; Start-Sleep -Seconds 1
 Stop-Pane $process
+# Whether the sign-in token is kept. It is kept encrypted (#130):
+# credentials.json, version 2, holds it under its key as {"dpapi": ...},
+# and its text is never in the file.
+function Token-Kept {
+    $path = Join-Path $data "extensions/credentials.json"
+    if (Select-String -Quiet -SimpleMatch 'sample-token' $path) { throw "the token is in credentials.json as text" }
+    $file = Get-Content -Raw $path | ConvertFrom-Json
+    if ($file.version -ne 2) { throw "credentials.json has version $($file.version), not 2" }
+    foreach ($package in $file.packages.PSObject.Properties) { if ($package.Value.token.dpapi) { return $true } }
+    return $false
+}
 if (-not (Select-String -Quiet -SimpleMatch '"note": "Water the plants"' (Join-Path $data "extensions/content.json"))) { throw "note not saved" }
-if (-not (Select-String -Quiet -SimpleMatch '"token": "sample-token"' (Join-Path $data "extensions/credentials.json"))) { throw "credential not saved" }
+if (-not (Token-Kept)) { throw "credential not saved" }
 if (-not (Select-String -Quiet -SimpleMatch '"last-greeting": "Good day to you"' (Join-Path $data "extensions/cache.json"))) { throw "greeting not cached" }
 
 # Clear the settings sample's cache from its page in Settings: Clear Cache,
@@ -661,7 +684,7 @@ Stop-Pane $process
 if (Select-String -Quiet -SimpleMatch 'Good day to you' (Join-Path $data "extensions/cache.json")) { throw "cache not cleared" }
 if (-not (Select-String -Quiet -SimpleMatch '"greeting-style": "formal"' (Join-Path $data "extensions/settings.json"))) { throw "setting lost" }
 if (-not (Select-String -Quiet -SimpleMatch '"note": "Water the plants"' (Join-Path $data "extensions/content.json"))) { throw "note lost" }
-if (-not (Select-String -Quiet -SimpleMatch '"token": "sample-token"' (Join-Path $data "extensions/credentials.json"))) { throw "credential lost" }
+if (-not (Token-Kept)) { throw "credential lost" }
 
 # Applications, a default extension: an installed application is found by
 # name in root search and Enter opens it. The application is a Start menu
@@ -737,7 +760,7 @@ Wait-Shown "Uninstalled Settings sample" -Prefix   # "...; its settings and cont
 Capture "50-uninstalled.png"
 Stop-Pane $process
 if (-not (Select-String -Quiet -SimpleMatch '"retained"' (Join-Path $data "extensions/installed.json"))) { throw "kept data not recorded" }
-if (Select-String -Quiet -SimpleMatch 'sample-token' (Join-Path $data "extensions/credentials.json")) { throw "credential not removed" }
+if (Token-Kept) { throw "credential not removed" }
 if (-not (Select-String -Quiet -SimpleMatch '"greeting-style": "formal"' (Join-Path $data "extensions/settings.json"))) { throw "setting not kept" }
 if (-not (Select-String -Quiet -SimpleMatch '"note": "Water the plants"' (Join-Path $data "extensions/content.json"))) { throw "note not kept" }
 $process = Start-Pane "stderr-reinstall.log" @("--install", "target/guests/packages/sample-settings")
@@ -2065,6 +2088,7 @@ if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 $env:PANE_DATA_DIR = $data
 $registry = Join-Path $data "extensions/installed.json"
 $history = Join-Path $data "extensions/clipboard-history.json"
+$extensions = Join-Path $data "extensions"
 $clipboardHome = Join-Path $OutDir "clipboard-home"
 if (Test-Path $clipboardHome) { Remove-Item -Recurse -Force $clipboardHome }
 New-Item -ItemType Directory -Force -Path $clipboardHome | Out-Null
@@ -2152,17 +2176,28 @@ function Copy-Text($text, $marker) { [PaneClip]::SetText($text, $marker); Start-
 # Puts the file at $path on the clipboard, as File Explorer's Copy does
 # (CF_HDROP).
 function Copy-File($path) { [PaneClip]::SetFiles($path); Start-Sleep -Milliseconds 500 }
-# The kept texts, newest first, as clipboard-history.json holds them.
+# The kept texts, newest first, as clipboard-history.json holds them. The
+# file holds each encrypted (#130), so clipboard_history.py decrypts them,
+# as the same Windows user.
 function Kept-Texts {
-    if (-not (Test-Path $history)) { return @() }
-    $file = Get-Content -Raw $history | ConvertFrom-Json
-    # {"version": 1, "packages": {<identity>: {"items": [...newest first]}}}
-    $items = foreach ($package in $file.packages.PSObject.Properties) { $package.Value.items }
-    return @($items | ForEach-Object { $_.text })
+    $joined = (python "$PSScriptRoot/clipboard_history.py" texts $extensions) -join ""
+    if ($LASTEXITCODE -ne 0) { throw "could not read the clipboard history" }
+    if ($joined -eq "") { return @() }
+    return @($joined -split ",")
 }
 function Not-Kept($text) {
     Start-Sleep -Seconds 2
     if ((Kept-Texts) -contains $text) { throw "$text was kept" }
+}
+# Waits until a kept text holds $text ($present) or none does (-not
+# $present), for 10 seconds.
+function Wait-Kept($text, [bool]$present) {
+    for ($i = 0; $i -lt 100; $i++) {
+        $found = [bool](Kept-Texts | Where-Object { $_.Contains($text) })
+        if ($found -eq $present) { return }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "${text} is not $(if ($present) { 'kept' } else { 'gone' })"
 }
 # Opens Pane's Clipboard History from wherever the launcher is: its split
 # view, the field ("Type to filter entries…") holding the keyboard.
@@ -2192,7 +2227,7 @@ try {
     Copy-Text "pane-smoke-no-history" "CanIncludeInClipboardHistory"
     Copy-Text "pane-smoke-no-cloud" "CanUploadToCloudClipboard"
     Copy-Text "pane-smoke-second" $null
-    Wait-For $history "pane-smoke-second" $true
+    Wait-Kept "pane-smoke-second" $true
     if (((Kept-Texts) -join ",") -ne "pane-smoke-second,pane-smoke-kept") { throw "kept: $(Kept-Texts)" }
     Open-History
     Capture "280-clipboard-recording.png"
@@ -2206,7 +2241,7 @@ try {
     History-Action "Resume Recording"
     Wait-For $history '"capture": "on"' $true
     Copy-Text "pane-smoke-resumed" $null
-    Wait-For $history "pane-smoke-resumed" $true
+    Wait-Kept "pane-smoke-resumed" $true
     Open-History
     Capture "282-clipboard-kept.png"   # evidence only: the three records, newest first
     Send "pane-smoke-second"; Start-Sleep -Seconds 1   # the filter leaves that record, selected
@@ -2235,11 +2270,11 @@ try {
     Wait-For $registry '"disabled": true' $false
     Close-Settings
     Copy-Text "pane-smoke-enabled" $null
-    Wait-For $history "pane-smoke-enabled" $true
+    Wait-Kept "pane-smoke-enabled" $true
     Stop-Pane $process
     $process = Start-Pane "stderr-clipboard-restarted.log"
     Copy-Text "pane-smoke-after-restart" $null
-    Wait-For $history "pane-smoke-after-restart" $true
+    Wait-Kept "pane-smoke-after-restart" $true
     Open-History
     Capture "285-clipboard-after-restart.png"
     Check "285-clipboard-after-restart.png" "hint"   # kept again after the restart
@@ -2250,8 +2285,10 @@ try {
     $expected = "pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-second,pane-smoke-resumed,pane-smoke-kept"
     if (((Kept-Texts) -join ",") -ne $expected) { throw "kept: $(Kept-Texts)" }
     foreach ($never in "secret", "no-history", "no-cloud", "paused", "disabled", "restarted-disabled") {
-        if (Select-String -Quiet -SimpleMatch "pane-smoke-$never" $history) { throw "pane-smoke-$never was kept" }
+        if ((Kept-Texts) -contains "pane-smoke-$never") { throw "pane-smoke-$never was kept" }
     }
+    # Kept encrypted (#130): no copied text is in the file as it is.
+    if (Select-String -Quiet -SimpleMatch "pane-smoke-" $history) { throw "a copied text is in clipboard-history.json as it is" }
 
     # Clipboard history expiry and deletion (#36, #166), on the history just
     # kept. With Pane stopped, the smoke makes pane-smoke-kept 8 days old
@@ -2264,7 +2301,6 @@ try {
     # (#167); and Clear History, once confirmed, deletes every record while
     # recording goes on, so a later copy is kept. Deleting never changes
     # what is on the clipboard.
-    $extensions = Join-Path $data "extensions"
     function History-Field($name) { (python "$PSScriptRoot/clipboard_history.py" field $extensions $name) -join "" }
     # The kept texts, newest first, joined by commas ("" when none).
     function Kept-Joined { (python "$PSScriptRoot/clipboard_history.py" texts $extensions) -join "" }
@@ -2281,7 +2317,7 @@ try {
     $onClipboard = [PaneClip]::GetText()
     Send "pane-smoke-second"; Start-Sleep -Seconds 1   # the filter leaves that record, selected
     History-Action "Delete Entry"
-    Wait-For $history "pane-smoke-second" $false
+    Wait-Kept "pane-smoke-second" $false
     Capture-Until "401-clipboard-item-deleted.png" "success" 10   # its toast: "Deleted the kept item"
     if ((Kept-Joined) -ne "pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-resumed") { throw "kept: $(Kept-Joined)" }
     if ([PaneClip]::GetText() -ne $onClipboard) { throw "deleting a record changed the clipboard" }
@@ -2293,24 +2329,24 @@ try {
     $copiedFile = Join-Path $clipboardHome "pane-smoke-file.txt"
     Set-Content -Encoding ASCII -LiteralPath $copiedFile "a file the smoke copies"
     Copy-File (Resolve-Path -LiteralPath $copiedFile).Path
-    Wait-For $history "pane-smoke-file.txt" $true
-    if (-not (Select-String -Quiet -SimpleMatch '"files"' $history)) { throw "the copied file was not kept as a file" }
+    Wait-Kept "pane-smoke-file.txt" $true
+    if (-not ((python "$PSScriptRoot/clipboard_history.py" files $extensions) -join "").Contains("pane-smoke-file.txt")) { throw "the copied file was not kept as a file" }
     Open-History
     Send "pane-smoke-file"; Start-Sleep -Seconds 1   # the filter leaves the file's record, selected
     Capture "403-clipboard-file.png"   # evidence only: the record, the file's icon and its preview
     Copy-Text "pane-smoke-final" $null
-    Wait-For $history "pane-smoke-final" $true
+    Wait-Kept "pane-smoke-final" $true
     Open-History
     History-Action "Clear History"   # asks first
     Capture "404-clipboard-clear-asked.png"   # evidence only: "Clear Clipboard History?"
     Send "{ENTER}"   # Clear History
-    Wait-For $history "pane-smoke-final" $false; Start-Sleep -Seconds 1
+    Wait-Kept "pane-smoke-final" $false; Start-Sleep -Seconds 1
     Capture "405-clipboard-cleared.png"
     if ((Kept-Joined) -ne "") { throw "kept: $(Kept-Joined)" }
     if ((History-Field "capture") -ne "on") { throw "history is $(History-Field 'capture') after Clear History" }
     if ([PaneClip]::GetText() -ne "pane-smoke-final") { throw "deleting history changed the clipboard" }
     Copy-Text "pane-smoke-after-clear" $null
-    Wait-For $history "pane-smoke-after-clear" $true
+    Wait-Kept "pane-smoke-after-clear" $true
     $shots = "400-clipboard-expired", "401-clipboard-item-deleted", "402-clipboard-retention-changed", "403-clipboard-file", "405-clipboard-cleared" | ForEach-Object { Join-Path $OutDir "$_.png" }
     python "$PSScriptRoot/check_screenshot.py" --distinct @shots
     if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: clipboard history expiry and deletion changed nothing" }

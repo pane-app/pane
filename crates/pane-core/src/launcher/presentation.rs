@@ -396,6 +396,7 @@ pub(super) fn kind(entry: &Entry) -> Option<RowKind> {
         | Entry::Acquire(_)
         | Entry::InstallUpdate
         | Entry::CheckUpdate
+        | Entry::OpenLogFolder
         | Entry::Manage
         | Entry::Settings => Some(RowKind::Command),
         _ => None,

@@ -47,6 +47,7 @@ mod clipboard_settings;
 pub mod clipboard_view;
 mod command_search;
 mod confirmations;
+mod crash_notice;
 mod feedback;
 mod hotkeys;
 mod icon_loads;
@@ -106,17 +107,20 @@ mod updates;
 
 use acquire::{Acquisitions, Defaults};
 use actions::selected_action;
-pub use actions::{ResultAction, ResultActionItem, ResultActions};
+pub use actions::{DISMISS_NOTICE, ResultAction, ResultActionItem, ResultActions};
 use aliases::AliasChoices;
 pub use aliases::AliasOutcome;
 pub use application_update::ApplicationUpdate;
 use application_update::{Application, Updates};
 use choices::Record;
+pub use crash_notice::{LogNotice, UNEXPECTED_QUIT};
 use developing::Developing;
 pub use developing::{BuildFailure, Development};
+pub(crate) use developing::{BuildNow, Remote};
 pub use extensions::{ExtensionMark, ExtensionOperation, OperationKind};
 pub use hotkeys::HotkeyOutcome;
 use hotkeys::{Bindings, OpenPane};
+pub(crate) use install::InstallPreview;
 pub use item_actions::{ItemAction, ItemActions, UnboundShortcut};
 pub use looks::{AccessoryKind, ShownAccessory, absolute_date, relative_date};
 use pausing::{Pauses, Recorder};
@@ -791,6 +795,9 @@ struct State {
     /// Pane's own update: what the last check found, and what is running
     /// now (see `application_update`).
     updates: Updates,
+    /// This run's crash record, and whether root search still tells that
+    /// Pane quit unexpectedly last time (see `crash_notice`).
+    crash: crash_notice::Notice,
     /// The query root search showed when the status line began showing a
     /// no-view command's answer (or its running), launched from it with
     /// that query typed, so that changing the query clears it.
@@ -1144,6 +1151,9 @@ enum Entry {
     /// Check for a Pane application update again, after the check failed
     /// (root).
     CheckUpdate,
+    /// Open Pane's log folder with the system's file manager, after Pane
+    /// quit unexpectedly last time (root; see `crash_notice`).
+    OpenLogFolder,
     /// Have the open command handle this callback, a search result's id
     /// (`handle-event`), then list it again.
     Run(String),
@@ -1292,6 +1302,7 @@ enum Pending {
     Acquire(String),
     InstallUpdate,
     CheckUpdate,
+    OpenLogFolder,
     StopSharing(PackageIdentity),
 }
 
@@ -1481,6 +1492,7 @@ impl Launcher {
             quick_slots: quick_slots::Kept::default(),
             acquisitions: Acquisitions::default(),
             updates: Updates::default(),
+            crash: crash_notice::Notice::default(),
             sent_from: None,
             list_entered: false,
             window_wanted: false,
@@ -2652,6 +2664,7 @@ impl Launcher {
                 Pending::Acquire(id) => launcher.retry_acquiring(&id).await,
                 Pending::InstallUpdate => launcher.install_application_update().await,
                 Pending::CheckUpdate => launcher.check_application_update_again().await,
+                Pending::OpenLogFolder => launcher.open_log_folder().await,
                 Pending::StopSharing(identity) => launcher.stop_sharing_folder(identity).await,
             }
         }
@@ -2840,6 +2853,10 @@ impl Launcher {
             Entry::CheckUpdate => {
                 state.view.status = Status::Running;
                 Pending::CheckUpdate
+            }
+            Entry::OpenLogFolder => {
+                state.view.status = Status::Running;
+                Pending::OpenLogFolder
             }
             Entry::AskNpm => {
                 self.show_npm_form(state);
@@ -3533,6 +3550,11 @@ impl Launcher {
             for (row, entry) in state.updates.rows() {
                 add(row, entry, None, None);
             }
+        }
+        // That Pane quit unexpectedly last time, until the user dismisses
+        // it or opens the log folder (see `crash_notice`).
+        for (row, entry) in state.crash.rows() {
+            add(row, entry, None, None);
         }
         // Retained data is managed there too, while nothing is installed.
         if self.installation.is_some() && !(state.packages.is_empty() && state.retained.is_empty())

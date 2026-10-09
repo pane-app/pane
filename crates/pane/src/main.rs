@@ -6,7 +6,7 @@ use std::sync::Arc;
 use gpui::{App, Bounds, TitlebarOptions, WindowBounds, WindowOptions, prelude::*};
 use pane::LauncherWindow;
 use pane_core::develop::Toolchains;
-use pane_core::{Launcher, Runtime};
+use pane_core::{Launcher, Runtime, local_channel};
 
 /// What `--install` asks to show for installation.
 enum ToPreview {
@@ -69,12 +69,16 @@ fn smoke_system(log: PathBuf) {
         answers.push_str(&format!("trash: {answer}\n"));
     }
     if let Err(error) = std::fs::write(&log, answers) {
-        eprintln!("PANE_TEST_SYSTEM_LOG: {error}");
+        pane_core::diagnostic!("PANE_TEST_SYSTEM_LOG: {error}");
     }
 }
 
 fn main() {
     let preview = package_to_preview();
+    // Pane's own log and crash record (#133), before anything else can
+    // write a diagnostic or panic: the log keeps what standard error says,
+    // and the record tells whether the run before ended unexpectedly.
+    let crash_record = pane::start_crash_record();
     gpui_platform::application().run(move |cx: &mut App| {
         // Pane's own settings — the appearance preferences recorded in
         // settings.json, with the PANE_THEME/PANE_MATERIAL development
@@ -84,7 +88,7 @@ fn main() {
         // a saved rebind is in force from the first window. A font
         // failure only falls back to the system's default font.
         if let Err(error) = pane::configure_visuals(cx) {
-            eprintln!("Pane's fonts could not be loaded: {error:#}");
+            pane_core::diagnostic!("Pane's fonts could not be loaded: {error:#}");
         }
         pane::bind_keys(cx);
         // The operating system's reduced-motion preference, followed for as
@@ -126,6 +130,12 @@ fn main() {
         // What commands copy, open, reveal and recycle reaches the system's
         // own clipboard, handlers, file manager and Recycle Bin (#145).
         .with_system(pane_core::system::native());
+        // That Pane quit unexpectedly last time, told in root search and on
+        // the About page; a clean quit removes this run's marker.
+        let launcher = match crash_record.clone() {
+            Some(record) => launcher.with_crash_record(record),
+            None => launcher,
+        };
         // File search's index of the home folder (#126, #175), kept in
         // Pane's cache folder; it runs only while an enabled extension uses
         // it, and never indexes Pane's own folders.
@@ -157,7 +167,7 @@ fn main() {
         let launcher = match pane_core::npm::Registry::from_dev_env() {
             Some(Ok(registry)) => launcher.with_npm_registry(registry),
             Some(Err(why)) => {
-                eprintln!("PANE_NPM_REGISTRY: {why}");
+                pane_core::diagnostic!("PANE_NPM_REGISTRY: {why}");
                 launcher.show_error(format!("PANE_NPM_REGISTRY: {why}"));
                 launcher
             }
@@ -177,7 +187,7 @@ fn main() {
         let launcher = match artifact_source.as_ref() {
             Some(Ok(source)) => launcher.with_defaults(source.clone(), pane::default_extensions()),
             Some(Err(why)) => {
-                eprintln!("PANE_ARTIFACTS: {why}");
+                pane_core::diagnostic!("PANE_ARTIFACTS: {why}");
                 launcher.show_error(format!("PANE_ARTIFACTS: {why}"));
                 launcher
             }
@@ -200,7 +210,7 @@ fn main() {
                 launcher.with_application_update(pane::APP_VERSION, source.clone(), exe)
             }
             (Err(why), _) => {
-                eprintln!(
+                pane_core::diagnostic!(
                     "Pane's own program could not be found, so it checks for no update: {why}"
                 );
                 launcher
@@ -224,12 +234,16 @@ fn main() {
         // Quitting removes Pane's native tray/menu-bar entry and releases
         // its global hotkey registrations, whichever way Pane is quit —
         // closing the launcher's window or the tray's Quit item, which
-        // does the same itself before it asks the platform to quit.
+        // does the same itself before it asks the platform to quit — and
+        // it is a clean quit, whose marker goes (#133): GPUI runs these
+        // hooks for the system ending the session too (`WM_ENDSESSION` on
+        // Windows, the termination notification on macOS).
         let quitting = launcher.clone();
         let quitting_tray = tray.clone();
         cx.on_app_quit(move |_| {
             let _ = quitting_tray.set_visible(false);
             quitting.release_hotkeys();
+            quitting.quit_cleanly();
             async {}
         })
         .detach();
@@ -249,6 +263,7 @@ fn main() {
         // once the window exists.
         let acquiring = launcher.clone();
         let checking = launcher.clone();
+        let developing = launcher.clone();
         // The window is the reference's launcher panel, at its client size
         // (see `pane::launcher_client_size`). No native title bar is drawn:
         // the panel's own glass chrome is the whole window. Its background
@@ -342,6 +357,30 @@ fn main() {
             }
         })
         .detach();
+        // `pane-ext dev` hands its builds to this Pane over the local
+        // channel (#217), which asks the window to show the install preview
+        // of a folder Pane has not installed. It listens where PANE_CHANNEL
+        // says, if it says, as pane-ext looks there: a second Pane beside an
+        // installed one, and the tests.
+        let endpoint = local_channel::Endpoint::from_env();
+        match endpoint.and_then(|endpoint| local_channel::serve(developing, &endpoint)) {
+            Ok((server, mut previews)) => {
+                cx.spawn(async move |cx| {
+                    // Pane listens for as long as it runs.
+                    let _server = server;
+                    while let Some(folder) = previews.next().await {
+                        let shown = window.update(cx, |launcher, window, cx| {
+                            launcher.present_package(&folder, window, cx)
+                        });
+                        if shown.is_err() {
+                            break;
+                        }
+                    }
+                })
+                .detach();
+            }
+            Err(error) => pane_core::diagnostic!("pane-ext cannot reach this Pane: {error}"),
+        }
         // Acquiring the default extensions goes on in the background: the
         // window, root search and the extension list stay usable, and the
         // status line says what it is doing (the changes channel redraws

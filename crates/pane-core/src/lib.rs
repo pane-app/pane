@@ -12,6 +12,7 @@ pub mod clipboard;
 pub mod defaults;
 mod dependencies;
 pub mod develop;
+pub mod diagnostics;
 pub mod downloads;
 mod dropdown;
 mod extension_data;
@@ -31,6 +32,7 @@ pub mod keyboard;
 mod launch;
 mod launcher;
 mod links;
+pub mod local_channel;
 pub mod npm;
 mod operations;
 mod packages;
@@ -40,6 +42,7 @@ pub mod placement;
 mod platform;
 mod preferences;
 mod programs;
+mod protection;
 mod runtime;
 mod search;
 pub mod system;
@@ -71,13 +74,14 @@ pub use launcher::clipboard_view;
 pub use launcher::search_files;
 pub use launcher::{
     AliasOutcome, ApplicationUpdate, BuildFailure, CommandPreferences, CommandRegistration,
-    ComputedAnswer, CustomViewSnapshot, Development, ExtensionMark, ExtensionOperation, FormField,
-    FormView, HotkeyOutcome, ItemAction, ItemActions, Launcher, LauncherView, ListPresentation,
-    MANAGE_EXTENSIONS, OpenSubmenu, OperationKind, PackagePreferences, PinTarget, PreferenceField,
-    PreferencesTarget, Presentation, Question, QuickSlot, ResultAction, ResultActionItem,
-    ResultActions, Row, RowKind, RowPresentation, Screen, Section, SelectedAction, SettingsTarget,
-    SetupHeader, ShortcutCatalog, ShortcutCommand, ShortcutGroup, SlotChange, Status, SubmenuState,
-    Unavailable, UnboundShortcut, UpdateHold, answer_sections, root_sections,
+    ComputedAnswer, CustomViewSnapshot, DISMISS_NOTICE, Development, ExtensionMark,
+    ExtensionOperation, FormField, FormView, HotkeyOutcome, ItemAction, ItemActions, Launcher,
+    LauncherView, ListPresentation, LogNotice, MANAGE_EXTENSIONS, OpenSubmenu, OperationKind,
+    PackagePreferences, PinTarget, PreferenceField, PreferencesTarget, Presentation, Question,
+    QuickSlot, ResultAction, ResultActionItem, ResultActions, Row, RowKind, RowPresentation,
+    Screen, Section, SelectedAction, SettingsTarget, SetupHeader, ShortcutCatalog, ShortcutCommand,
+    ShortcutGroup, SlotChange, Status, SubmenuState, UNEXPECTED_QUIT, Unavailable, UnboundShortcut,
+    UpdateHold, answer_sections, root_sections,
 };
 pub use links::LinkOpener;
 pub use operations::{MAX_CALL_DEPTH, MAX_OPERATION_JSON};

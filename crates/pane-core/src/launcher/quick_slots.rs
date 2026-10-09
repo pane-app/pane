@@ -643,6 +643,7 @@ fn change(
             | ResultAction::Alias
             | ResultAction::ConfigureCommand
             | ResultAction::ConfigureExtension
+            | ResultAction::DismissNotice
     );
     if !quick_slot_action || !matches!(state.view.screen, Screen::Root { .. }) {
         return refused;
@@ -695,7 +696,8 @@ fn change(
         | ResultAction::Hotkey
         | ResultAction::Alias
         | ResultAction::ConfigureCommand
-        | ResultAction::ConfigureExtension => refused,
+        | ResultAction::ConfigureExtension
+        | ResultAction::DismissNotice => refused,
     }
 }
 
@@ -723,7 +725,7 @@ impl Launcher {
         if forgot {
             // Written now, once: the next start reads the slots without them.
             if let Err(problem) = self.write_quick_slots() {
-                eprintln!("Pane could not forget the pin of a root provider: {problem}");
+                crate::diagnostic!("Pane could not forget the pin of a root provider: {problem}");
             }
             let mut state = self.lock();
             self.show_provider_toast(&mut state);

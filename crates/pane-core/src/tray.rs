@@ -13,11 +13,13 @@
 //! - Windows: `Shell_NotifyIcon` on a thread of Pane's own ([`windows`]):
 //!   the notification area holds the icon, whose menu a right click
 //!   opens and whose left click summons the launcher. No permission is
-//!   needed.
+//!   needed. The icon is added again when Explorer restarts, keeps one
+//!   identity per program path, and follows the taskbar's light or dark
+//!   theme.
 //! - macOS: an `NSStatusItem` in the system status area of the menu bar
-//!   ([`macos`]), whose menu AppKit shows when the item is clicked. It
-//!   must be made and changed on the main thread, as the hotkey adapter
-//!   must.
+//!   ([`macos`]), showing Pane's mark as a template image, whose menu
+//!   AppKit shows when the item is clicked. It must be made and changed
+//!   on the main thread, as the hotkey adapter must.
 //! - Linux: no entry yet. The desktop's tray speaks StatusNotifierItem
 //!   over DBus, which Pane does not speak yet, so there the adapter
 //!   explains that the entry is unavailable — the preference stays

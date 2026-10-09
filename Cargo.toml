@@ -1,6 +1,13 @@
 [workspace]
 resolver = "3"
-members = ["crates/pane", "crates/pane-build", "crates/pane-core", "crates/pane-target", "xtask"]
+members = [
+    "crates/pane",
+    "crates/pane-build",
+    "crates/pane-core",
+    "crates/pane-ext",
+    "crates/pane-target",
+    "xtask",
+]
 # Guests target WebAssembly and form their own workspace.
 exclude = ["guests"]
 

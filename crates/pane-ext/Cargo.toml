@@ -1,0 +1,22 @@
+# `pane-ext`, the command-line tool authors use beside the app (ADR 0047,
+# #128): `pane-ext dev` builds a package folder in the terminal with the
+# build crate development mode uses, and hands each build to the running
+# Pane over the local channel (#217).
+[package]
+name = "pane-ext"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# How a package is built, once or on each save: development mode's own.
+pane-build = { path = "../pane-build" }
+# Pane's manifest rules, and the local channel to the running Pane.
+pane-core = { path = "../pane-core" }
+
+[dev-dependencies]
+# Driving the launcher the tests host as the running Pane.
+futures.workspace = true
+tempfile.workspace = true

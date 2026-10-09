@@ -178,6 +178,7 @@ impl LauncherWindow {
                     return true;
                 }
                 self.launcher.select(index);
+                self.announcer.user_moved();
                 self.activate_selected(window, cx);
             }
         }

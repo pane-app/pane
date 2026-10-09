@@ -7,30 +7,49 @@ US57; T03, T09, T22; contributions to G2 and G7, not claims that they pass.
 The user gives an installed command a **global hotkey** in Pane, and pressing
 it while any application has focus opens that command in Pane's window. The
 three systems share one design and differ only in how Pane registers the
-shortcut with the system. The architecture is recorded in
+shortcut with the system. Pane also has one global hotkey of its own, the
+[Open Pane hotkey](#the-open-pane-hotkey) ([#74](https://github.com/hoangvu12/pane/issues/74)),
+which summons its window and belongs to no extension. The architecture is
+recorded in
 [ADR 0016](adr/0016-host-registers-global-hotkeys-for-commands.md)
 (proposed).
 
 ## Assigning one
 
-In **Settings › Extensions**, after each package's state, Reload, Clear cache and Uninstall
-rows, every command of an enabled package has a row "Hotkey for
-&lt;command&gt;", subtitled with its hotkey ("Ctrl+Alt+G · Opens it from any
-application"), "None · …", or why it is not active, then its package's source (copies of a package may share titles). Enter opens the hotkey
-screen, "Hotkey for Greeting", which says:
+A command's hotkey is recorded in one of two places, which change one record
+with the same checks, so what one shows the other shows:
 
-- "Press the keys that should open Greeting from any application, such as
-  Ctrl+Alt+G." (Control+Option+G on macOS);
-- its current hotkey, or that it has none, and why it is not active if it is
-  not;
-- "Esc goes back without changing it."
+- on the command's **extension page** in Settings (Extensions group), in its
+  Commands list, where each command has a hotkey recorder beside its alias
+  field ([ADR 0043](adr/0043-extensions-are-managed-in-settings-one-page-per-extension.md),
+  #168);
+- inline on Settings' **Shortcuts page** ([#76](https://github.com/hoangvu12/pane/issues/76)),
+  which lists every installed command, grouped by extension, with its Name,
+  Alias and Hotkey. Its filter field narrows the list by command or
+  extension name.
 
-Pressing a key with its modifiers there assigns it: Pane registers it with
-the system at once, releases the hotkey it replaces, records it and returns to
-the extension list with "Ctrl+Alt+G now opens Greeting". If the command has a
-hotkey, a "Remove hotkey" row releases and forgets it ("Greeting has no hotkey
-now"). Escape leaves without a change. A pressed key that cannot be used is
-explained as the status error and the screen stays for another try:
+In either place the Hotkey cell shows the command's hotkey, or "None". Click it,
+or press Enter or Space on it, and it listens ("Recording; Hotkey for
+Greeting: none" to a screen reader): the keys pressed next are the hotkey,
+captured, so they do not navigate or act. A hotkey that cannot be used is
+explained under the cell, which keeps listening for another try. Escape, Tab
+or a click elsewhere stops listening and changes nothing. A hotkey that lands
+is registered with the system at once, replaces the one before it, is
+recorded, and the page's status line says "Ctrl+Alt+G now opens Greeting". A
+button beside a recorded hotkey ("Clear the hotkey for Greeting") releases and
+forgets it ("Greeting has no hotkey now"). A record that cannot be written puts
+back what was last recorded, and the status line says "Could not keep the
+change: …". A command whose package is disabled, or that is unavailable on
+this system, is shown with its hotkey but cannot be recorded for; why is under
+the cell as "Not active: …". Where this system has no global hotkeys at all,
+the Shortcuts page says "Hotkeys are unavailable here: &lt;reason&gt;" over the
+Hotkey column.
+
+A pressed key that cannot be used is explained in these words. The core makes
+the same checks, with the same wording, wherever a hotkey is recorded,
+including on the hotkey screen ("Hotkey for Greeting") that the launcher's
+"Manage extensions" screen used to open and that Pane no longer shows
+(ADR 0043):
 
 | Pressed | Explanation |
 | --- | --- |
@@ -39,12 +58,13 @@ explained as the status error and the screen stays for another try:
 | Ctrl (Command on macOS) with only a letter or digit | "Ctrl+C is used by applications for their own commands, such as copying; add Alt or Shift." |
 | A shortcut the system keeps (list per system in [`pane_core::hotkeys`](../crates/pane-core/src/hotkeys.rs)) | "Alt+F4 is reserved: Windows closes the active window with it." |
 | The hotkey of another command | "Ctrl+Alt+G already opens Greeting: remove it there first, or press another shortcut." |
+| The [Open Pane hotkey](#the-open-pane-hotkey) | "Ctrl+Alt+Space opens Pane itself: choose another shortcut for Greeting, or change Pane's hotkey in Settings." |
 | Used by another application (the system refuses it) | "Ctrl+Alt+G cannot be used: another application or the system already uses it. Press another shortcut." |
 | Any other refusal by the system | "… cannot be used: the system refused it: &lt;reason&gt;. …" |
 
-A refused shortcut leaves the earlier hotkey working. Keys the launcher uses
-on that screen (Enter, Escape, Tab, arrows) are not recorded; a modifier
-pressed alone is not a key press.
+A refused shortcut leaves the earlier hotkey working. Keys the recorder uses
+(Enter, Space, Escape, Tab, arrows) are not recorded; a modifier pressed alone
+is not a key press.
 
 ## Pressing it
 
@@ -55,9 +75,66 @@ root search. The command runs exactly as when opened from root search. A
 hotkey pressed while its command's package is disabled, or after it was
 released, reaches Pane no more.
 
+## The Open Pane hotkey
+
+Pane has one global hotkey of its own, added for
+[#74](https://github.com/hoangvu12/pane/issues/74): the **Open Pane hotkey**.
+It is the application's, not any extension's or command's, and it is set on
+Settings' **General** page, in the "Open Pane hotkey" row.
+
+- **What a press does.** If the launcher is hidden, it is shown and focused:
+  it opens on the display the Launcher page's choice resolves to and starts
+  from what the Launcher page's reopening choice says (root search, or the
+  view it was left on). If it is shown but does not have the focus (another
+  application has it, or the Settings window), it is brought forward and
+  focused. If it is shown and focused, it is hidden. Hidden is not closed: Pane
+  keeps running, the Settings window stays open, and the next press shows the
+  same launcher again. A second press within 600 ms of an accepted one is taken
+  as the repeat of a key still held and does nothing.
+- **Defaults.** Ctrl+Alt+Space on Windows and Linux, Option+Space on macOS (a
+  provisional default, chosen to stay clear of the Windows key, Spotlight and
+  the window menu). [#125](https://github.com/hoangvu12/pane/issues/125) (ADR 0039)
+  will change the Windows default on a fresh install later, and this document
+  changes with it; what is written here is what ships now.
+- **Recording and reset.** Click the row's recorder, or press Enter or Space on
+  it, and it listens ("Recording; Open Pane with Ctrl+Alt+Space" to a screen
+  reader): the keys pressed next are the hotkey, captured. Escape, Tab or a
+  click elsewhere stops listening and changes nothing. The new hotkey is
+  registered with the system before the one it replaces is released, so any
+  refusal leaves the earlier one working and nothing is saved; the reason is
+  shown in the row and the recorder keeps listening. The reset button beside
+  it ("Reset the Open Pane hotkey to Ctrl+Alt+Space") goes back to the default
+  through the same checks, and is enabled only while the hotkey is not the
+  default.
+- **Where it is kept.** In Pane's own settings record, `settings.json` in the
+  data folder, as `"open_pane": "ctrl+alt+space"`, with the other host
+  settings: not in `hotkeys.json` and not in any extension's data. It is
+  registered at every start, and stays registered while every extension is
+  disabled and while the extension runtime has failed. A change whose save
+  fails releases what the record does not hold, so what the record names is
+  what works.
+- **Refusals.** The same checks as a command hotkey (the table above), and
+  the explanation is shown in the row. A shortcut a command already has: "Ctrl+Alt+G
+  already opens Greeting: remove it there first, or press another shortcut."
+  A shortcut another application has: "Ctrl+Alt+B cannot be used: another
+  application or the system already uses it." The reverse collision is the
+  table's row above: a command hotkey with the Open Pane hotkey's keys is
+  refused, and a command whose recorded hotkey names the same keys is shown
+  "Not active: the Open Pane hotkey uses it". Where Pane could not register
+  the chosen hotkey at start, the row says "Not active: &lt;reason&gt;".
+  Nothing else changes: the launcher opens at start as it always does, and
+  once hidden it is shown again by the tray or menu bar entry's Open Pane,
+  where Pane has one.
+- **Same adapters, same limits.** It is registered through the same system
+  adapters as command hotkeys (see Per platform below) and carries every
+  limit listed under Limits, Wayland's included: on Wayland the row says "Not
+  active: Not available on Linux with Wayland: …" with the explanation in
+  Per platform, and recording one is refused with it.
+
 ## What keeps and releases it
 
-- The hotkeys are Pane's own records, not the extension's data:
+- The command hotkeys are Pane's own records, not the extension's data (the
+  Open Pane hotkey's is `settings.json`, above):
   `hotkeys.json` beside `installed.json`, by command id (the package
   identity's key and the manifest's command id), `{ "version": 1, "hotkeys":
   { "local:/…#greeting": "ctrl+alt+g" } }`. Written atomically; an
@@ -132,6 +209,19 @@ cannot assign, read or declare one (no WIT or manifest change).
   on GPUI's test platform: Enter on the hotkey row, a plain `p` explained,
   `ctrl-alt-p` assigned; a reported press with root search showing a query
   opens the command, whose list has focus.
+- Open Pane hotkey ([`crates/pane/tests/open_pane.rs`](../crates/pane/tests/open_pane.rs)),
+  on GPUI's test platform with a fake system: the default registered at
+  start and a press toggling the launcher (shown, focused, hidden), a held key
+  not toggling again, the Settings window's focus not counting, recording
+  swapping the registration and the record, a shortcut another application has
+  and a command's hotkey refused with their explanations, a failed save rolling
+  the registration back, a restart registering the record, Escape, reset, the
+  hotkey working while the extension runtime has failed, and Wayland's
+  explanation on the General page.
+- Shortcuts page ([`crates/pane/tests/shortcuts.rs`](../crates/pane/tests/shortcuts.rs)),
+  likewise: a hotkey recorded inline and cleared, the collisions with another
+  command and with the Open Pane hotkey ("… opens Pane itself: …") explained,
+  and the catalog following the package lifecycle and a restart.
 - Adapters ([`crates/pane-core/tests/hotkey_adapters.rs`](../crates/pane-core/tests/hotkey_adapters.rs)):
   on Linux against an Xvfb of the test's own (`PANE_XVFB` or `PATH`; skipped without one,
   never the desktop the tests run in): a grab, a second client refused as
@@ -156,8 +246,9 @@ cannot assign, read or declare one (no WIT or manifest change).
 ## Limits
 
 - One hotkey per command, only for installed packages' commands (not the
-  samples this build supplies). Pane's own hotkey that summons its window,
-  the Open Pane hotkey (#74), is set on the Settings window's General page.
+  samples this build supplies). Pane's own [Open Pane hotkey](#the-open-pane-hotkey),
+  set on the Settings window's General page, is separate: one for the whole
+  application, not a command's, and an extension cannot read, assign or declare it.
 - Only the listed keys. On X11 the key is the one the current layout gives
   without Shift; a key the layout gives only with Shift (the digits of a
   French AZERTY keyboard) is refused for a hotkey without Shift ("on this
@@ -167,7 +258,7 @@ cannot assign, read or declare one (no WIT or manifest change).
   (reported on standard error, not yet on its row). Windows and macOS
   register virtual keys and key codes, whose layout behavior is the
   system's.
-- Wayland is unsupported (above); the portal (`org.freedesktop.portal.GlobalShortcuts`)
+- Wayland is unsupported (above), for the Open Pane hotkey as for commands'; the portal (`org.freedesktop.portal.GlobalShortcuts`)
   would let the desktop ask the user to confirm each shortcut, with
   support that differs between desktops, and is future work.
 - On X11 a window manager with focus-stealing prevention may leave Pane's
@@ -179,4 +270,5 @@ cannot assign, read or declare one (no WIT or manifest change).
 - The reserved lists are Pane's, not read from the system or desktop
   settings.
 - Pane's own window keeps the keys while a hotkey is registered: pressing it
-  with Pane focused opens the command too, even on the hotkey screen.
+  with Pane focused opens the command too, even on the hotkey screen. The
+  Open Pane hotkey pressed with the launcher focused hides it.

@@ -237,7 +237,7 @@ impl Launcher {
                 let message = error.to_string();
                 // The log: the diagnostics, such as a trap's backtrace, also
                 // go to Pane's standard error.
-                eprintln!("pane: {title} failed to start: {message}");
+                crate::diagnostic!("pane: {title} failed to start: {message}");
                 {
                     let mut state = self.lock();
                     // Already paused by its own failure (it could not load)

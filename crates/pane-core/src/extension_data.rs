@@ -8,8 +8,20 @@
 //! | Settings | `settings.json` | kept | the user's choice | default |
 //! | Content | `content.json` | kept | the user's choice | default |
 //! | Cache | `cache.json`, `web-images/` | removed | removed | default |
-//! | Local credentials | `credentials.json` | kept | removed | the user only (Unix: 0600) |
-//! | Clipboard history | `clipboard-history.json`, `clipboard-images/` | kept | the user's choice | the user only (Unix: 0600) |
+//! | Local credentials | `credentials.json` | kept | removed | the user only (Unix: 0600); Windows: each value encrypted (DPAPI) |
+//! | Clipboard history | `clipboard-history.json`, `clipboard-images/` | kept | the user's choice | the user only (Unix: 0600); Windows: each item's text encrypted (DPAPI) |
+//!
+//! On Windows the values of local credentials are written protected
+//! (#130, see `protection`): the file is version 2, in which each value
+//! records how it is protected, while package identities and keys stay
+//! readable, so clearing the cache, uninstalling, deleting retained data and
+//! the counts work without decrypting anything. A version-1 file an earlier
+//! Pane wrote is converted when Pane starts, in one atomic write; if that
+//! write fails, the file is read as it is and converted at the next start.
+//! A value that cannot be decrypted on this computer is explained to the
+//! extension that reads it and counted as unreadable, never dropped or
+//! replaced but by the extension's own `set`. The other kinds' files, and
+//! local credentials on macOS and Linux, stay at version 1.
 //!
 //! Each kind has one file next to `installed.json`, holding every package's
 //! values under the package identity's key, so they belong to the source
@@ -41,9 +53,14 @@ use crate::atomic::{Readers, write_atomically};
 use crate::clipboard::history::{HistoryStore, PackageHistory};
 use crate::generation::{End, Fence, Generation, Undo};
 use crate::packages::{PackageIdentity, SavedData};
+use crate::protection::{self, Stored, Value};
 
-/// The version of every kind's file.
+/// The version of every kind's file whose values are all written as they
+/// are: each value a string.
 const DATA_VERSION: u64 = 1;
+/// The version of a local credentials file whose values are protected
+/// (#130): each value records how it is (see [`Stored`]).
+const PROTECTED_VERSION: u64 = 2;
 
 /// The kinds that hold preference values: a password's are local
 /// credentials, every other's settings.
@@ -139,6 +156,46 @@ impl DataKind {
         }
     }
 
+    /// Whether this system writes the values of this kind protected
+    /// (#130): local credentials on Windows.
+    fn protects_values(self) -> bool {
+        self == DataKind::LocalCredentials && protection::PROTECTS
+    }
+
+    /// `text` as a value of this kind is kept: protected where this system
+    /// protects the kind, as it is otherwise.
+    fn keep(self, text: String) -> Result<Value, String> {
+        if self.protects_values() {
+            Value::protect(text)
+        } else {
+            Ok(Value::plain(text))
+        }
+    }
+
+    /// The versions of this kind's file this Pane reads.
+    fn versions(self) -> &'static str {
+        match self {
+            DataKind::LocalCredentials => "1 and 2",
+            _ => "1",
+        }
+    }
+
+    /// What reading a value of this kind that cannot be read on this
+    /// computer answers, given why (#130): "Pane cannot read this
+    /// credential on this computer: Windows could not decrypt it (…). Sign
+    /// in again."
+    fn cannot_read(self, why: &str) -> String {
+        match self {
+            DataKind::LocalCredentials => {
+                format!(
+                    "{}. Sign in again.",
+                    protection::cannot_read("credential", why)
+                )
+            }
+            _ => protection::cannot_read(self.counted().0, why),
+        }
+    }
+
     /// What all of a package's values of this kind are called, with a verb.
     fn kept_unchanged(self) -> &'static str {
         match self {
@@ -151,18 +208,55 @@ impl DataKind {
     }
 }
 
-#[derive(Clone, Default, Serialize, Deserialize)]
+/// Values by package identity key, then by key.
+type Values = BTreeMap<String, BTreeMap<String, Value>>;
+
+/// One kind's file in memory.
+#[derive(Clone, Default)]
 struct DataJson {
-    version: u64,
     /// Values by package identity key, then by the extension's own key.
-    packages: BTreeMap<String, BTreeMap<String, String>>,
+    packages: Values,
     /// The values the user set for the preferences packages declare (see
     /// `preferences`), by package identity key, then by the preference's
     /// storage key: Pane's own, apart from the keys a package's code saves
     /// under, which it neither reads nor sets through its data interfaces.
     /// Only settings and local credentials hold any.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    preferences: BTreeMap<String, BTreeMap<String, String>>,
+    preferences: Values,
+}
+
+/// One kind's file as written: in version 1 each value is a string, in
+/// version 2 (local credentials, #130) each is a [`Stored`], recording how
+/// it is protected.
+///
+/// ```json
+/// { "version": 2, "packages": { "local:/…": { "token": { "dpapi": "AQAAANCMnd8B…" } } } }
+/// ```
+#[derive(Serialize, Deserialize)]
+struct FileJson<V> {
+    version: u64,
+    packages: BTreeMap<String, BTreeMap<String, V>>,
+    // A constructor rather than `default`, which would make serde require
+    // `V: Default`, and `Stored` has none.
+    #[serde(default = "BTreeMap::new", skip_serializing_if = "BTreeMap::is_empty")]
+    preferences: BTreeMap<String, BTreeMap<String, V>>,
+}
+
+/// How many values an identity keeps of one kind, and how many of them
+/// cannot be read on this computer (#130).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Count {
+    kept: usize,
+    unreadable: usize,
+}
+
+impl Count {
+    /// `kept` values, each of which can be read.
+    fn readable(kept: usize) -> Count {
+        Count {
+            kept,
+            unreadable: 0,
+        }
+    }
 }
 
 impl DataJson {
@@ -171,6 +265,117 @@ impl DataJson {
     fn count(&self, owner: &str) -> usize {
         self.packages.get(owner).map_or(0, BTreeMap::len)
             + self.preferences.get(owner).map_or(0, BTreeMap::len)
+    }
+
+    /// How many values `owner` keeps in this file, and how many of them
+    /// cannot be read on this computer: counting needs no decryption; only
+    /// telling which cannot be read tries each protected value.
+    fn tally(&self, owner: &str) -> Count {
+        let unreadable = [&self.packages, &self.preferences]
+            .into_iter()
+            .filter_map(|values| values.get(owner))
+            .flat_map(BTreeMap::values)
+            .filter(|value| !value.is_plain() && value.text().is_err())
+            .count();
+        Count {
+            kept: self.count(owner),
+            unreadable,
+        }
+    }
+
+    /// Every value of the file.
+    fn values(&self) -> impl Iterator<Item = &Value> {
+        self.packages
+            .values()
+            .chain(self.preferences.values())
+            .flat_map(BTreeMap::values)
+    }
+
+    /// Every value of the file, to change.
+    fn values_mut(&mut self) -> impl Iterator<Item = &mut Value> {
+        self.packages
+            .values_mut()
+            .chain(self.preferences.values_mut())
+            .flat_map(BTreeMap::values_mut)
+    }
+
+    /// Protects, where this system protects `kind` (local credentials on
+    /// Windows, #130), the values still written as they are: whether any
+    /// was, and why one could not be, if one could not.
+    fn protect_plain_values(&mut self, kind: DataKind) -> (bool, Option<String>) {
+        let mut protected = false;
+        let mut failed = None;
+        if kind.protects_values() {
+            for value in self.values_mut() {
+                match value.protect_in_place() {
+                    Ok(done) => protected |= done,
+                    Err(why) => failed = Some(why),
+                }
+            }
+        }
+        (protected, failed)
+    }
+
+    /// The file as written, at `version`, each value made by `each`.
+    fn file<V>(&self, version: u64, each: impl Fn(&Value) -> V) -> FileJson<V> {
+        let written = |values: &Values| -> BTreeMap<String, BTreeMap<String, V>> {
+            values
+                .iter()
+                .map(|(owner, kept)| {
+                    let kept = kept
+                        .iter()
+                        .map(|(key, value)| (key.clone(), each(value)))
+                        .collect();
+                    (owner.clone(), kept)
+                })
+                .collect()
+        };
+        FileJson {
+            version,
+            packages: written(&self.packages),
+            preferences: written(&self.preferences),
+        }
+    }
+
+    /// The file `file` read, each value made by `each`.
+    fn from_file<V>(file: FileJson<V>, each: impl Fn(V) -> Value) -> DataJson {
+        let kept_values = |values: BTreeMap<String, BTreeMap<String, V>>| -> Values {
+            values
+                .into_iter()
+                .map(|(owner, kept)| {
+                    let kept = kept
+                        .into_iter()
+                        .map(|(key, value)| (key, each(value)))
+                        .collect();
+                    (owner, kept)
+                })
+                .collect()
+        };
+        DataJson {
+            packages: kept_values(file.packages),
+            preferences: kept_values(file.preferences),
+        }
+    }
+
+    /// The text of `kind`'s file holding these values: version 1 while
+    /// every value is written as it is (a value protected elsewhere, as in
+    /// a folder copied from Windows, is kept as it was), version 2
+    /// otherwise. Where this system protects the kind, an empty file is
+    /// version 2, and values that are all still as they are (Windows could
+    /// encrypt none of them) are written as version 1, as an earlier Pane
+    /// wrote them, never as plain values in a version-2 file.
+    fn to_json(&self, kind: DataKind) -> serde_json::Result<String> {
+        let all_plain = self.values().all(Value::is_plain);
+        let none = self.values().next().is_none();
+        if all_plain && !(kind.protects_values() && none) {
+            let file = self.file(DATA_VERSION, |value| {
+                value.plain_text().unwrap_or_default().to_owned()
+            });
+            serde_json::to_string_pretty(&file)
+        } else {
+            let file = self.file(PROTECTED_VERSION, |value| value.stored().clone());
+            serde_json::to_string_pretty(&file)
+        }
     }
 }
 
@@ -189,12 +394,52 @@ struct KindFile {
 impl KindFile {
     fn open(dir: &Path, kind: DataKind) -> KindFile {
         let path = dir.join(kind.file_name());
-        let file = read(&path);
-        KindFile {
+        let file = read(&path, kind);
+        let mut opened = KindFile {
             path,
             file,
             changes: 0,
             pending: 0,
+        };
+        opened.protect_plain_values(kind);
+        opened
+    }
+
+    /// Protects the values of a kind this system protects (local
+    /// credentials on Windows, #130) that the file still holds as they are,
+    /// as an earlier Pane wrote them (version 1), and writes the file at
+    /// once, in one atomic write. If that write fails, the file stays as it
+    /// was, its values read the same, and the next start tries again; a
+    /// value Windows could not encrypt stays as it is until then. No value
+    /// is lost either way.
+    fn protect_plain_values(&mut self, kind: DataKind) {
+        if !kind.protects_values() {
+            return;
+        }
+        let Ok(file) = &mut self.file else {
+            return;
+        };
+        let (protected, failed) = file.protect_plain_values(kind);
+        if let Some(why) = failed {
+            crate::diagnostic!(
+                "Pane could not protect a value in {}: {why}. It is kept as it is until Pane \
+                 next starts.",
+                self.path.display()
+            );
+        }
+        if !protected {
+            return;
+        }
+        let written = file
+            .to_json(kind)
+            .map_err(io::Error::other)
+            .and_then(|text| write_atomically(&self.path, text.as_bytes(), kind.readers()));
+        if let Err(error) = written {
+            crate::diagnostic!(
+                "Pane could not protect the values in {}: {error}. It reads them as they are and \
+                 tries again when it next starts.",
+                self.path.display()
+            );
         }
     }
 }
@@ -234,7 +479,9 @@ fn start_writer(data: Weak<Mutex<DataFile>>) -> mpsc::Sender<Job> {
                     }
                     Job::Write(write) => write,
                 };
-                let written = serde_json::to_string_pretty(&write.updated)
+                let written = write
+                    .updated
+                    .to_json(write.kind)
                     .map_err(io::Error::other)
                     .and_then(|text| write_atomically(&write.path, text.as_bytes(), write.readers));
                 if let Some(data) = data.upgrade() {
@@ -250,7 +497,7 @@ fn start_writer(data: Weak<Mutex<DataFile>>) -> mpsc::Sender<Job> {
             }
         });
     if let Err(error) = started {
-        eprintln!("pane: could not start the thread writing extension data: {error}");
+        crate::diagnostic!("pane: could not start the thread writing extension data: {error}");
     }
     jobs
 }
@@ -356,7 +603,9 @@ pub(crate) struct ExtensionData {
 
 impl ExtensionData {
     /// Opens the data kept in `dir`. Nothing is written until a command
-    /// saves a value.
+    /// saves a value, but for the conversion of files an earlier Pane wrote
+    /// unprotected, on a system that protects them (#130): local
+    /// credentials here, and clipboard history (see `clipboard::history`).
     pub fn open(dir: &Path) -> ExtensionData {
         let files = Arc::new(Mutex::new(DataFile {
             settings: KindFile::open(dir, DataKind::Settings),
@@ -631,8 +880,10 @@ impl ExtensionData {
 
     /// The values the user set for the preferences of the package with
     /// `identity`, by storage key (see `preferences`): its settings' and its
-    /// local credentials' together. A file that cannot be read holds none.
-    /// Pane's own record, readable whether or not the package runs.
+    /// local credentials' together. A file that cannot be read holds none,
+    /// and a value that cannot be read on this computer (#130) is as if it
+    /// was never set, so the user is asked for it again. Pane's own record,
+    /// readable whether or not the package runs.
     pub fn preference_values(&self, identity: &PackageIdentity) -> BTreeMap<String, String> {
         let owner = identity.key();
         let mut store = self.lock();
@@ -641,7 +892,11 @@ impl ExtensionData {
             if let Ok(file) = &store.of(kind).file
                 && let Some(kept) = file.preferences.get(&owner)
             {
-                values.extend(kept.clone());
+                values.extend(
+                    kept.iter().filter_map(|(key, value)| {
+                        Some((key.clone(), value.text().ok()?.to_owned()))
+                    }),
+                );
             }
         }
         values
@@ -655,7 +910,10 @@ impl ExtensionData {
     /// returned writes are awaited; [`PreferenceWrites::written`] says
     /// whether they were. Pane's own record: it changes whether or not the
     /// package runs, and the package's code never writes it. Nothing
-    /// changes, and the reason is returned, if either file cannot be read.
+    /// changes, and the reason is returned, if either file cannot be read
+    /// or a new local credential cannot be protected (#130). A value that
+    /// cannot be read on this computer is not handed to `change` and stays
+    /// as it is, unless `change` sets one under its key.
     pub fn change_preferences(
         &self,
         identity: &PackageIdentity,
@@ -664,10 +922,16 @@ impl ExtensionData {
         let owner = identity.key();
         let mut store = self.lock();
         let mut values = BTreeMap::new();
+        let mut unreadable = Vec::new();
         for kind in PREFERENCE_KINDS {
             let file = store.of(kind).file.as_ref().map_err(Clone::clone)?;
             for (key, value) in file.preferences.get(&owner).into_iter().flatten() {
-                values.insert(key.clone(), (kind, value.clone()));
+                match value.text() {
+                    Ok(text) => {
+                        values.insert(key.clone(), (kind, text.to_owned()));
+                    }
+                    Err(_) => unreadable.push((kind, key.clone(), value.clone())),
+                }
             }
         }
         let before = values.clone();
@@ -679,43 +943,58 @@ impl ExtensionData {
                 .map(|(key, (_, value))| (key.clone(), value.clone()))
                 .collect::<BTreeMap<String, String>>()
         };
-        let mut writes = Vec::new();
+        let mut changed = Vec::new();
         for kind in PREFERENCE_KINDS {
             let wanted = of(&values, kind);
             if wanted == of(&before, kind) {
                 continue;
             }
             let mut updated = store.of(kind).file.as_ref().map_err(Clone::clone)?.clone();
-            if wanted.is_empty() {
-                updated.preferences.remove(&owner);
-            } else {
-                updated.preferences.insert(owner.clone(), wanted);
+            let earlier = updated.preferences.remove(&owner).unwrap_or_default();
+            let mut kept: BTreeMap<String, Value> = unreadable
+                .iter()
+                .filter(|(held, key, _)| *held == kind && !values.contains_key(key))
+                .map(|(_, key, value)| (key.clone(), value.clone()))
+                .collect();
+            for (key, text) in wanted {
+                // A value set again unchanged is written as it was, not
+                // protected again.
+                let value = match earlier.get(&key) {
+                    Some(value) if value.text() == Ok(text.as_str()) => value.clone(),
+                    _ => kind
+                        .keep(text)
+                        .map_err(|why| format!("Could not save {}: {why}", kind.value()))?,
+                };
+                kept.insert(key, value);
             }
-            writes.push((kind, store.stage(kind, updated)));
+            if !kept.is_empty() {
+                updated.preferences.insert(owner.clone(), kept);
+            }
+            changed.push((kind, updated));
         }
+        let writes = changed
+            .into_iter()
+            .map(|(kind, updated)| (kind, store.stage(kind, updated)))
+            .collect();
         Ok(PreferenceWrites(writes))
     }
 
     /// What Pane keeps of `kinds`, read from their files now, so that a file
     /// repaired or changed by another Pane since is counted as it is. Each
     /// file is read once, however many identities are then described.
+    /// Counting decrypts nothing; only [`Kept::describe_unreadable`] tries
+    /// the protected values of the one identity it describes (#130).
     pub fn kept_now(&self, kinds: &[DataKind]) -> Kept {
         Kept(
             kinds
                 .iter()
                 .map(|&kind| {
                     if kind == DataKind::ClipboardHistory {
-                        return (kind, self.clipboard.counts_now());
+                        let counts = self.clipboard.counts_now().map(KindKept::Counted);
+                        return (kind, counts);
                     }
                     let path = self.lock().of(kind).path.clone();
-                    let counts = read(&path).map(|file| {
-                        file.packages
-                            .keys()
-                            .chain(file.preferences.keys())
-                            .map(|owner| (owner.clone(), file.count(owner)))
-                            .collect()
-                    });
-                    (kind, counts)
+                    (kind, read(&path, kind).map(KindKept::Read))
                 })
                 .collect(),
         )
@@ -770,7 +1049,21 @@ impl ExtensionData {
                 }
                 (data.path.clone(), data.changes)
             };
-            let fresh = read(&path);
+            let mut fresh = read(&path, kind);
+            // Values the file still holds as they are (a conversion at
+            // start that could not be written, #130) are protected before
+            // it is written again, as at start.
+            let failed = match &mut fresh {
+                Ok(file) => file.protect_plain_values(kind).1,
+                Err(_) => None,
+            };
+            if let Some(why) = failed {
+                crate::diagnostic!(
+                    "Pane could not protect a value in {}: {why}. It is kept as it is until Pane \
+                     next starts.",
+                    path.display()
+                );
+            }
             let mut store = self.lock();
             let data = store.of(kind);
             if data.pending > 0 || data.changes != before {
@@ -832,10 +1125,38 @@ impl PreferenceWrites {
     }
 }
 
-/// A kind's count of values by identity key (for clipboard history, its
-/// items; an identity that keeps only its choices counts 0), or why the
-/// kind's file cannot be read.
-type Counts = Result<BTreeMap<String, usize>, String>;
+/// One kind's values as they were read at one moment, or why the kind's
+/// file cannot be read.
+type Counts = Result<KindKept, String>;
+
+/// One kind's values as they were read.
+enum KindKept {
+    /// Clipboard history: how many items each identity key keeps (an
+    /// identity that keeps only its choices counts 0).
+    Counted(BTreeMap<String, usize>),
+    /// Any other kind: its file.
+    Read(DataJson),
+}
+
+impl KindKept {
+    /// How many values the identity with key `owner` keeps, if it keeps
+    /// any; with `unreadable`, also how many of them cannot be read on this
+    /// computer, which tries each of its protected values (#130).
+    fn count(&self, owner: &str, unreadable: bool) -> Option<Count> {
+        match self {
+            KindKept::Counted(counts) => counts.get(owner).copied().map(Count::readable),
+            KindKept::Read(file) => {
+                if !file.packages.contains_key(owner) && !file.preferences.contains_key(owner) {
+                    None
+                } else if unreadable {
+                    Some(file.tally(owner))
+                } else {
+                    Some(Count::readable(file.count(owner)))
+                }
+            }
+        }
+    }
+}
 
 /// Some kinds' files as they were read at one moment, to say what Pane keeps
 /// for a package: each kind's [`Counts`].
@@ -845,23 +1166,48 @@ impl Kept {
     /// How many values of each kind Pane keeps for `identity`, such as
     /// "1 setting and 1 content record", or `None` if it keeps none. A kind
     /// whose file is missing keeps none; one whose file cannot be read says
-    /// so.
+    /// so. Nothing is decrypted: a value that cannot be read on this
+    /// computer is counted like any other, as confirmations count (#130).
     pub fn describe(&self, identity: &PackageIdentity) -> Option<String> {
+        self.describe_counting(identity, false)
+    }
+
+    /// [`Kept::describe`], and how many of `identity`'s values cannot be
+    /// read on this computer (#130): "2 credentials, 1 unreadable". It
+    /// tries `identity`'s protected values only, for the Manage extensions
+    /// row that describes it.
+    pub fn describe_unreadable(&self, identity: &PackageIdentity) -> Option<String> {
+        self.describe_counting(identity, true)
+    }
+
+    fn describe_counting(&self, identity: &PackageIdentity, unreadable: bool) -> Option<String> {
         let key = identity.key();
         let parts: Vec<String> = self
             .0
             .iter()
             .filter_map(|(kind, counts)| {
                 let (one, many) = kind.counted();
-                let count = counts.as_ref().map(|counts| counts.get(&key).copied());
-                if *kind == DataKind::ClipboardHistory && count == Ok(Some(0)) {
+                let count = counts.as_ref().map(|kept| kept.count(&key, unreadable));
+                if *kind == DataKind::ClipboardHistory
+                    && matches!(count, Ok(Some(Count { kept: 0, .. })))
+                {
                     // Only whether it keeps history, and the excluded programs.
                     return Some("clipboard history settings".into());
                 }
                 match count.map(Option::unwrap_or_default) {
-                    Ok(0) => None,
-                    Ok(1) => Some(format!("1 {one}")),
-                    Ok(count) => Some(format!("{count} {many}")),
+                    Ok(Count { kept: 0, .. }) => None,
+                    Ok(Count {
+                        kept: 1,
+                        unreadable: 0,
+                    }) => Some(format!("1 {one}")),
+                    Ok(Count {
+                        kept,
+                        unreadable: 0,
+                    }) => Some(format!("{kept} {many}")),
+                    Ok(Count { kept, unreadable }) => {
+                        let called = if kept == 1 { one } else { many };
+                        Some(format!("{kept} {called}, {unreadable} unreadable"))
+                    }
                     Err(reason) => Some(format!("{many} that cannot be read now ({reason})")),
                 }
             })
@@ -934,26 +1280,42 @@ impl PackageData {
     }
 
     /// The value of `kind` saved under `key`, if any, unless this data's
-    /// generation has ended: stopped code reads nothing more either.
+    /// generation has ended: stopped code reads nothing more either. A
+    /// value that cannot be read on this computer (#130) is an error saying
+    /// why, which the extension can turn into "sign in again"; it stays
+    /// until the extension sets another.
     pub fn get(&self, kind: DataKind, key: &str) -> Result<Option<String>, String> {
         if let Some(refusal) = self.refusal(self.fence.as_ref().is_some_and(Fence::closed)) {
             return Err(refusal.into());
         }
         let mut store = self.data.lock();
         let file = store.of(kind).file.as_ref().map_err(Clone::clone)?;
-        Ok(file
+        let Some(value) = file
             .packages
             .get(&self.owner)
             .and_then(|values| values.get(key))
-            .cloned())
+        else {
+            return Ok(None);
+        };
+        value
+            .text()
+            .map(|text| Some(text.to_owned()))
+            .map_err(|why| kind.cannot_read(why))
     }
 
     /// Saves `value` of `kind` under `key`, unless code using this data is
     /// stopped: code that was disabled or replaced, or whose runtime thread
     /// Pane gave up on, saves nothing more. The change is checked and made
     /// while the fence is held, so none lands after the thread was given up
-    /// on; the file is written by the writer thread, which this awaits.
+    /// on; the file is written by the writer thread, which this awaits. A
+    /// local credential is protected first, on Windows (#130), and replaces
+    /// whatever was saved under `key`, one that could not be read too.
     pub async fn set(&self, kind: DataKind, key: &str, value: &str) -> Result<(), String> {
+        let failed = |error: io::Error| format!("Could not save {}: {error}", kind.value());
+        // Protected before the values are locked.
+        let value = kind
+            .keep(value.to_owned())
+            .map_err(|why| format!("Could not save {}: {why}", kind.value()))?;
         let outcome = {
             let fence = self.fence.as_ref().map(Fence::hold);
             let fenced = fence.as_deref() == Some(&true);
@@ -967,10 +1329,9 @@ impl PackageData {
                 .packages
                 .entry(self.owner.clone())
                 .or_default()
-                .insert(key.to_owned(), value.to_owned());
+                .insert(key.to_owned(), value);
             store.stage(kind, updated)
         };
-        let failed = |error: io::Error| format!("Could not save {}: {error}", kind.value());
         match outcome.await {
             Ok(written) => written.map_err(failed),
             Err(_) => Err(failed(io::Error::other(
@@ -1044,29 +1405,42 @@ fn end_as(current: &mut Generation, why: End) -> Undo {
     current.end(why)
 }
 
-/// Reads one kind's file; a missing file holds no values.
-fn read(path: &Path) -> Result<DataJson, String> {
+/// Reads the file of `kind` at `path`, without decrypting anything; a
+/// missing file holds no values.
+fn read(path: &Path, kind: DataKind) -> Result<DataJson, String> {
     match fs::read_to_string(path) {
-        Ok(text) => serde_json::from_str::<DataJson>(&text)
-            .map_err(|error| error.to_string())
-            .and_then(|file| {
-                if file.version == DATA_VERSION {
-                    Ok(file)
-                } else {
-                    Err(format!(
-                        "it has version {}, this Pane reads {DATA_VERSION}",
-                        file.version
-                    ))
-                }
-            }),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(DataJson {
-            version: DATA_VERSION,
-            packages: BTreeMap::new(),
-            preferences: BTreeMap::new(),
-        }),
+        Ok(text) => parse(&text, kind),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(DataJson::default()),
         Err(error) => Err(error.to_string()),
     }
     .map_err(|reason| format!("Cannot read {}: {reason}", path.display()))
+}
+
+/// The values of `kind`'s file whose text is `text`: version 1 for every
+/// kind, version 2 for local credentials too (#130); any other version is
+/// refused, so a file a newer Pane wrote is never overwritten.
+fn parse(text: &str, kind: DataKind) -> Result<DataJson, String> {
+    #[derive(Deserialize)]
+    struct Versioned {
+        version: u64,
+    }
+    let Versioned { version } =
+        serde_json::from_str::<Versioned>(text).map_err(|error| error.to_string())?;
+    match version {
+        DATA_VERSION => serde_json::from_str::<FileJson<String>>(text)
+            .map(|file| DataJson::from_file(file, Value::plain)),
+        PROTECTED_VERSION if kind == DataKind::LocalCredentials => {
+            serde_json::from_str::<FileJson<Stored>>(text)
+                .map(|file| DataJson::from_file(file, Value::from_stored))
+        }
+        other => {
+            return Err(format!(
+                "it has version {other}, this Pane reads {}",
+                kind.versions()
+            ));
+        }
+    }
+    .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -1212,10 +1586,13 @@ mod tests {
         );
         data.flush();
         assert_eq!(current.get(DataKind::Settings, "n").unwrap(), at_close);
-        let file = read(&dir.path().join(DataKind::Settings.file_name())).unwrap();
+        let settings = DataKind::Settings;
+        let file = read(&dir.path().join(settings.file_name()), settings).unwrap();
         assert_eq!(
-            file.packages[&identity.key()].get("n"),
-            at_close.as_ref(),
+            file.packages[&identity.key()]
+                .get("n")
+                .map(|value| value.text().unwrap()),
+            at_close.as_deref(),
             "the file holds the last save before the close"
         );
         // The package's generation goes on: a fresh thread's code saves.
@@ -1383,5 +1760,209 @@ mod tests {
             end(&data, &identity);
             assert_eq!(ran.lock().unwrap().len(), 2, "{name}: undone once");
         }
+    }
+
+    /// The local credentials file in `dir`, as text.
+    fn credentials_file(dir: &Path) -> String {
+        fs::read_to_string(dir.join(DataKind::LocalCredentials.file_name())).unwrap()
+    }
+
+    /// #130: a credential reads back as it was saved, also after a restart;
+    /// on Windows the file holds it encrypted (version 2), elsewhere as it
+    /// is (version 1, as before).
+    #[test]
+    fn a_credential_reads_back_and_is_written_as_this_system_protects_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = ExtensionData::open(dir.path());
+        let identity = PackageIdentity::local(dir.path()).unwrap();
+        let code = data.owned_by(&identity);
+        let credentials = DataKind::LocalCredentials;
+        block_on(code.set(credentials, "token", "sample-token")).unwrap();
+        block_on(code.set(DataKind::Settings, "style", "formal")).unwrap();
+        assert_eq!(
+            code.get(credentials, "token"),
+            Ok(Some("sample-token".into()))
+        );
+
+        let file = credentials_file(dir.path());
+        let json: serde_json::Value = serde_json::from_str(&file).unwrap();
+        if protection::PROTECTS {
+            assert!(!file.contains("sample-token"), "{file}");
+            assert_eq!(json["version"], 2);
+            let stored = &json["packages"][&identity.key()]["token"];
+            assert!(stored["dpapi"].is_string(), "{stored}");
+        } else {
+            assert_eq!(json["version"], 1);
+            assert_eq!(json["packages"][&identity.key()]["token"], "sample-token");
+        }
+        // The other kinds stay at version 1, as they are.
+        let settings = fs::read_to_string(dir.path().join("settings.json")).unwrap();
+        let settings: serde_json::Value = serde_json::from_str(&settings).unwrap();
+        assert_eq!(settings["version"], 1);
+        assert_eq!(settings["packages"][&identity.key()]["style"], "formal");
+
+        let restarted = ExtensionData::open(dir.path());
+        assert_eq!(
+            restarted.owned_by(&identity).get(credentials, "token"),
+            Ok(Some("sample-token".into()))
+        );
+        assert_eq!(restarted.count(credentials, &identity), Ok(1));
+    }
+
+    /// #130: on Windows a credentials file an earlier Pane wrote (version
+    /// 1) is protected when Pane starts, with every value kept.
+    #[cfg(windows)]
+    #[test]
+    fn a_version_1_credentials_file_is_protected_at_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let identity = PackageIdentity::local(dir.path()).unwrap();
+        let earlier = serde_json::json!({
+            "version": 1,
+            "packages": { identity.key(): { "token": "sample-token" } },
+            "preferences": { identity.key(): { "apiKey": "the key" } },
+        });
+        fs::write(dir.path().join("credentials.json"), earlier.to_string()).unwrap();
+
+        let data = ExtensionData::open(dir.path());
+
+        let file = credentials_file(dir.path());
+        assert!(
+            !file.contains("sample-token") && !file.contains("the key"),
+            "{file}"
+        );
+        let json: serde_json::Value = serde_json::from_str(&file).unwrap();
+        assert_eq!(json["version"], 2);
+        let code = data.owned_by(&identity);
+        assert_eq!(
+            code.get(DataKind::LocalCredentials, "token"),
+            Ok(Some("sample-token".into()))
+        );
+        assert_eq!(
+            data.preference_values(&identity)
+                .get("apiKey")
+                .map(String::as_str),
+            Some("the key")
+        );
+    }
+
+    /// #130: a value that cannot be decrypted on this computer (damaged, or
+    /// protected by Windows elsewhere) is explained to the extension, while
+    /// its other values read; it is counted as unreadable, kept as it was
+    /// by every other write, and replaced only by a `set` of its key. A
+    /// password preference that cannot be read is as if unset.
+    #[test]
+    fn a_value_that_cannot_be_read_is_explained_and_kept_until_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let identity = PackageIdentity::local(dir.path()).unwrap();
+        let damaged = serde_json::json!({ "dpapi": "AAAA" });
+        let file = serde_json::json!({
+            "version": 2,
+            "packages": { identity.key(): {
+                "token": damaged,
+                "other": { "plain": "still read" },
+            } },
+            "preferences": { identity.key(): { "apiKey": damaged } },
+        });
+        let path = dir.path().join("credentials.json");
+        fs::write(&path, file.to_string()).unwrap();
+        let data = ExtensionData::open(dir.path());
+        let code = data.owned_by(&identity);
+        let credentials = DataKind::LocalCredentials;
+
+        let error = code.get(credentials, "token").unwrap_err();
+        assert!(
+            error.starts_with("Pane cannot read this credential on this computer: "),
+            "{error}"
+        );
+        assert!(error.ends_with(". Sign in again."), "{error}");
+        if protection::PROTECTS {
+            assert!(
+                error.contains(": Windows could not decrypt it ("),
+                "{error}"
+            );
+        }
+        assert_eq!(
+            code.get(credentials, "other"),
+            Ok(Some("still read".into()))
+        );
+        // Counted without reading them, and said to be unreadable where
+        // Manage extensions describes the identity.
+        assert_eq!(data.count(credentials, &identity), Ok(3));
+        let kept = data.kept_now(&[credentials]);
+        assert_eq!(kept.describe(&identity).as_deref(), Some("3 credentials"));
+        assert_eq!(
+            kept.describe_unreadable(&identity).as_deref(),
+            Some("3 credentials, 2 unreadable")
+        );
+        // A password that cannot be read is asked for again.
+        assert_eq!(data.preference_values(&identity).get("apiKey"), None);
+
+        // Another write keeps it as it was.
+        block_on(code.set(credentials, "other", "changed")).unwrap();
+        let writes = data
+            .change_preferences(&identity, |values| {
+                values.insert("units".into(), (DataKind::Settings, "metric".into()));
+            })
+            .unwrap();
+        block_on(writes.written()).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written["packages"][&identity.key()]["token"], damaged);
+        assert_eq!(written["preferences"][&identity.key()]["apiKey"], damaged);
+        assert!(code.get(credentials, "token").is_err());
+
+        // Setting it replaces it.
+        block_on(code.set(credentials, "token", "signed in again")).unwrap();
+        assert_eq!(
+            code.get(credentials, "token"),
+            Ok(Some("signed in again".into()))
+        );
+        let writes = data
+            .change_preferences(&identity, |values| {
+                values.insert("apiKey".into(), (credentials, "new key".into()));
+            })
+            .unwrap();
+        block_on(writes.written()).unwrap();
+        assert_eq!(
+            data.preference_values(&identity)
+                .get("apiKey")
+                .map(String::as_str),
+            Some("new key")
+        );
+        let reopened = ExtensionData::open(dir.path());
+        assert_eq!(
+            reopened
+                .kept_now(&[credentials])
+                .describe_unreadable(&identity)
+                .as_deref(),
+            Some("3 credentials")
+        );
+    }
+
+    /// A credentials file of a version this Pane does not know (a newer
+    /// Pane's) is refused, and never overwritten.
+    #[test]
+    fn a_credentials_file_of_another_version_is_refused_and_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let identity = PackageIdentity::local(dir.path()).unwrap();
+        let path = dir.path().join("credentials.json");
+        let newer = r#"{ "version": 3, "packages": {} }"#;
+        fs::write(&path, newer).unwrap();
+        let data = ExtensionData::open(dir.path());
+        let code = data.owned_by(&identity);
+        let credentials = DataKind::LocalCredentials;
+
+        let error = code.get(credentials, "token").unwrap_err();
+        assert!(
+            error.ends_with("it has version 3, this Pane reads 1 and 2"),
+            "{error}"
+        );
+        assert!(block_on(code.set(credentials, "token", "new")).is_err());
+        assert!(
+            !data
+                .remove_uninstalled(&identity, SavedData::Keep)
+                .is_empty()
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), newer);
     }
 }

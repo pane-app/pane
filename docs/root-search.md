@@ -538,21 +538,60 @@ Checked through GPUI's accessibility tree
   placeholder. It tracks the field's keyboard focus.
 - The results are a `ListBox` labelled "Results" inside it, of
   `ListBoxOption`s with label, description (subtitle, and the reason when
-  unavailable) and selected state.
-- The selected result is the combo box's active descendant, so it is
-  reported as focused while the caret stays in the field; with no result, the
-  combo box itself is reported as focused.
+  unavailable), selected state, and their position in the whole list and
+  its size (a computed answer's card is one of them, named "6*7 = 42").
+- The combo box stays the focused node while the selection moves, so a
+  screen reader echoes what is typed. No result reports itself as focused:
+  GPUI CE implements an active descendant by reporting the descendant as
+  the focused node, so root search no longer uses one
+  ([#132](https://github.com/hoangvu12/pane/issues/132)).
+- The window's **announcer** says the selection instead: one hidden,
+  zero-size `Label` node of Pane's own, a polite live region whose name and
+  value are both the text said last (AccessKit's Windows and Linux adapters
+  announce a live region's name, its macOS adapter the value). Each text
+  replaces the last, so fast arrowing leaves only where the user stopped.
+  It says, in the launcher's language (English today):
+  - a selection move by the user (any key that moves it, a number chord,
+    the pointer): "<title>, <i> of <n>", with ", unavailable" after a row
+    that cannot run, and the section's name first when the move enters
+    another section ("Fallbacks: Echo, 1 of 1");
+  - opening a command or the extension list: "<name>, <n> results", then
+    the selected row; a screen whose rows are choices (a confirmation, a
+    package before installing it, why a build failed or a package paused):
+    its title, then the selected row; the Actions panel: "Actions for
+    <target>, <n> commands", then its selected entry; the footer menu: its
+    selected entry, said again each time it opens (the same text is cleared
+    for one frame, then set again);
+  - root search coming back: nothing, and what was said before is cleared;
+  - a list that becomes empty: "No results";
+  - typing: nothing per keystroke; once the query's results have settled,
+    or 300 ms after the last keystroke, whichever is later, the selected row
+    if it is not the one last said;
+  - a selection Pane changes itself (a late result, a refreshed list):
+    nothing, unless the selected row is another one;
+  - the footer's message when it is a toast or an outcome (a result, an
+    error), which the strip keeps as its name under its `Status` role:
+    AccessKit announces only a node with a live setting of its own, so the
+    announcer says it too. "Running…" and progress are the strip's alone.
+    When the message and the selection change together, the message is said
+    first and the selection 500 ms later, at most: a later message does not
+    hold it back again, and it is dropped if the list no longer shows it (a
+    panel closed, another list or selection, typing began).
+- A command's list keeps the focus on the list (or on its search field),
+  the Actions panel on its search field ("Search actions"), the footer menu
+  on the menu, and Clipboard History and Search Files on their fields; in
+  each, rows carry their position and the list's size, and none claims the
+  focus. Forms, custom views and Settings keep their own accessibility.
 
-**Open: active descendant.** GPUI CE has no real active-descendant support:
-it implements it by reporting the descendant as the focused node, not
-through AccessKit's `active_descendant` property on the field. So the
-selected result is reported as focused while the caret is in the field, and
-a screen reader may announce results instead of echoing what the user types.
-This needs a GPUI CE change (exposing `active_descendant` on the focused
-node) or a workaround before G2 (screen-reader-usable root search) can
-pass. **No screen reader was run** on any platform; announcements, echo and
-the combo box pattern's behaviour with Narrator/NVDA, VoiceOver and Orca are
-unverified. The limits listed for
+**Open: G2's remaining condition is a native run with each screen reader**
+(Narrator and NVDA on Windows, VoiceOver on macOS, Orca on Linux), not a
+GPUI change. The window tests check the focus, the rows' positions and the
+announcer's name and value; GPUI CE's debug tree does not report a node's
+live setting, so that the announcer is polite is read from the code, and
+what a screen reader speaks is not established by any test. **No screen
+reader was run** on any platform. A text the announcer says twice in a row
+(the same menu entry when the menu opens again) changes nothing in the
+tree, so it is not said again. The limits listed for
 [form text fields](forms.md#accessibility) (no text details, actions or
 invalid state) apply to the query field too.
 
@@ -623,7 +662,23 @@ field's editing state, with the limits described for
 [forms](forms.md#checks)); the accessibility nodes above; and typing an
 expression showing the calculator's answer as the query changes, Enter
 writing it to the clipboard, and an incomplete expression showing no
-results.
+results. The announcer's rules have unit tests in
+`crates/pane/src/features/announcer.rs`, and window tests in
+[`crates/pane/tests/announcements.rs`](../crates/pane/tests/announcements.rs):
+the field keeping the focus while the user arrows and no row claiming it,
+each row's position and the list's size, "<title>, <i> of <n>" as both the
+announcer's name and value after Down, several fast moves leaving the last
+row, typing that keeps the first row saying nothing and typing that changes
+it saying it once after the results settle, "No results" and a move into
+the fallbacks named "Fallbacks", opening a command saying its name and
+count and then its row, the same in a command's list and in the Actions
+panel (over a command's list and over root search), the footer's message
+said before a selection that changed with it while the footer keeps its
+status role, a sample's toast said and a move after it said at once, the
+footer menu's item said and said again when it opens again, and a
+selection Pane changes itself said only for another row; in
+`crates/pane/tests/window.rs`, Clipboard History's field keeping the focus,
+its rows' places, a move and "No results" for a filter that keeps nothing.
 
 Native checks: the GUI smoke scripts' search phase (screenshots 24 to 26)
 types "typescr", presses Enter, runs "Wait briefly" and asserts the screen

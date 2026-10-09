@@ -780,7 +780,7 @@ mod tests {
                 cursor
             }
             JournalRead::NoJournal => {
-                eprintln!("the volume of {} keeps no change journal", home.display());
+                crate::diagnostic!("the volume of {} keeps no change journal", home.display());
                 return;
             }
             other => {

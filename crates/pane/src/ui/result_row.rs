@@ -20,8 +20,9 @@
 //! - the pressed wash ([`pressed_wash`]), attached after the id, because a
 //!   press state needs the named (stateful) row,
 //! - the accessibility contract — `.role(Role::ListBoxOption)`,
-//!   `.aria_selected`, `.aria_active_descendant` when selected,
-//!   `.aria_disabled` with a description when the reason is present,
+//!   `.aria_selected`, its position in the list and the list's size,
+//!   `.aria_disabled` with a description when the reason is present (no
+//!   active descendant: the window's announcer says the selection, #132),
 //! - `.on_click(...)`, pointer movement, focus and any key handling.
 //!
 //! The row registers no handlers and no focus of its own, so nothing here

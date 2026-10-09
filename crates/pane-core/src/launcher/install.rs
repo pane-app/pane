@@ -269,6 +269,21 @@ pub(in crate::launcher) fn claim(
     Ok(identities)
 }
 
+/// Where the install preview of a local folder stands, for the local
+/// channel (`crate::local_channel`), which shows it when `pane-ext dev`
+/// first develops a folder Pane has not installed (#217).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum InstallPreview {
+    /// The package is installed.
+    Installed,
+    /// Its preview is on show, offering Install, or installing it.
+    Shown,
+    /// Its preview explains why it cannot be installed.
+    Refused(String),
+    /// Something else is on show.
+    Elsewhere,
+}
+
 /// The message when the plan changed since the preview.
 fn changed(title: &str) -> String {
     format!(
@@ -408,6 +423,38 @@ impl Launcher {
         self.leave_command(state);
         state.view = view;
         state.entries = entries;
+    }
+
+    /// Where the install preview of the local package with `identity`,
+    /// shown by [`Launcher::preview_package`] for its folder, stands.
+    pub(crate) fn previewing(&self, identity: &PackageIdentity) -> InstallPreview {
+        let state = self.lock();
+        if state.package(identity).is_some() {
+            return InstallPreview::Installed;
+        }
+        let (Screen::Package { details }, Some(folder)) =
+            (&state.view.screen, identity.local_folder())
+        else {
+            return InstallPreview::Elsewhere;
+        };
+        let offered = state.entries.iter().any(|entry| {
+            matches!(entry, Entry::Install(Request::Folder(shown), _, _) if shown == folder)
+        });
+        if offered {
+            return InstallPreview::Shown;
+        }
+        // A package that cannot be installed is explained, with nothing
+        // offered: its source, or the folder if it could not be read.
+        let named = [
+            format!("Source: {identity}"),
+            format!("Folder: {}", folder.display()),
+        ];
+        match &state.view.status {
+            Status::Error(why) if details.iter().any(|line| named.contains(line)) => {
+                InstallPreview::Refused(why.clone())
+            }
+            _ => InstallPreview::Elsewhere,
+        }
     }
 
     /// Shows Pane's own form asking which npm package to install.

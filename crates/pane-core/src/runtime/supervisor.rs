@@ -650,7 +650,7 @@ fn failed(shared: &Weak<Shared>, number: u64, failure: RuntimeFailure, why: Stri
         };
         current.status.clone()
     };
-    eprintln!("Pane's extension runtime stopped unexpectedly: {status:?}");
+    crate::diagnostic!("Pane's extension runtime stopped unexpectedly: {status:?}");
     let report = lock(&shared.crashes).clone();
     if let Some(report) = report {
         report(number, &status);

@@ -39,7 +39,7 @@ use notify::event::{EventKind, MetadataKind, ModifyKind};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::build::{
-    Build, BuildJob, BuildOutcome, BuildOutput, BuildStop, Builder, first_error, is_save,
+    Build, BuildJob, BuildOutcome, BuildOutput, BuildStop, Builder, Echo, first_error, is_save,
     stage_package,
 };
 use crate::sources::Sources;
@@ -200,6 +200,7 @@ pub struct Prepared {
     signals: Sender<Signal>,
     received: Receiver<Signal>,
     work: PathBuf,
+    echo: Option<Echo>,
 }
 
 impl Prepared {
@@ -229,7 +230,17 @@ impl Prepared {
             signals,
             received,
             work,
+            echo: None,
         })
+    }
+
+    /// This package's session, showing each line its builds print with
+    /// `echo` as they print it, such as in `pane-ext`'s terminal.
+    pub fn echo(self, echo: Echo) -> Prepared {
+        Prepared {
+            echo: Some(echo),
+            ..self
+        }
     }
 
     /// The source folder watched, canonical.
@@ -271,6 +282,7 @@ impl Prepared {
             received: self.received,
             stop,
             work: self.work,
+            echo: self.echo,
         };
         (session, worker)
     }
@@ -317,6 +329,7 @@ pub struct Worker {
     received: Receiver<Signal>,
     stop: BuildStop,
     work: PathBuf,
+    echo: Option<Echo>,
 }
 
 impl Worker {
@@ -342,7 +355,7 @@ fn lock(report: &Mutex<Development>) -> MutexGuard<'_, Development> {
 /// same paths in `to`, replacing each file rather than writing through it
 /// (a Rust build's component is a hard link into `target`). Returns their
 /// paths, relative to both.
-fn copy_components(manifests: &dyn ManifestFiles, from: &Path, to: &Path) -> Vec<PathBuf> {
+pub fn copy_components(manifests: &dyn ManifestFiles, from: &Path, to: &Path) -> Vec<PathBuf> {
     let Ok(components) = manifests.components(from) else {
         return Vec::new();
     };
@@ -504,7 +517,8 @@ impl<H: Host> Running<H> {
                 .work
                 .join("staging")
                 .join(format!("build-{}", self.builds));
-            let output = BuildOutput::new(Some(&self.worker.work.join(BUILD_LOG)));
+            let output = BuildOutput::new(Some(&self.worker.work.join(BUILD_LOG)))
+                .echoing(self.worker.echo.clone());
             let built = match stage_package(&*self.worker.manifests, &self.worker.folder, &staging)
             {
                 Ok(()) => self.build_once(&staging, &output),

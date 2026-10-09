@@ -131,7 +131,7 @@ impl DesktopEntries {
             let arguments = match exec_arguments(exec, &desktop, &path) {
                 Ok(arguments) => arguments,
                 Err(problem) => {
-                    eprintln!("pane: skipped desktop entry {}: {problem}", path.display());
+                    crate::diagnostic!("pane: skipped desktop entry {}: {problem}", path.display());
                     continue;
                 }
             };

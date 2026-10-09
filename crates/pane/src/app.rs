@@ -32,6 +32,7 @@ use pane_core::{
 
 use crate::extension_views::{custom_view, form};
 use crate::features::actions_panel;
+use crate::features::announcer;
 use crate::features::clipboard_history;
 use crate::features::compact_pins;
 use crate::features::confirmation;
@@ -91,6 +92,9 @@ pub struct LauncherWindow {
     pub(crate) log: Option<crate::features::extension_log::ExtensionLogView>,
     /// The footer toast's focus and time; see [`features::toast`].
     pub(crate) toast: toast::ToastControls,
+    /// What the window's live region says of the selection and the
+    /// footer's message (#132); see [`features::announcer`].
+    pub(crate) announcer: announcer::Announcer,
     /// The HUD's window, while one shows; see [`features::hud`].
     pub(crate) hud: hud::HudWindow,
     /// The confirmation a command asks for: its focus and "Don't ask
@@ -213,6 +217,7 @@ impl LauncherWindow {
             files: None,
             log: None,
             toast: toast::ToastControls::new(cx),
+            announcer: announcer::Announcer::default(),
             hud: hud::HudWindow::default(),
             confirmation: confirmation::ConfirmationControls::new(cx),
             home: quick_slots::Home::default(),
@@ -434,6 +439,7 @@ impl LauncherWindow {
 
     pub(crate) fn select_next(&mut self, _: &SelectNext, _: &mut Window, cx: &mut Context<Self>) {
         self.launcher.move_selection(1);
+        self.announcer.user_moved();
         cx.notify();
     }
 
@@ -444,6 +450,7 @@ impl LauncherWindow {
         cx: &mut Context<Self>,
     ) {
         self.launcher.move_selection(-1);
+        self.announcer.user_moved();
         cx.notify();
     }
 
@@ -458,6 +465,7 @@ impl LauncherWindow {
     ) {
         let step = virtual_list::page_move(Some(self.paged_list()), true);
         self.launcher.move_selection(step);
+        self.announcer.user_moved();
         cx.notify();
     }
 
@@ -471,6 +479,7 @@ impl LauncherWindow {
     ) {
         let step = virtual_list::page_move(Some(self.paged_list()), false);
         self.launcher.move_selection(step);
+        self.announcer.user_moved();
         cx.notify();
     }
 
@@ -697,6 +706,16 @@ impl LauncherWindow {
         self.motion.pointer_open();
         let pending = self.launcher.preview_package(folder);
         self.show_until_done(pending, window, cx);
+    }
+
+    /// Brings the launcher forward with the package in `folder` shown for
+    /// installation: `pane-ext dev`'s first run of a folder Pane has not
+    /// installed, which the author confirms here (#217).
+    pub fn present_package(&mut self, folder: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        self.unhide(window, cx);
+        window.activate_window();
+        cx.activate(true);
+        self.preview_package(folder, window, cx);
     }
 
     /// Downloads and shows the npm package `spec` names, as
@@ -1020,6 +1039,9 @@ impl LauncherWindow {
                 // window is taken.
                 crate::settings::shared(cx).update(cx, |settings, _| settings.release_tray());
                 self.launcher.release_hotkeys();
+                // A clean quit: this run's marker goes, so the next start
+                // does not say Pane quit unexpectedly (#133).
+                self.launcher.quit_cleanly();
                 cx.quit();
             }
         }
@@ -1299,6 +1321,7 @@ impl LauncherWindow {
     /// reference's does.
     fn select_under_pointer(&mut self, index: usize) {
         self.launcher.select(index);
+        self.announcer.user_moved();
         if let Some(scrolled_for) = self.scrolled_for.as_mut() {
             scrolled_for.selected = Some(index);
         }
@@ -1429,10 +1452,12 @@ impl LauncherWindow {
             }))
         })
         .debug_selector(|| format!("row-{}", row.title))
+        // The selected row is not reported as focused: the focus stays in
+        // the search field or on the list, and the announcer says the
+        // selection (#132).
         .role(Role::ListBoxOption)
         .aria_label(row.title.clone())
         .aria_selected(selected)
-        .when(selected, |row| row.aria_active_descendant())
         // An unavailable row stays listed and selectable; it says why it
         // cannot run here, on screen and to assistive technology.
         .when(row.unavailable.is_some(), |row| row.aria_disabled(true))
@@ -1447,6 +1472,7 @@ impl LauncherWindow {
                 } else if event.click_count() <= 1 {
                     // A double click's second click runs nothing more.
                     this.launcher.select(index);
+                    this.announcer.user_moved();
                     this.activate_selected(window, cx);
                     this.motion.pointer_open();
                 }
@@ -1491,7 +1517,6 @@ impl LauncherWindow {
         .role(Role::ListBoxOption)
         .aria_label(root_search::layouts::answer_label(answer))
         .aria_selected(selected)
-        .when(selected, |card| card.aria_active_descendant())
         .when_some(row.subtitle, |card, subtitle| {
             card.aria_description(subtitle)
         })
@@ -1795,6 +1820,12 @@ impl Render for LauncherWindow {
             Some(shown) => Some(shown.toast.text().into()),
             None => status.clone(),
         };
+        // The announcer says it too (#132), when it is a toast or an
+        // outcome; "Running…" and progress are the strip's own.
+        let said = announced
+            .as_ref()
+            .filter(|_| announcer::says_message(&view.status, toast.is_some()))
+            .map(SharedString::to_string);
         // The toast's actions take the footer's buttons' place.
         let toast_buttons = match &toast {
             Some(shown) => self.toast_buttons(shown, &theme, cx),
@@ -1834,6 +1865,9 @@ impl Render for LauncherWindow {
         let home = self.home_children(&view, cx) > 0;
         let head = home || notice.is_some() || empty.is_some();
         let sections = section_labels(&listing);
+        // What the announcer follows this frame, read before the rows move
+        // into the list (#132).
+        let followed = self.followed_list(&view, &sections, notice.is_some(), cx);
         let rows = std::mem::take(&mut view.rows);
         let rows_changed = self.results.show(result_list::ListFrame {
             view: view.clone(),
@@ -1951,9 +1985,11 @@ impl Render for LauncherWindow {
                 Some(log) => motion::arriving(log, arriving).into_any_element(),
                 None => div().into_any_element(),
             },
-            // The list holds keyboard focus; the selected row is its active
-            // descendant, and key actions bubble to the root. A command's
-            // list is dimmed under its open Actions panel, as root search is.
+            // The list holds keyboard focus, and is what assistive
+            // technology reports as focused: the announcer says the
+            // selected row (#132). Key actions bubble to the root. A
+            // command's list is dimmed under its open Actions panel, as root
+            // search is.
             _ => actions_panel::dimmed(
                 motion::arriving(list.track_focus(&self.focus_handle), arriving).into_any_element(),
                 self.actions.is_some(),
@@ -2148,7 +2184,9 @@ impl Render for LauncherWindow {
             Some(hero) => material.panel_over(&theme, hero, content),
             None => material.panel(&theme, content),
         };
-        panel.children(asked)
+        // The window's live region, hidden (#132).
+        let announcer = self.announce(followed, said.as_deref(), cx);
+        panel.children(asked).child(announcer)
     }
 }
 
@@ -2282,6 +2320,7 @@ pub(crate) fn row_icon(id: &str) -> (IconTone, Glyph) {
         "pane.install-from-git" => (IconTone::Term, Glyph::Terminal),
         pane_core::MANAGE_EXTENSIONS => (IconTone::Command, Glyph::Blocks),
         "pane.settings" => (IconTone::Command, Glyph::Gear),
+        pane_core::UNEXPECTED_QUIT => (IconTone::Folder, Glyph::Folder),
         _ => (IconTone::Command, Glyph::Prompt),
     }
 }

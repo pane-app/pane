@@ -144,7 +144,7 @@ impl LauncherWindow {
         let handle = match opened {
             Ok(handle) => handle,
             Err(error) => {
-                eprintln!("Pane could not show a HUD: {error:#}");
+                pane_core::diagnostic!("Pane could not show a HUD: {error:#}");
                 return;
             }
         };

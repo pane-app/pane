@@ -197,6 +197,10 @@ pub struct ClipboardRecord {
     /// on Windows (`C:\Windows\notepad.exe`), else its file name or
     /// process name (`notepad.exe`) — if it did.
     pub source: Option<String>,
+    /// Why Pane cannot read it on this computer, if it cannot (#130): its
+    /// text then says so, and it is neither copied nor pasted, only
+    /// deleted or left to expire.
+    pub unreadable: Option<String>,
 }
 
 /// A kept image, as the split view draws it: the PNG Pane keeps of it
@@ -221,6 +225,7 @@ impl ClipboardRecord {
             files: Vec::new(),
             copied_at,
             source: None,
+            unreadable: None,
         }
     }
 
@@ -234,6 +239,7 @@ impl ClipboardRecord {
             files: Vec::new(),
             copied_at,
             source: None,
+            unreadable: None,
         }
     }
 
@@ -251,6 +257,7 @@ impl ClipboardRecord {
             files,
             copied_at,
             source: None,
+            unreadable: None,
         }
     }
 
@@ -631,10 +638,12 @@ impl Launcher {
             .items
             .iter()
             .map(|item| {
-                // An image's PNG is where the store keeps it (#167).
+                // An image's PNG is where the store keeps it (#167); an
+                // item that cannot be read (#130) is shown as its
+                // explanation.
                 let image = item.image.as_ref().and_then(|image| {
                     let store = store.as_ref().ok()?;
-                    Some(ClipboardImage {
+                    item.unreadable.is_none().then(|| ClipboardImage {
                         path: store.image_path(data.owner(), &image.digest),
                         width: image.width,
                         height: image.height,
@@ -655,6 +664,7 @@ impl Launcher {
                     files: item.files.clone(),
                     copied_at: item.copied_at,
                     source: item.source.clone(),
+                    unreadable: item.unreadable.clone(),
                 }
             })
             .collect();
@@ -740,10 +750,15 @@ impl Launcher {
             .filter(|now| now.reading.epoch == epoch && now.owner == view.owner);
         let clip = match &now {
             None => Err("That clipboard history is no longer shown".to_owned()),
-            Some(now) => now
-                .record(id)
-                .map(pasted_clip)
-                .ok_or_else(|| "That item is no longer kept".to_owned()),
+            Some(now) => match now.record(id) {
+                None => Err("That item is no longer kept".to_owned()),
+                // One that cannot be read on this computer (#130) says why.
+                Some(ClipboardRecord {
+                    unreadable: Some(why),
+                    ..
+                }) => Err(why.clone()),
+                Some(record) => Ok(pasted_clip(record)),
+            },
         };
         {
             let mut state = self.lock();

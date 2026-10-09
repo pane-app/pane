@@ -1,6 +1,7 @@
 //! Feature presentation.
 
 pub(crate) mod actions_panel;
+pub(crate) mod announcer;
 pub(crate) mod clipboard_history;
 pub(crate) mod compact_pins;
 pub(crate) mod confirmation;

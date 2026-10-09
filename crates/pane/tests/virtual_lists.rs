@@ -11,6 +11,8 @@
 //! (`file_search_settings`), the Extensions group's sidebar entries and an
 //! extension's Commands share the same `PageWindow`.
 
+#[path = "support/a11y.rs"]
+mod a11y;
 #[path = "../../pane-core/tests/support/image_server.rs"]
 mod image_server;
 #[path = "support/settle.rs"]
@@ -210,8 +212,8 @@ fn the_keys_keep_the_selection_in_view_and_reach_both_ends(cx: &mut TestAppConte
 }
 
 /// Only the rows in view are drawn, so each says where it is in the whole
-/// list and how long the list is; the selected row is still the list's
-/// active descendant, announced by its title.
+/// list and how long the list is; the search field keeps the focus, and
+/// the window's announcer says the selected row with its place (#132).
 #[gpui::test]
 fn assistive_technology_still_hears_the_lists_size_and_the_selected_row(cx: &mut TestAppContext) {
     let (window, cx) = open(cx, commands(ROWS, title));
@@ -237,14 +239,26 @@ fn assistive_technology_still_hears_the_lists_size_and_the_selected_row(cx: &mut
     for option in &options {
         assert_eq!(option["aria"]["size_of_set"], LISTED, "{option}");
     }
-    let focused = ["active_descendant_focus", "gpui_focus"]
-        .iter()
-        .find_map(|key| tree[key].as_str())
-        .map(|id| &nodes[id]);
+    // The search field keeps the focus (#132): no row claims it, and the
+    // selected row says where it is in the whole list.
+    assert!(tree["active_descendant_focus"].is_null(), "{tree}");
+    let focused = tree["gpui_focus"].as_str().map(|id| &nodes[id]);
     let focused = focused.expect("a focused node");
-    assert_eq!(focused["aria"]["label"], title(30));
-    assert_eq!(focused["aria"]["position_in_set"], 31);
-    assert_eq!(focused["aria"]["size_of_set"], LISTED);
+    assert_eq!(focused["aria"]["label"], "Search");
+    let chosen = options
+        .iter()
+        .find(|option| option["aria"]["selected"] == true)
+        .expect("the selected row is drawn");
+    assert_eq!(chosen["aria"]["label"], title(30));
+    assert_eq!(chosen["aria"]["position_in_set"], 31);
+    assert_eq!(chosen["aria"]["size_of_set"], LISTED);
+    // The announcer says it, with its place in the whole list.
+    let (said, value) = a11y::announcer_of(&json);
+    assert_eq!(said, value);
+    assert!(
+        said.ends_with(&format!("{}, 31 of {LISTED}", title(30))),
+        "{said}"
+    );
 }
 
 /// The host's icon extraction, stood in for: a small PNG for any path that

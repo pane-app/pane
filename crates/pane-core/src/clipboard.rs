@@ -65,6 +65,8 @@ pub(crate) mod macos;
 pub(crate) mod windows;
 
 pub use history::Item;
+#[doc(hidden)]
+pub use history::revealed as revealed_history;
 #[cfg(target_os = "linux")]
 pub use linux::LinuxClipboard;
 #[cfg(target_os = "linux")]
@@ -655,7 +657,7 @@ impl Sink for CaptureSink {
                     .then(|| match store.keep_image(&owner, image) {
                         Ok(kept) => Some(kept),
                         Err(error) => {
-                            eprintln!("Pane could not keep a copied image: {error}");
+                            crate::diagnostic!("Pane could not keep a copied image: {error}");
                             None
                         }
                     })
@@ -872,6 +874,10 @@ impl Commands<'_> {
             .into_iter()
             .find(|item| item.id.to_string() == id)
             .ok_or("That item is no longer kept")?;
+        // One that cannot be read on this computer (#130) says why.
+        if let Some(why) = item.unreadable {
+            return Err(why);
+        }
         if let Some(image) = &item.image {
             let path = self
                 .data

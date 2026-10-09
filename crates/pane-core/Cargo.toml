@@ -15,7 +15,9 @@ pane-build = { path = "../pane-build" }
 pane-target = { path = "../pane-target" }
 serde.workspace = true
 serde_json.workspace = true
-tokio = { workspace = true, features = ["net", "rt", "sync", "time"] }
+# The local channel (#217) reads and writes its named pipe or socket by
+# lines (`io-util`, whose `bytes` is already in the tree).
+tokio = { workspace = true, features = ["io-util", "net", "rt", "sync", "time"] }
 unicase = "2.9"
 unicode-normalization = "0.1"
 wasmtime = { version = "=49.0.1", default-features = false, features = ["cache", "cranelift", "parallel-compilation", "runtime", "std", "async", "component-model", "component-model-async"] }
@@ -83,9 +85,12 @@ png = "0.18"
 # background mode with EcoQoS; its benchmark reads the process's private
 # memory (`ProcessStatus`). The applications' icons (#172) read a packaged
 # app's install folder through the package functions, a shortcut's icon
-# location and icon resources.
+# location and icon resources. The tray icon (#131) reads the taskbar's
+# theme and whether high contrast is on, and is made at the small-icon size
+# for its window's DPI. Local credentials and clipboard history are
+# encrypted on disk with DPAPI for the current user (#130).
 [target.'cfg(windows)'.dependencies]
-windows = { workspace = true, features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_Storage_Packaging_Appx", "Win32_System_ApplicationInstallationAndServicing", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_DataExchange", "Win32_System_IO", "Win32_System_Ioctl", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_ProcessStatus", "Win32_System_Registry", "Win32_System_Threading", "Win32_System_Variant", "Win32_System_WindowsProgramming", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Shell_PropertiesSystem", "Win32_UI_WindowsAndMessaging"] }
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_Storage_Packaging_Appx", "Win32_System_ApplicationInstallationAndServicing", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_DataExchange", "Win32_System_IO", "Win32_System_Ioctl", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_ProcessStatus", "Win32_System_Registry", "Win32_System_Threading", "Win32_System_Variant", "Win32_System_WindowsProgramming", "Win32_UI_Accessibility", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Shell_PropertiesSystem", "Win32_UI_WindowsAndMessaging"] }
 
 # Global hotkeys on X11 (key grabs on the root window) and the X11
 # clipboard of clipboard history (XFIXES selection events, selection
@@ -110,10 +115,12 @@ global-hotkey = "0.8"
 # CE's and global-hotkey's AppKit code. The system icon of a file or an
 # application (#142): NSWorkspace's icon, its images and their PNG. Copied
 # images and files in clipboard history (#167): a copy's pasteboard items
-# (every file URL), and a TIFF made into a PNG and back.
+# (every file URL), and a TIFF made into a PNG and back. The menu bar
+# item's template image (#131): its size (NSSize, NSGeometry's with
+# objc2-core-foundation's CGSize).
 objc2.workspace = true
 objc2-app-kit = { version = "0.3", default-features = false, features = ["NSControl", "NSMenu", "NSMenuItem", "NSPasteboard", "NSPasteboardItem", "NSResponder", "NSStatusBar", "NSStatusBarButton", "NSStatusItem", "NSView", "NSButton", "NSWorkspace", "NSImage", "NSImageRep", "NSBitmapImageRep", "objc2-core-foundation"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSData", "NSDictionary", "NSError", "NSFileManager", "NSString", "NSURL", "std"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSData", "NSDictionary", "NSError", "NSFileManager", "NSGeometry", "NSString", "NSURL", "objc2-core-foundation", "std"] }
 # The file index's change source (#175): an FSEvents stream opened from a
 # saved event id, so that FSEvents replays what changed while Pane was not
 # running and then reports live changes (MIT, already in the tree through

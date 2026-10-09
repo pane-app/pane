@@ -938,7 +938,7 @@ fn decode_percent(text: &str) -> Vec<u8> {
 
 /// `text`, decoded from (standard or URL-safe) base64, ignoring
 /// whitespace and padding.
-fn decode_base64(text: &str) -> Option<Vec<u8>> {
+pub(crate) fn decode_base64(text: &str) -> Option<Vec<u8>> {
     let mut decoded = Vec::with_capacity(text.len() * 3 / 4);
     let mut buffer = 0u32;
     let mut bits = 0;

@@ -216,6 +216,70 @@ without a word. Enabling the package again does not develop it again.
   A process the command starts in the instant before it is assigned to the
   job escapes it.
 
+## From the terminal: `pane-ext dev`
+
+`pane-ext dev [folder]` ([#217](https://github.com/pane-app/pane/issues/217),
+[ADR 0047](adr/0047-extensions-are-built-from-the-app-first-with-pane-ext-beside-it.md))
+develops the package in `folder` (the current folder by default) from the
+author's terminal. It runs the same session as Pane's own development (the
+`pane-build` crate's), so the build command, the obsolete builds and the
+copying of components into the source folder are the same; the difference
+is where the builds run and print:
+
+1. It reaches the running Pane over the **local channel**, a per-user
+   endpoint only the same user can open: the named pipe
+   `\\.\pipe\pane-<the user's SID>` on Windows, whose protected security
+   descriptor grants this user alone and which refuses remote clients; the
+   socket `channel` in `$XDG_RUNTIME_DIR/pane`, else in `pane-<uid>` in the
+   temporary folder, on macOS and Linux, in a folder of mode 0700 (Pane
+   does not listen in one open to others), itself mode 0600, closing
+   connections from other users unanswered; `pane-ext` does not connect
+   through such a folder that is not the user's own. `PANE_CHANNEL` names
+   another endpoint, to both.
+2. While its first build runs (step 3), if no Pane answers, it starts one:
+   the program `PANE_APP` names, else
+   `pane` beside `pane-ext`, else where Pane's packages install it
+   (`%LOCALAPPDATA%\Pane\pane.exe`, `Pane.app` in `/Applications` or
+   `~/Applications`, `~/.local/bin/pane`), else `pane` on the search path,
+   and waits up to a minute for it to listen. Found nowhere, it says where
+   it looked and exits, stopping the build.
+3. It builds the package in the terminal, printing what the build prints,
+   cargo's errors included, and stages it in a folder of its own in the
+   user's cache folder (`pane-ext/<hash of the folder>`).
+4. It hands the first build that succeeds to Pane. A folder Pane has not
+   installed is first shown in Pane's ordinary install preview, with this
+   build (its components are copied into the folder), and the author
+   chooses **Install** there; leaving the preview refuses the build, and
+   `pane-ext` exits. Pane then develops the package without watching or
+   building it: the rows, the status line, **Why <title> did not build**,
+   the extension log and its file are as for its own development, the
+   status saying "Developing <title> with pane-ext". An installed folder is
+   developed at once, from this build; a development already going on,
+   Pane's own or another `pane-ext`'s, ends first.
+5. Each save builds the package again in the terminal; Pane reloads each
+   build that succeeds, and a build that fails leaves Pane running the
+   working code, with the failure shown in Pane as its own are. **Build
+   <title> again** asks `pane-ext` to build.
+6. Pane's messages about the package and what the package prints, its
+   extension log, are printed in the terminal as they come ("Pane: Reloaded
+   Hello Rust", "info [hello] …").
+7. Ctrl+C, or the connection closing, stops the development as **Stop
+   developing** does (the package stays installed). Stopping it in Pane,
+   disabling or uninstalling the package, or quitting Pane ends
+   `pane-ext dev`.
+
+The channel's requests are JSON, one a line, each naming the channel's
+version (1), as `pane_core::local_channel` documents: `subscribe`,
+`develop` (a folder and a staged build), `building` and `failed` (later
+builds) and `stop`. Pane answers with `previewing`, `developing`,
+`refused`, `build`, `log` and `ended` events. A request of another version
+is refused, saying so.
+
+Rust packages work end to end. A JavaScript or TypeScript package builds
+with `pane_js.py`, as Pane's own development does, which `pane-ext` finds
+only through `PANE_COMPONENTIZE_JS`; the componentizer slice of #128
+replaces it.
+
 ## Local and published copies
 
 Development applies to one installation, identified by its source folder
@@ -252,6 +316,17 @@ These are implementation choices of #12/#13, not user decisions:
   [current decisions](current-decisions.md)).
 - The rows are near the end of Settings › Extensions, one per enabled
   package, after the hotkey rows and before retained data.
+
+- `pane-ext dev` (#217): the request set above; the endpoint's locations;
+  where `pane-ext` looks for a Pane to start, and the minute it waits; that
+  Pane waits up to 30 seconds for its window to show the install preview it
+  asked for, and then for as long as the author takes to answer it; that
+  the first `pane-ext dev` of a folder not installed copies the build's
+  components into the folder, so that the preview and the install are of
+  that build; that a second `pane-ext dev` of the same package takes the
+  development over, and the first is then refused rather than taking it
+  back; and that `pane-ext` reaches or starts Pane while its first build
+  runs, so that a missing Pane is reported at once.
 
 ## Checks
 
@@ -310,6 +385,27 @@ These are implementation choices of #12/#13, not user decisions:
 - [`crates/pane/tests/develop.rs`](../crates/pane/tests/develop.rs): the
   window redraws by itself when a background build fails and when the fix
   is reloaded, and renders the diagnostics.
+- [`crates/pane-core/tests/local_channel.rs`](../crates/pane-core/tests/local_channel.rs)
+  speaks the local channel as `pane-ext` does, against a launcher listening
+  on an endpoint of its own, with guests staged as builds: a folder not
+  installed is previewed with the build and developed once installed (its
+  log, Pane's messages, a failure kept as Pane's own, a later build
+  reloaded), and closing the connection stops the development; a preview
+  left refuses the build; an installed folder is developed at once, and
+  stopping it in Pane ends the connection's; an unknown folder is refused.
+  Unit tests in [`local_channel.rs`](../crates/pane-core/src/local_channel.rs):
+  the requests' and events' JSON, other versions refused, a second Pane
+  cannot listen on the endpoint, and the endpoint is open to this user only
+  (the socket's and its folder's modes, or the pipe's DACL).
+- [`crates/pane-ext/tests/dev.rs`](../crates/pane-ext/tests/dev.rs) runs
+  `pane-ext dev` on a copy of `guests/hello-rust` against a launcher
+  listening as the running Pane: the build's output, the install preview,
+  Pane's messages and the package's log line in the terminal; a compile
+  error printed there while Pane keeps the working code; a fix reloaded;
+  the development stopped when `pane-ext` is killed. With no Pane listening
+  and none to start, it says where it looked. Its unit
+  tests: waiting for a Pane that starts listening, and giving up on one
+  that does not.
 - The native smokes' development phase (screenshots 110 to 136; see the
   [platform notes](platforms/linux.md#development-mode-12-13)).
 
@@ -322,6 +418,16 @@ These are implementation choices of #12/#13, not user decisions:
   its own (`setsid`) is not killed anywhere but Windows.
 - The JS/TS build needs a Pane checkout's `pane_js.py` (and its toolchain);
   an installed Pane without a checkout cannot build JS/TS on save.
+- On macOS and Linux, Ctrl+C in `pane-ext dev`'s terminal ends `pane-ext`
+  but not a build it is running, which is in a process group of its own:
+  the build runs to its end, and Pane is told nothing of it. On Windows the
+  console's Ctrl+C reaches the build too.
+- That another user cannot open the endpoint is checked in CI through its
+  permissions (the socket's and its folder's modes, the pipe's DACL), not
+  by connecting as another user. On Windows, `pane-ext` does not check who
+  created the pipe it connects to: another user's pipe of that name,
+  created while Pane is not running, would receive its requests (the
+  folder and the staged build's path).
 - Native evidence is from Linux (X11) only; the macOS and Windows smokes run
   the same phase, not yet run there. The platform code (process groups, the
   Job Object, the watcher) was compile- and lint-checked for Windows and

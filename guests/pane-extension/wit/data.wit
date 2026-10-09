@@ -54,12 +54,21 @@ interface cache {
 
 /// Local credentials: secrets the extension keeps on this computer, such as
 /// a sign-in token. Kept apart from settings and content so that clearing the
-/// cache keeps them and uninstalling can remove them. Pane stores them as
-/// plain text in its data folder, in a file only the user can read on macOS
-/// and Linux, not in the system's keychain; any extension or program running
-/// as the user can read them.
+/// cache keeps them and uninstalling can remove them. Pane keeps them in a
+/// file in its data folder that only the user can read. On Windows each
+/// value is also encrypted there for the current Windows user (DPAPI), so a
+/// copy of the folder (a backup, a synced profile, a disk read outside
+/// Windows) or another user of the computer cannot read it; on macOS and
+/// Linux the file holds them as they are (mode 0600), not in the system's
+/// keychain. Values are plain while Pane runs: any extension or program
+/// running as the user can read them, and a program can decrypt them as
+/// Pane does.
 interface credentials {
-  /// The value saved under `key`, if any.
+  /// The value saved under `key`, if any. A value Pane cannot read on this
+  /// computer (Windows could not decrypt it: the user's password was reset
+  /// by an administrator, the folder came from another user or computer, or
+  /// the file was damaged) is an error saying so, ending "Sign in again.";
+  /// Pane keeps it until `set` replaces it.
   get: func(key: string) -> result<option<string>, string>;
 
   /// Saves `value` under `key`, replacing any earlier value. Fails while the

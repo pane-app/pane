@@ -151,7 +151,7 @@ impl Launcher {
             hotkeys.then(|| self.save::<HotkeyChoices>(None)),
         ];
         for problem in saves.into_iter().flatten().filter_map(Result::err) {
-            eprintln!("Pane could not forget what it kept for a root provider: {problem}");
+            crate::diagnostic!("Pane could not forget what it kept for a root provider: {problem}");
         }
         self.show_provider_toast(&mut self.lock());
     }
