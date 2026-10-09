@@ -343,7 +343,7 @@ fn resolve_command(launcher: &Launcher, state: &State, target: &PinTarget, id: &
             // A quick slot of a waiting command says why it cannot run and
             // runs nothing (see `waiting`).
             Entry::Waiting { identity, .. } => {
-                Err(state.waiting.of(&identity).map_or_else(
+                Err(state.waiting.reason(&identity).map_or_else(
                     || format!("{} no longer waits", state.title_of(&identity)),
                     |reason| reason.row.clone(),
                 ))

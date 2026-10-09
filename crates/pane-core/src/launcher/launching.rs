@@ -117,7 +117,7 @@ impl Launcher {
     fn waiting_gate(&self, epoch: u64, opening: &Opening) -> bool {
         let mut state = self.lock();
         let Some(reason) = owner(&state.packages, &opening.component)
-            .and_then(|package| state.waiting.of(&package.identity))
+            .and_then(|package| state.waiting.reason(&package.identity))
             .cloned()
         else {
             return true;

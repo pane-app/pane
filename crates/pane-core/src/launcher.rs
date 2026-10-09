@@ -928,7 +928,7 @@ impl State {
     fn runs(&self, package: &InstalledPackage) -> bool {
         package.enabled
             && !self.paused.is_paused(&package.identity)
-            && self.waiting.of(&package.identity).is_none()
+            && self.waiting.reason(&package.identity).is_none()
     }
 
     /// Computes which packages wait again, after the installed packages or
@@ -3420,7 +3420,7 @@ impl Launcher {
             // Once the package no longer waits (what it needed came back, or
             // it is gone or disabled), root search lists its commands as
             // they are now, keeping the screen epoch as refreshing does.
-            Screen::WaitingDetails { identity, .. } if state.waiting.of(identity).is_none() => {
+            Screen::WaitingDetails { identity, .. } if state.waiting.reason(identity).is_none() => {
                 let epoch = state.screen_epoch;
                 self.show_root(state, None);
                 state.screen_epoch = epoch;
@@ -3911,7 +3911,7 @@ impl Launcher {
     /// waits — what it needed came back — root search lists its commands
     /// again, so the screen is left for it.
     fn show_waiting_details(&self, state: &mut State, identity: &PackageIdentity, command: &str) {
-        let Some(reason) = state.waiting.of(identity).cloned() else {
+        let Some(reason) = state.waiting.reason(identity).cloned() else {
             self.show_root(state, None);
             return;
         };

@@ -219,7 +219,7 @@ impl Installed {
         // A package waiting for what its package requires answers what it
         // waits for (see `waiting`): waiting ends no generation, but its
         // code runs nothing a call would start.
-        if let Some(reason) = self.waiting.of(&package.identity) {
+        if let Some(reason) = self.waiting.reason(&package.identity) {
             return Err(OperationError::new(Unavailable, reason.calling.clone()));
         }
         let manifest = match &package.manifest {

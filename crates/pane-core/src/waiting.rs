@@ -148,7 +148,7 @@ impl Waiting {
     }
 
     /// Why the package with `identity` waits, if it does.
-    pub(crate) fn of(&self, identity: &PackageIdentity) -> Option<&Reason> {
+    pub(crate) fn reason(&self, identity: &PackageIdentity) -> Option<&Reason> {
         self.reasons.get(identity)
     }
 }
@@ -236,10 +236,10 @@ fn root_of(
     title_of: &dyn Fn(&PackageIdentity) -> String,
     path: &[PackageIdentity],
 ) -> Option<(PackageIdentity, String, Unmet)> {
-    let last = *path.last()?;
+    let last = path.last()?;
     let package = packages
         .iter()
-        .find(|package| package.identity == last)?;
+        .find(|package| &package.identity == last)?;
     let first = unmet_of(packages, able, paused, title_of, package)
         .into_iter()
         .next()?;
