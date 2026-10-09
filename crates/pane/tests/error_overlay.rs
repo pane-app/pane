@@ -81,9 +81,8 @@ impl Build for CopyBuild {
     }
 
     fn ignores(&self, path: &Path) -> bool {
-        path.file_name().is_some_and(|name| {
-            name == "sample_settings.wasm" || name == "sample_settings_ts.wasm"
-        })
+        path.file_name()
+            .is_some_and(|name| name == "sample_settings.wasm" || name == "sample_settings_ts.wasm")
     }
 
     fn run(&self, job: &BuildJob) -> BuildOutcome {
@@ -223,7 +222,9 @@ fn clipboard(cx: &mut VisualTestContext) -> String {
 /// Runs the item that crashes and waits for the overlay it shows.
 fn crash(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> pane_core::LauncherView {
     run_item(window, cx, "Crash");
-    until(window, cx, |view| matches!(view.screen, Screen::Crash { .. }))
+    until(window, cx, |view| {
+        matches!(view.screen, Screen::Crash { .. })
+    })
 }
 
 #[gpui::test]
@@ -239,12 +240,18 @@ fn a_developed_package_s_crash_shows_the_overlay_with_its_rows(cx: &mut TestAppC
     let view = crash(&window, cx);
     assert_eq!(view.title, format!("{} crashed", RUST.title));
     let details = view.details().to_vec();
-    assert!(details[0].starts_with("The extension crashed:"), "{details:?}");
+    assert!(
+        details[0].starts_with("The extension crashed:"),
+        "{details:?}"
+    );
     assert!(details.len() > 1, "the backtrace: {details:?}");
     assert!(cx.debug_bounds("row-Logs for Settings sample").is_some());
     assert!(cx.debug_bounds("row-Copy the message and trace").is_some());
     assert!(cx.debug_bounds("row-Run Greeting again").is_some());
-    assert!(cx.debug_bounds(Box::leak(format!("detail-{}", details[0]).into_boxed_str())).is_some());
+    assert!(
+        cx.debug_bounds(Box::leak(format!("detail-{}", details[0]).into_boxed_str()))
+            .is_some()
+    );
 
     // Escape returns to the command's list as it was.
     cx.simulate_keystrokes("escape");
@@ -269,16 +276,24 @@ fn the_overlay_s_rows_copy_the_message_and_open_the_logs(cx: &mut TestAppContext
     // Open Logs: the package's Logs screen, from the overlay.
     select(&window, cx, "Logs for Settings sample");
     cx.simulate_keystrokes("enter");
-    let view = until(&window, cx, |view| {
-        matches!(&view.screen, Screen::ExtensionLog { identity: shown } if *shown == identity)
-    });
+    let view = until(
+        &window,
+        cx,
+        |view| matches!(&view.screen, Screen::ExtensionLog { identity: shown } if *shown == identity),
+    );
     assert_eq!(view.title, format!("Logs for {}", RUST.title));
 }
 
 #[gpui::test]
 fn the_overlay_s_row_runs_the_command_again(cx: &mut TestAppContext) {
     let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    let (window, cx) = open(cx, data.path(), sources.path(), &RUST, Arc::new(Opened::default()));
+    let (window, cx) = open(
+        cx,
+        data.path(),
+        sources.path(),
+        &RUST,
+        Arc::new(Opened::default()),
+    );
     develop(&window, cx, &RUST);
     open_command(&window, cx);
 
@@ -303,7 +318,9 @@ fn a_typescript_command_s_thrown_error_shows_the_overlay_with_its_mapped_stack(
     // the command threw, whose frames name its sources, not the bundle
     // (#214's source maps).
     run_item(&window, cx, "Fail");
-    let view = until(&window, cx, |view| matches!(view.screen, Screen::Crash { .. }));
+    let view = until(&window, cx, |view| {
+        matches!(view.screen, Screen::Crash { .. })
+    });
     assert_eq!(view.title, format!("{} failed", TYPESCRIPT.title));
     let details = view.details().to_vec();
     assert!(
@@ -316,7 +333,10 @@ fn a_typescript_command_s_thrown_error_shows_the_overlay_with_its_mapped_stack(
     );
     let mapped = details.iter().find(|line| line.contains("src/index."));
     let mapped = mapped.expect("a frame mapped to the source");
-    assert!(cx.debug_bounds(Box::leak(format!("detail-{mapped}").into_boxed_str())).is_some());
+    assert!(
+        cx.debug_bounds(Box::leak(format!("detail-{mapped}").into_boxed_str()))
+            .is_some()
+    );
 }
 
 #[gpui::test]

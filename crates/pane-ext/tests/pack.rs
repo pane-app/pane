@@ -145,11 +145,16 @@ fn symlink(target: &Path, link: &Path) -> Option<()> {
 /// package this system installs.
 fn other_target() -> String {
     let current = pane_core::Target::current().expect("Pane names this system's target");
-    ["macos-aarch64", "linux-x86_64", "macos-x86_64", "linux-aarch64"]
-        .into_iter()
-        .find(|id| pane_core::Target::parse(id) != Some(current))
-        .expect("Pane names more than one target")
-        .to_owned()
+    [
+        "macos-aarch64",
+        "linux-x86_64",
+        "macos-x86_64",
+        "linux-aarch64",
+    ]
+    .into_iter()
+    .find(|id| pane_core::Target::parse(id) != Some(current))
+    .expect("Pane names more than one target")
+    .to_owned()
 }
 
 /// What the launcher shows of the last outcome: the status line, else the
@@ -202,7 +207,10 @@ fn a_rust_sample_packs_into_a_tarball_that_pane_installs_from_the_registry() {
     assert!(tarball.is_file(), "{printed}");
     // Windows' canonical paths carry a prefix Pane strips, so the print is
     // matched by the tarball's name rather than its whole path.
-    assert!(printed.contains("pane-samples-hello-rust-0.1.0.tgz"), "{printed}");
+    assert!(
+        printed.contains("pane-samples-hello-rust-0.1.0.tgz"),
+        "{printed}"
+    );
     assert!(printed.contains("4 files"), "{printed}");
     for file in ["hello_rust.wasm", "icon.png", "package.json", "pane.json"] {
         assert!(printed.contains(file), "missing {file}:\n{printed}");

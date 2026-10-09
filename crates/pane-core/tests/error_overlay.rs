@@ -227,7 +227,11 @@ fn a_crash_of_a_developed_package_shows_the_overlay_over_its_command() {
     assert!(details.len() > 1, "the backtrace: {details:?}");
     assert_eq!(
         titles(&pane.launcher),
-        ["Logs for Dev", "Copy the message and trace", "Run Open Dev again"]
+        [
+            "Logs for Dev",
+            "Copy the message and trace",
+            "Run Open Dev again"
+        ]
     );
 
     // Back puts the command's view back as it was, and the package is not
@@ -330,7 +334,10 @@ fn a_thrown_javascript_or_typescript_error_shows_the_overlay_with_its_source_map
             text.trim_start().starts_with("at ") && text.contains("src/index.")
         };
         let log = written(&pane.log(&identity));
-        assert!(log.iter().any(mapped), "{source}: the frames are not mapped");
+        assert!(
+            log.iter().any(mapped),
+            "{source}: the frames are not mapped"
+        );
     }
 }
 
@@ -382,10 +389,12 @@ fn a_no_view_command_s_failure_shows_the_overlay_and_its_retry_runs_it_again() {
     select_title(&pane.launcher, "Run Report launch again");
     block_on(pane.launcher.activate_selected());
     assert!(matches!(pane.launcher.view().screen, Screen::Crash { .. }));
-    let thrown = |(_, text): &(LogStream, String)| {
-        text.starts_with("Error: Report launch fails on request")
-    };
-    let count = written(&pane.log(&identity)).iter().filter(|line| thrown(line)).count();
+    let thrown =
+        |(_, text): &(LogStream, String)| text.starts_with("Error: Report launch fails on request");
+    let count = written(&pane.log(&identity))
+        .iter()
+        .filter(|line| thrown(line))
+        .count();
     assert_eq!(count, 2, "the command ran again");
 
     // Back returns to root search, which a no-view command leaves as it
