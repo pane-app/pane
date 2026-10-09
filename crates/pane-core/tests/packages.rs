@@ -191,7 +191,7 @@ fn a_package_that_describes_itself_shows_it_in_the_install_preview() {
     // The description is a line of the preview's details, under the
     // source and version (#224); the rest of the metadata is held for the
     // authoring tooling and reporting.
-    let details = launcher.view().details();
+    let details = launcher.view().details().to_vec();
     let source = details
         .iter()
         .position(|line| line.starts_with("Source:"))
