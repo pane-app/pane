@@ -106,9 +106,7 @@ pub(crate) fn footer_button(
                 .text_color(theme.footer_button_open_text),
             ButtonWash::Hover(look) => button
                 .text_color(theme.footer_button_text)
-                .when(look > 0., |button| {
-                    button.bg(faded(theme.hover_wash, look))
-                })
+                .when(look > 0., |button| button.bg(faded(theme.hover_wash, look)))
                 .active(|button| button.bg(pressed(theme.hover_wash))),
             ButtonWash::None => button.text_color(theme.footer_button_text),
         })

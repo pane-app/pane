@@ -22,9 +22,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use futures::executor::block_on;
-use gpui::{
-    Bounds, Entity, Modifiers, MouseButton, Pixels, TestAppContext, VisualTestContext, px,
-};
+use gpui::{Bounds, Entity, Modifiers, MouseButton, Pixels, TestAppContext, VisualTestContext, px};
 use pane::LauncherWindow;
 use pane_core::{CommandRegistration, Launcher, LauncherView, Runtime, Screen, Status};
 
@@ -281,7 +279,11 @@ fn hovering_a_root_row_selects_it_so_only_the_selection_wash_shows(cx: &mut Test
     cx.simulate_mouse_move(bravo, None::<MouseButton>, Modifiers::none());
     cx.run_until_parked();
     let view = settle(&window, cx);
-    assert_eq!(view.selected, Some(1), "the pointer selected where it moved");
+    assert_eq!(
+        view.selected,
+        Some(1),
+        "the pointer selected where it moved"
+    );
     assert!(
         paint::paints_fill_at(cx, row_bounds(cx, &view, 1), SELECTION_WASH),
         "the row it selected shows the selection wash"
@@ -368,9 +370,7 @@ fn under_reduced_motion_the_hover_wash_leaves_at_once(cx: &mut TestAppContext) {
 /// follows the pointer over its list), so the entry under the pointer
 /// shows the selection wash alone and no entry ever shows the hover wash.
 #[gpui::test]
-fn the_actions_panel_selects_under_the_pointer_and_draws_no_hover_wash(
-    cx: &mut TestAppContext,
-) {
+fn the_actions_panel_selects_under_the_pointer_and_draws_no_hover_wash(cx: &mut TestAppContext) {
     let (window, cx) = three_rows(cx);
     settle_frames(cx);
     cx.simulate_keystrokes(OPEN_ACTIONS);
@@ -443,9 +443,7 @@ fn root_rows_under_an_open_actions_panel_take_the_hover_wash(cx: &mut TestAppCon
 /// accent ring it was drawn with before #245 is gone with the row's
 /// inset edge, both shadows the paint cannot see.
 #[gpui::test]
-fn the_selected_answer_card_shows_the_selection_wash_without_its_ring(
-    cx: &mut TestAppContext,
-) {
+fn the_selected_answer_card_shows_the_selection_wash_without_its_ring(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
     let launcher = with_calculator(cx, data.path());
     let (window, cx) = open_launcher(cx, launcher);
@@ -514,9 +512,7 @@ fn the_pane_menu_washes_its_entry_and_its_mark_fades_out(cx: &mut TestAppContext
 /// A confirmation's buttons are the footer's family: the one under the
 /// pointer takes the hover wash, which fades out once the pointer leaves.
 #[gpui::test]
-fn a_confirmations_buttons_hover_wash_fades_out_when_the_pointer_leaves(
-    cx: &mut TestAppContext,
-) {
+fn a_confirmations_buttons_hover_wash_fades_out_when_the_pointer_leaves(cx: &mut TestAppContext) {
     let sources = tempfile::tempdir().unwrap();
     let data = tempfile::tempdir().unwrap();
     let folder =

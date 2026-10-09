@@ -1164,10 +1164,10 @@ impl LauncherWindow {
                             title: title.clone(),
                             time: record.time.clone(),
                             selected: on,
-                            hover: self.motion.hover.look(
-                                Spot::Clip(row),
-                                cx.background_executor().now(),
-                            ),
+                            hover: self
+                                .motion
+                                .hover
+                                .look(Spot::Clip(row), cx.background_executor().now()),
                         },
                         mark,
                         &theme,

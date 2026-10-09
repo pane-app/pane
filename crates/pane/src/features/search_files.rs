@@ -773,10 +773,10 @@ impl LauncherWindow {
                             title: title.clone().into(),
                             subtitle: folder.clone().into(),
                             selected: on,
-                            hover: self.motion.hover.look(
-                                Spot::Clip(row),
-                                cx.background_executor().now(),
-                            ),
+                            hover: self
+                                .motion
+                                .hover
+                                .look(Spot::Clip(row), cx.background_executor().now()),
                             icon,
                         },
                         &theme,

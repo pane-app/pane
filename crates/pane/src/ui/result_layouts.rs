@@ -100,13 +100,13 @@ pub(crate) struct AnswerCard {
 /// it and 4 below, padded 20 above and either side and 16 below, radius
 /// 14, white 6% — the selection wash instead while selected, with no
 /// ring and no edge (ADR 0035: the card shows the same wash a selected
-/// row does). Its
-/// values sit in two equal columns either side of a 40px disc holding the
-/// arrow, 16 apart, each centered over its caption 4 below it, in Geist
-/// Mono 500 with −.03em of tracking — what was typed in #D9DADD, the
-/// answer in white (see [`answer_value_type`] for their size). Where the
-/// board authors chips, a line 14 below the values holds "Also" and the
-/// chips, centered, under a white 7% rule with 14 above them.
+/// row does). Its values sit in two equal columns either side of a 40px
+/// disc holding the arrow, 16 apart, each centered over its caption 4
+/// below it, in Geist Mono 500 with −.03em of tracking — what was typed
+/// in #D9DADD, the answer in white (see [`answer_value_type`] for their
+/// size). Where the board authors chips, a line 14 below the values
+/// holds "Also" and the chips, centered, under a white 7% rule with 14
+/// above them.
 pub(crate) fn answer_card(card: &AnswerCard, theme: &Theme) -> Div {
     let geometry = &theme.geometry.results;
     let types = &theme.typography.results;
