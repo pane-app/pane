@@ -292,7 +292,7 @@ fn text_is_long(
     theme: &Theme,
     viewport: Size<Pixels>,
     busy: bool,
-    cx: &App,
+    window: &Window,
 ) -> bool {
     let text = shown.toast.text();
     if text.lines().count() > 1 {
@@ -300,7 +300,7 @@ fn text_is_long(
     }
     let style = footer_text_style(theme);
     let run = style.to_run(text.len());
-    let width = cx
+    let width = window
         .text_system()
         .layout_line(&text, style.font_size, &[run], None)
         .width;
@@ -384,9 +384,7 @@ impl LauncherWindow {
         }
         // The toast's time is held while the pointer is over it, its
         // details are open, or one of its controls has the focus.
-        let held = self.toast.hovered
-            || self.toast.open.is_some()
-            || self.toast.focused(window);
+        let held = self.toast.hovered || self.toast.open.is_some() || self.toast.focused(window);
         let Some(countdown) = self.toast.countdown.as_mut() else {
             return;
         };
@@ -579,9 +577,7 @@ impl LauncherWindow {
     fn give_focus_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.toast.restore.take() {
             Some(restore) => window.focus(&restore, cx),
-            None if self.launcher.screen().search_field().is_some() => {
-                self.query.focus(window, cx)
-            }
+            None if self.launcher.screen().search_field().is_some() => self.query.focus(window, cx),
             None => window.focus(&self.focus_handle, cx),
         }
     }
@@ -659,7 +655,7 @@ impl LauncherWindow {
         let (style, color) = style_look(shown.toast.style, theme);
         let title = first_line(&shown.toast.title);
         let message = shown.toast.message.as_deref().map(first_line);
-        let long = text_is_long(shown, theme, viewport, busy, cx);
+        let long = text_is_long(shown, theme, viewport, busy, window);
         let close_shown = self.toast.hovered || self.toast.focused(window);
         let details_button = long.then(|| self.toast_details_button(theme, cx));
         let close_button = self.toast_close_button(close_shown, theme, cx);
@@ -871,10 +867,7 @@ impl LauncherWindow {
                     .action(*slot)
                     .expect("the action of a listed slot");
                 let label = action.title.clone();
-                let shortcut = action
-                    .shortcut
-                    .as_ref()
-                    .map(crate::keyboard::binding_keys);
+                let shortcut = action.shortcut.as_ref().map(crate::keyboard::binding_keys);
                 let row = slot_name(*slot);
                 div()
                     .id(("toast-action", index))
@@ -897,7 +890,7 @@ impl LauncherWindow {
                     .role(Role::MenuItem)
                     .aria_label(label.clone())
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                        this.choose_toast_action(slot, window, cx);
+                        this.choose_toast_action(*slot, window, cx);
                     }))
                     .cursor_pointer()
                     .child(label)

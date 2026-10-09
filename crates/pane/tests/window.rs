@@ -1736,9 +1736,7 @@ fn a_pin_sharing_its_title_says_what_tells_it_apart(cx: &mut TestAppContext) {
 /// toast key and by a click; Escape and the popover's own close button
 /// close the details, leaving the toast.
 #[gpui::test]
-fn a_long_outcome_shows_its_first_line_and_opens_in_full_above_the_footer(
-    cx: &mut TestAppContext,
-) {
+fn a_long_outcome_shows_its_first_line_and_opens_in_full_above_the_footer(cx: &mut TestAppContext) {
     // The kind of message a picker or download failure reports: long
     // enough to wrap past the popover's cap.
     let detail = "the operation could not be completed because the target \

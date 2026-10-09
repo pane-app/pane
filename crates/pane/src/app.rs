@@ -1820,12 +1820,8 @@ impl Render for LauncherWindow {
                 // through the toast controls and timed to leave; the
                 // strip keeps the identity it always had, so a test or
                 // smoke still finds the footer where it was.
-                Status::Result(answer) => {
-                    ("status-result", Some(answer.into()), theme.success)
-                }
-                Status::Error(message) => {
-                    ("status-error", Some(message.into()), theme.danger)
-                }
+                Status::Result(answer) => ("status-result", Some(answer.into()), theme.success),
+                Status::Error(message) => ("status-error", Some(message.into()), theme.danger),
             };
         // The strip's name for assistive technology: the status, or the
         // toast's title and message.

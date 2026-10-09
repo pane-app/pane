@@ -104,7 +104,9 @@ fn shows_error(
     message: &str,
     cx: &mut VisualTestContext,
 ) -> LauncherView {
-    cx.read_entity(window, |window, _| window.launcher().show_error(message.to_owned()));
+    cx.read_entity(window, |window, _| {
+        window.launcher().show_error(message.to_owned())
+    });
     window.update(cx, |_, cx| cx.notify());
     settle(window, cx)
 }
@@ -287,9 +289,7 @@ fn an_outcome_is_a_timed_toast_that_leaves_the_status_line_at_rest(cx: &mut Test
 /// pointer leaves the full time starts again — not the rest of it: 2.9
 /// seconds after the pointer leaves, the toast is still there.
 #[gpui::test]
-fn the_pointer_over_an_outcome_toast_pauses_and_the_full_time_restarts(
-    cx: &mut TestAppContext,
-) {
+fn the_pointer_over_an_outcome_toast_pauses_and_the_full_time_restarts(cx: &mut TestAppContext) {
     let (window, cx) = plain(cx);
     pointer_leaves(cx);
     let message = "Could not keep the quick slots: the record is not writable";
@@ -416,7 +416,10 @@ fn a_new_outcome_replaces_the_one_before_it(cx: &mut TestAppContext) {
     });
     window.update(cx, |_, cx| cx.notify());
     settle(&window, cx);
-    assert!(cx.debug_bounds("toast-success").is_some(), "the new outcome");
+    assert!(
+        cx.debug_bounds("toast-success").is_some(),
+        "the new outcome"
+    );
     wait(Duration::from_millis(1500), cx);
     assert_eq!(
         settle_shown(&window, cx),
@@ -487,9 +490,18 @@ fn an_animated_toast_stays_until_it_is_updated(cx: &mut TestAppContext) {
     );
     cx.simulate_keystrokes(TOAST_KEY);
     settle(&window, cx);
-    assert!(cx.debug_bounds("toast-details").is_some(), "its details open");
-    assert!(cx.debug_bounds("toast-details-action-primary").is_some(), "Open");
-    assert!(cx.debug_bounds("toast-details-action-secondary").is_some(), "Retry");
+    assert!(
+        cx.debug_bounds("toast-details").is_some(),
+        "its details open"
+    );
+    assert!(
+        cx.debug_bounds("toast-details-action-primary").is_some(),
+        "Open"
+    );
+    assert!(
+        cx.debug_bounds("toast-details-action-secondary").is_some(),
+        "Retry"
+    );
     cx.simulate_keystrokes("escape");
     settle(&window, cx);
     wait(Duration::from_millis(3100), cx);
