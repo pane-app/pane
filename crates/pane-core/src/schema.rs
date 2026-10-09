@@ -329,8 +329,8 @@ mod tests {
     fn the_committed_schema_is_the_generated_one() {
         // The file is committed with LF endings and checked out with
         // whatever this system uses; the generated schema is one text.
-        let committed = include_str!("../../../guests/js/schema/pane.schema.json")
-            .replace("\r\n", "\n");
+        let committed =
+            include_str!("../../../guests/js/schema/pane.schema.json").replace("\r\n", "\n");
         assert_eq!(
             committed,
             manifest_schema(),

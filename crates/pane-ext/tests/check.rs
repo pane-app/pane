@@ -87,7 +87,7 @@ fn check(folder: &Path, args: &[&str]) -> (bool, String) {
 fn pane_refuses(folder: &Path) -> String {
     let data = tempfile::tempdir().unwrap();
     let launcher = Launcher::with_packages(
-        Runtime::start().unwrap(),
+        Ok(Runtime::start().unwrap()),
         vec![],
         data.path().join("extensions"),
     );
@@ -115,7 +115,7 @@ fn a_valid_sample_package_passes() {
 
 #[test]
 fn an_invalid_manifest_fails_with_panes_message() {
-    let repeated = manifest(r#""#.replace(
+    let repeated = manifest(&r#""#.replace(
         r#""commands": ["#,
         r#""commands": [
     { "id": "hello", "title": "Say hello", "component": "hello.wasm" },
@@ -199,7 +199,7 @@ fn every_lint_rule_has_a_fixture_that_triggers_it() {
     // A package a published one would not look like: lowercase titles, no
     // icon, no description, nowhere to report problems, and a required
     // preference with no default and no help beside it.
-    let manifest = r#"{
+    let lints = r#"{
   "manifestVersion": 1,
   "title": "my little tool",
   "version": "1.0.0",
@@ -211,7 +211,7 @@ fn every_lint_rule_has_a_fixture_that_triggers_it() {
     { "name": "key", "type": "text", "title": "Key", "required": true }
   ]
 }"#;
-    let folder = package(&sources.path().join("lints"), manifest, "sample_rust");
+    let folder = package(&sources.path().join("lints"), lints, "sample_rust");
     let (passed, printed) = check(&folder, &[]);
     // Warnings only: the package installs.
     assert!(passed, "{printed}");
