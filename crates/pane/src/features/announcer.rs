@@ -568,6 +568,7 @@ impl LauncherWindow {
             | Screen::ProgramDetails { .. }
             | Screen::PauseDetails { .. }
             | Screen::BuildDetails { .. }
+            | Screen::Crash { .. }
             | Screen::Confirm { .. }
             | Screen::RuntimeDetails { .. }
             | Screen::Hotkey { .. } => Opening::Titled(view.title.clone()),

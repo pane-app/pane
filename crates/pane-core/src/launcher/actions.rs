@@ -436,6 +436,9 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         (_, Some(Entry::BuildDetails(_))) => acting("Show details"),
         (_, Some(Entry::BuildAgain(_))) => acting("Build again"),
         (_, Some(Entry::ExtensionLog(_))) => acting("Show logs"),
+        (_, Some(Entry::CrashLogs(_))) => acting("Show logs"),
+        (_, Some(Entry::CrashCopy)) => acting("Copy"),
+        (_, Some(Entry::CrashRetry)) => acting("Run again"),
         (_, Some(Entry::AskClearCache(_))) => acting("Clear cache"),
         (_, Some(Entry::ResetConfirmations(_))) => acting("Reset confirmations"),
         (_, Some(Entry::AskHotkey(_))) => acting("Set hotkey"),
@@ -472,6 +475,8 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         (Screen::Package { .. }, None) => unusable("Install"),
         (Screen::Extensions { .. }, None) => unusable("Choose"),
         (Screen::Confirm { .. }, None) => unusable("Choose"),
+        // The error overlay's first row shows its log.
+        (Screen::Crash { .. }, None) => acting("Show logs"),
         // The hotkey screen without a row to remove has no primary action:
         // Enter does nothing there; the keys it records are the point.
         (Screen::Hotkey { .. }, None) => unusable(""),

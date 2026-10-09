@@ -87,6 +87,7 @@ use crate::search::{self, Keys, Query};
 
 mod dependents;
 mod developing;
+mod error_overlay;
 mod extensions;
 mod file_search;
 mod files;
@@ -117,6 +118,7 @@ pub use crash_notice::{LogNotice, UNEXPECTED_QUIT};
 use developing::Developing;
 pub use developing::{BuildFailure, Development};
 pub(crate) use developing::{BuildNow, Remote};
+use error_overlay::Shown;
 pub use extensions::{ExtensionMark, ExtensionOperation, OperationKind};
 pub use hotkeys::HotkeyOutcome;
 use hotkeys::{Bindings, OpenPane};
@@ -239,6 +241,16 @@ pub enum Screen {
     /// Why Pane paused an installed package, as lines of information under
     /// the title, with a row that retries it.
     PauseDetails {
+        identity: PackageIdentity,
+        details: Vec<String>,
+    },
+    /// The error overlay of a developed package's command that crashed,
+    /// trapped, threw or failed to start (see `error_overlay`): the message
+    /// and the stack trace as lines of information under the title, with
+    /// rows that open the package's Logs screen, copy the message and
+    /// trace, and run the command again. Shown over what the launcher was
+    /// showing, which [`State::error_overlay`] holds for Back to put back.
+    Crash {
         identity: PackageIdentity,
         details: Vec<String>,
     },
@@ -550,6 +562,7 @@ impl LauncherView {
             | Screen::Extensions { details }
             | Screen::Confirm { details, .. }
             | Screen::PauseDetails { details, .. }
+            | Screen::Crash { details, .. }
             | Screen::NetworkDetails { details, .. }
             | Screen::ProgramDetails { details, .. }
             | Screen::BuildDetails { details, .. }
@@ -858,6 +871,9 @@ struct State {
     /// as last noted: their rows in root search say "Needs setup" (see
     /// `setup`).
     setup_needed: HashSet<String>,
+    /// The error overlay on show (see `error_overlay`): the covered view
+    /// and its rows, put back when it leaves.
+    error_overlay: Option<Shown>,
     /// What this start forgot because its command is a root provider (see
     /// `providers`), for the toast naming it.
     provider_forgotten: providers::Forgotten,
@@ -1224,6 +1240,15 @@ enum Entry {
     /// Show the extension log of this developed package (extension list,
     /// build details).
     ExtensionLog(PackageIdentity),
+    /// Show the extension log of the developed package whose error overlay
+    /// is on display, leaving the overlay for it (error overlay).
+    CrashLogs(PackageIdentity),
+    /// Copy the message and stack trace the error overlay shows (error
+    /// overlay); the window writes the clipboard.
+    CrashCopy,
+    /// Run the failed command again, or start the failed package again
+    /// (error overlay).
+    CrashRetry,
     /// Ask whether to clear this installed package's cache (extension list).
     AskClearCache(PackageIdentity),
     /// Forget the answers remembered for this installed package's
@@ -1514,6 +1539,7 @@ impl Launcher {
             confirmations,
             confirmation_saves: Arc::default(),
             setup_needed: HashSet::new(),
+            error_overlay: None,
             provider_forgotten: providers::Forgotten::default(),
         };
         if let (Some(installation), Some(files)) = (&installation, &state.files) {
@@ -2437,6 +2463,9 @@ impl Launcher {
             .and_then(|index| state.entries.get(index));
         match entry {
             Some(Entry::Copy(text)) => Some(text.clone()),
+            // The error overlay's copy: the message and the trace, the
+            // lines its screen shows.
+            Some(Entry::CrashCopy) => Some(state.view.details().join("\n")),
             _ => None,
         }
     }
@@ -2533,6 +2562,9 @@ impl Launcher {
                     |entry| matches!(entry, Entry::PauseDetails(shown) if *shown == identity),
                 );
             }
+            // The error overlay leaves for what it covered; the command it
+            // was about stays open underneath, as it was.
+            Screen::Crash { .. } => self.leave_error_overlay(&mut state),
             Screen::NetworkDetails { identity, .. } => {
                 let identity = identity.clone();
                 self.show_extensions_at(
@@ -2806,6 +2838,15 @@ impl Launcher {
                 self.show_extension_log(state, &identity);
                 Pending::Nothing
             }
+            Entry::CrashLogs(identity) => {
+                self.open_crash_logs(state, &identity);
+                Pending::Nothing
+            }
+            Entry::CrashCopy => {
+                state.view.status = Status::Result("Copied the message and trace".into());
+                Pending::Nothing
+            }
+            Entry::CrashRetry => self.retry_crash(state),
             Entry::AskUninstall(identity) => {
                 let closure = dependencies::required_dependents(&state.packages, &identity);
                 if closure.is_empty() {
@@ -3375,6 +3416,10 @@ impl Launcher {
             | Screen::CustomView(_)
             | Screen::Confirm { .. }
             | Screen::Hotkey { .. } => {}
+            // The error overlay covers the screen it stands over: what it
+            // was about does not change underneath it. A new development
+            // event of the package ends it (see `show_development`).
+            Screen::Crash { .. } => {}
             // Its lines stay, also once development ended: the window reads
             // them as they are.
             Screen::ExtensionLog { .. } => {}
@@ -4034,7 +4079,17 @@ impl Launcher {
                 });
                 state.next_screen();
             }
-            Err(error) => state.view.status = Status::Error(error.to_string()),
+            Err(error) => {
+                // A developed package's crash, or error its command answered
+                // with, while the custom view opens shows as the error
+                // overlay (see `error_overlay`), in place of the status
+                // line.
+                if let Some(retry) = Launcher::open_again(&state, &component)
+                    && !self.show_error_overlay(&mut state, &component, &error, retry)
+                {
+                    state.view.status = Status::Error(error.to_string());
+                }
+            }
         }
     }
 
@@ -4252,6 +4307,17 @@ impl Launcher {
             };
             let state = &mut *state;
             let ended = stopped(state, &component, &data);
+            // A developed package's crash, or error its command answered
+            // with, shows as the error overlay over the command's view
+            // (see `error_overlay`), in place of the status line and the
+            // failure toast.
+            if ended.is_none()
+                && let Err(error) = &result
+                && let Some(retry) = Launcher::open_again(state, &component)
+                && self.show_error_overlay(state, &component, error, retry)
+            {
+                return;
+            }
             let list_again = handled && ended.is_none();
             state.view.status = match (ended, result) {
                 // Stopped while it was running: its answer is not shown.
@@ -4483,7 +4549,23 @@ impl Launcher {
                         searching = self.ask_files(state, "", 0);
                     }
                 }
-                Err(error) => state.view.status = Status::Error(error.to_string()),
+                Err(error) => {
+                    // A developed package's crash, or error its command
+                    // answered with, while the command opens shows as the
+                    // error overlay (see `error_overlay`) over what the
+                    // launcher is showing, in place of the status line.
+                    let retry = Opening {
+                        component: component.clone(),
+                        command: command.clone(),
+                        search,
+                        launch: launch.clone(),
+                        initial_search: None,
+                        no_view: false,
+                    };
+                    if !self.show_error_overlay(state, &component, &error, retry) {
+                        state.view.status = Status::Error(error.to_string());
+                    }
+                }
             }
             searching
         };

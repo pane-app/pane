@@ -4400,9 +4400,21 @@ impl Host {
         let mut wasi = WasiCtx::builder();
         if let Some(data) = &data {
             let generation = data.generation().number();
+            // A development build of JavaScript or TypeScript keeps a
+            // source map beside its component: what the package writes has
+            // the frames of its stacks mapped back to the sources its
+            // bundle was built from as the lines are captured. Read once
+            // here, per instance, rather than per line: the file is small,
+            // and the instance runs beside it for its whole life.
+            let map = crate::source_map::SourceMap::beside(path).map(Arc::new);
             let output = |stream| {
-                self.logs
-                    .output(data.owner(), generation, stream, log_command.clone())
+                self.logs.output(
+                    data.owner(),
+                    generation,
+                    stream,
+                    log_command.clone(),
+                    map.clone(),
+                )
             };
             wasi.stdout(output(LogStream::Stdout))
                 .stderr(output(LogStream::Stderr));

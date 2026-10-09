@@ -1754,7 +1754,8 @@ impl Render for LauncherWindow {
             Screen::Extensions { .. } => "No extensions are installed.",
             Screen::CustomView(_)
             | Screen::NetworkDetails { .. }
-            | Screen::ProgramDetails { .. } => "",
+            | Screen::ProgramDetails { .. }
+            | Screen::Crash { .. } => "",
             Screen::Confirm { .. }
             | Screen::Hotkey { .. }
             | Screen::PauseDetails { .. }
@@ -1769,7 +1770,11 @@ impl Render for LauncherWindow {
         // (an npm or Git package's has several more lines), keep their choices in
         // view.
         let preview = matches!(view.screen, Screen::Package { .. }) && !view.rows.is_empty();
-        let confirm = matches!(view.screen, Screen::Confirm { .. }) || preview;
+        // A confirmation, a preview and the error overlay keep their rows in
+        // view while their long lines of information scroll: the overlay's
+        // stack trace can be longer than the window.
+        let confirm =
+            matches!(view.screen, Screen::Confirm { .. } | Screen::Crash { .. }) || preview;
         // A preview has one or two rows (Install or Update) and more lines
         // to read, which may take more of the window than a confirmation's.
         let details_share = if preview { 0.62 } else { 0.4 };
@@ -2039,9 +2044,9 @@ impl Render for LauncherWindow {
             .font_features(theme.typography.features.clone())
             .text_color(theme.text_title)
             .when_some(heading, |content, heading| content.child(heading))
-            // A confirmation's or preview's long details scroll within 40%
-            // (a preview's 62%) of the window, leaving the rest to its
-            // choices, which stay visible.
+            // A confirmation's, preview's or error overlay's long details
+            // scroll within 40% (a preview's 62%) of the window, leaving the
+            // rest to its choices, which stay visible.
             .when(!details.is_empty(), |content| {
                 content.child(
                     div()

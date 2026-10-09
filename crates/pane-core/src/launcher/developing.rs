@@ -718,6 +718,17 @@ impl Launcher {
         }
         let mut state = self.lock();
         self.refresh(&mut state);
+        // A development event of the package whose error overlay is on
+        // display ends it, when its code is being replaced: what the
+        // overlay was about is over. A build failure or another failed
+        // start leaves it — the failure it shows is still the state of
+        // things.
+        if matches!(status, Status::Progress(_) | Status::Result(_))
+            && matches!(&state.view.screen, Screen::Crash { identity: shown } if shown == identity)
+        {
+            self.leave_error_overlay(&mut state);
+            self.refresh(&mut state);
+        }
         let shown = match &state.view.screen {
             Screen::Extensions { .. } | Screen::BuildDetails { .. } => true,
             Screen::Root { query } => query.is_empty(),

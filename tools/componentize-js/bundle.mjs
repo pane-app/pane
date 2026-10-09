@@ -5,6 +5,13 @@
 // component's world provides them.
 //
 // Usage: node bundle.mjs <tool node_modules> <entry> <out.mjs>
+//
+// A source map is written beside the bundle (`<out.mjs>.map`): Pane's
+// development builds keep it beside the component, and the extension log's
+// stack traces map back to the sources with it (#214). It holds positions
+// only — esbuild's default sources content is left out, so the map stays
+// small — and `pane_js.py build` copies it next to the component it hands
+// to the componentizer.
 import { createRequire } from "node:module";
 import { join } from "node:path";
 
@@ -21,4 +28,6 @@ await build({
   external: ["wasi:*", "pane:*"],
   mainFields: ["module", "main"],
   logLevel: "warning",
+  sourcemap: "external",
+  sourcesContent: false,
 });

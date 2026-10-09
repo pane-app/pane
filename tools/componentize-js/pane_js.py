@@ -503,6 +503,12 @@ def build(package: Path, out: Path, toolchain: Toolchain) -> dict:
     report = run([toolchain.componentizer, wit, COMMAND_WORLD, bundle, toolchain.runtime, out],
                  env=clean_env(QJS_P3_LIBC=str(toolchain.libc)), capture=True)
     result = json.loads(report.strip().splitlines()[-1])
+    # #214: the bundle's source map (beside it, written by bundle.mjs) is kept
+    # beside the staged component, its path plus `.map`; Pane's host reads it
+    # to map the stack traces the command throws back to its sources.
+    bundle_map = bundle.with_name(f"{bundle.name}.map")
+    if bundle_map.exists():
+        shutil.copyfile(bundle_map, out.with_name(f"{out.name}.map"))
     log(f"built {out} ({result['component_bytes']} bytes in {result['componentize_ms']} ms)")
     return result
 

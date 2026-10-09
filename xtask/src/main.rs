@@ -255,6 +255,14 @@ fn guests() -> Result<(), String> {
         let prebuilt = root.join(format!("guests/prebuilt/{name}.wasm"));
         std::fs::copy(&prebuilt, out.join(format!("{name}.wasm")))
             .map_err(|error| format!("copy {} failed: {error}", prebuilt.display()))?;
+        // Its source map, which the prebuilt samples carry beside their
+        // components: the tests that develop one want the stacks the sample
+        // throws mapped to its sources (#214).
+        let map = root.join(format!("guests/prebuilt/{name}.wasm.map"));
+        if map.exists() {
+            std::fs::copy(&map, out.join(format!("{name}.wasm.map")))
+                .map_err(|error| format!("copy {} failed: {error}", map.display()))?;
+        }
     }
     // Ready-to-run sample packages: each manifest in guests/packages with the
     // component it names, and the images it shows (#139): the other files
@@ -275,6 +283,13 @@ fn guests() -> Result<(), String> {
         for (from, to) in copies {
             std::fs::copy(&from, &to)
                 .map_err(|error| format!("copy {} failed: {error}", from.display()))?;
+        }
+        // The component's source map, when the prebuilt sample has one, for
+        // the tests that develop the package (#214).
+        let map = out.join(format!("{component}.wasm.map"));
+        if map.exists() {
+            std::fs::copy(&map, dest.join(format!("{component}.wasm.map")))
+                .map_err(|error| format!("copy {} failed: {error}", map.display()))?;
         }
         // Everything beside the package's pane.json: its icons, its
         // assets/ folder, and the help (HELP.md) its Setup screen shows.

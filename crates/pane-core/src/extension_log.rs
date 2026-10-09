@@ -20,6 +20,7 @@
 //! file of the development session (rotated at [`FILE_LIMIT`], keeping one
 //! earlier file) and sends each to whoever follows it.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::{self, Write};
@@ -29,6 +30,8 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use crate::source_map::SourceMap;
 
 /// The longest line kept, in bytes: the rest is cut, with a note of how
 /// much.
@@ -177,13 +180,19 @@ impl ExtensionLogs {
 
     /// Where a guest instance of the package with identity key `owner`, in
     /// generation `generation`, writes `stream`: lines are tagged with the
-    /// command `command` holds when each is written.
+    /// command `command` holds when each is written. `map` is the source
+    /// map kept beside the component, when one is: what the package writes
+    /// has the frames of its stacks mapped back to the sources its bundle
+    /// was built from (see `crate::source_map`) as the lines are captured,
+    /// which is what a JavaScript or TypeScript development build keeps it
+    /// for.
     pub fn output(
         &self,
         owner: &str,
         generation: u64,
         stream: LogStream,
         command: CurrentCommand,
+        map: Option<Arc<SourceMap>>,
     ) -> Output {
         Output(Arc::new(OutputTo {
             logs: self.clone(),
@@ -191,6 +200,7 @@ impl ExtensionLogs {
             generation,
             stream,
             command,
+            map,
         }))
     }
 
@@ -480,6 +490,9 @@ struct OutputTo {
     generation: u64,
     stream: LogStream,
     command: CurrentCommand,
+    /// The source map of the component the instance runs, when one is kept
+    /// beside it: a development build of JavaScript or TypeScript.
+    map: Option<Arc<SourceMap>>,
 }
 
 impl wasmtime_wasi::cli::IsTerminal for Output {
@@ -536,6 +549,13 @@ impl Lines {
             bytes.pop();
         }
         let text = String::from_utf8_lossy(&bytes);
+        // A JavaScript or TypeScript command's stacks name its bundle; a
+        // map beside the component turns them back into its sources as
+        // the line is captured, so every reader of the log shows them so.
+        let text = match &self.to.map {
+            Some(map) => Cow::Owned(map.map_frames(&text)),
+            None => text,
+        };
         let cut = std::mem::take(&mut self.cut);
         let to = &self.to;
         to.logs.extension(
@@ -640,7 +660,7 @@ mod tests {
     use super::*;
 
     fn write(logs: &ExtensionLogs, stream: LogStream, bytes: &[u8]) {
-        let output = logs.output("p", 1, stream, CurrentCommand::default());
+        let output = logs.output("p", 1, stream, CurrentCommand::default(), None);
         let mut lines = Lines {
             to: output.0.clone(),
             partial: Vec::new(),

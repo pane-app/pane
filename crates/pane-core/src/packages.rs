@@ -2985,6 +2985,13 @@ fn copy_package(package: &SourcePackage, location: &Path) -> io::Result<()> {
             runner::copy_executable(&source, &target)?;
         } else {
             fs::copy(source, target)?;
+            // A development build of JavaScript or TypeScript keeps a source
+            // map beside its component; it comes with the component, so the
+            // extension log's stack traces keep mapping to the sources after
+            // the install or reload that copied it (#214).
+            if let Some(map) = map_beside(&source) {
+                fs::copy(&map, map_beside(&target).expect("the target is named"))?;
+            }
         }
     }
     for file in helper_files {
@@ -2997,6 +3004,13 @@ fn copy_package(package: &SourcePackage, location: &Path) -> io::Result<()> {
         fs::copy(&help, location.join(preferences::HELP_FILE))?;
     }
     copy_images(package, location)
+}
+
+/// The source map kept beside the component at `component`, when there is
+/// one: its file name plus `.map` (#214).
+fn map_beside(component: &Path) -> Option<PathBuf> {
+    let name = component.file_name()?.to_str()?;
+    Some(component.with_file_name(format!("{name}.map")))
 }
 
 /// The folder of a package whose images its lists name (#139), as

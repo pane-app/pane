@@ -45,6 +45,7 @@ mod programs;
 mod protection;
 mod runtime;
 mod search;
+mod source_map;
 pub mod system;
 pub mod system_icons;
 mod threads;
