@@ -12,7 +12,7 @@
 //! search's presentation holds (`crate::features::root_search::layouts`).
 
 use gpui::prelude::*;
-use gpui::{BoxShadow, Div, Hsla, Pixels, Role, SharedString, div, px};
+use gpui::{BoxShadow, Div, Hsla, Pixels, Role, SharedString, Stateful, div, px};
 
 use crate::ui::icon::{self, Glyph};
 use crate::ui::shell::LAUNCHER_CLIENT;
@@ -88,7 +88,7 @@ pub(crate) struct AnswerSide {
 /// What the answer card shows: what was typed and its answer, the
 /// calculator board's "Also" chips where it authors them, the swatch of
 /// a colour answer, and whether the card is the selected result.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AnswerCard {
     pub(crate) source: AnswerSide,
     pub(crate) answer: AnswerSide,
@@ -221,10 +221,11 @@ pub(crate) fn answer_value_type(card: &AnswerCard, theme: &Theme) -> TypeLine {
 /// A colour answer's swatch: the answer column's width, `card_swatch`
 /// high, rounded as a chip with its ring, filled with `colour` — a colour
 /// well, named by the answer's `label` (the colour's value).
-fn swatch(colour: Hsla, label: &SharedString, theme: &Theme) -> Div {
+fn swatch(colour: Hsla, label: &SharedString, theme: &Theme) -> Stateful<Div> {
     let geometry = &theme.geometry.results;
     let colors = &theme.results;
     div()
+        .id("answer-swatch")
         .debug_selector(|| "answer-swatch".into())
         .role(Role::ColorWell)
         .aria_label(label.clone())
