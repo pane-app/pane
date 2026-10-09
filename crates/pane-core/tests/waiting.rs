@@ -883,7 +883,7 @@ fn a_global_hotkey_of_a_waiting_command_says_why_and_runs_nothing() {
 #[test]
 fn a_reload_of_the_dependency_that_fails_to_start_leaves_its_dependents_waiting() {
     let dirs = Dirs::new();
-    let greeter = dirs.sample(GREETER);
+    let source = dirs.sample(GREETER);
     let caller = dirs.caller(&greeter());
     let launcher = dirs.launcher();
     dirs.install(&launcher, &caller);
@@ -892,7 +892,7 @@ fn a_reload_of_the_dependency_that_fails_to_start_leaves_its_dependents_waiting(
     // reloading it fails, and it is paused for that. The dependent waits.
     fs::copy(
         guest("failing_start.wasm"),
-        greeter.join("sample_operations.wasm"),
+        source.join("sample_operations.wasm"),
     )
     .unwrap();
     manage(&launcher);
@@ -913,7 +913,7 @@ fn a_reload_of_the_dependency_that_fails_to_start_leaves_its_dependents_waiting(
     // A reload that starts brings them back.
     fs::copy(
         guest("sample_operations.wasm"),
-        greeter.join("sample_operations.wasm"),
+        source.join("sample_operations.wasm"),
     )
     .unwrap();
     manage(&launcher);
