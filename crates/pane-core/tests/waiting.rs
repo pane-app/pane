@@ -77,6 +77,10 @@ impl Dirs {
         self.sources.path().join(name)
     }
 
+    fn identity(&self, name: &str) -> PackageIdentity {
+        PackageIdentity::local(&self.folder(name)).unwrap()
+    }
+
     /// The source other packages call the package in folder `name` by: its
     /// identity, as Pane shows it.
     fn source(&self, name: &str) -> String {
@@ -209,7 +213,11 @@ impl Dirs {
             }
         });
         fs::create_dir_all(self.extensions()).unwrap();
-        fs::write(self.extensions().join("settings.json"), settings.to_string()).unwrap();
+        fs::write(
+            self.extensions().join("settings.json"),
+            settings.to_string(),
+        )
+        .unwrap();
     }
 
     /// Whether an instance of the package in folder `name` is running.
@@ -370,7 +378,10 @@ fn a_dependent_waits_while_its_dependency_is_disabled_and_comes_back_when_it_is_
     );
     open(&launcher, "Call from JavaScript");
     let view = launcher.view();
-    assert!(matches!(view.screen, Screen::WaitingDetails { .. }), "{view:?}");
+    assert!(
+        matches!(view.screen, Screen::WaitingDetails { .. }),
+        "{view:?}"
+    );
     assert_eq!(view.title, "Why Call from JavaScript cannot run");
     assert_eq!(
         view.details().first().map(String::as_str),
@@ -468,7 +479,7 @@ fn a_waiting_package_answers_its_operations_unavailable_with_the_reason() {
 
     open(&launcher, "Call from TypeScript");
     assert_eq!(launcher.view().screen, Screen::Command);
-    select_title(launcher, "Greet through another extension");
+    select_title(&launcher, "Greet through another extension");
     block_on(launcher.activate_selected());
     launcher.set_field_value("source", &dirs.source("caller"));
     launcher.set_field_value("name", "Ada");
@@ -537,7 +548,10 @@ fn a_cycle_of_healthy_packages_runs_and_one_with_a_member_missing_waits_as_a_who
         "Needs Package p, which is not installed"
     );
     open(&launcher, "Fixture q");
-    assert!(matches!(launcher.view().screen, Screen::WaitingDetails { .. }));
+    assert!(matches!(
+        launcher.view().screen,
+        Screen::WaitingDetails { .. }
+    ));
     assert!(!dirs.runs(&launcher, "q"));
 }
 
@@ -653,7 +667,11 @@ fn root_results_are_not_asked_while_waiting_and_asked_again_once_it_is_back() {
     block_on(launcher.set_enabled(&dirs.identity(GREETER), false));
     block_on(launcher.set_query("reverse another"));
     assert!(
-        launcher.view().rows.iter().all(|row| row.title != "rehtona"),
+        launcher
+            .view()
+            .rows
+            .iter()
+            .all(|row| row.title != "rehtona"),
         "{:?}",
         titles(&launcher)
     );
@@ -682,7 +700,7 @@ fn waiting_leaves_an_open_screen_and_its_calls_alone_and_never_pauses_it() {
         "the open screen stays"
     );
     assert!(dirs.runs(&launcher, "caller"), "its instance stays");
-    select_title(launcher, "Greet through another extension");
+    select_title(&launcher, "Greet through another extension");
     block_on(launcher.activate_selected());
     launcher.set_field_value("source", "greeter");
     launcher.set_field_value("name", "Ada");
@@ -716,14 +734,12 @@ fn a_call_of_a_waiting_package_already_running_finishes() {
     // disabled, so b waits. The call already running finishes: waiting
     // ends no generation and stops no instance.
     open(&launcher, "Fixture a");
-    select_title(launcher, "Call b's wait");
+    select_title(&launcher, "Call b's wait");
     let calling = launcher.activate_selected();
     let calling = thread::spawn(move || block_on(calling));
-    until(
-        "b's wait began",
-        "started".to_owned(),
-        || b_saved(&dirs, "waiting").unwrap_or_default(),
-    );
+    until("b's wait began", "started".to_owned(), || {
+        b_saved(&dirs, "waiting").unwrap_or_default()
+    });
 
     block_on(launcher.set_enabled(&dirs.identity("c"), false));
     launcher.show_root_search();
@@ -802,7 +818,7 @@ fn a_quick_slot_and_an_alias_and_a_fallback_of_a_waiting_command_say_why_and_run
             .map(|reason| reason.reason().to_owned()),
         Some("Needs Rust operations sample, which is disabled".to_owned())
     );
-    select_title(launcher, "Call from JavaScript");
+    select_title(&launcher, "Call from JavaScript");
     block_on(launcher.activate_selected());
     assert_eq!(
         error(&launcher.view().status),
@@ -860,7 +876,7 @@ fn a_reload_of_the_dependency_that_fails_to_start_leaves_its_dependents_waiting(
     // reloading it fails, and it is paused for that. The dependent waits.
     fs::copy(guest("failing_start.wasm"), greeter.join("sample_operations.wasm")).unwrap();
     manage(&launcher);
-    select_title(launcher, "Reload Rust operations sample");
+    select_title(&launcher, "Reload Rust operations sample");
     block_on(launcher.activate_selected());
     let status = launcher.view().status.clone();
     assert!(
@@ -877,7 +893,7 @@ fn a_reload_of_the_dependency_that_fails_to_start_leaves_its_dependents_waiting(
     // A reload that starts brings them back.
     fs::copy(guest("sample_operations.wasm"), greeter.join("sample_operations.wasm")).unwrap();
     manage(&launcher);
-    select_title(launcher, "Reload Rust operations sample");
+    select_title(&launcher, "Reload Rust operations sample");
     block_on(launcher.activate_selected());
     assert_eq!(
         launcher.view().status,
