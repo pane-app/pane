@@ -20,9 +20,7 @@ use futures::executor::block_on;
 use pane_core::feedback::WindowRequest;
 use pane_core::file_index::IndexerConfig;
 use pane_core::system::System;
-use pane_core::{
-    CommandMatches, CommandWhen, Launcher, Manifest, Runtime, Screen, Status,
-};
+use pane_core::{CommandMatches, CommandWhen, Launcher, Manifest, Runtime, Screen, Status};
 use tempfile::TempDir;
 
 #[path = "support/feedback.rs"]
@@ -412,7 +410,12 @@ fn files_pane() -> (FilesPane, Launcher) {
     fs::write(notes.join("plan.md"), "plan").unwrap();
     fs::write(notes.join("run plan.bat"), "@echo off").unwrap();
     let system = Arc::new(RecordingSystem::default());
-    let launcher = pane.with("files", Fakes { system: Some(system.clone()) });
+    let launcher = pane.with(
+        "files",
+        Fakes {
+            system: Some(system.clone()),
+        },
+    );
     (FilesPane { pane, system }, launcher)
 }
 
@@ -466,7 +469,12 @@ fn opening_a_typed_program_reveals_it_and_never_runs_it() {
 fn a_typed_address_offers_quicklinks_opening_and_saving_it() {
     let pane = Pane::new();
     let system = Arc::new(RecordingSystem::default());
-    let launcher = pane.with("quicklinks", Fakes { system: Some(system.clone()) });
+    let launcher = pane.with(
+        "quicklinks",
+        Fakes {
+            system: Some(system.clone()),
+        },
+    );
     let window = RecordingWindow::attach(&launcher);
 
     // A typed address lists the two commands declared for it, and only
