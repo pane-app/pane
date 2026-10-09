@@ -625,7 +625,8 @@ impl Folded {
                 space = false;
             }
             let end = start + character.len_utf8();
-            for folded in any_ascii::any_ascii_char(character).chars().flat_map(char::to_lowercase) {
+            let transliterated = any_ascii::any_ascii_char(character);
+            for folded in transliterated.chars().flat_map(char::to_lowercase) {
                 chars.push(folded);
                 origin.push(Some((start, end)));
             }
