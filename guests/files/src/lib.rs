@@ -40,7 +40,7 @@ use pane_extension::search::SearchResult;
 use pane_extension::system;
 use pane_extension::window::{self, PopToRootType};
 use pane_extension::{
-    Command, CustomView, FieldValue, FormError, Item, List, LaunchRecord, NoCustomView,
+    Command, CustomView, FieldValue, FormError, Item, LaunchRecord, List, NoCustomView,
 };
 
 struct Files;
@@ -67,8 +67,8 @@ const REVEAL: &str = "reveal";
 /// same way.
 const PROGRAM_EXTENSIONS: &[&str] = &[
     // Windows
-    "exe", "bat", "cmd", "com", "lnk", "js", "jse", "vbs", "vbe", "wsf", "wsh", "hta", "msi",
-    "msp", "scr", "pif", "ps1", "cpl", "reg", "url", // macOS
+    "exe", "bat", "cmd", "com", "lnk", "js", "jse", "vbs", "vbe", "wsf", "wsh", "hta", "msi", "msp",
+    "scr", "pif", "ps1", "cpl", "reg", "url", // macOS
     "app", "command", "tool", "terminal", "workflow", // Linux
     "desktop",
 ];
@@ -178,7 +178,9 @@ impl Command for Files {
         match command.as_str() {
             OPEN => open_typed(&launch),
             REVEAL => reveal_typed(&launch),
-            other => Err(format!("`{other}` opens a screen; it has no run entry point")),
+            other => Err(format!(
+                "`{other}` opens a screen; it has no run entry point"
+            )),
         }
     }
 
