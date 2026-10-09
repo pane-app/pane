@@ -274,14 +274,6 @@ fn needs(folder: &str) -> String {
     )
 }
 
-/// An optional dependency on the package in sibling folder `folder`.
-fn uses(folder: &str) -> String {
-    format!(
-        r#"{{ "id": "{folder}", "source": "local:../{folder}", "optional": true,
-             "operations": [{{ "id": "echo", "version": 1 }}] }}"#
-    )
-}
-
 /// A required dependency on the Rust operations sample, as `greeter`,
 /// calling its `greet` 1.
 fn greeter() -> String {
