@@ -337,10 +337,30 @@ fn disable_all_disables_the_shown_set_stops_it_and_keeps_its_settings() {
     // the toasts `restarted`'s calls show.
     assert_eq!(enabled(&dirs.restarted()), alone);
 
-    // Settings b kept its settings.
+    // Settings b kept its settings. Enabled while Package c is still
+    // disabled, its command waits for c now, rather than its calls failing
+    // (#152); enabled once c is, it runs and finds its setting.
     assert_eq!(
         toggle(&restarted, "Settings b"),
         Status::Result("Enabled Settings b".into())
+    );
+    to_root(&restarted);
+    let greeting = restarted
+        .view()
+        .rows
+        .iter()
+        .find(|row| row.title == "Greeting")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        greeting.unavailable,
+        Some(pane_core::Unavailable::Waiting(
+            "Needs Package c, which is disabled".into()
+        ))
+    );
+    assert_eq!(
+        toggle(&restarted, "Package c"),
+        Status::Result("Enabled Package c".into())
     );
     assert_eq!(
         greet(&restarted, "Greet me"),
@@ -524,6 +544,7 @@ fn pane_pausing_a_required_dependency_disables_nothing_else_and_its_dependent_wa
     );
 
     // The user disabling the paused package still asks about its dependent.
+    manage(&restarted);
     press(&restarted, "Rust operations sample");
     assert_eq!(
         restarted.view().title,
