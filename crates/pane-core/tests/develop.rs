@@ -465,7 +465,11 @@ fn a_build_that_fails_to_start_is_paused_with_retry_and_not_rolled_back() {
     assert_eq!(view.title, "Dev failed to start");
     assert_eq!(
         titles(&dev.launcher),
-        ["Logs for Dev", "Copy the message and trace", "Retry starting Dev"]
+        [
+            "Logs for Dev",
+            "Copy the message and trace",
+            "Retry starting Dev"
+        ]
     );
     let details = view.details().to_vec();
     assert!(details[0].starts_with("The extension crashed:"));
