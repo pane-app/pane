@@ -115,15 +115,15 @@ fn a_valid_sample_package_passes() {
 
 #[test]
 fn an_invalid_manifest_fails_with_panes_message() {
-    let repeated = manifest(&r#""#.replace(
+    let repeated = manifest("").replace(
         r#""commands": ["#,
         r#""commands": [
     { "id": "hello", "title": "Say hello", "component": "hello.wasm" },
 "#,
-    ));
+    );
     let keywords = format!(
-        r#"{{ "manifestVersion": 1, "title": "Hello", "apiVersion": "0.1", "keywords": {}, "commands": [{{ "id": "hello", "title": "Say hello", "component": "hello.wasm" }}] }}"#,
-        format!("{:?}", vec!["word"; 21])
+        r#"{{ "manifestVersion": 1, "title": "Hello", "apiVersion": "0.1", "keywords": {:?}, "commands": [{{ "id": "hello", "title": "Say hello", "component": "hello.wasm" }}] }}"#,
+        vec!["word"; 21]
     );
     let cases: [(&str, String, &str); 4] = [
         (
@@ -236,16 +236,21 @@ fn every_lint_rule_has_a_fixture_that_triggers_it() {
 
     // An icon smaller than a published extension's is warned about too.
     let sources = tempfile::tempdir().unwrap();
+    let small_icon = manifest("").replace(
+        r#""commands": ["#,
+        r#""icon": "icon.png",
+  "commands": ["#,
+    );
     let folder = package(
         &sources.path().join("small-icon"),
-        &manifest(r#", "icon": "icon.png""#),
+        &small_icon,
         "sample_rust",
     );
     fs::write(folder.join("icon.png"), TINY_PNG).unwrap();
     let (passed, printed) = check(&folder, &[]);
     assert!(passed, "{printed}");
     assert!(
-        printed.contains("its icon icon.png is 1×1, smaller than the 512×512"),
+        printed.contains("the package's icon icon.png is 1×1, smaller than the 512×512"),
         "{printed}"
     );
 

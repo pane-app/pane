@@ -89,6 +89,7 @@ fn sample(name: &str, manifest: &str, package: Option<&str>) -> PathBuf {
     for file in ["Cargo.toml", "Cargo.lock"] {
         fs::copy(from.join(file), to.join(file)).unwrap();
     }
+    fs::copy(from.join("src/lib.rs"), to.join("src/lib.rs")).unwrap();
     let guest = repository().join("guests/pane-extension");
     let cargo = fs::read_to_string(to.join("Cargo.toml")).unwrap().replace(
         r#"path = "../pane-extension""#,
