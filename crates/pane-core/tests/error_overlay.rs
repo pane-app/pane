@@ -157,7 +157,8 @@ impl Pane {
             "{:?}",
             self.launcher.view().status
         );
-        (folder, PackageIdentity::local(&folder).unwrap())
+        let identity = PackageIdentity::local(&folder).unwrap();
+        (folder, identity)
     }
 
     /// Installs the package "Dev" and develops it.

@@ -244,7 +244,7 @@ fn a_developed_package_s_crash_shows_the_overlay_with_its_rows(cx: &mut TestAppC
     assert!(cx.debug_bounds("row-Logs for Settings sample").is_some());
     assert!(cx.debug_bounds("row-Copy the message and trace").is_some());
     assert!(cx.debug_bounds("row-Run Greeting again").is_some());
-    assert!(cx.debug_bounds(&format!("detail-{}", details[0])).is_some());
+    assert!(cx.debug_bounds(Box::leak(format!("detail-{}", details[0]).into_boxed_str())).is_some());
 
     // Escape returns to the command's list as it was.
     cx.simulate_keystrokes("escape");
@@ -316,7 +316,7 @@ fn a_typescript_command_s_thrown_error_shows_the_overlay_with_its_mapped_stack(
     );
     let mapped = details.iter().find(|line| line.contains("src/index."));
     let mapped = mapped.expect("a frame mapped to the source");
-    assert!(cx.debug_bounds(&format!("detail-{mapped}")).is_some());
+    assert!(cx.debug_bounds(Box::leak(format!("detail-{mapped}").into_boxed_str())).is_some());
 }
 
 #[gpui::test]

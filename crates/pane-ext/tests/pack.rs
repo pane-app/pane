@@ -200,10 +200,9 @@ fn a_rust_sample_packs_into_a_tarball_that_pane_installs_from_the_registry() {
     assert!(passed, "{printed}");
     let tarball = folder.join(TARBALL);
     assert!(tarball.is_file(), "{printed}");
-    assert!(
-        printed.contains(&tarball.file_name().unwrap().to_string_lossy()),
-        "{printed}"
-    );
+    // Windows' canonical paths carry a prefix Pane strips, so the print is
+    // matched by the tarball's name rather than its whole path.
+    assert!(printed.contains("pane-samples-hello-rust-0.1.0.tgz"), "{printed}");
     assert!(printed.contains("4 files"), "{printed}");
     for file in ["hello_rust.wasm", "icon.png", "package.json", "pane.json"] {
         assert!(printed.contains(file), "missing {file}:\n{printed}");
