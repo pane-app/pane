@@ -179,22 +179,12 @@ fn a_url_like_query_lists_only_the_command_declared_for_it(fixture: &Fixture) {
         "below the results, above the files: {:?}",
         sections(&launcher)
     );
-    let sent = send(
-        &launcher,
-        "https://github.com/pane-app/pane",
-        "Hear an Address",
-    );
-    if sent != Status::Result("Heard “https://github.com/pane-app/pane”".into()) {
-        for package in launcher.packages() {
-            eprintln!(
-                "DIAG package {:?} log: {:?}",
-                package.title(),
-                launcher.extension_log(&package.identity)
-            );
-        }
-    }
     assert_eq!(
-        sent,
+        send(
+            &launcher,
+            "https://github.com/pane-app/pane",
+            "Hear an Address"
+        ),
         Status::Result("Heard “https://github.com/pane-app/pane”".into()),
         "the parsed address is the fallback text"
     );
@@ -521,6 +511,9 @@ fn a_typed_address_offers_quicklinks_opening_and_saving_it() {
         }]
     );
     assert_eq!(window.take(), [WindowRequest::Hide]);
+    // The window shows again, as the user would summon it, so the toast
+    // the saved quicklink leaves is in the footer.
+    launcher.set_window_presence(pane_core::WindowPresence::Shown);
 
     // Create Quicklink opens its form with the address filled in, and
     // saving makes a quicklink of it.
@@ -540,23 +533,7 @@ fn a_typed_address_offers_quicklinks_opening_and_saving_it() {
     );
     launcher.set_field_value("name", "Example");
     block_on(launcher.submit_form());
-    let after = shown(&launcher);
-    if after != Status::Result("Created “Example”".into()) {
-        eprintln!(
-            "DIAG status {:?} screen {:?} toast {:?}",
-            launcher.view().status,
-            launcher.view().screen,
-            launcher.toast()
-        );
-        for package in launcher.packages() {
-            eprintln!(
-                "DIAG package {:?} log: {:?}",
-                package.title(),
-                launcher.extension_log(&package.identity)
-            );
-        }
-    }
-    assert_eq!(after, Status::Result("Created “Example”".into()));
+    assert_eq!(shown(&launcher), Status::Result("Created “Example”".into()));
     assert!(matches!(launcher.view().screen, Screen::Root { .. }));
     search(&launcher, "example");
     assert!(titles(&launcher).contains(&"Example".to_owned()));
