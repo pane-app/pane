@@ -262,7 +262,7 @@ impl Launcher {
         let no_view = package.mode_of(&command) == CommandMode::NoView;
         Some(Opening {
             launch: state.launch.clone(),
-            ..Opening::of(&registration, no_view, state.launch.source.clone())
+            ..Opening::of(&registration, no_view, state.launch.source)
         })
     }
 }
@@ -334,6 +334,6 @@ fn thrown_trace(logs: &ExtensionLogs, identity: &PackageIdentity, message: &str)
     if !first.contains(message) {
         return None;
     }
-    let stack: Vec<&str> = block[1..].iter().copied().collect();
+    let stack: Vec<&str> = block[1..].to_vec();
     (!stack.is_empty()).then(|| stack.join("\n"))
 }

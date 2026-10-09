@@ -738,7 +738,7 @@ fn tarball_bytes(folder: &Path, files: &[PathBuf]) -> std::io::Result<Vec<u8>> {
         .mtime(0)
         .write(Vec::new(), flate2::Compression::best());
     gz.write_all(&tar)?;
-    Ok(gz.finish()?)
+    gz.finish()
 }
 
 /// The file npm names the tarball of `name` at `version`: the scope and
