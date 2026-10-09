@@ -77,7 +77,9 @@ fn main() -> ExitCode {
 
 /// The arguments of `check`: an optional folder, then `--json` and
 /// `--deny-warnings` in any order.
-fn check_arguments(args: std::env::ArgsOs) -> Result<(Option<PathBuf>, bool, bool), String> {
+fn check_arguments(
+    args: std::iter::Skip<std::env::ArgsOs>,
+) -> Result<(Option<PathBuf>, bool, bool), String> {
     let mut folder = None;
     let mut json = false;
     let mut deny_warnings = false;

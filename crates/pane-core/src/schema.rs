@@ -321,9 +321,6 @@ fn nullable(schema: Schema) -> Schema {
 mod tests {
     use super::*;
 
-    /// Where the committed schema lives, beside the SDK that ships it.
-    const COMMITTED: &str = "../../../guests/js/schema/pane.schema.json";
-
     /// The committed schema is the generated one: the file this test
     /// compares is what `cargo xtask schema --write` writes, so a schema
     /// and the types that generate it cannot drift apart. Regenerate with
@@ -332,7 +329,8 @@ mod tests {
     fn the_committed_schema_is_the_generated_one() {
         // The file is committed with LF endings and checked out with
         // whatever this system uses; the generated schema is one text.
-        let committed = include_str!(COMMITTED).replace("\r\n", "\n");
+        let committed = include_str!("../../../guests/js/schema/pane.schema.json")
+            .replace("\r\n", "\n");
         assert_eq!(
             committed,
             manifest_schema(),
@@ -346,7 +344,10 @@ mod tests {
     fn platforms_match() {
         use crate::platform::Platform;
         let values = enum_values::<PlatformId>();
-        let expected: Vec<String> = Platform::ALL.iter().map(Platform::id).collect();
+        let expected: Vec<String> = Platform::ALL
+            .iter()
+            .map(|platform| platform.id().into())
+            .collect();
         assert_eq!(values, expected);
     }
 
@@ -355,7 +356,10 @@ mod tests {
     fn preference_types_match() {
         use crate::preferences::PreferenceKind;
         let values = enum_values::<PreferenceType>();
-        let expected: Vec<String> = PreferenceKind::ALL.iter().map(|kind| kind.id()).collect();
+        let expected: Vec<String> = PreferenceKind::ALL
+            .iter()
+            .map(|kind| kind.id().into())
+            .collect();
         assert_eq!(values, expected);
     }
 
