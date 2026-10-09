@@ -1,32 +1,42 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0 OR MIT
-"""Build Pane's JavaScript and TypeScript commands into WASI 0.3 components.
+"""Build the wasm parts and the per-platform componentizer of Pane's JS/TS builds.
 
 Usage:
-  pane_js.py toolchain                  fetch and build the pinned toolchain
-  pane_js.py wasm-parts <dir>           build runtime.wasm and copy wasi-sdk's P3 libc.so
-                                        into <dir>, their digests in wasm-parts.json
-  pane_js.py componentizer <dir>        build this host's componentizer into <dir>
-                                        against the wasm parts there
-  pane_js.py build <package> <out.wasm> type-check, bundle and componentize one command
-  pane_js.py samples                    rebuild guests/prebuilt/ and its manifest
-  pane_js.py check                      verify guests/prebuilt/ against its manifest
-                                        and the current sources (needs no toolchain)
+  pane_js.py wasm-parts <dir>     build runtime.wasm and copy wasi-sdk's P3 libc.so
+                                   into <dir>, what built them and their digests
+                                   in wasm-parts.json
+  pane_js.py componentizer <dir>  build this host's componentizer into <dir>
+                                   against the wasm parts there
+  pane_js.py check-parts <dir>    verify the committed wasm parts against a
+                                   fresh build in <dir>
 
-The toolchain is upstream componentize-qjs at a pinned commit plus the patch
-queue in patches/, built with a pinned Rust nightly and wasi-sdk (pins.json),
-and esbuild/TypeScript from package-lock.json. Downloads and builds are cached
-in PANE_JS_TOOLCHAIN_DIR, by default the user cache directory
-(pane/componentize-js). Nothing outside that directory and the output paths is
-written, except that rustup installs the pinned toolchains.
+The componentizer is the vendored componentize-qjs
+(tools/componentize-js/componentize-qjs) at the commit pins.json names, with
+the patch queue in patches/ applied in its source: nothing is downloaded or
+patched here. Its `crates/core` is a member of the repository's workspace,
+built with the repository's stable Rust; `componentizer` builds its
+`p3_build` example, the standalone componentizer of the `p3_build <wit>
+<world> <js> <runtime.wasm> <out.wasm>` contract that a development build
+spawns when it does not link the componentizer in-process (#218).
 
-The wasm parts are the same on every host, so CI builds them once and each
-host's componentizer against them (`wasm-parts`, then `componentizer`; the
-componentizer needs only the stable Rust). With PANE_JS_PREBUILT naming a
-folder they left, `build` and `samples` use its componentizer, runtime and
-libc instead of building their own.
+Only `wasm-parts` needs the pinned nightly Rust and wasi-sdk: the runtime
+crate of the vendored tree builds for wasm32-wasip3 against the SDK's P3
+libc. The wasm parts are host-independent, built once (on Linux, by
+componentizer.yml), recorded in wasm-parts.json, and committed
+(tools/componentize-js/wasm-parts): the repository's JS/TS build embeds
+those committed files, so nothing a package builds needs the nightly or the
+SDK (#218). `componentizer.yml` runs `check-parts` to keep the committed
+files from drifting from the source.
 
-Prerequisites on every OS: Python 3.12+, git, Node.js 22+ with npm, and rustup.
+Building a JS/TS package is no longer this script's work: pane-build
+(crates/pane-build) does it, with Node.js and npm alone, and `cargo xtask
+js-guests` rebuilds the committed samples with it. When #219 retires
+componentizer.yml, this script goes with it.
+
+Prerequisites: Python 3.12+ and rustup, and for `wasm-parts` the wasi-sdk
+download (recorded in pins.json). Node.js 22+ with npm is needed to build
+packages, not to run these.
 """
 from __future__ import annotations
 
@@ -34,7 +44,6 @@ import hashlib
 import json
 import os
 import platform
-import re
 import shlex
 import shutil
 import subprocess
@@ -46,77 +55,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 PINS = json.loads((HERE / "pins.json").read_text(encoding="utf-8"))
+# The vendored componentize-qjs, patches applied in its source.
+VENDORED = HERE / "componentize-qjs"
+WASM_PARTS = HERE / "wasm-parts"
 EXE = ".exe" if os.name == "nt" else ""
-WORLD = "js-extension"
-# The world a command is built against: `js-extension` plus the exports its
-# package.json's `"pane"` options name, written by `command_world`.
-COMMAND_WORLD = "js-command"
-# `"pane"` option -> the interface a command setting it also exports.
-EXPORT_OPTIONS = {
-    "rootResults": "pane:extension/root-results@0.1.0",
-    "indexedResults": "pane:extension/indexed-results@0.1.0",
-    "operations": "pane:extension/published-operations@0.1.0",
-    "search": "pane:extension/command-search@0.1.0",
-    "service": "pane:extension/service@0.1.0",
-}
-# `"pane"` option -> the interface a command setting it also imports, beyond
-# what every command may import (`js-extension`): a command that sets none
-# of them does not import it at all.
-IMPORT_OPTIONS = {
-    "files": "pane:extension/files@0.1.0",
-    "fileIndex": "pane:extension/file-index@0.1.0",
-    "clipboardHistory": "pane:extension/clipboard-history@0.1.0",
-}
-PREBUILT = REPO / "guests" / "prebuilt"
-MANIFEST = PREBUILT / "manifest.json"
-# (component file in guests/prebuilt and target/guests, source package)
-SAMPLES = [
-    ("sample_js.wasm", "guests/sample-js"),
-    ("sample_ts.wasm", "guests/sample-ts"),
-    ("sample_settings_js.wasm", "guests/sample-settings-js"),
-    ("sample_settings_ts.wasm", "guests/sample-settings-ts"),
-    ("sample_operations_js.wasm", "guests/sample-operations-js"),
-    ("sample_operations_ts.wasm", "guests/sample-operations-ts"),
-    ("sample_applications_js.wasm", "guests/sample-applications-js"),
-    ("sample_applications_ts.wasm", "guests/sample-applications-ts"),
-    ("sample_query_js.wasm", "guests/sample-query-js"),
-    ("sample_query_ts.wasm", "guests/sample-query-ts"),
-    ("sample_no_view_js.wasm", "guests/sample-no-view-js"),
-    ("sample_no_view_ts.wasm", "guests/sample-no-view-ts"),
-    ("sample_search_js.wasm", "guests/sample-search-js"),
-    ("sample_search_ts.wasm", "guests/sample-search-ts"),
-    ("sample_helper_js.wasm", "guests/sample-helper-js"),
-    ("sample_helper_ts.wasm", "guests/sample-helper-ts"),
-    ("sample_files_js.wasm", "guests/sample-files-js"),
-    ("sample_files_ts.wasm", "guests/sample-files-ts"),
-    ("sample_clipboard_js.wasm", "guests/sample-clipboard-js"),
-    ("sample_clipboard_ts.wasm", "guests/sample-clipboard-ts"),
-    ("sample_npm_js.wasm", "guests/sample-npm-js"),
-    ("sample_schedule_js.wasm", "guests/sample-schedule-js"),
-    ("sample_schedule_ts.wasm", "guests/sample-schedule-ts"),
-    ("sample_service_js.wasm", "guests/sample-service-js"),
-    ("sample_service_ts.wasm", "guests/sample-service-ts"),
-    ("sample_actions_js.wasm", "guests/sample-actions-js"),
-    ("sample_actions_ts.wasm", "guests/sample-actions-ts"),
-    ("sample_preferences_js.wasm", "guests/sample-preferences-js"),
-    ("sample_preferences_ts.wasm", "guests/sample-preferences-ts"),
-    ("sample_arguments_js.wasm", "guests/sample-arguments-js"),
-    ("sample_arguments_ts.wasm", "guests/sample-arguments-ts"),
-    ("sample_icons_js.wasm", "guests/sample-icons-js"),
-    ("sample_icons_ts.wasm", "guests/sample-icons-ts"),
-    ("sample_programs_js.wasm", "guests/sample-programs-js"),
-    ("sample_programs_ts.wasm", "guests/sample-programs-ts"),
-]
-# Pane's WIT, copied beside the world in guests/js/wit.
-PANE_WIT = ["extension.wit", "commands.wit", "feedback.wit", "system.wit", "data.wit", "preferences.wit", "root-results.wit",
-            "operations.wit", "applications.wit", "search.wit", "helpers.wit", "files.wit", "clipboard.wit", "service.wit",
-            "programs.wit", "file-index.wit"]
-# WASI's WIT (clocks, and `wasi:http` with the packages it names), copied from
-# wit/deps into the world's deps/.
-WASI_WIT = sorted((REPO / "wit" / "deps").glob("*.wit"))
-# Toolchain inputs that decide what a component contains.
-TOOL_INPUTS = ["pins.json", "package.json", "package-lock.json", "bundle.mjs", "p3_build.rs", "patches"]
-SKIP_DIRS = {"node_modules", ".git"}
 
 
 def cache_root() -> Path:
@@ -142,7 +84,7 @@ def log(message: str) -> None:
 def tool(name: str) -> str:
     found = shutil.which(name)
     if not found:
-        raise SystemExit(f"pane-js: `{name}` was not found on PATH; see guests/README.md for prerequisites")
+        raise SystemExit(f"pane-js: `{name}` was not found on PATH")
     return found
 
 
@@ -166,33 +108,6 @@ def clean_env(**extra: str) -> dict[str, str]:
 
 def sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def tree_files(root: Path) -> list[Path]:
-    if root.is_file():
-        return [root]
-    files = []
-    for directory, dirs, names in os.walk(root):
-        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
-        files += [Path(directory) / name for name in names]
-    # By their parts, which compare case-sensitively everywhere: Windows
-    # paths compare ignoring case, which would order `README.md` and
-    # `adapt.js` otherwise than Linux does, and so digest them differently.
-    return sorted(files, key=lambda path: path.parts)
-
-
-def inputs_digest(paths: list[Path]) -> str:
-    """Digest of text inputs by repository-relative path, with line endings normalized."""
-    digest = hashlib.sha256()
-    for root in paths:
-        for path in tree_files(root):
-            digest.update(path.relative_to(REPO).as_posix().encode() + b"\0")
-            digest.update(path.read_bytes().replace(b"\r\n", b"\n") + b"\0")
-    return digest.hexdigest()
-
-
-def tool_inputs() -> list[Path]:
-    return [HERE / name for name in TOOL_INPUTS]
 
 
 def host_platform() -> tuple[str, str]:
@@ -231,7 +146,11 @@ def extract(archive: Path, into: Path) -> Path:
 def rust_stable() -> str:
     """The repository's pinned stable toolchain, which builds the componentizer."""
     text = (REPO / "rust-toolchain.toml").read_text(encoding="utf-8")
-    return re.search(r'^channel\s*=\s*"([^"]+)"', text, re.M).group(1)
+    return text.split('channel = "', 1)[1].split('"', 1)[0]
+
+
+def patch_digests() -> dict[str, str]:
+    return {name: sha256_file(HERE / "patches" / name) for name in PINS["patches"]}
 
 
 class Toolchain:
@@ -241,37 +160,7 @@ class Toolchain:
         self.sdk_name = f"wasi-sdk-{sdk['version']}-{arch}-{system}"
         self.sdk_digest = sdk["archive_sha256"][f"{arch}-{system}"]
         self.sdk = CACHE / self.sdk_name
-        self.key = inputs_digest(tool_inputs())[:16]
-        qjs = PINS["componentize_qjs"]
-        self.source = CACHE / "src" / f"componentize-qjs-{qjs['commit'][:12]}-{self.key}"
-        self.bin = CACHE / "bin" / self.key
-        self.runtime = self.bin / "runtime.wasm"
-        self.componentizer = self.bin / f"componentize-qjs-p3{EXE}"
-        self.node = CACHE / "node"
-        self.stamp = self.bin / "toolchain.json"
         self.sdk_libc = self.sdk / "share" / "wasi-sysroot" / "lib" / "wasm32-wasip3" / "libc.so"
-        self.libc = self.sdk_libc
-        prebuilt = os.environ.get("PANE_JS_PREBUILT")
-        self.prebuilt = Path(prebuilt).resolve() if prebuilt else None
-        if self.prebuilt:
-            self.runtime = self.prebuilt / "runtime.wasm"
-            self.libc = self.prebuilt / "libc.so"
-            self.componentizer = self.prebuilt / f"componentize-qjs-p3{EXE}"
-            self.stamp = self.prebuilt / "toolchain.json"
-
-    def ensure(self) -> dict:
-        """Makes the toolchain ready, building only what the cache lacks."""
-        if self.prebuilt:
-            missing = [path.name for path in [self.runtime, self.libc, self.componentizer, self.stamp]
-                       if not path.exists()]
-            if missing:
-                raise SystemExit(f"pane-js: PANE_JS_PREBUILT ({self.prebuilt}) lacks {', '.join(missing)}")
-        else:
-            self.ensure_sdk()
-            if not self.stamp.exists():
-                self.build()
-        self.ensure_node()
-        return json.loads(self.stamp.read_text(encoding="utf-8"))
 
     def ensure_sdk(self) -> None:
         """wasi-sdk: its compiler builds the runtime; its P3 libc is linked into every component."""
@@ -283,43 +172,19 @@ class Toolchain:
                  archive, self.sdk_digest)
         extract(archive, CACHE)
 
-    def build(self) -> None:
-        log(f"building the componentize-qjs toolchain into {CACHE}")
-        self.fetch_source()
-        self.build_runtime(self.runtime)
-        self.build_componentizer(self.runtime, self.componentizer)
-        versions = {**self.wasm_versions(self.runtime, self.libc), **self.componentizer_versions()}
-        self.stamp.write_text(json.dumps(versions, indent=2) + "\n", encoding="utf-8")
-
-    def fetch_source(self) -> None:
-        """A fresh copy of the pinned componentize-qjs with the patch queue applied."""
-        qjs = PINS["componentize_qjs"]
-        repo_path = qjs["repository"].removeprefix("https://github.com/")
-        archive = CACHE / "downloads" / f"componentize-qjs-{qjs['commit']}.tar.gz"
-        download(f"https://codeload.github.com/{repo_path}/tar.gz/{qjs['commit']}", archive, qjs["archive_sha256"])
-
-        # A fresh checkout of the pinned source with the patch queue applied.
-        if self.source.exists():
-            shutil.rmtree(self.source)
-        scratch = CACHE / "src" / "extract"
-        shutil.rmtree(scratch, ignore_errors=True)
-        extract(archive, scratch).rename(self.source)
-        shutil.rmtree(scratch)
-        git = tool("git")
-        run([git, "init", "-q"], cwd=self.source)
-        for patch in PINS["patches"]:
-            run([git, "apply", "--whitespace=nowarn", HERE / "patches" / patch], cwd=self.source)
-            log(f"applied {patch}")
-        examples = self.source / "crates" / "core" / "examples"
-        examples.mkdir(exist_ok=True)
-        shutil.copyfile(HERE / "p3_build.rs", examples / "p3_build.rs")
-
     def build_runtime(self, out: Path) -> None:
         """The QuickJS runtime, for wasm32-wasip3 against the SDK's P3 libc,
-        with the pinned nightly; needs `fetch_source` and `ensure_sdk`."""
+        with the pinned nightly: the vendored runtime crate, copied to the
+        cache so its lockfile and build artifacts stay out of the repository
+        (it is excluded from the repository's workspace, so `--locked` has
+        no lockfile to hold it to; what the runtime is built from is
+        recorded by wasm-parts.json's digests instead)."""
         nightly = PINS["rust_nightly"]
         rustup = tool("rustup")
         run([rustup, "toolchain", "install", nightly, "--profile", "minimal", "--component", "rust-src"])
+        scratch = CACHE / "src" / "runtime"
+        shutil.rmtree(scratch, ignore_errors=True)
+        shutil.copytree(VENDORED / "crates" / "runtime", scratch)
         clang = str(self.sdk / "bin" / f"clang{EXE}")
         sysroot_lib = self.sdk_libc.parent
         runtime_target = CACHE / "runtime-target"
@@ -345,29 +210,27 @@ class Toolchain:
             BINDGEN_EXTRA_CLANG_ARGS_wasm32_wasip3=shlex.quote(f"--sysroot={self.sdk / 'share' / 'wasi-sysroot'}"),
             CFLAGS_wasm32_wasip3="--target=wasm32-wasip3 -fPIC -Oz",
         )
-        run([rustup, "run", nightly, "cargo", "build", "--release", "--locked", "--target", "wasm32-wasip3",
-             "-Zbuild-std=std,panic_abort", "--manifest-path", self.source / "Cargo.toml",
-             "-p", "componentize-qjs-runtime"], env=env)
+        run([rustup, "run", nightly, "cargo", "build", "--release", "--target", "wasm32-wasip3",
+             "-Zbuild-std=std,panic_abort", "--manifest-path", scratch / "Cargo.toml"],
+            env=env)
         out.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(runtime_target / "wasm32-wasip3" / "release" / "componentize_qjs_runtime.wasm", out)
 
     def build_componentizer(self, runtime: Path, out: Path) -> None:
-        """This host's componentizer, with the stable Rust; needs `fetch_source`.
-        Its build script requires four prebuilt runtimes; Pane always passes
-        the runtime explicitly, so copies of `runtime` satisfy it."""
+        """This host's componentizer, with the stable Rust: the `p3_build`
+        example of the vendored crate, a member of the repository's
+        workspace, built in the repository (so the repository's lockfile and
+        target folder apply)."""
         stable = rust_stable()
         rustup = tool("rustup")
         run([rustup, "toolchain", "install", stable, "--profile", "minimal"])
-        prebuilt = self.source / "crates" / "core" / "prebuilt"
-        prebuilt.mkdir(exist_ok=True)
-        for name in ["runtime.wasm", "runtime-opt-size.wasm", "runtime-sync.wasm", "runtime-opt-size-sync.wasm"]:
-            shutil.copyfile(runtime, prebuilt / name)
-        componentizer_target = CACHE / "componentizer-target"
-        run([rustup, "run", stable, "cargo", "build", "--release", "--locked", "--manifest-path",
-             self.source / "Cargo.toml", "-p", "componentize-qjs", "--example", "p3_build"],
-            env=clean_env(CARGO_TARGET_DIR=str(componentizer_target)))
+        run([rustup, "run", stable, "cargo", "build", "--release", "--locked",
+             "--manifest-path", REPO / "Cargo.toml", "-p", "componentize-qjs",
+             "--example", "p3_build"], cwd=REPO, env=clean_env())
+        target = os.environ.get("CARGO_TARGET_DIR") or os.environ.get("CARGO_BUILD_TARGET_DIR") or "target"
+        built = REPO / target / "release" / "examples" / f"p3_build{EXE}"
         out.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(componentizer_target / "release" / "examples" / f"p3_build{EXE}", out)
+        shutil.copyfile(built, out)
         out.chmod(0o755)
 
     def wasm_versions(self, runtime: Path, libc: Path) -> dict:
@@ -391,33 +254,12 @@ class Toolchain:
             "built_on": "-".join(host_platform()),
         }
 
-    def ensure_node(self) -> None:
-        """esbuild and TypeScript at the versions in package-lock.json."""
-        lock = HERE / "package-lock.json"
-        marker = self.node / "node_modules" / ".pane-lock-sha256"
-        if marker.exists() and marker.read_text() == sha256_file(lock):
-            return
-        self.node.mkdir(parents=True, exist_ok=True)
-        for name in ["package.json", "package-lock.json"]:
-            shutil.copyfile(HERE / name, self.node / name)
-        npm_ci(self.node)
-        marker.write_text(sha256_file(lock))
-
-    def node_versions(self) -> dict[str, str]:
-        lock = json.loads((HERE / "package-lock.json").read_text(encoding="utf-8"))["packages"]
-        return {name: lock[f"node_modules/{name}"]["version"] for name in ["esbuild", "typescript"]}
-
-
-def patch_digests() -> dict[str, str]:
-    return {name: sha256_file(HERE / "patches" / name) for name in PINS["patches"]}
-
 
 def wasm_parts(into: Path) -> None:
     """Builds the runtime and copies the SDK's P3 libc into `into`, with
     what they were built from and their digests in `wasm-parts.json`."""
     toolchain = Toolchain()
     toolchain.ensure_sdk()
-    toolchain.fetch_source()
     runtime, libc = into / "runtime.wasm", into / "libc.so"
     toolchain.build_runtime(runtime)
     shutil.copyfile(toolchain.sdk_libc, libc)
@@ -429,7 +271,7 @@ def wasm_parts(into: Path) -> None:
 def componentizer(into: Path) -> None:
     """Builds this host's componentizer into `into` against the wasm parts
     `wasm_parts` left there, and records the whole toolchain in
-    `toolchain.json`, so that `into` can be PANE_JS_PREBUILT."""
+    `toolchain.json`, so that `into` can be a PANE_COMPONENTIZER folder."""
     record = json.loads((into / "wasm-parts.json").read_text(encoding="utf-8"))
     runtime, libc = into / "runtime.wasm", into / "libc.so"
     for path, key in [(runtime, "runtime_sha256"), (libc, "libc_sha256")]:
@@ -439,7 +281,6 @@ def componentizer(into: Path) -> None:
             or record["patches"] != patch_digests()):
         raise SystemExit("pane-js: the wasm parts were built from other pins or patches")
     toolchain = Toolchain()
-    toolchain.fetch_source()
     out = into / f"componentize-qjs-p3{EXE}"
     toolchain.build_componentizer(runtime, out)
     record.update(toolchain.componentizer_versions())
@@ -447,225 +288,29 @@ def componentizer(into: Path) -> None:
     log(f"built {out} ({sha256_file(out)})")
 
 
-def npm_ci(directory: Path) -> None:
-    # Install scripts are not needed by these packages and are not run.
-    run([tool("npm"), "ci", "--ignore-scripts", "--no-audit", "--no-fund"], cwd=directory)
-
-
-def build(package: Path, out: Path, toolchain: Toolchain) -> dict:
-    """Type-checks, bundles and componentizes the command package at `package`."""
-    package = package.resolve()
-    manifest = json.loads((package / "package.json").read_text(encoding="utf-8"))
-    entry = manifest.get("main")
-    if not entry:
-        raise SystemExit(f"pane-js: {package / 'package.json'} needs a `main` entry naming the command module")
-    # Stage the package beside Pane's types (`@pane-app/extension` is `file:../js`),
-    # so dependencies install into the cache rather than the source tree.
-    work = CACHE / "work" / f"{package.name}-{hashlib.sha256(str(package).encode()).hexdigest()[:8]}"
-    staged, types = work / package.name, work / "js"
-    shutil.rmtree(types, ignore_errors=True)
-    shutil.copytree(REPO / "guests" / "js", types)
-    if staged.exists():
-        for child in staged.iterdir():
-            if child.name != "node_modules":
-                shutil.rmtree(child) if child.is_dir() else child.unlink()
-    shutil.copytree(package, staged, dirs_exist_ok=True, ignore=shutil.ignore_patterns(*SKIP_DIRS))
-    lock = staged / "package-lock.json"
-    if lock.exists():
-        marker = staged / "node_modules" / ".pane-lock-sha256"
-        if not (marker.exists() and marker.read_text() == sha256_file(lock)):
-            npm_ci(staged)
-            marker.write_text(sha256_file(lock))
-
-    node = tool("node")
-    modules = toolchain.node / "node_modules"
-    if (staged / "tsconfig.json").exists():
-        log(f"type-checking {package.name}")
-        # From the staged package, so errors name its files as the author
-        # does ("src/index.ts(3,7): error ...").
-        run([node, modules / "typescript" / "bin" / "tsc", "-p", staged / "tsconfig.json"], cwd=staged)
-    bundle = work / "bundle.mjs"
-    adapted = work / "pane-entry.mjs"
-    adapted.write_text(adapted_entry(staged / entry, types / "adapt.js", manifest.get("pane", {})),
-                       encoding="utf-8")
-    run([node, HERE / "bundle.mjs", modules, adapted, bundle])
-
-    wit = types / "wit"
-    (wit / "deps" / "pane-extension").mkdir(parents=True, exist_ok=True)
-    for name in PANE_WIT:
-        shutil.copyfile(REPO / "wit" / name, wit / "deps" / "pane-extension" / name)
-    for path in WASI_WIT:
-        shutil.copyfile(path, wit / "deps" / path.name)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    bundled = bundle.read_text(encoding="utf-8")
-    world = command_world(manifest.get("pane", {}), uses_http(bundled), uses_programs(bundled))
-    (wit / "command.wit").write_text(world, encoding="utf-8")
-    report = run([toolchain.componentizer, wit, COMMAND_WORLD, bundle, toolchain.runtime, out],
-                 env=clean_env(QJS_P3_LIBC=str(toolchain.libc)), capture=True)
-    result = json.loads(report.strip().splitlines()[-1])
-    log(f"built {out} ({result['component_bytes']} bytes in {result['componentize_ms']} ms)")
-    return result
-
-
-# The exports the adapter wraps, by `pane` option (None: always), each with
-# the handler that answers errors as text (see guests/js/adapt.js).
-ADAPTED_PROVIDERS = {
-    "rootResults": ("rootResults", "resultsFor"),
-    "indexedResults": ("indexedResults", "results"),
-    "operations": ("publishedOperations", "runOperation"),
-    "search": ("commandSearch", "search"),
-    "service": ("service", "runCycle"),
-}
-
-
-def adapted_entry(entry: Path, adapter: Path, options: dict) -> str:
-    """The module bundled for `entry`: its exports, with the ones Pane calls
-    wrapped by `adapter` so that what a handler throws is an error, not a
-    crash, and `console` installed before the command's module loads."""
-    entry_js, adapter_js = json.dumps(entry.as_posix()), json.dumps(adapter.as_posix())
-    # `console` first, so that the command's own module has it as it loads.
-    console_js = json.dumps((adapter.parent / "console.js").as_posix())
-    lines = [
-        f"import {console_js};",
-        f"import * as extension from {entry_js};",
-        f"import {{ adaptCommand, adaptProvider }} from {adapter_js};",
-        f"export * from {entry_js};",
-        "export const command = adaptCommand(extension.command);",
-    ]
-    for option, (name, handler) in ADAPTED_PROVIDERS.items():
-        if options.get(option):
-            lines.append(f"export const {name} = adaptProvider(extension.{name}, {json.dumps(handler)});")
-    return "\n".join(lines) + "\n"
-
-
-# `wasi:http`'s client, which a command imports only if its bundle uses it
-# (itself, or through `@pane-app/extension/http`), as a Rust command's component
-# imports only what its code calls: Pane lists a package whose component
-# imports it as one that uses the network.
-HTTP_IMPORT = "wasi:http/client@0.3.0"
-
-
-def uses_http(bundle: str) -> bool:
-    """Whether the bundled module imports any `wasi:http` interface."""
-    return re.search(r"""(?:from|import)\s*\(?\s*["']wasi:http/""", bundle) is not None
-
-
-# Pane's system programs (wit/programs.wit), which a command imports only if
-# its bundle uses them (itself, or through `@pane-app/extension/programs`), as a
-# Rust command's component imports only what its code calls: Pane lists a
-# package whose component imports them as one that runs system programs.
-PROGRAMS_IMPORT = "pane:extension/programs@0.1.0"
-
-
-def uses_programs(bundle: str) -> bool:
-    """Whether the bundled module imports Pane's system programs."""
-    return re.search(r"""(?:from|import)\s*\(?\s*["']pane:extension/programs@""", bundle) is not None
-
-
-def command_world(options: dict, http: bool, programs: bool = False) -> str:
-    """The world `js-command`: `js-extension` exporting and importing what
-    `options` name, importing `wasi:http`'s client if `http` and Pane's
-    system programs if `programs`."""
-    unknown = sorted(set(options) - set(EXPORT_OPTIONS) - set(IMPORT_OPTIONS))
-    if unknown:
-        raise SystemExit(f"pane-js: unknown \"pane\" options in package.json: {', '.join(unknown)}")
-    exports = "".join(f"  export {interface};\n" for option, interface in EXPORT_OPTIONS.items()
-                      if options.get(option))
-    imports = "".join(f"  import {interface};\n" for option, interface in IMPORT_OPTIONS.items()
-                      if options.get(option))
-    if http:
-        imports += f"  import {HTTP_IMPORT};\n"
-    if programs:
-        imports += f"  import {PROGRAMS_IMPORT};\n"
-    return (f"package pane:js-guest@0.1.0;\n\nworld {COMMAND_WORLD} {{\n  include {WORLD};\n"
-            f"{imports}{exports}}}\n")
-
-
-def component_inputs(source: str) -> str:
-    pane_wit = [REPO / "wit" / name for name in PANE_WIT] + WASI_WIT
-    return inputs_digest(tool_inputs() + pane_wit + [REPO / "guests" / "js", REPO / source])
-
-
-def samples() -> None:
-    toolchain = Toolchain()
-    versions = toolchain.ensure()
-    components = {}
-    for name, source in SAMPLES:
-        out = PREBUILT / name
-        build(REPO / source, out, toolchain)
-        components[name] = {
-            "source": source,
-            "inputs_sha256": component_inputs(source),
-            "bytes": out.stat().st_size,
-            "sha256": sha256_file(out),
-        }
-    manifest = {
-        "about": ("JS/TS sample components used by tests and `cargo run -p pane`; rebuild with "
-                  "`cargo xtask js-guests`. Rebuilds are not byte-identical: the QuickJS snapshot "
-                  "holds build-time state. inputs_sha256 covers the sources and toolchain pins."),
-        "toolchain": {**versions, **toolchain.node_versions()},
-        "components": components,
-    }
-    MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    log(f"wrote {MANIFEST}")
-
-
-def check() -> None:
-    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    problems = []
-    for name, source in SAMPLES:
-        entry = manifest["components"].get(name)
-        path = PREBUILT / name
-        if entry is None or not path.exists():
-            problems.append(f"{name} is missing")
-            continue
-        if sha256_file(path) != entry["sha256"]:
-            problems.append(f"{name} does not match its manifest sha256")
-        if component_inputs(source) != entry["inputs_sha256"]:
-            problems.append(f"{name} is stale: {source} or the toolchain pins changed since it was built")
+def check_parts(fresh: Path) -> None:
+    """Verifies the committed wasm parts (tools/componentize-js/wasm-parts)
+    against the fresh build in `fresh`: their bytes and the record of what
+    built them, so the committed files cannot drift from the vendored source
+    they should have been built from."""
+    problems = [name for name in ["runtime.wasm", "libc.so", "wasm-parts.json"]
+                if sha256_file(fresh / name) != sha256_file(WASM_PARTS / name)]
     if problems:
-        raise SystemExit("pane-js: " + "; ".join(problems) + ". Run `cargo xtask js-guests`.")
-    log("prebuilt components match their sources")
-    check_npm_licenses()
-
-
-# npm packages bundled into components must keep them permissively licensed,
-# like the Cargo policy in guests/deny.toml.
-NPM_LICENSES = {"MIT", "MIT-0", "Apache-2.0", "Apache-2.0 OR MIT", "MIT OR Apache-2.0", "BSD-2-Clause",
-                "BSD-3-Clause", "ISC", "0BSD", "Zlib", "CC0-1.0", "Unlicense"}
-
-
-def check_npm_licenses() -> None:
-    problems = []
-    for _, source in SAMPLES:
-        lock = json.loads((REPO / source / "package-lock.json").read_text(encoding="utf-8"))
-        for path, package in lock.get("packages", {}).items():
-            if package.get("link") or path.startswith("..") or not path:
-                continue  # in-repo packages carry the repository's own license
-            if not package.get("dev") and package.get("license") not in NPM_LICENSES:
-                problems.append(f"{source}: {path} is licensed {package.get('license')!r}")
-    if problems:
-        raise SystemExit("pane-js: bundled npm packages need a license review: " + "; ".join(problems))
-    log("bundled npm packages are permissively licensed")
+        raise SystemExit("pane-js: the committed wasm parts (tools/componentize-js/wasm-parts) "
+                         f"do not match the fresh build: {', '.join(problems)} differ. Rebuild them "
+                         "with `pane_js.py wasm-parts tools/componentize-js/wasm-parts`, commit "
+                         "them, and rebuild the samples with `cargo xtask js-guests`.")
+    log("the committed wasm parts match the fresh build")
 
 
 def main(argv: list[str]) -> None:
     match argv:
-        case ["toolchain"]:
-            Toolchain().ensure()
-            log(f"toolchain ready in {CACHE}")
         case ["wasm-parts", into]:
             wasm_parts(Path(into).resolve())
         case ["componentizer", into]:
             componentizer(Path(into).resolve())
-        case ["build", package, out]:
-            toolchain = Toolchain()
-            toolchain.ensure()
-            build(Path(package), Path(out).resolve(), toolchain)
-        case ["samples"]:
-            samples()
-        case ["check"]:
-            check()
+        case ["check-parts", fresh]:
+            check_parts(Path(fresh).resolve())
         case _:
             raise SystemExit(__doc__)
 
@@ -674,8 +319,7 @@ if __name__ == "__main__":
     try:
         main(sys.argv[1:])
     except SystemExit as failure:
-        # A failure is one line starting "pane-js: error:" on standard error,
-        # which Pane's development mode shows as a build's first error.
+        # A failure is one line starting "pane-js: error:" on standard error.
         message = failure.code
         if isinstance(message, str) and message.startswith("pane-js: "):
             print("pane-js: error: " + message.removeprefix("pane-js: "), file=sys.stderr, flush=True)

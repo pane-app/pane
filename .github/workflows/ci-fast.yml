@@ -100,6 +100,11 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           tests: true
+      # Development mode's JavaScript and TypeScript builds need Node.js
+      # and npm (#218); the setup action installs none.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - name: Build guests and run this shard of the tests
         run: cargo xtask ci-tests --partition hash:${{ matrix.shard }}
       # As in ci-branch.yml: the Linux (X11) clipboard adapter's test
@@ -152,6 +157,11 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           tests: true
+      # The chosen tests may be the JavaScript/TypeScript ones, which need
+      # Node.js and npm (#218); the setup action installs none.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - name: Build guests and run the chosen tests
         shell: bash
         run: cargo xtask ci-tests -E "$TESTS"
@@ -160,23 +170,25 @@ jobs:
 
   # The JS/TS sample components are committed (guests/prebuilt), and the
   # verify tier's prebuilt-samples check fails once their sources, the
-  # SDK or the WIT change. Rebuilding them needs the pinned componentize
-  # toolchain, a heavy build an implementing agent's machine should not
-  # pay, so a push whose committed components are stale rebuilds them
-  # here and uploads them as the `js-guests` artifact; the agent commits
-  # it (`gh run download <run> -n js-guests -D guests/prebuilt`) before
-  # asking for a verify run. A push whose components are current skips
-  # the rebuild after the check.
+  # SDK, the WIT or the toolchain change. Rebuilding them is pane-build's
+  # JavaScript build (#218), which needs Node.js and npm alone and the
+  # repository's own Rust (the componentizer linked in), so a push whose
+  # committed components are stale rebuilds them here and uploads them as
+  # the `js-guests` artifact; the agent commits it (`gh run download <run>
+  # -n js-guests -D guests/prebuilt`) before asking for a verify run. A
+  # push whose components are current skips the rebuild after the check;
+  # no Python, nightly Rust, wasi-sdk or toolchain cache is involved.
   js-guests:
     name: Rebuild stale JS/TS samples (ubuntu-24.04)
     if: ${{ !inputs.verify }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
       - name: Check whether the committed components are current
         id: stale
         run: |
-          if python3 tools/componentize-js/pane_js.py check; then
+          if cargo xtask js-guests --check; then
             echo "stale=false" >> "$GITHUB_OUTPUT"
           else
             echo "stale=true" >> "$GITHUB_OUTPUT"
@@ -185,22 +197,9 @@ jobs:
         if: steps.stale.outputs.stale == 'true'
         with:
           node-version: 24
-      - name: Install the pinned Rust toolchain
-        if: steps.stale.outputs.stale == 'true'
-        run: rustup toolchain install
-      # The same toolchain cache as ci.yml's js-guests job, so a run on
-      # main has usually built it already.
-      - uses: actions/cache@v4
-        if: steps.stale.outputs.stale == 'true'
-        with:
-          path: |
-            ~/.cache/pane/componentize-js/bin
-            ~/.cache/pane/componentize-js/downloads
-            ~/.cache/pane/componentize-js/node
-          key: js-toolchain-${{ runner.os }}-${{ hashFiles('tools/componentize-js/**', 'rust-toolchain.toml') }}
       - name: Rebuild the JS/TS sample components
         if: steps.stale.outputs.stale == 'true'
-        run: python3 tools/componentize-js/pane_js.py samples
+        run: cargo xtask js-guests
       - name: Upload the rebuilt components
         if: steps.stale.outputs.stale == 'true'
         uses: actions/upload-artifact@v4

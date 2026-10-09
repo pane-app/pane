@@ -13,10 +13,14 @@
 //!   is the one cargo reports it built this time, wherever its target folder
 //!   is (a workspace member, `CARGO_TARGET_DIR`, `build.target-dir`), never
 //!   an older file left where the manifest points.
-//! - **JavaScript or TypeScript**, a folder with `package.json`: Pane's JS
-//!   build, `python3 tools/componentize-js/pane_js.py build <folder> <out>`,
-//!   once for each component the manifest names, writing straight into the
-//!   staging folder.
+//! - **JavaScript or TypeScript**, a folder with `package.json`: Pane's own
+//!   JS build (`crate::js`: `npm ci` of the locked dependencies into a
+//!   staging copy, the package's `tsc`, esbuild around Pane's adapter, and
+//!   the componentizer), once for each component the manifest names,
+//!   writing straight into the staging folder. It needs Node.js and npm
+//!   alone; the componentizer is Pane's own, linked in (`pane-ext`, and
+//!   Pane's tests) or the binary the package's `@pane-app/cli` platform
+//!   package installed.
 //!
 //! It is not a general build system: there is no build command of the
 //! package's own, and a folder with neither file cannot be developed.
@@ -92,6 +96,13 @@ impl BuildJob {
     /// package outside development mode, such as in a test.
     pub fn new(staging: PathBuf) -> BuildJob {
         BuildJob::with(BuildStop::default(), staging, BuildOutput::new(None))
+    }
+
+    /// A run like [`BuildJob::new`] whose lines are also shown as they are
+    /// printed (`cargo xtask js-guests` builds in a terminal).
+    pub fn echoing(staging: PathBuf, echo: Echo) -> BuildJob {
+        let output = BuildOutput::new(None).echoing(Some(echo));
+        BuildJob::with(BuildStop::default(), staging, output)
     }
 
     pub(crate) fn with(stop: BuildStop, staging: PathBuf, output: BuildOutput) -> BuildJob {
@@ -248,11 +259,9 @@ impl BuildOutput {
 pub struct Toolchains<M> {
     /// Cargo, which builds Rust packages; `None` if none was found.
     pub cargo: Option<PathBuf>,
-    /// The Python interpreter that runs Pane's JavaScript build.
-    pub python: Option<PathBuf>,
-    /// Pane's JavaScript build, `tools/componentize-js/pane_js.py` of a Pane
-    /// source checkout; `None` if this Pane does not know one.
-    pub componentize_js: Option<PathBuf>,
+    /// How a JavaScript or TypeScript package is componentized (see
+    /// [`Componentizer`]).
+    pub componentizer: Componentizer,
     /// Reads the components a package's manifest names.
     pub manifests: M,
 }
@@ -260,44 +269,81 @@ pub struct Toolchains<M> {
 /// Where [`Toolchains::from_env`] looks, for the explanation when it finds
 /// nothing.
 const CARGO_LOOKUP: &str = "cargo on PATH, then ~/.cargo/bin/cargo";
-const PYTHON_LOOKUP: &str = if cfg!(windows) {
-    "PANE_PYTHON, then python3 and python on PATH (not the Microsoft Store's WindowsApps stub)"
-} else {
-    "PANE_PYTHON, then python3 on PATH"
-};
+
+/// How a JavaScript or TypeScript package's build componentizes it.
+#[derive(Clone, Debug)]
+pub enum Componentizer {
+    /// A componentizer binary: the folder [`Toolchains::from_env`] resolved
+    /// holds `componentize-qjs-p3`, `runtime.wasm` and `libc.so` — named by
+    /// `PANE_COMPONENTIZER`, or the one a Pane source checkout builds
+    /// (`target/guests/componentizer`, which `cargo xtask guests` makes) —
+    /// else the package's own `@pane-app/cli` platform package
+    /// (`node_modules/@pane-app/cli-<target>/`, which `npm install`
+    /// provides), whose version the package pins.
+    Binary(Option<PathBuf>),
+    /// In this process: the componentizer pane-build links when built with
+    /// its `componentizer` feature (`pane-ext` is, and Pane's own tests
+    /// through its dev-dependencies), embedding the committed `runtime.wasm`
+    /// and `libc.so` ([`crate::js_assets`]). [`Toolchains::from_env`] returns
+    /// it whenever it is compiled in.
+    #[cfg(feature = "componentizer")]
+    Linked,
+}
 
 impl<M: ManifestFiles + Default> Toolchains<M> {
     /// The tools as this computer names them: `cargo` on `PATH` (rustup's
     /// proxy, so a package's `rust-toolchain.toml` applies), else in
-    /// `~/.cargo/bin` (`%USERPROFILE%\.cargo\bin` on Windows); Python as
-    /// `PANE_PYTHON`, else `python3` on `PATH`, else on Windows `python`
-    /// (not the Microsoft Store stub in `WindowsApps`); and Pane's JS build
-    /// as `PANE_COMPONENTIZE_JS`, else `default_js` if that file exists.
-    pub fn from_env(default_js: Option<PathBuf>) -> Toolchains<M> {
+    /// `~/.cargo/bin` (`%USERPROFILE%\.cargo\bin` on Windows); and how a
+    /// JavaScript or TypeScript package is componentized: the folder
+    /// `PANE_COMPONENTIZER` names, else this process's own componentizer
+    /// where one is linked in, else the default folder when it holds one,
+    /// else the binary the package itself installed.
+    pub fn from_env(default_folder: Option<PathBuf>) -> Toolchains<M> {
         let home = env_path(if cfg!(windows) { "USERPROFILE" } else { "HOME" });
         let cargo = find_on_path("cargo", |_| true).or_else(|| {
             let cargo = home?.join(".cargo/bin").join(executable("cargo"));
             cargo.is_file().then_some(cargo)
         });
-        let python = env_path("PANE_PYTHON")
-            .or_else(|| find_on_path("python3", not_store_stub))
-            .or_else(|| {
-                cfg!(windows)
-                    .then(|| find_on_path("python", not_store_stub))
-                    .flatten()
-            });
-        let componentize_js =
-            env_path("PANE_COMPONENTIZE_JS").or_else(|| default_js.filter(|path| path.is_file()));
+        let componentizer = match env_path("PANE_COMPONENTIZER") {
+            // Even a build with a componentizer of its own linked in obeys
+            // it, so a specific binary is built with (one a workflow built,
+            // a package's own): PANE_COMPONENTIZER names a folder holding
+            // `componentize-qjs-p3`, `runtime.wasm` and `libc.so`.
+            Some(folder) => Componentizer::Binary(Some(folder)),
+            None => default_componentizer(default_folder),
+        };
         Toolchains {
             cargo,
-            python,
-            componentize_js,
+            componentizer,
             manifests: M::default(),
         }
     }
 }
 
-fn env_path(name: &str) -> Option<PathBuf> {
+/// The componentizer a build uses when none is named: its own, linked in
+/// (see [`Componentizer::Linked`]), else the default folder when it holds
+/// one, else whatever the package itself installed.
+fn default_componentizer(default: Option<PathBuf>) -> Componentizer {
+    // With its `componentizer` feature pane-build componentizes in this
+    // process; without it, a checkout's componentizer folder serves, and
+    // without either the package's own does.
+    #[cfg(feature = "componentizer")]
+    {
+        let _ = default;
+        return Componentizer::Linked;
+    }
+    #[cfg(not(feature = "componentizer"))]
+    {
+        return match default
+            .filter(|folder| crate::js::componentizer_parts(folder).is_ok())
+        {
+            Some(folder) => Componentizer::Binary(Some(folder)),
+            None => Componentizer::Binary(None),
+        };
+    }
+}
+
+pub(crate) fn env_path(name: &str) -> Option<PathBuf> {
     std::env::var_os(name)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
@@ -313,18 +359,11 @@ fn executable(name: &str) -> String {
 
 /// The first file `name` (with `.exe` on Windows) on `PATH` that `accept`
 /// takes.
-fn find_on_path(name: &str, accept: impl Fn(&Path) -> bool) -> Option<PathBuf> {
+pub(crate) fn find_on_path(name: &str, accept: impl Fn(&Path) -> bool) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
         .map(|dir| dir.join(executable(name)))
         .find(|candidate| candidate.is_file() && accept(candidate))
-}
-
-/// Windows' `python.exe` in `WindowsApps` only offers the Microsoft Store.
-fn not_store_stub(path: &Path) -> bool {
-    !path
-        .components()
-        .any(|part| part.as_os_str().eq_ignore_ascii_case("WindowsApps"))
 }
 
 impl<M: ManifestFiles + Clone> Builder for Toolchains<M> {
@@ -345,20 +384,25 @@ impl<M: ManifestFiles + Clone> Builder for Toolchains<M> {
             }));
         }
         if folder.join("package.json").is_file() {
-            let Some(python) = self.python.clone() else {
-                return Err(format!(
-                    "Pane found no Python to run its JavaScript build (it looked for {PYTHON_LOOKUP})"
-                ));
-            };
-            let Some(tool) = self.componentize_js.clone() else {
-                return Err("Pane does not know where its JavaScript build is: set \
-                            PANE_COMPONENTIZE_JS to tools/componentize-js/pane_js.py in a Pane \
-                            source checkout"
-                    .into());
+            let componentizer = match self.componentizer.clone() {
+                #[cfg(feature = "componentizer")]
+                Componentizer::Linked => Componentizer::Linked,
+                Componentizer::Binary(None) => match crate::js::package_componentizer(folder) {
+                    Ok(package) => Componentizer::Binary(Some(package)),
+                    Err(reason) => return Err(reason),
+                },
+                Componentizer::Binary(Some(folder)) => {
+                    match crate::js::componentizer_parts(&folder) {
+                        Ok(_) => Componentizer::Binary(Some(folder)),
+                        Err(reason) => return Err(format!(
+                            "PANE_COMPONENTIZER ({}) holds no componentizer: {reason}",
+                            folder.display()
+                        )),
+                    }
+                }
             };
             return Ok(Arc::new(JsBuild {
-                python,
-                tool,
+                componentizer,
                 folder: folder.to_path_buf(),
                 components,
                 manifests,
@@ -513,35 +557,33 @@ fn stage(from: &Path, to: &Path) -> std::io::Result<()> {
     std::fs::copy(from, to).map(|_| ())
 }
 
-/// A JavaScript or TypeScript package: Pane's JS build, once per component.
+/// A JavaScript or TypeScript package: Pane's own JS build
+/// (`crate::js`), once per component.
 struct JsBuild {
-    python: PathBuf,
-    tool: PathBuf,
+    componentizer: Componentizer,
     folder: PathBuf,
     components: Vec<PathBuf>,
     manifests: Arc<dyn ManifestFiles>,
 }
 
 impl JsBuild {
-    fn command_for(&self, out: &Path) -> String {
-        format!(
-            "{} {} build {} {}",
-            quoted_path(&self.python),
-            quoted_path(&self.tool),
-            quoted_path(&self.folder),
-            quoted_path(out)
-        )
+    /// The build's steps, as the author would read them: the tools the
+    /// build runs, in order, in the package folder. `tsc` runs only where
+    /// the package has a `tsconfig.json`; `npm ci` only when the lockfile
+    /// changed.
+    fn steps(&self) -> String {
+        if self.folder.join("tsconfig.json").is_file() {
+            "npm ci --ignore-scripts && tsc -p tsconfig.json && esbuild --bundle && componentize"
+        } else {
+            "npm ci --ignore-scripts && esbuild --bundle && componentize"
+        }
+        .into()
     }
 }
 
 impl Build for JsBuild {
     fn command(&self) -> String {
-        let commands: Vec<String> = self
-            .components
-            .iter()
-            .map(|component| self.command_for(&self.folder.join(component)))
-            .collect();
-        commands.join(" && ")
+        self.steps()
     }
 
     fn ignores(&self, path: &Path) -> bool {
@@ -555,14 +597,7 @@ impl Build for JsBuild {
         };
         for component in components {
             let out = job.staging().join(&component);
-            let mut command = Command::new(&self.python);
-            command
-                .current_dir(&self.folder)
-                .arg(&self.tool)
-                .arg("build")
-                .arg(&self.folder)
-                .arg(&out);
-            match job.run_command(command, &self.command_for(&out), None) {
+            match crate::js::build_js_command(job, &self.folder, &out, &self.componentizer) {
                 BuildOutcome::Built => {}
                 other => return other,
             }

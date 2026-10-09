@@ -11,8 +11,10 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-# How a package is built, once or on each save: development mode's own.
-pane-build = { path = "../pane-build" }
+# How a package is built, once or on each save: development mode's own,
+# with the componentizer linked in, so `pane-ext dev` builds a JavaScript or
+# TypeScript package with no tool but Node.js and npm.
+pane-build = { path = "../pane-build", features = ["componentizer"] }
 # Pane's manifest rules, and the local channel to the running Pane.
 pane-core = { path = "../pane-core" }
 

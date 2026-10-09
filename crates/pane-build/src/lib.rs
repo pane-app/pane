@@ -7,7 +7,9 @@
 //! - [`Build`] and [`Builder`] say what a build is; [`Toolchains`] is Pane's,
 //!   one adapter per language.
 //! - [`build_package`] builds a folder once and returns its staged
-//!   components, or why it did not build.
+//!   components, or why it did not build; [`build_js_command`] is the
+//!   JavaScript/TypeScript build of one command, which `cargo xtask
+//!   js-guests` runs as well.
 //! - [`Prepared`] and [`Session`] build a folder after each save, handing each
 //!   build that succeeds to a [`Host`]: Pane's launcher reloads the package
 //!   from it.
@@ -24,10 +26,14 @@ mod build;
 pub mod process_tree;
 mod session;
 mod sources;
+mod js;
+mod js_assets;
 
 pub use build::{
-    Build, BuildJob, BuildOutcome, Builder, Echo, Toolchains, build_package, is_save, stage_package,
+    Build, BuildJob, BuildOutcome, Builder, Componentizer, Echo, Toolchains, build_package,
+    is_save, stage_package,
 };
+pub use js::build_js_command;
 pub use session::{
     BuildFailure, Claim, Development, Host, MAX_OBSOLETE, Prepared, Session, Worker,
     copy_components,

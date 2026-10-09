@@ -1,14 +1,18 @@
 name: Componentizer
 
-# Pane's patched componentize-qjs (tools/componentize-js) for every
-# platform `pane-ext` will ship on (#215, spec #128): Windows, macOS and
-# Linux on x64 and arm64. The wasm parts, the QuickJS runtime and wasi-sdk's
-# WASI 0.3 libc, are the same everywhere, so one Linux job builds them and
-# records their digests; each platform's job builds its own componentizer
-# against them with the stable Rust, uploads it, componentizes the
-# TypeScript sample with it and runs Pane's install and sample checks on
-# the result. It runs on demand and when the toolchain changes; nothing
-# else waits for it. docs/agents/ci.md describes the tiers.
+# Pane's componentizer (tools/componentize-js/componentize-qjs, vendored
+# with the patch queue applied in its source) for every platform `pane-ext`
+# will ship on (#215, spec #128): Windows, macOS and Linux on x64 and arm64.
+# The wasm parts, the QuickJS runtime and wasi-sdk's WASI 0.3 libc, are the
+# same everywhere, so one Linux job builds them and records their digests —
+# and compares them with the committed parts (tools/componentize-js/
+# wasm-parts) that the repository's JS/TS builds embed, so those cannot
+# drift from the source. Each platform's job builds its own componentizer
+# against them with the stable Rust, uploads it, rebuilds the JS/TS samples
+# through pane-build's build with that binary (PANE_COMPONENTIZER, the same
+# path an installed Pane's development mode spawns) and runs Pane's install
+# and sample checks on the result. It runs on demand and when the toolchain
+# changes; nothing else waits for it. docs/agents/ci.md describes the tiers.
 on:
   workflow_dispatch:
   push:
@@ -52,6 +56,11 @@ jobs:
             cat "$parts/wasm-parts.json"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+      # The repository builds JS/TS packages with the committed parts
+      # (tools/componentize-js/wasm-parts), so they must not drift from the
+      # vendored source this fresh build came from.
+      - name: Check the committed wasm parts against the fresh build
+        run: python tools/componentize-js/pane_js.py check-parts "$RUNNER_TEMP/wasm-parts"
       - uses: actions/upload-artifact@v4
         with:
           name: componentizer-wasm-parts
@@ -107,16 +116,16 @@ jobs:
             ${{ runner.temp }}/toolchain/componentize-qjs-p3*
             ${{ runner.temp }}/toolchain/toolchain.json
           if-no-files-found: error
-      # The committed TypeScript sample is replaced by this platform's
-      # build of it, which the guests step copies to target/guests.
-      - name: Componentize the TypeScript sample with it
-        run: python tools/componentize-js/pane_js.py build guests/sample-ts guests/prebuilt/sample_ts.wasm
+      # The committed JS/TS samples are replaced by this platform's builds
+      # of them, through pane-build's build with this binary — the same
+      # build path an installed Pane's development mode spawns (the
+      # componentizer of the package's own @pane-app/cli platform package).
+      - name: Rebuild the JS/TS samples with it
+        run: cargo xtask js-guests
         env:
-          PANE_JS_PREBUILT: ${{ runner.temp }}/toolchain
-      - name: Build the guests
-        run: cargo xtask guests
-      # The sample's contract checks, and installing packages whose
-      # command is the sample: Pane's install checks, then running it.
+          PANE_COMPONENTIZER: ${{ runner.temp }}/toolchain
+      # The samples' contract checks, and installing packages whose command
+      # is the TypeScript sample: Pane's install checks, then running it.
       - name: Install and run the sample through Pane
         run: cargo test -p pane-core --test integration -- "samples::typescript::" "packages::"
 

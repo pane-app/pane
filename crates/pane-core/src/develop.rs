@@ -2,10 +2,13 @@
 //! on save (ADR 0004; #12, #13). What a build is, and the session that runs
 //! one after each save, are the `pane-build` crate's, which `pane-ext`
 //! builds with too (ADR 0047, #216); this module gives it Pane's manifest.
+//! Its JavaScript and TypeScript build (#218) is `pane-build`'s own, linked
+//! in through the dev-dependency below, so Pane's tests build a JS/TS
+//! package with Node.js and npm alone.
 
 use std::path::{Path, PathBuf};
 
-pub use pane_build::{Build, BuildJob, BuildOutcome, Builder};
+pub use pane_build::{Build, BuildJob, BuildOutcome, Builder, Componentizer};
 
 use crate::packages::Manifest;
 
@@ -59,8 +62,9 @@ mod tests {
     fn toolchains() -> Toolchains {
         Toolchains {
             cargo: Some("cargo".into()),
-            python: Some("python3".into()),
-            componentize_js: Some(PathBuf::from("/pane/tools/componentize-js/pane_js.py")),
+            // In this process, as Pane's tests build with (pane-build's
+            // `componentizer` feature, a dev-dependency of pane-core's).
+            componentizer: Componentizer::Linked,
             manifests: PaneManifest,
         }
     }
@@ -91,19 +95,15 @@ mod tests {
     }
 
     #[test]
-    fn a_folder_with_package_json_builds_each_component_with_pane_js() {
+    fn a_folder_with_package_json_builds_with_pane_js() {
         let folder = tempfile::tempdir().unwrap();
         manifest(folder.path(), "dist/hello.wasm");
         std::fs::write(folder.path().join("package.json"), "{}").unwrap();
+        std::fs::write(folder.path().join("tsconfig.json"), "{}").unwrap();
         let build = toolchains().build_for(folder.path()).unwrap();
-        let dir = folder.path().display();
-        let out = folder.path().join("dist/hello.wasm");
         assert_eq!(
             build.command(),
-            format!(
-                "python3 /pane/tools/componentize-js/pane_js.py build {dir} {}",
-                out.display()
-            )
+            "npm ci --ignore-scripts && tsc -p tsconfig.json && esbuild --bundle && componentize"
         );
         for output in ["dist", "dist/hello.wasm", "node_modules/zod/index.js"] {
             assert!(!is_save(Path::new(output), &*build), "{output}");
@@ -111,27 +111,12 @@ mod tests {
         for source in ["src/index.ts", "package.json", "tsconfig.json", "pane.json"] {
             assert!(is_save(Path::new(source), &*build), "{source}");
         }
-    }
-
-    #[test]
-    fn commands_quote_paths_with_spaces() {
-        let folder = tempfile::tempdir().unwrap();
-        let spaced = folder.path().join("my package");
-        std::fs::create_dir(&spaced).unwrap();
-        manifest(&spaced, "dist/hello.wasm");
-        std::fs::write(spaced.join("package.json"), "{}").unwrap();
-        let tools = Toolchains {
-            python: Some("/opt/my python/bin/python3".into()),
-            ..toolchains()
-        };
-        let command = tools.build_for(&spaced).unwrap().command();
-        assert!(
-            command.starts_with("\"/opt/my python/bin/python3\" "),
-            "{command}"
-        );
-        assert!(
-            command.contains(&format!("\"{}\"", spaced.display())),
-            "{command}"
+        // Without a tsconfig there is no type-checking step.
+        std::fs::remove_file(folder.path().join("tsconfig.json")).unwrap();
+        let build = toolchains().build_for(folder.path()).unwrap();
+        assert_eq!(
+            build.command(),
+            "npm ci --ignore-scripts && esbuild --bundle && componentize"
         );
     }
 
@@ -164,18 +149,22 @@ mod tests {
         let error = toolchains().build_for(folder.path()).err().unwrap();
         assert!(error.contains("neither Cargo.toml"), "{error}");
         std::fs::write(folder.path().join("package.json"), "{}").unwrap();
-        let no_js = Toolchains {
-            componentize_js: None,
+        // A package without Pane's CLI installed, when no componentizer of
+        // Pane's own is linked in or named: run npm install.
+        let no_cli = Toolchains {
+            componentizer: Componentizer::Binary(None),
             ..toolchains()
         };
-        let error = no_js.build_for(folder.path()).err().unwrap();
-        assert!(error.contains("PANE_COMPONENTIZE_JS"), "{error}");
-        let no_python = Toolchains {
-            python: None,
-            ..toolchains()
+        let error = no_cli.build_for(folder.path()).err().unwrap();
+        assert!(error.contains("npm install"), "{error}");
+        assert!(error.contains("node_modules/@pane-app/cli-"), "{error}");
+        // A componentizer folder that holds none is explained too.
+        let empty = Toolchains {
+            componentizer: Componentizer::Binary(Some(PathBuf::from("/pane/componentizer"))),
+            ..no_cli
         };
-        let error = no_python.build_for(folder.path()).err().unwrap();
-        assert!(error.contains("PANE_PYTHON, then python3"), "{error}");
+        let error = empty.build_for(folder.path()).err().unwrap();
+        assert!(error.contains("PANE_COMPONENTIZER"), "{error}");
         std::fs::write(folder.path().join("Cargo.toml"), "").unwrap();
         let no_cargo = Toolchains {
             cargo: None,

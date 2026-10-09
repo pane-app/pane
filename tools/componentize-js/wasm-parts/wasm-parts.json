@@ -1,0 +1,18 @@
+{
+  "componentize_qjs": {
+    "repository": "https://github.com/andreiltd/componentize-qjs",
+    "version": "0.4.5",
+    "commit": "e563c6d6ae50b087980414015663ca9c948c09bb"
+  },
+  "patches": {
+    "0001-wasip3-runtime-port.patch": "9501a0f531b94a34b2b9dcc9c01542aa17ba825483c4184a2f0651696f542fbd",
+    "0002-reseed-snapshot-random-state.patch": "3cd7fd913f1e3dfc38214700e499b22c5f0bdfd371d299ab1aab7dc1309611d6",
+    "0003-stub-async-host-imports.patch": "aaa2682a2ef3c6eddee881c40feac927038d1e92af5fb16e5ee35a28e60aa46f",
+    "0004-task-context-stack-pointer.patch": "59ab1f9298b2fc330ea75a9fbd04bae046a2bc9e5790eb3d1376a88735f6cc60",
+    "0005-native-output.patch": "77f027eaca60c3c13bd37cb351b3686affb6dd16a08f6188ba9a5556356ccff3"
+  },
+  "runtime_rustc": "rustc 1.101.0-nightly (75a75c3e0 2026-09-26)",
+  "wasi_sdk": "34.0",
+  "runtime_sha256": "6c1706c03b4499dffd554eea98934929313b4b42040bb2eae4c9949ca10a4d3a",
+  "libc_sha256": "a8d7b7073fcece887a573c1b7b4cd3b1b215da579ed7ab2f1dff8baf76b7fae9"
+}

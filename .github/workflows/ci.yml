@@ -215,6 +215,12 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           tests: true
+      # Development mode's JavaScript and TypeScript builds (#218) run with
+      # the componentizer linked in, un-gated: Node.js and npm alone build
+      # them, and the setup action installs neither.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - name: Build guests and run this shard of the tests
         run: cargo xtask ci-tests --partition hash:${{ matrix.shard }}
       # The Linux (X11) clipboard adapter's test replaces what is on the
@@ -345,22 +351,12 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Committed components match their sources and toolchain pins
-        run: python3 tools/componentize-js/pane_js.py check
+      - uses: ./.github/actions/setup
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - uses: ./.github/actions/setup
-      # The built toolchain (runtime, componentizer, npm tools) and the pinned
-      # downloads, in the default PANE_JS_TOOLCHAIN_DIR; the Rust build
-      # directories are not kept. The test shards below restore it too.
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/pane/componentize-js/bin
-            ~/.cache/pane/componentize-js/downloads
-            ~/.cache/pane/componentize-js/node
-          key: js-toolchain-${{ runner.os }}-${{ hashFiles('tools/componentize-js/**', 'rust-toolchain.toml') }}
+      - name: Committed components match their sources and toolchain pins
+        run: cargo xtask js-guests --check
       - name: Rebuild the JS/TS sample components
         run: cargo xtask js-guests
       - name: Upload the rebuilt components
@@ -370,9 +366,10 @@ jobs:
           path: guests/prebuilt
 
   # The whole test suite against the rebuilt components, in shards as the
-  # tests job runs it. Also development mode's JavaScript and TypeScript
-  # builds on save (crates/pane-core/tests/develop_builds.rs), which need
-  # the toolchain the job above built.
+  # tests job runs it, with Node.js and npm alone: development mode's
+  # JavaScript and TypeScript builds on save
+  # (crates/pane-core/tests/develop_builds.rs) run un-gated through
+  # pane-build's build with the componentizer linked in (#218).
   js-guests-tests:
     name: JS/TS guests from source, tests (ubuntu-24.04, ${{ matrix.shard }})
     needs: js-guests
@@ -389,14 +386,6 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           tests: true
-      - uses: actions/cache/restore@v4
-        with:
-          path: |
-            ~/.cache/pane/componentize-js/bin
-            ~/.cache/pane/componentize-js/downloads
-            ~/.cache/pane/componentize-js/node
-          key: js-toolchain-${{ runner.os }}-${{ hashFiles('tools/componentize-js/**', 'rust-toolchain.toml') }}
-          fail-on-cache-miss: true
       - name: Use the rebuilt components
         uses: actions/download-artifact@v4
         with:
@@ -404,8 +393,6 @@ jobs:
           path: guests/prebuilt
       - name: Run this shard of the tests against the rebuilt components
         run: cargo xtask ci-tests --partition hash:${{ matrix.shard }}
-        env:
-          PANE_TEST_JS_BUILDS: "1"
 
   # The one check to require, as in ci-branch.yml: green when every job
   # above passed or was skipped. A job added here is added to `needs`.

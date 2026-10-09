@@ -7,6 +7,9 @@ license.workspace = true
 
 [dependencies]
 pane-target = { path = "../crates/pane-target" }
+# Rebuilding the prebuilt JS/TS samples through the one build path development
+# mode uses (#218), with the componentizer linked in.
+pane-build = { path = "../crates/pane-build", features = ["componentizer"] }
 # Packing the npm sample as `npm pack` does, without npm.
 tar.workspace = true
 flate2.workspace = true

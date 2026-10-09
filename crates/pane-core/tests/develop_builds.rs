@@ -6,9 +6,10 @@
 //!
 //! The Rust test runs `cargo build --release --target wasm32-wasip2` (the
 //! pinned toolchain and its `wasm32-wasip2` target, as `cargo xtask guests`
-//! needs). The JavaScript and TypeScript tests run
-//! `tools/componentize-js/pane_js.py`, which needs the JS toolchain
-//! (guests/README.md), so they run only with `PANE_TEST_JS_BUILDS=1`.
+//! needs). The JavaScript and TypeScript tests run pane-build's own build
+//! with the componentizer linked in: Node.js and npm alone build them
+//! (`npm ci` of the package's locked dependencies, its `tsc`, esbuild,
+//! componentization), with no Python and no toolchain (#218).
 //!
 //! Each copy is kept in Cargo's test folder between runs, so later runs
 //! build incrementally; only its sources are replaced.
@@ -35,7 +36,9 @@ fn repository() -> PathBuf {
 }
 
 fn toolchains() -> Toolchains {
-    Toolchains::from_env(Some(repository().join("tools/componentize-js/pane_js.py")))
+    // The componentizer linked in, as pane-core's dev-dependencies build with
+    // (#218): Node.js and npm alone build a JavaScript or TypeScript package.
+    Toolchains::from_env(None)
 }
 
 /// A development sample: its folder in `guests`, its title, the file
@@ -146,19 +149,26 @@ fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
 /// Builds the package in `folder` as development mode does, then puts its
 /// components in the folder, as its author would before installing it.
 fn build_once(folder: &Path) {
-    let build = toolchains().build_for(folder).unwrap();
+    let staged = build_with(&toolchains(), folder);
+    for command in pane_core::Manifest::read(staged.path()).unwrap().commands {
+        let component = command.component;
+        let target = folder.join(&component);
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        let _ = fs::remove_file(&target);
+        fs::copy(staged.path().join(&component), target).unwrap();
+    }
+}
+
+/// Builds the package in `folder` with `toolchains` once, as development mode
+/// does, returning its staging folder, which holds the built components.
+fn build_with(toolchains: &Toolchains, folder: &Path) -> tempfile::TempDir {
+    let build = toolchains.build_for(folder).unwrap();
     let staging = tempfile::tempdir().unwrap();
     fs::copy(folder.join("pane.json"), staging.path().join("pane.json")).unwrap();
     let job = BuildJob::new(staging.path().to_path_buf());
     let outcome = build.run(&job);
     assert_eq!(outcome, BuildOutcome::Built, "{:#?}", job.output());
-    for command in pane_core::Manifest::read(staging.path()).unwrap().commands {
-        let component = command.component;
-        let target = folder.join(&component);
-        fs::create_dir_all(target.parent().unwrap()).unwrap();
-        let _ = fs::remove_file(&target);
-        fs::copy(staging.path().join(&component), target).unwrap();
-    }
+    staging
 }
 
 /// A launcher that develops with Pane's builds, keeping its data in `data`.
@@ -349,19 +359,64 @@ fn a_rust_package_built_elsewhere_reloads_what_cargo_built_this_time() {
     );
 }
 
-fn js_builds() -> bool {
-    let wanted = std::env::var_os("PANE_TEST_JS_BUILDS").is_some_and(|value| value == "1");
-    if !wanted {
-        eprintln!("skipped: set PANE_TEST_JS_BUILDS=1 to run the JavaScript build");
+/// The `@pane-app/cli` platform package a package installs with `npm install`
+/// (#219), staged into the package's `node_modules` from the componentizer
+/// `cargo xtask guests` builds, with the committed wasm parts: the binary a
+/// development build of an installed Pane spawns (no tool of this checkout
+/// runs).
+fn install_cli(folder: &Path) -> PathBuf {
+    let built = repository().join("target/guests/componentizer");
+    let target = pane_target::Target::current()
+        .expect("Pane names this system's target")
+        .id()
+        .to_owned();
+    let binary = if cfg!(windows) {
+        built.join("componentize-qjs-p3.exe")
+    } else {
+        built.join("componentize-qjs-p3")
+    };
+    assert!(
+        binary.is_file(),
+        "{} is missing; run `cargo xtask guests`",
+        binary.display()
+    );
+    let cli = folder.join(format!("node_modules/@pane-app/cli-{target}"));
+    fs::create_dir_all(&cli).unwrap();
+    let parts = repository().join("tools/componentize-js/wasm-parts");
+    for part in [
+        binary,
+        parts.join("runtime.wasm"),
+        parts.join("libc.so"),
+    ] {
+        fs::copy(&part, cli.join(part.file_name().unwrap())).unwrap();
     }
-    wanted
+    cli
+}
+
+#[test]
+fn a_typescript_package_with_pane_cli_installed_builds_with_its_componentizer() {
+    // An installed Pane (no componentizer of its own linked in, none named)
+    // builds a package that has Pane's CLI installed with the componentizer
+    // the package itself holds — no tool of this checkout runs.
+    let folder = TYPESCRIPT.copy_as("develop-hello-ts-cli");
+    TYPESCRIPT.save(&folder, TYPESCRIPT.greeting);
+    install_cli(&folder);
+    let package_toolchains = Toolchains {
+        componentizer: pane_core::develop::Componentizer::Binary(None),
+        ..toolchains()
+    };
+    build_with(&package_toolchains, &folder);
+
+    // A package without it is explained, as an installed Pane is for one
+    // whose author has not run npm install.
+    let plain = TYPESCRIPT.copy_as("develop-hello-ts-no-cli");
+    let error = package_toolchains.build_for(&plain).unwrap_err();
+    assert!(error.contains("npm install"), "{error}");
+    assert!(error.contains("node_modules/@pane-app/cli-"), "{error}");
 }
 
 #[test]
 fn a_javascript_package_is_built_and_reloaded_on_save() {
-    if !js_builds() {
-        return;
-    }
     develop(
         &JAVASCRIPT,
         "Hello from JavaScript",
@@ -373,9 +428,6 @@ fn a_javascript_package_is_built_and_reloaded_on_save() {
 
 #[test]
 fn a_typescript_package_is_built_and_reloaded_on_save() {
-    if !js_builds() {
-        return;
-    }
     develop(
         &TYPESCRIPT,
         "Hello from TypeScript",

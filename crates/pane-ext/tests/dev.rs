@@ -8,10 +8,13 @@
 //! development. With no Pane listening and none to start, `pane-ext dev`
 //! says where it looked for one, without waiting for its build.
 //!
-//! The builds run `cargo build --release --target wasm32-wasip2` (the pinned
-//! toolchain and its `wasm32-wasip2` target, as `cargo xtask guests`
-//! needs). `PANE_APP` names a file that does not exist, so that `pane-ext`
-//! never starts a Pane of its own here.
+//! The Rust builds run `cargo build --release --target wasm32-wasip2` (the
+//! pinned toolchain and its `wasm32-wasip2` target, as `cargo xtask guests`
+//! needs). The TypeScript one runs pane-build's JavaScript build with the
+//! componentizer `pane-ext` links in (#218): `npm ci` of the package's
+//! locked dependencies, its `tsc`, esbuild, componentization — Node.js and
+//! npm alone. `PANE_APP` names a file that does not exist, so that
+//! `pane-ext` never starts a Pane of its own here.
 
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
@@ -76,6 +79,41 @@ fn save(folder: &Path, greeting: &str) {
         .replace(GREETING, greeting)
         .replace(SAY_HELLO, &logged);
     fs::write(folder.join("src/lib.rs"), source).unwrap();
+}
+
+/// A fresh copy of the TypeScript development sample
+/// (`guests/hello-ts`) in the test folder's `name`, saved with `greeting`:
+/// what `pane-ext dev` builds with the componentizer it links, needing
+/// Node.js and npm alone.
+fn js_sample(name: &str, greeting: &str) -> PathBuf {
+    let from = repository().join("guests/hello-ts");
+    let to = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let _ = fs::remove_dir_all(to.join("src"));
+    fs::create_dir_all(to.join("src")).unwrap();
+    for file in [
+        "package.json",
+        "package-lock.json",
+        "tsconfig.json",
+        "pane.json",
+        "src/index.ts",
+    ] {
+        fs::copy(from.join(file), to.join(file)).unwrap();
+    }
+    js_save(&to, greeting);
+    to.canonicalize().unwrap()
+}
+
+/// Saves the TypeScript sample's source with its greeting declared as
+/// `greeting`.
+fn js_save(folder: &Path, greeting: &str) {
+    let source = fs::read_to_string(repository().join("guests/hello-ts/src/index.ts")).unwrap();
+    const GREETING: &str = r#"const GREETING: string = "Hello from TypeScript";"#;
+    assert!(source.contains(GREETING), "{GREETING}");
+    fs::write(
+        folder.join("src/index.ts"),
+        source.replace(GREETING, greeting),
+    )
+    .unwrap();
 }
 
 /// An endpoint of this test's own. On Unix its folder is left for Pane to
@@ -302,6 +340,66 @@ fn pane_ext_dev_builds_in_the_terminal_and_develops_in_pane_until_it_closes() {
             .iter()
             .any(|package| package.identity == identity)
     );
+}
+
+/// The TypeScript sample's greeting, as it is committed.
+const TYPESCRIPT_GREETING: &str = r#"const GREETING: string = "Hello from TypeScript";"#;
+
+#[test]
+fn pane_ext_dev_builds_a_typescript_package_with_the_componentizer_it_links() {
+    let folder = js_sample("pane-ext-dev-ts", TYPESCRIPT_GREETING);
+    let identity = PackageIdentity::local(&folder).unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let launcher = Launcher::with_packages(
+        Ok(Runtime::start().unwrap()),
+        vec![],
+        data.path().join("extensions"),
+    );
+    let endpoint = endpoint(data.path());
+    let (_server, previews) = local_channel::serve(launcher.clone(), &endpoint).unwrap();
+    let _previewed = window(launcher.clone(), previews);
+    let terminal = Terminal::default();
+    let mut pane_ext = PaneExt::dev(&folder, &endpoint, data.path(), &terminal);
+
+    // The build (npm ci of the locked dependencies, tsc, esbuild,
+    // componentization) prints here, and Pane develops the package with it.
+    terminal.wait_for("pane-js: built");
+    terminal.wait_for("Pane develops Hello TypeScript");
+    assert!(launcher.development(&identity).is_some());
+    assert_eq!(
+        say_hello_typescript(&launcher),
+        Status::Result("Hello from TypeScript".into())
+    );
+
+    // A save with a type error prints tsc's errors here, and Pane keeps
+    // running the working code.
+    js_save(&folder, r#"const GREETING: string = 42;"#);
+    terminal.wait_for("error TS2322");
+    terminal.wait_for("Pane: Hello TypeScript did not build");
+
+    // A fix is built here and reloaded there.
+    js_save(&folder, r#"const GREETING: string = "Hello from pane-ext";"#);
+    terminal.wait_for("Pane: Reloaded Hello TypeScript");
+    assert_eq!(
+        say_hello_typescript(&launcher),
+        Status::Result("Hello from pane-ext".into())
+    );
+
+    // Closing pane-ext, as Ctrl+C does, stops the development.
+    pane_ext.kill();
+    let stopped = || launcher.development(&identity).is_none();
+    wait_until("the development to stop", stopped, || terminal.text());
+}
+
+/// Opens Hello TypeScript from root search and runs "Say hello", returning
+/// what it showed.
+fn say_hello_typescript(launcher: &Launcher) -> Status {
+    for _ in 0..3 {
+        launcher.back();
+    }
+    choose(launcher, "Hello TypeScript");
+    choose(launcher, "Say hello");
+    shown(launcher)
 }
 
 #[test]

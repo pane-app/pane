@@ -1,0 +1,46 @@
+[package]
+# The componentizer of Pane's JavaScript and TypeScript builds, vendored from
+# upstream componentize-qjs (see the README beside this tree) and linked
+# in-process by `pane-build`'s `componentizer` feature and by `pane-ext`. It is
+# built with the repository's stable Rust; the QuickJS runtime it embeds is
+# the committed `tools/componentize-js/wasm-parts/runtime.wasm`, and the WASI
+# 0.3 libc it links into every component is passed by the caller.
+name = "componentize-qjs"
+version = "0.4.5"
+edition = "2024"
+description = "Convert JavaScript to WebAssembly components using QuickJS"
+license = "Apache-2.0"
+repository = "https://github.com/andreiltd/componentize-qjs"
+homepage = "https://github.com/andreiltd/componentize-qjs"
+publish = false
+readme = "../../README.md"
+
+[lib]
+name = "componentize_qjs"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+bytes = "1"
+# Resolving a JS entry's imports; the version upstream pinned.
+oxc-resolver = "11.21"
+# Driving the componentize future (the `p3_build` example, and callers that
+# link this crate); a current-thread runtime is enough.
+tokio = { version = "1", default-features = false, features = ["rt"] }
+wit-parser = "0.258"
+wit-component = { version = "0.258", features = ["dummy-module"] }
+wit-dylib = "0.258"
+# The same Wasmtime as Pane's own runtime (49.0.1), where upstream pinned 47:
+# `define_unknown_imports_as_traps` gained the async stubs the old patch
+# queue added (the retired 0003), so the vendored tree needs no patch for it.
+wasmtime = { version = "=49.0.1", features = ["component-model", "async"] }
+wasmtime-wasi = { version = "=49.0.1", default-features = false, features = ["p2", "p3"] }
+wasmtime-wizer = { version = "49.0.1", default-features = false, features = ["component-model", "wasmtime"] }
+wasm-compose = { version = "0.258", default-features = false }
+indexmap = "2"
+tempfile = "3"
+
+[features]
+default = ["component-model-async"]
+opt-size = []
+component-model-async = []

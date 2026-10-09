@@ -110,6 +110,12 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           tests: true
+      # Development mode's JavaScript and TypeScript builds (#218) run with
+      # the componentizer linked in, un-gated: Node.js and npm alone build
+      # them, and the setup action installs neither.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - name: Build guests and run this shard of the tests
         run: cargo xtask ci-tests --partition hash:${{ matrix.shard }}
       # The Linux (X11) clipboard adapter's test replaces what is on the

@@ -499,49 +499,55 @@ Build commands, from the repository root:
 
 ```sh
 cargo xtask js-guests        # rebuild guests/prebuilt/ and target/guests/ from the samples
-python3 tools/componentize-js/pane_js.py build <package dir> <out.wasm>   # any command package
-python3 tools/componentize-js/pane_js.py check   # are the prebuilt samples current and their npm licenses permissive?
+cargo run -p pane-ext -- dev <package dir>   # any command package: build it and develop it in Pane
+cargo xtask js-guests --check # are the prebuilt samples current and their npm licenses permissive?
 ```
 
-A build installs the package's locked dependencies into a staging copy,
-type-checks it with TypeScript when it has a `tsconfig.json` (the JS sample is
-checked through JSDoc), bundles it with esbuild and componentizes it. The TS
-sample's `.ts` source is transpiled by esbuild and runs on the same runtime as
-JS. The first run builds the toolchain (about five minutes), later runs take
-seconds. Everything downloaded or built goes to `PANE_JS_TOOLCHAIN_DIR`,
-default `~/.cache/pane/componentize-js` on Linux,
-`~/Library/Caches/pane/componentize-js` on macOS and
-`%LOCALAPPDATA%\pane\componentize-js` on Windows; the source tree is not
-written except for the output. After editing a sample, run
+A build is pane-build's JavaScript build (`crates/pane-build`, #218): it
+installs the package's locked dependencies into a staging copy, type-checks
+it with the package's TypeScript when it has a `tsconfig.json` (the JS
+sample is checked through JSDoc), bundles it with esbuild — both from the
+package's own `node_modules`, so its lockfile pins their versions — and
+componentizes it with the componentizer the repository links (the committed
+`runtime.wasm` and `libc.so` of `tools/componentize-js/wasm-parts`). The TS
+sample's `.ts` source is transpiled by esbuild and runs on the same runtime
+as JS. A build needs Node.js and npm and the repository's Rust, and nothing
+else; the staging copy is kept in the user's cache
+(`pane/js-build/<package>-<hash>`, under `~/.cache` on Linux,
+`~/Library/Caches` on macOS and `%LOCALAPPDATA%` on Windows), so a save
+whose lockfile did not change installs nothing. After editing a sample, run
 `cargo xtask js-guests` and commit the updated `guests/prebuilt/`.
 
 Prerequisites, in addition to the Rust ones in the [README](../README.md):
 
-- Python 3.12 or later (`python3`; on Windows use `python` in the commands
-  above; set `PYTHON` for `cargo xtask` if yours is named differently), git,
-  and Node.js 22 or later with npm. `cargo xtask ci` also runs the `check`
-  subcommand, so it needs Python too.
-- The build installs Rust `nightly-2026-09-27` with `rust-src` through rustup,
-  and downloads wasi-sdk 34 for the host (x86_64 or arm64, all three OSes).
-- **Windows:** `python` from python.org or the Microsoft Store and Node.js
-  from nodejs.org; run from a normal shell. **macOS:** Xcode Command Line
-  Tools already provide git; install Python and Node.js from their installers
-  or Homebrew. **Linux:** the distribution's `python3`, `git`, `nodejs` and
-  `npm` (Node.js 22+, for example through nvm).
+- Node.js 22 or later with npm. Nothing else: no Python, no nightly Rust,
+  no wasi-sdk — the componentizer is linked into the build
+  (`crates/pane-build`'s `componentizer` feature), with the wasm parts the
+  repository commits. Python 3.12+ and rustup are needed only to build the
+  wasm parts themselves (`tools/componentize-js/pane_js.py wasm-parts`, a
+  maintenance step `componentizer.yml` runs, not part of building a
+  package).
+- **Windows:** Node.js from nodejs.org; run from a normal shell. **macOS:**
+  Node.js from its installer or Homebrew. **Linux:** the distribution's
+  `nodejs` and `npm` (Node.js 22+, for example through nvm).
 
-Toolchain used: upstream [componentize-qjs](https://github.com/andreiltd/componentize-qjs)
-0.4.5 at `e563c6d6` with the three patches in
-[`tools/componentize-js/patches`](../tools/componentize-js/patches), its
-QuickJS runtime built with `nightly-2026-09-27` for `wasm32-wasip3` against
-wasi-sdk 34, the componentizer built with Rust 1.98.1, esbuild 0.28.2 and
-TypeScript 7.0.2. Every JS component imports the same 20 WASI 0.3 interfaces
+Toolchain used: the vendored
+[componentize-qjs](https://github.com/andreiltd/componentize-qjs) 0.4.5 at
+`e563c6d6`
+([`tools/componentize-js/componentize-qjs`](../tools/componentize-js/componentize-qjs),
+the patch queue applied in its source), its QuickJS runtime built with
+`nightly-2026-09-27` for `wasm32-wasip3` against wasi-sdk 34 (the committed
+`runtime.wasm`), wasi-sdk 34's `libc.so` (also committed), the componentizer
+built with the repository's Rust 1.98.1, esbuild 0.28.2 and TypeScript
+7.0.2. Every JS component imports the same 20 WASI 0.3 interfaces
 through its libc, whatever the source uses, and `wasi:http`'s `types` and
 `client` too if its bundle imports `wasi:http` (itself or through
 `@pane-app/extension/http`), which Pane then lists as using the network; it is
-about 4.4 MB. The whole toolchain build has been run on Linux and Windows x86_64. The componentizer
-itself is built in CI for Windows, macOS and Linux on x64 and arm64, from a runtime built once on
-Linux, and each build's TypeScript sample passes Pane's checks there (`componentizer.yml`). See
-[tools/componentize-js](../tools/componentize-js/README.md) for the patch queue.
+about 4.4 MB. The componentizer itself is built in CI for Windows, macOS and
+Linux on x64 and arm64, from the committed wasm parts, and each build's
+TypeScript sample passes Pane's checks there (`componentizer.yml`). See
+[tools/componentize-js](../tools/componentize-js/README.md) for the patch
+queue and the wasm parts.
 
 ## Forms
 
@@ -2292,9 +2298,10 @@ rebuild it against the current [`wit/extension.wit`](../wit/extension.wit).
 Where the component comes from is up to your build. A standalone Rust crate
 can point `component` at `target/wasm32-wasip2/release/<name>.wasm` inside
 the crate folder after `cargo build --release --target wasm32-wasip2`. A
-JavaScript or TypeScript package can build into its own folder with
-`python3 tools/componentize-js/pane_js.py build <package dir> <package dir>/dist/<name>.wasm`
-and point at `dist/<name>.wasm`. The repository's samples live in one Cargo
+JavaScript or TypeScript package builds its component wherever its build
+puts it (development mode copies each built component into the folder, so
+`pane.json` can point at `dist/<name>.wasm`); `pane-ext dev <package dir>`
+builds it and hands it to Pane. The repository's samples live in one Cargo
 workspace and a prebuilt folder, so their manifests are in
 [`packages/`](packages) and `cargo xtask guests` assembles each with its
 component into `target/guests/packages/<name>/`.
@@ -2428,11 +2435,15 @@ succeeds:
   component), so `pane.json` names its component under
   `target/wasm32-wasip2/release/`; Pane takes the file of that name cargo
   built this time, even with another target folder.
-- A folder with `package.json` is built with
-  `python3 tools/componentize-js/pane_js.py build <folder> <out>` for each
-  component `pane.json` names, such as `dist/<name>.wasm` (a Pane run from a
-  checkout knows where `pane_js.py` is; otherwise set
-  `PANE_COMPONENTIZE_JS`; `PANE_PYTHON` names the interpreter).
+- A folder with `package.json` is built with Pane's own JavaScript build
+  (`npm ci --ignore-scripts && tsc -p tsconfig.json && esbuild --bundle &&
+  componentize`) for each component `pane.json` names, such as
+  `dist/<name>.wasm`, needing Node.js and npm alone: a `pane-ext` or Pane
+  from a checkout componentizes with its own linked componentizer; an
+  installed Pane with the componentizer of the package's own installed
+  `@pane-app/cli` platform package (`node_modules/@pane-app/cli-<target>`,
+  which `npm install` provides — a package without one is explained), or
+  the folder `PANE_COMPONENTIZER` names.
 
 Each build puts the components in a staging folder under Pane's data
 folder, and runs with Pane's environment (less what `cargo run` set for

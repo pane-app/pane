@@ -129,6 +129,10 @@ fsevent-sys = "4.1"
 
 [dev-dependencies]
 tempfile.workspace = true
+# The tests build JavaScript and TypeScript packages with the componentizer
+# linked in (the `PANE_TEST_JS_BUILDS` gate is gone; Node.js and npm alone
+# build them now, #218).
+pane-build = { path = "../pane-build", features = ["componentizer"] }
 
 # The integration tests are one binary, whose `tests/main.rs` declares each
 # file: a binary per file meant a link, and a debug file, for each of them.
