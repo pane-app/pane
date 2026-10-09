@@ -193,12 +193,22 @@ fn a_url_like_query_lists_only_the_command_declared_for_it(fixture: &Fixture) {
         "below the results, above the files: {:?}",
         sections(&launcher)
     );
+    let sent = send(
+        &launcher,
+        "https://github.com/pane-app/pane",
+        "Hear an Address",
+    );
+    if sent != Status::Result("Heard “https://github.com/pane-app/pane”".into()) {
+        for package in launcher.packages() {
+            eprintln!(
+                "DIAG package {:?} log: {:?}",
+                package.title(),
+                launcher.extension_log(&package.identity)
+            );
+        }
+    }
     assert_eq!(
-        send(
-            &launcher,
-            "https://github.com/pane-app/pane",
-            "Hear an Address"
-        ),
+        sent,
         Status::Result("Heard “https://github.com/pane-app/pane”".into()),
         "the parsed address is the fallback text"
     );
