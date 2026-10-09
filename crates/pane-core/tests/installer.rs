@@ -374,9 +374,10 @@ fn acquiring_shows_progress_and_leaves_the_core_usable() {
     assert!(progress.contains("0%"), "{progress}");
     assert!(titles(&launcher).contains(&"Install extension from folder…".to_owned()));
     assert!(titles(&launcher).contains(&"Install extension from npm…".to_owned()));
-    // Typing in root search still works while the payload arrives.
+    // Typing in root search still works while the payload arrives. Pane's
+    // install row matches "calc" fuzzily (#193).
     search(&launcher, "calc");
-    assert!(titles(&launcher).is_empty(), "{:?}", titles(&launcher));
+    assert_eq!(titles(&launcher), ["Install extension from folder…"]);
     acquiring.join().unwrap();
 
     assert_eq!(

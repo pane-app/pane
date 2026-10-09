@@ -273,7 +273,7 @@ fn a_rebind_takes_effect_at_once_is_saved_and_survives_a_restart(cx: &mut TestAp
     let (window, cx) = open_sample(cx, Some(data.path()));
 
     // Two results to move between, with the query keeping focus.
-    cx.simulate_input("script");
+    cx.simulate_input("scripts");
     let view = settle(&window, cx);
     assert_eq!(view.selected, Some(0));
 
@@ -311,7 +311,7 @@ fn a_rebind_takes_effect_at_once_is_saved_and_survives_a_restart(cx: &mut TestAp
             cx,
         )
     });
-    fresh_cx.simulate_input("script");
+    fresh_cx.simulate_input("scripts");
     settle(&window, fresh_cx);
     fresh_cx.simulate_keystrokes("ctrl-n");
     assert_eq!(
@@ -791,7 +791,7 @@ fn a_save_that_fails_rolls_the_binding_back(cx: &mut TestAppContext) {
     // The failure is explained, and the binding the record holds is the
     // one that works: the change that could not be saved did not keep the
     // keys it took.
-    cx.simulate_input("script");
+    cx.simulate_input("scripts");
     settle(&window, cx);
     cx.simulate_keystrokes("ctrl-n");
     assert_eq!(
@@ -1326,7 +1326,7 @@ fn the_navigation_bindings_move_the_selection_unless_an_action_has_their_keys(
     let data = tempfile::tempdir().unwrap();
     let (window, cx) = open_sample(cx, Some(data.path()));
     // Two results to move between, with the query keeping focus.
-    cx.simulate_input("script");
+    cx.simulate_input("scripts");
     assert_eq!(settle(&window, cx).selected, Some(0));
 
     // The choices are Raycast's, each labelled with the keys it binds,
@@ -1407,7 +1407,7 @@ fn the_navigation_bindings_move_the_selection_unless_an_action_has_their_keys(
     cx.simulate_keystrokes(&nav("j"));
     let view = settle(&window, cx);
     assert_eq!(view.selected, Some(0), "Alt+J no longer moves");
-    assert_eq!(view.query(), Some("script"));
+    assert_eq!(view.query(), Some("scripts"));
     cx.simulate_keystrokes("down");
     assert_eq!(settle(&window, cx).selected, Some(1), "Down still moves");
     cx.simulate_keystrokes("up");
@@ -1442,7 +1442,7 @@ fn the_navigation_bindings_move_the_selection_unless_an_action_has_their_keys(
 fn a_navigation_choice_that_fails_to_save_restores_the_recorded_keys(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
     let (window, cx) = open_sample(cx, Some(data.path()));
-    cx.simulate_input("script");
+    cx.simulate_input("scripts");
     assert_eq!(settle(&window, cx).selected, Some(0));
 
     // Saved: Emacs.
@@ -1508,7 +1508,7 @@ fn the_behavior_choices_are_applied_by_a_fresh_application(cx: &mut TestAppConte
         .with_hotkeys(Arc::new(FakeSystem::default()));
     let (window, fresh_cx) =
         fresh.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
-    fresh_cx.simulate_input("script");
+    fresh_cx.simulate_input("scripts");
     assert_eq!(settle(&window, fresh_cx).selected, Some(0));
     fresh_cx.simulate_keystrokes(&nav("n"));
     assert_eq!(

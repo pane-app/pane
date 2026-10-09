@@ -99,9 +99,11 @@ subsequence with a score: a letter matched at the text's first position
 scores 4, at a word start 3, elsewhere 2; a separator matched to a
 separator scores 1. Each gap between two consecutive matched positions
 costs 1; adjacency is free. A query separator that cannot be placed is
-skipped, never a failure; a letter that cannot be placed means no match.
-The best placement's score counts, and an exact equality of the folded
-query and a folded text is its own outcome, the best one. Separators are
+skipped, never a failure; a letter that cannot be placed means no match;
+and a query with no letters at all matches nothing, so a row of
+separators alone does not list every result that holds one. The best
+placement's score counts, and an exact equality of the folded query and
+a folded text is its own outcome, the best one. Separators are
 whitespace and `- . / ( ) [ ]`; capital letters inside a word are not word
 starts; a query starting with "/" treats the first "/" in a title as a
 space; and a query longer than two characters is checked in order first,

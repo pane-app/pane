@@ -1080,8 +1080,10 @@ fn a_disabled_quicklinks_hides_its_quicklinks_and_keeps_them() {
     assert_eq!(titles(&launcher), Vec::<String>::new(), "nor its commands");
 
     block_on(launcher.set_enabled(&identity, true));
+    // Pane's install row matches "doc" fuzzily through its subtitle
+    // (#193); the quicklink is what is chosen.
     search(&launcher, "doc");
-    assert_eq!(titles(&launcher), ["Docs"]);
+    assert_eq!(titles(&launcher), ["Docs", "Install extension from npm…"]);
 }
 
 #[test]

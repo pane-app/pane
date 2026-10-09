@@ -430,7 +430,9 @@ fn disabling_the_target_removes_its_alias_and_fallback_without_enabling_it_again
     search(&launcher, "ec hello");
     assert_eq!(titles(&launcher), Vec::<String>::new());
     search(&launcher, "ec");
-    assert_eq!(titles(&launcher), Vec::<String>::new());
+    // Pane's own rows match the two letters fuzzily (#193); the disabled
+    // command's alias and fallback rows are gone.
+    assert!(!titles(&launcher).contains(&"Echo".to_owned()));
     assert_eq!(running(&runtime), Vec::<PathBuf>::new());
 
     // Changing them does not enable it either.
@@ -482,7 +484,11 @@ fn copies_from_other_sources_with_the_same_title_stay_distinct(fixture: &Fixture
     }
 
     search(&launcher, "ec");
-    assert_eq!(titles(&launcher)[..2], ["Echo", "Echo"]);
+    // The command's alias row first and its fallbacks last; between them,
+    // Pane's own rows match the two letters fuzzily (#193).
+    let listed = titles(&launcher);
+    assert_eq!(&listed[..1], ["Echo"]);
+    assert_eq!(&listed[listed.len() - 2..], ["Echo", "Echo"]);
     assert!(launcher.view().rows[0].id.ends_with("second#echo"));
 
     // The rows name their sources, since the titles are the same.
@@ -789,7 +795,9 @@ fn uninstalling_forgets_exactly_its_own_commands_not_those_of_a_longer_source() 
     let recorded = fs::read_to_string(dirs.aliases_file()).unwrap();
     assert!(recorded.contains("x#y#echo\": \"ec\""), "{recorded}");
     search(&launcher, "ec hi");
-    assert_eq!(titles(&launcher), ["Echo"]);
+    // Pane's install row matches the letters fuzzily below the send row
+    // (#193).
+    assert_eq!(titles(&launcher), ["Echo", "Install extension from folder…"]);
 }
 
 #[test]
@@ -821,7 +829,9 @@ fn a_change_that_cannot_be_kept_never_brings_back_an_uninstalled_packages_choice
         row_subtitle(&launcher, "Alias for Echo")
     );
     search(&launcher, "ec hi");
-    assert_eq!(titles(&launcher), Vec::<String>::new());
+    // Pane's install row matches the letters fuzzily (#193); the command's
+    // row is gone.
+    assert_eq!(titles(&launcher), ["Install extension from folder…"]);
 }
 
 /// Echo opened from its row, with no text sent: it runs without a screen

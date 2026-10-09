@@ -177,7 +177,9 @@ fn typing_an_applications_name_lists_it_and_enter_opens_it() {
 
     search(&launcher, "fire");
 
-    assert_eq!(titles(&launcher), ["Firefox"]);
+    // Pane's install row matches the four letters fuzzily below the
+    // application's prefix match (#193).
+    assert_eq!(titles(&launcher), ["Firefox", "Install extension from Git…"]);
     let view = launcher.view();
     assert_eq!(view.rows[0].subtitle.as_deref(), Some("Application"));
     assert_eq!(view.selected, Some(0));
@@ -196,6 +198,9 @@ fn applications_rank_with_commands_by_title() {
     let system = FakeSystem::with(&["Rust", "Trusty Notes"]);
     let (launcher, _) = dirs.launcher(&system, &["sample-rust"]);
 
+    // Low holds the mid-word containment of "Trusty", which the default
+    // High drops (#193).
+    launcher.set_search_sensitivity(pane_core::SearchSensitivity::Low);
     search(&launcher, "rust");
 
     // The exact title first, then the title starting with the query, then
@@ -236,7 +241,7 @@ fn applications_are_looked_for_once_per_visit_of_root_search() {
     // Installed meanwhile: found once the user comes back to root search.
     system.applications.lock().unwrap().push(app("Firewall"));
     search(&launcher, "fire");
-    assert_eq!(titles(&launcher), ["Firefox"]);
+    assert_eq!(titles(&launcher), ["Firefox", "Install extension from Git…"]);
 
     // Come back to root search afresh, as a reopened window does:
     // Applications has no command row of its own to open and leave (a root
@@ -325,8 +330,9 @@ fn disabling_applications_removes_them_and_stops_looking_while_others_still_answ
     // The calculator still answers; neither has a row of its own.
     search(&launcher, "6*7");
     assert_eq!(titles(&launcher), ["42"]);
+    // Pane's install row matches "calc" fuzzily (#193); no calculator row.
     search(&launcher, "calc");
-    assert!(titles(&launcher).is_empty(), "{:?}", titles(&launcher));
+    assert_eq!(titles(&launcher), ["Install extension from folder…"]);
 
     block_on(launcher.set_enabled(&identity(), true));
     search(&launcher, "fire");
@@ -350,7 +356,11 @@ fn an_answer_arriving_after_disabling_is_discarded() {
     answered.join().unwrap();
 
     search(&launcher, "firef");
-    assert!(titles(&launcher).is_empty(), "{:?}", titles(&launcher));
+    assert!(
+        !titles(&launcher).contains(&"Firefox".to_owned()),
+        "{:?}",
+        titles(&launcher)
+    );
 }
 
 /// Applications is a root provider (#164): typing "applications" offers
@@ -363,7 +373,9 @@ fn applications_has_no_row_of_its_own_and_each_application_is_found() {
     let (launcher, _) = dirs.launcher(&system, &[]);
 
     search(&launcher, "applications");
-    assert!(titles(&launcher).is_empty(), "{:?}", titles(&launcher));
+    // The Files application matches the word through the composite of
+    // its subtitle and title (#193); no Applications row is listed.
+    assert!(!titles(&launcher).contains(&"Applications".to_owned()));
     assert!(
         launcher
             .view()
@@ -422,7 +434,9 @@ fn a_js_command_finds_and_opens_applications(package: &str, language: &str) {
 
     search(&launcher, "launch fire");
 
-    assert_eq!(titles(&launcher), ["Launch Firefox"]);
+    // The Files launcher matches too, through the composite of its
+    // command's row and the sample's subtitle (#193).
+    assert_eq!(titles(&launcher), ["Launch Firefox", "Launch Files"]);
     let view = launcher.view();
     let sample = format!("{language} applications sample");
     assert_eq!(view.rows[0].subtitle.as_deref(), Some(sample.as_str()));

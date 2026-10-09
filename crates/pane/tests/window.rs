@@ -1272,7 +1272,7 @@ fn typing_in_root_search_narrows_the_results_and_enter_opens_the_best_match(
 #[gpui::test]
 fn arrow_keys_move_through_the_matches_while_the_query_keeps_focus(cx: &mut TestAppContext) {
     let (window, cx) = open_with(cx, samples::sample_commands());
-    cx.simulate_input("script");
+    cx.simulate_input("scripts");
     assert_eq!(
         row_titles(&window, cx),
         ["JavaScript sample", "TypeScript sample"]
@@ -1306,9 +1306,9 @@ fn the_production_scenario_edits_searches_selects_opens_and_back_navigates(
     );
 
     // Edits: typing reaches the query field the launcher owns.
-    cx.simulate_input("script");
+    cx.simulate_input("scripts");
     let view = settle(&window, cx);
-    assert_eq!(view.query(), Some("script"));
+    assert_eq!(view.query(), Some("scripts"));
     // Searches: the real root adapter narrows the real commands.
     assert_eq!(
         row_titles(&window, cx),
@@ -1428,14 +1428,14 @@ fn input_method_composition_searches_root(cx: &mut TestAppContext) {
 #[gpui::test]
 fn assistive_technology_sees_the_search_field_and_the_selected_result(cx: &mut TestAppContext) {
     let (window, cx) = open_with(cx, samples::sample_commands());
-    cx.simulate_input("script");
+    cx.simulate_input("scripts");
     settle(&window, cx);
 
     let nodes = accessible_nodes(cx);
     let search = node(&nodes, "EditableComboBox", "Search");
     assert_eq!(
         (&search["value"], &search["placeholder"]),
-        (&"script".into(), &"Search apps and commands…".into())
+        (&"scripts".into(), &"Search apps and commands…".into())
     );
     node(&nodes, "ListBox", "Results");
     node(&nodes, "ListBoxOption", "TypeScript sample");
@@ -1628,7 +1628,9 @@ fn typing_an_applications_name_shows_it_and_enter_opens_it(cx: &mut TestAppConte
     let (window, cx) = open_launcher(cx, launcher);
 
     cx.simulate_input("fire");
-    wait_for_rows(&window, cx, &["Firefox"]);
+    // Pane's install row matches the four letters fuzzily below the
+    // application's prefix match (#193).
+    wait_for_rows(&window, cx, &["Firefox", "Install extension from Git…"]);
     assert!(
         cx.debug_bounds("row-Firefox").is_some(),
         "the application is rendered"
@@ -2069,7 +2071,9 @@ fn a_running_action_cannot_be_dispatched_again_through_the_footer_button(cx: &mu
     let (window, cx) = open_launcher(cx, launcher);
 
     cx.simulate_input("fire");
-    wait_for_rows(&window, cx, &["Firefox"]);
+    // Pane's install row matches the four letters fuzzily below the
+    // application's prefix match (#193).
+    wait_for_rows(&window, cx, &["Firefox", "Install extension from Git…"]);
     let nodes = accessible_nodes(cx);
     node(&nodes, "Button", "Open application");
     let button = cx

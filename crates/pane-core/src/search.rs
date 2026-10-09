@@ -9,10 +9,12 @@
 //! separator scores 1. Each gap between two consecutive matched
 //! positions costs 1; adjacency is free. A query separator that cannot
 //! be placed is skipped, counted as skipped and never a failure, while
-//! a letter that cannot be placed means no match. The best placement's
-//! score counts, and an exact equality of the folded query and a folded
-//! text is its own outcome, the best one. A query starting with "/"
-//! treats the first "/" in a text as a space.
+//! a letter that cannot be placed means no match. A query with no
+//! letters at all matches nothing: there is nothing to place, and a row
+//! of separators alone does not list every result that holds one. The
+//! best placement's score counts, and an exact equality of the folded
+//! query and a folded text is its own outcome, the best one. A query
+//! starting with "/" treats the first "/" in a text as a space.
 //!
 //! How good a score must be to count as a match is the user's Search
 //! sensitivity ([`SearchSensitivity`]): Low accepts any placement,
@@ -383,6 +385,9 @@ impl Query {
     /// highest-scoring way the query's letters fall into the text in
     /// order, its separators placed on the text's or skipped. `trace`
     /// also recovers where each query character landed, for highlighting.
+    /// A query with no letters at all matches nothing: there is nothing
+    /// to place, and a row of separators alone should not list every
+    /// result that holds one.
     fn placed_in(&self, chars: Vec<char>, trace: bool) -> Option<Placed> {
         let mut chars = chars;
         // A query starting with "/" treats the first "/" in the text as
@@ -393,7 +398,7 @@ impl Query {
             chars[at] = ' ';
         }
         let query: Vec<char> = self.text.chars().collect();
-        if query.is_empty() || chars.is_empty() {
+        if self.letters == 0 || chars.is_empty() {
             return None;
         }
         // The quick in-order rejection: a text that cannot hold the
@@ -557,9 +562,7 @@ fn place(query: &[char], text: &[char], trace: bool) -> Option<Placed> {
             }
         }
     }
-    let Some((i, j)) = winner else {
-        return None;
-    };
+    let (i, j) = winner?;
     let score = dp[i * m + j];
     let mut at = Vec::new();
     if trace {
@@ -584,11 +587,11 @@ pub(crate) fn ranked_matches<'a>(
     if query.text.is_empty() {
         return (0..keys.len()).collect();
     }
-    let mut matches: Vec<(Option<Rank>, i32, usize)> = keys
+    let mut matches: Vec<(Rank, i32, usize)> = keys
         .enumerate()
         .filter_map(|(index, keys)| {
             let score = keys.scored(query, sensitivity)?;
-            Some((query.rank(keys), score, index))
+            Some((query.rank(keys).unwrap_or(Rank::Fuzzy), score, index))
         })
         .collect();
     // Stable: the six ranked steps keep root search order among
@@ -603,8 +606,10 @@ pub(crate) fn ranked_matches<'a>(
 /// One text as it is highlighted: folded character by character, each
 /// folded character carrying the byte range of the character of the text
 /// as written that it came from, so the positions the scorer finds map
-/// back to what the user sees. Whitespace collapses as [`fold`]
-/// collapses it.
+/// back to what the user sees. `None` marks a character that maps to
+/// nothing highlightable: the space a collapsed run folded to (a
+/// composite's, or one the placement never used) and the second half of
+/// a composite. Whitespace collapses as [`fold`] collapses it.
 struct Folded {
     chars: Vec<char>,
     origin: Vec<Option<(usize, usize)>>,
@@ -615,20 +620,21 @@ impl Folded {
         let nfc: String = text.nfc().collect();
         let mut chars = Vec::new();
         let mut origin = Vec::new();
-        // A space waits for the word it separates, so leading and
+        // A space waits for the word it separates — carrying the range of
+        // the first whitespace of the run it collapsed — so leading and
         // trailing whitespace and empty runs fold away.
-        let mut space = false;
+        let mut space: Option<(usize, usize)> = None;
         for (start, character) in nfc.char_indices() {
             if character.is_whitespace() {
-                if !chars.is_empty() {
-                    space = true;
+                let end = start + character.len_utf8();
+                if !chars.is_empty() && space.is_none() {
+                    space = Some((start, end));
                 }
                 continue;
             }
-            if space {
+            if let Some(range) = space.take() {
                 chars.push(' ');
-                origin.push(None);
-                space = false;
+                origin.push(Some(range));
             }
             let end = start + character.len_utf8();
             let transliterated = any_ascii::any_ascii_char(character);
@@ -639,6 +645,32 @@ impl Folded {
         }
         Folded { chars, origin }
     }
+}
+
+/// The composite of `title` and `subtitle`, `title` first: a text a query
+/// can span, where only the title's characters keep their origins,
+/// wherever they sit — the subtitle's half maps to nothing.
+fn composite(title: &Folded, subtitle: &Folded, title_first: bool) -> Folded {
+    let (first, second) = if title_first {
+        (&title.chars, &subtitle.chars)
+    } else {
+        (&subtitle.chars, &title.chars)
+    };
+    let mut chars = first.clone();
+    chars.push(' ');
+    chars.extend(second.iter().copied());
+    let mut origin: Vec<Option<(usize, usize)>> = if title_first {
+        title.origin.clone()
+    } else {
+        std::iter::repeat_n(None, subtitle.chars.len()).collect()
+    };
+    origin.push(None);
+    origin.extend(if title_first {
+        std::iter::repeat_n(None, subtitle.chars.len()).collect::<Vec<_>>()
+    } else {
+        title.origin.clone()
+    });
+    Folded { chars, origin }
 }
 
 /// Where `query` matched `title` (with `subtitle`) at `sensitivity`, for
@@ -668,25 +700,16 @@ pub fn title_matches(
     // highlights its letters in the title. Only the title's characters
     // map back; wherever a placement lands in the subtitle, it
     // highlights nothing.
-    let mut texts: Vec<(Vec<char>, Vec<Option<(usize, usize)>>)> = Vec::new();
+    let mut texts: Vec<Folded> = Vec::new();
     if let Some(subtitle) = subtitle.filter(|subtitle| !subtitle.chars.is_empty()) {
-        let joined = |first: &Folded, second: &Folded| {
-            let mut chars = first.chars.clone();
-            chars.push(' ');
-            chars.extend(second.chars.iter().copied());
-            let mut origin = first.origin.clone();
-            origin.push(None);
-            origin.extend(second.origin.iter().map(|_| None));
-            (chars, origin)
-        };
-        texts.push(joined(&title, &subtitle));
-        texts.push(joined(&subtitle, &title));
+        texts.push(composite(&title, &subtitle, true));
+        texts.push(composite(&title, &subtitle, false));
     }
-    texts.push((title.chars, title.origin));
+    texts.push(title);
     // The best placement over the texts that pass the threshold.
     let mut best: Option<(i32, usize, Vec<Option<usize>>)> = None;
-    for (index, (chars, _)) in texts.iter().enumerate() {
-        if let Some(placed) = query.placed_in(chars.clone(), true) {
+    for (index, text) in texts.iter().enumerate() {
+        if let Some(placed) = query.placed_in(text.chars.clone(), true) {
             let better = sensitivity.accepts(placed.score, query.letters)
                 && best
                     .as_ref()
@@ -699,7 +722,7 @@ pub fn title_matches(
     let Some((_, index, at)) = best else {
         return Vec::new();
     };
-    let origin = &texts[index].1;
+    let origin = &texts[index].origin;
     let mut ranges: Vec<std::ops::Range<usize>> = at
         .into_iter()
         .filter_map(|at| at.and_then(|at| origin.get(at).copied().flatten()))
@@ -990,8 +1013,9 @@ mod tests {
     fn every_word_may_be_found_in_a_different_place() {
         // "dark" in the title, "theme" in the group: one result.
         assert_eq!(titles("dark theme"), vec!["Dark"]);
-        // The page's title counts too, as a package's does in root search.
-        assert_eq!(titles("glass appearance"), vec!["Glass"]);
+        // "glass" in the title, "material" in the group: one result, the
+        // composite of the two an exact match.
+        assert_eq!(titles("glass material"), vec!["Glass"]);
     }
 
     // The arrays are the expected runs, one range each, not ranges to
@@ -1044,15 +1068,17 @@ mod tests {
         // "straße" is "Straße" folded: the whole title is the placement.
         assert_eq!(title_matches("Straße", None, "straße", high), [0..7]);
         // ß folds to two characters, so "ss" highlights it whole — a
-        // placement only Medium holds.
+        // placement only Medium holds, whose best run starts at the
+        // title's first letter.
         let medium = SearchSensitivity::Medium;
         let title = "Straße";
         let ranges = title_matches(title, None, "ss", medium);
-        assert_eq!(ranges, [4..6]);
-        assert_eq!(&title[ranges[0].clone()], "ß");
+        assert_eq!(ranges, [0..1, 4..6]);
+        assert_eq!(&title[ranges[1].clone()], "ß");
     }
 
     #[test]
+    #[allow(clippy::single_range_in_vec_init)]
     fn transliterated_matches_highlight_what_was_written() {
         let high = SearchSensitivity::default();
         // "duong" is "Đường" folded: the whole title is the placement.
@@ -1066,10 +1092,11 @@ mod tests {
             title_matches("Search YouTube", Some("Videos"), "utub vid", high),
             [9..13]
         );
-        assert_eq!(&"Search YouTube"[9..13], "utub");
+        assert_eq!(&"Search YouTube"[9..13], "uTub");
     }
 
     #[test]
+    #[allow(clippy::single_range_in_vec_init)]
     fn a_title_that_does_not_pass_highlights_nothing() {
         let high = SearchSensitivity::default();
         // "download" places in "Undownloadable files" mid-word: exactly

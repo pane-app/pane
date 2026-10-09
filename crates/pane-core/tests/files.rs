@@ -35,7 +35,7 @@ mod rows;
 mod system;
 
 use feedback::RecordingWindow;
-use rows::titles;
+use rows::{select_title, titles};
 use system::{Done, RecordingSystem};
 
 /// Activates the selected row and answers what the HUD then said, if one
@@ -716,6 +716,9 @@ fn a_file_is_checked_again_when_it_is_opened() {
         search(&launcher, "index");
         fs::remove_file(fixture.file("files index.txt")).unwrap();
         std::os::unix::fs::symlink(&outside, fixture.file("files index.txt")).unwrap();
+        // Pane's install row matches "index" fuzzily above the file rows
+        // (#193); the file row is what is opened.
+        select_title(&launcher, "files index.txt");
         block_on(launcher.activate_selected());
         assert_eq!(
             launcher.view().status,

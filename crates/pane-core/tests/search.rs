@@ -209,7 +209,9 @@ fn search_sensitivity_decides_how_good_a_score_must_be() {
     block_on(launcher.set_query("download"));
     assert!(titles(&launcher).is_empty(), "High, the default");
     launcher.set_search_sensitivity(SearchSensitivity::Medium);
-    block_on(launcher.set_query("download"));
+    // The same query re-searched changes nothing, so the retry carries a
+    // space the matcher folds away.
+    block_on(launcher.set_query("download "));
     assert_eq!(titles(&launcher), ["Undownloadable files"]);
     // The choice applies on the next keystroke: the list the current
     // query has already made stays as it is.
@@ -219,7 +221,7 @@ fn search_sensitivity_decides_how_good_a_score_must_be() {
         ["Undownloadable files"],
         "the list stays until the query changes"
     );
-    block_on(launcher.set_query("download "));
+    block_on(launcher.set_query("download"));
     assert!(
         titles(&launcher).is_empty(),
         "the next keystroke applies it"
@@ -272,10 +274,11 @@ fn every_letter_of_the_query_must_place_in_order() {
     // "downloads" holds every letter but not in this order.
     assert!(titles(&launcher).is_empty(), "{:?}", titles(&launcher));
     // A word of the query may sit in the title and the rest in the
-    // subtitle, through the composite of the two.
-    block_on(launcher.set_query("down files"));
-    assert_eq!(titles(&launcher), ["Clear cache"], "High, the default");
-    launcher.set_search_sensitivity(SearchSensitivity::Low);
+    // subtitle: "files" is only in Clear cache's, "delete" only in it.
+    block_on(launcher.set_query("delete files"));
+    assert_eq!(titles(&launcher), ["Clear cache"]);
+    // The query's own separator helps: placed on a separator, it lifts the
+    // score, so "down files" holds the mid-word match too at High.
     block_on(launcher.set_query("down files"));
     assert_eq!(titles(&launcher), ["Undownloadable files", "Clear cache"]);
 }

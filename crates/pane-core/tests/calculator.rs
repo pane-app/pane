@@ -133,9 +133,10 @@ fn incomplete_and_invalid_expressions_and_ordinary_words_list_no_answer() {
         assert_eq!(launcher.view().status, status, "{query}");
     }
     // The calculator is a root provider (#164): typing its name finds no
-    // row of its own.
+    // row of its own — Pane's install row matches the letters fuzzily
+    // (#193).
     search(&launcher, "calc");
-    assert_eq!(titles(&launcher), Vec::<String>::new());
+    assert_eq!(titles(&launcher), ["Install extension from folder…"]);
     // Completing the expression answers it.
     search(&launcher, "(1 + 2");
     search(&launcher, "(1 + 2)");

@@ -190,7 +190,9 @@ fn typing_a_providers_name_finds_no_row_while_its_results_still_answer() {
     );
     // Each application is still its own root result.
     search(&launcher, "fire");
-    assert_eq!(titles(&launcher), ["Firefox"]);
+    // Pane's install row matches the four letters fuzzily below the
+    // application's prefix match (#193).
+    assert_eq!(titles(&launcher), ["Firefox", "Install extension from Git…"]);
     // The calculator still answers arithmetic, with its answer card.
     search(&launcher, "6*7");
     assert_eq!(titles(&launcher), ["42"]);
