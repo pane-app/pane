@@ -19,12 +19,13 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
 use pane_core::clipboard::{Clock, ManualClock, SystemClock};
+use pane_core::hotkeys::{HotkeyError, Hotkeys, Shortcut};
 use pane_core::{
     Launcher, PackageIdentity, ResultAction, Row, Runtime, SavedData, Screen, SlotChange, Status,
     Unavailable,
@@ -811,6 +812,43 @@ fn a_quick_slot_and_an_alias_and_a_fallback_of_a_waiting_command_say_why_and_run
 }
 
 #[test]
+fn a_global_hotkey_of_a_waiting_command_says_why_and_runs_nothing() {
+    let dirs = Dirs::new();
+    dirs.sample(GREETER);
+    let caller = dirs.caller(&needs(GREETER));
+    let launcher = Launcher::with_packages(Ok(dirs.runtime.clone()), vec![], dirs.extensions())
+        .with_clock(dirs.clock.clone())
+        .with_hotkeys(Arc::new(AnyHotkeys::default()));
+    dirs.install(&launcher, &caller);
+
+    // The user gave the command a global hotkey; pressing it from any
+    // application shows the reason and runs nothing.
+    set_hotkey(&launcher, "Call from JavaScript", "ctrl+alt+c");
+    block_on(launcher.set_enabled(&dirs.identity(GREETER), false));
+    launcher.show_root_search();
+
+    let shortcut = Shortcut::parse("ctrl+alt+c").unwrap();
+    let opening = launcher
+        .press_hotkey(&shortcut)
+        .expect("the hotkey still opens its command");
+    block_on(opening);
+    assert!(matches!(launcher.view().screen, Screen::Root { .. }));
+    assert_eq!(
+        error(&launcher.view().status),
+        "Needs Rust operations sample, which is disabled"
+    );
+    assert!(!dirs.runs(&launcher, "caller"));
+
+    // Once what it needs is back, the hotkey opens it again.
+    block_on(launcher.set_enabled(&dirs.identity(GREETER), true));
+    let opening = launcher
+        .press_hotkey(&shortcut)
+        .expect("the hotkey still opens its command");
+    block_on(opening);
+    assert_eq!(launcher.view().screen, Screen::Command);
+}
+
+#[test]
 fn a_reload_of_the_dependency_that_fails_to_start_leaves_its_dependents_waiting() {
     let dirs = Dirs::new();
     let greeter = dirs.sample(GREETER);
@@ -847,6 +885,42 @@ fn a_reload_of_the_dependency_that_fails_to_start_leaves_its_dependents_waiting(
     );
     launcher.show_root_search();
     assert_eq!(row(&launcher, "Call from JavaScript").unavailable, None);
+}
+
+/// A hotkey system that registers everything, so a test can assign a
+/// shortcut and press it.
+#[derive(Default)]
+struct AnyHotkeys(Mutex<Vec<Shortcut>>);
+
+impl Hotkeys for AnyHotkeys {
+    fn unavailable(&self) -> Option<String> {
+        None
+    }
+
+    fn register(&self, shortcut: &Shortcut) -> Result<(), HotkeyError> {
+        self.0.lock().unwrap().push(shortcut.clone());
+        Ok(())
+    }
+
+    fn unregister(&self, shortcut: &Shortcut) {
+        self.0.lock().unwrap().retain(|kept| kept != shortcut);
+    }
+}
+
+/// Gives the command titled `title` the global hotkey `shortcut`, as the
+/// user does in Manage extensions.
+fn set_hotkey(launcher: &Launcher, title: &str, shortcut: &str) {
+    manage(launcher);
+    activate(
+        launcher,
+        &format!("Hotkey for {title}"),
+    );
+    assert!(
+        matches!(launcher.view().screen, Screen::Hotkey { .. }),
+        "{:?}",
+        launcher.view()
+    );
+    block_on(launcher.record_hotkey(Shortcut::parse(shortcut).unwrap()));
 }
 
 /// Sets the Schedule sample's command to run its item every `every`
