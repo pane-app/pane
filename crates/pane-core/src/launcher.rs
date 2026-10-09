@@ -4083,10 +4083,13 @@ impl Launcher {
                 // A developed package's crash, or error its command answered
                 // with, while the custom view opens shows as the error
                 // overlay (see `error_overlay`), in place of the status
-                // line.
-                if let Some(retry) = Launcher::open_again(&state, &component)
-                    && !self.show_error_overlay(&mut state, &component, &error, retry)
-                {
+                // line; every other case, including a command whose
+                // package Pane does not know (its own registered
+                // commands), keeps the status line.
+                let shown = Launcher::open_again(&state, &component).is_some_and(|retry| {
+                    self.show_error_overlay(&mut state, &component, &error, retry)
+                });
+                if !shown {
                     state.view.status = Status::Error(error.to_string());
                 }
             }
