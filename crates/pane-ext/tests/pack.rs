@@ -222,7 +222,11 @@ fn a_rust_sample_packs_into_a_tarball_that_pane_installs_from_the_registry() {
     for entry in archive.entries().unwrap() {
         let mut entry = entry.unwrap();
         let name = String::from_utf8(entry.path_bytes().to_vec()).unwrap();
-        assert_eq!(entry.header().entry_type(), tar::EntryType::Regular, "{name}");
+        assert_eq!(
+            entry.header().entry_type(),
+            tar::EntryType::Regular,
+            "{name}"
+        );
         assert_eq!(entry.header().mode().unwrap(), 0o644, "{name}");
         assert_eq!(entry.header().mtime().unwrap(), PACKED_MTIME, "{name}");
         names.push(name);
@@ -358,7 +362,10 @@ fn what_pane_refuses_is_refused_by_pack_with_panes_messages() {
     fs::write(folder.join("pane.json"), manifest(false, "")).unwrap();
     let (passed, printed) = pack(&folder);
     assert!(!passed, "{printed}");
-    assert!(printed.contains("the package has no icon of its own"), "{printed}");
+    assert!(
+        printed.contains("the package has no icon of its own"),
+        "{printed}"
+    );
     assert!(
         printed.contains("a published extension's icon is a 512×512 image"),
         "{printed}"
@@ -419,6 +426,9 @@ fn an_argument_pack_does_not_take_is_a_usage_error() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(printed.contains("is not an argument pack takes"), "{printed}");
+    assert!(
+        printed.contains("is not an argument pack takes"),
+        "{printed}"
+    );
     assert!(printed.contains("Usage: pane-ext"), "{printed}");
 }

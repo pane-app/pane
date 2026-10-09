@@ -69,14 +69,21 @@ fn pack(folder: Option<PathBuf>) -> Result<(), String> {
     ) {
         Ok(built) => built,
         Err(failure) => {
-            eprintln!("pane-ext: {} did not build: {}", folder.display(), failure.summary);
+            eprintln!(
+                "pane-ext: {} did not build: {}",
+                folder.display(),
+                failure.summary
+            );
             for line in &failure.output {
                 eprintln!("{line}");
             }
             if let Some(log) = &failure.log {
                 eprintln!("pane-ext: the whole output is in {}", log.display());
             }
-            return Err(format!("{} was not packed: it did not build", folder.display()));
+            return Err(format!(
+                "{} was not packed: it did not build",
+                folder.display()
+            ));
         }
     };
     // The built components go back into the package folder, as a

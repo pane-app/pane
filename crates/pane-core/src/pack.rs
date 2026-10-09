@@ -163,9 +163,7 @@ fn pack_git(folder: &Path, manifest: &Manifest, report: &mut CheckReport) -> Pac
             .next()
             .and_then(|part| part.as_os_str().to_str())
             .is_some_and(|part| NOT_IN_A_REVISION.contains(&part));
-        if in_skipped
-            && let Some(why) = bad_name(&file)
-        {
+        if in_skipped && let Some(why) = bad_name(&file) {
             report.errors.push(CheckProblem {
                 id: PACKED,
                 file: Some(file.display().to_string()),
@@ -193,7 +191,7 @@ fn pack_git(folder: &Path, manifest: &Manifest, report: &mut CheckReport) -> Pac
 /// The npm `package.json` of the package in `folder`: its name, version
 /// and `files` list, or the problem with reading one.
 fn package_json(folder: &Path, report: &mut CheckReport) -> Option<PackageJson> {
-    let refused = |message: String| {
+    let mut refused = |message: String| {
         report.errors.push(CheckProblem {
             id: FILES,
             file: Some("package.json".into()),
@@ -203,14 +201,18 @@ fn package_json(folder: &Path, report: &mut CheckReport) -> Option<PackageJson> 
     let text = match fs::read_to_string(folder.join("package.json")) {
         Ok(text) => text,
         Err(error) => {
-            refused(format!("the package's package.json cannot be read: {error}"));
+            refused(format!(
+                "the package's package.json cannot be read: {error}"
+            ));
             return None;
         }
     };
     let json: serde_json::Value = match serde_json::from_str(&text) {
         Ok(json) => json,
         Err(error) => {
-            refused(format!("the package's package.json cannot be read: {error}"));
+            refused(format!(
+                "the package's package.json cannot be read: {error}"
+            ));
             return None;
         }
     };
@@ -310,7 +312,7 @@ fn collect(folder: &Path, prefix: &Path, files: &mut Vec<PathBuf>, report: &mut 
                 message: format!(
                     "the package contains `{}`, whose name is not valid UTF-8; Pane unpacks \
                      only paths inside the package",
-                    prefix.join(name.to_string_lossy()).display()
+                    prefix.join(name.to_string_lossy().into_owned()).display()
                 ),
             });
             continue;
@@ -334,7 +336,7 @@ fn collect(folder: &Path, prefix: &Path, files: &mut Vec<PathBuf>, report: &mut 
 fn walk(folder: &Path, files: &[PathBuf], report: &mut CheckReport) -> Vec<PathBuf> {
     let mut packed = Vec::new();
     let mut entries = 0;
-    let mut bytes = 0;
+    let mut bytes = 0u64;
     for file in files {
         if let Some(why) = bad_name(file) {
             report.errors.push(CheckProblem {
@@ -420,7 +422,7 @@ fn walk_revision(
                 message: format!(
                     "the package contains `{}`, whose name is not valid UTF-8; Pane takes only \
                      files and folders every system can write",
-                    prefix.join(name.to_string_lossy()).display()
+                    prefix.join(name.to_string_lossy().into_owned()).display()
                 ),
             });
             continue;
@@ -606,8 +608,8 @@ fn covered(files: &[String], file: &Path) -> bool {
     let Some(file) = file.to_str() else {
         return false;
     };
-    let included = files.iter().filter(|entry| !entry.starts_with('!'));
-    let excluded = files.iter().filter(|entry| entry.starts_with('!'));
+    let mut included = files.iter().filter(|entry| !entry.starts_with('!'));
+    let mut excluded = files.iter().filter(|entry| entry.starts_with('!'));
     included.any(|entry| entry_covers(entry, file))
         && !excluded.any(|entry| entry_covers(&entry[1..], file))
 }

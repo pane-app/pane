@@ -159,9 +159,7 @@ fn respond(served: &Served, base: &str, path: &str) -> Vec<u8> {
         };
         return versions
             .iter()
-            .find(|(version, _)| {
-                tarball_url(base, name, version).ends_with(&format!("/-/{file}"))
-            })
+            .find(|(version, _)| tarball_url(base, name, version).ends_with(&format!("/-/{file}")))
             .map_or_else(not_found, |(_, version)| version.tarball.clone());
     }
     let name = path.replace("%2f", "/").replace("%2F", "/");
@@ -176,7 +174,10 @@ fn respond(served: &Served, base: &str, path: &str) -> Vec<u8> {
                 "integrity": integrity(&version.tarball),
                 "shasum": "not checked",
             });
-            (number.clone(), json!({ "name": name, "version": number, "dist": dist }))
+            (
+                number.clone(),
+                json!({ "name": name, "version": number, "dist": dist }),
+            )
         })
         .collect();
     let mut tags = serde_json::Map::new();

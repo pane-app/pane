@@ -4502,10 +4502,13 @@ dependencies = [
 name = "pane-ext"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "futures",
  "pane-build",
  "pane-core",
  "serde_json",
+ "sha2",
+ "tar",
  "tempfile",
 ]
 
