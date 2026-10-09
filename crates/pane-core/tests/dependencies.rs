@@ -381,10 +381,13 @@ fn a_disabled_required_dependency_is_not_enabled_again() {
             "Needs Rust operations sample, which is disabled".into()
         ))
     );
-    select_title(launcher, "Call from JavaScript");
+    select_title(&launcher, "Call from JavaScript");
     block_on(launcher.activate_selected());
     let view = launcher.view();
-    assert!(matches!(view.screen, Screen::WaitingDetails { .. }), "{view:?}");
+    assert!(
+        matches!(view.screen, Screen::WaitingDetails { .. }),
+        "{view:?}"
+    );
     assert_eq!(view.title, "Why Call from JavaScript cannot run");
     // Enabling the dependency again brings it back by itself.
     block_on(launcher.set_enabled(&dirs.identity(RUST), true));
@@ -397,7 +400,7 @@ fn a_disabled_required_dependency_is_not_enabled_again() {
         .unwrap()
         .clone();
     assert_eq!(command.unavailable, None);
-    assert_eq!(greet(launcher, "greeter"), result("Hello, Ada, from Rust"));
+    assert_eq!(greet(&launcher, "greeter"), result("Hello, Ada, from Rust"));
 }
 
 #[test]

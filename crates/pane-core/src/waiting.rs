@@ -140,7 +140,10 @@ impl Waiting {
                 !able[*index] && package.enabled && !paused(&package.identity)
             })
             .map(|(_, package)| {
-                (package.identity.clone(), reason(packages, &able, paused, title_of, package))
+                (
+                    package.identity.clone(),
+                    reason(packages, &able, paused, title_of, package),
+                )
             })
             .collect();
         Waiting { reasons }
@@ -194,7 +197,7 @@ fn unmet_of(
                         title: title_of(&identity),
                         state: Some(Unmet::NotInstalled),
                         identity,
-                    })
+                    });
                 }
             };
             if !dependency.enabled {
@@ -236,9 +239,7 @@ fn root_of(
     path: &[PackageIdentity],
 ) -> Option<(PackageIdentity, String, Unmet)> {
     let last = path.last()?;
-    let package = packages
-        .iter()
-        .find(|package| &package.identity == last)?;
+    let package = packages.iter().find(|package| &package.identity == last)?;
     let first = unmet_of(packages, able, paused, title_of, package)
         .into_iter()
         .next()?;
