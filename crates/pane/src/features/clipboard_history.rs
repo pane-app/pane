@@ -66,7 +66,7 @@ use pane_core::clipboard_view::{
 };
 use pane_core::{Binding, Keyboard, KeyboardAction, LauncherView, Screen, Status};
 
-use crate::app::{KEY_CONTEXT, LauncherWindow};
+use crate::app::{KEY_CONTEXT, LauncherWindow, Spot};
 use crate::features::announcer::{self, Listing, Noun, Opening, Selected, Target};
 use crate::ui::extension_icon::{self, IconSize};
 use crate::ui::footer::{self, ButtonWash};
@@ -995,6 +995,10 @@ impl LauncherWindow {
             crate::keyboard::binding_keys(keyboard.binding(KeyboardAction::InvokeSelectedAction));
         let actions_keys =
             crate::keyboard::binding_keys(keyboard.binding(KeyboardAction::OpenActions));
+        // The footer buttons' hover washes, read as they are drawn and
+        // reported by the buttons themselves (#245).
+        let hover_now = cx.background_executor().now();
+        let look = |spot: Spot| self.motion.hover.look(spot, hover_now);
         // Paste (Enter) acts on the selected record: with none, there is no
         // primary action at all.
         let paste = selected.map(|_| {
@@ -1003,13 +1007,18 @@ impl LauncherWindow {
                 "Paste",
                 &invoke,
                 CapStyle::Accent,
-                ButtonWash::Hover,
+                ButtonWash::Hover(look(Spot::Button("clipboard-paste"))),
                 &theme,
             )
             .role(Role::Button)
             .aria_label("Paste")
             .aria_keyshortcuts(invoke.name())
             .cursor_pointer()
+            .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+                this.motion
+                    .hover
+                    .set(Spot::Button("clipboard-paste"), *over, cx);
+            }))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 this.paste_selected_record(window, cx);
             }))
@@ -1020,13 +1029,18 @@ impl LauncherWindow {
             "Actions",
             &actions_keys,
             CapStyle::Regular,
-            ButtonWash::Hover,
+            ButtonWash::Hover(look(Spot::Button("clipboard-actions"))),
             &theme,
         )
         .role(Role::Button)
         .aria_label("Actions")
         .aria_keyshortcuts(actions_keys.name())
         .cursor_pointer()
+        .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+            this.motion
+                .hover
+                .set(Spot::Button("clipboard-actions"), *over, cx);
+        }))
         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
             if this.actions_open() {
                 this.close_actions(window, cx);
@@ -1150,6 +1164,10 @@ impl LauncherWindow {
                             title: title.clone(),
                             time: record.time.clone(),
                             selected: on,
+                            hover: self.motion.hover.look(
+                                Spot::Clip(row),
+                                cx.background_executor().now(),
+                            ),
                         },
                         mark,
                         &theme,
@@ -1160,6 +1178,9 @@ impl LauncherWindow {
                     .aria_selected(on)
                     .aria_position_in_set(row + 1)
                     .aria_size_of_set(frame.rows.len())
+                    .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+                        this.motion.hover.set(Spot::Clip(row), *over, cx);
+                    }))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         if let Some(history) = this.clipboard.as_mut() {
                             history.browse.select(id.clone());

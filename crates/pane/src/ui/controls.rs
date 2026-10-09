@@ -403,8 +403,9 @@ pub(crate) fn button(
 
 /// A secondary button (the store board's ghost pill, `.pill.ghost`): a
 /// button's box, transparent, its label in the body ink. The store authors
-/// no hover for it; Pane's is a footer button's white 6% (`.fbtn:hover`),
-/// and its press the [`pressed`] wash of that. It is `id`, as [`button`].
+/// no hover for it; Pane's is the hover wash the footer's buttons take
+/// (`.fbtn:hover`, #245 — imperceptibly apart from the 6% it was), and
+/// its press the [`pressed`] wash of that. It is `id`, as [`button`].
 pub(crate) fn ghost_button(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
@@ -412,7 +413,7 @@ pub(crate) fn ghost_button(
     theme: &Theme,
 ) -> Stateful<Div> {
     let hover = if enabled {
-        theme.control_hover
+        theme.hover_wash
     } else {
         gpui::transparent_black()
     };
@@ -499,6 +500,8 @@ pub(crate) fn well_glyph(mark: Glyph, theme: &Theme) -> gpui::Svg {
 
 /// `input` styled as a well's text: 13px in the title ink, the muted
 /// placeholder, the accent caret, filling the well and scrolling sideways.
+/// The text the user selects in it is marked with the selection wash
+/// (#245, as every field's is).
 pub(crate) fn well_input(
     input: EditableTextElement,
     placeholder: impl Into<SharedString>,
@@ -509,7 +512,7 @@ pub(crate) fn well_input(
         .placeholder(placeholder)
         .placeholder_color(theme.text_placeholder)
         .caret_color(theme.accent_text)
-        .selection_color(theme.row_selected)
+        .selection_color(theme.selection_wash)
         .marked_color(theme.accent_text)
         .text_size(typography.settings_text_size)
         .text_color(theme.text_title)
@@ -740,8 +743,8 @@ pub(crate) fn select_trigger(label: impl Into<SharedString>, theme: &Theme) -> D
 /// One choice in a select's list: the Actions panel's entry family
 /// (`.arow`: 36 high at least, radius 8, 8px either side, 13px/450 in its
 /// ink), its `description` under its label in the muted 12.5, the 6px
-/// accent mark at its end while `committed`; the white 11% wash while
-/// `highlighted`, white 6% under the pointer — at once, and the hover
+/// accent mark at its end while `committed`; the selection wash while
+/// `highlighted`, the hover wash under the pointer — at once, and the hover
 /// attached in every state (a highlighted or unavailable one's being its
 /// resting look). While held, an offered choice takes the [`pressed`] wash
 /// of its hover — of its highlight, if highlighted — at once too. A choice
@@ -757,19 +760,19 @@ pub(crate) fn menu_row(
     let controls = &theme.geometry.controls;
     let typography = &theme.typography;
     let rest = if highlighted {
-        theme.action_selected
+        theme.selection_wash
     } else {
         gpui::transparent_black()
     };
     let hover = if highlighted || !offered {
         rest
     } else {
-        theme.control_hover
+        theme.hover_wash
     };
     let press = pressed(if highlighted {
-        theme.action_selected
+        theme.selection_wash
     } else {
-        theme.control_hover
+        theme.hover_wash
     });
     let line = typography.settings.field_description;
     div()

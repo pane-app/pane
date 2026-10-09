@@ -57,7 +57,7 @@ use pane_core::{
     KeyboardAction, LauncherView, PinnedLayout, QuickSlot, ResultAction, Screen, SlotChange,
 };
 
-use crate::app::{KEY_CONTEXT, LauncherWindow};
+use crate::app::{KEY_CONTEXT, LauncherWindow, Spot};
 use crate::ui::extension_icon::RowIcon;
 use crate::ui::pinned::{
     HOME_CHILDREN, PIN_HINT, SlotContent, home, home_rows, pin_hint, pinned_slot, shows_pin_hint,
@@ -565,6 +565,12 @@ impl LauncherWindow {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
+        // Hovering a slot moves no selection, so the row takes the fainter
+        // hover wash, fading out once the pointer leaves (#245).
+        let hover = self
+            .motion
+            .hover
+            .look(Spot::Slot(index), cx.background_executor().now());
         let row = result_row_with(
             RowContent {
                 title: slot.title.clone().into(),
@@ -574,6 +580,7 @@ impl LauncherWindow {
                 unavailable_reason: slot.unavailable.clone().map(Into::into),
                 unavailable_id: ("slot-unavailable", index).into(),
                 selected: false,
+                hover,
                 icon: Some(slot_icon(&self.launcher, &slot, theme)),
             },
             RowMeta {
@@ -582,10 +589,15 @@ impl LauncherWindow {
             },
             theme,
         )
-        .focus_visible(|row| row.bg(theme.row_hover));
+        // The keyboard's focus on the row: the hover wash's own value,
+        // as the row's focus treatment always was a wash.
+        .focus_visible(|row| row.bg(theme.hover_wash));
         let press = crate::ui::result_row::pressed_wash(false, theme);
         let row = row
             .id(("slot", index))
+            .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+                this.motion.hover.set(Spot::Slot(index), *over, cx);
+            }))
             .active(move |row| row.bg(press))
             .debug_selector(move || format!("slot-{}", index + 1));
         slot_accessibility(index, &slot, self.slot_input(index, row, cx))
@@ -638,10 +650,19 @@ impl LauncherWindow {
             title: slot.title.clone().into(),
             icon: slot_icon(&self.launcher, &slot, theme),
             number,
+            // Hovering a slot moves no selection: the fainter wash,
+            // fading out once the pointer leaves (#245).
+            hover: self
+                .motion
+                .hover
+                .look(Spot::Slot(index), cx.background_executor().now()),
             unavailable: slot.unavailable.clone().map(Into::into),
         };
         let tile = self
             .slot_input(index, pinned_slot(content, theme), cx)
+            .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+                this.motion.hover.set(Spot::Slot(index), *over, cx);
+            }))
             // What tells it apart from a result of its title, which its
             // tile has no room to show.
             .when_some(slot.detail.clone(), |tile, detail| {

@@ -1510,8 +1510,10 @@ pub(crate) fn panel_child(
 
 /// An entry (`.arow`): 36 high, radius 8, 8px either side, its 16px glyph
 /// in the icon gray, its 13px/450 label filling the row, and its keys at
-/// the right in their caps' style; the 11% wash when selected, the 6% one
-/// on hover. A destructive entry draws its glyph and label in the
+/// the right in their caps' style; the selected entry's wash, and the
+/// only one an entry shows: hovering here selects, so the selection wash
+/// is the entry's wash under the pointer too (ADR 0035). A destructive
+/// entry draws its glyph and label in the
 /// destructive color, and says so to assistive technology; the keys are
 /// also the row's shortcut there. An entry that opens a submenu ends in a
 /// chevron (#140). A submenu's note (loading, or its error) is not dimmed
@@ -1560,17 +1562,17 @@ pub(crate) fn action_row(
             row.aria_description(description)
         })
         .when_some(keys, |row, (keys, _)| row.aria_keyshortcuts(keys.name()))
-        .when(selected, |row| row.bg(theme.action_selected))
-        .when(!selected && available, |row| {
-            row.hover(|row| row.bg(theme.control_hover))
-        })
+        // The selected entry's wash — and the only one an entry shows:
+        // hovering an entry selects it (a move over one moves the
+        // selection), so no fainter hover wash is drawn (ADR 0035).
+        .when(selected, |row| row.bg(theme.selection_wash))
         // While held, an available entry takes the stronger wash of its
-        // hover, or of its selected wash, at once.
+        // selected wash, or of the hover wash, at once.
         .when(available, |row| {
             let press = pressed(if selected {
-                theme.action_selected
+                theme.selection_wash
             } else {
-                theme.control_hover
+                theme.hover_wash
             });
             row.active(move |row| row.bg(press))
         })
@@ -1718,7 +1720,7 @@ pub(crate) fn search_field(
                 .placeholder(PLACEHOLDER)
                 .placeholder_color(theme.text_placeholder)
                 .caret_color(theme.accent_text)
-                .selection_color(theme.row_selected)
+                .selection_color(theme.selection_wash)
                 .marked_color(theme.accent_text)
                 .text_size(theme.typography.action_size)
                 .text_color(theme.text_title)

@@ -7,10 +7,14 @@
 //! 14px/500 title, the 13px subtitle and, on the right, an extension
 //! item's accessories (text, a relative date, a coloured tag; #139), the
 //! optional alias chip, key sequence and kind. A title, subtitle or
-//! accessory with a tooltip shows it while the pointer rests on it. A pale
-//! wash marks hover and selection; selection stays visible while hovering:
-//! a selected row keeps its wash and inset edge and does not switch to the
-//! hover wash. Neither wash fades: the reference's row changes at once.
+//! accessory with a tooltip shows it while the pointer rests on it. A
+//! wash marks hover and selection, the theme's two strengths of the text
+//! colour (ADR 0035): the selected row's wash has no inset edge or ring,
+//! and stays put under the pointer; an unselected row under the pointer
+//! takes the fainter hover wash — drawn where hovering does not move the
+//! selection, so a row the pointer selects never shows it — fading out
+//! over [`crate::ui::motion::HOVER_FADE`] once the pointer leaves. The
+//! selection itself never fades: the row changes at once.
 //!
 //! This component owns no identity and no behavior. It returns a plain
 //! [`Div`] so the app attaches everything behavioral on top:
@@ -47,7 +51,7 @@ use gpui::{
 use crate::ui::extension_icon::{self, DrawnIcon, IconSize, RowIcon};
 use crate::ui::icon::TileSize;
 use crate::ui::keycap::{self, CapStyle, KeySequence};
-use crate::ui::theme::{Theme, pressed};
+use crate::ui::theme::{Theme, faded, pressed};
 use crate::ui::tooltip::{TooltipLook, text_tooltip};
 
 /// What a result row shows — plain presentation values, already resolved
@@ -67,6 +71,12 @@ pub(crate) struct RowContent {
     pub(crate) unavailable_id: ElementId,
     /// Whether the row is selected. Selection styling wins over hover.
     pub(crate) selected: bool,
+    /// The hover wash's strength, 0 to 1 (see `crate::app::hover_wash`):
+    /// full while the pointer rests on the row, fading once it has left.
+    /// Drawn only while the row is unselected, where hovering does not
+    /// move the selection — root search's rows select under the pointer,
+    /// so a row there shows the selection wash instead.
+    pub(crate) hover: f32,
     /// The row's icon presentation.
     pub(crate) icon: Option<RowIcon>,
 }
@@ -117,7 +127,8 @@ pub(crate) struct AccessoryLook {
 pub(crate) fn result_row_with(content: RowContent, meta: RowMeta, theme: &Theme) -> Div {
     let geometry = &theme.geometry;
     let typography = &theme.typography;
-    let row = row_surface(content.selected, theme).font_family(typography.family.clone());
+    let row =
+        row_surface(content.selected, content.hover, theme).font_family(typography.family.clone());
 
     let row = match &content.icon {
         Some(icon) => row.child(extension_icon::row_icon_at(
@@ -309,17 +320,19 @@ pub(crate) fn with_number_hint<E: ParentElement + Styled>(
 /// no press for its rows.
 pub(crate) fn pressed_wash(selected: bool, theme: &Theme) -> Hsla {
     pressed(if selected {
-        theme.row_selected
+        theme.selection_wash
     } else {
-        theme.row_hover
+        theme.hover_wash
     })
 }
 
 /// A row's surface (`.row`): at least 44 high, radius 10, 10px either side
-/// and 12 between its parts, with the pale hover wash while unselected,
-/// and the selected wash and its 1px inset edge while `selected` (a
-/// selected row keeps them under the pointer): the result row's.
-fn row_surface(selected: bool, theme: &Theme) -> Div {
+/// and 12 between its parts, with the fainter hover wash while unselected
+/// at `hover`'s strength (1 under the pointer, fading once it has left,
+/// and drawn only where hovering does not move the selection), and the
+/// selected row's wash — no inset edge (ADR 0035), frosted over a
+/// background image (ADR 0028) — while `selected`: the result row's.
+fn row_surface(selected: bool, hover: f32, theme: &Theme) -> Div {
     let geometry = &theme.geometry;
     div()
         .flex_none()
@@ -331,19 +344,17 @@ fn row_surface(selected: bool, theme: &Theme) -> Div {
         .px(geometry.row_padding_x)
         .rounded(geometry.row_radius)
         .cursor_pointer()
-        // A row under the pointer (unselected only: selection stays
-        // visible while hovering) takes the pale hover wash.
-        .when(!selected, |row| row.hover(|row| row.bg(theme.row_hover)))
-        // The selected row: its wash and its 1px inset edge — frosted over
-        // a background image (ADR 0028).
+        // An unselected row under the pointer — or one its hover wash is
+        // still fading from — takes the fainter wash (#245). A selected
+        // row never does: selection stays visible while hovering.
+        .when(!selected && hover > 0., |row| {
+            row.bg(faded(theme.hover_wash, hover))
+        })
+        // The selected row: its wash, frosted over a background image
+        // (ADR 0028), with no inset edge (ADR 0035).
         .when(selected, |row| {
             row.when_some(theme.frost, |row, frost| row.backdrop_blur(frost.blur))
-                .bg(theme.row_selected)
-                .shadow(vec![
-                    BoxShadow::new(px(0.), px(0.), theme.row_selected_border)
-                        .spread_radius(px(1.))
-                        .inset(),
-                ])
+                .bg(theme.selection_wash)
         })
 }
 

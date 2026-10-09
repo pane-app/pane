@@ -1,5 +1,6 @@
 //! The launcher window's frame motion: the view transition, the footer
-//! menu popup's entrance and exit, and the number hints' slide — what
+//! menu popup's entrance and exit, the number hints' slide and the hover
+//! washes' exits — what
 //! moves between frames, presentation only (see [`crate::ui::motion`] for
 //! the whole policy).
 //!
@@ -18,6 +19,7 @@ use std::time::Instant;
 
 use pane_core::Screen;
 
+use crate::app::hover_wash::HoverWashes;
 use crate::features::number_hints::Numbers;
 use crate::ui::motion::{self, Direction};
 
@@ -82,6 +84,11 @@ pub(crate) struct FrameMotion {
     /// The number hints Ctrl reveals: the hold that shows them is the
     /// number hints module's, their slide is advanced here each frame.
     pub(crate) numbers: Numbers,
+    /// The hover washes the launcher's surfaces take under the pointer,
+    /// and the fade each leaves behind (#245; see
+    /// [`crate::app::hover_wash`]): the surfaces report their hover, and
+    /// their renders read the washes' strength as they draw.
+    pub(crate) hover: HoverWashes,
 }
 
 impl FrameMotion {
@@ -100,6 +107,7 @@ impl FrameMotion {
             #[cfg(any(test, debug_assertions))]
             drawn_menu_popup: None,
             numbers: Numbers::default(),
+            hover: HoverWashes::default(),
         }
     }
 
@@ -202,11 +210,17 @@ impl FrameMotion {
         if menu_open || menu_popup.is_none() {
             self.menu_exit = None;
         }
+        // The hover washes' exits, on the same frame discipline: a fade
+        // in flight keeps the frames coming; the frame that settles the
+        // last one asks for none. Reduced motion settles them at once.
+        let hover = self.hover.advance(reduced, now);
         // While the arriving content is still in flight, frames keep
         // coming; the frame that completes the transition asks for none,
         // so a settled window is idle. The same holds for the footer menu
-        // popup's entrance or exit and the number hints' slide.
-        let animating = arriving.is_some() || menu_popup.is_some() || self.numbers.reveal.is_some();
+        // popup's entrance or exit, the number hints' slide and the hover
+        // washes' exits.
+        let animating =
+            arriving.is_some() || menu_popup.is_some() || self.numbers.reveal.is_some() || hover;
         Frame {
             arriving,
             menu_popup,

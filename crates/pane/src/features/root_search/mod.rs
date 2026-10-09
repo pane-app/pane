@@ -259,7 +259,7 @@ pub(crate) fn search_header(
                 .placeholder(placeholder)
                 .placeholder_color(theme.text_placeholder)
                 .caret_color(theme.accent_text)
-                .selection_color(theme.row_selected)
+                .selection_color(theme.selection_wash)
                 .marked_color(theme.accent_text)
                 .text_size(typography.search_size)
                 .text_color(theme.text_query)

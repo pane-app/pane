@@ -65,6 +65,16 @@ pub(crate) fn pressed(wash: Hsla) -> Hsla {
     }
 }
 
+/// `color` at `strength` of its alpha: a hover wash's look as it fades
+/// out behind the pointer (#245). Full strength is the wash itself; 0
+/// is nothing drawn at all.
+pub(crate) fn faded(color: Hsla, strength: f32) -> Hsla {
+    Hsla {
+        alpha: (color.alpha * strength.clamp(0., 1.)).min(1.),
+        ..color
+    }
+}
+
 /// The semantic tokens. Field groups follow the roles the launcher uses:
 /// text, background, borders, selection, focus, semantic states, control
 /// chrome — plus the typography and geometry the reference fixes.
@@ -119,13 +129,23 @@ pub(crate) struct Theme {
     /// Dividers between header/footer and the list (reference: .06).
     pub(crate) hairline_soft: Hsla,
 
-    // -- Selection roles ----------------------------------------------------
-    /// A row under the pointer (reference: rgba(255,255,255,.035)).
-    pub(crate) row_hover: Hsla,
-    /// The selected row's wash (reference: rgba(255,255,255,.085)).
-    pub(crate) row_selected: Hsla,
-    /// The selected row's inset edge (reference: rgba(255,255,255,.05)).
-    pub(crate) row_selected_border: Hsla,
+    // -- Selection and hover (ADR 0035) -------------------------------
+    /// The selected row's wash in every launcher list — root search's
+    /// rows, a command's list, a command search, a confirmation's rows,
+    /// the Actions panel's and the Pane menu's entries: the text colour
+    /// at 10% (Raycast's value), with no inset edge and no ring (ADR
+    /// 0035). A selected row over a background image keeps this wash over
+    /// its frost, without the edge.
+    pub(crate) selection_wash: Hsla,
+    /// The hover wash where hovering does not move the selection (a
+    /// command's list, rows under an open overlay, pinned slots, the
+    /// footer's buttons, the Pane menu's entries): the text colour at
+    /// 5%, fainter than the selection, fading out over
+    /// [`crate::ui::motion::HOVER_FADE`] once the pointer leaves (ADR
+    /// 0035). Where hovering *does* move the selection — root search's
+    /// rows, the Actions panel's entries — only the selection wash ever
+    /// shows.
+    pub(crate) hover_wash: Hsla,
 
     // -- Root search's result layouts (#96) ----------------------------------
     /// The no-results notice, the computed answer's card and the empty
@@ -226,8 +246,6 @@ pub(crate) struct Theme {
     pub(crate) footer_mark: Hsla,
     /// A footer button's label (reference `.fbtn`: #D9DADD).
     pub(crate) footer_button_text: Hsla,
-    /// A footer button's hover wash, and an Actions row's (white 6%).
-    pub(crate) control_hover: Hsla,
     /// The Actions button while its panel is open (white 10%), with
     /// [`Theme::footer_button_open_text`] on it.
     pub(crate) footer_button_open: Hsla,
@@ -235,8 +253,6 @@ pub(crate) struct Theme {
     pub(crate) footer_button_open_text: Hsla,
     /// The 1×16 rule between the footer's buttons (white 10%).
     pub(crate) footer_divider: Hsla,
-    /// The selected Actions row's wash (reference `.arow.sel`: white 11%).
-    pub(crate) action_selected: Hsla,
     /// An Actions row's label (#E4E4E7).
     pub(crate) action_text: Hsla,
     /// An Actions row's glyph (#A3A4A9).
@@ -265,8 +281,6 @@ pub(crate) struct Theme {
     pub(crate) slot_background: Hsla,
     /// A pinned slot's 1px inset edge (white 5%).
     pub(crate) slot_edge: Hsla,
-    /// A pinned slot under the pointer (`.slot:hover`: white 7%).
-    pub(crate) slot_hover: Hsla,
     /// A pinned slot's title (`.slot-t`: #D9DADD).
     pub(crate) slot_title: Hsla,
     /// The pin hint's dashed outline, in the strip's cell after the last
@@ -649,8 +663,8 @@ pub(crate) struct ResultColors {
     pub(crate) notice_disc: Hsla,
     pub(crate) notice_disc_edge: Hsla,
     pub(crate) notice_glyph: Hsla,
-    /// The answer card's fill (white 6%); its 1px ring while selected is
-    /// the accent stroke ([`Theme::accent_text`]).
+    /// The answer card's fill (white 6%); while selected the card shows
+    /// [`Theme::selection_wash`] instead, with no ring (ADR 0035).
     pub(crate) card_fill: Hsla,
     /// The value typed (#D9DADD) and the answer (#FFFFFF).
     pub(crate) card_source: Hsla,
@@ -1055,9 +1069,8 @@ impl Theme {
             hairline: color(0xFFFFFF13),
             hairline_soft: color(0xFFFFFF0F),
 
-            row_hover: color(0xFFFFFF09),
-            row_selected: color(0xFFFFFF16),
-            row_selected_border: color(0xFFFFFF0D),
+            selection_wash: color(0xEDEDEF1A),
+            hover_wash: color(0xEDEDEF0D),
 
             results: ResultColors::dark(),
 
@@ -1101,11 +1114,9 @@ impl Theme {
 
             footer_mark: color(0xEDEDEFEB),
             footer_button_text: color(0xD9DADDFF),
-            control_hover: color(0xFFFFFF0F),
             footer_button_open: color(0xFFFFFF1A),
             footer_button_open_text: color(0xFFFFFFFF),
             footer_divider: color(0xFFFFFF1A),
-            action_selected: color(0xFFFFFF1C),
             action_text: color(0xE4E4E7FF),
             action_icon: color(0xA3A4A9FF),
             action_rule: color(0xFFFFFF12),
@@ -1118,7 +1129,6 @@ impl Theme {
 
             slot_background: color(0xFFFFFF09),
             slot_edge: color(0xFFFFFF0D),
-            slot_hover: color(0xFFFFFF12),
             slot_title: color(0xD9DADDFF),
             slot_empty_edge: color(0xFFFFFF1A),
 
@@ -1162,9 +1172,8 @@ impl Theme {
             hairline: color(0x00000017),
             hairline_soft: color(0x00000012),
 
-            row_hover: color(0x0000000B),
-            row_selected: color(0x00000016),
-            row_selected_border: color(0x0000000D),
+            selection_wash: color(0x2021261A),
+            hover_wash: color(0x2021260D),
 
             results: ResultColors::light(),
 
@@ -1211,11 +1220,9 @@ impl Theme {
 
             footer_mark: color(0x202126EB),
             footer_button_text: color(0x2A2B31FF),
-            control_hover: color(0x0000000F),
             footer_button_open: color(0x0000001A),
             footer_button_open_text: color(0x111214FF),
             footer_divider: color(0x0000001A),
-            action_selected: color(0x0000001C),
             action_text: color(0x202126FF),
             action_icon: color(0x575A63FF),
             action_rule: color(0x00000012),
@@ -1228,7 +1235,6 @@ impl Theme {
 
             slot_background: color(0x00000009),
             slot_edge: color(0x0000000D),
-            slot_hover: color(0x00000012),
             slot_title: color(0x2A2B31FF),
             slot_empty_edge: color(0x0000001A),
 
@@ -1247,10 +1253,10 @@ impl Theme {
     /// glass tint alpha on glass, so the window's frost still shows
     /// through it; the frosted surfaces blur what is behind
     /// them 30px under the canvas at 40% (the footer at 60%) and a cool
-    /// silver edge; hover and selection are plain white washes (dark ones
-    /// in the light palette); and the secondary text steps up a shade to
-    /// read over the picture. The light values are the dark ones turned
-    /// over, not yet tuned.
+    /// silver edge; selection and hover are the text colour's washes
+    /// (ADR 0035), which carry over from the palette beneath; and the
+    /// secondary text steps up a shade to read over the picture. The
+    /// light values are the dark ones turned over, not yet tuned.
     pub(crate) fn over_backdrop(&self, canvas: Hsla) -> Theme {
         let light = self.panel_solid.lightness > 0.5;
         let at = |base: Hsla, alpha: f32| Hsla { alpha, ..base };
@@ -1290,15 +1296,8 @@ impl Theme {
             panel_sheen: transparent_black(),
             footer_tint: at(canvas, 0.6),
             hairline_soft: edge,
-            row_hover: wash(0.06),
-            row_selected: wash(0.10),
-            row_selected_border: Hsla {
-                alpha: edge.alpha + 0.01,
-                ..edge
-            },
             slot_background: frost.tint,
             slot_edge: edge,
-            slot_hover: wash(0.09),
             frost: Some(frost),
             ..self.clone()
         }

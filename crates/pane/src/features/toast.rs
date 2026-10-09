@@ -34,7 +34,7 @@ use gpui::{
 use pane_core::feedback::TOAST_DURATION;
 use pane_core::{ShownToast, Status, ToastSlot, ToastStyle};
 
-use crate::app::{KEY_CONTEXT, LauncherWindow};
+use crate::app::{KEY_CONTEXT, LauncherWindow, Spot};
 use crate::ui::footer::{self, ButtonWash};
 use crate::ui::keycap::{CapStyle, KeySequence};
 use crate::ui::theme::Theme;
@@ -394,12 +394,16 @@ impl LauncherWindow {
                 .unwrap_or(KeySequence { keys: Vec::new() });
             let label = action.title.clone();
             let shortcut = keys.name();
+            let look = self
+                .motion
+                .hover
+                .look(Spot::Button(id), cx.background_executor().now());
             let button = footer::footer_button(
                 id,
                 label.clone(),
                 &keys,
                 CapStyle::Regular,
-                ButtonWash::Hover,
+                ButtonWash::Hover(look),
                 theme,
             )
             .key_context(BUTTON_CONTEXT)
@@ -418,6 +422,9 @@ impl LauncherWindow {
             })
             .on_action(cx.listener(Self::press_toast_action))
             .on_action(cx.listener(Self::leave_toast))
+            .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+                this.motion.hover.set(Spot::Button(id), *over, cx);
+            }))
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 // A double click's second click chooses nothing again.
                 if event.click_count() > 1 {

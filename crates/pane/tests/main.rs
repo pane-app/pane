@@ -37,6 +37,7 @@ mod quicklinks;
 mod repositories;
 mod runtime_crash;
 mod search_files;
+mod selection;
 mod settings;
 mod settings_search;
 mod shortcuts;

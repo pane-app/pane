@@ -16,7 +16,7 @@
 use gpui::{AnyElement, Div, IntoElement, SharedString, Stateful, div, prelude::*, px};
 
 use crate::ui::keycap::{CapStyle, KeySequence, key_sequence};
-use crate::ui::theme::{Theme, pressed};
+use crate::ui::theme::{Theme, faded, pressed};
 
 /// One part of the footer's hint line.
 pub(crate) enum HintPart {
@@ -56,10 +56,14 @@ pub(crate) fn hint_line(parts: Vec<HintPart>, theme: &Theme) -> Div {
 }
 
 /// How a footer button answers the pointer and its panel.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum ButtonWash {
-    /// Transparent at rest, the 6% wash on hover (`.fbtn:hover`).
-    Hover,
+    /// Transparent at rest, the hover wash at `look`'s strength under
+    /// the pointer (`.fbtn:hover`), fading out once it leaves (#245): the
+    /// caller passes the strength it read from the window's hover state
+    /// and reports the pointer's arrivals and departures through its
+    /// `.on_hover`.
+    Hover(f32),
     /// Transparent, with no hover wash: the reference's Actions button,
     /// whose inline background (transparent while its panel is closed)
     /// overrides `.fbtn:hover`.
@@ -100,10 +104,12 @@ pub(crate) fn footer_button(
             ButtonWash::Pressed => button
                 .bg(theme.footer_button_open)
                 .text_color(theme.footer_button_open_text),
-            ButtonWash::Hover => button
+            ButtonWash::Hover(look) => button
                 .text_color(theme.footer_button_text)
-                .hover(|button| button.bg(theme.control_hover))
-                .active(|button| button.bg(pressed(theme.control_hover))),
+                .when(look > 0., |button| {
+                    button.bg(faded(theme.hover_wash, look))
+                })
+                .active(|button| button.bg(pressed(theme.hover_wash))),
             ButtonWash::None => button.text_color(theme.footer_button_text),
         })
         .child(

@@ -90,12 +90,20 @@
 //!   a reversal retargets smoothly instead of flashing.
 //! - A **control's pointer feedback** — the wash a row, an item or a
 //!   button takes under the pointer, and the stronger wash it takes
-//!   while pressed ([`crate::ui::theme::pressed`]) — changes at once:
-//!   the hover tens of times a day, the press the instant the pointer
-//!   goes down, so the family has no motion at all. (GPUI fades a
-//!   property the same way in every state, so a hover fade would have
-//!   delayed the press too.) Keyboard focus and an option's active
-//!   state stay rest styles: the focus ring and the selected wash.
+//!   while pressed ([`crate::ui::theme::pressed`]) — arrives at once,
+//!   and the press always changes at once: the press is the instant the
+//!   pointer goes down, never something the user waits on. The hover
+//!   wash's *exit* is the one exception, Raycast's (ADR 0035): where
+//!   hovering does not move the selection, the wash fades out over
+//!   [`HOVER_FADE`] once the pointer leaves, so moving across a surface
+//!   reads as smooth rather than blinking. That exit runs on the window's
+//!   own bookkeeping (`crate::app::hover_wash`), not on GPUI's style
+//!   states, which fade a property the same way in every state — a hover
+//!   fade there would have delayed the press too. Keyboard focus and an
+//!   option's active state stay rest styles: the focus ring and the
+//!   selected wash. Selection never fades: a key moves it at once, and
+//!   where hovering selects, the wash that shows is the selection's,
+//!   arriving and leaving with the pointer at once.
 //!
 //! Reduced motion: [`App::reduce_motion`] decides, and
 //! [`observe_reduced_motion`] connects that flag to what the operating
@@ -106,9 +114,10 @@
 //! schedules no further cosmetic frames.
 //!
 //! Frame discipline: every transition — a view transition, a Settings
-//! section arrival, a group disclosure, a popup's entrance or exit —
-//! runs for its bounded duration (a control's hover and pressed washes
-//! have none: they change at once) and requests
+//! section arrival, a group disclosure, a popup's entrance or exit, a
+//! hover wash's exit — runs for its bounded duration (a control's
+//! pressed wash has none: it changes at once, and a hover wash arrives
+//! at once) and requests
 //! animation frames only while one is in flight. Completing, cancelling
 //! (the screen changed again), reduced motion, an unmounted window and a
 //! hidden window all end with a frame that requests nothing — the window
@@ -178,6 +187,13 @@ pub(crate) const POPUP_ENTER: Duration = Duration::from_millis(140);
 /// what the exit's inert visuals may and may not do while it runs.
 pub(crate) const POPUP_EXIT: Duration = Duration::from_millis(100);
 
+/// How long the wash a surface takes under the pointer takes to fade out
+/// once the pointer leaves it (#245, ADR 0035): Raycast's 70ms. The wash
+/// arrives at once — only the way out fades — so a hover never delays
+/// anything the pointer does, and under reduced motion the exit leaves
+/// at once too, as every transition does. Selection never fades at all.
+pub(crate) const HOVER_FADE: Duration = Duration::from_millis(70);
+
 /// How far the arriving content starts from its resting place, in logical
 /// pixels: 3px, in the ticket's 2-4px window. Far enough to read as
 /// direction, near enough never to look like scrolling.
@@ -217,13 +233,33 @@ pub(crate) struct Tween {
 impl Tween {
     /// The tween's value at `now`: `from` when it started, `target`
     /// once its duration has passed.
-    fn value(&self, now: Instant) -> f32 {
+    pub(crate) fn value(&self, now: Instant) -> f32 {
         let elapsed = now.saturating_duration_since(self.started);
         if self.duration.is_zero() || elapsed >= self.duration {
             return self.target;
         }
         let progress = ease(elapsed.as_secs_f32() / self.duration.as_secs_f32());
         self.target + (self.from - self.target) * (1. - progress)
+    }
+
+    /// Whether the tween has run its duration at `now`, so the
+    /// presentation it moves has arrived.
+    pub(crate) fn finished(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.started) >= self.duration
+    }
+}
+
+/// Starts the fade of a hover wash the pointer just left (#245): its
+/// strength from full to nothing over [`HOVER_FADE`], from `now`. The
+/// surface's render reads the tween's [`Tween::value`] each frame while
+/// the fade runs (see `crate::app::hover_wash`); the frame that finds it
+/// [`Tween::finished`] drops it and asks for no more.
+pub(crate) fn hover_exit(now: Instant) -> Tween {
+    Tween {
+        target: 0.,
+        from: 1.,
+        started: now,
+        duration: HOVER_FADE.mul_f32(measurement_scale()),
     }
 }
 

@@ -747,7 +747,7 @@ fn control_button(
     let hover = if area == WindowControlArea::Close {
         theme.danger
     } else {
-        theme.row_hover
+        theme.hover_wash
     };
     div()
         .id(id)
@@ -765,7 +765,8 @@ fn control_button(
         .aria_label(label)
         .on_click(move |_: &gpui::ClickEvent, window, _| activate(window))
         // The close button's hover is the danger tone, as Windows paints
-        // it; the others take the row hover wash. The press takes the
+        // it; the others take the hover wash (its value within a shade of
+        // the row wash they had, #245). The press takes the
         // stronger wash of either. Both change at once, as every control's
         // do: a fade here would have to be the press's too, since GPUI
         // fades a property the same way in every state — and a window

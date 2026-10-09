@@ -45,7 +45,7 @@ use pane_core::file_index::{IndexState, size_words};
 use pane_core::search_files::{FileDetails, FileType, SearchFilesView};
 use pane_core::{LauncherView, Screen, Status};
 
-use crate::app::{KEY_CONTEXT, LauncherWindow};
+use crate::app::{KEY_CONTEXT, LauncherWindow, Spot};
 use crate::features::announcer::{self, Listing, Noun, Opening, Selected, Target};
 use crate::features::root_search;
 use crate::ui::extension_icon::{self, IconSize};
@@ -773,6 +773,10 @@ impl LauncherWindow {
                             title: title.clone().into(),
                             subtitle: folder.clone().into(),
                             selected: on,
+                            hover: self.motion.hover.look(
+                                Spot::Clip(row),
+                                cx.background_executor().now(),
+                            ),
                             icon,
                         },
                         &theme,
@@ -784,6 +788,9 @@ impl LauncherWindow {
                     .aria_selected(on)
                     .aria_position_in_set(row + 1)
                     .aria_size_of_set(frame.rows.len())
+                    .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+                        this.motion.hover.set(Spot::Clip(row), *over, cx);
+                    }))
                     // A click selects; a double click runs the primary
                     // action, as Enter does.
                     .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {

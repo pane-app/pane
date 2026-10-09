@@ -9,6 +9,7 @@
 //! the per-screen sync and render methods this orchestration calls.
 
 mod frame_motion;
+mod hover_wash;
 mod presence;
 mod result_list;
 
@@ -58,6 +59,7 @@ use crate::{
 };
 
 pub(crate) use frame_motion::FrameMotion;
+pub(crate) use hover_wash::{HoverWashes, Spot};
 use presence::{Fit, Presence, Press, WindowSize};
 
 pub(crate) const KEY_CONTEXT: &str = "Launcher";
@@ -104,7 +106,8 @@ pub struct LauncherWindow {
     /// [`features::quick_slots`].
     pub(crate) home: quick_slots::Home,
     /// What moves between frames — the view transition, the footer menu
-    /// popup's entrance and exit, the number hints' slide — and the rule
+    /// popup's entrance and exit, the number hints' slide, the hover
+    /// washes' exits — and the rule
     /// of which navigation arrives and which lands at once; see
     /// [`FrameMotion`].
     pub(crate) motion: FrameMotion,
@@ -1423,6 +1426,15 @@ impl LauncherWindow {
         };
         // Presentation only: the shared row paints the chrome, and the
         // identity, accessibility and click behavior are attached here.
+        // The row's hover wash strength is read as it is drawn: on a
+        // screen whose hovering does not move the selection (a command's
+        // list, root search's rows under an open overlay) an unselected
+        // row under the pointer — or one its wash is still fading from —
+        // takes the fainter wash (#245).
+        let hover = self
+            .motion
+            .hover
+            .look(Spot::Row(index), cx.background_executor().now());
         result_row_with(
             RowContent {
                 title: row.title.clone().into(),
@@ -1430,12 +1442,20 @@ impl LauncherWindow {
                 unavailable_reason: reason.map(SharedString::from),
                 selected,
                 unavailable_id: ("unavailable", index).into(),
+                hover,
                 icon: Some(icon),
             },
             meta,
             theme,
         )
         .id(("row", index))
+        // The row reports the pointer's arrivals and departures for its
+        // wash (see `crate::app::hover_wash`): where hovering moves the
+        // selection — root search's free rows — the wash never shows, so
+        // reporting changes nothing there.
+        .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+            this.motion.hover.set(Spot::Row(index), *over, cx);
+        }))
         // While held, the row takes the stronger wash of its hover, or of
         // its selected wash, at once.
         .active({
@@ -1503,11 +1523,15 @@ impl LauncherWindow {
             None => card,
         }
         .id(("row", index))
-        // While held, the card takes the stronger wash of its own fill: it
-        // has no hover or selected wash to derive one from (its selection
-        // is a ring).
+        // While held, the card takes the stronger wash of what it shows
+        // while selected — the selection wash, as a row does — or of its
+        // own fill, at once.
         .active({
-            let press = pressed(visuals.theme.results.card_fill);
+            let press = if selected {
+                pressed(visuals.theme.selection_wash)
+            } else {
+                pressed(visuals.theme.results.card_fill)
+            };
             move |card| card.bg(press)
         })
         .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
@@ -1543,7 +1567,18 @@ impl LauncherWindow {
         let keyboard = crate::settings::shared(cx).read(cx).keyboard().clone();
         let primary = (!action.label.is_empty() && !status).then(|| {
             let invoke = keyboard.binding(pane_core::KeyboardAction::InvokeSelectedAction);
-            action_button(action, invoke, theme)
+            // The button's hover wash, read as it is drawn, and reported
+            // by the button itself (#245).
+            let look = self.motion.hover.look(
+                Spot::Button("primary-action"),
+                cx.background_executor().now(),
+            );
+            action_button(action, invoke, look, theme)
+                .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+                    this.motion
+                        .hover
+                        .set(Spot::Button("primary-action"), *over, cx);
+                }))
                 .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
                     // A double click's second click runs nothing more.
                     if event.click_count() <= 1 {
@@ -2247,8 +2282,12 @@ pub(crate) fn launcher_changed_outside(cx: &mut App) {
 /// the action's label truncating beside the effective `invoke` binding's
 /// keys in the accent caps — the primary action's key — so a rebound
 /// Ctrl+Enter shows (and announces) Ctrl and the return key, never a bare
-/// Enter. Presentation only: the caller attaches the click (the
-/// launcher's [`LauncherWindow::press_primary_action`] path).
+/// Enter. `look` is the button's hover wash strength (see
+/// `crate::app::hover_wash`), which the caller reads from the window's
+/// hover state; the caller also attaches the pointer's arrivals and
+/// departures through the button's `.on_hover`. Presentation only: the
+/// caller attaches the click (the launcher's
+/// [`LauncherWindow::press_primary_action`] path).
 ///
 /// A click never dispatches what the definition says cannot run now, so
 /// an unavailable button is dimmed, marked for assistive technology, and
@@ -2257,6 +2296,7 @@ pub(crate) fn launcher_changed_outside(cx: &mut App) {
 pub(crate) fn action_button(
     action: &SelectedAction,
     invoke: &pane_core::Binding,
+    look: f32,
     theme: &Theme,
 ) -> Stateful<Div> {
     let keys = crate::keyboard::binding_keys(invoke);
@@ -2265,7 +2305,7 @@ pub(crate) fn action_button(
         action.label.clone(),
         &keys,
         CapStyle::Accent,
-        footer::ButtonWash::Hover,
+        footer::ButtonWash::Hover(look),
         theme,
     )
     .role(Role::Button)
