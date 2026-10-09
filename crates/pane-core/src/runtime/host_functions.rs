@@ -171,10 +171,7 @@ impl feedback_host::Host for GuestState {
         if let Some(host) = self.host_functions() {
             host.show_hud(
                 &self.caller(),
-                Hud {
-                    title,
-                    style: style_of(style),
-                },
+                Hud::new(style_of(style), title),
             );
         }
     }

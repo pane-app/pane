@@ -308,10 +308,7 @@ fn closed(started: &Started, hud: Option<&str>, what: &str) {
         })
         .collect();
     let expected: Vec<Hud> = hud
-        .map(|title| Hud {
-            title: title.into(),
-            style: ToastStyle::Success,
-        })
+        .map(|title| Hud::new(ToastStyle::Success, title))
         .into_iter()
         .collect();
     assert_eq!(huds, expected, "{what}");

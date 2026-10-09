@@ -234,6 +234,11 @@ impl LauncherWindow {
         // answered as not confirmed (#146).
         cx.observe_window_activation(window, |this, window, cx| {
             let active = window.is_window_active();
+            // A pending HUD's work is done once the launcher is active
+            // again (#250).
+            if active {
+                this.close_pending_hud(cx);
+            }
             // A window that just showed itself for a confirmation may still
             // hear of the deactivation its own hiding caused (#146).
             let counts = this.confirmation_sees_activation(active);
@@ -417,10 +422,7 @@ impl LauncherWindow {
     #[doc(hidden)]
     pub fn show_smoke_hud(&mut self, title: String, window: &mut Window, cx: &mut Context<Self>) {
         self.window_requested(WindowRequest::Hide, window, cx);
-        let hud = pane_core::Hud {
-            title,
-            style: pane_core::ToastStyle::Failure,
-        };
+        let hud = pane_core::Hud::new(pane_core::ToastStyle::Failure, title);
         self.window_requested(WindowRequest::Hud(hud), window, cx);
     }
 
@@ -849,6 +851,8 @@ impl LauncherWindow {
     /// visible window, opened on the display the placement resolves.
     pub(crate) fn unhide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.launcher.set_window_presence(WindowPresence::Shown);
+        // A pending HUD is over once the launcher is active again (#250).
+        self.close_pending_hud(cx);
         if self.presence.show() {
             window.set_visible(true);
             // The pointer is wherever it is now: the next event records it.

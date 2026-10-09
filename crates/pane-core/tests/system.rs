@@ -247,10 +247,7 @@ impl Pane {
                 _ => None,
             })
             .collect();
-        let expected = hud.map(|title| Hud {
-            title: title.into(),
-            style: ToastStyle::Success,
-        });
+        let expected = hud.map(|title| Hud::new(ToastStyle::Success, title));
         assert_eq!(huds, expected.iter().collect::<Vec<_>>(), "{what}");
         assert_eq!(self.launcher.window_presence(), WindowPresence::Hidden);
         assert_eq!(self.launcher.view().screen, Screen::Command, "{what}");

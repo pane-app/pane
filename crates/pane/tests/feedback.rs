@@ -3,9 +3,14 @@
 //! where the status line was, its time (3 seconds for a success, paused
 //! while the pointer is over it; an animated one stays until it is
 //! updated), the toast key that reaches its actions and its actions' own
-//! shortcuts, the HUD's window and its time (1.2 seconds, 3 for a
-//! failure), and `close` hiding the window. The core's rules (the other
-//! languages, the hidden-window rule, stale handles, subtitles) are
+//! shortcuts, the HUD's window — its time (1.2 seconds, 3 for a failure,
+//! then a fade out over about a second; a pending one stays until the
+//! launcher is active again), its shape and placement (#250: content-sized
+//! at most 500 wide, 46 logical pixels tall — 56 with a message — centred
+//! with its bottom edge 150 above the display's bottom), what it draws
+//! (icon, title, message) and what it announces through its live region —
+//! and `close` hiding the window. The core's rules (the other languages,
+//! the hidden- and compact-window rule, stale handles, subtitles) are
 //! `pane-core`'s `feedback.rs`.
 
 use std::path::PathBuf;
@@ -15,14 +20,21 @@ use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, pr
 use pane::LauncherWindow;
 use pane_core::tray::TrayAction;
 use pane_core::{
-    CommandRegistration, Hud, Launcher, LauncherView, Runtime, Screen, ShownToast, Status,
-    ToastStyle,
+    CommandRegistration, Hud, Icon, IconSource, Launcher, LauncherView, Runtime, Screen,
+    ShownToast, Status, ToastStyle,
 };
+
+#[path = "support/a11y.rs"]
+mod a11y;
 
 #[path = "support/settle.rs"]
 mod settle;
 
+#[path = "support/wait.rs"]
+mod wait;
+
 use settle::{settle, settle_bare, settle_shown};
+use wait::frame;
 
 /// Open actions' default binding on this system.
 const OPEN_ACTIONS: &str = if cfg!(target_os = "macos") {
@@ -142,6 +154,37 @@ fn hidden(window: &Entity<LauncherWindow>, cx: &VisualTestContext) -> bool {
 
 fn hud(window: &Entity<LauncherWindow>, cx: &VisualTestContext) -> Option<String> {
     cx.read_entity(window, |window, _| window.hud())
+}
+
+/// Shows `hud` as the launcher's window seam would, and answers a context
+/// over the HUD's own window, as the launcher's window's context answers
+/// over it.
+fn hud_shown(
+    hud: pane_core::Hud,
+    window: &Entity<LauncherWindow>,
+    cx: &mut VisualTestContext,
+) -> VisualTestContext {
+    window.update_in(cx, |window, w, cx| window.request_hud(hud, w, cx));
+    cx.run_until_parked();
+    let handle = cx
+        .read_entity(window, |window, _| window.hud_window())
+        .expect("the HUD's window");
+    VisualTestContext::from_window(handle, &cx.cx)
+}
+
+/// The HUD window's pill quad, its popover fill, and the alpha it is drawn
+/// with: the fade out shows in it.
+fn pill_alpha(hud: &mut VisualTestContext) -> f32 {
+    let mut fills: Vec<(f32, f32)> = hud
+        .update(|window, _| window.painted_quads())
+        .into_iter()
+        .filter_map(|quad| {
+            let fill = quad.background.as_solid()?;
+            Some((quad.bounds.size.width.0 * quad.bounds.size.height.0, fill.a))
+        })
+        .collect();
+    fills.sort_by(|a, b| a.0.total_cmp(&b.0));
+    fills.pop().expect("the HUD's pill").1
 }
 
 /// Moves the pointer off the window.
@@ -307,7 +350,8 @@ fn the_toast_key_reaches_its_actions_and_their_shortcuts_run_them(cx: &mut TestA
 }
 
 /// "Show HUD" closes the window and shows the HUD in a window of its own
-/// for 1.2 seconds; a failure's HUD stays 3 seconds.
+/// for 1.2 seconds, then fades out over about a second; a failure's HUD
+/// stays 3 seconds and fades the same way.
 #[gpui::test]
 fn a_hud_shows_in_a_window_of_its_own_for_its_time(cx: &mut TestAppContext) {
     let (window, cx) = opened(cx);
@@ -319,23 +363,286 @@ fn a_hud_shows_in_a_window_of_its_own_for_its_time(cx: &mut TestAppContext) {
     wait(Duration::from_millis(1100), cx);
     assert!(hud(&window, cx).is_some(), "still there before 1.2 seconds");
     wait(Duration::from_millis(200), cx);
-    assert_eq!(hud(&window, cx), None, "gone after 1.2 seconds");
+    assert!(
+        hud(&window, cx).is_some(),
+        "its 1.2 seconds up, it fades out instead of closing at once"
+    );
+    wait(Duration::from_millis(1100), cx);
+    assert_eq!(hud(&window, cx), None, "gone once its fade has run");
 
-    window.update_in(cx, |window, w, cx| {
-        window.request_hud(
-            Hud {
-                title: "Could not copy".into(),
-                style: ToastStyle::Failure,
-            },
-            w,
-            cx,
-        )
-    });
-    cx.run_until_parked();
+    hud_shown(
+        Hud::new(ToastStyle::Failure, "Could not copy"),
+        &window,
+        cx,
+    );
     wait(Duration::from_millis(2900), cx);
     assert!(hud(&window, cx).is_some(), "a failure stays longer");
     wait(Duration::from_millis(200), cx);
+    assert!(hud(&window, cx).is_some(), "a failure's fade has begun too");
+    wait(Duration::from_millis(1100), cx);
     assert_eq!(hud(&window, cx), None);
+}
+
+/// The HUD is placed on the display the launcher showed on, centred
+/// horizontally, its bottom edge 150 logical pixels above that display's
+/// bottom, 46 logical pixels tall — 56 with a message — and content-sized,
+/// at most 500 wide (#250).
+#[gpui::test]
+fn a_hud_is_placed_centred_150_pixels_above_the_bottom_of_its_display(cx: &mut TestAppContext) {
+    let (window, cx) = opened(cx);
+    let display = cx.update(|_, cx| cx.displays().remove(0)).bounds();
+
+    let mut hud = hud_shown(
+        Hud::new(ToastStyle::Success, "Copied to Clipboard"),
+        &window,
+        cx,
+    );
+    let bounds = hud.update(|window, _| window.bounds());
+    assert_eq!(bounds.size.height, px(46.), "one line");
+    assert_eq!(
+        bounds.bottom(),
+        display.origin.y + display.size.height - px(150.),
+        "the bottom edge 150 above the display's"
+    );
+    assert_eq!(
+        bounds.origin.x + bounds.size.width / 2.,
+        display.origin.x + display.size.width / 2.,
+        "centred on the display"
+    );
+    assert!(
+        bounds.size.width >= px(160.) && bounds.size.width <= px(500.),
+        "content-sized, within its bounds: {:?}",
+        bounds.size
+    );
+
+    // A message makes the second line: taller, the same placement.
+    let explained = Hud {
+        message: Some("the clipboard was full".into()),
+        ..Hud::new(ToastStyle::Success, "Copied to Clipboard")
+    };
+    let mut hud = hud_shown(explained, &window, cx);
+    let bounds = hud.update(|window, _| window.bounds());
+    assert_eq!(bounds.size.height, px(56.), "two lines");
+    assert_eq!(
+        bounds.bottom(),
+        display.origin.y + display.size.height - px(150.),
+        "the bottom edge 150 above the display's"
+    );
+    assert_eq!(
+        bounds.origin.x + bounds.size.width / 2.,
+        display.origin.x + display.size.width / 2.,
+        "centred on the display"
+    );
+
+    // The widest it ever is: a longer title is truncated into 500.
+    let mut hud = hud_shown(
+        Hud::new(ToastStyle::Success, "x".repeat(500)),
+        &window,
+        cx,
+    );
+    assert_eq!(
+        hud.update(|window, _| window.bounds()).size.width,
+        px(500.),
+        "the widest"
+    );
+}
+
+/// Under reduced motion the HUD closes at its time with no fade: gone
+/// just past its 1.2 seconds, where full motion is still fading.
+#[gpui::test]
+fn reduced_motion_closes_a_hud_at_its_time_without_a_fade(cx: &mut TestAppContext) {
+    let (window, cx) = opened(cx);
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    hud_shown(
+        Hud::new(ToastStyle::Success, "Copied"),
+        &window,
+        cx,
+    );
+    wait(Duration::from_millis(1100), cx);
+    assert!(hud(&window, cx).is_some(), "still there before 1.2 seconds");
+    wait(Duration::from_millis(200), cx);
+    assert_eq!(hud(&window, cx), None, "closed at its time, not faded");
+}
+
+/// One HUD at a time: a newer one replaces the HUD still shown, closing
+/// its window, and the replaced one's time, once past, closes nothing.
+#[gpui::test]
+fn a_newer_hud_replaces_one_still_shown(cx: &mut TestAppContext) {
+    let (window, cx) = opened(cx);
+    hud_shown(
+        Hud::new(ToastStyle::Success, "Copied"),
+        &window,
+        cx,
+    );
+    let first = cx
+        .read_entity(&window, |window, _| window.hud_window())
+        .expect("the first HUD's window");
+    hud_shown(
+        Hud::new(ToastStyle::Failure, "Could not copy"),
+        &window,
+        cx,
+    );
+    assert_eq!(hud(&window, cx).as_deref(), Some("Could not copy"));
+    let second = cx
+        .read_entity(&window, |window, _| window.hud_window())
+        .expect("the second HUD's window");
+    assert_ne!(first, second, "the newer HUD's own window");
+    assert!(
+        first.update(cx, |_, _, _| ()).is_err(),
+        "the replaced HUD's window closed"
+    );
+    // The first's 1.2 seconds, once past, closed nothing: the failure
+    // keeps its own time.
+    wait(Duration::from_millis(1300), cx);
+    assert!(hud(&window, cx).is_some(), "the failure's time still runs");
+}
+
+/// A pending HUD (work in progress) has no time of its own: it stays
+/// until it is updated — which replaces it as any newer HUD does — or
+/// until the launcher is active again.
+#[gpui::test]
+fn a_pending_hud_stays_until_it_is_updated_or_the_launcher_is_active_again(
+    cx: &mut TestAppContext,
+) {
+    let (window, cx) = opened(cx);
+    hud_shown(
+        Hud::new(ToastStyle::Animated, "Uploading…"),
+        &window,
+        cx,
+    );
+    wait(Duration::from_secs(10), cx);
+    assert_eq!(
+        hud(&window, cx).as_deref(),
+        Some("Uploading…"),
+        "a pending HUD stays"
+    );
+
+    // An update replaces it, and the update's own time runs.
+    hud_shown(
+        Hud::new(ToastStyle::Success, "Uploaded"),
+        &window,
+        cx,
+    );
+    assert_eq!(hud(&window, cx).as_deref(), Some("Uploaded"));
+    wait(Duration::from_millis(1300), cx);
+    assert!(hud(&window, cx).is_some(), "the update's fade has begun");
+    wait(Duration::from_millis(1100), cx);
+    assert_eq!(hud(&window, cx), None);
+
+    // Another pending one ends when the launcher comes forward again.
+    hud_shown(
+        Hud::new(ToastStyle::Animated, "Uploading…"),
+        &window,
+        cx,
+    );
+    assert!(hud(&window, cx).is_some(), "pending again");
+    window.update_in(cx, |window, w, cx| {
+        window.tray_selected(TrayAction::OpenPane, w, cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(hud(&window, cx), None, "the launcher active again ends it");
+    assert!(!hidden(&window, cx));
+}
+
+/// The HUD never takes the focus: shown while the launcher has it, the
+/// launcher keeps it, and the HUD's window is never the active one.
+#[gpui::test]
+fn a_hud_never_takes_the_focus(cx: &mut TestAppContext) {
+    let (window, cx) = opened(cx);
+    // Only an active window can be seen to keep the focus: the test
+    // platform opens none active.
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    let launcher = cx.window_handle();
+    assert_eq!(cx.update(|_, cx| cx.active_window()), Some(launcher));
+    let mut hud = hud_shown(
+        Hud::new(ToastStyle::Success, "Copied"),
+        &window,
+        cx,
+    );
+    assert_eq!(
+        cx.update(|_, cx| cx.active_window()),
+        Some(launcher),
+        "the launcher keeps the focus"
+    );
+    assert!(
+        !hud.update(|window, _| window.is_window_active()),
+        "the HUD's window is never active"
+    );
+}
+
+/// The HUD's text is announced through a live region of its window — the
+/// title, with the message after it, as both the region's name and its
+/// value, as the launcher's announcer says the footer's toasts (#132) —
+/// so a screen reader hears it while the launcher is elsewhere.
+#[gpui::test]
+fn a_hud_announces_its_title_and_message_through_a_live_region(cx: &mut TestAppContext) {
+    let (window, cx) = opened(cx);
+    let explained = Hud {
+        message: Some("3 files".into()),
+        ..Hud::new(ToastStyle::Success, "Copied")
+    };
+    let mut hud = hud_shown(explained, &window, cx);
+    let (name, value) = a11y::announcer_of(&a11y::a11y(&mut hud));
+    assert_eq!(name, "Copied: 3 files");
+    assert_eq!(value, "Copied: 3 files");
+}
+
+/// The HUD fades out over about a second: its pill is drawn at full
+/// strength until its time is up, then fainter as the frames it asks for
+/// pass, until the window closes at the fade's end.
+#[gpui::test]
+fn a_hud_fades_out_over_about_a_second(cx: &mut TestAppContext) {
+    let (window, cx) = opened(cx);
+    let mut hud = hud_shown(
+        Hud::new(ToastStyle::Success, "Copied"),
+        &window,
+        cx,
+    );
+    // A still HUD asks for no frame, and is drawn at full strength.
+    assert_eq!(frame(&mut hud, Duration::ZERO), 0);
+    assert_eq!(pill_alpha(&mut hud), 1.);
+    // Its 1.2 seconds up, the fade begins and asks for frames.
+    wait(Duration::from_millis(1300), cx);
+    assert!(hud(&window, cx).is_some(), "its fade has begun");
+    assert!(frame(&mut hud, Duration::ZERO) >= 1, "the fade asks for frames");
+    // Half a second into it, the pill is about half as strong.
+    frame(&mut hud, Duration::from_millis(500));
+    let half = pill_alpha(&mut hud);
+    assert!(
+        (0.35..0.65).contains(&half),
+        "half a second in, about half as strong: {half}"
+    );
+    // Past the fade's span the window closes.
+    frame(&mut hud, Duration::from_millis(600));
+    assert_eq!(hud(&window, cx), None, "gone once the fade has run");
+}
+
+/// The HUD draws an optional icon, a one-line title and an optional
+/// one-line message: the icon before the title on its line, the message
+/// under it as the second line.
+#[gpui::test]
+fn a_hud_draws_its_icon_its_title_and_its_message(cx: &mut TestAppContext) {
+    let (window, cx) = opened(cx);
+    let explained = Hud {
+        message: Some("3 files".into()),
+        icon: Some(Icon::new(IconSource::Builtin {
+            name: "clipboard".into(),
+            filled: false,
+        })),
+        ..Hud::new(ToastStyle::Success, "Copied")
+    };
+    let mut hud = hud_shown(explained, &window, cx);
+    let dot = hud.debug_bounds("toast-success").expect("the style's dot");
+    let icon = hud.debug_bounds("icon-hud").expect("the icon");
+    let title = hud.debug_bounds("hud-title").expect("the title");
+    let message = hud.debug_bounds("hud-message").expect("the message");
+    assert!(dot.left() < icon.left(), "the dot, then the icon");
+    assert!(icon.right() <= title.left(), "the icon before the title");
+    assert!(
+        message.top() >= title.bottom(),
+        "the message is the second line, under the title"
+    );
 }
 
 /// "Close" hides the window; summoned again, the launcher shows the

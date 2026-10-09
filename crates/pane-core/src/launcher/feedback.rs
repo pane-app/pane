@@ -215,7 +215,20 @@ impl Launcher {
                 return;
             }
             state.feedback.presence = presence;
-            if presence != WindowPresence::Shown {
+            // Collapsed to its search field, the launcher has no footer for
+            // a toast: one still shown there becomes a HUD, as one that
+            // arrives while it is collapsed does (#141). An animated toast
+            // makes a pending one, which stays until the launcher is active
+            // again (#250).
+            if presence == WindowPresence::Compact
+                && state
+                    .feedback
+                    .toast
+                    .as_ref()
+                    .is_some_and(|current| current.in_footer)
+            {
+                present(&mut state.feedback);
+            } else if presence != WindowPresence::Shown {
                 leave_if_animated(&mut state.feedback);
             }
             match presence {
@@ -686,7 +699,9 @@ fn present(feedback: &mut Feedback) {
     } else {
         current.in_footer = false;
         window.show_hud(&Hud {
-            title: current.toast.text(),
+            title: current.toast.title.clone(),
+            message: current.toast.message.clone(),
+            icon: None,
             style: current.toast.style,
         });
     }
@@ -989,10 +1004,14 @@ mod tests {
                 [
                     WindowRequest::Hud(Hud {
                         title: "Working".into(),
+                        message: None,
+                        icon: None,
                         style: ToastStyle::Animated
                     }),
                     WindowRequest::Hud(Hud {
-                        title: "Done: 3 files".into(),
+                        title: "Done".into(),
+                        message: Some("3 files".into()),
+                        icon: None,
                         style: ToastStyle::Success
                     }),
                 ],
@@ -1056,10 +1075,7 @@ mod tests {
     #[test]
     fn a_hud_closes_the_window_first() {
         let (launcher, window) = launcher();
-        let hud = Hud {
-            title: "Copied to Clipboard".into(),
-            style: ToastStyle::Success,
-        };
+        let hud = Hud::new(ToastStyle::Success, "Copied to Clipboard");
         launcher.show_hud(hud.clone());
         assert_eq!(
             window.take(),

@@ -290,10 +290,10 @@ fn a_failed_paste_is_an_error_not_a_copy(fixture: &Fixture) {
     );
     // The window had closed for the paste: the failure is said in a HUD.
     pane.closed(
-        &[Hud {
-            title: format!("The extension reported an error: {why}"),
-            style: ToastStyle::Failure,
-        }],
+        &[Hud::new(
+            ToastStyle::Failure,
+            format!("The extension reported an error: {why}"),
+        )],
         "a failed Paste",
     );
 }
@@ -311,10 +311,7 @@ fn where_paste_is_not_available_paste_copies_and_says_so(fixture: &Fixture) {
         fixture.title
     );
     pane.closed(
-        &[Hud {
-            title: PASTE_FALLBACK.into(),
-            style: ToastStyle::Success,
-        }],
+        &[Hud::new(ToastStyle::Success, PASTE_FALLBACK)],
         "Paste where it is not available",
     );
 

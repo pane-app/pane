@@ -885,10 +885,7 @@ impl Launcher {
         if let Some(mut state) = self.lock_if_current(view.reading.epoch) {
             state.view.status = Status::Idle;
         }
-        self.show_hud(Hud {
-            title: COPIED.into(),
-            style: ToastStyle::Success,
-        });
+        self.show_hud(Hud::new(ToastStyle::Success, COPIED));
         Ok(())
     }
 

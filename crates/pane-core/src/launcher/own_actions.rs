@@ -522,10 +522,7 @@ impl Launcher {
             };
         }
         match ended {
-            Ended::Hud(title) => self.show_hud(Hud {
-                title,
-                style: ToastStyle::Success,
-            }),
+            Ended::Hud(title) => self.show_hud(Hud::new(ToastStyle::Success, title)),
             Ended::Quiet | Ended::Failed(_) => self.changed(),
         }
     }
@@ -568,10 +565,7 @@ impl Launcher {
                     if let Some(mut state) = self.lock_if_current(epoch) {
                         state.view.status = Status::Idle;
                     }
-                    self.show_hud(Hud {
-                        title: PASTE_FALLBACK.into(),
-                        style: ToastStyle::Success,
-                    });
+                    self.show_hud(Hud::new(ToastStyle::Success, PASTE_FALLBACK));
                     return;
                 }
                 Err(why) => Some(format!("Could not copy it: {why}")),
@@ -589,10 +583,7 @@ impl Launcher {
             state.feedback.presence == WindowPresence::Hidden
         };
         match failed {
-            Some(why) if hidden => self.show_hud(Hud {
-                title: why,
-                style: ToastStyle::Failure,
-            }),
+            Some(why) if hidden => self.show_hud(Hud::new(ToastStyle::Failure, why)),
             _ => self.changed(),
         }
     }

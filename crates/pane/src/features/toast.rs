@@ -46,7 +46,7 @@ actions!(toast, [FocusToast, PressToastAction, LeaveToast]);
 const BUTTON_CONTEXT: &str = "ToastButton";
 
 /// The dot that says a toast's style, in px.
-const DOT: f32 = 8.;
+pub(crate) const DOT: f32 = 8.;
 
 /// Registers the toast key in the launcher, and a toast action's button's
 /// activation keys while it is focused.
