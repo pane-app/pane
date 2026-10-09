@@ -4,11 +4,11 @@
 //! launcher.
 //!
 //! Only what the launcher holds is drawn. The notice names the real query
-//! and is shown when nothing but fallbacks is listed for it; the fallbacks
-//! under it stay unselected until the user selects one (#100). A computed
-//! answer's card shows the query it answers and the text Enter copies —
-//! no units, conversions or history, which no command supplies — and the
-//! row behind it keeps its id, its selection and its copy action.
+//! and is shown when nothing but fallbacks is listed for it; the first
+//! fallback under it is selected, so Enter sends it the query (ADR 0031).
+//! A computed answer's card shows the query it answers and the text Enter
+//! copies — no units, conversions or history, which no command supplies —
+//! and the row behind it keeps its id, its selection and its copy action.
 
 use gpui::prelude::*;
 use gpui::{Div, Role, Stateful};
@@ -17,8 +17,10 @@ use pane_core::{ComputedAnswer, Screen};
 use crate::ui::result_layouts::{self, AnswerCard, AnswerSide, NoticeCopy};
 use crate::ui::theme::Theme;
 
-/// The notice's description while fallbacks are listed under it.
-const WITH_FALLBACKS: &str = "Pick a fallback below, or install an extension that knows about it.";
+/// The notice's description while fallbacks are listed under it: the
+/// first is selected (ADR 0031), so Enter sends the text to it.
+const WITH_FALLBACKS: &str =
+    "Enter sends it to the first fallback below, or install an extension that knows about it.";
 
 /// The notice's description while the user has no fallback for the text:
 /// the extension list offers a command that takes text as a fallback.

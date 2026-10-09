@@ -322,7 +322,9 @@ fn an_alias_finds_the_command_first_and_sends_the_text_after_it_only_when_invoke
     assert_eq!(titles(&launcher)[..2], ["Echo", "4"]);
 }
 
-fn a_fallback_is_listed_last_for_any_text_and_is_never_chosen_by_itself(fixture: &Fixture) {
+fn a_fallback_is_listed_last_for_any_text_and_the_first_is_selected_when_nothing_else_matches(
+    fixture: &Fixture,
+) {
     let dirs = Dirs::new();
     let (launcher, runtime) = dirs.launcher();
     dirs.install(&launcher, fixture.package, "query");
@@ -340,18 +342,13 @@ fn a_fallback_is_listed_last_for_any_text_and_is_never_chosen_by_itself(fixture:
         "{recorded}"
     );
 
-    // Nothing else matches: the fallback is listed, not selected, so Enter
-    // sends nothing.
+    // Nothing else matches: the fallback is listed and the first is
+    // selected, so Enter sends it the whole query (ADR 0031).
     search(&launcher, "zqx words");
     assert_eq!(titles(&launcher), ["Echo"]);
     assert_eq!(subtitle(&launcher, 0), "Send “zqx words” · fallback");
-    assert_eq!(launcher.view().selected, None);
-    block_on(launcher.activate_selected());
-    assert_eq!(shown(&launcher), Status::Idle);
+    assert_eq!(launcher.view().selected, Some(0));
     assert_eq!(running(&runtime), Vec::<PathBuf>::new());
-
-    // Choosing it sends the whole query.
-    launcher.move_selection(1);
     block_on(launcher.activate_selected());
     assert_eq!(
         shown(&launcher),
@@ -564,7 +561,7 @@ macro_rules! contract {
 
 contract!(
     an_alias_finds_the_command_first_and_sends_the_text_after_it_only_when_invoked,
-    a_fallback_is_listed_last_for_any_text_and_is_never_chosen_by_itself,
+    a_fallback_is_listed_last_for_any_text_and_the_first_is_selected_when_nothing_else_matches,
     an_answer_is_cleared_once_the_query_changes,
     disabling_the_target_removes_its_alias_and_fallback_without_enabling_it_again,
     copies_from_other_sources_with_the_same_title_stay_distinct,

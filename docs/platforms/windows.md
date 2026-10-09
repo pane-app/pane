@@ -175,8 +175,9 @@ record that cannot be written after the data is deleted only by a Unix test.
 The smoke's alias phase (screenshots 66 to 74, [aliases and fallbacks](../aliases.md#checks))
 gives Echo, the query sample's command, the alias "ec" and makes it a
 fallback on its extension's page in Settings (its alias cell and fallback
-switch, #168), sends "ec hello" and, from the unselected
-fallback row chosen with Down, "zqx" to it, and checks that with the
+switch, #168), sends "ec hello" and "zqx" to it — the first fallback
+preselected when nothing else matches (ADR 0031), so Enter sends "zqx"
+without a move — and checks that with the
 extension disabled "ec hello" lists nothing. Nothing in it is specific to
 Windows (no system API is involved); **not run on Windows yet**.
 

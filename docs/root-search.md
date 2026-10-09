@@ -53,7 +53,8 @@ for it come first, once they arrive):
 For a query that is not blank, a command whose [alias](aliases.md) the
 query is, or starts with, comes before everything (computed results
 included), and the [fallbacks](aliases.md#making-a-command-a-fallback)
-after everything; a fallback is never selected by itself.
+after everything; when nothing but fallbacks is listed, the first is
+selected, so Enter sends it the query (ADR 0031).
 
 A **disabled** package contributes nothing ([#10](https://github.com/pane-app/pane/issues/10)):
 its commands leave the results at once, even while the choice is being
@@ -123,7 +124,7 @@ state and maps input to those calls.
 | Alt+P / Alt+N (the Keyboard page's Emacs navigation bindings) or Alt+K / Alt+J (its Vim Motions), Control instead of Alt on macOS | Previous / next result too, beside Up and Down, while that set is chosen (the default is None). Raycast for Windows puts these sets on Alt as well; its Alt+B / Alt+F and Alt+H / Alt+L move left and right in its grids, and Pane has no left or right selection to give them, so they stay unbound |
 | Moving the pointer over a result | Select it, so the footer's action and Enter act on it; a pointer resting on a result never undoes the keys' selection, and while a layer over the list owns the target (the Actions panel, the Pane menu) the pointer selects nothing. The first pointer event after the window shows only records where the pointer is |
 | A click on a result | The selected result: invoke it, as Enter does. An unselected one (the keys moved the selection away while the pointer rested on it): select it; a second click invokes it |
-| Enter | Invoke the selected result: open the command, explain an unavailable or unreadable one, open Pane's own screen, copy a computed result's text to the clipboard ("Copied 42 to the clipboard"; root search stays as it was), open an application ("Opened Firefox"; root search stays as it was), or send the text to a command that takes a query, through its alias or as a fallback, and show its answer (root search stays as it was) |
+| Enter | Invoke the selected result: open the command, explain an unavailable or unreadable one, open Pane's own screen, copy a computed result's text to the clipboard ("Copied 42 to the clipboard"; root search stays as it was), open an application ("Opened Firefox"; root search stays as it was), or send the text to a command that takes a query, through its alias or as a fallback — with nothing else listed, the first fallback is the selected result (ADR 0031) — and show its answer (root search stays as it was) |
 | Escape | Clear the query; with an empty query, nothing |
 | Ctrl+K (Cmd+K on macOS; the Keyboard page's Open actions), or the footer's Actions button | Open the selected result's Actions panel, or close it |
 
@@ -261,10 +262,12 @@ accent ring shows while it is selected.
 
 **The no-results notice** (#96) heads the list while nothing but
 fallbacks is listed for a query that is not blank: "Nothing matches
-“…”", then "Pick a fallback below, or install an extension that knows
-about it." (or, with no fallback, where one is offered: Manage
-extensions). It stays above the fallbacks whichever is selected; Pane
-searches commands, applications and the files of the home folder (and
+“…”", then "Enter sends it to the first fallback below, or install an
+extension that knows about it." (or, with no fallback, where one is
+offered: Manage extensions). It stays above the fallbacks whichever is
+selected; the first is root search's own selection, so Enter sends it
+the query (ADR 0031). Pane searches commands, applications and the files
+of the home folder (and
 the folders the user adds), so it claims no search of the whole computer, and it suggests no extensions, having no
 store to suggest them from.
 
@@ -274,11 +277,11 @@ search (Escape from a command, after an install or update) starts with an
 empty query. Opening a command moves focus to its list.
 
 A **missing result is not a failed action**: a query that matches nothing
-shows the no-results notice ("Nothing matches “…”"), selects nothing, and
-Enter then does nothing; the status line stays idle. The
+shows the no-results notice ("Nothing matches “…””). The
 [fallbacks](aliases.md#making-a-command-a-fallback), if the user has any,
-are listed below it, unselected: Down selects the first, and the notice
-stays above it. A result that matches but fails when invoked
+are listed below it with the first selected, so Enter sends it the query
+(ADR 0031); with none, nothing is selected, Enter then does nothing, and
+the status line stays idle. A result that matches but fails when invoked
 (its component is missing, the runtime is unavailable, the guest reports an
 error) shows the failure as the status error, as before this slice.
 
@@ -669,8 +672,9 @@ the field keeping the focus while the user arrows and no row claiming it,
 each row's position and the list's size, "<title>, <i> of <n>" as both the
 announcer's name and value after Down, several fast moves leaving the last
 row, typing that keeps the first row saying nothing and typing that changes
-it saying it once after the results settle, "No results" and a move into
-the fallbacks named "Fallbacks", opening a command saying its name and
+it saying it once after the results settle, "No results", the preselected
+first fallback said once typing settles and a move into the fallbacks
+named "Fallbacks", opening a command saying its name and
 count and then its row, the same in a command's list and in the Actions
 panel (over a command's list and over root search), the footer's message
 said before a selection that changed with it while the footer keeps its

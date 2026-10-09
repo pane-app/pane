@@ -254,7 +254,7 @@ fn typing_says_the_selected_row_once_settled_if_it_changed(cx: &mut TestAppConte
 }
 
 #[gpui::test]
-fn a_query_with_no_results_says_so_and_a_move_into_the_fallbacks_names_them(
+fn a_query_with_no_results_says_its_first_fallback_and_a_move_into_the_fallbacks_names_them(
     cx: &mut TestAppContext,
 ) {
     // Echo, the query sample, offered as a fallback through the extension
@@ -282,20 +282,31 @@ fn a_query_with_no_results_says_so_and_a_move_into_the_fallbacks_names_them(
     let shown = settle(&window, cx);
     assert!(matches!(shown.screen, Screen::Root { .. }), "{shown:?}");
 
-    // Nothing matches: "No results", once typing settles.
+    // Nothing matches: the notice heads the fallbacks, and root search
+    // itself selects the first (ADR 0031). Once typing settles the
+    // announcer says it, a selection Pane changed to another row.
     cx.simulate_input("zqx");
     let shown = view(&window, cx);
-    assert_eq!(shown.selected, None);
+    assert_eq!(shown.selected, Some(0));
     assert!(cx.debug_bounds("no-results").is_some());
     typing_settles(cx);
-    until_announced(cx, "No results");
+    until_announced(cx, "Echo, 1 of 1");
     assert_focus_stays(cx, "Search");
 
-    // Down moves into the fallbacks, whose section is named first.
+    // A match above the fallback keeps it selected, and a move into the
+    // fallbacks names their section first.
+    cx.simulate_keystrokes("escape");
+    settle(&window, cx);
+    cx.simulate_input("manage");
+    typing_settles(cx);
+    let shown = view(&window, cx);
+    assert_eq!(shown.rows[0].title, "Manage Extensions");
+    assert_eq!(shown.selected, Some(0));
+    until_announced(cx, "Manage Extensions, 1 of 2");
     cx.simulate_keystrokes("down");
     let shown = view(&window, cx);
-    assert_eq!(shown.selected, Some(0));
-    assert_eq!(announcement(cx), "Fallbacks: Echo, 1 of 1");
+    assert_eq!(shown.selected, Some(1));
+    assert_eq!(announcement(cx), "Fallbacks: Echo, 2 of 2");
     assert_focus_stays(cx, "Search");
 }
 

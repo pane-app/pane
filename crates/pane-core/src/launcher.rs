@@ -1978,8 +1978,9 @@ impl Launcher {
                 let last = view.rows.len() - 1;
                 view.selected = Some(selected.saturating_add_signed(delta).min(last));
             }
-            // Only root search's fallbacks are listed with none selected:
-            // Down chooses the first, Up the last.
+            // Nothing is selected only while the list is empty — root
+            // search selects its first fallback too (ADR 0031): Down
+            // chooses the first, Up the last.
             None if view.rows.is_empty() => {}
             None if delta > 0 => view.selected = Some(0),
             None => view.selected = Some(view.rows.len() - 1),
@@ -1987,9 +1988,10 @@ impl Launcher {
     }
 
     /// Searches root search for `query`: the rows become the root results
-    /// that match it, best match first, and the best match is selected. An
-    /// empty query lists every root result. Ignored on other screens, and
-    /// when `query` is already the query.
+    /// that match it, best match first, and the best match is selected —
+    /// the first fallback, when nothing but fallbacks is listed (ADR 0031).
+    /// An empty query lists every root result. Ignored on other screens,
+    /// and when `query` is already the query.
     ///
     /// Metadata is searched at once, without running any guest. For a query
     /// that is not blank, the enabled commands that compute root results
@@ -4703,8 +4705,8 @@ fn root_rows(state: &State, query: &str) -> (Vec<Row>, Vec<Entry>) {
     let computed_row = |computed: &Computed| (computed.row.clone(), computed.entry.clone());
     // What the user's alias names comes first, even before computed
     // results; files found for the query follow what is found by title,
-    // since a folder can hold many; the fallbacks, which the user must
-    // choose, come last.
+    // since a folder can hold many; the fallbacks, which the user chooses
+    // when anything else is listed, come last.
     aliases::rows_sending_after_alias(state, query)
         .into_iter()
         .chain(by_alias.into_iter().map(by_its_alias))

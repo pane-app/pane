@@ -63,11 +63,11 @@ it below the results for any text typed" or "On · …". Enter turns it on
 ("Echo is now offered for any text typed in root search") or off ("Echo is
 no longer a fallback"). For any query that is not blank, each fallback is
 listed **below every other result**, in the order the user turned them on,
-subtitled "Send “zqx” · fallback". A fallback row is **never selected by
-itself**: when nothing else matches, root search shows "No results for
-“zqx”" above the fallbacks with nothing selected, so Enter does nothing, as
-before; Down (or Up, or a click) selects one and Enter sends the whole
-query, trimmed.
+subtitled "Send “zqx” · fallback". When nothing else matches, root search
+selects the first, so Enter sends it the whole query, trimmed (ADR 0031),
+with its notice that nothing matched above the fallbacks; when anything
+else is listed, the fallbacks stay below it unselected until the user
+moves to one.
 
 ## What keeps and removes them
 
@@ -148,9 +148,10 @@ shown and never counts towards [pausing](pausing.md); a trap does.
   shows its answer and keeps root search; an error answer is shown; kept
   after a restart; the form starts with the alias and an empty one removes
   it; an alias ranks above a computed result (the calculator's). A fallback
-  is listed last for any text, not selected, Enter then does nothing and
-  Echo does not start; Down and Enter send the query; not for a blank query;
-  turned off again. The answer cleared when the query changes, and one
+  is listed last for any text, the first selected when nothing else
+  matches, so Enter sends the query without a move, and unselected below a
+  match; not for a blank query; turned off again. Echo does not start while
+  typing. The answer cleared when the query changes, and one
   arriving after the change not shown. Three crashes of the query "crash"
   pause the package; its alias row explains it and runs nothing. Refusals
   (another command's alias "straße" given as "STRASSE", a space, 33
@@ -173,14 +174,16 @@ shown and never counts towards [pausing](pausing.md); a trap does.
 - Window ([`crates/pane/tests/aliases.rs`](../crates/pane/tests/aliases.rs)),
   on GPUI's test platform with real key events: the alias typed in its form
   and saved, the form reopened filled with it, the fallback turned on; "ec
-  hello" and Enter show Echo's answer; "zqx" shows "No results" and the
-  fallback unselected, Enter changes nothing (checked once the runtime has
-  served every call: Echo, stopped before, has not started again), Down and
-  Enter send "zqx". Rows are chosen by title.
+  hello" and Enter show Echo's answer; "zqx words" shows the notice above
+  the first fallback, preselected (its accessibility node is the selection)
+  and typing starts nothing (checked once the runtime has served every
+  call: Echo, stopped before, has not started again); Enter, and Ctrl+1 as
+  any row, send the trimmed query. Rows are chosen by title.
 - Native GUI smokes, one identical phase on all three systems (screenshots
   66 to 74): with data folders of their own, install the query sample, set
-  the alias "ec" and the fallback in Settings › Extensions, send "ec hello" and,
-  from the fallback chosen with Down, "zqx"; check `aliases.json`; restart,
+  the alias "ec" and the fallback in Settings › Extensions, send "ec hello",
+  then "zqx", which Enter hands to the preselected first fallback (ADR
+  0031); check `aliases.json`; restart,
   disable the extension and check that "ec hello" gives the same screen as
   a Pane with nothing installed. See the
   [Linux](platforms/linux.md#aliases-and-fallbacks-31),
@@ -202,5 +205,5 @@ shown and never counts towards [pausing](pausing.md); a trap does.
   when the user types on (its late answer is discarded); calls run one at a
   time on the runtime thread (#29, #18).
 - Screen readers: fallback rows are ordinary options of the results list;
-  with none selected, the combo box itself is reported as focused. No
+  the combo box itself is reported as focused, whatever is selected. No
   screen reader was run ([root search](root-search.md#accessibility)).

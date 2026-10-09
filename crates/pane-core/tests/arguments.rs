@@ -510,7 +510,9 @@ fn alias_and_fallback_text_fill_the_first_text_argument(fixture: &Fixture) {
     block_on(launcher.activate_selected());
     pane.search("zqx  words ");
     assert_eq!(titles(launcher), ["Greet"]);
-    launcher.move_selection(1);
+    // Nothing else is listed, so the first fallback is selected and Enter
+    // sends the text, which fills the name (ADR 0031).
+    assert_eq!(launcher.view().selected, Some(0));
     block_on(launcher.activate_selected());
     assert_eq!(
         shown(launcher),
@@ -518,6 +520,38 @@ fn alias_and_fallback_text_fill_the_first_text_argument(fixture: &Fixture) {
             "Greet run 2 from fallback: name=zqx  words; fallback text: zqx  words".into()
         )
     );
+}
+
+/// Installs the Rust sample with Greet's arguments changed by `change`
+/// and checks that the extension list offers no fallback row for it,
+/// while Stamp's and Relay's are offered: Stamp's only argument is text
+/// and Relay takes a query.
+fn greet_not_offered_as_a_fallback(change: impl FnOnce(&mut serde_json::Value)) {
+    let (pane, status) = install_changed(change);
+    assert!(matches!(status, Status::Result(_)), "{status:?}");
+    manage(&pane.launcher);
+    let rows = titles(&pane.launcher);
+    assert!(
+        !rows.iter().any(|row| row == "Fallback: Greet"),
+        "Greet cannot take the query as its fallback text: {rows:?}"
+    );
+    select_title(&pane.launcher, "Fallback: Stamp");
+    select_title(&pane.launcher, "Fallback: Relay");
+}
+
+/// A command whose first argument is not text, or whose first is text
+/// but a later one is required, cannot be sent the query, so the
+/// extension list offers no fallback row for it (#194, #120).
+#[test]
+fn a_command_whose_arguments_cannot_take_the_query_is_not_offered_as_a_fallback() {
+    // The first argument is a password.
+    greet_not_offered_as_a_fallback(|manifest| {
+        manifest["commands"][0]["arguments"][0]["type"] = "password".into();
+    });
+    // A required argument follows the first.
+    greet_not_offered_as_a_fallback(|manifest| {
+        manifest["commands"][0]["arguments"][1]["required"] = true.into();
+    });
 }
 
 fn the_last_dropdown_is_remembered_and_a_password_is_recorded_nowhere(fixture: &Fixture) {

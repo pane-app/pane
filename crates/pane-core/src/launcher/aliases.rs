@@ -9,8 +9,8 @@
 //!   sends that text to the command when the user invokes it.
 //! - A **fallback** is a command that takes a query, which the user chose to
 //!   have offered for any text typed in root search: it is listed below every
-//!   other result and never selected by itself, so the text reaches it only
-//!   when the user chooses it.
+//!   other result, and when nothing but fallbacks is listed the first is
+//!   selected, so Enter sends it the query (ADR 0031).
 //!
 //! The text sent also fills the command's first text or password argument
 //! when it has one without a value (see `argument_form`).
@@ -292,9 +292,11 @@ pub(super) fn fallback_rows(state: &State, query: &str) -> Vec<(Row, Entry)> {
 }
 
 /// The row root search selects by itself: the first one that is not a
-/// fallback, whose command the user must choose.
+/// fallback, whose command the user must choose — or, when nothing but
+/// fallbacks is listed, the first of them, so Enter sends it the query
+/// (ADR 0031).
 pub(super) fn first_choice(entries: &[Entry]) -> Option<usize> {
-    entries.iter().position(|entry| {
+    let chosen = entries.iter().position(|entry| {
         !matches!(
             entry,
             Entry::Send(Sending {
@@ -302,7 +304,8 @@ pub(super) fn first_choice(entries: &[Entry]) -> Option<usize> {
                 ..
             })
         )
-    })
+    });
+    chosen.or((!entries.is_empty()).then_some(0))
 }
 
 /// An installed command as the extension list lists its alias and fallback.
