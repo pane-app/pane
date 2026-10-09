@@ -1,7 +1,7 @@
 //! Pane's quicklinks, a default extension in Raycast's shape: named targets
 //! (a link of any scheme, a file, a folder or an application, ADR 0037),
 //! each with an optional application to open it with, which root search
-//! finds and opens. Four commands share this component:
+//! finds and opens. Six commands share this component:
 //!
 //! - **Search Quicklinks** (`quicklinks`, view): each quicklink an item with
 //!   its favicon (or its file's or application's icon), its name and its
@@ -10,6 +10,13 @@
 //!   results that Pane opens itself.
 //! - **Create Quicklink** (`create`, view): the form. Edit and Duplicate
 //!   launch it with the quicklink in their context, so it opens filled in.
+//! - **Open in Browser** (`browser`, no-view, `"matches": "url"`, #195):
+//!   listed only for a typed web address, which it receives as its fallback
+//!   text and opens with the system's handler.
+//! - **Create Quicklink** (`save`, view, `"matches": "url"`, #195): the
+//!   create form with the typed address filled in as its link, listed only
+//!   for a typed web address (the `create` command's form, reached without
+//!   typing one).
 //! - **Export Quicklinks** (`export`, no-view): copies them as JSON.
 //! - **Import Quicklinks** (`import`, no-view): adds those the clipboard's
 //!   JSON holds that are new.
@@ -43,6 +50,8 @@ pane_extension::indexed::export!(Quicklinks);
 /// The commands' ids in `pane.json`.
 const SEARCH: &str = "quicklinks";
 const CREATE: &str = "create";
+const BROWSER: &str = "browser";
+const SAVE: &str = "save";
 const IMPORT: &str = "import";
 const EXPORT: &str = "export";
 
@@ -119,6 +128,27 @@ fn form_screen(launch: &LaunchRecord) -> Result<List, String> {
     Ok(screen
         .value(LINK, link.target.clone())
         .value(OPEN_WITH, application))
+}
+
+/// The form the `save` command shows for the address the user typed
+/// (#195): the create form with the address, received as its launch
+/// record's fallback text, filled in as its link and waiting for a name.
+fn save_screen(launch: &LaunchRecord) -> List {
+    let address = launch.fallback_text.clone().unwrap_or_default();
+    List::form(CREATE, form("Create Quicklink".into(), "Create Quicklink")).value(LINK, address)
+}
+
+/// Open in Browser (#195): opens the address the user typed, received as
+/// its launch record's fallback text, with the system's handler (their
+/// browser, for an `https:` address), then closes the window, as the SDK's
+/// standard Open action does.
+fn open_browser(launch: &LaunchRecord) -> Result<(), String> {
+    let Some(address) = launch.fallback_text.as_deref() else {
+        return Err("Open in Browser needs a web address typed in root search".into());
+    };
+    system::open(address, None)?;
+    window::close(false, window::PopToRootType::Default);
+    Ok(())
 }
 
 /// Launches Create Quicklink with `context`, as the user would.
@@ -367,6 +397,9 @@ impl Command for Quicklinks {
         if launch.command == CREATE {
             return form_screen(&launch);
         }
+        if launch.command == SAVE {
+            return Ok(save_screen(&launch));
+        }
         let saved = links::load()?;
         if saved.is_empty() {
             let create = Item::new("create", "Create Quicklink")
@@ -380,10 +413,11 @@ impl Command for Quicklinks {
         Ok(List::new("Quicklinks").items(saved.iter().map(item)))
     }
 
-    async fn run(command: String, _launch: LaunchRecord) -> Result<(), String> {
+    async fn run(command: String, launch: LaunchRecord) -> Result<(), String> {
         match command.as_str() {
             EXPORT => export(),
             IMPORT => import(),
+            BROWSER => open_browser(&launch),
             other => Err(format!(
                 "`{other}` opens a screen; it has no run entry point"
             )),

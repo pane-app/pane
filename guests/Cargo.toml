@@ -15,6 +15,7 @@ members = [
     "sample-operations",
     "sample-dependencies",
     "sample-query",
+    "sample-matches",
     "sample-no-view",
     "sample-search",
     "sample-schedule",

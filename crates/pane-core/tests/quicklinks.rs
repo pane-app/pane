@@ -826,9 +826,13 @@ fn quicklinks_are_indexed_results_ranked_with_commands() {
     assert_eq!(row.kind, Some(RowKind::Link));
     assert!(row.answer.is_none(), "not a computed result");
 
-    // Found by its target too; other words find nothing.
+    // Found by its target too, with the rows the address is below it
+    // (#195); other words find nothing.
     search(&launcher, "notes.example");
-    assert_eq!(titles(&launcher), ["Notes on exporting"]);
+    assert_eq!(
+        titles(&launcher),
+        ["Notes on exporting", "Open in Browser", "Create Quicklink"]
+    );
     search(&launcher, "gitlab");
     assert_eq!(titles(&launcher), Vec::<String>::new());
     // A blank query lists commands, not quicklinks.

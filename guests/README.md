@@ -150,6 +150,17 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   `packages/sample-query-js` and `packages/sample-query-ts`; held alike by
   `crates/pane-core/tests/aliases.rs`, and the Rust one by
   `crates/pane/tests/aliases.rs`.
+- `sample-matches`, `sample-matches-js`, `sample-matches-ts`: the
+  `when`/`matches` sample in Rust, JavaScript and TypeScript, four no-view
+  commands: "Hear an Address" (`"matches": "url"`) and "Hear a Path"
+  (`"matches": "file-path"`) are listed only for a typed web address or
+  path and answer what it parsed or resolved, "Blank Only"
+  (`"when": "blank"`) only while nothing is typed and "Searching Only"
+  (`"when": "searching"`) only while something is
+  ([Commands for typed addresses and paths](#commands-for-typed-addresses-and-paths)).
+  Their packages are `packages/sample-matches`,
+  `packages/sample-matches-js` and `packages/sample-matches-ts`; held alike
+  by `crates/pane-core/tests/typed_queries.rs`.
 - `sample-no-view`, `sample-no-view-js`, `sample-no-view-ts`: the no-view
   sample in Rust, JavaScript and TypeScript, one component serving five
   commands ([No-view commands and the launch record](#no-view-commands-and-the-launch-record)):
@@ -1770,6 +1781,64 @@ export const command: Command = {
 };
 ```
 
+## Commands for typed addresses and paths
+
+Root search understands a query that is a **web address** (an absolute URL
+with a scheme, or a bare domain such as `github.com`, with `https://`
+inferred) or a **path** (a drive letter and a separator, `\\`, `~`
+resolved to the home folder, `/`, or `file://`), and a command can be
+listed only for such a query: `"matches"` says what it is matched by —
+`"title"` (the default), `"url"` or `"file-path"` — and `"when"` when it is
+listed at all: `"always"` (the default), `"blank"` (only while nothing is
+typed) or `"searching"` (only while something is). A command declared for
+URL-like or path-like queries is never matched by its title; it is listed,
+in install order below the results found by title, only for a query that
+is one, and Pane sends it the parsed address or resolved path as its launch
+record's [fallback text](#a-command-that-takes-a-query) when the user
+invokes its row. See
+[docs/root-search.md](../docs/root-search.md#understanding-the-typed-query)
+for the grammar and where the rows sit.
+
+Rust, as [`sample-matches`](sample-matches) does, "Hear an Address" being a
+no-view command listed only for a typed web address:
+
+```rust
+async fn run(command: String, launch: LaunchRecord) -> Result<(), String> {
+    match command.as_str() {
+        "url" => {}
+        other => return Err(format!("unknown command: {other}")),
+    }
+    let heard = match launch.fallback_text {
+        Some(address) => format!("Heard “{address}”"),
+        None => "Heard nothing".into(),
+    };
+    show_toast(Toast::success(heard));
+    Ok(())
+}
+```
+
+```json
+{ "id": "url", "title": "Hear an Address", "component": "sample_matches.wasm",
+  "mode": "no-view", "when": "searching", "matches": "url" }
+```
+
+JavaScript or TypeScript, as the [JavaScript](sample-matches-js) and
+[TypeScript](sample-matches-ts) matches samples do:
+
+```ts
+export const command: Command = {
+  async run(id, launch) {
+    showToast({ title: launch.fallbackText ?? "Heard nothing" });
+  },
+};
+```
+
+The default extensions use it: Quicklinks' **Open in Browser** and
+**Create Quicklink** are declared `"matches": "url"` (the form's link
+prefilled with the address, which is what the fallback text carries), and
+Files' **Open** and **Reveal in File Explorer** `"matches": "file-path"`.
+An unknown `when` or `matches` is refused at install, with the reason.
+
 ## Searching inside a command
 
 A command that searches an online service as the user types sets
@@ -2263,6 +2332,8 @@ and TypeScript: Pane sees only components.
   has none), so put the words people will type there; Pane searches this
   metadata without running the command
   ([root search](../docs/root-search.md#matching-and-ranking)). Optional
+  `when` and `matches` say when the command's row is listed and what it is
+  matched by ([below](#commands-for-typed-addresses-and-paths)). Optional
   `rootResults: true` says the command also computes
   [root results from the query](#root-results-computed-from-the-query).
   Optional `schedule` declares [scheduled work](#scheduled-work): an

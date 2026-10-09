@@ -195,13 +195,18 @@ pub(super) enum Via {
     Alias,
     /// The command is a fallback; the whole query is sent.
     Fallback,
+    /// The query is a typed web address or path the command was declared
+    /// for (`"matches"`, #195): the parsed address or resolved path is
+    /// sent. Only `typed_query` builds such a row.
+    Typed,
 }
 
 /// A root search row's query, to send to a command that takes one.
 #[derive(Clone)]
 pub(super) struct Sending {
-    /// The command, launched from its alias or as a fallback with the
-    /// text as its launch record's fallback text.
+    /// The command, launched from its alias, as a fallback, or for the
+    /// address or path typed, with the text as its launch record's
+    /// fallback text.
     pub(super) opening: Opening,
     pub(super) via: Via,
     /// Why the command cannot run now; invoking the row shows it.
@@ -232,6 +237,8 @@ fn send_row(state: &State, target: &Target, text: &str, via: Via, how: &str) -> 
     let kind = match via {
         Via::Alias => "alias",
         Via::Fallback => "fallback",
+        // A typed query's rows are built in `typed_query`, never here.
+        Via::Typed => "typed",
     };
     let row = Row {
         id: format!("{kind}:{}", registration.id),
@@ -241,7 +248,8 @@ fn send_row(state: &State, target: &Target, text: &str, via: Via, how: &str) -> 
     };
     let from = match via {
         Via::Alias => LaunchSource::Alias,
-        Via::Fallback => LaunchSource::Fallback,
+        // A typed query's rows are built in `typed_query`, never here.
+        Via::Fallback | Via::Typed => LaunchSource::Fallback,
     };
     let mut opening = Opening::of(registration, target.no_view, from);
     opening.launch = LaunchRecord::sending(from, text);

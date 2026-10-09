@@ -1,0 +1,42 @@
+{
+  "manifestVersion": 1,
+  "title": "Matches sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "url",
+      "title": "Hear an Address",
+      "subtitle": "A Rust command listed only for a web address typed in root search",
+      "component": "sample_matches.wasm",
+      "mode": "no-view",
+      "when": "searching",
+      "matches": "url"
+    },
+    {
+      "id": "path",
+      "title": "Hear a Path",
+      "subtitle": "A Rust command listed only for a file or folder path typed in root search",
+      "component": "sample_matches.wasm",
+      "mode": "no-view",
+      "when": "searching",
+      "matches": "file-path"
+    },
+    {
+      "id": "blank",
+      "title": "Blank Only",
+      "subtitle": "Listed only while nothing is typed",
+      "component": "sample_matches.wasm",
+      "mode": "no-view",
+      "when": "blank"
+    },
+    {
+      "id": "searching",
+      "title": "Searching Only",
+      "subtitle": "Listed only while something is typed",
+      "component": "sample_matches.wasm",
+      "mode": "no-view",
+      "when": "searching"
+    }
+  ]
+}

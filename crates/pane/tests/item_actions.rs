@@ -12,7 +12,10 @@ use std::path::PathBuf;
 
 use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, prelude::*};
 use pane::LauncherWindow;
-use pane_core::{CommandRegistration, Launcher, LauncherView, Runtime, Screen, Status};
+use pane_core::{
+    CommandMatches, CommandRegistration, CommandWhen, Launcher, LauncherView, Runtime, Screen,
+    Status,
+};
 
 #[path = "support/settle.rs"]
 mod settle;
@@ -51,6 +54,8 @@ fn opened(cx: &mut TestAppContext) -> (Entity<LauncherWindow>, &mut VisualTestCo
         component,
         takes_query: false,
         search: false,
+        when: CommandWhen::Always,
+        matches: CommandMatches::Title,
     };
     let launcher = Launcher::new(Runtime::start(), vec![command]);
     cx.executor().allow_parking();

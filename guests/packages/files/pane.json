@@ -1,7 +1,7 @@
 {
   "manifestVersion": 1,
   "title": "Files",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "apiVersion": "0.1",
   "icon": "icon.svg",
   "commands": [
@@ -13,6 +13,24 @@
       "component": "files.wasm",
       "search": true,
       "rootResults": true
+    },
+    {
+      "id": "open",
+      "title": "Open",
+      "subtitle": "Opens the file or folder path you typed",
+      "component": "files.wasm",
+      "mode": "no-view",
+      "when": "searching",
+      "matches": "file-path"
+    },
+    {
+      "id": "reveal",
+      "title": "Reveal in File Explorer",
+      "subtitle": "Shows the file or folder path you typed selected in File Explorer",
+      "component": "files.wasm",
+      "mode": "no-view",
+      "when": "searching",
+      "matches": "file-path"
     }
   ],
   "fileIndex": true

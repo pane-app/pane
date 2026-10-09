@@ -3,7 +3,9 @@
 Added for [#28](https://github.com/pane-app/pane/issues/28) (US03, US07,
 US12, US59; T01, T03, T10, T22; G2, G5, G7, as contributions, not claims that
 they pass) and reworked in Raycast's shape for
-[#149](https://github.com/pane-app/pane/issues/149) (part of #120). A user
+[#149](https://github.com/pane-app/pane/issues/149) (part of #120), with
+the commands for a typed web address added for
+[#195](https://github.com/pane-app/pane/issues/195). A user
 saves a named link, file, folder or application, finds it by typing into
 [root search](root-search.md), also after restarting Pane, and opens it.
 
@@ -11,21 +13,26 @@ saves a named link, file, folder or application, finds it by typing into
 
 Quicklinks is a default extension in Rust
 ([`guests/quicklinks`](../guests/quicklinks), package
-`guests/packages/quicklinks`, version 0.3.0), like
+`guests/packages/quicklinks`, version 0.6.0), like
 [the calculator](root-search.md#the-calculator): not part of the core,
-disabled like any package, and acquired at first setup (#53). Its four
+disabled like any package, and acquired at first setup (#53). Its six
 commands share one component:
 
 | Command | Id | Mode | Does |
 | --- | --- | --- | --- |
 | **Search Quicklinks** | `quicklinks` | view | lists the quicklinks with their actions; supplies them to root search |
 | **Create Quicklink** | `create` | view | the form |
+| **Open in Browser** | `browser` | no-view | opens a typed web address (`"matches": "url"`, #195) |
+| **Create Quicklink** | `save` | view | the form with a typed web address prefilled (`"matches": "url"`, #195) |
 | **Import Quicklinks** | `import` | no-view | adds the quicklinks the clipboard holds as JSON |
 | **Export Quicklinks** | `export` | no-view | copies the quicklinks to the clipboard as JSON |
 
 Search Quicklinks keeps the first version's command id, so a quick slot or
 alias given to the old **Quicklinks** command now reaches Search
-Quicklinks.
+Quicklinks. Open in Browser and the address-prefilled Create Quicklink
+declare `matches: "url"`: root search lists them only for a URL-like query,
+never matched by their titles (see
+[root search](root-search.md#understanding-the-typed-query)).
 
 ### Search Quicklinks
 
@@ -121,6 +128,17 @@ quicklink by.
 
 ## In root search
 
+A query that is a typed web address is one Quicklinks answers (#195): its
+two commands declared `matches: "url"` are listed under "Addresses", below
+the results found by title and above the files, and the first is selected
+when nothing else matches, so Enter acts on the address. **Open in
+Browser** (`browser`) opens the address with the system's handler — `https://`
+inferred before a bare domain — with the address as its launch record's
+fallback text, and closes the window. **Create Quicklink** (`save`) is the
+same form as the `create` command's, with the address filled in as its
+link: giving it a name and pressing Enter saves the quicklink, toasting
+"Created “Docs”", exactly as filling the form by hand would.
+
 Search Quicklinks declares `"indexedResults": true`: it supplies one
 [indexed result](root-search.md) per quicklink, titled with its name and
 with its target as the subtitle, which root search keeps and matches by
@@ -147,7 +165,7 @@ they are back from the next query.
 Through the launcher's public interface, with the real package, a recording
 system for opening and the clipboard and a recording window
 ([`crates/pane-core/tests/quicklinks.rs`](../crates/pane-core/tests/quicklinks.rs)):
-the four commands and their modes; the form saving and returning to root
+the six commands and their modes; the form saving and returning to root
 search, and each refusal above on its field; each row's icon, title, target
 and accessory, and its actions with their shortcuts, Delete destructive;
 Open, Open With… and Copy Link closing the window, Copy Link with its HUD;
@@ -158,6 +176,11 @@ with commands; a pinned quicklink through a restart, a rename and its
 deletion; export and import, between two Panes and with entries skipped;
 import's failure toasts; the first version's content and quick slot after
 the upgrade; disabling.
+
+The rows for a typed web address — Open in Browser opening it and closing
+the window, `https://` inferred before a bare domain, and Create Quicklink
+opening the form with the address prefilled and saving it — are checked in
+[`crates/pane-core/tests/typed_queries.rs`](../crates/pane-core/tests/typed_queries.rs).
 
 Window checks through GPUI's test platform with real key events
 ([`crates/pane/tests/quicklinks.rs`](../crates/pane/tests/quicklinks.rs)):

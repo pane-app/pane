@@ -1,7 +1,7 @@
 {
   "manifestVersion": 1,
   "title": "Quicklinks",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "apiVersion": "0.1",
   "icon": "icon.svg",
   "commands": [
@@ -21,6 +21,25 @@
       "subtitle": "Name a link, file, folder or application to open from root search",
       "component": "quicklinks.wasm",
       "mode": "view"
+    },
+    {
+      "id": "browser",
+      "title": "Open in Browser",
+      "subtitle": "Opens the web address you typed",
+      "component": "quicklinks.wasm",
+      "mode": "no-view",
+      "when": "searching",
+      "matches": "url"
+    },
+    {
+      "id": "save",
+      "title": "Create Quicklink",
+      "icon": "create.svg",
+      "subtitle": "Saves the web address you typed as a quicklink",
+      "component": "quicklinks.wasm",
+      "mode": "view",
+      "when": "searching",
+      "matches": "url"
     },
     {
       "id": "import",

@@ -17,7 +17,8 @@ use std::time::{Duration, Instant};
 use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, prelude::*};
 use pane::LauncherWindow;
 use pane_core::{
-    CommandRegistration, Fault, Launcher, LauncherView, Runtime, Screen, Status, SubmenuState,
+    CommandMatches, CommandRegistration, CommandWhen, Fault, Launcher, LauncherView, Runtime,
+    Screen, Status, SubmenuState,
 };
 
 #[path = "support/settle.rs"]
@@ -61,6 +62,8 @@ fn opened(cx: &mut TestAppContext) -> (Entity<LauncherWindow>, &mut VisualTestCo
         component,
         takes_query: false,
         search: false,
+        when: CommandWhen::Always,
+        matches: CommandMatches::Title,
     };
     let runtime = Runtime::start().unwrap();
     let launcher = Launcher::new(Ok(runtime.clone()), vec![command]);

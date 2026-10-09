@@ -21,6 +21,7 @@ use super::{
     Entry, Launcher, LauncherView, Mode, Screen, SelectedAction, State, Status, quick_slots,
     shortcuts,
 };
+use super::aliases::Via;
 use crate::packages::SavedData;
 
 /// One kind of action on a result.
@@ -369,9 +370,14 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         // A no-view command runs and opens no screen.
         (_, Some(Entry::Open(opening))) if opening.no_view => acting("Run command"),
         (_, Some(Entry::Open(_))) => acting("Open command"),
-        (_, Some(Entry::Send(sending))) => match &sending.unavailable {
-            Some(_) => unusable("Unavailable"),
-            None => acting("Send query"),
+        (_, Some(Entry::Send(sending))) => match (&sending.unavailable, sending.via) {
+            (Some(_), _) => unusable("Unavailable"),
+            // A row declared for the address or path typed (#195): its
+            // command is launched with what was typed as its fallback
+            // text, as any command's row launches it.
+            (None, Via::Typed) if sending.opening.no_view => acting("Run command"),
+            (None, Via::Typed) => acting("Open command"),
+            (None, _) => acting("Send query"),
         },
         (_, Some(Entry::Copy(_))) => acting("Copy answer"),
         (_, Some(Entry::OpenUrl(_))) => acting("Open link"),

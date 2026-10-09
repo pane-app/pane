@@ -72,10 +72,12 @@ and one index serves every package that uses it:
   ([`wit/file-index.wit`](../wit/file-index.wit)): `search` and `status`,
   for any package that declares `"fileIndex": true` ([For authors](#for-authors)).
 - **The default extension**, [`guests/files`](../guests/files) (Rust),
-  package [`guests/packages/files`](../guests/packages/files) (0.8.0,
-  `"fileIndex": true`): its one command, Search Files (id `files`,
-  `"search": true` and `"rootResults": true`), answers root search from the
-  index with the entries' ids. Installed as Pane's default extension, its
+  package [`guests/packages/files`](../guests/packages/files) (0.9.0,
+  `"fileIndex": true`): its command Search Files (id `files`, `"search":
+  true` and `"rootResults": true`) answers root search from the index with
+  the entries' ids, and its two commands declared `"matches":
+  "file-path"` (#195), Open and Reveal in File Explorer, act on a path
+  typed into root search (below). Installed as Pane's default extension, its
   screen is Pane's own Search Files view; a copy installed from a folder
   lists what is searched and answers its own field (the best 50). It is not a
   [root provider](root-search.md#root-providers): it has a row and a
@@ -470,6 +472,23 @@ interrupted is given its limit again before it counts as hung, and the
 churn windows start again after a sleep.
 
 ## In root search
+
+A query that is a typed path is one Files answers (#195): its two commands
+declared `matches: "file-path"` are listed under "Addresses", below the
+results found by title and above the files, and the first is selected when
+nothing else matches, so Enter acts on the path. Each receives the resolved
+path (as typed, `~` resolved to the home folder, `file://` taken off) as
+its launch record's fallback text. **Open** (id `open`) opens the path with
+the system's handler, and **Reveal in File Explorer** (id `reveal`) shows
+it selected in the file manager; each closes the window after it acts.
+Open never runs a program: a path whose name says one is shown in the file
+manager instead, as file search's own Enter does
+([opening](#opening)); the name is all the extension can see, a pure WASI
+guest reading no file system, and it is what the index knows a program by.
+A command declared `"when": "blank"` or `"searching"` appears only then
+(see [root search](root-search.md#understanding-the-typed-query)); the
+`sample-matches` package shows the declarations in Rust, JavaScript and
+TypeScript.
 
 Files answers root search through `root-results`, now from the index: its
 call returns at once from the host and never waits for a walk, so a busy
@@ -1106,6 +1125,14 @@ see [Catching up and watching](#catching-up-and-watching).
 
 Written with #175; none has run yet (tests run once every ticket of the
 milestone is merged).
+
+The rows for a path typed into root search (#195) are checked in
+[`crates/pane-core/tests/typed_queries.rs`](../crates/pane-core/tests/typed_queries.rs),
+with the real Files package, a recording link opener and system and a home
+folder of the test's own: Open and Reveal in File Explorer listed under
+"Addresses" only for a path-like query; Open opening the file, and
+revealing a program instead of running it; Reveal in File Explorer
+revealing it.
 
 - **The index through the launcher**
   ([`crates/pane-core/tests/file_index.rs`](../crates/pane-core/tests/file_index.rs)),

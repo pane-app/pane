@@ -7,6 +7,15 @@
 //! once open, the command owns the launcher's search field
 //! (`"search": true`) and lists more.
 //!
+//! Two more commands are declared for a path typed into root search
+//! (#195, `"matches": "file-path"`), listed only for one and receiving
+//! the resolved path as their launch record's fallback text: **Open**
+//! (`open`) opens it with the system's handler — a program or script is
+//! shown in the file manager instead, never run, as file search's own
+//! Enter does (ADR 0037) — and **Reveal in File Explorer** (`reveal`)
+//! shows it selected there. Each closes the window after it acts, as the
+//! SDK's standard actions do.
+//!
 //! Installed as Pane's default extension, Search Files is drawn by Pane
 //! itself, as Raycast's File Search is (#177): Pane lists the index for it
 //! — Recently Used before typing, a type dropdown, more rows as the list
@@ -28,7 +37,11 @@ use pane_extension::feedback::{Toast, show_toast};
 use pane_extension::file_index::{self, FileEntry, IndexState, SearchOptions};
 use pane_extension::root::{RootAction, RootResult};
 use pane_extension::search::SearchResult;
-use pane_extension::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
+use pane_extension::system;
+use pane_extension::window::{self, PopToRootType};
+use pane_extension::{
+    Command, CustomView, FieldValue, FormError, Item, List, LaunchRecord, NoCustomView,
+};
 
 struct Files;
 pane_extension::export!(Files);
@@ -41,6 +54,83 @@ const ROOT_RESULTS: u32 = 5;
 
 /// The most files one search in Search Files' own field lists.
 const SEARCH_RESULTS: u32 = 50;
+
+/// The commands' ids in `pane.json`.
+const OPEN: &str = "open";
+const REVEAL: &str = "reveal";
+
+/// The types whose names say that opening a file runs it: a program, a
+/// script, a shortcut or an installer, the same on every system, as Pane's
+/// host decides (`crates/pane-core/src/files.rs`, `program_named`). A path
+/// typed into root search is checked by its name alone: a pure WASI guest
+/// cannot read the file system, and the file index knows a program the
+/// same way.
+const PROGRAM_EXTENSIONS: &[&str] = &[
+    // Windows
+    "exe", "bat", "cmd", "com", "lnk", "js", "jse", "vbs", "vbe", "wsf", "wsh", "hta", "msi",
+    "msp", "scr", "pif", "ps1", "cpl", "reg", "url", // macOS
+    "app", "command", "tool", "terminal", "workflow", // Linux
+    "desktop",
+];
+
+/// Whether `path`'s name alone says that opening it runs a program: its
+/// type is one of [`PROGRAM_EXTENSIONS`], compared caselessly, or a folder
+/// above it is a macOS application bundle (`.app`).
+fn program_named(path: &str) -> bool {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    let extension = name.rsplit_once('.').map(|(_, extension)| extension);
+    if extension.is_some_and(|extension| {
+        PROGRAM_EXTENSIONS
+            .iter()
+            .any(|program| program.eq_ignore_ascii_case(extension))
+    }) {
+        return true;
+    }
+    // A folder above the path ending in `.app` is a macOS application
+    // bundle.
+    let mut folder = path;
+    while let Some(at) = folder.rfind(['/', '\\']) {
+        folder = &folder[..at];
+        if folder.ends_with(".app") {
+            return true;
+        }
+    }
+    false
+}
+
+/// The resolved path a command declared for a typed one received as its
+/// launch record's fallback text.
+fn typed_path(launch: &LaunchRecord, what: &str) -> Result<String, String> {
+    launch
+        .fallback_text
+        .clone()
+        .ok_or_else(|| format!("{what} needs a file or folder path typed in root search"))
+}
+
+/// Open (#195): opens the path typed into root search with the system's
+/// handler — a program or script is shown in the file manager instead,
+/// never run, as file search's own Enter does (ADR 0037) — then closes the
+/// window, as the SDK's standard actions do.
+fn open_typed(launch: &LaunchRecord) -> Result<(), String> {
+    let path = typed_path(launch, "Open")?;
+    if program_named(&path) {
+        system::reveal(&path)?;
+    } else {
+        system::open(&path, None)?;
+    }
+    window::close(false, PopToRootType::Default);
+    Ok(())
+}
+
+/// Reveal in File Explorer (#195): shows the path typed into root search
+/// selected in the file manager, then closes the window, as the SDK's
+/// standard action does.
+fn reveal_typed(launch: &LaunchRecord) -> Result<(), String> {
+    let path = typed_path(launch, "Reveal in File Explorer")?;
+    system::reveal(&path)?;
+    window::close(false, PopToRootType::Default);
+    Ok(())
+}
 
 /// What the index is doing, for people.
 fn status() -> String {
@@ -83,6 +173,14 @@ fn found(query: &str, limit: u32) -> Result<Vec<FileEntry>, String> {
 
 impl Command for Files {
     type CustomView = NoCustomView;
+
+    async fn run(command: String, launch: LaunchRecord) -> Result<(), String> {
+        match command.as_str() {
+            OPEN => open_typed(&launch),
+            REVEAL => reveal_typed(&launch),
+            other => Err(format!("`{other}` opens a screen; it has no run entry point")),
+        }
+    }
 
     async fn render() -> Result<List, String> {
         Ok(List::new("Search Files").item(

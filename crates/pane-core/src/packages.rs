@@ -507,6 +507,58 @@ pub enum CommandMode {
     Provider,
 }
 
+/// When root search lists a command (`"when"` in its `pane.json` entry,
+/// #195). The default, `Always`, is what commands did before: a row with
+/// a blank query and whenever the query matches it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CommandWhen {
+    /// `"always"`, also the `when` of a command whose entry does not say
+    /// one: the command's row is listed with a blank query and while the
+    /// user searches.
+    #[default]
+    Always,
+    /// `"blank"`: only while nothing is typed, so the command is never
+    /// found by a query, however well it matches.
+    Blank,
+    /// `"searching"`: only while the user types something, so the blank
+    /// query's list does not hold it.
+    Searching,
+}
+
+impl CommandWhen {
+    /// Whether a command with this `when` is listed while the query is
+    /// blank (`true`) or has text (`false`).
+    pub fn listed(self, blank: bool) -> bool {
+        match (self, blank) {
+            (CommandWhen::Always, _) => true,
+            (CommandWhen::Blank, true) => true,
+            (CommandWhen::Blank, false) => false,
+            (CommandWhen::Searching, true) => false,
+            (CommandWhen::Searching, false) => true,
+        }
+    }
+}
+
+/// What root search matches a command's row by (`"matches"` in its
+/// `pane.json` entry, #195). The default, `Title`, is what commands did
+/// before.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CommandMatches {
+    /// `"title"`, also the `matches` of a command whose entry does not say
+    /// one: the row is listed when the query matches its title, subtitle
+    /// or package title, as ever.
+    #[default]
+    Title,
+    /// `"url"`: only for a query that is a typed web address, which the
+    /// row is sent as its launch record's fallback text when invoked;
+    /// never matched by title.
+    Url,
+    /// `"file-path"`: only for a path-like query, resolved and sent as
+    /// its launch record's fallback text when invoked; never matched by
+    /// title.
+    FilePath,
+}
+
 /// The shortest interval a command's schedule may declare: 1 second.
 /// Provisional (#47), pending the user's decision on scheduling intervals.
 pub const MIN_SCHEDULE_SECONDS: u64 = 1;
@@ -543,6 +595,14 @@ pub struct ManifestCommand {
     /// Whether it opens a screen, runs without one, or only answers root
     /// search (`"mode"`; `view` when the entry does not say).
     pub mode: CommandMode,
+    /// When root search lists the command (`"when"`, #195; `Always` when
+    /// the entry does not say one).
+    pub when: CommandWhen,
+    /// What root search matches the command's row by (`"matches"`, #195;
+    /// `Title` when the entry does not say one): its title as usual, or
+    /// only URL-like or path-like queries, which the row is then sent as
+    /// its launch record's fallback text when invoked.
+    pub matches: CommandMatches,
     /// Whether the command takes a query (`"takesQuery": true`): text typed
     /// into root search that Pane sends it when the user invokes it through
     /// its alias or as a fallback, as its launch record's fallback text.
@@ -663,6 +723,10 @@ struct CommandJson {
     platforms: Option<Vec<String>>,
     #[serde(default)]
     mode: Option<String>,
+    #[serde(default)]
+    when: Option<String>,
+    #[serde(default)]
+    matches: Option<String>,
     #[serde(default)]
     root_results: bool,
     #[serde(default)]
@@ -921,6 +985,33 @@ impl Manifest {
             if mode == CommandMode::Provider {
                 check_provider(&command)?;
             }
+            let when = match command.when.as_deref() {
+                None | Some("always") => CommandWhen::Always,
+                Some("blank") => CommandWhen::Blank,
+                Some("searching") => CommandWhen::Searching,
+                Some(other) => {
+                    return Err(invalid(format!(
+                        "command `{}` has the when \"{}\"; a command's `when` is \"always\" \
+                         (the default), \"blank\" (only while nothing is typed) or \
+                         \"searching\" (only while something is)",
+                        command.id,
+                        other.escape_debug()
+                    )));
+                }
+            };
+            let matches = match command.matches.as_deref() {
+                None | Some("title") => CommandMatches::Title,
+                Some("url") => CommandMatches::Url,
+                Some("file-path") => CommandMatches::FilePath,
+                Some(other) => {
+                    return Err(invalid(format!(
+                        "command `{}` has the matches \"{}\"; a command's `matches` is \
+                         \"title\" (the default), \"url\" or \"file-path\"",
+                        command.id,
+                        other.escape_debug()
+                    )));
+                }
+            };
             let schedule = command
                 .schedule
                 .map(|schedule| parse_schedule(&command.id, mode, schedule))
@@ -952,6 +1043,8 @@ impl Manifest {
                 component,
                 platforms,
                 mode,
+                when,
+                matches,
                 root_results: command.root_results,
                 indexed_results: command.indexed_results,
                 takes_query: command.takes_query,
@@ -1975,6 +2068,8 @@ impl InstalledPackage {
                     component: self.location.join(&command.component),
                     takes_query: command.accepts_fallback_text(),
                     search: command.search,
+                    when: command.when,
+                    matches: command.matches,
                 };
                 let unavailable = package.clone().or_else(|| {
                     platform::unavailable(command.platforms.as_deref(), "this command")

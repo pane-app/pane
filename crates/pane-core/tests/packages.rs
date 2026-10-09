@@ -638,6 +638,8 @@ fn launcher_with_build_command(dirs: &Dirs) -> Launcher {
         component: guest("sample_js"),
         takes_query: false,
         search: false,
+        when: pane_core::CommandWhen::Always,
+        matches: pane_core::CommandMatches::Title,
     };
     Launcher::with_packages(
         Runtime::start(),

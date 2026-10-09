@@ -14,7 +14,10 @@ use gpui::{AppContext, Entity, TestAppContext, VisualTestContext};
 use pane::LauncherWindow;
 use pane_core::system::Clip;
 use pane_core::tray::TrayAction;
-use pane_core::{CommandRegistration, Launcher, LauncherView, Runtime, Screen, Status};
+use pane_core::{
+    CommandMatches, CommandRegistration, CommandWhen, Launcher, LauncherView, Runtime, Screen,
+    Status,
+};
 
 #[path = "support/settle.rs"]
 mod settle;
@@ -56,6 +59,8 @@ fn opened(
         component,
         takes_query: false,
         search: false,
+        when: CommandWhen::Always,
+        matches: CommandMatches::Title,
     };
     let system = Arc::new(RecordingSystem::default());
     let launcher = Launcher::new(Runtime::start(), vec![command]).with_system(system.clone());

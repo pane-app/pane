@@ -62,6 +62,7 @@ mod providers;
 mod quick_slots;
 pub mod search_files;
 mod submenus;
+mod typed_query;
 
 use crate::clipboard::{Capture, ClipboardSystem};
 use crate::dependencies;
@@ -74,8 +75,8 @@ use crate::launch::{LaunchRecord, LaunchSource};
 use crate::links::{LinkOpener, NoOpener};
 use crate::operations::Installed;
 use crate::packages::{
-    InstalledPackage, PackageError, PackageIdentity, RetainedData, SavedData, SourcePackage, Store,
-    paused_reason,
+    CommandMatches, CommandWhen, InstalledPackage, PackageError, PackageIdentity, RetainedData,
+    SavedData, SourcePackage, Store, paused_reason,
 };
 use crate::platform;
 use crate::runtime::{
@@ -187,6 +188,16 @@ pub struct CommandRegistration {
     /// Whether the command searches as the user types into its own search
     /// field once it is open (`"search": true`); root search never asks it.
     pub search: bool,
+    /// When root search lists the command (`"when"` in its manifest, #195;
+    /// always when it does not say).
+    pub when: CommandWhen,
+    /// What root search matches the command's row by (`"matches"` in its
+    /// manifest, #195; its title when it does not say). A command declared
+    /// for URL-like or path-like queries is listed only for such a query,
+    /// without title matching, and the parsed address or resolved path is
+    /// sent to it as its launch record's fallback text when invoked (see
+    /// `typed_query`).
+    pub matches: CommandMatches,
 }
 
 impl CommandRegistration {
@@ -719,6 +730,13 @@ struct State {
     /// The root results commands supplied ahead of the query, such as the
     /// installed applications, listed for a query that is not blank.
     indexes: indexed::Indexes,
+    /// What the query typed into root search is, beyond the words it
+    /// holds: a web address or a path, parsed once per change of the query
+    /// (see `typed_query`, #195). `None` for words and for a blank query.
+    typed: Option<typed_query::TypedQuery>,
+    /// The user's home folder, which `~` in a typed path resolves to: the
+    /// one the file index is configured with, else the environment's.
+    home: Option<PathBuf>,
     /// Incremented on every search, so that an answer arriving for an
     /// earlier search, even of the same query, is discarded.
     search_epoch: u64,
@@ -1086,6 +1104,12 @@ struct RootResult {
     /// command, or an indexed result under its command (see
     /// `quick_slots`).
     pin: Option<PinTarget>,
+    /// When the command's row is listed (`"when"`, #195): always, only
+    /// with a blank query, or only while the user searches.
+    when: CommandWhen,
+    /// What the command's row is matched by (`"matches"`, #195): its
+    /// title, or only URL-like or path-like queries (see `typed_query`).
+    matches: CommandMatches,
 }
 
 /// A root result a command computed from the current query.
@@ -1468,6 +1492,8 @@ impl Launcher {
             root: Vec::new(),
             computed: Vec::new(),
             indexes: indexed::Indexes::default(),
+            typed: None,
+            home: home_folder(),
             search_epoch: 0,
             search_alive: None,
             files: runtime.as_ref().ok().map(Runtime::file_access),
@@ -2231,6 +2257,9 @@ impl Launcher {
         if state.sent_from.take().is_some_and(|sent| sent != query) {
             state.view.status = Status::Idle;
         }
+        // What the query is, beyond its words, is understood once per
+        // change of it (#195).
+        state.typed = typed_query::analyze(query, state.home.as_deref());
         let (rows, entries) = root_rows(state, query);
         state.view.screen = Screen::Root {
             query: query.to_owned(),
@@ -3286,6 +3315,7 @@ impl Launcher {
         state.sent_from = None;
         state.computed.clear();
         state.indexes.stale();
+        state.typed = None;
         let (rows, entries) = root_rows(state, "");
         let selected = select
             .and_then(|component| {
@@ -3460,7 +3490,12 @@ impl Launcher {
     /// Pane's own rows.
     fn root_results(&self, state: &State) -> Vec<RootResult> {
         let mut results = Vec::new();
-        let mut add = |row: Row, entry: Entry, package: Option<&str>, target| {
+        let mut add = |row: Row,
+                       entry: Entry,
+                       package: Option<&str>,
+                       target,
+                       when: CommandWhen,
+                       matches: CommandMatches| {
             let alias = state.aliases.chosen.active_alias(&row.id);
             let keys = Keys::new(&row.title, row.subtitle.as_deref(), package).with_alias(alias);
             // A command's row, available or not, is a registered command a
@@ -3473,6 +3508,8 @@ impl Launcher {
                 keys,
                 target,
                 pin,
+                when,
+                matches,
             });
         };
         let command = |(command, unavailable): (CommandRegistration, Option<Unavailable>),
@@ -3498,9 +3535,9 @@ impl Launcher {
         };
         // A disabled package contributes nothing to root search.
         let enabled = || state.packages.iter().filter(|package| package.enabled);
-        for built in self.commands.iter().cloned() {
-            let (row, entry) = command((built, None), false);
-            add(row, entry, None, None);
+        for built in self.commands.iter() {
+            let (row, entry) = command((built.clone(), None), false);
+            add(row, entry, None, None, built.when, built.matches);
         }
         for package in enabled() {
             // Its commands are found by its title too, even those that show
@@ -3519,6 +3556,7 @@ impl Launcher {
                     .or(unavailable.map(Unavailable::OnThisSystem));
                 let no_view = package.mode_of(registration.manifest_id())
                     == crate::packages::CommandMode::NoView;
+                let (when, matches) = (registration.when, registration.matches);
                 let target = aliases::Target {
                     registration: registration.clone(),
                     identity: package.identity.clone(),
@@ -3526,7 +3564,7 @@ impl Launcher {
                     no_view,
                 };
                 let (row, entry) = command((registration, unavailable), no_view);
-                add(row, entry, Some(&title), Some(target));
+                add(row, entry, Some(&title), Some(target), when, matches);
             }
         }
         for package in enabled() {
@@ -3542,7 +3580,14 @@ impl Launcher {
                     package.title(),
                     package.location.display()
                 );
-                add(row, Entry::Broken(problem), None, None);
+                add(
+                    row,
+                    Entry::Broken(problem),
+                    None,
+                    None,
+                    CommandWhen::Always,
+                    CommandMatches::Title,
+                );
             }
         }
         if self.installation.is_some() {
@@ -3552,21 +3597,42 @@ impl Launcher {
                 subtitle: Some("Choose a local extension package to install".into()),
                 unavailable: None,
             };
-            add(row, Entry::InstallFromFolder, None, None);
+            add(
+                row,
+                Entry::InstallFromFolder,
+                None,
+                None,
+                CommandWhen::Always,
+                CommandMatches::Title,
+            );
             let row = Row {
                 id: INSTALL_FROM_NPM.into(),
                 title: "Install extension from npm…".into(),
                 subtitle: Some("Download an extension package published to npm".into()),
                 unavailable: None,
             };
-            add(row, Entry::AskNpm, None, None);
+            add(
+                row,
+                Entry::AskNpm,
+                None,
+                None,
+                CommandWhen::Always,
+                CommandMatches::Title,
+            );
             let row = Row {
                 id: INSTALL_FROM_GIT.into(),
                 title: "Install extension from Git…".into(),
                 subtitle: Some("Fetch an extension package from a Git repository".into()),
                 unavailable: None,
             };
-            add(row, Entry::AskGit, None, None);
+            add(
+                row,
+                Entry::AskGit,
+                None,
+                None,
+                CommandWhen::Always,
+                CommandMatches::Title,
+            );
         }
         // A default extension Pane could not acquire can be tried again;
         // the row is gone while one is being acquired, or once it is
@@ -3579,20 +3645,41 @@ impl Launcher {
                     subtitle: Some(why),
                     unavailable: None,
                 };
-                add(row, Entry::Acquire(id), None, None);
+                add(
+                    row,
+                    Entry::Acquire(id),
+                    None,
+                    None,
+                    CommandWhen::Always,
+                    CommandMatches::Title,
+                );
             }
         }
         // Pane's own update, when a check found one the user can choose to
         // install, or failed in a way that can be tried again.
         if self.application.is_some() {
             for (row, entry) in state.updates.rows() {
-                add(row, entry, None, None);
+                add(
+                    row,
+                    entry,
+                    None,
+                    None,
+                    CommandWhen::Always,
+                    CommandMatches::Title,
+                );
             }
         }
         // That Pane quit unexpectedly last time, until the user dismisses
         // it or opens the log folder (see `crash_notice`).
         for (row, entry) in state.crash.rows() {
-            add(row, entry, None, None);
+            add(
+                row,
+                entry,
+                None,
+                None,
+                CommandWhen::Always,
+                CommandMatches::Title,
+            );
         }
         // Retained data is managed there too, while nothing is installed.
         if self.installation.is_some() && !(state.packages.is_empty() && state.retained.is_empty())
@@ -3603,7 +3690,14 @@ impl Launcher {
                 subtitle: Some("Configure, update and remove extensions in Settings".into()),
                 unavailable: None,
             };
-            add(row, Entry::Manage, None, None);
+            add(
+                row,
+                Entry::Manage,
+                None,
+                None,
+                CommandWhen::Always,
+                CommandMatches::Title,
+            );
         }
         // Pane's Settings window is the app's to open; the row is listed
         // whatever is installed, since Settings is reachable without any
@@ -3616,7 +3710,14 @@ impl Launcher {
                 subtitle: Some("Open Pane's settings window".into()),
                 unavailable: None,
             };
-            add(row, Entry::Settings, None, None);
+            add(
+                row,
+                Entry::Settings,
+                None,
+                None,
+                CommandWhen::Always,
+                CommandMatches::Title,
+            );
         }
         results
     }
@@ -4653,16 +4754,34 @@ fn open_form_for(state: &mut State, purpose: FormPurpose, form: Form) {
     state.next_screen();
 }
 
+/// The user's home folder, which `~` in a typed path resolves to
+/// (#195), as the environment names it: `USERPROFILE` on Windows, `HOME`
+/// elsewhere. The file index's configuration replaces it with the home it
+/// is built over (see [`Launcher::with_file_index`]), which is the same
+/// folder on a real Pane.
+fn home_folder() -> Option<PathBuf> {
+    let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    std::env::var_os(var).map(PathBuf::from)
+}
+
 /// The rows of root search for `query`, and what activating each does: the
 /// results computed from it, then the root results matching it, best match
 /// first, with, for a query that is not blank, those supplied ahead of it
-/// (after the others of the same rank), then the computed results that open
-/// a file, then the rows explaining why a command could not supply them.
+/// (after the others of the same rank), the rows declared for the address
+/// or path the query is, then the computed results that open a file, then
+/// the rows explaining why a command could not supply them.
 fn root_rows(state: &State, query: &str) -> (Vec<Row>, Vec<Entry>) {
     let blank = query.trim().is_empty();
     let candidates: Vec<&RootResult> = state
         .root
         .iter()
+        // A command declared for URL-like or path-like queries is never
+        // matched by title: it is listed for such a query alone, below
+        // (see `typed_query`).
+        .filter(|result| result.matches == CommandMatches::Title)
+        // A command may show with a blank query alone, or only while the
+        // user searches (its `when`, #195).
+        .filter(|result| result.when.listed(blank))
         .chain(state.indexes.results().filter(|_| !blank))
         .collect();
     let keys: Vec<&Keys> = candidates.iter().map(|result| &result.keys).collect();
@@ -4710,6 +4829,9 @@ fn root_rows(state: &State, query: &str) -> (Vec<Row>, Vec<Entry>) {
         .chain(by_alias.into_iter().map(by_its_alias))
         .chain(computed.into_iter().map(computed_row))
         .chain(matches.into_iter().map(found))
+        // The rows declared for the address or path the query is (#195),
+        // below the results found by title and above the files.
+        .chain(typed_query::rows(state))
         .chain(files.into_iter().map(computed_row))
         .chain(failures)
         .chain(aliases::fallback_rows(state, query))

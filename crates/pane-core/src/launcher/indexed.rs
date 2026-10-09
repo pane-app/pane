@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 use super::quick_slots::PinTarget;
 use super::{CommandRegistration, Entry, RootResult, Row};
+use crate::packages::{CommandMatches, CommandWhen};
 use crate::runtime::{CallError, IndexedAction, IndexedResult};
 use crate::search::Keys;
 
@@ -250,5 +251,8 @@ fn indexed_result(command: &CommandRegistration, result: IndexedResult) -> RootR
         keys,
         target: None,
         pin: Some(pin),
+        // An indexed result is matched by its titles and keywords, as ever.
+        when: CommandWhen::Always,
+        matches: CommandMatches::Title,
     }
 }

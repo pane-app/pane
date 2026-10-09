@@ -18,7 +18,9 @@ use std::time::Duration;
 
 use gpui::{Entity, TestAppContext, VisualTestContext, prelude::*};
 use pane::LauncherWindow;
-use pane_core::{CommandRegistration, Launcher, LauncherView, Runtime, Screen};
+use pane_core::{
+    CommandMatches, CommandRegistration, CommandWhen, Launcher, LauncherView, Runtime, Screen,
+};
 
 #[path = "support/a11y.rs"]
 mod a11y;
@@ -344,6 +346,8 @@ fn open_actions_sample(
         component,
         takes_query: false,
         search: false,
+        when: CommandWhen::Always,
+        matches: CommandMatches::Title,
     };
     let (window, cx) = open_launcher(cx, Launcher::new(Runtime::start(), vec![command]));
     cx.simulate_input("actions sample");

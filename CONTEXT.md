@@ -109,7 +109,7 @@ What invoking a root result reaches, shown on its row: Command, Application, Fil
 _Avoid_: Type, category
 
 **Result section**:
-A labelled run of root results: "Commands" over a blank query's commands and applications, below the pinned home; "Results" with their count over a query's, then "Fallbacks"; a run of computed answers sits under the title of the command that computed them ("Calculator"), and the files found for the query, with the row searching them all, under "Files". Sections only label the list; they never reorder or filter it, and none claims recent use: learning orders the list (frecency orders the blank query's), never a section.
+A labelled run of root results: "Commands" over a blank query's commands and applications, below the pinned home; "Results" with their count over a query's, then "Fallbacks"; a run of computed answers sits under the title of the command that computed them ("Calculator"), the rows declared for the address or path the query is under "Addresses" (#195), and the files found for the query, with the row searching them all, under "Files". Sections only label the list; they never reorder or filter it, and none claims recent use: learning orders the list (frecency orders the blank query's), never a section.
 _Avoid_: Group (a shortcut group is a Settings term), suggestions
 
 **Learned query**:

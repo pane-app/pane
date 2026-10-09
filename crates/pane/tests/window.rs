@@ -6,7 +6,9 @@ use std::time::Duration;
 
 use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, prelude::*, px};
 use pane::LauncherWindow;
-use pane_core::{CommandRegistration, Launcher, Runtime, Screen, Status};
+use pane_core::{
+    CommandMatches, CommandRegistration, CommandWhen, Launcher, Runtime, Screen, Status,
+};
 
 #[path = "../../pane-core/tests/support/platforms.rs"]
 mod platforms;
@@ -89,6 +91,8 @@ fn command(title: &str, guest: &str) -> CommandRegistration {
         component,
         takes_query: false,
         search: false,
+        when: CommandWhen::Always,
+        matches: CommandMatches::Title,
     }
 }
 

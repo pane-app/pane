@@ -51,6 +51,7 @@ use crate::feedback::{
     WindowControl, WindowPresence,
 };
 use crate::keyboard::{Binding, PaneKeys};
+use crate::packages::{CommandMatches, CommandWhen};
 use crate::runtime::{CallError, read_shortcut};
 
 /// What a failure toast for an error a command answered with is titled:
@@ -848,6 +849,8 @@ mod tests {
                 component: PathBuf::from(COMPONENT),
                 takes_query: false,
                 search: false,
+                when: CommandWhen::default(),
+                matches: CommandMatches::default(),
             }],
         );
         let window = Arc::new(Recording::default());

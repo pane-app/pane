@@ -37,7 +37,10 @@ for it come first, once they arrive):
 2. the commands of each enabled installed package, in install order, and,
    for a query that is not blank only, the [results supplied ahead of the
    query](#results-supplied-ahead-of-the-query), such as the installed
-   applications, after them;
+   applications, after them — a command's `when` and `matches` say when it
+   is listed at all, and the commands declared for a typed address or path
+   come [below the results found by title](#understanding-the-typed-query)
+   instead;
 3. an enabled installed package whose managed copy cannot be read, as one row
    explaining the problem;
 4. Pane's own rows: "Install extension from folder…", "Install extension
@@ -245,7 +248,7 @@ Each row shows what the launcher knows beyond its title and subtitle, from a rea
 - the alias and the registered global hotkey the user gave its command;
 - the part of its title the query matched, in the accent.
 
-Rows sit under section labels: "Commands" over a blank query's list (root search's own order, with no claim of recent use), "Results" with their count over a query's, a computed answer under the title of the command that computed it ("Calculator"), the files found for the query with the row searching them all under "Files" (#175), and the fallbacks under "Fallbacks" (below the no-results notice when nothing else matched). The presentation changes nothing about what is listed, its order, or what a row does.
+Rows sit under section labels: "Commands" over a blank query's list (root search's own order, with no claim of recent use), "Results" with their count over a query's, a computed answer under the title of the command that computed it ("Calculator"), the rows declared for the address or path the query is under "Addresses" (#195), the files found for the query with the row searching them all under "Files" (#175), and the fallbacks under "Fallbacks" (below the no-results notice when nothing else matched). The presentation changes nothing about what is listed, its order, or what a row does.
 
 **A computed answer** (#96) — a computed result whose action copies
 text, such as the calculator's — is drawn as the reference calculator
@@ -458,6 +461,63 @@ double precision; the answer shows at most 15 significant digits and at most
 "<query> = <answer> · Enter copies the answer" as its subtitle; root search
 draws it as a computed answer's card (above).
 
+## Understanding the typed query
+
+Root search understands what is typed beyond the words it holds
+([#195](https://github.com/pane-app/pane/issues/195)): a query can be a
+**web address** or a **path**. The analysis is the core's, made once per
+change of the query (the launcher's, never an extension's):
+
+- A query is **URL-like** when it has no spaces, is not path-like, and
+  either parses as an absolute URL with a scheme (`https://github.com`,
+  `mailto:someone@example.com`), or contains a dot that is not its last
+  character and whose part before the first `/` is a plausible host —
+  labels of letters, digits and `-`, the last alphabetic and at least two
+  letters, or four numbers — which `https://` is inferred before
+  (`github.com`, `notes.example.com/pane`; `1.5` is not one).
+- A query is **path-like** when it starts with a drive letter and a
+  separator (`C:\Windows`, `C:/Program Files`), with `\\` (a network
+  path), with `~`, resolved to the user's home folder alone or followed by
+  a separator, with `/`, or with `file://`, which names the path after it
+  (`file:///etc/hosts`, `file:///C:/Windows`). A path may hold spaces; the
+  home folder is the one the [file index](files.md) covers.
+
+The rows such a query lists come from **commands that declare they are for
+it** (below), so the core stays small: the default extensions supply them.
+They sit below the results found by title and above the files, under
+"Addresses", in install order, and Enter on one sends the parsed address
+or resolved path to its command as the launch record's **fallback text**
+(as an alias or a fallback sends text), launching it as any command's row
+does — a no-view command runs, a view command opens its screen. The
+selected row, the number chords and the Actions panel treat them as any
+row; the first is selected when nothing else matches, so Enter acts on
+what was typed.
+
+**Where a command appears** is the command's to declare in its `pane.json`
+entry, an additive extension API change: `when` says when root search lists
+it — `"always"` (the default), `"blank"` (only while nothing is typed) or
+`"searching"` (only while something is) — and `matches` what it is matched
+by — `"title"` (the default), `"url"` (only URL-like queries) or
+`"file-path"` (only path-like ones). A command declared for URL-like or
+path-like queries is never matched by its title, however well it fits.
+See the [author guide](../guests/README.md#commands-for-typed-addresses-and-paths).
+
+**The default extensions supply the rows** for them:
+
+- [Quicklinks](quicklinks.md#in-root-search) adds **Open in Browser** and
+  **Create Quicklink** (the address prefilled as its form's link) for
+  URL-like queries.
+- [Files](files.md#in-root-search) adds **Open** and **Reveal in File
+  Explorer** for path-like queries; a program is shown in the file manager
+  and never run, as file search's own Enter does
+  ([files](files.md#opening)).
+- The [samples](../guests/README.md#commands-for-typed-addresses-and-paths)
+  show the declarations in Rust, JavaScript and TypeScript.
+
+Colours, dates and percentages (the calculator's computed answers) and
+listing a typed folder's entries belong to later tickets of the
+specification.
+
 ## Activation
 
 Searching reads only what the launcher already holds: built-in command
@@ -612,6 +672,26 @@ re-enabling a package under a query, an update finishing while the user
 searches, an unavailable command found and explained without running, and
 twelve installed packages searched with no guest running and only the
 invoked one started.
+
+For typed addresses and paths
+([`crates/pane-core/tests/typed_queries.rs`](../crates/pane-core/tests/typed_queries.rs)),
+with the real `sample-matches` packages in Rust, JavaScript and TypeScript,
+the real Quicklinks and Files extensions, and the recording system and
+link-opener fakes: the query analysis (an absolute URL as typed, a bare
+domain with `https://` inferred, `1.5` and words as neither, Windows and
+Unix paths, `~` resolved to the home folder of the file index, `file://`),
+a command declared `matches: url` or `matches: file-path` listed only for
+such a query, under "Addresses" below the results and above the files,
+never matched by its title, and receiving the parsed address or resolved
+path as its fallback text; `when` honoured with a blank query and while
+searching; Quicklinks' "Open in Browser" opening the address through the
+system and closing the window, and its "Create Quicklink" opening the form
+with the address prefilled and saving it; Files' "Open" opening a typed
+path and revealing a program instead of running it, and its "Reveal in
+File Explorer" revealing it. The analysis' grammar has unit tests in
+`crates/pane-core/src/launcher/typed_query.rs`. Opening a typed URL and a
+typed path with the system's own handler is a release-validation smoke
+phase to add, not a merge gate (#195).
 
 For computed results and the calculator
 ([`crates/pane-core/tests/calculator.rs`](../crates/pane-core/tests/calculator.rs)),
