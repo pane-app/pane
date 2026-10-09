@@ -273,6 +273,22 @@ fn uses(folder: &str) -> String {
     )
 }
 
+/// A required dependency on the Rust operations sample, as `greeter`,
+/// calling its `greet` 1.
+fn greeter() -> String {
+    r#"{ "id": "greeter", "source": "local:../sample-operations",
+         "operations": [{ "id": "greet", "version": 1 }] }"#
+        .to_owned()
+}
+
+/// An optional dependency on the Rust operations sample, as `helper`,
+/// calling its `greet` 1.
+fn uses_greeter() -> String {
+    r#"{ "id": "helper", "source": "local:../sample-operations", "optional": true,
+         "operations": [{ "id": "greet", "version": 1 }] }"#
+        .to_owned()
+}
+
 /// The root search row titled `title`.
 fn row(launcher: &Launcher, title: &str) -> Row {
     let view = launcher.view();
@@ -353,7 +369,7 @@ fn set_fallback(launcher: &Launcher, title: &str) {
 /// requires it, leaving root search shown.
 fn greeter_and_caller(dirs: &Dirs) -> Launcher {
     dirs.sample(GREETER);
-    let caller = dirs.caller(&needs(GREETER));
+    let caller = dirs.caller(&greeter());
     let launcher = dirs.launcher();
     dirs.install(&launcher, &caller);
     launcher.show_root_search();
@@ -446,11 +462,11 @@ fn a_dependent_waits_while_its_dependency_is_uninstalled_and_comes_back_when_it_
     block_on(launcher.uninstall(&greeter, SavedData::Keep));
     launcher.show_root_search();
 
-    // The uninstalled dependency is named by the title its retained data
-    // was kept under; Enter offers Manage extensions.
+    // The uninstalled dependency is named by its identity (no data was
+    // kept under a title); Enter offers Manage extensions.
     assert_eq!(
         waiting_reason(&launcher, "Call from JavaScript"),
-        "Needs Rust operations sample, which is not installed"
+        format!("Needs {}, which is not installed", greeter)
     );
     open(&launcher, "Call from JavaScript");
     assert_eq!(titles(&launcher), ["Open Manage extensions"]);
@@ -468,7 +484,7 @@ fn a_dependent_waits_while_its_dependency_is_uninstalled_and_comes_back_when_it_
 fn a_waiting_package_answers_its_operations_unavailable_with_the_reason() {
     let dirs = Dirs::new();
     dirs.sample(GREETER);
-    let caller = dirs.caller(&needs(GREETER));
+    let caller = dirs.caller(&greeter());
     // The TypeScript sample calls the caller's operation by identity; it
     // depends on nothing, so it does not wait with it.
     let typescript = dirs.sample("sample-operations-ts");
@@ -545,7 +561,7 @@ fn a_cycle_of_healthy_packages_runs_and_one_with_a_member_missing_waits_as_a_who
     launcher.show_root_search();
     assert_eq!(
         waiting_reason(&launcher, "Fixture q"),
-        "Needs Package p, which is not installed"
+        format!("Needs {}, which is not installed", dirs.identity("p"))
     );
     open(&launcher, "Fixture q");
     assert!(matches!(
@@ -558,7 +574,7 @@ fn a_cycle_of_healthy_packages_runs_and_one_with_a_member_missing_waits_as_a_who
 #[test]
 fn an_optional_dependency_never_makes_a_command_wait() {
     let dirs = Dirs::new();
-    let caller = dirs.caller(&uses(GREETER));
+    let caller = dirs.caller(&uses_greeter());
     let launcher = dirs.launcher();
     dirs.install(&launcher, &caller);
     launcher.show_root_search();
@@ -583,7 +599,7 @@ fn an_optional_dependency_never_makes_a_command_wait() {
 fn waiting_skips_a_schedule_s_ticks_and_comes_back_from_a_full_interval() {
     let dirs = Dirs::new();
     dirs.sample(GREETER);
-    let scheduled = set_every(&dirs.requiring("sample-schedule", &needs(GREETER)), 1);
+    let scheduled = set_every(&dirs.requiring("sample-schedule", &greeter()), 1);
     let launcher = dirs.launcher();
     dirs.install(&launcher, &scheduled);
     assert!(launcher.wait_for_schedules(PROMPTLY));
@@ -621,7 +637,7 @@ fn waiting_skips_a_schedule_s_ticks_and_comes_back_from_a_full_interval() {
 fn waiting_stops_a_service_s_cycles_and_the_first_runs_at_once_when_it_comes_back() {
     let dirs = Dirs::new();
     dirs.sample(GREETER);
-    let serving = dirs.requiring("sample-service", &needs(GREETER));
+    let serving = dirs.requiring("sample-service", &greeter());
     let launcher = dirs.launcher();
     dirs.install(&launcher, &serving);
     assert!(launcher.wait_for_services(PROMPTLY));
@@ -652,7 +668,7 @@ fn waiting_stops_a_service_s_cycles_and_the_first_runs_at_once_when_it_comes_bac
 fn root_results_are_not_asked_while_waiting_and_asked_again_once_it_is_back() {
     let dirs = Dirs::new();
     dirs.sample(GREETER);
-    let sample = dirs.requiring("sample-rust", &needs(GREETER));
+    let sample = dirs.requiring("sample-rust", &greeter());
     let launcher = dirs.launcher();
     dirs.install(&launcher, &sample);
     launcher.back();
@@ -727,8 +743,8 @@ fn a_call_of_a_waiting_package_already_running_finishes() {
     dirs.save_sources(&["b"]);
     let launcher = dirs.launcher();
     dirs.install(&launcher, &dirs.folder("a"));
+    // Installing b installs c with it, as it requires it.
     dirs.install(&launcher, &dirs.folder("b"));
-    dirs.install(&launcher, &dirs.folder("c"));
 
     // a calls b's `wait`, which takes ten seconds; while it runs, c is
     // disabled, so b waits. The call already running finishes: waiting
@@ -831,7 +847,7 @@ fn a_quick_slot_and_an_alias_and_a_fallback_of_a_waiting_command_say_why_and_run
 fn a_global_hotkey_of_a_waiting_command_says_why_and_runs_nothing() {
     let dirs = Dirs::new();
     dirs.sample(GREETER);
-    let caller = dirs.caller(&needs(GREETER));
+    let caller = dirs.caller(&greeter());
     let launcher = Launcher::with_packages(Ok(dirs.runtime.clone()), vec![], dirs.extensions())
         .with_clock(dirs.clock.clone())
         .with_hotkeys(Arc::new(AnyHotkeys::default()));
@@ -868,7 +884,7 @@ fn a_global_hotkey_of_a_waiting_command_says_why_and_runs_nothing() {
 fn a_reload_of_the_dependency_that_fails_to_start_leaves_its_dependents_waiting() {
     let dirs = Dirs::new();
     let greeter = dirs.sample(GREETER);
-    let caller = dirs.caller(&needs(GREETER));
+    let caller = dirs.caller(&greeter());
     let launcher = dirs.launcher();
     dirs.install(&launcher, &caller);
 
