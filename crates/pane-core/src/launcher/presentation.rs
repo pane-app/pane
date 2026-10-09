@@ -245,7 +245,12 @@ pub(super) fn row_presentation(state: &State, index: usize) -> RowPresentation {
         hotkey: command
             .then(|| state.bindings.registered_of(&row.id))
             .flatten(),
-        matched: title_matches(&row.title, query),
+        matched: title_matches(
+            &row.title,
+            row.subtitle.as_deref(),
+            query,
+            state.sensitivity,
+        ),
         answer: answer(state, row, entry, query),
         needs_setup: matches!(entry, Entry::Open(_)) && state.setup_needed.contains(&row.id),
         icon: icon(state, row, entry),

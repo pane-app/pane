@@ -1,7 +1,8 @@
 //! The Launcher page: the choices that govern the launcher window — which
-//! display it opens on, when reopening it pops back to root search, and
-//! its layout: the window mode (expanded or compact), how the pins are
-//! laid out, and whether the compact window shows them.
+//! display it opens on, when reopening it pops back to root search, how
+//! strict root search's matching is, and its layout: the window mode
+//! (expanded or compact), how the pins are laid out, and whether the
+//! compact window shows them.
 //!
 //! Every value it shows and every choice it takes goes through the host
 //! settings ([`crate::settings`]), so the record's own rules — atomic
@@ -12,13 +13,15 @@
 //! every time the launcher opens (through [`crate::placement`], the
 //! platform seam this page also reads to explain the choices), and what
 //! reopening shows is applied when the launcher is next opened. The
-//! layout choices are read by the launcher window as it draws.
+//! layout choices are read by the launcher window as it draws, and the
+//! search sensitivity is applied by the launcher's matcher on the next
+//! keystroke after the choice is taken.
 //!
-//! The display and the reopening delay are Pane-styled searchable
-//! selects ([`crate::ui::select`]); the window mode and the pinned
-//! layout are segmented choices (#99, the Settings board's family), two
-//! fixed choices a user scans faster than searches; showing the pins in
-//! the compact window is a switch.
+//! The display, the reopening delay and the search sensitivity are
+//! Pane-styled searchable selects ([`crate::ui::select`]); the window mode
+//! and the pinned layout are segmented choices (#99, the Settings board's
+//! family), two fixed choices a user scans faster than searches; showing
+//! the pins in the compact window is a switch.
 //!
 //! What the page explains, as the General page does for its hotkey: the
 //! choices the platform cannot answer — the display with the mouse where
@@ -37,7 +40,7 @@ use gpui::{
     prelude::*,
 };
 use pane_core::placement::{DisplayLayout, resolve};
-use pane_core::{Launcher, OpeningMonitor, PinnedLayout, Reopening, WindowMode};
+use pane_core::{Launcher, OpeningMonitor, PinnedLayout, Reopening, SearchSensitivity, WindowMode};
 
 use super::{Page, SettingsWindow, search};
 use crate::ui::controls::{self, status_note as note};
@@ -104,6 +107,17 @@ pub(crate) const REOPENINGS: [(Reopening, &str, &str, &str); 4] = [
 pub(crate) const REOPENING_NAME: &str = "Pop to root search";
 pub(crate) const REOPENING_DEBUG: &str = "launcher-reopening";
 
+/// The search sensitivity choices the page offers, in list order: the
+/// preference, the choice's name (the select's id too) and what it
+/// matches. High is the default, so it comes first.
+pub(crate) const SENSITIVITY_NAME: &str = "Search sensitivity";
+pub(crate) const SENSITIVITY_DEBUG: &str = "launcher-sensitivity";
+pub(crate) const SENSITIVITIES: [(SearchSensitivity, &str, &str); 3] = [
+    (SearchSensitivity::High, "High", "Matches that also start the text or a word of it"),
+    (SearchSensitivity::Medium, "Medium", "Word starts and tighter placements"),
+    (SearchSensitivity::Low, "Low", "Every placement the letters can make"),
+];
+
 /// The layout rows: their names, and their segments — the preference, the
 /// segment's name and its test selector.
 pub(crate) const WINDOW_MODE_NAME: &str = "Window mode";
@@ -164,6 +178,8 @@ pub(crate) struct State {
     monitor: Entity<Select>,
     /// The reopening choice's select.
     reopening: Entity<Select>,
+    /// The search sensitivity choice's select.
+    sensitivity: Entity<Select>,
 }
 
 impl State {
@@ -226,7 +242,42 @@ impl State {
             window,
             cx,
         );
-        State { monitor, reopening }
+        let sensitivity = super::choice_select(
+            SENSITIVITY_NAME,
+            SENSITIVITY_DEBUG,
+            |_| {
+                SENSITIVITIES
+                    .iter()
+                    .map(|&(_, name, does)| crate::ui::select::Choice {
+                        subtitle: Some(does.into()),
+                        ..super::choice(name, name, None)
+                    })
+                    .collect()
+            },
+            |cx| {
+                let chosen = crate::settings::shared(cx).read(cx).search_sensitivity();
+                SENSITIVITIES
+                    .iter()
+                    .find(|&&(sensitivity, ..)| sensitivity == chosen)
+                    .map_or("High", |&(_, name, _)| name)
+            },
+            |name, cx| {
+                if let Some(&(sensitivity, ..)) =
+                    SENSITIVITIES.iter().find(|&&(_, of, _)| of == name)
+                {
+                    crate::settings::shared(cx).update(cx, |settings, cx| {
+                        settings.set_search_sensitivity(sensitivity, cx);
+                    });
+                }
+            },
+            window,
+            cx,
+        );
+        State {
+            monitor,
+            reopening,
+            sensitivity,
+        }
     }
 
     /// The popup's search field, for tests that drive composition the
@@ -327,13 +378,13 @@ impl SettingsWindow {
 }
 
 /// The settings the page offers the sidebar's search: each choice of the
-/// display and reopening selects, named as the page names it, in the group
-/// it sits in, saying why it cannot be used where the system does not
-/// answer it — the result stays listed with its reason, as the control
-/// does on the page — then the Layout card's three rows. Each select's
-/// choices all jump to the one select control that offers them. The
-/// reopening and layout choices are no platform integration: they are
-/// always usable.
+/// display, reopening and search sensitivity selects, named as the page
+/// names it, in the group it sits in, saying why it cannot be used where
+/// the system does not answer it — the result stays listed with its
+/// reason, as the control does on the page — then the Layout card's three
+/// rows. Each select's choices all jump to the one select control that
+/// offers them. The reopening, sensitivity and layout choices are no
+/// platform integration: they are always usable.
 fn entries(_launcher: &Launcher, cx: &App) -> Vec<search::Entry> {
     let placement = crate::placement::shared(cx);
     let layout = placement.layout();
@@ -357,6 +408,12 @@ fn entries(_launcher: &Launcher, cx: &App) -> Vec<search::Entry> {
         group: Some(REOPENING_NAME.into()),
         unavailable: None,
     });
+    let sensitivities = SENSITIVITIES.iter().map(|&(_, name, _)| search::Entry {
+        control: Some(SENSITIVITY_DEBUG.into()),
+        title: name.into(),
+        group: Some(SENSITIVITY_NAME.into()),
+        unavailable: None,
+    });
     let layout = [
         ("launcher-window-mode", WINDOW_MODE_NAME),
         (COMPACT_PINNED_DEBUG, COMPACT_PINNED_NAME),
@@ -369,15 +426,20 @@ fn entries(_launcher: &Launcher, cx: &App) -> Vec<search::Entry> {
         group: Some(LAYOUT.into()),
         unavailable: None,
     });
-    monitors.chain(reopenings).chain(layout).collect()
+    monitors
+        .chain(reopenings)
+        .chain(sensitivities)
+        .chain(layout)
+        .collect()
 }
 
-/// The page's keyboard controls are its two selects, the display and the
-/// reopening delay: a select's trigger takes focus (it is a tab stop, and
-/// Enter opens its choices), so a jump to any of its choices focuses it.
-/// The Layout card's segments and switch take no keyboard focus (they are
-/// chosen with the pointer, as the reference's settings rows are), so a
-/// jump to one reveals it and the sidebar keeps the focus: `false`.
+/// The page's keyboard controls are its three selects, the display, the
+/// reopening delay and the search sensitivity: a select's trigger takes
+/// focus (it is a tab stop, and Enter opens its choices), so a jump to
+/// any of its choices focuses it. The Layout card's segments and switch
+/// take no keyboard focus (they are chosen with the pointer, as the
+/// reference's settings rows are), so a jump to one reveals it and the
+/// sidebar keeps the focus: `false`.
 fn focus(
     this: &mut SettingsWindow,
     target: &str,
@@ -387,6 +449,7 @@ fn focus(
     let select = match target {
         "launcher-monitor" => &this.launcher_page.monitor,
         REOPENING_DEBUG => &this.launcher_page.reopening,
+        SENSITIVITY_DEBUG => &this.launcher_page.sensitivity,
         _ => return false,
     };
     let trigger = select.read(cx).trigger_focus();
@@ -474,12 +537,17 @@ fn render(
         .flex_none()
         .anchor_scroll(Some(this.search_anchor(REOPENING_DEBUG)))
         .child(this.launcher_page.reopening.clone());
+    let sensitivity = div()
+        .id(SENSITIVITY_DEBUG)
+        .flex_none()
+        .anchor_scroll(Some(this.search_anchor(SENSITIVITY_DEBUG)))
+        .child(this.launcher_page.sensitivity.clone());
     let mode_anchor = this.search_anchor("launcher-window-mode");
     let pinned_anchor = this.search_anchor("launcher-pinned");
     let compact_pinned_anchor = this.search_anchor(COMPACT_PINNED_DEBUG);
     compose(
         &view,
-        (select, Some(reopening)),
+        (select, Some(reopening), Some(sensitivity)),
         theme,
         |control, element| match control {
             LauncherControl::WindowMode(mode) => element
@@ -540,22 +608,29 @@ fn segments<T: Copy + PartialEq>(
 /// The Launcher page's composition: a card of the Display row — `selects.0`, the opening
 /// monitor's searchable select (see [`crate::ui::select`]), with the
 /// fallback it explains under its name, or where the platform cannot
-/// choose the display at all, why — and the Pop to root search row
-/// (`selects.1`); then the Layout card's window mode segments, the switch
-/// that shows the pins in the compact window, and the pinned items
-/// segments. A failed save's status sits above the cards. `attach` adds
-/// each control's behavior; the composition gives each its identity, its
-/// accessibility and its look.
+/// choose the display at all, why — the Pop to root search row
+/// (`selects.1`) and the Search sensitivity row (`selects.2`); then the
+/// Layout card's window mode segments, the switch that shows the pins in
+/// the compact window, and the pinned items segments. A failed save's
+/// status sits above the cards. `attach` adds each control's behavior;
+/// the composition gives each its identity, its accessibility and its look.
 pub(crate) fn compose(
     view: &LauncherView,
-    selects: (Option<Stateful<Div>>, Option<Stateful<Div>>),
+    selects: (
+        Option<Stateful<Div>>,
+        Option<Stateful<Div>>,
+        Option<Stateful<Div>>,
+    ),
     theme: &Theme,
     attach: impl Fn(LauncherControl, Stateful<Div>) -> Stateful<Div>,
 ) -> Stateful<Div> {
-    let (select, reopening) = selects;
+    let (select, reopening, sensitivity) = selects;
     let reopening = controls::setting_row(REOPENING_NAME, Vec::new(), theme)
         .debug_selector(|| "launcher-reopening-field".into())
         .children(reopening);
+    let sensitivity = controls::setting_row(SENSITIVITY_NAME, Vec::new(), theme)
+        .debug_selector(|| "launcher-sensitivity-field".into())
+        .children(sensitivity);
     // The opening display, with the choice's own honesty: what the
     // launcher opens on now, when that is not the display the choice
     // names; or, where the platform cannot choose the display at all, why.
@@ -576,7 +651,11 @@ pub(crate) fn compose(
         .debug_selector(|| "launcher-monitor-field".into())
         .children(select);
     let card = controls::card(
-        [display.into_any_element(), reopening.into_any_element()],
+        [
+            display.into_any_element(),
+            reopening.into_any_element(),
+            sensitivity.into_any_element(),
+        ],
         theme,
     );
     let mode = controls::setting_row(WINDOW_MODE_NAME, Vec::new(), theme)

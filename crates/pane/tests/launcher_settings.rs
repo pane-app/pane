@@ -13,7 +13,7 @@
 
 use std::cell::RefCell;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -27,7 +27,7 @@ use pane::placement::Placement;
 use pane::{LauncherWindow, SettingsWindow};
 use pane_core::hotkeys::{HotkeyError, Hotkeys, Shortcut};
 use pane_core::placement::{Display, DisplayId, DisplayLayout, Point, Rect, Size};
-use pane_core::{Launcher, PackageIdentity, Runtime, Screen};
+use pane_core::{CommandRegistration, Launcher, PackageIdentity, Runtime, Screen};
 use tempfile::TempDir;
 
 #[path = "support/settle.rs"]
@@ -1191,6 +1191,102 @@ fn the_page_registers_its_settings_in_the_settings_search(cx: &mut TestAppContex
         "the sections are back"
     );
     let _ = window;
+}
+
+/// The Launcher page's Search sensitivity control (#193): found through
+/// the Settings search, chosen through the page's own select, recorded in
+/// the settings record — and applied by the launcher on the next
+/// keystroke, so the same query finds more results once the choice is
+/// taken.
+#[gpui::test]
+fn the_search_sensitivity_control_changes_the_results_live(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let placement = Rc::new(FakePlacement::default());
+    placement.layout(Some(Point { x: 100., y: 100. }), None);
+    cx.update(|cx| pane::placement::init(placement.clone() as Rc<dyn Placement>, cx));
+    init_settings(Some(data.path()), cx);
+    let component = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/guests/sample_rust.wasm");
+    assert!(
+        component.exists(),
+        "{} is missing; run `cargo xtask guests`",
+        component.display()
+    );
+    let commands = vec![CommandRegistration {
+        id: "undownloadable".into(),
+        title: "Undownloadable files".into(),
+        subtitle: None,
+        component,
+        takes_query: false,
+        search: false,
+    }];
+    let launcher =
+        Launcher::new(Runtime::start(), commands).with_hotkeys(Arc::new(FakeSystem::default()));
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let (window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+
+    // The default is High: "download" sits mid-word in "Undownloadable
+    // files", and High wants a match that starts the text or a word.
+    cx.simulate_input("download");
+    let view = settle(&window, cx);
+    assert!(view.rows.is_empty(), "High, the default");
+
+    // The control is found through the Settings search, and its Medium
+    // choice taken through the page's own select.
+    cx.simulate_keystrokes(settings_shortcut());
+    cx.run_until_parked();
+    let settings = cx
+        .cx
+        .update(|cx| {
+            cx.windows()
+                .into_iter()
+                .filter_map(|window| window.downcast::<SettingsWindow>())
+                .next()
+        })
+        .expect("Settings opened");
+    let mut settings_cx = VisualTestContext::from_window(AnyWindowHandle::from(settings), &cx.cx);
+    settings_cx.simulate_keystrokes(find_shortcut());
+    settings_cx.simulate_input("sensitivity");
+    settings_cx.run_until_parked();
+    assert!(
+        settings_cx
+            .debug_bounds("settings-search-result-Medium")
+            .is_some(),
+        "the sensitivity's choices are found"
+    );
+    let tree = a11y(&mut settings_cx);
+    assert!(
+        tree.contains("Launcher \u{b7} Search sensitivity"),
+        "the result names the page and the group, {tree}"
+    );
+    settings_cx.simulate_keystrokes("enter");
+    settings_cx.run_until_parked();
+    settle_frames(&mut settings_cx);
+    click(&mut settings_cx, "launcher-sensitivity");
+    settings_cx.run_until_parked();
+    click(&mut settings_cx, "launcher-sensitivity-Medium");
+    settings_cx.run_until_parked();
+    until_record_holds(&mut settings_cx, data.path(), "\"searchSensitivity\": \"medium\"");
+
+    // The choice applies on the next keystroke: the list the query has
+    // already made stays as it is, and the query made again holds the
+    // command.
+    let view = cx.read_entity(&window, |window, _| window.launcher().view());
+    assert!(view.rows.is_empty(), "the list stays until the query changes");
+    cx.simulate_keystrokes("escape");
+    let view = settle(&window, cx);
+    assert_eq!(view.query(), Some(""));
+    cx.simulate_input("download");
+    let view = settle(&window, cx);
+    assert_eq!(
+        view.rows
+            .iter()
+            .map(|row| row.title.as_str())
+            .collect::<Vec<_>>(),
+        ["Undownloadable files"],
+        "Medium holds the mid-word match"
+    );
 }
 
 /// Whether the accessibility tree of the window `cx` drives has the switch

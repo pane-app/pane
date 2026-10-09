@@ -463,6 +463,24 @@ impl Settings {
         self.commit(chosen, Taken::Recorded, cx);
     }
 
+    /// How strict root search's matching is; the launcher's next keystroke
+    /// applies it.
+    pub(crate) fn search_sensitivity(&self) -> pane_core::SearchSensitivity {
+        self.chosen.search_sensitivity
+    }
+
+    /// Chooses how strict root search's matching is; the choice takes
+    /// effect as the launcher applies it, on the next keystroke.
+    pub(crate) fn set_search_sensitivity(
+        &mut self,
+        sensitivity: pane_core::SearchSensitivity,
+        cx: &mut Context<Self>,
+    ) {
+        let mut chosen = self.chosen.clone();
+        chosen.search_sensitivity = sensitivity;
+        self.commit(chosen, Taken::Recorded, cx);
+    }
+
     /// What the launcher's back key does.
     pub(crate) fn escape(&self) -> pane_core::EscapeBehavior {
         self.chosen.escape
@@ -1396,6 +1414,14 @@ pub(crate) fn keyboard_of(cx: &App) -> Keyboard {
 pub(crate) fn navigation_of(cx: &App) -> pane_core::NavigationBindings {
     cx.try_global::<Shared>()
         .map(|shared| shared.0.read(cx).chosen.navigation)
+        .unwrap_or_default()
+}
+
+/// How strict root search's matching is in force, as [`keyboard_of`]
+/// reads the settings: the launcher applies it on its next keystroke.
+pub(crate) fn search_sensitivity_of(cx: &App) -> pane_core::SearchSensitivity {
+    cx.try_global::<Shared>()
+        .map(|shared| shared.0.read(cx).chosen.search_sensitivity)
         .unwrap_or_default()
 }
 

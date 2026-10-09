@@ -68,6 +68,7 @@ use crate::dependencies;
 use crate::extension_data::{ExtensionData, PackageData};
 use crate::files::FileAccess;
 use crate::generation::End;
+use crate::host_settings::SearchSensitivity;
 use crate::hotkeys::{self as system_hotkeys, Hotkeys};
 use crate::keyboard::PaneKeys;
 use crate::launch::{LaunchRecord, LaunchSource};
@@ -829,6 +830,10 @@ struct State {
     /// Pane's own keys in force, which no action shortcut takes (see
     /// `item_actions`).
     pane_keys: PaneKeys,
+    /// How strict root search's matching is, as the window holds the
+    /// Launcher page's choice: High until one is pushed, applied on the
+    /// next keystroke (see [`Launcher::set_search_sensitivity`]).
+    sensitivity: SearchSensitivity,
     /// The open command's unbound shortcuts as last noted, so a developed
     /// package's report is made again only when they change.
     reported_unbound: Vec<UnboundShortcut>,
@@ -1504,6 +1509,7 @@ impl Launcher {
             runtime_slow: None,
             update_controls,
             pane_keys: PaneKeys::default(),
+            sensitivity: SearchSensitivity::default(),
             reported_unbound: Vec::new(),
             open_command: None,
             feedback: feedback::Feedback::default(),
@@ -2062,6 +2068,19 @@ impl Launcher {
                     return;
                 }
             }
+        }
+    }
+
+    /// Tells the launcher how strict root search's matching is now: the
+    /// Launcher page's choice as the window holds it, pushed as the query
+    /// field changes. It applies on the next keystroke — the list the
+    /// current query has already made stays as it is — and its late
+    /// answers re-rank with it. Until one is pushed, the default (High)
+    /// applies.
+    pub fn set_search_sensitivity(&self, sensitivity: SearchSensitivity) {
+        let mut state = self.lock();
+        if state.sensitivity != sensitivity {
+            state.sensitivity = sensitivity;
         }
     }
 
@@ -4669,7 +4688,7 @@ fn root_rows(state: &State, query: &str) -> (Vec<Row>, Vec<Entry>) {
     let parsed = Query::new(query);
     let named = |index: &usize| parsed.is_alias_of(&candidates[*index].keys);
     let by_alias: Vec<usize> = (0..candidates.len()).filter(named).collect();
-    let matches: Vec<usize> = search::ranked_matches(&parsed, keys.into_iter())
+    let matches: Vec<usize> = search::ranked_matches(&parsed, keys.into_iter(), state.sensitivity)
         .into_iter()
         .filter(|index| !named(index))
         .collect();

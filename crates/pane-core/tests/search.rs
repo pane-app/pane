@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 
 use futures::executor::block_on;
 use pane_core::{
-    CallError, CommandRegistration, Launcher, PackageIdentity, Runtime, Screen, Status, Unavailable,
+    CallError, CommandRegistration, Launcher, PackageIdentity, Runtime, Screen, SearchSensitivity,
+    Status, Unavailable,
 };
 use tempfile::TempDir;
 
@@ -87,6 +88,10 @@ fn root_search_opens_with_an_empty_query_listing_every_command_in_order() {
 #[test]
 fn a_query_keeps_the_matching_commands_best_match_first() {
     let launcher = downloads();
+    // The ladder holds the whole order at Low; High (the default) drops
+    // the mid-word containment (see
+    // `search_sensitivity_decides_how_good_a_score_must_be`).
+    launcher.set_search_sensitivity(SearchSensitivity::Low);
     block_on(launcher.set_query("download"));
 
     assert_eq!(launcher.view().query(), Some("download"));
@@ -150,6 +155,102 @@ fn composed_and_decomposed_accents_match_each_other() {
     assert_eq!(titles(&launcher), ["Résumé"]);
 }
 
+/// Fuzzy matching without accents (#193): the query's letters place in a
+/// result's title, subtitle or package title as a subsequence, and
+/// transliteration folds away the accents and diacritics in between.
+#[test]
+an_abbreviation_finds_the_command_by_its_word_starts() {
+    let launcher = without_runtime(vec![
+        command("Visual Studio Code", None),
+        command("Clear History", None),
+        command("Clipboard History", None),
+    ]);
+    block_on(launcher.set_query("vsc"));
+    assert_eq!(titles(&launcher), ["Visual Studio Code"]);
+    // A match only the scorer found ranks below the ladder, ordered by
+    // its score: the tighter placement first.
+    block_on(launcher.set_query("clhis"));
+    assert_eq!(
+        titles(&launcher),
+        ["Clear History", "Clipboard History"],
+        "Clear History's letters sit closer than Clipboard's"
+    );
+}
+
+#[test]
+fn accents_and_diacritics_never_stand_between_the_query_and_the_result() {
+    let launcher = without_runtime(vec![
+        command("Café", None),
+        command("Tiếng Việt", None),
+        command("Đường", Some("A street in Hà Nội")),
+        command("Straße", None),
+    ]);
+    // Both ways: without the accents, and with them on the other side.
+    block_on(launcher.set_query("cafe"));
+    assert_eq!(titles(&launcher), ["Café"]);
+    block_on(launcher.set_query("tieng viet"));
+    assert_eq!(titles(&launcher), ["Tiếng Việt"]);
+    // The highlight maps back to the title as written: "duong" is all of
+    // "Đường".
+    block_on(launcher.set_query("duong"));
+    assert_eq!(titles(&launcher), ["Đường"]);
+    let ranges = launcher.presentation().rows[0].matched.clone();
+    assert_eq!(ranges, [0.."Đường".len()]);
+    assert_eq!(&"Đường"[ranges[0].clone()], "Đường");
+    block_on(launcher.set_query("strasse"));
+    assert_eq!(titles(&launcher), ["Straße"]);
+}
+
+#[test]
+fn search_sensitivity_decides_how_good_a_score_must_be() {
+    let launcher = without_runtime(vec![command("Undownloadable files", None)]);
+    // "download" sits mid-word: exactly 2n, which High — the default —
+    // rejects, and Medium and Low hold.
+    block_on(launcher.set_query("download"));
+    assert!(titles(&launcher).is_empty(), "High, the default");
+    launcher.set_search_sensitivity(SearchSensitivity::Medium);
+    block_on(launcher.set_query("download"));
+    assert_eq!(titles(&launcher), ["Undownloadable files"]);
+    // The choice applies on the next keystroke: the list the current
+    // query has already made stays as it is.
+    launcher.set_search_sensitivity(SearchSensitivity::High);
+    assert_eq!(
+        titles(&launcher),
+        ["Undownloadable files"],
+        "the list stays until the query changes"
+    );
+    block_on(launcher.set_query("download "));
+    assert!(titles(&launcher).is_empty(), "the next keystroke applies it");
+}
+
+/// The title characters of the best placement, as the presentation hands
+/// them to the window: contiguous letters one run, scattered ones one run
+/// each, and nothing for a title the query did not match.
+#[test]
+fn root_search_highlights_the_title_characters_of_the_best_placement() {
+    let launcher = without_runtime(vec![
+        command("Clipboard History", None),
+        command("Clear cache", Some("Delete downloaded files")),
+    ]);
+    let matched = |launcher: &Launcher, title: &str| {
+        launcher
+            .presentation()
+            .rows
+            .iter()
+            .zip(launcher.view().rows)
+            .find(|(_, row)| row.title == title)
+            .map(|(shown, _)| shown.matched.clone())
+            .unwrap_or_default()
+    };
+    block_on(launcher.set_query("clhis"));
+    assert_eq!(titles(&launcher), ["Clipboard History"]);
+    assert_eq!(matched(&launcher, "Clipboard History"), [0..2, 10..13]);
+    // A row found by its subtitle alone highlights nothing in its title.
+    block_on(launcher.set_query("del files"));
+    assert_eq!(titles(&launcher), ["Clear cache"]);
+    assert!(matched(&launcher, "Clear cache").is_empty());
+}
+
 #[test]
 fn searching_the_same_query_again_keeps_the_selection() {
     let launcher = downloads();
@@ -160,12 +261,19 @@ fn searching_the_same_query_again_keeps_the_selection() {
 }
 
 #[test]
-fn every_word_of_the_query_must_match() {
+fn every_letter_of_the_query_must_place_in_order() {
     let launcher = downloads();
     block_on(launcher.set_query("rec down"));
     assert_eq!(titles(&launcher), ["Recent downloads"]);
+    block_on(launcher.set_query("dnolw"));
+    // "downloads" holds every letter but not in this order.
+    assert!(titles(&launcher).is_empty(), "{:?}", titles(&launcher));
+    // A word of the query may sit in the title and the rest in the
+    // subtitle, through the composite of the two.
     block_on(launcher.set_query("down files"));
-    // "files" is a word of one title and only in the other's subtitle.
+    assert_eq!(titles(&launcher), ["Clear cache"], "High, the default");
+    launcher.set_search_sensitivity(SearchSensitivity::Low);
+    block_on(launcher.set_query("down files"));
     assert_eq!(titles(&launcher), ["Undownloadable files", "Clear cache"]);
 }
 
@@ -176,6 +284,9 @@ fn equally_good_matches_keep_root_search_order() {
         command("JavaScript sample", None),
         command("TypeScript sample", None),
     ]);
+    // Low holds mid-word matches, which the default drops, so all three
+    // tie on each query.
+    launcher.set_search_sensitivity(SearchSensitivity::Low);
     block_on(launcher.set_query("sample"));
     assert_eq!(
         titles(&launcher),
@@ -427,11 +538,14 @@ fn a_command_with_its_own_subtitle_is_found_by_its_package_title_last() {
         Some("Five days ahead"),
         "the command still shows its own subtitle"
     );
-    // Words may match the title, subtitle and package title together.
+    // A query may span a result's title and subtitle, through the
+    // composite of the two — but no longer across its package title:
+    // "weather five" holds words of the package title and the subtitle,
+    // and no single text holds them both.
+    block_on(launcher.set_query("forecast five"));
+    assert_eq!(titles(&launcher), ["Forecast"]);
     block_on(launcher.set_query("weather five"));
-    assert_eq!(titles(&launcher), ["Forecast"]);
-    block_on(launcher.set_query("forecast weather"));
-    assert_eq!(titles(&launcher), ["Forecast"]);
+    assert!(titles(&launcher).is_empty(), "{:?}", titles(&launcher));
 }
 
 #[test]

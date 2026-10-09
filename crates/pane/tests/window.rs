@@ -2652,6 +2652,52 @@ fn root_rows_sit_under_their_section_labels(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("section-Commands").is_none());
 }
 
+/// The title characters of the best placement, highlighted in the accent
+/// (#193): scattered letters one run each, in the byte ranges the row's
+/// title draws them by, and nothing for a row whose match sits in its
+/// subtitle.
+#[gpui::test]
+fn the_matched_characters_of_the_best_placement_are_highlighted(cx: &mut TestAppContext) {
+    let mut clearing = command("Clear cache", JAVASCRIPT.component);
+    clearing.subtitle = Some("Delete downloaded files".into());
+    let (window, cx) = open_with(cx, vec![command("Clipboard History", RUST.component), clearing]);
+    settle(&window, cx);
+
+    // "clhis" places c, l at the start of the title and h, i, s in
+    // "History".
+    cx.simulate_input("clhis");
+    let view = settle(&window, cx);
+    assert_eq!(
+        view.rows
+            .iter()
+            .map(|row| row.title.as_str())
+            .collect::<Vec<_>>(),
+        ["Clipboard History"]
+    );
+    assert!(cx.debug_bounds("row-Clipboard History").is_some());
+    let matched = cx.read_entity(&window, |window, _| {
+        window.launcher().presentation().rows[0].matched.clone()
+    });
+    assert_eq!(matched, [0..2, 10..13], "cl and his, the title's own bytes");
+
+    // A row found by its subtitle alone highlights nothing in its title.
+    cx.simulate_keystrokes("escape");
+    settle(&window, cx);
+    cx.simulate_input("del files");
+    let view = settle(&window, cx);
+    assert_eq!(
+        view.rows
+            .iter()
+            .map(|row| row.title.as_str())
+            .collect::<Vec<_>>(),
+        ["Clear cache"]
+    );
+    let matched = cx.read_entity(&window, |window, _| {
+        window.launcher().presentation().rows[0].matched.clone()
+    });
+    assert!(matched.is_empty(), "the match sits in the subtitle");
+}
+
 /// Three root rows — Alpha, Bravo and Charlie, which open the Rust,
 /// JavaScript and TypeScript samples — the pointer outside the window.
 fn three_rows(cx: &mut TestAppContext) -> (gpui::Entity<LauncherWindow>, &mut VisualTestContext) {

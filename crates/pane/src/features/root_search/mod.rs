@@ -97,6 +97,12 @@ impl QueryField {
             // Results computed from the query (the calculator's answer)
             // arrive later, without holding up typing. The announcer waits
             // for them before it says the selected row (#132).
+            //
+            // The sensitivity is pushed as the query changes, so the
+            // keystroke that changed it matches by the choice the
+            // Launcher page holds now.
+            this.launcher
+                .set_search_sensitivity(crate::settings::search_sensitivity_of(cx));
             let computed = this.launcher.set_query(input.read(cx).as_str());
             this.announcer.search_started();
             cx.notify();

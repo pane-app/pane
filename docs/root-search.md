@@ -4,8 +4,10 @@ Added for [#23](https://github.com/pane-app/pane/issues/23) (US09, US14, T01,
 T02, T03, G2, G4). Root search now has a query field: typing narrows root to
 the matching commands, best match first, and Enter invokes the selected one.
 Only command metadata from `pane.json` (and the commands built into Pane) is
-searched; no extension runs until the user invokes one of its commands. This
-is a first matching and ranking, not tuned relevance.
+searched; no extension runs until the user invokes one of its commands.
+Matching is fuzzy, without accents and adjustable in strictness
+([#193](https://github.com/pane-app/pane/issues/193)); the ranking is still
+the simple ladder the later ranking ticket (#197) replaces.
 [#27](https://github.com/pane-app/pane/issues/27) (US06, US12, T01, T03)
 adds [results computed from the query](#results-computed-from-the-query),
 with [the calculator](#the-calculator) as a default extension.
@@ -68,17 +70,55 @@ it still matches.
 
 Implemented in [`crates/pane-core/src/search.rs`](../crates/pane-core/src/search.rs).
 The query and each result's title, subtitle and, for an installed command,
-its package's title are compared after three steps: Unicode NFC
+its package's title are compared after four steps: Unicode NFC
 normalization, so "é" typed as one character matches "e" followed by a
-combining accent; full Unicode lowercasing (`to_lowercase`); and collapsing
-every run of whitespace, including leading and trailing spaces, to a single
-space, in titles as in the query. Lowercasing is not locale-aware case
-folding: language rules such as Turkish dotted and dotless I are out of
-scope. A result matches when **every word** of the query appears in its
-title, subtitle or package title. An installed command without its own
-subtitle shows its package title as the subtitle; one with its own subtitle
-is still found by its package title, below everything else. Matches are
-ranked by how well the title matches:
+combining accent; transliteration to ASCII through the `any_ascii` table
+(Hunter WB, ISC, on the licence allow list in `deny.toml`, no dependencies;
+chosen over `deunicode`, whose current release declares a BSD-3-Clause
+with a fourth clause the allow list does not name), so é is e, đ and Đ are
+d, ß is ss, ligatures split and every script the table covers is
+romanised — "cafe" finds "Café", "tieng viet" finds "Tiếng Việt" and
+"duong" finds "Đường"; full Unicode lowercasing (`to_lowercase`); and
+collapsing every run of whitespace, including leading and trailing
+spaces, to a single space, in titles as in the query. Lowercasing is not
+locale-aware case folding: language rules such as Turkish dotted and
+dotless I are out of scope. The alias the user gave a result is the
+exception: it is compared caselessly as it was recorded, never
+transliterated, so an alias means exactly what it meant
+([#31](aliases.md)).
+
+A result matches when one of its texts passes the scorer and the user's
+Search sensitivity: its title, each alternate title, its subtitle with
+its keywords, the composites "title subtitle" and "subtitle title" (so a
+query can span both: "utub vid" finding a result titled "Search YouTube"
+with the subtitle "Videos"), or, for an installed command, its package's
+title — a command without its own subtitle still shows its package title
+as the subtitle, and one with its own subtitle is still found by its
+package title. The scorer places the query's letters in a text as a
+subsequence with a score: a letter matched at the text's first position
+scores 4, at a word start 3, elsewhere 2; a separator matched to a
+separator scores 1. Each gap between two consecutive matched positions
+costs 1; adjacency is free. A query separator that cannot be placed is
+skipped, never a failure; a letter that cannot be placed means no match.
+The best placement's score counts, and an exact equality of the folded
+query and a folded text is its own outcome, the best one. Separators are
+whitespace and `- . / ( ) [ ]`; capital letters inside a word are not word
+starts; a query starting with "/" treats the first "/" in a title as a
+space; and a query longer than two characters is checked in order first,
+so a text that cannot hold its letters is never scored.
+
+**Search sensitivity** — the Launcher page's choice, recorded in the
+settings record as `searchSensitivity`, default High — decides how good a
+score must be, with n the query's characters that are not separators:
+Low accepts any placement; Medium requires at least 1.5·(n−2)+4; High
+requires more than 2n, a match that starts the text or a word of it. The
+choice applies on the next keystroke: the list the current query has
+already made stays as it is.
+
+A result that matches is ranked by how well the title matches (a ladder
+kept from before fuzzy matching until #197 replaces it), best first —
+with the lower sensitivities filling in the rows that hold only by
+containment:
 
 | Rank | The title… | Query "download" |
 | --- | --- | --- |
@@ -89,8 +129,12 @@ ranked by how well the title matches:
 | 4 | contains each query word | Undownloadable files |
 | 5 | (a word is only in the subtitle) | Clear cache, "Delete downloaded files" |
 | 6 | (a word is only in the package title) | a command of package "Downloads" with a subtitle of its own |
+| 7 | (a match no ladder step found) | "clhis" finding Clipboard History: c and l in "Clip", h, i and s in "History" |
 
-An [indexed result](#results-supplied-ahead-of-the-query) may also have
+The seventh rank holds a match only the scorer found — the query's
+letters scattered through a title, or words the texts merely hold — and
+orders it by the score, best first; the first six keep root search order
+among themselves. An indexed result may also have
 **alternate titles** (an application's untranslated name or its program's
 name, such as `wt` for Windows Terminal), each matched as the title is,
 the best of them giving the rank, and **keywords**, matched as the subtitle
@@ -99,15 +143,21 @@ is (rank 5). The row still shows its real title (#170).
 Results of the same rank keep root search order. A blank query lists every
 root result. The best match is selected after every change of the query;
 searching the same query again changes nothing. Each result's text is
-normalized once, when root search is shown or its results are rebuilt,
+folded once, when root search is shown or its results are rebuilt,
 not on every keystroke.
 
-Not done, deliberately: typo tolerance, abbreviations ("ts" for TypeScript
-sample), accent folding ("e" finding "é"), locale-aware case folding,
-frequency or recency, per-user ranking, keywords or aliases in the manifest
-(aliases are the user's, [#31](aliases.md); keywords and alternate titles
-exist only for indexed results), and ranking results of
-different kinds (apps, files) against each other.
+The letters a title matched are highlighted in the accent on the row
+(the title characters of the best placement, including a placement that
+spans the title and the subtitle); a result found by an alternate title,
+a keyword, its subtitle or its package title alone highlights nothing in
+its title.
+
+Not done, deliberately: typo tolerance (edit distance), locale-aware case
+folding, frequency or recency, per-user ranking, a ranking of results of
+different kinds (apps, files) against each other, and the ranking
+comparator itself (#197 replaces the ladder wholesale). Command keywords
+in the manifest join the matcher in #197; alternate titles and keywords
+exist only for indexed results (aliases are the user's, [#31](aliases.md)).
 
 ## Host behavior
 
@@ -243,7 +293,9 @@ Each row shows what the launcher knows beyond its title and subtitle, from a rea
 
 - the row's kind (Command, Application, File, Folder, Link or Fallback), taken from what activating it does;
 - the alias and the registered global hotkey the user gave its command;
-- the part of its title the query matched, in the accent.
+- the part of its title the query matched — the title characters of the
+  best placement — in the accent; a result found by an alternate title, a
+  keyword, its subtitle or its package title alone highlights nothing.
 
 Rows sit under section labels: "Commands" over a blank query's list (root search's own order, with no claim of recent use), "Results" with their count over a query's, a computed answer under the title of the command that computed it ("Calculator"), the files found for the query with the row searching them all under "Files" (#175), and the fallbacks under "Fallbacks" (below the no-results notice when nothing else matched). The presentation changes nothing about what is listed, its order, or what a row does.
 
@@ -601,7 +653,11 @@ Through the launcher's public interface
 ([`crates/pane-core/tests/search.rs`](../crates/pane-core/tests/search.rs)):
 the empty query, each rank in order, letter case and blank queries, spaces
 inside and around titles not lowering their rank, composed and decomposed
-accents matching each other, every word having to match, ties keeping
+accents matching each other, transliteration (French accents, Vietnamese
+including đ, ß), abbreviations, word starts and gaps, a query spanning the
+title and the subtitle, every letter of the query having to place in
+order, each sensitivity level admitting and rejecting its cases and
+applying on the next keystroke, highlight ranges, ties keeping
 order, the same query searched again keeping the selection, selection and
 invocation among the
 matches, no match with Enter doing nothing versus a match that fails,
@@ -659,10 +715,17 @@ no-results state and Escape clearing the field; focus on the field at start
 and after returning from a command, and typing in a command not searching
 root; input-method composition searching as it composes (driven on the
 field's editing state, with the limits described for
-[forms](forms.md#checks)); the accessibility nodes above; and typing an
+[forms](forms.md#checks)); the matched characters of the best placement
+highlighted on the row, and nothing highlighted for a row found by its
+subtitle; the accessibility nodes above; and typing an
 expression showing the calculator's answer as the query changes, Enter
 writing it to the clipboard, and an incomplete expression showing no
-results. The announcer's rules have unit tests in
+results. The Launcher page's Search sensitivity control is driven through
+the real Settings window in
+[`crates/pane/tests/launcher_settings.rs`](../crates/pane/tests/launcher_settings.rs):
+found through the Settings search, its choice recorded, and applied by the
+launcher on the next keystroke, so the same query finds more results once
+it is taken. The announcer's rules have unit tests in
 `crates/pane/src/features/announcer.rs`, and window tests in
 [`crates/pane/tests/announcements.rs`](../crates/pane/tests/announcements.rs):
 the field keeping the focus while the user arrows and no row claiming it,

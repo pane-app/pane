@@ -64,7 +64,7 @@ pub use feedback::{
 pub use helpers::runner::{MAX_HELPER_INPUT, MAX_HELPER_OUTPUT};
 pub use host_settings::{
     BackgroundEffect, EscapeBehavior, HostSettings, MaterialPreference, NavigationBindings,
-    OpeningMonitor, PinnedLayout, Reopening, ThemePreference, WindowMode,
+    OpeningMonitor, PinnedLayout, Reopening, SearchSensitivity, ThemePreference, WindowMode,
 };
 #[doc(hidden)]
 pub use http::HttpLimits;

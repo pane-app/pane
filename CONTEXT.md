@@ -101,8 +101,12 @@ The launcher's main search and result view before a specific command is opened.
 _Avoid_: Every integration's internal search
 
 **Root result**:
-One entry root search lists for a query and can invoke, such as an extension command; it is matched by its title, subtitle and, for an installed command, its package's title, and ranked by the core.
+One entry root search lists for a query and can invoke, such as an extension command; it is matched — fuzzily, without accents, by the strictness the user chose — by its title, subtitle and, for an installed command, its package's title, and ranked by the core.
 _Avoid_: Item (an item belongs to a command's own list), search hit
+
+**Search sensitivity**:
+How strict root search's matching is, as the Launcher page records it: Low, Medium or High (the default). The choice applies on the next keystroke, the list the current query has already made staying as it is.
+_Avoid_: Filter, search mode
 
 **Result kind**:
 What invoking a root result reaches, shown on its row: Command, Application, File, Folder, Link or Fallback. The core derives it from the result's action, never from its title; Folder is a folder the file index found.
