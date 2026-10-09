@@ -20,9 +20,10 @@ use std::sync::Arc;
 use futures::executor::block_on;
 use pane_core::feedback::WindowRequest;
 use pane_core::file_index::IndexerConfig;
-use pane_core::packages::{CommandMatches, CommandWhen};
 use pane_core::system::System;
-use pane_core::{Launcher, LinkOpener, Manifest, Runtime, Screen, Status};
+use pane_core::{
+    CommandMatches, CommandWhen, Launcher, LinkOpener, Manifest, Runtime, Screen, Status,
+};
 use tempfile::TempDir;
 
 #[path = "support/feedback.rs"]
@@ -312,7 +313,7 @@ impl Fixture {
 fn the_when_and_matches_are_read_from_the_manifest(fixture: &Fixture) {
     let pane = Pane::new();
     let folder = package(fixture.package, &pane.sources.path().join("read"));
-    let manifest = pane_core::Manifest::read(&folder).unwrap();
+    let manifest = Manifest::read(&folder).unwrap();
     let read: Vec<(&str, CommandWhen, CommandMatches)> = manifest
         .commands
         .iter()
