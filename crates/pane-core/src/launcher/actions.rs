@@ -241,7 +241,7 @@ fn result_actions(launcher: &Launcher, state: &State) -> Option<ResultActions> {
     // an alias, and not this build's samples, which take no configuration.
     let command = matches!(
         state.entries.get(index),
-        Some(Entry::Open(_) | Entry::Unavailable(_))
+        Some(Entry::Open(_) | Entry::Unavailable(_) | Entry::Waiting { .. })
     )
     .then(|| {
         shortcuts::catalog(launcher, state)
@@ -360,7 +360,10 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         (_, Some(Entry::File(file))) => acting(&super::own_actions::primary_title(file)),
         (_, Some(Entry::OpenApplication { .. })) => acting("Open application"),
         (_, Some(Entry::OpenTarget { .. })) => acting("Open link"),
-        (_, Some(Entry::Broken(_) | Entry::Unavailable(_))) => unusable("Unavailable"),
+        (
+            _,
+            Some(Entry::Broken(_) | Entry::Unavailable(_) | Entry::Waiting { .. }),
+        ) => unusable("Unavailable"),
         (_, Some(Entry::InstallFromFolder)) => acting("Install from folder"),
         (_, Some(Entry::AskNpm)) => acting("Install from npm"),
         (_, Some(Entry::AskGit)) => acting("Install from Git"),
@@ -456,6 +459,7 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         // Enter does nothing there; the keys it records are the point.
         (Screen::Hotkey { .. }, None) => unusable(""),
         (Screen::PauseDetails { .. }, None) => unusable("Retry"),
+        (Screen::WaitingDetails { .. }, None) => unusable("Fix"),
         (Screen::RuntimeDetails { .. }, None) => unusable("Restart"),
         (Screen::BuildDetails { .. }, None) => unusable("Build again"),
         // The Logs screen's lines are the window's: Enter copies the one

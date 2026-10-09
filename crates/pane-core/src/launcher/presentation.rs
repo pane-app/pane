@@ -235,7 +235,7 @@ pub(super) fn row_presentation(state: &State, index: usize) -> RowPresentation {
     let Some(entry) = state.entries.get(index) else {
         return RowPresentation::default();
     };
-    let command = matches!(entry, Entry::Open(_) | Entry::Unavailable(_));
+    let command = matches!(entry, Entry::Open(_) | Entry::Unavailable(_) | Entry::Waiting { .. });
     RowPresentation {
         kind: kind(entry),
         alias: command
@@ -352,7 +352,7 @@ fn icon(state: &State, row: &Row, entry: &Entry) -> Option<Icon> {
         return Some(looks::shown_icon(state, &icon));
     }
     let id = match entry {
-        Entry::Open(_) | Entry::Unavailable(_) => row.id.as_str(),
+        Entry::Open(_) | Entry::Unavailable(_) | Entry::Waiting { .. } => row.id.as_str(),
         Entry::Send(_) => row
             .id
             .strip_prefix("alias:")
@@ -377,7 +377,7 @@ fn file_icon(entry: &Entry) -> Option<Icon> {
 /// What kind of thing activating `entry` from root search reaches.
 pub(super) fn kind(entry: &Entry) -> Option<RowKind> {
     match entry {
-        Entry::Open(_) | Entry::Unavailable(_) => Some(RowKind::Command),
+        Entry::Open(_) | Entry::Unavailable(_) | Entry::Waiting { .. } => Some(RowKind::Command),
         Entry::Send(Sending {
             via: Via::Fallback, ..
         }) => Some(RowKind::Fallback),

@@ -47,6 +47,7 @@ pub mod system_icons;
 mod threads;
 pub mod tray;
 mod util;
+mod waiting;
 #[cfg(windows)]
 mod windows_shell;
 mod zip;

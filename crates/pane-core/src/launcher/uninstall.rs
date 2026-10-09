@@ -222,6 +222,9 @@ impl Launcher {
         // Their hotkeys are released now, and forgotten once they are
         // uninstalled.
         self.sync_hotkeys(state);
+        // Their dependents now wait for them, rather than fail (see
+        // `waiting`).
+        state.recheck_waiting();
         // Their results kept for root search go, and so does an answer from
         // one being awaited.
         Launcher::forget_indexes(state);
@@ -308,6 +311,8 @@ impl Launcher {
                     }
                 }
                 self.sync_hotkeys(&mut state);
+                // Nothing waits for them any more: they are back.
+                state.recheck_waiting();
                 let message = match titles.as_slice() {
                     [title] => format!(
                         "Could not uninstall {title}: {error}. It is still installed and \

@@ -83,6 +83,7 @@ use crate::runtime::{
     ViewId, WeakRuntime,
 };
 use crate::search::{self, Keys, Query};
+use crate::waiting::{Fix, Waiting};
 
 mod dependents;
 mod developing;
@@ -238,6 +239,13 @@ pub enum Screen {
         identity: PackageIdentity,
         details: Vec<String>,
     },
+    /// Why a command of the installed package with `identity` waits for
+    /// what its package requires, as lines of information under the title,
+    /// with a row that fixes what is missing (see `waiting`).
+    WaitingDetails {
+        identity: PackageIdentity,
+        details: Vec<String>,
+    },
     /// Why the last development build of an installed package failed, as
     /// lines of information under the title (its command and output), with
     /// a row that builds it again.
@@ -331,6 +339,10 @@ pub enum Unavailable {
     OnThisSystem(String),
     /// Its package is paused after an error until the user retries it.
     Paused(String),
+    /// Its package waits for a required dependency that cannot serve it
+    /// (see `waiting`): the command comes back by itself once what it
+    /// needs returns, and nothing of it runs meanwhile.
+    Waiting(String),
 }
 
 impl Row {
@@ -396,7 +408,9 @@ impl Unavailable {
     /// The reason, as shown to the user.
     pub fn reason(&self) -> &str {
         match self {
-            Unavailable::OnThisSystem(reason) | Unavailable::Paused(reason) => reason,
+            Unavailable::OnThisSystem(reason)
+            | Unavailable::Paused(reason)
+            | Unavailable::Waiting(reason) => reason,
         }
     }
 }
@@ -546,6 +560,7 @@ impl LauncherView {
             | Screen::Extensions { details }
             | Screen::Confirm { details, .. }
             | Screen::PauseDetails { details, .. }
+            | Screen::WaitingDetails { details, .. }
             | Screen::NetworkDetails { details, .. }
             | Screen::ProgramDetails { details, .. }
             | Screen::BuildDetails { details, .. }
@@ -851,6 +866,10 @@ struct State {
     /// What this start forgot because its command is a root provider (see
     /// `providers`), for the toast naming it.
     provider_forgotten: providers::Forgotten,
+    /// Which packages wait for a required dependency that cannot serve
+    /// them, each with why (see `waiting`): recomputed whenever the
+    /// packages or their pauses change, under this lock.
+    waiting: Waiting,
 }
 
 /// What is happening to a package, which stops another change to it
@@ -900,9 +919,32 @@ impl State {
             .find(|package| package.identity == *identity)
     }
 
-    /// Whether `package`'s code may run: it is enabled and not paused.
+    /// Whether `package`'s code may run: it is enabled, not paused, and not
+    /// waiting for a required dependency that cannot serve it (see
+    /// `waiting`). Waiting gates what Pane starts for a package — its
+    /// commands' views and runs, scheduled work, services and results — but
+    /// ends no generation: what already runs keeps running, and an open
+    /// screen stays.
     fn runs(&self, package: &InstalledPackage) -> bool {
-        package.enabled && !self.paused.is_paused(&package.identity)
+        package.enabled
+            && !self.paused.is_paused(&package.identity)
+            && self.waiting.of(&package.identity).is_none()
+    }
+
+    /// Computes which packages wait again, after the installed packages or
+    /// their pauses changed (installed, uninstalled, enabled, disabled,
+    /// paused, retried, reloaded or updated): what every path that changes
+    /// them calls under this lock, so `runs`, the rows and the operation
+    /// calls a guest makes all see the same answer. The change hooks of the
+    /// extension data wake the scheduler and the services thread, which
+    /// look again through `runs`.
+    fn recheck_waiting(&mut self) {
+        let waiting = Waiting::of(
+            &self.packages,
+            &|identity| self.paused.is_paused(identity),
+            &|identity| self.title_of(identity),
+        );
+        self.waiting = waiting;
     }
 
     /// The title of the installed package with `identity`, the title its
@@ -1130,6 +1172,13 @@ enum Entry {
     /// Explain why this command (root) or this item's action (command view)
     /// is unavailable on this system, or paused; the extension is not called.
     Unavailable(String),
+    /// Show why this command of the installed package with `identity` waits
+    /// for what its package requires, with the row that fixes it (root;
+    /// see `waiting`). The command's title names the screen.
+    Waiting {
+        identity: PackageIdentity,
+        command: String,
+    },
     /// Nothing in the launcher: the window asks for a folder (root).
     InstallFromFolder,
     /// Ask which npm package to install (root).
@@ -1499,6 +1548,7 @@ impl Launcher {
             confirmation_saves: Arc::default(),
             setup_needed: HashSet::new(),
             provider_forgotten: providers::Forgotten::default(),
+            waiting: Waiting::default(),
         };
         if let (Some(installation), Some(files)) = (&installation, &state.files) {
             files.open_record(&installation.dir);
@@ -1521,6 +1571,8 @@ impl Launcher {
                 }
             }
         }
+        // Who waits, from the packages and the pauses restored above.
+        state.recheck_waiting();
         let sources = install::Sources {
             registry: crate::npm::Registry::npmjs(),
             downloads: installation.as_ref().map(|i| i.dir.join(DOWNLOADS_DIR)),
@@ -1542,15 +1594,23 @@ impl Launcher {
             state: Arc::new(Mutex::new(state)),
         };
         if let (Ok(runtime), Some(installation)) = (&launcher.runtime, &launcher.installation) {
-            // Operation calls see the packages as the launcher has them.
+            // Operation calls see the packages as the launcher has them,
+            // and who waits among them.
             let state = Arc::downgrade(&launcher.state);
             let data = installation.data.clone();
-            runtime.set_directory(Arc::new(move || Installed {
-                packages: state.upgrade().map_or_else(Vec::new, |state| {
-                    let state = state.lock().unwrap_or_else(|p| p.into_inner());
-                    state.packages.clone()
-                }),
-                data: Some(data.clone()),
+            runtime.set_directory(Arc::new(move || {
+                let (packages, waiting) = state.upgrade().map_or_else(
+                    || (Vec::new(), Waiting::default()),
+                    |state| {
+                        let state = state.lock().unwrap_or_else(|p| p.into_inner());
+                        (state.packages.clone(), state.waiting.clone())
+                    },
+                );
+                Installed {
+                    packages,
+                    waiting,
+                    data: Some(data.clone()),
+                }
             }));
         }
         // Scheduled work and continuing services follow the system's clock
@@ -2483,6 +2543,10 @@ impl Launcher {
                     |entry| matches!(entry, Entry::PauseDetails(shown) if *shown == identity),
                 );
             }
+            // Entered from root search: Escape returns to it.
+            Screen::WaitingDetails { .. } => {
+                self.show_root(&mut state, None);
+            }
             Screen::NetworkDetails { identity, .. } => {
                 let identity = identity.clone();
                 self.show_extensions_at(
@@ -2676,6 +2740,10 @@ impl Launcher {
             },
             Entry::Broken(problem) | Entry::Unavailable(problem) => {
                 state.view.status = Status::Error(problem);
+                Pending::Nothing
+            }
+            Entry::Waiting { identity, command } => {
+                self.show_waiting_details(state, &identity, &command);
                 Pending::Nothing
             }
             Entry::Copy(text) => {
@@ -3115,6 +3183,8 @@ impl Launcher {
             // A package that uses the file index starts it (#175), whether
             // or not root search is refreshed after.
             self.sync_file_index(state);
+            // What it requires may have changed who waits (see `waiting`).
+            state.recheck_waiting();
             return false;
         };
         // The replaced copy's code no longer runs: its generation ended
@@ -3139,6 +3209,8 @@ impl Launcher {
         self.sync_hotkeys(state);
         // The new copy may use the file index, or no longer use it.
         self.sync_file_index(state);
+        // The new copy's requirements may change who waits (see `waiting`).
+        state.recheck_waiting();
         // The replaced copy's results are asked for afresh.
         state
             .indexes
@@ -3345,6 +3417,15 @@ impl Launcher {
                 state.screen_epoch = epoch;
             }
             Screen::PauseDetails { .. } => {}
+            // Once the package no longer waits (what it needed came back, or
+            // it is gone or disabled), root search lists its commands as
+            // they are now, keeping the screen epoch as refreshing does.
+            Screen::WaitingDetails { identity, .. } if state.waiting.of(identity).is_none() => {
+                let epoch = state.screen_epoch;
+                self.show_root(state, None);
+                state.screen_epoch = epoch;
+            }
+            Screen::WaitingDetails { .. } => {}
             // What it reached since, or the extension list once it is gone,
             // keeping the screen epoch.
             Screen::NetworkDetails { identity, .. } => {
@@ -3410,8 +3491,11 @@ impl Launcher {
             let keys = Keys::new(&row.title, row.subtitle.as_deref(), package).with_alias(alias);
             // A command's row, available or not, is a registered command a
             // quick slot can hold by its id; Pane's own rows are not.
-            let pin = matches!(entry, Entry::Open(_) | Entry::Unavailable(_))
-                .then(|| PinTarget::Command(row.id.clone()));
+            let pin = matches!(
+                entry,
+                Entry::Open(_) | Entry::Unavailable(_) | Entry::Waiting { .. }
+            )
+            .then(|| PinTarget::Command(row.id.clone()));
             results.push(RootResult {
                 row,
                 entry,
@@ -3421,8 +3505,15 @@ impl Launcher {
             });
         };
         let command = |(command, unavailable): (CommandRegistration, Option<Unavailable>),
-                       no_view: bool| {
+                       no_view: bool,
+                       waiting: Option<&PackageIdentity>| {
             let entry = match &unavailable {
+                // A waiting command's reason comes with the row that fixes
+                // what it waits for (see `waiting`).
+                Some(Unavailable::Waiting(_)) => Entry::Waiting {
+                    identity: waiting.cloned().expect("the package that waits"),
+                    command: command.title.clone(),
+                },
                 Some(reason) => Entry::Unavailable(reason.reason().to_owned()),
                 None => Entry::Open(Opening::of(&command, no_view, LaunchSource::RootSearch)),
             };
@@ -3444,7 +3535,7 @@ impl Launcher {
         // A disabled package contributes nothing to root search.
         let enabled = || state.packages.iter().filter(|package| package.enabled);
         for built in self.commands.iter().cloned() {
-            let (row, entry) = command((built, None), false);
+            let (row, entry) = command((built, None), false, None);
             add(row, entry, None, None);
         }
         for package in enabled() {
@@ -3457,10 +3548,18 @@ impl Launcher {
                 .paused
                 .is_paused(&package.identity)
                 .then(|| Unavailable::Paused(paused_reason(&title)));
+            // A package that waits for a required dependency (see
+            // `waiting`) keeps its commands listed, saying what they need:
+            // they come back by themselves once what it needs returns.
+            let waiting = state
+                .waiting
+                .of(&package.identity)
+                .map(|reason| Unavailable::Waiting(reason.row.clone()));
             // A root provider has no row: its results answer instead.
             for (registration, unavailable) in package.launchable_commands() {
                 let unavailable = paused
                     .clone()
+                    .or(waiting.clone())
                     .or(unavailable.map(Unavailable::OnThisSystem));
                 let no_view = package.mode_of(registration.manifest_id())
                     == crate::packages::CommandMode::NoView;
@@ -3470,7 +3569,11 @@ impl Launcher {
                     unavailable: unavailable.clone(),
                     no_view,
                 };
-                let (row, entry) = command((registration, unavailable), no_view);
+                let (row, entry) = command(
+                    (registration, unavailable),
+                    no_view,
+                    Some(&package.identity),
+                );
                 add(row, entry, Some(&title), Some(target));
             }
         }
@@ -3800,6 +3903,69 @@ impl Launcher {
         };
         state.view =
             LauncherView::new(screen, pausing::details_title(&title)).with_rows(vec![retry]);
+    }
+
+    /// Shows why the command titled `command` of the package with
+    /// `identity` waits for what its package requires, with the row that
+    /// fixes what it waits for (see `waiting`). Once the package no longer
+    /// waits — what it needed came back — root search lists its commands
+    /// again, so the screen is left for it.
+    fn show_waiting_details(&self, state: &mut State, identity: &PackageIdentity, command: &str) {
+        let Some(reason) = state.waiting.of(identity).cloned() else {
+            self.show_root(state, None);
+            return;
+        };
+        let details = vec![
+            format!("{}.", reason.row),
+            "Pane runs none of its code until what it needs returns. It comes back by itself; \
+             waiting stops nothing of it that runs, keeps its settings and saved data, and an \
+             open screen of it stays."
+                .into(),
+        ];
+        // What fixes what it waits for: the root cause the chain names.
+        let (row, entry) = match reason.fix {
+            Fix::Enable(target) => {
+                let title = state.title_of(&target);
+                (
+                    Row {
+                        id: format!("enable:{}", target.key()),
+                        title: format!("Enable {title}"),
+                        subtitle: Some("The extension it needs is disabled".into()),
+                        unavailable: None,
+                    },
+                    Entry::Toggle(target),
+                )
+            }
+            Fix::Retry(target) => {
+                let title = state.title_of(&target);
+                (
+                    Row {
+                        id: format!("retry:{}", target.key()),
+                        title: format!("Retry {title}"),
+                        subtitle: Some("The extension it needs is paused after an error".into()),
+                        unavailable: None,
+                    },
+                    Entry::Retry(target),
+                )
+            }
+            Fix::Manage => (
+                Row {
+                    id: MANAGE_EXTENSIONS.into(),
+                    title: "Open Manage extensions".into(),
+                    subtitle: Some("See what is installed and what it needs".into()),
+                    unavailable: None,
+                },
+                Entry::Manage,
+            ),
+        };
+        state.next_screen();
+        state.entries = vec![entry];
+        let screen = Screen::WaitingDetails {
+            identity: identity.clone(),
+            details,
+        };
+        state.view =
+            LauncherView::new(screen, format!("Why {command} cannot run")).with_rows(vec![row]);
     }
 
     /// Asks whether to clear the cache of the installed package with
