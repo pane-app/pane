@@ -229,8 +229,20 @@ impl Launcher {
         let Some(shown) = state.error_overlay.take() else {
             return Pending::Nothing;
         };
-        match shown.retry {
+        let Shown {
+            return_to,
+            entries,
+            retry,
+            ..
+        } = shown;
+        match retry {
             Retry::Command(opening) => {
+                // The overlay leaves as Back leaves it, before the retry
+                // runs: a crash the retry meets covers what the overlay
+                // covered, not the overlay itself.
+                state.next_screen();
+                state.view = return_to;
+                state.entries = entries;
                 if opening.no_view {
                     Launcher::begin_run(state);
                 } else {

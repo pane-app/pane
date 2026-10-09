@@ -331,12 +331,40 @@ mod tests {
         // whatever this system uses; the generated schema is one text.
         let committed =
             include_str!("../../../guests/js/schema/pane.schema.json").replace("\r\n", "\n");
+        // The schema's content is compared with every object's keys sorted:
+        // the build that runs this test links Pane, whose interface toolkit
+        // turns serde_json's maps into insertion-ordered ones, while the
+        // build that regenerates the schema (`cargo xtask schema`) keeps
+        // them sorted — one content, two orders.
         assert_eq!(
-            committed,
-            manifest_schema(),
+            sorted(&committed),
+            sorted(&manifest_schema()),
             "the committed schema differs from the one Pane's manifest types generate; \
              regenerate it with `cargo xtask schema --write`"
         );
+    }
+
+    /// `text`'s JSON with every object's keys sorted, so the order the
+    /// build's serde_json keeps them in cannot differ.
+    fn sorted(text: &str) -> String {
+        let value = serde_json::from_str::<Value>(text).expect("the schema is JSON");
+        serde_json::to_string_pretty(&sorted_keys(value)).expect("the schema is writable")
+    }
+
+    /// `value` with every object's keys sorted, recursively.
+    fn sorted_keys(value: Value) -> Value {
+        match value {
+            Value::Object(object) => {
+                let mut sorted: Vec<(String, Value)> = object
+                    .into_iter()
+                    .map(|(key, value)| (key, sorted_keys(value)))
+                    .collect();
+                sorted.sort_by(|(one, _), (other, _)| one.cmp(other));
+                sorted.into_iter().collect()
+            }
+            Value::Array(values) => Value::Array(values.into_iter().map(sorted_keys).collect()),
+            value => value,
+        }
     }
 
     /// The schema's platform list is the one Pane reads.

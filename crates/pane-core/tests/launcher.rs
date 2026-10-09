@@ -2,6 +2,7 @@
 //! components built by `cargo xtask guests`.
 
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
 use pane_core::{
@@ -654,6 +655,12 @@ fn a_view_the_guest_refuses_to_open_is_an_error() {
     block_on(launcher.activate_selected());
 
     assert_eq!(launcher.view().screen, Screen::Command);
+    // The guest's refusal is shown once its answer reaches the launcher.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !matches!(launcher.view().status, Status::Error(_)) {
+        assert!(Instant::now() < deadline, "no error was shown for the refusal");
+        std::thread::sleep(Duration::from_millis(20));
+    }
     assert_eq!(
         error(&launcher),
         "The extension reported an error: the guest refused the view"

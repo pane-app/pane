@@ -195,6 +195,9 @@ fn develop(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, sample: 
         cx,
         |view| matches!(&view.status, Status::Result(text) if text.starts_with("Developing")),
     );
+    // Back to root search, whose rows the command joins once developed.
+    cx.simulate_keystrokes("escape");
+    until(window, cx, |view| matches!(view.screen, Screen::Root { .. }));
 }
 
 /// Opens the sample's command from root search with Enter, and waits for
