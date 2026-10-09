@@ -217,10 +217,10 @@ fn a_rust_sample_packs_into_a_tarball_that_pane_installs_from_the_registry() {
     // The tarball is written the same on every system: every file under
     // `package/`, in name order, with npm's fixed time and mode.
     let bytes = fs::read(&tarball).unwrap();
-    let archive = tar::Archive::new(flate2::read::GzDecoder::new(&bytes[..]));
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(&bytes[..]));
     let mut names = Vec::new();
     for entry in archive.entries().unwrap() {
-        let mut entry = entry.unwrap();
+        let entry = entry.unwrap();
         let name = String::from_utf8(entry.path_bytes().to_vec()).unwrap();
         assert_eq!(
             entry.header().entry_type(),

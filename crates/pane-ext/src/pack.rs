@@ -15,7 +15,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use pane_build::{Build, Builder};
+use pane_build::Builder;
 use pane_core::develop::{PaneManifest, Toolchains};
 use pane_core::pack::pack_package;
 

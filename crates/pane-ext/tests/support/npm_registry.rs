@@ -42,6 +42,7 @@ impl Registry {
         let thread = {
             let served = served.clone();
             let stop = stop.clone();
+            let url = url.clone();
             std::thread::spawn(move || {
                 for stream in listener.incoming() {
                     if stop.load(Ordering::SeqCst) {
@@ -138,7 +139,7 @@ fn answer(stream: TcpStream, served: &Mutex<Served>, base: &str) {
     }
     let mut stream = reader.into_inner();
     let body = {
-        let mut served = served.lock().unwrap();
+        let served = served.lock().unwrap();
         respond(&served, base, &path)
     };
     let head = format!(
