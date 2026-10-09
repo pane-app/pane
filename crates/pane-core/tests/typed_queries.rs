@@ -542,6 +542,12 @@ fn a_typed_address_offers_quicklinks_opening_and_saving_it() {
     block_on(launcher.submit_form());
     let after = shown(&launcher);
     if after != Status::Result("Created “Example”".into()) {
+        eprintln!(
+            "DIAG status {:?} screen {:?} toast {:?}",
+            launcher.view().status,
+            launcher.view().screen,
+            launcher.toast()
+        );
         for package in launcher.packages() {
             eprintln!(
                 "DIAG package {:?} log: {:?}",
