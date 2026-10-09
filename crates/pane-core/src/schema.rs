@@ -403,11 +403,14 @@ mod tests {
     /// The string values the enum type `T` lists, as the schema writes them.
     fn enum_values<T: JsonSchema>() -> Vec<String> {
         let schema = SchemaGenerator::default().into_root_schema_for::<T>();
+        // schemars writes a renamed enum as a `oneOf` of string constants,
+        // one per variant; the values are those constants.
         schema
-            .get("enum")
+            .get("oneOf")
             .and_then(Value::as_array)
-            .expect("an enum lists its values")
+            .expect("an enum lists its variants")
             .iter()
+            .filter_map(|variant| variant.get("const"))
             .filter_map(Value::as_str)
             .map(str::to_owned)
             .collect()

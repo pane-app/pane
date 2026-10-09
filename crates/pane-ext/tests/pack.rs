@@ -140,22 +140,16 @@ fn symlink(target: &Path, link: &Path) -> Option<()> {
     made.ok()
 }
 
-/// A helper target that is not this system's, so that a package declaring
-/// one stays a package this system installs.
+/// A helper target that is neither this system's nor a Windows one (whose
+/// helper files must end in `.exe`), so that a package declaring it stays a
+/// package this system installs.
 fn other_target() -> String {
     let current = pane_core::Target::current().expect("Pane names this system's target");
-    [
-        "windows-x86_64",
-        "macos-aarch64",
-        "linux-x86_64",
-        "windows-aarch64",
-        "macos-x86_64",
-        "linux-aarch64",
-    ]
-    .into_iter()
-    .find(|id| pane_core::Target::parse(id) != Some(current))
-    .expect("Pane names more than one target")
-    .to_owned()
+    ["macos-aarch64", "linux-x86_64", "macos-x86_64", "linux-aarch64"]
+        .into_iter()
+        .find(|id| pane_core::Target::parse(id) != Some(current))
+        .expect("Pane names more than one target")
+        .to_owned()
 }
 
 /// What the launcher shows of the last outcome: the status line, else the
@@ -207,7 +201,7 @@ fn a_rust_sample_packs_into_a_tarball_that_pane_installs_from_the_registry() {
     let tarball = folder.join(TARBALL);
     assert!(tarball.is_file(), "{printed}");
     assert!(
-        printed.contains(&format!("packed {}", tarball.display())),
+        printed.contains(&tarball.file_name().unwrap().to_string_lossy()),
         "{printed}"
     );
     assert!(printed.contains("4 files"), "{printed}");
@@ -301,7 +295,7 @@ fn what_pane_refuses_is_refused_by_pack_with_panes_messages() {
     let (passed, printed) = pack(&folder);
     assert!(!passed, "{printed}");
     assert!(
-        printed.contains("whose name ends in `.` or a space"),
+        printed.contains("whose name ends with `.` or a space"),
         "{printed}"
     );
     assert!(

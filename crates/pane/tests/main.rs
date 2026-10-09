@@ -19,6 +19,7 @@ mod confirmations;
 mod crash_record;
 mod default_icons;
 mod develop;
+mod error_overlay;
 mod extension_log;
 mod feedback;
 mod file_actions;

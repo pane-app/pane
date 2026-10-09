@@ -33,6 +33,7 @@ mod develop;
 mod develop_builds;
 mod disable;
 mod disable_dependents;
+mod error_overlay;
 mod extension_log;
 mod extension_pages;
 mod feedback;
