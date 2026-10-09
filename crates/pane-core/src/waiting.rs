@@ -14,15 +14,15 @@
 //! one member missing waits as a whole.
 //!
 //! What a package's commands do while it waits is the launcher's, told by
-//! [`State::recheck_waiting`](crate::launcher) recomputing this whenever
-//! the packages or their pauses change: a waiting command's view, run
-//! entry point, actions, arguments and setup screen do not run, its
-//! schedule's ticks are skipped and not replayed, its service does not
-//! cycle, and root search does not ask for its root or indexed results.
-//! Waiting ends no generation and stops no instance: a call or cycle
-//! already running finishes, and an open screen stays. It never counts
-//! towards pausing. A package waiting as a whole answers its published
-//! operations `unavailable`, naming what it waits for.
+//! `State::recheck_waiting` recomputing this whenever the packages or their
+//! pauses change: a waiting command's view, run entry point, actions,
+//! arguments and setup screen do not run, its schedule's ticks are skipped
+//! and not replayed, its service does not cycle, and root search does not
+//! ask for its root or indexed results. Waiting ends no generation and
+//! stops no instance: a call or cycle already running finishes, and an
+//! open screen stays. It never counts towards pausing. A package waiting
+//! as a whole answers its published operations `unavailable`, naming what
+//! it waits for.
 //!
 //! When the requirement is met again — the dependency is enabled, retried,
 //! installed, or its package is reloaded or updated — the waiting map is
