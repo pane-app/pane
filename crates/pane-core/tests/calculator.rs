@@ -11,6 +11,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
+use pane_core::clipboard::{Clock, ManualClock};
 use pane_core::{ComputedAnswer, Launcher, Limits, PackageIdentity, Runtime, Section, Status};
 use tempfile::TempDir;
 
@@ -330,6 +331,7 @@ fn an_answer_is_presented_with_its_query_under_its_commands_title() {
             query: "1 + 1".into(),
             answer: "2".into(),
             command: "Calculator".into(),
+            swatch: None,
         })
     );
     assert_eq!(presentation.rows[1].answer, None);
@@ -597,4 +599,339 @@ fn manifest_computing(title: &str, command: &str) -> String {
   "commands": [{{ "id": "command", "title": "{command}", "component": "command.wasm",
     "rootResults": true }}] }}"#
     )
+}
+
+/// Each form a query names a colour in answers as its uppercase hex
+/// (#196): the four hex lengths, the comma-separated legacy functions and
+/// `oklch`, an alpha making the hex eight digits.
+#[test]
+fn each_colour_form_answers_as_its_hex() {
+    let dirs = Dirs::new();
+    let launcher = dirs.launcher(dirs.runtime());
+    let colours = [
+        ("#3aa", "#33AAAA"),
+        ("#3aab", "#33AAAABB"),
+        ("#33aaaa", "#33AAAA"),
+        ("#33AAAABB", "#33AAAABB"),
+        ("rgb(51, 170, 170)", "#33AAAA"),
+        ("rgba(51, 170, 170, 0.5)", "#33AAAA80"),
+        ("hsl(120, 50%, 50%)", "#40BF40"),
+        ("hsla(120, 50%, 50%, 1)", "#40BF40"),
+        ("oklch(0.7 0.1 180)", "#4BB3A1"),
+    ];
+    for (query, hex) in colours {
+        search(&launcher, query);
+        assert_eq!(titles(&launcher), [hex], "{query}");
+        assert_eq!(selected_title(&launcher).as_deref(), Some(hex), "{query}");
+    }
+}
+
+/// A colour answer is presented as the card with a swatch, under
+/// "Color" instead of the command's title, and Enter copies the hex
+/// (#196).
+#[test]
+fn a_colour_answer_is_presented_with_its_swatch_under_color() {
+    let dirs = Dirs::new();
+    let launcher = dirs.launcher(dirs.runtime());
+    search(&launcher, "#3aa");
+    let (view, presentation) = launcher.presented_view();
+    assert_eq!(titles(&launcher), ["#33AAAA"]);
+    assert_eq!(
+        presentation.rows[0].answer,
+        Some(ComputedAnswer {
+            query: "#3aa".into(),
+            answer: "#33AAAA".into(),
+            command: "Calculator".into(),
+            swatch: Some("#33AAAA".into()),
+        })
+    );
+    assert_eq!(
+        presentation.sections,
+        [Section {
+            label: "Color".into(),
+            note: None,
+            first: 0,
+        }]
+    );
+    assert_eq!(launcher.selected_copy().as_deref(), Some("#33AAAA"));
+    // The arithmetic keeps its own answer, under the command's title.
+    search(&launcher, "1 + 1");
+    let presentation = launcher.presentation();
+    assert_eq!(presentation.rows[0].answer.as_ref().unwrap().swatch, None);
+    assert_eq!(presentation.sections[0].label, "Calculator");
+    assert!(view.rows[0].id.ends_with(":answer"));
+}
+
+/// A colour name is not a colour: "red" is a word, so nothing is
+/// answered, as Raycast leaves names out on purpose (#196).
+#[test]
+fn colour_names_are_not_answered() {
+    let dirs = Dirs::new();
+    let launcher = dirs.launcher(dirs.runtime());
+    for query in ["red", "cornflower", "sea green", "#3a", "#33aaaab", "rgb(51, 170)", "1 + 2"] {
+        search(&launcher, query);
+        assert_eq!(titles(&launcher), Vec::<String>::new(), "{query}");
+    }
+}
+
+/// A colour answer's Actions panel offers it as hex, RGB, HSL and OKLCH
+/// after Enter's copy and Paste, each copying its own text (#196).
+#[test]
+fn a_colour_answer_offers_each_way_to_copy_it() {
+    let dirs = Dirs::new();
+    let system = Arc::new(RecordingSystem::default());
+    let launcher = dirs.launcher(dirs.runtime()).with_system(system.clone());
+    search(&launcher, "#3aa");
+    let actions: Vec<String> = launcher
+        .item_actions()
+        .expect("the answer has actions")
+        .actions
+        .into_iter()
+        .map(|action| action.title)
+        .collect();
+    assert_eq!(
+        actions,
+        [
+            "Copy answer",
+            "Paste answer",
+            "Copy as Hex",
+            "Copy as RGB",
+            "Copy as HSL",
+            "Copy as OKLCH",
+        ]
+    );
+    let copies = [
+        "#33AAAA",
+        "rgb(51, 170, 170)",
+        "hsl(180, 54%, 43%)",
+        "oklch(0.675 0.102 195)",
+    ];
+    for (index, copied) in copies.iter().enumerate() {
+        block_on(launcher.run_selected_action(index + 2));
+        assert_eq!(
+            system.take(),
+            [Done::Copied {
+                clip: pane_core::system::Clip::Text((*copied).into()),
+                concealed: false,
+            }],
+            "copy {index}"
+        );
+        assert_eq!(
+            launcher.view().status,
+            Status::Idle,
+            "a copy says what it did in a HUD, not the status line"
+        );
+    }
+}
+
+/// Each percentage phrase answers as its value, within the calculator's
+/// number rules: the phrase's words are its own, and a query over 256
+/// characters is not one (#196).
+#[test]
+fn each_percentage_phrase_answers_as_its_value() {
+    let dirs = Dirs::new();
+    let launcher = dirs.launcher(dirs.runtime());
+    let phrases = [
+        ("20% of 50", "10"),
+        ("12.5% of 200", "25"),
+        ("15% off 80", "68"),
+        ("15% on 80", "92"),
+        ("50 + 20%", "60"),
+        ("50 - 20%", "40"),
+        ("50 − 20%", "40"),
+        ("10 as a % of 50", "20"),
+        ("20%  of   50", "10"),
+    ];
+    for (query, answer) in phrases {
+        search(&launcher, query);
+        assert_eq!(titles(&launcher), [answer], "{query}");
+    }
+    // Not phrases: an operator the phrases do not apply, a word they do
+    // not use, a sign, a zero divided by.
+    for query in ["20% of 50 + 1", "20% from 50", "-20% of 50", "1 as a % of 0"] {
+        search(&launcher, query);
+        assert_eq!(titles(&launcher), Vec::<String>::new(), "{query}");
+    }
+    // Nor a query over the calculator's 256-character bound.
+    let long = format!("{}% of 50", "1".repeat(300));
+    search(&launcher, &long);
+    assert_eq!(titles(&launcher), Vec::<String>::new());
+}
+
+/// Each date and time word answers at once with the local date or time
+/// the launcher's clock says, under "Date & Time", and Enter copies it
+/// (#196). The clock stands still, so the answers are its own; the words
+/// are the calculator's, lowercase.
+#[test]
+fn each_date_and_time_word_answers_at_the_clocks_time() {
+    let dirs = Dirs::new();
+    // 2025-06-01T14:23:45Z, a Sunday, by a clock that says UTC.
+    let clock = ManualClock::at(1_748_787_825_000);
+    let launcher = dirs.launcher(dirs.runtime()).with_clock(clock.clone());
+    let answers = [
+        ("now", "Jun 1, 2025, 14:23"),
+        ("time", "14:23"),
+        ("today", "Jun 1, 2025"),
+        ("date", "Jun 1, 2025"),
+        ("tomorrow", "Jun 2, 2025"),
+        ("yesterday", "May 31, 2025"),
+    ];
+    for (query, answer) in answers {
+        search(&launcher, query);
+        assert_eq!(titles(&launcher), [answer], "{query}");
+        assert_eq!(selected_title(&launcher).as_deref(), Some(answer), "{query}");
+        assert_eq!(launcher.selected_copy().as_deref(), Some(answer), "{query}");
+    }
+    search(&launcher, "now");
+    let presentation = launcher.presentation();
+    assert_eq!(
+        presentation.rows[0].answer,
+        Some(ComputedAnswer {
+            query: "now".into(),
+            answer: "Jun 1, 2025, 14:23".into(),
+            command: "Calculator".into(),
+            swatch: None,
+        })
+    );
+    assert_eq!(
+        presentation.sections,
+        [Section {
+            label: "Date & Time".into(),
+            note: None,
+            first: 0,
+        }]
+    );
+    // Words with case or more to them are not the words.
+    for query in ["Now", "today!", "noon"] {
+        search(&launcher, query);
+        assert_eq!(titles(&launcher), Vec::<String>::new(), "{query:?}");
+    }
+    // The clock has moved: the words answer its new time.
+    clock.advance(Duration::from_millis(60_000));
+    search(&launcher, "time");
+    assert_eq!(titles(&launcher), ["14:24"]);
+}
+
+/// A date or time word's Actions panel offers ISO 8601 and a Unix
+/// timestamp after Enter's copy and Paste, each copying its own text
+/// (#196): the moment for "now" and "time", the day's local midnight for
+/// a date word.
+#[test]
+fn a_date_or_time_word_offers_iso_8601_and_a_unix_timestamp() {
+    let dirs = Dirs::new();
+    let system = Arc::new(RecordingSystem::default());
+    let clock = ManualClock::at(1_748_787_825_000);
+    let launcher = dirs
+        .launcher(dirs.runtime())
+        .with_system(system.clone())
+        .with_clock(clock);
+    let expected = |query: &str, iso: &str, unix: &str| {
+        search(&launcher, query);
+        let actions: Vec<String> = launcher
+            .item_actions()
+            .expect("the answer has actions")
+            .actions
+            .into_iter()
+            .map(|action| action.title)
+            .collect();
+        assert_eq!(
+            actions,
+            ["Copy answer", "Paste answer", "Copy ISO 8601", "Copy Unix timestamp"]
+        );
+        block_on(launcher.run_selected_action(2));
+        assert_eq!(
+            system.take(),
+            [Done::Copied {
+                clip: pane_core::system::Clip::Text(iso.into()),
+                concealed: false,
+            }],
+            "{query}: ISO 8601"
+        );
+        block_on(launcher.run_selected_action(3));
+        assert_eq!(
+            system.take(),
+            [Done::Copied {
+                clip: pane_core::system::Clip::Text(unix.into()),
+                concealed: false,
+            }],
+            "{query}: the Unix timestamp"
+        );
+    };
+    expected("now", "2025-06-01T14:23:45Z", "1748787825");
+    expected("time", "2025-06-01T14:23:45Z", "1748787825");
+    expected("today", "2025-06-01", "1748736000");
+    expected("tomorrow", "2025-06-02", "1748822400");
+    expected("yesterday", "2025-05-31", "1748649600");
+}
+
+/// The local date and time follow the clock's offset from UTC, not the
+/// guest's reading of UTC alone (#196): a moment in the evening UTC is
+/// the same day five and a half hours east of it, and a moment after
+/// midnight UTC is still yesterday eight hours west of it.
+#[test]
+fn date_and_time_words_answer_in_the_clocks_zone() {
+    // 2025-06-01T14:23:45Z, five and a half hours east of UTC.
+    let east = Dirs::new();
+    let clock = ZonedClock {
+        at: 1_748_787_825_000,
+        offset: 19_800_000,
+    };
+    let launcher = east.launcher(east.runtime()).with_clock(Arc::new(clock));
+    search(&launcher, "now");
+    assert_eq!(titles(&launcher), ["Jun 1, 2025, 19:53"]);
+    assert_eq!(launcher.selected_copy().as_deref(), Some("Jun 1, 2025, 19:53"));
+    search(&launcher, "today");
+    assert_eq!(titles(&launcher), ["Jun 1, 2025"]);
+
+    // 2025-06-01T01:00:00Z, eight hours west of UTC: locally 5 pm on May 31.
+    let west = Dirs::new();
+    let system = Arc::new(RecordingSystem::default());
+    let clock = ZonedClock {
+        at: 1_748_739_600_000,
+        offset: -28_800_000,
+    };
+    let launcher = west
+        .launcher(west.runtime())
+        .with_system(system.clone())
+        .with_clock(Arc::new(clock));
+    for (query, answer) in [
+        ("now", "May 31, 2025, 17:00"),
+        ("today", "May 31, 2025"),
+        ("tomorrow", "Jun 1, 2025"),
+        ("yesterday", "May 30, 2025"),
+    ] {
+        search(&launcher, query);
+        assert_eq!(titles(&launcher), [answer], "{query}");
+    }
+    // ISO 8601 names the zone: the moment's own, not UTC's.
+    search(&launcher, "now");
+    for (index, copied) in [(2, "2025-05-31T17:00:00-08:00"), (3, "1748739600")] {
+        block_on(launcher.run_selected_action(index));
+        assert_eq!(
+            system.take(),
+            [Done::Copied {
+                clip: pane_core::system::Clip::Text(copied.into()),
+                concealed: false,
+            }],
+            "copy {index}"
+        );
+    }
+}
+
+/// A clock at one fixed moment in one fixed zone, for the date and time
+/// words' tests.
+struct ZonedClock {
+    at: u64,
+    /// Offset from UTC, in milliseconds.
+    offset: i64,
+}
+
+impl Clock for ZonedClock {
+    fn now(&self) -> u64 {
+        self.at
+    }
+
+    fn local_offset(&self, _at: u64) -> i64 {
+        self.offset
+    }
 }

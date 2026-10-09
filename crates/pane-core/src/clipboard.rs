@@ -517,6 +517,15 @@ pub trait Clock: Send + Sync + 'static {
     /// Now, in milliseconds since the Unix epoch.
     fn now(&self) -> u64;
 
+    /// How far the local time at `at` (milliseconds since the Unix epoch)
+    /// is from UTC, in milliseconds: the system's, by its time zone
+    /// settings, so a guest answering a query about the local date or
+    /// time can (#196). A clock that says nothing answers 0.
+    fn local_offset(&self, at: u64) -> i64 {
+        let _ = at;
+        0
+    }
+
     /// Has `changed` called whenever this clock is set other than by time
     /// passing (the system's never is), so that expiry and due scheduled
     /// work are looked at again.
@@ -535,6 +544,10 @@ impl Clock for SystemClock {
             .map_or(0, |since| {
                 u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
             })
+    }
+
+    fn local_offset(&self, at: u64) -> i64 {
+        crate::launcher::clipboard_view::local_offset_ms(at)
     }
 }
 

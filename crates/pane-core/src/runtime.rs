@@ -284,6 +284,45 @@ fn stoppable() -> (StopSearch, SearchStopped) {
 pub(crate) struct RootResult {
     pub listing: ResultListing,
     pub action: RootAction,
+    /// The answer's card, when the result is one: its own section, its
+    /// swatch and further ways to copy it (see [`AnswerDetail`]).
+    pub answer: Option<AnswerDetail>,
+}
+
+/// What a root result that is an answer's card says beyond its title and
+/// action: the section it sits under, the colour of its swatch and
+/// further ways to copy it, as the command answered (the calculator's
+/// colour and date answers, #196).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AnswerDetail {
+    /// The section the answer is listed under, in place of the command's
+    /// title ("Color", "Date & Time").
+    pub section: String,
+    /// The colour of the card's swatch, as `#RRGGBB` or `#RRGGBBAA`;
+    /// `None` when the answer is not a colour.
+    pub swatch: Option<String>,
+    /// Further ways to copy the answer, each an entry of the Actions
+    /// panel, in order.
+    pub copies: Vec<AnswerCopy>,
+}
+
+/// One further way to copy a computed answer, as the Actions panel offers
+/// it: what the copy is called and the text it copies.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AnswerCopy {
+    pub title: String,
+    pub text: String,
+}
+
+/// When a query is asked about: the moment the user stopped at it, in
+/// milliseconds since the Unix epoch, and how far the local time there
+/// is from UTC, by the clock root search's own dates are shown by (a
+/// test's, in a test).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct WallTime {
+    pub milliseconds: u64,
+    /// In milliseconds.
+    pub offset: i64,
 }
 
 /// What invoking a computed root result does; Pane performs it.
@@ -822,6 +861,7 @@ enum Request {
     RootResults {
         component: PathBuf,
         query: String,
+        at: WallTime,
         data: Option<PackageData>,
         reply: oneshot::Sender<Result<Vec<RootResult>, CallError>>,
     },
@@ -1413,12 +1453,13 @@ impl Runtime {
     }
 
     /// Asks the command in `component`, which computes root results, for
-    /// its results for `query`; the command reads and saves `data`.
-    /// Starts its instance if it has none.
+    /// its results for `query` at `at` (see [`WallTime`]); the command
+    /// reads and saves `data`. Starts its instance if it has none.
     pub(crate) async fn root_results_with(
         &self,
         component: &Path,
         query: &str,
+        at: WallTime,
         data: Option<PackageData>,
     ) -> Result<Vec<RootResult>, CallError> {
         let (reply, response) = oneshot::channel();
@@ -1426,6 +1467,7 @@ impl Runtime {
             Request::RootResults {
                 component: component.to_path_buf(),
                 query: query.to_owned(),
+                at,
                 data,
                 reply,
             },
@@ -3096,10 +3138,11 @@ impl Host {
             Request::RootResults {
                 component,
                 query,
+                at,
                 data,
                 mut reply,
             } => Box::pin(async move {
-                let result = self.root_results(&component, query, data, &mut reply).await;
+                let result = self.root_results(&component, query, at, data, &mut reply).await;
                 let _ = reply.send(result);
             }),
 
@@ -3717,6 +3760,7 @@ impl Host {
         &self,
         path: &Path,
         query: String,
+        at: WallTime,
         data: Option<PackageData>,
         reply: &mut oneshot::Sender<Result<Vec<RootResult>, CallError>>,
     ) -> Result<Vec<RootResult>, CallError> {
@@ -3740,6 +3784,11 @@ impl Host {
             .ok_or_else(|| {
                 CallError::Interface(format!("it does not export {ROOT_RESULTS_INTERFACE}"))
             })?;
+        // The moment the query was asked about, as the interface carries it.
+        let at = root_results::WallTime {
+            milliseconds: at.milliseconds,
+            offset: at.offset,
+        };
         let result = self
             .run_guest_until(
                 path,
@@ -3747,7 +3796,9 @@ impl Host {
                 async |instance| {
                     instance
                         .store
-                        .run_concurrent(async |store| provider.call_results_for(store, query).await)
+                        .run_concurrent(async |store| {
+                            provider.call_results_for(store, query, at).await
+                        })
                         .await
                 },
                 reply.closed(),
@@ -3767,6 +3818,18 @@ impl Host {
                     root_results::RootAction::OpenUrl(url) => RootAction::OpenUrl(url),
                     root_results::RootAction::OpenFile(path) => RootAction::OpenFile(path),
                 },
+                answer: result.answer.map(|answer| AnswerDetail {
+                    section: answer.section,
+                    swatch: answer.swatch,
+                    copies: answer
+                        .copies
+                        .into_iter()
+                        .map(|copy| AnswerCopy {
+                            title: copy.title,
+                            text: copy.text,
+                        })
+                        .collect(),
+                }),
             })
             .collect())
     }

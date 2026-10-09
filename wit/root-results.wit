@@ -47,19 +47,61 @@ interface root-results {
     title: string,
     subtitle: option<string>,
     action: root-action,
+    /// What the answer's card shows beyond its title and action, when the
+    /// result is one (see `answer-detail`); `None` for a plain result.
+    answer: option<answer-detail>,
   }
 
-  /// The results for `query`, the text typed into root search, never empty
-  /// or blank, best first. A query the command has no answer for, such as
-  /// ordinary words or an incomplete or invalid expression, has no results:
-  /// that is not an error. An error is the extension failing; Pane shows it
-  /// as a result explaining the failure. Pane asks again on every change of
-  /// the query. Once the query changes or root search is left, Pane
-  /// cancels a call still pending: one not started is not started, and one
-  /// waiting inside the extension (on an async import) is dropped with the
-  /// extension's instance, whose memory is lost; the next call starts a
-  /// fresh one.
-  results-for: async func(query: string) -> result<list<root-result>, string>;
+  /// What a root result that is an answer's card says beyond its title and
+  /// its action: the section it sits under, the colour of its swatch, and
+  /// further ways to copy it. The calculator's colour and date answers
+  /// answer with one; an answer without it sits under its command's title
+  /// and offers only the copy its own action is.
+  record answer-detail {
+    /// The title of the section the answer is listed under, in place of
+    /// the command's ("Color", "Date & Time").
+    section: string,
+    /// The colour of the card's swatch, as `#RRGGBB` or `#RRGGBBAA`;
+    /// none when the answer is not a colour.
+    swatch: option<string>,
+    /// Further ways to copy the answer, each an entry of the Actions
+    /// panel, in order; Enter's copy stays the result's own action.
+    copies: list<answer-copy>,
+  }
+
+  /// One further way to copy a computed answer, as the Actions panel
+  /// offers it: what the copy is called and the text it copies. Pane puts
+  /// the text on the clipboard and says it copied.
+  record answer-copy {
+    /// The copy's title, as the panel shows it ("Copy as RGB").
+    title: string,
+    /// The text it copies.
+    text: string,
+  }
+
+  /// When Pane asks for results: the moment the user stopped at the query
+  /// and how far the local time there is from UTC, by the clock root
+  /// search's own dates are shown by. A command that answers about the
+  /// current date or time ("now", "today") computes its answer from it;
+  /// anything else can ignore it.
+  record wall-time {
+    /// The moment, in milliseconds since the Unix epoch.
+    milliseconds: u64,
+    /// How far local time at `milliseconds` is from UTC, in milliseconds.
+    offset: i64,
+  }
+
+  /// The results for `query`, the text typed into root search, asked
+  /// about at `at`, never empty or blank, best first. A query the command
+  /// has no answer for, such as ordinary words or an incomplete or
+  /// invalid expression, has no results: that is not an error. An error is
+  /// the extension failing; Pane shows it as a result explaining the
+  /// failure. Pane asks again on every change of the query. Once the query
+  /// changes or root search is left, Pane cancels a call still pending:
+  /// one not started is not started, and one waiting inside the extension
+  /// (on an async import) is dropped with the extension's instance, whose
+  /// memory is lost; the next call starts a fresh one.
+  results-for: async func(query: string, at: wall-time) -> result<list<root-result>, string>;
 }
 
 /// The root results export alone: a command component that computes root

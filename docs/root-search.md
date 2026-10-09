@@ -245,18 +245,20 @@ Each row shows what the launcher knows beyond its title and subtitle, from a rea
 - the alias and the registered global hotkey the user gave its command;
 - the part of its title the query matched, in the accent.
 
-Rows sit under section labels: "Commands" over a blank query's list (root search's own order, with no claim of recent use), "Results" with their count over a query's, a computed answer under the title of the command that computed it ("Calculator"), the files found for the query with the row searching them all under "Files" (#175), and the fallbacks under "Fallbacks" (below the no-results notice when nothing else matched). The presentation changes nothing about what is listed, its order, or what a row does.
+Rows sit under section labels: "Commands" over a blank query's list (root search's own order, with no claim of recent use), "Results" with their count over a query's, a computed answer under the title of the command that computed it ("Calculator") or, since #196, under the section the answer's own detail names (the calculator's colours under "Color", its dates and times under "Date & Time"), the files found for the query with the row searching them all under "Files" (#175), and the fallbacks under "Fallbacks" (below the no-results notice when nothing else matched). The presentation changes nothing about what is listed, its order, or what a row does.
 
 **A computed answer** (#96) — a computed result whose action copies
 text, such as the calculator's — is drawn as the reference calculator
 board's card: what was typed, an arrow, and the answer, in Geist Mono at
 the board's 34px, or at 24 or 18 when the longer of the two would not fit
 its column (past that it wraps). The card shows only what the launcher
-holds (`ComputedAnswer`: the query, the text Enter copies, the command):
-the board's units, "Also" conversions and recent calculations have no
-provider and are not drawn. It is a row like any
-other — selected first, moved to by the keys or the pointer, its primary
-action "Copy answer", named "6*7 = 42" for assistive technology — and its
+holds (`ComputedAnswer`: the query, the text Enter copies, the command
+and, since #196, the colour of its swatch when the answer is one — see
+[the calculator](#the-calculator)): the board's units, "Also" conversions
+and recent calculations have no provider and are not drawn. It is a row
+like any other — selected first, moved to by the keys or the pointer, its
+primary action "Copy answer", named "6*7 = 42" for assistive technology
+(the swatch is a colour well named by the colour's value) — and its
 accent ring shows while it is selected.
 
 **The no-results notice** (#96) heads the list while nothing but
@@ -296,11 +298,16 @@ comes from the extension, through the same guest boundary as its command:
   in Rust, JavaScript and TypeScript).
 - For every change of a query that is not blank, `Launcher::set_query`
   ranks the metadata at once and returns a future that asks each enabled
-  command with `rootResults` for `results-for(query)`, one after another in
-  install order, and lists each command's results as soon as it answers, so
-  a slow command does not hide the answers of those asked before it. The
-  window awaits it off its thread and redraws, so typing never waits for an
-  extension. Answers for an older query or an earlier search of the same
+  command with `rootResults` for `results-for(query, at)`, one after another
+  in install order, and lists each command's results as soon as it answers,
+  so a slow command does not hide the answers of those asked before it.
+  `at` is when the query is asked about — the moment the user stopped at
+  it, by the clock root search's own dates are shown by, with the local
+  time's offset from UTC — so a command can answer about the current date
+  or time (the calculator's "now" and "today", #196); the whole search
+  shares one moment, whatever a slow command delays. The window awaits it
+  off its thread and redraws, so typing never waits for an extension.
+  Answers for an older query or an earlier search of the same
   query (or after leaving root search) are discarded; until a command
   answers, the new query lists none of its results, never an older
   query's. Since [#29](https://github.com/pane-app/pane/issues/29) the
@@ -442,21 +449,53 @@ arbitrary code evaluation):
   whole-number exponent; `^` binds tightest and right to left, then `*` and
   `/`, then `+` and `-`, left to right; a leading `-` or `+` applies to what
   follows, so `-2^2` is -4, and any number of signs may lead;
+- the percentage phrases (#196), within those number rules: `p% of x`,
+  `p% off x` (x reduced by p%), `p% on x` (x increased), `x + p%`, `x − p%`
+  and `x as a % of y`, their words the language's own, lowercase;
 - parentheses, nested at most 64 deep, and spaces anywhere;
 - at most 256 characters in all.
 
-A query has an answer only if it applies at least one operator: "42" or
-"(5)" is not a calculation. Everything else has no answer and lists nothing:
-incomplete input ("2 +", "(1 + 2"), invalid input ("2 + * 3", "2 3",
-letters, functions, constants, units, percentages, deeper nesting or a
-longer query, so that no query can exhaust the guest's stack), and undefined or
-unrepresentable values ("1 / 0", "2 ^ 0.5", overflow). Arithmetic is IEEE
+A query has an answer only if it applies at least one operator or is a
+percentage phrase: "42" or "(5)" is not a calculation. Everything else has
+no answer and lists nothing: incomplete input ("2 +", "(1 + 2"), invalid
+input ("2 + * 3", "2 3", letters, functions, constants, units, other
+percentages, deeper nesting or a longer query, so that no query can
+exhaust the guest's stack), and undefined or unrepresentable values
+("1 / 0", "2 ^ 0.5", "1 as a % of 0", overflow). Arithmetic is IEEE
 double precision; the answer shows at most 15 significant digits and at most
 10 decimals, without trailing zeros (0.1 + 0.2 is 0.3, 1 / 3 is
 0.3333333333), and scientific notation from 10^15 up or below 10^-6
 (`1.00000000000001e15`, `1e-7`). The row shows the answer as its title and
 "<query> = <answer> · Enter copies the answer" as its subtitle; root search
 draws it as a computed answer's card (above).
+
+Since #196 the calculator answers three more kinds of query, each through
+its answer detail ([`wit/root-results.wit`](../wit/root-results.wit)),
+which names the section the answer sits under, a swatch and further ways
+to copy it:
+
+- **Colours**: `#RGB`, `#RGBA`, `#RRGGBB`, `#RRGGBBAA` (either case, each
+  short digit standing for two of it), `rgb()`, `rgba()`, `hsl()`, `hsla()`
+  (comma-separated, as CSS writes them) and `oklch()` (space-separated, its
+  lightness 0-1, with an optional `/ a` alpha). An argument out of range is
+  clipped as CSS clips it; a colour name is not a colour, as Raycast leaves
+  names out on purpose ("red" is also a word). The answer is the colour as
+  uppercase hex — `#RRGGBBAA` while it is not fully opaque — drawn with a
+  swatch under the section "Color", and Enter copies it. The Actions panel
+  offers copying it as hex, RGB, HSL and OKLCH.
+- **Date and time words**: "now", "time", "today", "date", "tomorrow" and
+  "yesterday" answer at once with the local date or time in the layout
+  Pane's own dates use ("Jun 1, 2025, 14:23"), under "Date & Time"; Enter
+  copies it, and the Actions panel offers ISO 8601 (a date for a date word,
+  the whole moment otherwise, in the local zone) and a Unix timestamp (a
+  date word's at its local midnight). The moment is Pane's: the query is
+  asked about at the moment the user stopped at it, by the clock root
+  search's own dates are shown by, with the local time's offset from UTC,
+  so a test can hold the clock still. Date arithmetic and time zones stay
+  out: a query about another moment than now is not answered.
+
+Units, currencies and conversion between them stay out (CONTEXT: Pane has
+no unit conversion).
 
 ## Activation
 
@@ -632,6 +671,16 @@ nothing more and keeping other results, and enabling it again; a failing
 and a crashing command (the `faulty` fixture) explained as a row while other
 results stay, and a fresh instance afterwards; and a package declaring
 `rootResults` whose component lacks the interface refused at install. The
+colours, dates and percentages (#196): each colour form answering as its
+uppercase hex; the colour card presented with its swatch under "Color"
+while the arithmetic keeps the command's title; colour names and
+wrong-shaped queries listing nothing; the Actions panel offering hex, RGB,
+HSL and OKLCH, each copying its own text; each percentage phrase answered
+within the number rules and the length bound, with a query that is not a
+phrase listing nothing; each date and time word answered at the clock's
+moment under "Date & Time" with Enter copying it, in the clock's zone —
+a manual clock in the tests, east and west of UTC, across a day boundary —
+and the panel's ISO 8601 and Unix timestamp copying their own text. The
 same computed result ("reverse <text>") in Rust, JavaScript and TypeScript
 ([`samples.rs`](../crates/pane-core/tests/samples.rs)).
 
@@ -662,7 +711,9 @@ field's editing state, with the limits described for
 [forms](forms.md#checks)); the accessibility nodes above; and typing an
 expression showing the calculator's answer as the query changes, Enter
 writing it to the clipboard, and an incomplete expression showing no
-results. The announcer's rules have unit tests in
+results; since #196, a colour answer showing as the card with a swatch
+under "Color", the swatch a colour well named by the colour's value, and
+Enter copying the hex. The announcer's rules have unit tests in
 `crates/pane/src/features/announcer.rs`, and window tests in
 [`crates/pane/tests/announcements.rs`](../crates/pane/tests/announcements.rs):
 the field keeping the focus while the user arrows and no row claiming it,

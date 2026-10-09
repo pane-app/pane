@@ -1588,6 +1588,50 @@ fn a_computed_answer_shows_as_the_card_under_its_commands_title(cx: &mut TestApp
     until_announced(cx, "6*7*2 = 84, 1 of 1");
 }
 
+/// A colour answer shows as the card with a swatch (#196): under
+/// "Color" instead of the calculator's title, the swatch under the
+/// answer's value, taller than the plain card by its height and the gap
+/// above it, named for assistive technology by the colour's value, and
+/// Enter copies the hex.
+#[gpui::test]
+fn a_colour_answer_shows_as_the_card_with_a_swatch(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let launcher = with_calculator(cx, data.path());
+    let (window, cx) = open_launcher(cx, launcher);
+
+    cx.simulate_input("#3aa");
+    wait_for_rows(&window, cx, &["#33AAAA"]);
+    let label = cx
+        .debug_bounds("section-Color")
+        .expect("the card is labelled with its own section");
+    let card = cx.debug_bounds("row-#33AAAA").expect("the answer is drawn");
+    assert!(cx.debug_bounds("answer-value").is_some(), "as the card");
+    let swatch = cx
+        .debug_bounds("answer-swatch")
+        .expect("the colour is drawn as a swatch");
+    // The swatch sits under the answer's value, within the card.
+    assert!(swatch.top() >= card.top() + px(20. + 44.));
+    assert!(swatch.bottom() <= card.bottom());
+    assert_eq!(card.size.height, px(20. + 44. + 4. + 28. + 16.));
+    assert_eq!(card.top(), label.bottom() + px(4.));
+    // The swatch is a colour well named by the colour's value.
+    node(&accessible_nodes(cx), "ColorWell", "#33AAAA");
+    assert!(query_has_focus(&window, cx));
+    typing_settles(cx);
+    until_announced(cx, "#3aa = #33AAAA, 1 of 1");
+
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert_eq!(
+        view.status,
+        Status::Result("Copied #33AAAA to the clipboard".into())
+    );
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("#33AAAA".into())
+    );
+}
+
 /// A system with two applications, recording which one Pane opens.
 #[derive(Default)]
 struct TwoApplications {

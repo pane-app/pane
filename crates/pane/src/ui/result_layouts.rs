@@ -1,10 +1,10 @@
 //! Root search's result layouts beyond the row (#96), as the reference's
 //! empty and calculator boards draw them: the no-results notice heading
-//! the fallbacks, and the computed answer's card. The boards' other
-//! variants — a calculation-history row, an extension suggestion, a
-//! section label whose note ends with keys — are not drawn: no command
-//! supplies a calculation history, unit conversions or extension
-//! suggestions (#100).
+//! the fallbacks, and the computed answer's card, with its swatch where
+//! the answer is a colour (#196). The boards' other variants — a
+//! calculation-history row, an extension suggestion, a section label
+//! whose note ends with keys — are not drawn: no command supplies a
+//! calculation history, unit conversions or extension suggestions (#100).
 //!
 //! Presentation only, in the result row's shape: each function returns a
 //! plain [`Div`] that the caller gives its identity, accessibility and
@@ -12,7 +12,7 @@
 //! search's presentation holds (`crate::features::root_search::layouts`).
 
 use gpui::prelude::*;
-use gpui::{BoxShadow, Div, Hsla, Pixels, SharedString, div, px};
+use gpui::{BoxShadow, Div, Hsla, Pixels, Role, SharedString, div, px};
 
 use crate::ui::icon::{self, Glyph};
 use crate::ui::shell::LAUNCHER_CLIENT;
@@ -86,13 +86,16 @@ pub(crate) struct AnswerSide {
 }
 
 /// What the answer card shows: what was typed and its answer, the
-/// calculator board's "Also" chips where it authors them, and whether the
-/// card is the selected result.
+/// calculator board's "Also" chips where it authors them, the swatch of
+/// a colour answer, and whether the card is the selected result.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AnswerCard {
     pub(crate) source: AnswerSide,
     pub(crate) answer: AnswerSide,
     pub(crate) also: Vec<SharedString>,
+    /// The answer's swatch, when it is a colour, drawn under the answer's
+    /// value and named by it for assistive technology.
+    pub(crate) swatch: Option<Hsla>,
     pub(crate) selected: bool,
 }
 
@@ -102,9 +105,12 @@ pub(crate) struct AnswerCard {
 /// values sit in two equal columns either side of a 40px disc holding the
 /// arrow, 16 apart, each centered over its caption 4 below it, in Geist
 /// Mono 500 with −.03em of tracking — what was typed in #D9DADD, the
-/// answer in white (see [`answer_value_type`] for their size). Where the
-/// board authors chips, a line 14 below the values holds "Also" and the
-/// chips, centered, under a white 7% rule with 14 above them.
+/// answer in white (see [`answer_value_type`] for their size). A colour
+/// answer's swatch is under the answer's value, the caption's place, 28
+/// high and rounded as a chip, named for assistive technology by the
+/// value. Where the board authors chips, a line 14 below the values holds
+/// "Also" and the chips, centered, under a white 7% rule with 14 above
+/// them.
 pub(crate) fn answer_card(card: &AnswerCard, theme: &Theme) -> Div {
     let geometry = &theme.geometry.results;
     let types = &theme.typography.results;
@@ -144,7 +150,17 @@ pub(crate) fn answer_card(card: &AnswerCard, theme: &Theme) -> Div {
         .gap(geometry.card_column_gap)
         .child(side(&card.source, colors.card_source, "answer-source"))
         .child(arrow(theme))
-        .child(side(&card.answer, colors.card_answer, "answer-value"));
+        .child(
+            // The answer's swatch, when it is a colour: under the answer's
+            // value, where a board authors a caption, named by it for
+            // assistive technology.
+            side(&card.answer, colors.card_answer, "answer-value").when_some(
+                card.swatch,
+                |column, colour| {
+                    column.child(swatch(colour, &card.answer.value, theme))
+                },
+            ),
+        );
     let also = (!card.also.is_empty()).then(|| {
         div()
             .w_full()
@@ -200,6 +216,23 @@ pub(crate) fn answer_value_type(card: &AnswerCard, theme: &Theme) -> TypeLine {
         .into_iter()
         .find(|step| longest * f32::from(step.size) * advance <= column)
         .unwrap_or(types.answer_value_small)
+}
+
+/// A colour answer's swatch: the answer column's width, `card_swatch`
+/// high, rounded as a chip with its ring, filled with `colour` — a colour
+/// well, named by the answer's `label` (the colour's value).
+fn swatch(colour: Hsla, label: &SharedString, theme: &Theme) -> Div {
+    let geometry = &theme.geometry.results;
+    let colors = &theme.results;
+    div()
+        .debug_selector(|| "answer-swatch".into())
+        .role(Role::ColorWell)
+        .aria_label(label.clone())
+        .w_full()
+        .h(geometry.card_swatch)
+        .rounded(geometry.chip_radius)
+        .bg(colour)
+        .shadow(vec![ring(colors.chip_edge)])
 }
 
 /// The card's arrow: the 18px glyph in its 40px disc (white 7%).
@@ -280,6 +313,7 @@ mod tests {
             source: side(source),
             answer: side(answer),
             also: Vec::new(),
+            swatch: None,
             selected: true,
         }
     }

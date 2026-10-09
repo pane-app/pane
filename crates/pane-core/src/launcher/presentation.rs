@@ -98,7 +98,8 @@ pub struct RowPresentation {
 /// A computed answer: a root result a command computed from the query
 /// whose action copies its text, such as the calculator's answer to
 /// "6*7". Only what the launcher holds: the query it answers, the text
-/// activating it copies and the command that computed it — no units,
+/// activating it copies, the command that computed it and, when the
+/// answer is a colour, the colour of its swatch (#196) — no units,
 /// conversions or history, which no command supplies. The row keeps its
 /// id and its copy action.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -109,6 +110,10 @@ pub struct ComputedAnswer {
     pub answer: String,
     /// The title of the command that computed it ("Calculator").
     pub command: String,
+    /// The colour of the answer's swatch, as `#RRGGBB` or `#RRGGBBAA`,
+    /// when the command answered one (the calculator's colours, #196);
+    /// `None` for an answer without a swatch.
+    pub swatch: Option<String>,
 }
 
 /// A section label over a run of rows: the rows from `first` up to the
@@ -302,6 +307,8 @@ fn sections(state: &State) -> Vec<Section> {
     // Only the computed answers name a command: a row is one only when
     // activating it copies what a command computed. The files found for
     // the query (with the row searching them all) are labelled "Files".
+    // An answer whose command answered a section of its own sits under
+    // that ("Color", "Date & Time", #196) instead of the command's title.
     let answers: Vec<Option<&str>> = state.view.rows[..shown]
         .iter()
         .zip(&state.entries)
@@ -310,7 +317,10 @@ fn sections(state: &State) -> Vec<Section> {
                 .computed
                 .iter()
                 .find(|computed| computed.row.id == row.id)
-                .map(|computed| computed.command_title.as_str()),
+                .map(|computed| match computed.answer.as_ref() {
+                    Some(answer) => answer.section.as_str(),
+                    None => computed.command_title.as_str(),
+                }),
             Entry::File(_) => Some("Files"),
             Entry::Open(opening) if opening.initial_search.is_some() => Some("Files"),
             _ => None,
@@ -333,6 +343,10 @@ fn answer(state: &State, row: &Row, entry: &Entry, query: &str) -> Option<Comput
         query: query.trim().to_owned(),
         answer: text.clone(),
         command: computed.command_title.clone(),
+        swatch: computed
+            .answer
+            .as_ref()
+            .and_then(|answer| answer.swatch.clone()),
     })
 }
 
@@ -444,11 +458,13 @@ pub fn root_sections(query: &str, rows: usize, fallbacks: usize) -> Vec<Section>
 /// Root search's sections for `query` (see [`root_sections`]), with each
 /// run of computed answers among the results under a label of its own —
 /// the title of the command that computed them, as the reference's
-/// calculator board labels its card "Calculator" — and the results
-/// before or after such a run under "Results" with their own count.
+/// calculator board labels its card "Calculator", or the section the
+/// answer's own detail names in its place ("Color", "Date & Time",
+/// #196) — and the results before or after such a run under "Results"
+/// with their own count.
 ///
-/// `answers` holds, for each listed row, the title of the command that
-/// computed it when it is a computed answer; `fallbacks` is the index of
+/// `answers` holds, for each listed row, the section label it sits under
+/// when it is a computed answer; `fallbacks` is the index of
 /// the first fallback (the number of rows when none is listed).
 pub fn answer_sections(query: &str, answers: &[Option<&str>], fallbacks: usize) -> Vec<Section> {
     let rows = answers.len();

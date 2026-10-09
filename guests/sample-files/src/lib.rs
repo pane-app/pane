@@ -15,7 +15,7 @@
 
 use pane_extension::alloc::{format, string::String, vec::Vec};
 use pane_extension::file_index::{self, FileEntry, IndexState, SearchOptions};
-use pane_extension::root::{RootAction, RootResult};
+use pane_extension::root::{RootAction, RootResult, WallTime};
 use pane_extension::search::SearchResult;
 use pane_extension::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
 
@@ -84,7 +84,7 @@ impl pane_extension::search::Guest for Sample {
 }
 
 impl pane_extension::root::Guest for Sample {
-    async fn results_for(query: String) -> Result<Vec<RootResult>, String> {
+    async fn results_for(query: String, _at: WallTime) -> Result<Vec<RootResult>, String> {
         Ok(found(&query)?
             .into_iter()
             .map(|entry| RootResult {
@@ -92,6 +92,7 @@ impl pane_extension::root::Guest for Sample {
                 id: entry.path,
                 subtitle: None,
                 action: RootAction::OpenFile(entry.id),
+                answer: None,
             })
             .collect())
     }

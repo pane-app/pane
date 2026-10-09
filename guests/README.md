@@ -768,17 +768,27 @@ query has changed. A query the command has no answer for returns no results
 extension failing, and Pane lists a result explaining it. A disabled package
 is not asked. See [root search](../docs/root-search.md#results-computed-from-the-query).
 
+Pane asks with the query and when it was typed, as `at`
+(`WallTime` in Rust, `WallTime` in TypeScript: milliseconds since the Unix
+epoch and the local time's offset from UTC, by the clock root search's own
+dates are shown by), so a command can answer about the current date or time
+without reading a clock of its own. A result that is an answer's card can
+say more than its title and action in `answer` (`AnswerDetail`): the section
+it sits under in place of the command's title ("Color", "Date & Time"), a
+swatch, and further ways to copy it the Actions panel offers. The
+calculator's colours and dates use all of it.
+
 Rust (`pane_extension::root`; the component then exports both interfaces):
 
 ```rust
 use pane_extension::alloc::{string::String, vec, vec::Vec};
-use pane_extension::root::{RootAction, RootResult};
+use pane_extension::root::{RootAction, RootResult, WallTime};
 
 pane_extension::export!(Sample);
 pane_extension::root::export!(Sample);
 
 impl pane_extension::root::Guest for Sample {
-    async fn results_for(query: String) -> Result<Vec<RootResult>, String> {
+    async fn results_for(query: String, at: WallTime) -> Result<Vec<RootResult>, String> {
         let Some(text) = query.strip_prefix("reverse ") else {
             return Ok(Vec::new());
         };
@@ -788,6 +798,7 @@ impl pane_extension::root::Guest for Sample {
             title: reversed.clone(),
             subtitle: None,
             action: RootAction::Copy(reversed),
+            answer: None,
         }])
     }
 }
@@ -852,9 +863,9 @@ opens a document or a folder, and shows a program in the file manager
 
 ```rust
 use pane_extension::file_index::{self, SearchOptions};
-use pane_extension::root::{RootAction, RootResult};
+use pane_extension::root::{RootAction, RootResult, WallTime};
 
-async fn results_for(query: String) -> Result<Vec<RootResult>, String> {
+async fn results_for(query: String, at: WallTime) -> Result<Vec<RootResult>, String> {
     Ok(file_index::search(&query, SearchOptions::first(5))?
         .into_iter()
         .map(|entry| RootResult {
@@ -862,6 +873,7 @@ async fn results_for(query: String) -> Result<Vec<RootResult>, String> {
             title: entry.name,
             subtitle: None,
             action: RootAction::OpenFile(entry.id),
+            answer: None,
         })
         .collect())
 }
@@ -935,9 +947,9 @@ Rust (`pane_extension::files`):
 
 ```rust
 use pane_extension::files::{self, FolderState};
-use pane_extension::root::{RootAction, RootResult};
+use pane_extension::root::{RootAction, RootResult, WallTime};
 
-async fn results_for(query: String) -> Result<Vec<RootResult>, String> {
+async fn results_for(query: String, at: WallTime) -> Result<Vec<RootResult>, String> {
     let FolderState::Ready(listing) = files::list_folder()? else {
         return Ok(Vec::new());
     };
@@ -950,6 +962,7 @@ async fn results_for(query: String) -> Result<Vec<RootResult>, String> {
             title: file.relative,
             subtitle: None,
             action: RootAction::OpenFile(file.id),
+            answer: None,
         })
         .collect())
 }

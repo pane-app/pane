@@ -6,6 +6,9 @@
 //!   exponent, with the usual precedence (`^` first and right to left, then
 //!   `*` and `/`, then `+` and `-`, each left to right);
 //! - a leading `-` or `+` (`-3`, `2 * -(1 + 1)`), and parentheses;
+//! - the percentage phrases: `p% of x`, `p% off x` (x reduced by p%),
+//!   `p% on x` (x increased), `x + p%`, `x − p%` and `x as a % of y`,
+//!   their numbers as the language writes them (#196);
 //! - spaces anywhere between those.
 //!
 //! A query longer than 256 characters, or nesting parentheses more than 64
@@ -13,10 +16,10 @@
 //! calculator's stack.
 //!
 //! An expression has an answer only if it applies at least one of the binary
-//! operators: a number alone, like `42` or `(5)`, is not a calculation.
-//! Nothing else is understood: no functions, constants, variables, units or
-//! percentages. Arithmetic is IEEE double precision; answers are shown with
-//! at most 15 significant digits.
+//! operators or is a percentage phrase: a number alone, like `42` or `(5)`,
+//! is not a calculation. Nothing else is understood: no functions, constants,
+//! variables, units or other percentages. Arithmetic is IEEE double precision;
+//! answers are shown with at most 15 significant digits.
 
 use pane_extension::alloc::{format, string::String, vec::Vec};
 
@@ -54,7 +57,7 @@ enum Failure {
 }
 
 /// The longest query evaluated, in characters.
-const MAX_LENGTH: usize = 256;
+pub(super) const MAX_LENGTH: usize = 256;
 
 /// The deepest nesting of parentheses evaluated.
 const MAX_DEPTH: u32 = 64;
@@ -122,7 +125,7 @@ fn tokens(query: &str) -> Option<Vec<Token>> {
 }
 
 /// The value of a number's digits with at most one decimal point.
-fn number(text: &str) -> Option<f64> {
+pub(super) fn number(text: &str) -> Option<f64> {
     let (whole, fraction) = match text.split_once('.') {
         Some((whole, fraction)) => (whole, fraction),
         None => (text, ""),
@@ -308,4 +311,88 @@ fn trimmed(number: &str) -> &str {
     } else {
         number
     }
+}
+
+/// One part of a percentage phrase.
+enum Part {
+    Number(f64),
+    Percent,
+    Plus,
+    Minus,
+    /// One of the phrase's words: `of`, `off`, `on`, `as` or `a`.
+    Word(&'static str),
+}
+
+/// The percentage phrase `query` is (see the module documentation), as its
+/// value: `p% of x` is p hundredths of x, `p% off x` x reduced by p%,
+/// `p% on x` x increased by it, `x + p%` and `x − p%` the same, and `x as
+/// a % of y` x as a percentage of y. The phrases' numbers are the
+/// language's own and their words its own, lowercase, and no other
+/// operator applies within one; a query that is not a phrase answers
+/// `None` (the arithmetic may still answer it). The value is finite or
+/// `None`.
+pub(super) fn percentage(query: &str) -> Option<f64> {
+    let mut parts = Vec::new();
+    let mut chars = query.char_indices().peekable();
+    while let Some((start, c)) = chars.next() {
+        match c {
+            c if c.is_whitespace() => continue,
+            '%' => parts.push(Part::Percent),
+            '+' => parts.push(Part::Plus),
+            '-' | '\u{2212}' => parts.push(Part::Minus),
+            '0'..='9' | '.' => {
+                let mut end = start + c.len_utf8();
+                while let Some(&(at, next)) = chars.peek() {
+                    if !(next.is_ascii_digit() || next == '.') {
+                        break;
+                    }
+                    end = at + next.len_utf8();
+                    chars.next();
+                }
+                parts.push(Part::Number(number(&query[start..end])?));
+            }
+            c if c.is_ascii_lowercase() => {
+                let mut end = start + c.len_utf8();
+                while let Some(&(at, next)) = chars.peek() {
+                    if !next.is_ascii_lowercase() {
+                        break;
+                    }
+                    end = at + next.len_utf8();
+                    chars.next();
+                }
+                // A word the phrases do not use is not one, as a letter is
+                // not part of the arithmetic either.
+                let word = ["of", "off", "on", "as", "a"]
+                    .into_iter()
+                    .find(|word| query[start..end] == *word)?;
+                parts.push(Part::Word(word));
+            }
+            _ => return None,
+        }
+    }
+    // The part of `x` that `p` percent is: the phrases' shared factor.
+    let part = |x: f64, p: f64| p * x / 100.0;
+    let value = match &parts[..] {
+        // p% of x, p% off x, p% on x.
+        [Part::Number(p), Part::Percent, Part::Word(word), Part::Number(x)] => match *word {
+            "of" => part(*x, *p),
+            "off" => *x - part(*x, *p),
+            "on" => *x + part(*x, *p),
+            _ => return None,
+        },
+        // x + p%, x − p%.
+        [Part::Number(x), Part::Plus, Part::Number(p), Part::Percent] => *x + part(*x, *p),
+        [Part::Number(x), Part::Minus, Part::Number(p), Part::Percent] => *x - part(*x, *p),
+        // x as a % of y.
+        [
+            Part::Number(x),
+            Part::Word("as"),
+            Part::Word("a"),
+            Part::Percent,
+            Part::Word("of"),
+            Part::Number(y),
+        ] => *x * 100.0 / *y,
+        _ => return None,
+    };
+    value.is_finite().then_some(value)
 }

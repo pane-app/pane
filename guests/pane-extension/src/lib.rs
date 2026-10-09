@@ -282,6 +282,12 @@ pub mod publish {
 /// pane_extension::root::export!(Calculator);
 /// ```
 ///
+/// Pane asks with the query and when it was typed ([`root::WallTime`]), so a
+/// command can answer about the current date or time. A result that is an
+/// answer card can say more than its title and action in
+/// [`root::AnswerDetail`]: the section it sits under, a colour swatch, and
+/// further ways to copy it.
+///
 /// A command whose only job is this, as the calculator's, also says
 /// `"mode": "provider"` (a root provider): it has no row of its own and
 /// Pane never opens or runs it, so its [`Command`](crate::Command) keeps
@@ -294,7 +300,9 @@ pub mod root {
         default_bindings_module: "pane_extension::root",
     });
 
-    pub use exports::pane::extension::root_results::{Guest, RootAction, RootResult};
+    pub use exports::pane::extension::root_results::{
+        AnswerCopy, AnswerDetail, Guest, RootAction, RootResult, WallTime,
+    };
 }
 
 /// The applications installed on the system (`pane:extension/applications`),
