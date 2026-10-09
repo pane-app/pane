@@ -97,12 +97,9 @@ fn opened_samples(cx: &mut TestAppContext) -> (Entity<LauncherWindow>, &mut Visu
     open_launcher(cx, Launcher::new(Runtime::start(), commands))
 }
 
-/// The launcher with the calculator package installed, as the window tests
-/// install it, back at root search.
-fn opened_calculator(
-    cx: &mut TestAppContext,
-    data: &std::path::Path,
-) -> (Entity<LauncherWindow>, &mut VisualTestContext) {
+/// The calculator package installed, as the window tests install it,
+/// back at root search.
+fn with_calculator(cx: &mut TestAppContext, data: &std::path::Path) -> Launcher {
     let folder =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/calculator");
     let launcher = Launcher::with_packages(Runtime::start(), vec![], data.join("extensions"));
@@ -115,8 +112,7 @@ fn opened_calculator(
         "{:?}",
         launcher.view().status
     );
-    launcher.back();
-    open_launcher(cx, launcher)
+    launcher.back()
 }
 
 fn open_launcher(
@@ -213,7 +209,7 @@ fn hint_shown(cx: &mut VisualTestContext, number: usize) -> bool {
         .as_object()
         .unwrap()
         .values()
-        .any(|node| node["aria"]["role"] == "Image" && node["aria"]["label"] == name)
+        .any(|node| node["aria"]["role"] == "Image" && node["aria"]["label"] == name.as_str())
 }
 
 /// Holds Ctrl alone until the hints have shown, delivering the frames
@@ -320,9 +316,7 @@ fn an_altgr_character_reaches_the_field_and_matches_no_chord(cx: &mut TestAppCon
     let view = settle(&window, cx);
     assert_eq!(
         view.screen,
-        Screen::Root {
-            query: "@".into()
-        },
+        Screen::Root { query: "@".into() },
         "no row was picked"
     );
     assert!(
@@ -339,7 +333,7 @@ fn an_altgr_character_reaches_the_field_and_matches_no_chord(cx: &mut TestAppCon
 #[gpui::test]
 fn ctrl_c_copies_a_selection_and_without_one_runs_the_rows_copy_action(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
-    let (window, cx) = opened_calculator(cx, data.path());
+    let (window, cx) = open_launcher(cx, with_calculator(cx, data.path()));
 
     cx.simulate_input("6*7");
     wait_for_rows(&window, cx, &["42"]);
@@ -473,7 +467,13 @@ fn a_key_a_scroll_or_losing_focus_hides_the_number_hints(cx: &mut TestAppContext
         .debug_bounds("row-Rust sample")
         .expect("the row is drawn")
         .center();
-    cx.simulate_scroll(row, gpui::point(gpui::px(0.), gpui::px(-40.)));
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: row,
+        delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(-40.))),
+        modifiers: Modifiers::none(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    cx.run_until_parked();
     wait::frame(cx, Duration::from_millis(0));
     wait::settle_frames(cx);
     assert!(!hint_shown(cx, 1), "a scroll hides them");
