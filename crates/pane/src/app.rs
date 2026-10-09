@@ -18,8 +18,8 @@ use std::path::Path;
 
 use gpui::{
     App, ClipboardItem, Context, Div, EntityInputHandler, FocusHandle, Focusable, Hsla,
-    KeyDownEvent, MouseMoveEvent, ObjectFit, PathPromptOptions, Pixels, Point, Role, SharedString,
-    Size, Stateful, Window, div, img, prelude::*, px, relative,
+    KeyDownEvent, MouseMoveEvent, ObjectFit, PathPromptOptions, Pixels, Point, Role,
+    ScrollWheelEvent, SharedString, Size, Stateful, Window, div, img, prelude::*, px, relative,
 };
 use pane_core::changes::Changes;
 use pane_core::feedback::WindowRequest;
@@ -2034,6 +2034,11 @@ impl Render for LauncherWindow {
             .on_action(cx.listener(Self::focus_previous))
             .on_modifiers_changed(cx.listener(Self::modifiers_changed))
             .on_key_down(cx.listener(Self::key_down))
+            // A scroll while the number hints show ends their look: the
+            // user is moving through the list, not choosing a number.
+            .on_scroll_wheel(cx.listener(|this, _: &ScrollWheelEvent, _, cx| {
+                this.end_numbers(cx);
+            }))
             // Bubbling after the rows' own handlers, so a row compares the
             // event against the position before it.
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, _| {

@@ -1,10 +1,11 @@
 # Maintained GPUI CE dependency
 
 Pane uses [hoangvu12/gpui-ce](https://github.com/hoangvu12/gpui-ce), branch
-`pane/source-over-alpha`, to carry the Windows alpha correction and macOS startup ABI repair required by
+`pane/source-over-alpha`, to carry the Windows alpha correction, macOS startup ABI repair and
+editable-text empty-copy propagation required by
 [#63](https://github.com/pane-app/pane/issues/63), under
 [#61](https://github.com/pane-app/pane/issues/61). Cargo uses an immutable commit,
-not the branch tip: `5d27954ce5305447bb97d1d7b89b0db9b7a2c59c`. All four declarations in `crates/pane/Cargo.toml` (including
+not the branch tip: `70ed267181dc56e4739d5782eb56fae51a2afd29`. All four declarations in `crates/pane/Cargo.toml` (including
 the test dependency) move together. The fork's internal path dependencies resolve
 to that same Git source, preserving one GPUI type identity across renderer,
 platforms and editable controls. `Cargo.lock` records the full closure, and
@@ -160,3 +161,29 @@ the old `()` inside a macOS callback, which aborted every debug build the first
 time it opened a pop-up: Pane's HUD, which the macOS smoke reached after opening a
 found file (release run 37730452204). Release builds skip the check and were not
 affected.
+
+## Empty editable-text copy propagates
+
+Fork `70ed267181dc56e4739d5782eb56fae51a2afd29` (a fast-forward on
+`pane/source-over-alpha` above `5d27954ce5305447bb97d1d7b89b0db9b7a2c59c`)
+makes `EditableTextState::copy` in `gpui_ce_elements` call `cx.propagate()`
+when the field's selection is empty, instead of ending the action having
+done nothing. A copy with a selection still writes it and stops the action
+as before; `cut` and every other editable-text action are unchanged, and no
+keybinding changes.
+
+Pane's launcher rule ([#251](https://github.com/pane-app/pane/issues/251))
+needs that fall-through: the keymap dispatches a focused field's own copy
+first, so Ctrl+C with a non-empty selection copies the text, and with none
+the key must reach the launcher's chord handling, which runs the selected
+row's action bound to the same chord. Pane's `crates/pane/tests/chords.rs`
+covers both halves through the window. The fork's in-file unit test
+(`test_copy_without_selection_copies_nothing`) pins that an empty selection
+writes nothing to the clipboard:
+
+```sh
+cargo +1.98.1 test --locked -p gpui_ce_elements --lib test_copy_without
+```
+
+No platform, renderer or layout code changes; the same 19 lockfile source
+entries move to the new commit.

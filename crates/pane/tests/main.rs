@@ -13,6 +13,7 @@ mod aliases;
 mod announcements;
 mod application_icons;
 mod arguments;
+mod chords;
 mod command_search;
 mod compact_pins;
 mod confirmations;

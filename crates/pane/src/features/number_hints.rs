@@ -3,6 +3,11 @@
 //! launcher's items with — the pinned home's first slots, then the first
 //! rows — and the chord picks one.
 //!
+//! The hints are a look at the chords, and it ends the moment the user
+//! does anything else: any other modifier, any key pressed, a scroll, a
+//! key release, the window losing focus or being hidden
+//! ([`LauncherWindow::end_numbers`]).
+//!
 //! What each digit picks is [`numbered`]'s, from the launcher's view and
 //! the home's numbered slots; the `impl LauncherWindow` block below holds
 //! the hold, the hints' slide and the pick the launcher window wires to
@@ -141,10 +146,13 @@ impl LauncherWindow {
         }
     }
 
-    /// A key pressed while Ctrl is held, before the hints show: the user is
-    /// pressing a chord, not looking for the numbers.
-    pub(crate) fn chord_pressed(&mut self) {
-        self.motion.numbers.pending = false;
+    /// A key pressed in the launcher, before any chord sees it: the look
+    /// at the numbers is over — the hints slide away if they had shown,
+    /// and a hold not yet long enough shows nothing — because the user is
+    /// pressing a chord (or typing), not reading the numbers. The chord's
+    /// own digits pick through [`Self::pick_number`], which ends them too.
+    pub(crate) fn chord_pressed(&mut self, cx: &mut Context<Self>) {
+        self.end_numbers(cx);
     }
 
     /// What Ctrl and `digit` pick as the launcher is drawn: what

@@ -428,17 +428,18 @@ impl LauncherWindow {
     /// it: Ctrl and a digit, while the search field, a slot or a command's
     /// list has focus (an overlay's own field never does), picks what that
     /// number names (see [`crate::features::number_hints::numbered`]) — once per press: the
-    /// system's repeats of a held chord run nothing more.
+    /// system's repeats of a held chord run nothing more. Every key press
+    /// ends the look at the numbers first ([`Self::chord_pressed`]): a
+    /// chord or a typed key, whatever it does, is not a look at the
+    /// numbers.
     fn quick_slot_chord(
         &mut self,
         event: &KeyDownEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.chord_pressed(cx);
         let Some(digit) = chord_digit(&event.keystroke) else {
-            // Another key while Ctrl is held: a chord, not a look at the
-            // numbers.
-            self.chord_pressed();
             return;
         };
         let field = self.query_field().focus_handle(cx).is_focused(window);

@@ -268,6 +268,26 @@ fn the_answer_offers_copy_then_paste_which_copies_where_it_cannot_paste() {
         .collect();
     assert_eq!(actions, ["Copy answer", "Paste answer"]);
     assert_eq!(launcher.selected_action().label, "Copy answer");
+    // Copy answer also runs with the platform's copy chord (#251): a
+    // focused field's own copy of its selection takes the chord first, so
+    // it reaches the answer only with nothing selected in the field.
+    let copy_chord = if cfg!(target_os = "macos") {
+        "cmd-c"
+    } else {
+        "ctrl-c"
+    };
+    let shortcuts: Vec<Option<String>> = launcher
+        .item_actions()
+        .expect("the answer has actions")
+        .actions
+        .into_iter()
+        .map(|action| action.shortcut.map(|binding| binding.id()))
+        .collect();
+    assert_eq!(
+        shortcuts,
+        [Some(copy_chord.to_owned()), None],
+        "the copy chord is bound, paste stays a chord-less action"
+    );
 
     // Not available here yet: it copies the answer and says so.
     block_on(launcher.run_selected_action(1));
