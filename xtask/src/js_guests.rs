@@ -363,7 +363,7 @@ fn inputs_digest(root: &Path, paths: &[PathBuf]) -> String {
     // `adapt.js` otherwise than Linux does, and so digest them differently.
     let mut files: Vec<(Vec<String>, PathBuf)> = paths
         .iter()
-        .flat_map(tree_files)
+        .flat_map(|path| tree_files(path))
         .map(|path| (path_parts(&path), path))
         .collect();
     files.sort();
