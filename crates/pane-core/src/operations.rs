@@ -41,6 +41,7 @@ use crate::packages::{
 };
 use crate::platform;
 use crate::runtime::{CallError, GuestState, bindings};
+use crate::waiting::Waiting;
 
 use bindings::pane::extension::operations;
 
@@ -165,6 +166,10 @@ pub(crate) type Directory = Arc<dyn Fn() -> Installed + Send + Sync>;
 #[derive(Default)]
 pub(crate) struct Installed {
     pub packages: Vec<InstalledPackage>,
+    /// Which of them wait for a required dependency that cannot serve
+    /// them, with why (see `waiting`): a package waiting as a whole answers
+    /// its operations `unavailable`.
+    pub waiting: Waiting,
     pub data: Option<ExtensionData>,
 }
 
@@ -210,6 +215,12 @@ impl Installed {
         let title = package.title();
         if !package.enabled {
             return Err(OperationError::new(Disabled, disabled(&title)));
+        }
+        // A package waiting for what its package requires answers what it
+        // waits for (see `waiting`): waiting ends no generation, but its
+        // code runs nothing a call would start.
+        if let Some(reason) = self.waiting.reason(&package.identity) {
+            return Err(OperationError::new(Unavailable, reason.calling.clone()));
         }
         let manifest = match &package.manifest {
             Ok(manifest) => manifest,

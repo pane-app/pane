@@ -335,6 +335,8 @@ impl Launcher {
             installation.records.record(identity, Some(pause.clone()));
         }
         state.paused.pause(identity.clone(), pause);
+        // Its dependents now wait for it, rather than fail (see `waiting`).
+        state.recheck_waiting();
         // Its results kept for root search go.
         Launcher::forget_indexes(state);
         let components: Vec<PathBuf> = state
@@ -401,6 +403,8 @@ impl Launcher {
             installation.data.resume(identity);
             installation.records.record(identity, None);
         }
+        // Its dependents come back from waiting for it (see `waiting`).
+        state.recheck_waiting();
         pause
     }
 

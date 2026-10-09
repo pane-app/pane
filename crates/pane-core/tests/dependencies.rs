@@ -4,7 +4,9 @@
 //! installing adds the missing required ones with it and its code then calls
 //! them by dependency id, while optional, disabled and already installed
 //! (pinned) dependencies are left as they are, and anything that stops a
-//! required one leaves nothing installed. The operations samples
+//! required one leaves nothing installed. A disabled or uninstalled
+//! required dependency makes the dependent's command wait for it, coming
+//! back by itself once it returns (#152). The operations samples
 //! (`guests/sample-operations*`) and the operations fixture
 //! (`guests/fixtures/operations`) from `cargo xtask guests` serve as
 //! packages.
@@ -13,7 +15,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use futures::executor::block_on;
-use pane_core::{Launcher, PackageIdentity, Runtime, SavedData, Status};
+use pane_core::{Launcher, PackageIdentity, Runtime, SavedData, Screen, Status, Unavailable};
 use tempfile::TempDir;
 
 #[path = "support/platforms.rs"]
@@ -359,13 +361,46 @@ fn a_disabled_required_dependency_is_not_enabled_again() {
         .find(|p| p.identity == dirs.identity(RUST))
         .unwrap();
     assert!(!rust.enabled);
+    // The dependent now waits for the disabled dependency, rather than its
+    // calls answering `disabled` (#152): its command stays listed, saying
+    // what it needs, and running it shows the reason instead of calling
+    // the guest.
+    launcher.back();
+    launcher.back();
+    launcher.back();
+    let command = launcher
+        .view()
+        .rows
+        .iter()
+        .find(|row| row.title == "Call from JavaScript")
+        .unwrap()
+        .clone();
     assert_eq!(
-        greet(&launcher, "greeter"),
-        error(
-            "disabled: Rust operations sample is disabled; Pane does not enable it for a call, \
-             enable it in Settings"
-        )
+        command.unavailable,
+        Some(Unavailable::Waiting(
+            "Needs Rust operations sample, which is disabled".into()
+        ))
     );
+    select_title(&launcher, "Call from JavaScript");
+    block_on(launcher.activate_selected());
+    let view = launcher.view();
+    assert!(
+        matches!(view.screen, Screen::WaitingDetails { .. }),
+        "{view:?}"
+    );
+    assert_eq!(view.title, "Why Call from JavaScript cannot run");
+    // Enabling the dependency again brings it back by itself.
+    block_on(launcher.set_enabled(&dirs.identity(RUST), true));
+    launcher.show_root_search();
+    let command = launcher
+        .view()
+        .rows
+        .iter()
+        .find(|row| row.title == "Call from JavaScript")
+        .unwrap()
+        .clone();
+    assert_eq!(command.unavailable, None);
+    assert_eq!(greet(&launcher, "greeter"), result("Hello, Ada, from Rust"));
 }
 
 #[test]
@@ -615,7 +650,7 @@ fn an_update_adding_a_required_dependency_installs_it() {
 }
 
 #[test]
-fn a_required_dependency_uninstalled_later_is_explained_to_the_caller() {
+fn a_required_dependency_uninstalled_later_leaves_its_dependent_waiting() {
     let dirs = Dirs::new();
     dirs.sample(RUST);
     let caller = dirs.caller(GREETER);
@@ -624,13 +659,27 @@ fn a_required_dependency_uninstalled_later_is_explained_to_the_caller() {
 
     block_on(launcher.uninstall(&dirs.identity(RUST), SavedData::Delete));
 
+    // The dependent waits for it instead of failing (#152): its command
+    // stays listed, naming the uninstalled dependency, and running it
+    // shows the reason instead of calling the guest. Its calls by
+    // dependency id are not made at all; one through an optional
+    // dependency still explains the call.
+    launcher.back();
+    launcher.back();
+    launcher.back();
+    let command = launcher
+        .view()
+        .rows
+        .iter()
+        .find(|row| row.title == "Call from JavaScript")
+        .unwrap()
+        .clone();
     assert_eq!(
-        greet(&launcher, "greeter"),
-        error(&format!(
-            "not-found: Caller requires `greeter` from {}, which is not installed; install \
-             Caller again to install it",
+        command.unavailable,
+        Some(Unavailable::Waiting(format!(
+            "Needs {}, which is not installed",
             dirs.identity(RUST)
-        ))
+        )))
     );
 }
 

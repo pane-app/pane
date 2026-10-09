@@ -181,7 +181,8 @@ impl AliasChoices {
 pub(super) struct Target {
     pub(super) registration: CommandRegistration,
     pub(super) identity: PackageIdentity,
-    /// Why it cannot run now: paused, or unavailable on this system.
+    /// Why it cannot run now: paused, waiting for a required dependency
+    /// (see `waiting`), or unavailable on this system.
     pub(super) unavailable: Option<Unavailable>,
     /// Whether it is a no-view command, which runs with the text sent
     /// rather than opening a screen.

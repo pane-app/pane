@@ -78,6 +78,7 @@ mod uninstall;
 mod uninstall_dependents;
 mod unresponsive;
 mod update;
+mod waiting;
 mod web_icons;
 
 /// Cargo no longer finds the files under `tests/` itself (`autotests =
