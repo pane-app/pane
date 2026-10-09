@@ -797,7 +797,10 @@ fn uninstalling_forgets_exactly_its_own_commands_not_those_of_a_longer_source() 
     search(&launcher, "ec hi");
     // Pane's install row matches the letters fuzzily below the send row
     // (#193).
-    assert_eq!(titles(&launcher), ["Echo", "Install extension from folder…"]);
+    assert_eq!(
+        titles(&launcher),
+        ["Echo", "Install extension from folder…"]
+    );
 }
 
 #[test]

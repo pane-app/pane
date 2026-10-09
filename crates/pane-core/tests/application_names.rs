@@ -209,7 +209,10 @@ fn a_program_s_name_finds_its_application_unless_generic_shared_or_given_argumen
     let fixture = launcher(&system, &[]);
     let launcher = &fixture.launcher;
 
-    assert_eq!(titles_for(launcher, "code"), ["Visual Studio Code", "Manage Extensions"]);
+    assert_eq!(
+        titles_for(launcher, "code"),
+        ["Visual Studio Code", "Manage Extensions"]
+    );
     assert_eq!(titles_for(launcher, "wt"), ["Windows Terminal"]);
     // Typing a role finds nothing by it.
     assert!(titles_for(launcher, "launcher").is_empty());

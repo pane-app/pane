@@ -597,7 +597,7 @@ pub(crate) fn ranked_matches<'a>(
     // Stable: the six ranked steps keep root search order among
     // themselves, and a fuzzy match orders by its score, best first.
     matches.sort_by(|a, b| match (a.0, b.0) {
-        (None, None) => b.1.cmp(&a.1),
+        (Rank::Fuzzy, Rank::Fuzzy) => b.1.cmp(&a.1),
         _ => a.0.cmp(&b.0),
     });
     matches.into_iter().map(|(_, _, index)| index).collect()

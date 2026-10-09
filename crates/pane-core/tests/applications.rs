@@ -179,7 +179,10 @@ fn typing_an_applications_name_lists_it_and_enter_opens_it() {
 
     // Pane's install row matches the four letters fuzzily below the
     // application's prefix match (#193).
-    assert_eq!(titles(&launcher), ["Firefox", "Install extension from Git…"]);
+    assert_eq!(
+        titles(&launcher),
+        ["Firefox", "Install extension from Git…"]
+    );
     let view = launcher.view();
     assert_eq!(view.rows[0].subtitle.as_deref(), Some("Application"));
     assert_eq!(view.selected, Some(0));
@@ -241,7 +244,10 @@ fn applications_are_looked_for_once_per_visit_of_root_search() {
     // Installed meanwhile: found once the user comes back to root search.
     system.applications.lock().unwrap().push(app("Firewall"));
     search(&launcher, "fire");
-    assert_eq!(titles(&launcher), ["Firefox", "Install extension from Git…"]);
+    assert_eq!(
+        titles(&launcher),
+        ["Firefox", "Install extension from Git…"]
+    );
 
     // Come back to root search afresh, as a reopened window does:
     // Applications has no command row of its own to open and leave (a root
