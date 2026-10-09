@@ -161,16 +161,24 @@ fn an_alias_and_a_fallback_set_in_the_window_send_the_typed_text_to_the_command(
     assert!(fallback.top() > notice.bottom(), "the fallback is below it");
     // The preselected fallback is the selection assistive technology
     // sees (#194).
-    assert_eq!(selected_row(cx), ("Echo", 1, 1));
+    let (label, position, size) = selected_row(cx);
+    assert_eq!((label.as_str(), position, size), ("Echo", 1, 1));
     cx.run_until_parked();
-    assert!(!block_on(runtime.running()).contains(&echo), "typing sent nothing");
+    assert!(
+        !block_on(runtime.running()).contains(&echo),
+        "typing sent nothing"
+    );
     cx.simulate_keystrokes("enter");
     assert_eq!(
         settle_shown(&window, cx),
         Status::Result("Echo heard “zqx words”".into())
     );
     let view = settle(&window, cx);
-    assert_eq!(view.query(), Some("zqx words "), "root search stays as it was");
+    assert_eq!(
+        view.query(),
+        Some("zqx words "),
+        "root search stays as it was"
+    );
     assert!(block_on(runtime.running()).contains(&echo));
 
     // A fallback row is an ordinary row for Ctrl and a digit: the chord
