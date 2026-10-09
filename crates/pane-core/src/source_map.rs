@@ -241,7 +241,7 @@ fn vlqs(segment: &str) -> Option<Vec<i64>> {
             }
         }
     }
-    started.not().then_some(values)
+    (!started).then_some(values)
 }
 
 /// The 6-bit value a base64 digit of the mappings stands for.
@@ -332,7 +332,7 @@ mod tests {
             vec![4, 9, 20, -3, 2047, -1024],
             vec![i64::from(u32::MAX), -i64::from(u32::MAX)],
         ] {
-            assert_eq!(vlqs(&encoded(&values)), Some(values), "{values:?}");
+            assert_eq!(vlqs(&encoded(&values)), Some(values.clone()), "{values:?}");
         }
         // A digit left hanging carries no value.
         assert_eq!(vlqs("g"), None);

@@ -2984,7 +2984,7 @@ fn copy_package(package: &SourcePackage, location: &Path) -> io::Result<()> {
             // never see it half-written and get Linux's `ETXTBSY`.
             runner::copy_executable(&source, &target)?;
         } else {
-            fs::copy(source, target)?;
+            fs::copy(&source, &target)?;
             // A development build of JavaScript or TypeScript keeps a source
             // map beside its component; it comes with the component, so the
             // extension log's stack traces keep mapping to the sources after

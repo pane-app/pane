@@ -724,7 +724,7 @@ impl Launcher {
         // start leaves it — the failure it shows is still the state of
         // things.
         if matches!(status, Status::Progress(_) | Status::Result(_))
-            && matches!(&state.view.screen, Screen::Crash { identity: shown } if shown == identity)
+            && matches!(&state.view.screen, Screen::Crash { identity: shown, .. } if shown == identity)
         {
             self.leave_error_overlay(&mut state);
             self.refresh(&mut state);

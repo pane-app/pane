@@ -102,7 +102,7 @@ impl Launcher {
             .map(|command| command.title)
             .unwrap_or_else(|| title.clone());
         let (return_to, entries) = covered(state);
-        self.show(
+        self.overlay(
             state,
             &identity,
             match error {
@@ -139,7 +139,7 @@ impl Launcher {
         let title = state.title_of(identity);
         let (message, trace) = message_of(error);
         let (return_to, entries) = covered(state);
-        self.show(
+        self.overlay(
             state,
             identity,
             format!("{title} failed to start"),
@@ -156,7 +156,7 @@ impl Launcher {
     /// Shows the overlay: `title`, `details` (the message and the trace)
     /// and its rows over the view on display, which `shown` puts back when
     /// it leaves.
-    fn show(
+    fn overlay(
         &self,
         state: &mut State,
         identity: &PackageIdentity,
@@ -187,7 +187,11 @@ impl Launcher {
             subtitle: Some("Start it again".into()),
             unavailable: None,
         };
-        state.entries = vec![Entry::CrashLogs(identity.clone()), Entry::CrashCopy, Entry::CrashRetry];
+        state.entries = vec![
+            Entry::CrashLogs(identity.clone()),
+            Entry::CrashCopy,
+            Entry::CrashRetry,
+        ];
         let screen = Screen::Crash {
             identity: identity.clone(),
             details,
@@ -204,7 +208,9 @@ impl Launcher {
             return;
         };
         state.next_screen();
-        let Shown { return_to, entries, .. } = shown;
+        let Shown {
+            return_to, entries, ..
+        } = shown;
         state.view = return_to;
         state.entries = entries;
     }
@@ -308,11 +314,7 @@ fn details(message: String, trace: Option<String>) -> Vec<String> {
 /// which are the error and its stack, mapped to the author's sources as
 /// they were captured. `None` when the throw left no such block — thrown
 /// without a stack, or not logged.
-fn thrown_trace(
-    logs: &ExtensionLogs,
-    identity: &PackageIdentity,
-    message: &str,
-) -> Option<String> {
+fn thrown_trace(logs: &ExtensionLogs, identity: &PackageIdentity, message: &str) -> Option<String> {
     let lines = logs.lines(&identity.key());
     let mut block: Vec<&str> = Vec::new();
     for line in lines.iter().rev() {

@@ -255,7 +255,7 @@ fn the_overlay_s_row_opens_the_package_s_logs() {
     select_title(&pane.launcher, "Logs for Dev");
     block_on(pane.launcher.activate_selected());
     let view = pane.launcher.view();
-    assert!(matches!(&view.screen, Screen::ExtensionLog { shown } if *shown == identity));
+    assert!(matches!(&view.screen, Screen::ExtensionLog { identity: shown } if *shown == identity));
     assert_eq!(view.title, "Logs for Dev");
 }
 

@@ -270,7 +270,7 @@ fn the_overlay_s_rows_copy_the_message_and_open_the_logs(cx: &mut TestAppContext
     select(&window, cx, "Logs for Settings sample");
     cx.simulate_keystrokes("enter");
     let view = until(&window, cx, |view| {
-        matches!(&view.screen, Screen::ExtensionLog { shown } if *shown == identity)
+        matches!(&view.screen, Screen::ExtensionLog { identity: shown } if *shown == identity)
     });
     assert_eq!(view.title, format!("Logs for {}", RUST.title));
 }
