@@ -88,7 +88,7 @@ interface root-results {
     /// The moment, in milliseconds since the Unix epoch.
     milliseconds: u64,
     /// How far local time at `milliseconds` is from UTC, in milliseconds.
-    offset: i64,
+    offset: s64,
   }
 
   /// The results for `query`, the text typed into root search, asked
