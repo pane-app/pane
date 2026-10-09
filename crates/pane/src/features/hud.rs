@@ -100,7 +100,10 @@ impl Render for HudView {
         // reached, until the window is closed at its end.
         let opacity = match self.fading {
             Some(start) => {
-                let elapsed = cx.background_executor().now().saturating_duration_since(start);
+                let elapsed = cx
+                    .background_executor()
+                    .now()
+                    .saturating_duration_since(start);
                 if elapsed < FADE {
                     window.request_animation_frame();
                 }
@@ -401,10 +404,19 @@ mod tests {
 
     #[test]
     fn a_hud_is_content_sized_within_its_bounds() {
-        assert_eq!(size_for(&Hud::new(ToastStyle::Success, "Hi")).height, px(HEIGHT.0));
-        assert_eq!(size_for(&Hud::new(ToastStyle::Success, "Hi")).width, px(WIDTH.0));
+        assert_eq!(
+            size_for(&Hud::new(ToastStyle::Success, "Hi")).height,
+            px(HEIGHT.0)
+        );
+        assert_eq!(
+            size_for(&Hud::new(ToastStyle::Success, "Hi")).width,
+            px(WIDTH.0)
+        );
         let copied = size_for(&Hud::new(ToastStyle::Success, "Copied to Clipboard"));
-        assert!(copied.width > px(WIDTH.0) && copied.width < px(WIDTH.1), "{copied:?}");
+        assert!(
+            copied.width > px(WIDTH.0) && copied.width < px(WIDTH.1),
+            "{copied:?}"
+        );
         assert_eq!(
             size_for(&Hud::new(ToastStyle::Success, "x".repeat(500))).width,
             px(WIDTH.1)
@@ -438,7 +450,10 @@ mod tests {
 
     #[test]
     fn the_huds_text_reads_as_its_title_and_message() {
-        assert_eq!(announced(&Hud::new(ToastStyle::Success, "Copied")), "Copied");
+        assert_eq!(
+            announced(&Hud::new(ToastStyle::Success, "Copied")),
+            "Copied"
+        );
         let explained = Hud {
             message: Some("the server said no".into()),
             ..Hud::new(ToastStyle::Failure, "Upload failed")

@@ -180,7 +180,7 @@ fn pill_alpha(hud: &mut VisualTestContext) -> f32 {
         .into_iter()
         .filter_map(|quad| {
             let fill = quad.background.as_solid()?;
-            Some((quad.bounds.size.width.0 * quad.bounds.size.height.0, fill.a))
+            Some((quad.bounds.size.width.0 * quad.bounds.size.height.0, fill.alpha))
         })
         .collect();
     fills.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -370,11 +370,7 @@ fn a_hud_shows_in_a_window_of_its_own_for_its_time(cx: &mut TestAppContext) {
     wait(Duration::from_millis(1100), cx);
     assert_eq!(hud(&window, cx), None, "gone once its fade has run");
 
-    hud_shown(
-        Hud::new(ToastStyle::Failure, "Could not copy"),
-        &window,
-        cx,
-    );
+    hud_shown(Hud::new(ToastStyle::Failure, "Could not copy"), &window, cx);
     wait(Duration::from_millis(2900), cx);
     assert!(hud(&window, cx).is_some(), "a failure stays longer");
     wait(Duration::from_millis(200), cx);
@@ -435,11 +431,7 @@ fn a_hud_is_placed_centred_150_pixels_above_the_bottom_of_its_display(cx: &mut T
     );
 
     // The widest it ever is: a longer title is truncated into 500.
-    let mut hud = hud_shown(
-        Hud::new(ToastStyle::Success, "x".repeat(500)),
-        &window,
-        cx,
-    );
+    let mut hud = hud_shown(Hud::new(ToastStyle::Success, "x".repeat(500)), &window, cx);
     assert_eq!(
         hud.update(|window, _| window.bounds()).size.width,
         px(500.),
@@ -453,11 +445,7 @@ fn a_hud_is_placed_centred_150_pixels_above_the_bottom_of_its_display(cx: &mut T
 fn reduced_motion_closes_a_hud_at_its_time_without_a_fade(cx: &mut TestAppContext) {
     let (window, cx) = opened(cx);
     cx.update(|_, cx| cx.set_reduce_motion(true));
-    hud_shown(
-        Hud::new(ToastStyle::Success, "Copied"),
-        &window,
-        cx,
-    );
+    hud_shown(Hud::new(ToastStyle::Success, "Copied"), &window, cx);
     wait(Duration::from_millis(1100), cx);
     assert!(hud(&window, cx).is_some(), "still there before 1.2 seconds");
     wait(Duration::from_millis(200), cx);
@@ -469,19 +457,11 @@ fn reduced_motion_closes_a_hud_at_its_time_without_a_fade(cx: &mut TestAppContex
 #[gpui::test]
 fn a_newer_hud_replaces_one_still_shown(cx: &mut TestAppContext) {
     let (window, cx) = opened(cx);
-    hud_shown(
-        Hud::new(ToastStyle::Success, "Copied"),
-        &window,
-        cx,
-    );
+    hud_shown(Hud::new(ToastStyle::Success, "Copied"), &window, cx);
     let first = cx
         .read_entity(&window, |window, _| window.hud_window())
         .expect("the first HUD's window");
-    hud_shown(
-        Hud::new(ToastStyle::Failure, "Could not copy"),
-        &window,
-        cx,
-    );
+    hud_shown(Hud::new(ToastStyle::Failure, "Could not copy"), &window, cx);
     assert_eq!(hud(&window, cx).as_deref(), Some("Could not copy"));
     let second = cx
         .read_entity(&window, |window, _| window.hud_window())
@@ -505,11 +485,7 @@ fn a_pending_hud_stays_until_it_is_updated_or_the_launcher_is_active_again(
     cx: &mut TestAppContext,
 ) {
     let (window, cx) = opened(cx);
-    hud_shown(
-        Hud::new(ToastStyle::Animated, "Uploading…"),
-        &window,
-        cx,
-    );
+    hud_shown(Hud::new(ToastStyle::Animated, "Uploading…"), &window, cx);
     wait(Duration::from_secs(10), cx);
     assert_eq!(
         hud(&window, cx).as_deref(),
@@ -518,11 +494,7 @@ fn a_pending_hud_stays_until_it_is_updated_or_the_launcher_is_active_again(
     );
 
     // An update replaces it, and the update's own time runs.
-    hud_shown(
-        Hud::new(ToastStyle::Success, "Uploaded"),
-        &window,
-        cx,
-    );
+    hud_shown(Hud::new(ToastStyle::Success, "Uploaded"), &window, cx);
     assert_eq!(hud(&window, cx).as_deref(), Some("Uploaded"));
     wait(Duration::from_millis(1300), cx);
     assert!(hud(&window, cx).is_some(), "the update's fade has begun");
@@ -530,11 +502,7 @@ fn a_pending_hud_stays_until_it_is_updated_or_the_launcher_is_active_again(
     assert_eq!(hud(&window, cx), None);
 
     // Another pending one ends when the launcher comes forward again.
-    hud_shown(
-        Hud::new(ToastStyle::Animated, "Uploading…"),
-        &window,
-        cx,
-    );
+    hud_shown(Hud::new(ToastStyle::Animated, "Uploading…"), &window, cx);
     assert!(hud(&window, cx).is_some(), "pending again");
     window.update_in(cx, |window, w, cx| {
         window.tray_selected(TrayAction::OpenPane, w, cx)
@@ -555,11 +523,7 @@ fn a_hud_never_takes_the_focus(cx: &mut TestAppContext) {
     cx.run_until_parked();
     let launcher = cx.window_handle();
     assert_eq!(cx.update(|_, cx| cx.active_window()), Some(launcher));
-    let mut hud = hud_shown(
-        Hud::new(ToastStyle::Success, "Copied"),
-        &window,
-        cx,
-    );
+    let mut hud = hud_shown(Hud::new(ToastStyle::Success, "Copied"), &window, cx);
     assert_eq!(
         cx.update(|_, cx| cx.active_window()),
         Some(launcher),
@@ -594,27 +558,26 @@ fn a_hud_announces_its_title_and_message_through_a_live_region(cx: &mut TestAppC
 #[gpui::test]
 fn a_hud_fades_out_over_about_a_second(cx: &mut TestAppContext) {
     let (window, cx) = opened(cx);
-    let mut hud = hud_shown(
-        Hud::new(ToastStyle::Success, "Copied"),
-        &window,
-        cx,
-    );
+    let mut shown = hud_shown(Hud::new(ToastStyle::Success, "Copied"), &window, cx);
     // A still HUD asks for no frame, and is drawn at full strength.
-    assert_eq!(frame(&mut hud, Duration::ZERO), 0);
-    assert_eq!(pill_alpha(&mut hud), 1.);
+    assert_eq!(frame(&mut shown, Duration::ZERO), 0);
+    assert_eq!(pill_alpha(&mut shown), 1.);
     // Its 1.2 seconds up, the fade begins and asks for frames.
     wait(Duration::from_millis(1300), cx);
     assert!(hud(&window, cx).is_some(), "its fade has begun");
-    assert!(frame(&mut hud, Duration::ZERO) >= 1, "the fade asks for frames");
+    assert!(
+        frame(&mut shown, Duration::ZERO) >= 1,
+        "the fade asks for frames"
+    );
     // Half a second into it, the pill is about half as strong.
-    frame(&mut hud, Duration::from_millis(500));
-    let half = pill_alpha(&mut hud);
+    frame(&mut shown, Duration::from_millis(500));
+    let half = pill_alpha(&mut shown);
     assert!(
         (0.35..0.65).contains(&half),
         "half a second in, about half as strong: {half}"
     );
     // Past the fade's span the window closes.
-    frame(&mut hud, Duration::from_millis(600));
+    frame(&mut shown, Duration::from_millis(600));
     assert_eq!(hud(&window, cx), None, "gone once the fade has run");
 }
 

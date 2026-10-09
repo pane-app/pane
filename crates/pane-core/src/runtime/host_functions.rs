@@ -169,10 +169,7 @@ impl feedback_host::Host for GuestState {
     fn show_hud(&mut self, title: String, style: feedback_host::ToastStyle) {
         let _host = self.host();
         if let Some(host) = self.host_functions() {
-            host.show_hud(
-                &self.caller(),
-                Hud::new(style_of(style), title),
-            );
+            host.show_hud(&self.caller(), Hud::new(style_of(style), title));
         }
     }
 }

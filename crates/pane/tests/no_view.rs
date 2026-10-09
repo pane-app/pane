@@ -156,13 +156,13 @@ fn installed_compact(
 
 /// [`installed`], writing the settings record `settings` into the data
 /// folder first and making the host settings read it, when there is one.
-fn installed_with(
-    cx: &mut TestAppContext,
+fn installed_with<'a>(
+    cx: &'a mut TestAppContext,
     system: Arc<FakeSystem>,
     settings: Option<&str>,
 ) -> (
     Entity<LauncherWindow>,
-    &mut VisualTestContext,
+    &'a mut VisualTestContext,
     tempfile::TempDir,
     tempfile::TempDir,
     std::path::PathBuf,
