@@ -235,7 +235,10 @@ pub(super) fn row_presentation(state: &State, index: usize) -> RowPresentation {
     let Some(entry) = state.entries.get(index) else {
         return RowPresentation::default();
     };
-    let command = matches!(entry, Entry::Open(_) | Entry::Unavailable(_) | Entry::Waiting { .. });
+    let command = matches!(
+        entry,
+        Entry::Open(_) | Entry::Unavailable(_) | Entry::Waiting { .. }
+    );
     RowPresentation {
         kind: kind(entry),
         alias: command

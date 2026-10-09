@@ -4,8 +4,10 @@ Added for [#47](https://github.com/pane-app/pane/issues/47) (US14, US45,
 US57, US58, US79; T02, T09, T17; contributions to G3, not a claim that it
 passes). A command can declare, in its package's manifest, that it runs on
 a schedule: Pane runs the command's action of the item the schedule names
-every interval, while the package's code may run — it is enabled and not
-[paused](pausing.md) — without the user asking, and shows the answer on the
+every interval, while the package's code may run — it is enabled, not
+[paused](pausing.md) and not
+[waiting](dependencies.md#waiting-for-a-required-dependency) for a required
+dependency — without the user asking, and shows the answer on the
 command's screen. Disabling the package stops the schedule; enabling it
 starts it again; a restart schedules again whatever the manifest declares.
 The architecture is recorded in [ADR 0024](adr/0024-the-host-runs-scheduled-extension-work-by-its-own-clock.md)
@@ -65,11 +67,17 @@ The architecture is recorded in [ADR 0024](adr/0024-the-host-runs-scheduled-exte
   is activated by it. A command unavailable on this system is never
   scheduled, like an action the user cannot invoke.
 - **While the code may run.** The schedule runs while the package is
-  enabled and not paused, from the moment its code may run: Pane starts,
+  enabled, not paused and not
+  [waiting](dependencies.md#waiting-for-a-required-dependency) for a required
+  dependency, from the moment its code may run: Pane starts,
   the package is installed or enabled, or its code is replaced by a reload
   or an update (the interval restarts with the new code). A disable, an
   uninstall, a pause after a failure, or a code replacement ends it, and
-  enabling the package again starts it from a full interval.
+  enabling the package again starts it from a full interval. Waiting skips
+  the ticks that fall due (they are not replayed), and the schedule starts
+  from a full interval when what it waits for returns; a run already going
+  when the package began to wait finishes, since waiting ends no
+  [generation](generations.md).
 - **The generation owns the run.** Each run belongs to the package's
   [generation](generations.md) current when the scheduler asked for it:
   a disable, reload, update, uninstall or pause that happens while it

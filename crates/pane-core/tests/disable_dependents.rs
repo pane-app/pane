@@ -478,11 +478,12 @@ fn damage(launcher: &Launcher, identity: &PackageIdentity) {
 }
 
 #[test]
-fn pane_pausing_a_required_dependency_disables_nothing_else() {
+fn pane_pausing_a_required_dependency_disables_nothing_else_and_its_dependent_waits() {
     let dirs = Dirs::new();
     dirs.operations_sample();
-    let caller = dirs.fixture(
+    let caller = dirs.settings(
         "caller",
+        "Settings caller",
         r#"{ "id": "greeter", "source": "local:../sample-operations",
              "operations": [{ "id": "greet", "version": 1 }] }"#,
     );
@@ -502,6 +503,25 @@ fn pane_pausing_a_required_dependency_disables_nothing_else() {
     assert!(all_enabled(&restarted));
     manage(&restarted);
     assert!(matches!(restarted.view().screen, Screen::Extensions { .. }));
+
+    // Its dependent now waits for the paused dependency, rather than
+    // having its calls refused (#152): its command stays listed, saying
+    // what it needs, and comes back once the dependency is retried or
+    // reloaded.
+    to_root(&restarted);
+    let greeting = restarted
+        .view()
+        .rows
+        .iter()
+        .find(|row| row.title == "Greeting")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        greeting.unavailable,
+        Some(pane_core::Unavailable::Waiting(
+            "Needs Rust operations sample, which is paused".into()
+        ))
+    );
 
     // The user disabling the paused package still asks about its dependent.
     press(&restarted, "Rust operations sample");

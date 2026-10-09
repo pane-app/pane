@@ -3553,7 +3553,7 @@ impl Launcher {
             // they come back by themselves once what it needs returns.
             let waiting = state
                 .waiting
-                .of(&package.identity)
+                .reason(&package.identity)
                 .map(|reason| Unavailable::Waiting(reason.row.clone()));
             // A root provider has no row: its results answer instead.
             for (registration, unavailable) in package.launchable_commands() {

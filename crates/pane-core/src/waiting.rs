@@ -121,8 +121,7 @@ impl Waiting {
         loop {
             let mut removed = false;
             for (index, package) in packages.iter().enumerate() {
-                if !able[index] || unmet_of(packages, &able, paused, title_of, package).is_empty()
-                {
+                if !able[index] || unmet_of(packages, &able, paused, title_of, package).is_empty() {
                     continue;
                 }
                 able[index] = false;

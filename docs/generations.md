@@ -17,7 +17,13 @@ starts, and ends when the package is disabled, [paused](pausing.md) after it
 failed, or its code is replaced by a reload or an update (a reload's or update's new code runs in a new
 generation). A disabled package stays in an ended generation until it is
 enabled again. Commands built into Pane have no generation: they run as long
-as Pane.
+as Pane. A package that
+[waits](dependencies.md#waiting-for-a-required-dependency) for a required
+dependency that cannot serve it keeps its generation: waiting is not one
+of the ways a generation ends. What Pane would start for a waiting package
+— its commands' views and runs, scheduled work, services and results — is
+not started, but a call or cycle already running finishes, an open screen
+stays and its calls answer as calls do.
 
 Every guest call has two owners, with different powers:
 
@@ -183,6 +189,11 @@ resume in the store. So:
   yielding while the test disables or reloads `a`: what they try
   afterwards (saving, calling `b`) is refused, and their answer, or their
   error, completing in the same turn is discarded.
+- [`crates/pane-core/tests/waiting.rs`](../crates/pane-core/tests/waiting.rs)
+  drives a call that is already running when the package that made it
+  begins to [wait](dependencies.md#waiting-for-a-required-dependency): it
+  finishes with its answer, since waiting ends no generation and stops no
+  instance.
 - Runtime tests (`runtime.rs`): stopping a call whose instance holds a
   stream open to the host (stdout), the pending future of that write and
   an open custom view releases them all (the faulty fixture's `hold`); and

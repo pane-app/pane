@@ -360,10 +360,9 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         (_, Some(Entry::File(file))) => acting(&super::own_actions::primary_title(file)),
         (_, Some(Entry::OpenApplication { .. })) => acting("Open application"),
         (_, Some(Entry::OpenTarget { .. })) => acting("Open link"),
-        (
-            _,
-            Some(Entry::Broken(_) | Entry::Unavailable(_) | Entry::Waiting { .. }),
-        ) => unusable("Unavailable"),
+        (_, Some(Entry::Broken(_) | Entry::Unavailable(_) | Entry::Waiting { .. })) => {
+            unusable("Unavailable")
+        }
         (_, Some(Entry::InstallFromFolder)) => acting("Install from folder"),
         (_, Some(Entry::AskNpm)) => acting("Install from npm"),
         (_, Some(Entry::AskGit)) => acting("Install from Git"),

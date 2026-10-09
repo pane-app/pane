@@ -19,6 +19,11 @@ come from npm ([npm](npm.md#dependencies-from-npm)), and since
 [#46](https://github.com/pane-app/pane/issues/46) from a Git repository
 ([Git](git.md#dependencies-from-git)), with the same plan.
 
+A package that requires another can also **wait** for it: while a
+required dependency is missing, disabled, [paused](pausing.md) or waiting
+itself, the dependent's commands stay listed, saying what they need, and
+none of their work runs ([below](#waiting-for-a-required-dependency)).
+
 ## Declaring
 
 ```json
@@ -275,14 +280,15 @@ too), though not disabled again.
 
 **Enabling again** enables only the package pressed: its dependents stay
 disabled, across restarts too, until the user enables each. Enabling a
-dependent whose required dependency is still disabled is allowed; its calls
-to it answer `disabled`, as before.
+dependent whose required dependency is still disabled is allowed, and the
+dependent then [waits](#waiting-for-a-required-dependency) for it, coming
+back by itself once it is enabled.
 
 **Pausing is not disabling.** When Pane [pauses](pausing.md) a required
 dependency after it failed, nothing else changes and nothing is asked:
-its dependents stay enabled, and their calls to it are refused while it is
-paused. The user disabling a paused package still asks about its
-dependents (and ends the pause, as disabling does).
+its dependents stay enabled and [wait](#waiting-for-a-required-dependency)
+for it, coming back on Retry. The user disabling a paused package still
+asks about its dependents (and ends the pause, as disabling does).
 
 `Launcher::set_enabled` remains the single-package switch it was: it
 disables only the package given, without asking.
@@ -359,6 +365,48 @@ it answer `not-found` meanwhile.
 `Launcher::uninstall` remains the single-package uninstall it was: it
 uninstalls only the package given, without asking.
 
+## Waiting for a required dependency
+
+Added for [#152](https://github.com/pane-app/pane/issues/152), the first
+slice of [#151](https://github.com/pane-app/pane/issues/151) (ADR 0041).
+A command of an enabled, unpaused package **waits** while one of its
+package's required dependencies is missing, disabled, [paused](pausing.md)
+or waiting itself. Optional dependencies never make a command wait, nor
+does one the package needs only on other systems, and nothing changes in
+`pane.json`: Pane computes who waits from the dependencies already
+declared and the packages' states. Every enabled, unpaused package starts
+as able to run, and any package with an unmet requirement is removed,
+repeating until nothing changes: a cycle of healthy packages runs, and a
+cycle with one member missing waits as a whole. It is recomputed whenever
+a package is installed, uninstalled, enabled, disabled, paused, retried,
+reloaded or updated.
+
+While a command waits, nothing of it runs: not its view, run entry point,
+actions, arguments or setup screen; its [schedule](schedules.md)'s ticks,
+which are skipped and not replayed; its [service](services.md), which
+does not cycle; and its root and indexed results, which root search does
+not ask for. A package waiting as a whole answers its published
+operations `unavailable` ("<title> is waiting for <what>"). Waiting ends
+no [generation](generations.md) and stops no instance: a call or cycle
+already running finishes, and an open screen stays, its calls answering
+as calls do. Waiting never counts towards [pausing](pausing.md).
+
+The command's row in root search stays listed, saying what it needs
+("Needs <title>, which is <state>", the state being not installed,
+disabled, paused, or waiting for something else), and a chain names what
+is actually missing ("Needs Notes Sync, which waits for Auth: Auth is
+disabled"). Pressing Enter shows the reason with a row that fixes it:
+"Enable <title>", "Retry <title>", or "Open Manage extensions". Its
+quick slots, aliases, global hotkeys and fallbacks say the same reason
+and run nothing.
+
+When the requirement is met again — the dependency is enabled, retried,
+installed, or its package reloaded or updated — the command comes back by
+itself, with nothing for the user to do: its row is ordinary again, its
+schedule starts from a full interval, its service's first cycle runs at
+once in the instance it still has, and root search asks for its results
+on the next query.
+
 ## For later slices
 
 A plan (`crates/pane-core/src/dependencies.rs`) is data: its required edges
@@ -392,6 +440,15 @@ check the set again when chosen with one step (`still_shown` in
 - The native smokes install the [dependencies sample](../guests/sample-dependencies/src/lib.rs)
   and show "Hello, Pane, from JavaScript" in the real window (frames 75 to
   77; [Linux](platforms/linux.md#dependencies-42)).
+- [`crates/pane-core/tests/waiting.rs`](../crates/pane-core/tests/waiting.rs)
+  drives the waiting commands themselves (#152): a dependent waiting while
+  its required dependency is disabled, paused, uninstalled or waiting
+  itself, and coming back on enable, Retry, install or a reload that starts;
+  the reason on the row, Enter's reason and fix rows, the `unavailable`
+  answer to a waiting package's operations, waits three deep and the two
+  cycles; schedules and services waiting and coming back; root results not
+  asked for; the open screen and its calls left alone; and the quick slot,
+  alias and fallback saying the reason and running nothing.
 - [`crates/pane-core/tests/disable_dependents.rs`](../crates/pane-core/tests/disable_dependents.rs)
   drives disabling a required dependency through the extension list: the
   question listing the closure (through a dependent of a dependent) before
@@ -400,7 +457,8 @@ check the set again when chosen with one step (`still_shown` in
   settings, enabling the dependency alone (also after a restart), an
   optional user disabled at once, cycles, a dependent enabled or disabled
   while the question is shown, a record that cannot be written, and Pane
-  pausing a dependency disabling nothing else. Unit tests in
+  pausing a dependency disabling nothing else while its dependent waits.
+  Unit tests in
   [`dependencies.rs`](../crates/pane-core/src/dependencies.rs) cover the
   closure itself.
 - The native smokes' own phase (frames 140 to 143;
@@ -437,7 +495,10 @@ check the set again when chosen with one step (`still_shown` in
 - [`crates/pane/tests/install.rs`](../crates/pane/tests/install.rs): the
   question in the native window at Pane's size with long source paths,
   whose first choice stays visible (a confirmation's details scroll within
-  40% of the window), Escape keeping both and Enter uninstalling both.
+  40% of the window), Escape keeping both and Enter uninstalling both; and
+  a waiting command's row and Enter, with real key events: the reason
+  under the row, the reason and the "Enable <title>" fix row on the screen
+  Enter opens, and the command back once the fix row is chosen (#152).
 - The native smokes' own phase (frames 180 to 183;
   [Linux](platforms/linux.md#uninstalling-required-dependents-44)) asks,
   cancels, uninstalls both with Uninstall all and installs the dependency
@@ -447,9 +508,9 @@ check the set again when chosen with one step (`still_shown` in
 
 - Local folders, npm (#45) and Git (#46), with these semantics.
 - One copy per source, no version ranges and no multi-version solving.
-- No Pane-side view yet of installed packages whose required dependency was
-  disabled (other than through Disable all) or removed (other than through
-  Uninstall all, as by `Launcher::uninstall`); their calls explain it.
+- Waiting covers only what the packages' `pane.json` files already declare:
+  the requirement is a whole package, not one operation of it, and the
+  Manage extensions rows that would list and fix each one are #157's.
 - Only the extension list asks about dependents; `Launcher::set_enabled`
   and `Launcher::uninstall` (used by tests and internal callers) change one
   package. The extension list offers no way to disable or uninstall a
