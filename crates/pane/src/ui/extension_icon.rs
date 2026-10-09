@@ -1,14 +1,20 @@
 //! Drawing the icons extensions give (ADR 0036, #139): a row's, an
 //! accessory's, a package's and a command's — bare, without a tile behind
 //! them (ADR 0035's "bare application icons"), while Pane's own rows keep
-//! their tiles ([`RowIcon::Pane`]).
+//! their tiles ([`RowIcon::Pane`]) — with one exception: a built-in glyph
+//! an extension *names* as a command's or package's own icon draws on
+//! Pane's neutral command tile at the tile sizes ([`row_icon_at`]), so a
+//! command naming one of Pane's glyphs reads as a command while its image
+//! icons stay bare ([`DrawnIcon::tile_color`], #247).
 //!
 //! Presentation only: the caller resolves what to draw ([`DrawnIcon`]) —
 //! the file for the theme in force, the colour after contrast correction —
 //! from the launcher's icon (see `crate::features::icons`), and this draws
 //! it:
 //!
-//! - a built-in glyph, as a mask in its colour;
+//! - a built-in glyph, as a mask in its colour — on Pane's neutral command
+//!   tile where [`row_icon_at`] draws it at a tile's size, bare everywhere
+//!   else, at an accessory's or an action's small size included;
 //! - an image file in its own colours, clipped to its mask, or, tinted, as
 //!   a mask in its colour (an SVG through the SVG renderer, a PNG recoloured
 //!   once and kept);
@@ -23,8 +29,9 @@
 //! The tests read what was drawn from debug selectors: the icon's own
 //! `icon-<scope>`, and around what it draws `icon-<scope>-<what>` (such as
 //! `glyph-star` or `image-logo@dark.png`), `icon-<scope>-color-<rrggbbaa>`
-//! where a colour applies, and `icon-<scope>-mask-circle` or
-//! `icon-<scope>-mask-rounded`.
+//! where a colour applies, `icon-<scope>-mask-circle` or
+//! `icon-<scope>-mask-rounded`, and `icon-<scope>-tile` where a named
+//! built-in glyph draws on Pane's neutral command tile.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -35,7 +42,7 @@ use gpui::{
     Role, SharedString, Stateful, Window, div, hsla_to_rgba, img, prelude::*, svg,
 };
 
-use crate::ui::icon::{Glyph, IconTone, TileSize, tile_at};
+use crate::ui::icon::{Glyph, IconTone, TileSize, neutral_chrome, tile_at};
 use crate::ui::theme::Theme;
 use crate::ui::tooltip::{TooltipLook, text_tooltip};
 
@@ -62,6 +69,14 @@ pub(crate) struct DrawnIcon {
     pub(crate) image: IconImage,
     /// The colour of a glyph, a tinted image or a letter.
     pub(crate) color: Hsla,
+    /// A built-in glyph an extension named as its command's or package's
+    /// own icon: the colour [`row_icon_at`] draws it in on Pane's neutral
+    /// command tile (ADR 0035, #247) — its tint, else the tile's own
+    /// foreground — so a command naming one of Pane's glyphs reads as a
+    /// command while image icons stay bare. `None` for every other icon,
+    /// and for a glyph standing in for one (a fallback), which draws bare
+    /// where the icon it stands in for does.
+    pub(crate) tile_color: Option<Hsla>,
     pub(crate) mask: Option<IconMask>,
     /// Drawn in its place when the image cannot be loaded.
     pub(crate) fallback: Option<Box<DrawnIcon>>,
@@ -128,8 +143,10 @@ impl IconSize {
 }
 
 /// `icon` at the tile size `size`: Pane's tile, or the extension's icon
-/// bare in the tile's box. Its id is `id`; `scope` names it in the debug
-/// selectors.
+/// bare in the tile's box — except a built-in glyph it names, which draws
+/// on Pane's neutral command tile, so a command naming one of Pane's
+/// glyphs reads as a command while image icons stay bare (ADR 0035,
+/// #247). Its id is `id`; `scope` names it in the debug selectors.
 pub(crate) fn row_icon_at(
     icon: &RowIcon,
     size: TileSize,
@@ -140,9 +157,31 @@ pub(crate) fn row_icon_at(
     match icon {
         RowIcon::Pane(tone, glyph) => tile_at(size, *tone, *glyph, theme),
         RowIcon::Drawn(drawn) => {
-            div()
-                .flex_none()
-                .child(draw(drawn, IconSize::of(size, theme), id, scope, theme))
+            let sizes = IconSize::of(size, theme);
+            match drawn.tile_color {
+                // A built-in glyph the extension named: the tile's own
+                // colour there — its tint, else the tile's foreground —
+                // the glyph drawn in it on the tile's chrome.
+                Some(color) => {
+                    let mut on_tile = drawn.clone();
+                    on_tile.color = color;
+                    let tile = format!("icon-{scope}-tile");
+                    let bare = draw(&on_tile, sizes, id, scope, theme);
+                    neutral_chrome(
+                        div()
+                            .debug_selector(move || tile)
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .size(sizes.size)
+                            .rounded(sizes.radius),
+                        theme,
+                    )
+                    .child(bare)
+                }
+                None => div().flex_none().child(draw(drawn, sizes, id, scope, theme)),
+            }
         }
     }
 }

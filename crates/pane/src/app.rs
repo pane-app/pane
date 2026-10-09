@@ -26,8 +26,8 @@ use pane_core::feedback::WindowRequest;
 use pane_core::hotkeys::Shortcut;
 use pane_core::tray::TrayAction;
 use pane_core::{
-    ComputedAnswer, Launcher, LauncherView, ListPresentation, NextShowing, Row, RowPresentation,
-    Screen, SelectedAction, SettingsTarget, Status, WindowPresence,
+    ComputedAnswer, Launcher, LauncherView, ListPresentation, NextShowing, Row, RowKind,
+    RowPresentation, Screen, SelectedAction, SettingsTarget, Status, WindowPresence,
 };
 
 use crate::extension_views::{custom_view, form};
@@ -1385,11 +1385,19 @@ impl LauncherWindow {
             (Some(description), false) => Some(format!("{description}. {}", spoken.join(", "))),
             (None, false) => Some(spoken.join(", ")),
         };
-        // Its icon: an extension's, drawn bare, or Pane's tile (#139).
+        // Its icon: an extension's, drawn bare, or Pane's tile (#139) — a
+        // command's named built-in glyph on Pane's neutral command tile,
+        // which only a command's row draws (ADR 0035, #247).
         let icon = match &shown.icon {
-            Some(icon) => crate::ui::extension_icon::RowIcon::Drawn(crate::features::icons::drawn(
-                icon, theme,
-            )),
+            Some(icon) => {
+                let mut drawn = crate::features::icons::drawn(icon, theme);
+                // An application's, a file's or an item's icon draws bare,
+                // whatever it is: the tile is a command's own glyph's.
+                if !matches!(shown.kind, Some(RowKind::Command) | Some(RowKind::Fallback)) {
+                    drawn.tile_color = None;
+                }
+                crate::ui::extension_icon::RowIcon::Drawn(drawn)
+            }
             None => row_icon(&row.id).into(),
         };
         let accessories = shown
