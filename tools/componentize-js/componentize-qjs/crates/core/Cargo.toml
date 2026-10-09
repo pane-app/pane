@@ -22,8 +22,9 @@ path = "src/lib.rs"
 [dependencies]
 anyhow = "1"
 bytes = "1"
-# Resolving a JS entry's imports; the version upstream pinned.
-oxc-resolver = "11.21"
+# Resolving a JS entry's imports; the version upstream pinned (the
+# package's name on crates.io carries an underscore).
+oxc_resolver = "11.21"
 # Driving the componentize future (the `p3_build` example, and callers that
 # link this crate); a current-thread runtime is enough.
 tokio = { version = "1", default-features = false, features = ["rt"] }

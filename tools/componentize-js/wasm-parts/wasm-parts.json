@@ -13,6 +13,6 @@
   },
   "runtime_rustc": "rustc 1.101.0-nightly (75a75c3e0 2026-09-26)",
   "wasi_sdk": "34.0",
-  "runtime_sha256": "6c1706c03b4499dffd554eea98934929313b4b42040bb2eae4c9949ca10a4d3a",
+  "runtime_sha256": "45da6c8d902e367b958c2048ddb263a13ea296ac4bb89002a91df6b820bc9f59",
   "libc_sha256": "a8d7b7073fcece887a573c1b7b4cd3b1b215da579ed7ab2f1dff8baf76b7fae9"
 }

@@ -974,7 +974,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "indexmap",
- "oxc-resolver",
+ "oxc_resolver",
  "tempfile",
  "tokio",
  "wasm-compose",
@@ -4530,7 +4530,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "oxc-resolver"
+name = "oxc_resolver"
 version = "11.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b5400dea5053fe933683bcfc63cfd6025a9826748a9ecf2da37892d2993da57"
