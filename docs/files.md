@@ -103,7 +103,8 @@ A package declares in `pane.json` that it uses the index:
 `"fileIndex": true`. The index is opened, caught up and watched only while
 at least one such package is enabled, not paused, and has a command the user
 left on in Settings (`Launcher::sync_file_index`, after every change of the
-packages): turning off Files' one command, Search Files, stops the index as
+packages): turning off every one of Files' commands — Search Files and,
+since #195, its Open and Reveal in File Explorer — stops the index as
 disabling Files does. When the last such package is disabled, paused or has
 its commands turned off, watching stops at once and the index stays on
 disk; turning one on again catches it up from where it stopped.

@@ -51,7 +51,6 @@ use crate::feedback::{
     WindowControl, WindowPresence,
 };
 use crate::keyboard::{Binding, PaneKeys};
-use crate::packages::{CommandMatches, CommandWhen};
 use crate::runtime::{CallError, read_shortcut};
 
 /// What a failure toast for an error a command answered with is titled:
@@ -749,6 +748,7 @@ fn bind_action(action: GivenAction, keys: &PaneKeys, taken: Option<&Binding>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::packages::{CommandMatches, CommandWhen};
 
     fn given(shortcut: Option<&str>) -> GivenAction {
         GivenAction {

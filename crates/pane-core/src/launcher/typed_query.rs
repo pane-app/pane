@@ -36,7 +36,7 @@ use std::path::Path;
 use super::aliases::{Sending, Via};
 use super::{Entry, Opening, RootResult, Row, State};
 use crate::launch::{LaunchRecord, LaunchSource};
-use crate::packages::{CommandMatches, CommandWhen};
+use crate::packages::CommandMatches;
 
 /// A query root search understood as a typed address or path, with the
 /// text sent to commands declared for it: the parsed address or the
@@ -116,12 +116,15 @@ fn path_like(query: &str, home: Option<&Path>) -> Option<String> {
     (is_drive(query) || query.starts_with('\\') || query.starts_with('/')).then(|| query.to_owned())
 }
 
-/// Whether `text` starts with a drive letter and a separator, as
-/// `C:\Windows` and `C:/Windows` do — the same on every system, so a
+/// Whether `text` starts with a drive letter, its colon and a separator,
+/// as `C:\Windows` and `C:/Windows` do — the same on every system, so a
 /// Windows path is understood wherever Pane runs.
 fn is_drive(text: &str) -> bool {
     let bytes = text.as_bytes();
-    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && (bytes[1] == b'/' || bytes[1] == b'\\')
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'/' || bytes[2] == b'\\')
 }
 
 /// The address of a URL-like `query`, if it is one: as typed when it has a
