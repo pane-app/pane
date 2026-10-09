@@ -645,7 +645,10 @@ fn turning_off_search_files_stops_the_index_as_disabling_files_does() {
         .into_iter()
         .map(|command| command.registration.id)
         .collect();
-    assert!(commands.len() > 1, "Files has the typed-path commands (#195)");
+    assert!(
+        commands.len() > 1,
+        "Files has the typed-path commands (#195)"
+    );
     // The index stops once every command is turned off, as the package's
     // own switch does; one left on keeps it running.
     for command in &commands {

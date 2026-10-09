@@ -18,8 +18,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use futures::executor::block_on;
-use pane_core::file_index::IndexerConfig;
 use pane_core::feedback::WindowRequest;
+use pane_core::file_index::IndexerConfig;
 use pane_core::packages::{CommandMatches, CommandWhen};
 use pane_core::system::System;
 use pane_core::{Launcher, LinkOpener, Manifest, Runtime, Screen, Status};
@@ -27,10 +27,10 @@ use tempfile::TempDir;
 
 #[path = "support/feedback.rs"]
 mod feedback;
-#[path = "support/rows.rs"]
-mod rows;
 #[path = "support/system.rs"]
 mod recording;
+#[path = "support/rows.rs"]
+mod rows;
 
 use feedback::{RecordingWindow, shown};
 use recording::{Done, RecordingSystem};
@@ -81,12 +81,9 @@ impl Pane {
             self.home.clone(),
             Vec::new(),
         );
-        let mut launcher = Launcher::with_packages(
-            Ok(runtime),
-            vec![],
-            self.data.path().join("extensions"),
-        )
-        .with_file_index(config);
+        let mut launcher =
+            Launcher::with_packages(Ok(runtime), vec![], self.data.path().join("extensions"))
+                .with_file_index(config);
         if let Some(system) = system {
             launcher = launcher.with_system(system);
         }
@@ -196,7 +193,11 @@ fn a_url_like_query_lists_only_the_command_declared_for_it(fixture: &Fixture) {
         sections(&launcher)
     );
     assert_eq!(
-        send(&launcher, "https://github.com/pane-app/pane", "Hear an Address"),
+        send(
+            &launcher,
+            "https://github.com/pane-app/pane",
+            "Hear an Address"
+        ),
         Status::Result("Heard “https://github.com/pane-app/pane”".into()),
         "the parsed address is the fallback text"
     );
@@ -267,7 +268,10 @@ fn when_is_honoured(fixture: &Fixture) {
     let listed = titles(&launcher);
     assert!(listed.contains(&"Blank Only".to_owned()), "{listed:?}");
     assert!(!listed.contains(&"Searching Only".to_owned()), "{listed:?}");
-    assert!(!listed.contains(&"Hear an Address".to_owned()), "{listed:?}");
+    assert!(
+        !listed.contains(&"Hear an Address".to_owned()),
+        "{listed:?}"
+    );
     assert!(!listed.contains(&"Hear a Path".to_owned()), "{listed:?}");
 
     // While searching, only the command declared for that is: not the one
@@ -312,13 +316,7 @@ fn the_when_and_matches_are_read_from_the_manifest(fixture: &Fixture) {
     let read: Vec<(&str, CommandWhen, CommandMatches)> = manifest
         .commands
         .iter()
-        .map(|command| {
-            (
-                command.id.as_str(),
-                command.when,
-                command.matches,
-            )
-        })
+        .map(|command| (command.id.as_str(), command.when, command.matches))
         .collect();
     assert_eq!(
         read,
@@ -453,7 +451,14 @@ fn files_pane() -> (FilesPane, Launcher) {
             links: Some(links),
         },
     );
-    (FilesPane { pane, opener, system }, launcher)
+    (
+        FilesPane {
+            pane,
+            opener,
+            system,
+        },
+        launcher,
+    )
 }
 
 #[test]
@@ -495,7 +500,9 @@ fn opening_a_typed_program_reveals_it_and_never_runs_it() {
     assert!(opened.is_empty(), "a program is never opened or run");
     assert_eq!(
         done,
-        [Done::Revealed(PathBuf::from(files.file("notes/run plan.bat")))]
+        [Done::Revealed(PathBuf::from(
+            files.file("notes/run plan.bat")
+        ))]
     );
 }
 
