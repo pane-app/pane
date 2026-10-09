@@ -9,9 +9,8 @@
 //! Through the launcher's public interface with the real sample packages
 //! `cargo xtask guests` assembles (`sample-matches` in Rust, JavaScript
 //! and TypeScript), and the default extensions Quicklinks and Files, whose
-//! own commands are declared for them, with the recording system for
-//! opening and revealing (`support/system.rs`) and the recording link
-//! opener of the files suite.
+//! own commands are declared for them, with the recording system
+//! (`support/system.rs`) for what opening and revealing asks of it.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,7 +21,7 @@ use pane_core::feedback::WindowRequest;
 use pane_core::file_index::IndexerConfig;
 use pane_core::system::System;
 use pane_core::{
-    CommandMatches, CommandWhen, Launcher, LinkOpener, Manifest, Runtime, Screen, Status,
+    CommandMatches, CommandWhen, Launcher, Manifest, Runtime, Screen, Status,
 };
 use tempfile::TempDir;
 
@@ -49,12 +48,10 @@ struct Pane {
     home: PathBuf,
 }
 
-/// The fakes a test hands Pane: what its commands ask of the system, and
-/// the link opener that opens the files it is asked to open. `None` for
-/// the real ones (which these tests never reach).
+/// The fakes a test hands Pane: what its commands ask of the system.
+/// `None` for the real one (which these tests never reach).
 struct Fakes {
     system: Option<Arc<RecordingSystem>>,
-    links: Option<Arc<dyn LinkOpener>>,
 }
 
 impl Pane {
@@ -87,9 +84,6 @@ impl Pane {
                 .with_file_index(config);
         if let Some(system) = system {
             launcher = launcher.with_system(system);
-        }
-        if let Some(links) = fakes.links {
-            launcher = launcher.with_link_opener(links);
         }
         launcher
     }
@@ -171,19 +165,13 @@ fn sections(launcher: &Launcher) -> Vec<(String, usize)> {
 impl Fixture {
     fn pane(&self) -> (Pane, Launcher) {
         let pane = Pane::new();
-        let launcher = pane.with(
-            self.package,
-            Fakes {
-                system: None,
-                links: None,
-            },
-        );
+        let launcher = pane.with(self.package, Fakes { system: None });
         (pane, launcher)
     }
 }
 
 fn a_url_like_query_lists_only_the_command_declared_for_it(fixture: &Fixture) {
-    let (_, launcher) = fixture.pane();
+    let (_pane, launcher) = fixture.pane();
 
     search(&launcher, "https://github.com/pane-app/pane");
     assert_eq!(titles(&launcher), ["Hear an Address"]);
@@ -231,7 +219,7 @@ fn a_url_like_query_lists_only_the_command_declared_for_it(fixture: &Fixture) {
 }
 
 fn windows_and_unix_paths_are_paths(fixture: &Fixture) {
-    let (_, launcher) = fixture.pane();
+    let (_pane, launcher) = fixture.pane();
 
     let path = if cfg!(windows) {
         r"C:\Windows".to_owned()
@@ -310,10 +298,7 @@ impl Fixture {
         let mut manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
         change(&mut manifest);
         fs::write(folder.join("pane.json"), manifest.to_string()).unwrap();
-        let launcher = pane.start(Fakes {
-            system: None,
-            links: None,
-        });
+        let launcher = pane.start(Fakes { system: None });
         block_on(launcher.install_package(&folder));
         let status = launcher.view().status;
         (pane, launcher, status)
@@ -400,37 +385,11 @@ contract!(
     an_unknown_matches_is_refused_at_install_with_the_reason,
 );
 
-/// The recording link opener of the files suite: records the files it is
-/// asked to open, opens no link.
-#[derive(Clone, Default)]
-struct FakeOpener {
-    files: Arc<std::sync::Mutex<Vec<PathBuf>>>,
-}
-
-impl FakeOpener {
-    /// The files it was asked to open, in order.
-    fn opened(&self) -> Vec<PathBuf> {
-        self.files.lock().unwrap().clone()
-    }
-}
-
-impl LinkOpener for FakeOpener {
-    fn open(&self, url: &str) -> Result<(), String> {
-        panic!("no link is opened here: {url}")
-    }
-
-    fn open_file(&self, path: &Path) -> Result<(), String> {
-        self.files.lock().unwrap().push(path.to_path_buf());
-        Ok(())
-    }
-}
-
 /// Pane with the Files default extension installed over a home folder
-/// holding `notes/plan.md` and `notes/run plan.bat`, and the fakes its
-/// rows act through.
+/// holding `notes/plan.md` and `notes/run plan.bat`, and the recording
+/// system its rows act through.
 struct FilesPane {
     pane: Pane,
-    opener: FakeOpener,
     system: Arc<RecordingSystem>,
 }
 
@@ -441,8 +400,8 @@ impl FilesPane {
     }
 
     /// What opening and revealing did so far, taking the records.
-    fn acted(&self) -> (Vec<PathBuf>, Vec<Done>) {
-        (self.opener.opened(), self.system.take())
+    fn acted(&self) -> Vec<Done> {
+        self.system.take()
     }
 }
 
@@ -453,23 +412,8 @@ fn files_pane() -> (FilesPane, Launcher) {
     fs::write(notes.join("plan.md"), "plan").unwrap();
     fs::write(notes.join("run plan.bat"), "@echo off").unwrap();
     let system = Arc::new(RecordingSystem::default());
-    let opener = FakeOpener::default();
-    let links: Arc<dyn LinkOpener> = Arc::new(opener.clone());
-    let launcher = pane.with(
-        "files",
-        Fakes {
-            system: Some(system.clone()),
-            links: Some(links),
-        },
-    );
-    (
-        FilesPane {
-            pane,
-            opener,
-            system,
-        },
-        launcher,
-    )
+    let launcher = pane.with("files", Fakes { system: Some(system.clone()) });
+    (FilesPane { pane, system }, launcher)
 }
 
 #[test]
@@ -485,16 +429,18 @@ fn a_typed_path_offers_files_opening_and_revealing_it() {
     );
     select_title(&launcher, "Open");
     block_on(launcher.activate_selected());
-    let (opened, done) = files.acted();
-    assert_eq!(opened, [PathBuf::from(files.file("notes/plan.md"))]);
-    assert!(done.is_empty(), "nothing is revealed: {done:?}");
+    assert_eq!(
+        files.acted(),
+        [Done::Opened {
+            target: files.file("notes/plan.md"),
+            application: None,
+        }]
+    );
 
     select_title(&launcher, "Reveal in File Explorer");
     block_on(launcher.activate_selected());
-    let (opened, done) = files.acted();
-    assert!(opened.is_empty(), "nothing is opened: {opened:?}");
     assert_eq!(
-        done,
+        files.acted(),
         [Done::Revealed(PathBuf::from(files.file("notes/plan.md")))]
     );
 }
@@ -507,13 +453,12 @@ fn opening_a_typed_program_reveals_it_and_never_runs_it() {
     assert_eq!(titles(&launcher), ["Open", "Reveal in File Explorer"]);
     select_title(&launcher, "Open");
     block_on(launcher.activate_selected());
-    let (opened, done) = files.acted();
-    assert!(opened.is_empty(), "a program is never opened or run");
     assert_eq!(
-        done,
+        files.acted(),
         [Done::Revealed(PathBuf::from(
             files.file("notes/run plan.bat")
-        ))]
+        ))],
+        "a program is shown in the file manager and never run"
     );
 }
 
@@ -521,13 +466,7 @@ fn opening_a_typed_program_reveals_it_and_never_runs_it() {
 fn a_typed_address_offers_quicklinks_opening_and_saving_it() {
     let pane = Pane::new();
     let system = Arc::new(RecordingSystem::default());
-    let launcher = pane.with(
-        "quicklinks",
-        Fakes {
-            system: Some(system.clone()),
-            links: None,
-        },
-    );
+    let launcher = pane.with("quicklinks", Fakes { system: Some(system.clone()) });
     let window = RecordingWindow::attach(&launcher);
 
     // A typed address lists the two commands declared for it, and only
@@ -593,7 +532,17 @@ fn a_typed_address_offers_quicklinks_opening_and_saving_it() {
     );
     launcher.set_field_value("name", "Example");
     block_on(launcher.submit_form());
-    assert_eq!(shown(&launcher), Status::Result("Created “Example”".into()));
+    let after = shown(&launcher);
+    if after != Status::Result("Created “Example”".into()) {
+        for package in launcher.packages() {
+            eprintln!(
+                "DIAG package {:?} log: {:?}",
+                package.title(),
+                launcher.extension_log(&package.identity)
+            );
+        }
+    }
+    assert_eq!(after, Status::Result("Created “Example”".into()));
     assert!(matches!(launcher.view().screen, Screen::Root { .. }));
     search(&launcher, "example");
     assert!(titles(&launcher).contains(&"Example".to_owned()));
