@@ -396,7 +396,9 @@ impl Launcher {
         if opening.no_view {
             Launcher::begin_run(state);
         } else {
-            state.view.status = Status::Running { since: Instant::now() };
+            state.view.status = Status::Running {
+                since: Instant::now(),
+            };
         }
         let data = self.data_in(state, &opening.component);
         Some(Submitted {

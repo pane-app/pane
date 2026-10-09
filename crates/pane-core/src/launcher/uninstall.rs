@@ -235,7 +235,9 @@ impl Launcher {
         } else {
             self.refresh(state);
         }
-        state.view.status = Status::Running { since: Instant::now() };
+        state.view.status = Status::Running {
+            since: Instant::now(),
+        };
         Some(Uninstall { removed, saved })
     }
 

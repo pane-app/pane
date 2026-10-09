@@ -415,7 +415,9 @@ pub enum Status {
     /// began, the core's own clock — what [`Launcher::pending_since`]
     /// answers, so the window can hold its late loading bar back until
     /// the work has outlasted a moment (#248).
-    Running { since: Instant },
+    Running {
+        since: Instant,
+    },
     /// Work Pane does in the background is in progress, saying what, such
     /// as building a package being developed.
     Progress(String),
@@ -2783,7 +2785,9 @@ impl Launcher {
                 }
                 None => {
                     state.sent_from = state.view.query().map(str::to_owned);
-                    state.view.status = Status::Running { since: Instant::now() };
+                    state.view.status = Status::Running {
+                        since: Instant::now(),
+                    };
                     Pending::Send(sending)
                 }
             },
@@ -2802,7 +2806,9 @@ impl Launcher {
             // Any scheme, as Raycast opens it (ADR 0037): the extension is
             // trusted, and a filter here would protect nothing.
             Entry::OpenUrl(url) => {
-                state.view.status = Status::Running { since: Instant::now() };
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 Pending::OpenUrl(url)
             }
             Entry::StopSharingFolder(identity) => Pending::StopSharing(identity),
@@ -2943,19 +2949,27 @@ impl Launcher {
                 .begin_install(state, request, mode, assumptions)
                 .map_or(Pending::Nothing, Pending::Install),
             Entry::Acquire(id) => {
-                state.view.status = Status::Running { since: Instant::now() };
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 Pending::Acquire(id)
             }
             Entry::InstallUpdate => {
-                state.view.status = Status::Running { since: Instant::now() };
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 Pending::InstallUpdate
             }
             Entry::CheckUpdate => {
-                state.view.status = Status::Running { since: Instant::now() };
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 Pending::CheckUpdate
             }
             Entry::OpenLogFolder => {
-                state.view.status = Status::Running { since: Instant::now() };
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 Pending::OpenLogFolder
             }
             Entry::AskNpm => {
@@ -2972,17 +2986,23 @@ impl Launcher {
                 if opening.no_view {
                     Launcher::begin_run(state);
                 } else {
-                    state.view.status = Status::Running { since: Instant::now() };
+                    state.view.status = Status::Running {
+                        since: Instant::now(),
+                    };
                 }
                 Pending::Open(opening)
             }
             Entry::Run(callback) => {
-                state.view.status = Status::Running { since: Instant::now() };
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 Pending::Run(callback)
             }
             Entry::Actions(listed) => match listed.actions[0].callback() {
                 Some(callback) => {
-                    state.view.status = Status::Running { since: Instant::now() };
+                    state.view.status = Status::Running {
+                        since: Instant::now(),
+                    };
                     Pending::Run(callback.to_owned())
                 }
                 // A primary action that opens a submenu (#140): the window
@@ -2994,11 +3014,15 @@ impl Launcher {
                 Pending::Nothing
             }
             Entry::CustomView(item_id, info) => {
-                state.view.status = Status::Running { since: Instant::now() };
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 Pending::CustomView(item_id, info)
             }
             Entry::OpenApplication { id, name } => {
-                state.view.status = Status::Running { since: Instant::now() };
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 Pending::OpenApplication { id, name }
             }
             Entry::OpenTarget {
@@ -3006,7 +3030,9 @@ impl Launcher {
                 application,
                 name,
             } => {
-                state.view.status = Status::Running { since: Instant::now() };
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 Pending::OpenTarget {
                     target,
                     application,
@@ -3021,7 +3047,9 @@ impl Launcher {
                 Pending::Own(work)
             }
             Entry::ClearCache(identity) => {
-                state.view.status = Status::Running { since: Instant::now() };
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 Pending::ClearCache(identity)
             }
         }
@@ -3095,7 +3123,9 @@ impl Launcher {
         for identity in &identities {
             self.apply_enabled(state, identity, enabled);
         }
-        state.view.status = Status::Running { since: Instant::now() };
+        state.view.status = Status::Running {
+            since: Instant::now(),
+        };
         Some(Change {
             identities,
             enabled,
@@ -3196,7 +3226,9 @@ impl Launcher {
 
     fn start_running(&self) -> u64 {
         let mut state = self.lock();
-        state.view.status = Status::Running { since: Instant::now() };
+        state.view.status = Status::Running {
+            since: Instant::now(),
+        };
         state.screen_epoch
     }
 
@@ -3747,7 +3779,9 @@ impl Launcher {
                 ),
             ) => {
                 open.submitting = true;
-                state.view.status = Status::Running { since: Instant::now() };
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 let git = matches!(open.purpose, FormPurpose::Git);
                 form.fields.first().map(|field| (git, field.value.clone()))
             }
@@ -3783,7 +3817,9 @@ impl Launcher {
             _ => None,
         };
         if submission.is_some() {
-            state.view.status = Status::Running { since: Instant::now() };
+            state.view.status = Status::Running {
+                since: Instant::now(),
+            };
         }
         let epoch = state.screen_epoch;
         let data = submission

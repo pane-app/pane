@@ -121,7 +121,9 @@ impl Launcher {
         if !state.claim(&identity, Changing::Reloading) {
             return None;
         }
-        state.view.status = Status::Running { since: Instant::now() };
+        state.view.status = Status::Running {
+            since: Instant::now(),
+        };
         Some(Reload {
             identity,
             attempt,

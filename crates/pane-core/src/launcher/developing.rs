@@ -486,7 +486,9 @@ impl Launcher {
             .installation
             .as_ref()
             .expect("changeable checked there is an installation");
-        state.view.status = Status::Running { since: Instant::now() };
+        state.view.status = Status::Running {
+            since: Instant::now(),
+        };
         Some(DevelopStart {
             builder,
             folder: folder.to_path_buf(),

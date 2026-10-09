@@ -29,8 +29,8 @@
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::time::Instant;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use super::{
     CommandList, Entry, Launcher, Row, Screen, State, Status, files, owner, stopped,
@@ -154,7 +154,9 @@ impl Launcher {
                 return None;
             }
         };
-        state.view.status = Status::Running { since: Instant::now() };
+        state.view.status = Status::Running {
+            since: Instant::now(),
+        };
         let epoch = state.screen_epoch;
         let search = state.search_epoch;
         let launcher = self.clone();
@@ -366,7 +368,9 @@ impl Launcher {
         };
         // Still listing a granted folder: the wait goes on, stamped anew.
         let status = if listed.is_some() {
-            Status::Running { since: Instant::now() }
+            Status::Running {
+                since: Instant::now(),
+            }
         } else {
             status
         };

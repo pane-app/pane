@@ -66,7 +66,9 @@ fn titles(view: &LauncherView) -> Vec<&str> {
 /// A window over a launcher with the slow fixture installed as a package
 /// that computes root results, through its preview and Enter, as a user
 /// installs it.
-fn slow(cx: &mut TestAppContext) -> (
+fn slow(
+    cx: &mut TestAppContext,
+) -> (
     Entity<LauncherWindow>,
     &mut VisualTestContext,
     tempfile::TempDir,
@@ -93,7 +95,9 @@ fn slow(cx: &mut TestAppContext) -> (
 
 /// A window over a launcher with the no-view sample installed, whose
 /// "Report launch" runs quickly from root search, as a user installs it.
-fn quick(cx: &mut TestAppContext) -> (
+fn quick(
+    cx: &mut TestAppContext,
+) -> (
     Entity<LauncherWindow>,
     &mut VisualTestContext,
     tempfile::TempDir,
@@ -114,7 +118,10 @@ fn quick(cx: &mut TestAppContext) -> (
     settle(&window, cx);
     cx.simulate_keystrokes("enter");
     let view = settle(&window, cx);
-    assert_eq!(view.status, Status::Result("Installed No-view sample".into()));
+    assert_eq!(
+        view.status,
+        Status::Result("Installed No-view sample".into())
+    );
     (window, cx, sources, data)
 }
 
@@ -181,11 +188,18 @@ fn a_slow_root_search_shows_the_late_loading_bar_and_fades_it_away(cx: &mut Test
     // moves along the line as frames are delivered.
     frame(cx, SOME);
     let (strength, sweep) = bar(&window, cx).expect("the line is drawn");
-    assert!(strength > 0. && strength < 1., "the line fades in: {strength}");
+    assert!(
+        strength > 0. && strength < 1.,
+        "the line fades in: {strength}"
+    );
     assert!(sweep.is_some(), "the sweep runs");
-    let entered = cx.debug_bounds("loading-sweep").expect("the sweep is drawn");
+    let entered = cx
+        .debug_bounds("loading-sweep")
+        .expect("the sweep is drawn");
     frame(cx, SOME);
-    let swept = cx.debug_bounds("loading-sweep").expect("the sweep is drawn");
+    let swept = cx
+        .debug_bounds("loading-sweep")
+        .expect("the sweep is drawn");
     assert!(
         swept.origin.x + swept.size.width > entered.origin.x + entered.size.width + px(1.),
         "the highlight sweeps across the line: {swept:?} after {entered:?}"
@@ -197,7 +211,10 @@ fn a_slow_root_search_shows_the_late_loading_bar_and_fades_it_away(cx: &mut Test
     frame(cx, SOME);
     let (strength, _) = bar(&window, cx).expect("the line is drawn");
     assert_eq!(strength, 1., "the line is fully shown");
-    assert!(frame(cx, Duration::from_millis(25)) >= 1, "a frame is asked for");
+    assert!(
+        frame(cx, Duration::from_millis(25)) >= 1,
+        "a frame is asked for"
+    );
 
     // The fixture's answer arrives: the work is over, the line fades away
     // from where it was, and the window is idle again.
@@ -208,7 +225,11 @@ fn a_slow_root_search_shows_the_late_loading_bar_and_fades_it_away(cx: &mut Test
     assert!(strength < 1., "the line is leaving: {strength}");
     frame(cx, PAST);
     assert!(cx.debug_bounds("loading-bar").is_none(), "the line is gone");
-    assert_eq!(frame(cx, Duration::from_millis(25)), 0, "the window is idle");
+    assert_eq!(
+        frame(cx, Duration::from_millis(25)),
+        0,
+        "the window is idle"
+    );
 }
 
 /// An action that finishes in a few milliseconds never shows the line and
@@ -227,8 +248,15 @@ fn a_quick_action_shows_no_line_and_is_never_announced_busy(cx: &mut TestAppCont
     // work, with frames delivered beneath the threshold.
     cx.simulate_keystrokes("enter");
     frame(cx, SOME);
-    assert!(cx.debug_bounds("loading-bar").is_none(), "no line for quick work");
-    assert_ne!(announcement(cx), "Running…", "a quick action is not announced busy");
+    assert!(
+        cx.debug_bounds("loading-bar").is_none(),
+        "no line for quick work"
+    );
+    assert_ne!(
+        announcement(cx),
+        "Running…",
+        "a quick action is not announced busy"
+    );
 
     // Its answer is what the user reads and hears.
     let shown = settle_shown(&window, cx);
@@ -324,34 +352,62 @@ fn a_slow_command_search_shows_the_line_under_its_own_rule(cx: &mut TestAppConte
     cx.simulate_input("slow");
     cx.run_until_parked();
     let view = cx.read_entity(&window, |window, _| window.launcher().view());
-    assert!(matches!(view.status, Status::Running { .. }), "the search is pending");
     assert!(
-        cx.read_entity(&window, |window, _| window.launcher().pending_since()).is_some(),
+        matches!(view.status, Status::Running { .. }),
+        "the search is pending"
+    );
+    assert!(
+        cx.read_entity(&window, |window, _| window.launcher().pending_since())
+            .is_some(),
         "the core says the work is pending"
     );
-    assert!(cx.debug_bounds("loading-bar").is_none(), "beneath the threshold");
+    assert!(
+        cx.debug_bounds("loading-bar").is_none(),
+        "beneath the threshold"
+    );
 
     // Past it, the same line along the command's own rule — and the
     // footer's strip says nothing for such work (#248): no "Running…"
     // text, though the strip keeps its selector.
     frame(cx, PAST);
-    let search = cx.debug_bounds("search").expect("the command's search field");
+    let search = cx
+        .debug_bounds("search")
+        .expect("the command's search field");
     let line = cx.debug_bounds("loading-bar").expect("the line is drawn");
     assert_eq!(line.size.height, px(1.));
-    assert_eq!(line.bottom(), search.origin.y + px(64.), "along its own rule");
-    assert!(cx.debug_bounds("status-message").is_none(), "no message in the strip");
-    assert!(cx.debug_bounds("status-running").is_some(), "the strip keeps its selector");
+    assert_eq!(
+        line.bottom(),
+        search.origin.y + px(64.),
+        "along its own rule"
+    );
+    assert!(
+        cx.debug_bounds("status-message").is_none(),
+        "no message in the strip"
+    );
+    assert!(
+        cx.debug_bounds("status-running").is_some(),
+        "the strip keeps its selector"
+    );
 
     // The search is cleared: the wait ends, and the line fades away.
     cx.simulate_keystrokes("escape");
     let view = settle(&window, cx);
     assert_eq!(
         (view.screen, view.status),
-        (Screen::CommandSearch { query: String::new() }, Status::Idle)
+        (
+            Screen::CommandSearch {
+                query: String::new()
+            },
+            Status::Idle
+        )
     );
     frame(cx, PAST);
     assert!(cx.debug_bounds("loading-bar").is_none(), "the line is gone");
-    assert_eq!(frame(cx, Duration::from_millis(25)), 0, "the window is idle");
+    assert_eq!(
+        frame(cx, Duration::from_millis(25)),
+        0,
+        "the window is idle"
+    );
     assert_eq!(
         service.requests().last().map(String::as_str),
         Some("/search?q=slow")

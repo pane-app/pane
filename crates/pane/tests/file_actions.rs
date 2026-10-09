@@ -188,7 +188,9 @@ fn until(
 /// Runs the window until the launcher no longer runs an action: a hidden
 /// window draws nothing, so this does not wait for a frame.
 fn done(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> LauncherView {
-    until(window, cx, |view| !matches!(view.status, Status::Running { .. }))
+    until(window, cx, |view| {
+        !matches!(view.status, Status::Running { .. })
+    })
 }
 
 fn hidden(window: &Entity<LauncherWindow>, cx: &VisualTestContext) -> bool {

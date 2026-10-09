@@ -341,7 +341,9 @@ impl Launcher {
                 // The status line is about this action from now on: it
                 // runs until the command answered, as an item's action does.
                 state.sent_from = None;
-                state.view.status = Status::Running { since: Instant::now() };
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 let data = self.data_in(&state, &owner);
                 run = Some((state.screen_epoch, owner, command, callback, data));
             }

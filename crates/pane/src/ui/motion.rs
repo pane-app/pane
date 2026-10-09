@@ -477,7 +477,15 @@ pub(crate) fn advance_loading(
     reduced: bool,
     now: Instant,
 ) -> Option<f32> {
-    advance_tween(fade, target, 1. - target, LOADING_FADE, changed, reduced, now)
+    advance_tween(
+        fade,
+        target,
+        1. - target,
+        LOADING_FADE,
+        changed,
+        reduced,
+        now,
+    )
 }
 
 /// Advances a popup's entrance or exit — the popup's look, 0 closed, 1

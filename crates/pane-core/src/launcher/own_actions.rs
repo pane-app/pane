@@ -246,7 +246,9 @@ pub(super) fn primary(file: FileRow) -> Work {
 pub(super) fn begin(state: &mut State, work: &Work) {
     state.sent_from = None;
     if !matches!(work, Work::Trash(_) | Work::Paste(_)) {
-        state.view.status = Status::Running { since: Instant::now() };
+        state.view.status = Status::Running {
+            since: Instant::now(),
+        };
     }
 }
 
@@ -453,7 +455,9 @@ impl Launcher {
             Err(why) => return Ended::Failed(why),
         }
         if let Some(mut state) = self.lock_if_current(epoch) {
-            state.view.status = Status::Running { since: Instant::now() };
+            state.view.status = Status::Running {
+                since: Instant::now(),
+            };
         }
         let system = self.system();
         let moved = self

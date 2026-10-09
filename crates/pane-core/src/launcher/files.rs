@@ -182,7 +182,9 @@ impl Launcher {
         let folder = folder.to_path_buf();
         let files = {
             let mut state = self.lock();
-            state.view.status = Status::Running { since: Instant::now() };
+            state.view.status = Status::Running {
+                since: Instant::now(),
+            };
             state.files.clone()
         };
         async move {
@@ -214,7 +216,9 @@ impl Launcher {
     pub(super) async fn stop_sharing_folder(&self, identity: PackageIdentity) {
         let files = {
             let mut state = self.lock();
-            state.view.status = Status::Running { since: Instant::now() };
+            state.view.status = Status::Running {
+                since: Instant::now(),
+            };
             state.files.clone()
         };
         let revoked = match files {

@@ -143,7 +143,9 @@ impl Launcher {
     /// was launched from stays typed.
     pub(super) fn begin_run(state: &mut State) {
         state.sent_from = state.view.query().map(str::to_owned);
-        state.view.status = Status::Running { since: Instant::now() };
+        state.view.status = Status::Running {
+            since: Instant::now(),
+        };
     }
 
     /// Runs the no-view command of `opening` (`run`) with its launch
@@ -367,7 +369,9 @@ impl Launcher {
                 // As its hotkey opens it: whatever Pane shows makes way,
                 // and the window is shown for it.
                 self.show_root(state, Some(opening.component.clone()));
-                state.view.status = Status::Running { since: Instant::now() };
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 state.window_wanted = true;
             }
         }

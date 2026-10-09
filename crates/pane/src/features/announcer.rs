@@ -877,15 +877,37 @@ mod tests {
         assert!(says_message(&Status::Result("Copied".into()), false, false));
         assert!(says_message(&Status::Error("Failed".into()), false, false));
         assert!(
-            says_message(&Status::Running { since: Instant::now() }, true, false),
+            says_message(
+                &Status::Running {
+                    since: Instant::now()
+                },
+                true,
+                false
+            ),
             "a toast"
         );
         // The busy state is said only once waited-for work has outlasted
         // the loading bar's threshold (#248): beneath it, a quick action,
         // never.
-        assert!(!says_message(&Status::Running { since: Instant::now() }, false, false));
-        assert!(says_message(&Status::Running { since: Instant::now() }, false, true));
-        assert!(!says_message(&Status::Progress("3 of 9".into()), false, true));
+        assert!(!says_message(
+            &Status::Running {
+                since: Instant::now()
+            },
+            false,
+            false
+        ));
+        assert!(says_message(
+            &Status::Running {
+                since: Instant::now()
+            },
+            false,
+            true
+        ));
+        assert!(!says_message(
+            &Status::Progress("3 of 9".into()),
+            false,
+            true
+        ));
         assert!(!says_message(&Status::Idle, false, true));
     }
 

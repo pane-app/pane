@@ -32,8 +32,8 @@
 use std::time::{Duration, Instant};
 
 use gpui::{
-    ColorExt, Context, Div, Pixels, Task, div, linear_color_stop, linear_gradient, prelude::*,
-    px, relative,
+    ColorExt, Context, Div, Pixels, Task, div, linear_color_stop, linear_gradient, prelude::*, px,
+    relative,
 };
 
 use crate::app::LauncherWindow;
@@ -300,11 +300,7 @@ mod tests {
         assert!(!frame.busy);
         assert_eq!(frame.wake, Some(started + PAST));
         // The wait holds across frames that draw nothing.
-        let frame = loading.advance(
-            Some(since),
-            false,
-            started + motion::LOADING_AFTER / 2,
-        );
+        let frame = loading.advance(Some(since), false, started + motion::LOADING_AFTER / 2);
         assert!(frame.bar.is_none());
         assert_eq!(frame.wake, Some(started + PAST));
     }
@@ -322,7 +318,10 @@ mod tests {
         // A moment on, the line is visible and the sweep has entered.
         let frame = loading.advance(Some(since), false, started + PAST + SOME);
         let bar = frame.bar.expect("the line is drawn");
-        assert!(bar.strength > 0.5, "ease-out covers most of the distance early");
+        assert!(
+            bar.strength > 0.5,
+            "ease-out covers most of the distance early"
+        );
         assert!(bar.strength < 1., "the fade-in is not done in a moment");
         assert_eq!(bar.sweep, Some((0., 0.)), "the sweep enters from nothing");
         // The fade completes and the sweep travels; the line keeps asking
@@ -409,11 +408,7 @@ mod tests {
         // is back, and fully shown a fade later.
         let frame = loading.advance(Some(second), false, restarted + PAST);
         assert!(frame.busy, "the new work's count is its own");
-        let frame = loading.advance(
-            Some(second),
-            false,
-            restarted + PAST + motion::LOADING_FADE,
-        );
+        let frame = loading.advance(Some(second), false, restarted + PAST + motion::LOADING_FADE);
         assert_eq!(frame.bar.expect("the line is back").strength, 1.);
     }
 
@@ -449,6 +444,10 @@ mod tests {
             started + PAST + SOME + motion::LOADING_SWEEP,
         );
         let bar = frame.bar.expect("the line is drawn");
-        assert_eq!(bar.sweep, Some((0., 0.)), "the next pass enters from nothing");
+        assert_eq!(
+            bar.sweep,
+            Some((0., 0.)),
+            "the next pass enters from nothing"
+        );
     }
 }

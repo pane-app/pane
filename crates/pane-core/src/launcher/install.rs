@@ -582,7 +582,9 @@ impl Launcher {
             // Planned again, the change is shown.
             Err(Refusal::Changed) => Vec::new(),
         };
-        state.view.status = Status::Running { since: Instant::now() };
+        state.view.status = Status::Running {
+            since: Instant::now(),
+        };
         Some(Begun {
             request,
             mode,

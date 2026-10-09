@@ -389,7 +389,9 @@ impl Launcher {
             Launcher::begin_run(&mut state);
         } else {
             self.show_root(&mut state, Some(opening.component.clone()));
-            state.view.status = Status::Running { since: Instant::now() };
+            state.view.status = Status::Running {
+                since: Instant::now(),
+            };
         }
         // Its data as the package is now, so a disable or reload meanwhile
         // stops the opening.
@@ -524,7 +526,9 @@ impl Launcher {
         };
         self.leave_hotkey(state, &command);
         if set.write {
-            state.view.status = Status::Running { since: Instant::now() };
+            state.view.status = Status::Running {
+                since: Instant::now(),
+            };
             Some(HotkeyChange {
                 command: set.command,
                 done: set.done,
@@ -715,7 +719,9 @@ impl Launcher {
             .set_hotkey_of(state, command, None)
             .expect("clearing a hotkey takes no check");
         self.leave_hotkey(state, command);
-        state.view.status = Status::Running { since: Instant::now() };
+        state.view.status = Status::Running {
+            since: Instant::now(),
+        };
         Some(HotkeyChange {
             command: set.command,
             done: set.done,

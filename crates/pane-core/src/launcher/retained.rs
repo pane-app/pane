@@ -134,7 +134,9 @@ impl Launcher {
         if !state.claim(&identity, Changing::DeletingRetained) {
             return None;
         }
-        state.view.status = Status::Running { since: Instant::now() };
+        state.view.status = Status::Running {
+            since: Instant::now(),
+        };
         Some(retained)
     }
 

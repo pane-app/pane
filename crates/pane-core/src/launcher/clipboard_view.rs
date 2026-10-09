@@ -929,7 +929,9 @@ impl Launcher {
                 state.view.status = match &clip {
                     Err(why) => Status::Error(why.clone()),
                     // Running until it is pasted, or copied instead.
-                    Ok(_) => Status::Running { since: Instant::now() },
+                    Ok(_) => Status::Running {
+                        since: Instant::now(),
+                    },
                 };
             }
         }

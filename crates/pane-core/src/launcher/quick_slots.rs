@@ -836,7 +836,9 @@ impl Launcher {
             Some(_) => {
                 // The status line is about this action from now on.
                 state.sent_from = None;
-                state.view.status = Status::Running { since: Instant::now() };
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
             }
             None => {}
         }
@@ -935,7 +937,9 @@ impl Launcher {
         let (changed, said) = change(self, state, target, action);
         let save = match &changed {
             SlotChange::Changed(_) => {
-                state.view.status = Status::Running { since: Instant::now() };
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 Some((state.screen_epoch, said))
             }
             SlotChange::AlreadyPinned(_) => {

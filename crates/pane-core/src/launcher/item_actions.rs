@@ -263,7 +263,9 @@ impl Launcher {
         if let (Some(callback), Some(component)) = (callback, state.open.clone()) {
             // The status line is about this action from now on.
             state.sent_from = None;
-            state.view.status = Status::Running { since: Instant::now() };
+            state.view.status = Status::Running {
+                since: Instant::now(),
+            };
             let data = self.data_in(&state, &component);
             run = Some((state.screen_epoch, component, callback, data));
         }
