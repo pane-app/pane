@@ -207,12 +207,34 @@ jobs:
           name: js-guests
           path: guests/prebuilt
 
+  # One-shot while the hand-merged lock settles (#218): resolve the
+  # workspace without --locked and upload the Cargo.lock cargo writes,
+  # so the committed one can be replaced with the resolver's own output.
+  # Removed once the committed lock is that output.
+  lock:
+    name: Regenerate the lock (ubuntu-24.04)
+    if: ${{ !inputs.verify }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Resolve the workspace
+        # The lock is written during resolution, so a compile error after
+        # it still leaves the artifact below to commit.
+        run: cargo check --workspace --all-targets
+      - name: Upload the resolved lock
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-lock
+          path: Cargo.lock
+
   # The one check to require, as in ci-branch.yml: green when every job
   # above passed or was skipped. A job added here is added to `needs`.
   passed:
     name: CI passed
     if: always()
-    needs: [check, lints, tests, macos-check, chosen, js-guests]
+    needs: [check, lints, tests, macos-check, chosen, js-guests, lock]
     runs-on: ubuntu-24.04
     steps:
       - name: Every job passed or was skipped
