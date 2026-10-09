@@ -849,7 +849,8 @@ mod tests {
         );
         // Recorded as the record's camelCase field, and read back.
         assert_eq!(
-            reading(r#"{ "version": 1, "searchSensitivity": "low" }"#).unwrap()
+            reading(r#"{ "version": 1, "searchSensitivity": "low" }"#)
+                .unwrap()
                 .search_sensitivity,
             super::SearchSensitivity::Low
         );

@@ -113,9 +113,21 @@ pub(crate) const REOPENING_DEBUG: &str = "launcher-reopening";
 pub(crate) const SENSITIVITY_NAME: &str = "Search sensitivity";
 pub(crate) const SENSITIVITY_DEBUG: &str = "launcher-sensitivity";
 pub(crate) const SENSITIVITIES: [(SearchSensitivity, &str, &str); 3] = [
-    (SearchSensitivity::High, "High", "Matches that also start the text or a word of it"),
-    (SearchSensitivity::Medium, "Medium", "Word starts and tighter placements"),
-    (SearchSensitivity::Low, "Low", "Every placement the letters can make"),
+    (
+        SearchSensitivity::High,
+        "High",
+        "Matches that also start the text or a word of it",
+    ),
+    (
+        SearchSensitivity::Medium,
+        "Medium",
+        "Word starts and tighter placements",
+    ),
+    (
+        SearchSensitivity::Low,
+        "Low",
+        "Every placement the letters can make",
+    ),
 ];
 
 /// The layout rows: their names, and their segments — the preference, the

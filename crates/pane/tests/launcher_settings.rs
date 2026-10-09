@@ -1205,8 +1205,8 @@ fn the_search_sensitivity_control_changes_the_results_live(cx: &mut TestAppConte
     placement.layout(Some(Point { x: 100., y: 100. }), None);
     cx.update(|cx| pane::placement::init(placement.clone() as Rc<dyn Placement>, cx));
     init_settings(Some(data.path()), cx);
-    let component = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/guests/sample_rust.wasm");
+    let component =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/sample_rust.wasm");
     assert!(
         component.exists(),
         "{} is missing; run `cargo xtask guests`",
@@ -1267,13 +1267,20 @@ fn the_search_sensitivity_control_changes_the_results_live(cx: &mut TestAppConte
     settings_cx.run_until_parked();
     click(&mut settings_cx, "launcher-sensitivity-Medium");
     settings_cx.run_until_parked();
-    until_record_holds(&mut settings_cx, data.path(), "\"searchSensitivity\": \"medium\"");
+    until_record_holds(
+        &mut settings_cx,
+        data.path(),
+        "\"searchSensitivity\": \"medium\"",
+    );
 
     // The choice applies on the next keystroke: the list the query has
     // already made stays as it is, and the query made again holds the
     // command.
     let view = cx.read_entity(&window, |window, _| window.launcher().view());
-    assert!(view.rows.is_empty(), "the list stays until the query changes");
+    assert!(
+        view.rows.is_empty(),
+        "the list stays until the query changes"
+    );
     cx.simulate_keystrokes("escape");
     let view = settle(&window, cx);
     assert_eq!(view.query(), Some(""));

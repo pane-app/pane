@@ -111,7 +111,11 @@ fn normalize(text: &str) -> String {
 /// Việt".
 fn fold(text: &str) -> String {
     if text.is_ascii() {
-        return text.to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ");
+        return text
+            .to_lowercase()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
     }
     let nfc: String = text.nfc().collect();
     any_ascii::any_ascii(&nfc)
@@ -406,16 +410,15 @@ impl Query {
 /// that rejects a text the scorer would only reject more expensively.
 fn holds(query: &[char], text: &[char]) -> bool {
     let mut at = 0;
-    query
-        .iter()
-        .filter(|c| !is_separator(**c))
-        .all(|&c| match text[at..].iter().position(|&t| t == c) {
+    query.iter().filter(|c| !is_separator(**c)).all(|&c| {
+        match text[at..].iter().position(|&t| t == c) {
             Some(found) => {
                 at += found + 1;
                 true
             }
             None => false,
-        })
+        }
+    })
 }
 
 /// What the query's `i`-th character scores placed at `j` in `text`, or
@@ -546,7 +549,10 @@ fn place(query: &[char], text: &[char], trace: bool) -> Option<Placed> {
             if here == impossible {
                 continue;
             }
-            if winner.as_ref().is_none_or(|&(wi, wj)| here > dp[wi * m + wj]) {
+            if winner
+                .as_ref()
+                .is_none_or(|&(wi, wj)| here > dp[wi * m + wj])
+            {
                 winner = Some((i, j));
             }
         }
@@ -682,7 +688,9 @@ pub fn title_matches(
     for (index, (chars, _)) in texts.iter().enumerate() {
         if let Some(placed) = query.placed_in(chars.clone(), true) {
             let better = sensitivity.accepts(placed.score, query.letters)
-                && best.as_ref().is_none_or(|(score, _, _)| placed.score > *score);
+                && best
+                    .as_ref()
+                    .is_none_or(|(score, _, _)| placed.score > *score);
             if better {
                 best = Some((placed.score, index, placed.at));
             }
@@ -752,7 +760,11 @@ mod alternate_tests {
     use super::{Keys, Query, SearchSensitivity, ranked_matches};
 
     fn matches(query: &str, keys: &[Keys]) -> Vec<usize> {
-        ranked_matches(&Query::new(query), keys.iter(), SearchSensitivity::default())
+        ranked_matches(
+            &Query::new(query),
+            keys.iter(),
+            SearchSensitivity::default(),
+        )
     }
 
     fn strings(words: &[&str]) -> Vec<String> {
@@ -862,8 +874,14 @@ mod matching_tests {
         let keys = texts(&[("Search YouTube", Some("Videos"))]);
         // The composite "title subtitle" holds the whole query, and so
         // does the composite the other way round.
-        assert_eq!(matched("utub vid", &keys, SearchSensitivity::default()), [0]);
-        assert_eq!(matched("vid utub", &keys, SearchSensitivity::default()), [0]);
+        assert_eq!(
+            matched("utub vid", &keys, SearchSensitivity::default()),
+            [0]
+        );
+        assert_eq!(
+            matched("vid utub", &keys, SearchSensitivity::default()),
+            [0]
+        );
     }
 
     #[test]
@@ -876,7 +894,10 @@ mod matching_tests {
         assert_eq!(matched("download", &keys, SearchSensitivity::Low), [0]);
         // "dwl" is scattered through the one word: only Low holds it.
         for sensitivity in [SearchSensitivity::High, SearchSensitivity::Medium] {
-            assert!(matched("dwl", &keys, sensitivity).is_empty(), "{sensitivity:?}");
+            assert!(
+                matched("dwl", &keys, sensitivity).is_empty(),
+                "{sensitivity:?}"
+            );
         }
         assert_eq!(matched("dwl", &keys, SearchSensitivity::Low), [0]);
         // High still holds a match that starts a word.
@@ -979,10 +1000,22 @@ mod tests {
     #[allow(clippy::single_range_in_vec_init)]
     fn the_query_highlights_as_one_run_where_the_title_holds_it() {
         let high = SearchSensitivity::default();
-        assert_eq!(title_matches("Clipboard History", None, "clip", high), [0..4]);
-        assert_eq!(title_matches("Clipboard History", None, "CLIP", high), [0..4]);
-        assert_eq!(title_matches("Clipboard History", None, "board hi", high), [4..12]);
-        assert_eq!(title_matches("Clipboard History", None, "  hist ", high), [10..14]);
+        assert_eq!(
+            title_matches("Clipboard History", None, "clip", high),
+            [0..4]
+        );
+        assert_eq!(
+            title_matches("Clipboard History", None, "CLIP", high),
+            [0..4]
+        );
+        assert_eq!(
+            title_matches("Clipboard History", None, "board hi", high),
+            [4..12]
+        );
+        assert_eq!(
+            title_matches("Clipboard History", None, "  hist ", high),
+            [10..14]
+        );
     }
 
     #[test]
@@ -1004,7 +1037,10 @@ mod tests {
         let high = SearchSensitivity::default();
         // Ä is two bytes, folded to a of one; the range covers both.
         assert_eq!(title_matches("Ärger übersetzen", None, "är", high), [0..3]);
-        assert_eq!(title_matches("Ärger übersetzen", None, "über", high), [7..12]);
+        assert_eq!(
+            title_matches("Ärger übersetzen", None, "über", high),
+            [7..12]
+        );
         // "straße" is "Straße" folded: the whole title is the placement.
         assert_eq!(title_matches("Straße", None, "straße", high), [0..7]);
         // ß folds to two characters, so "ss" highlights it whole — a
@@ -1041,13 +1077,22 @@ mod tests {
         // holds it, as one run.
         assert!(title_matches("Undownloadable files", None, "download", high).is_empty());
         assert_eq!(
-            title_matches("Undownloadable files", None, "download", SearchSensitivity::Medium),
+            title_matches(
+                "Undownloadable files",
+                None,
+                "download",
+                SearchSensitivity::Medium
+            ),
             [2..10]
         );
         // A query found only in the subtitle highlights nothing in the
         // title: its placements in the composites land past the title.
-        let matched =
-            title_matches("Clear cache", Some("Delete downloaded files"), "del files", high);
+        let matched = title_matches(
+            "Clear cache",
+            Some("Delete downloaded files"),
+            "del files",
+            high,
+        );
         assert!(matched.is_empty());
     }
 }

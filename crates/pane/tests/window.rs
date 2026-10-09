@@ -2660,7 +2660,10 @@ fn root_rows_sit_under_their_section_labels(cx: &mut TestAppContext) {
 fn the_matched_characters_of_the_best_placement_are_highlighted(cx: &mut TestAppContext) {
     let mut clearing = command("Clear cache", JAVASCRIPT.component);
     clearing.subtitle = Some("Delete downloaded files".into());
-    let (window, cx) = open_with(cx, vec![command("Clipboard History", RUST.component), clearing]);
+    let (window, cx) = open_with(
+        cx,
+        vec![command("Clipboard History", RUST.component), clearing],
+    );
     settle(&window, cx);
 
     // "clhis" places c, l at the start of the title and h, i, s in

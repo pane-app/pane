@@ -220,7 +220,10 @@ fn search_sensitivity_decides_how_good_a_score_must_be() {
         "the list stays until the query changes"
     );
     block_on(launcher.set_query("download "));
-    assert!(titles(&launcher).is_empty(), "the next keystroke applies it");
+    assert!(
+        titles(&launcher).is_empty(),
+        "the next keystroke applies it"
+    );
 }
 
 /// The title characters of the best placement, as the presentation hands
