@@ -117,6 +117,9 @@ mod tests {
             assert!((channel - 0.5).abs() < 1e-3);
         }
         assert_eq!(grey.alpha, 1.);
-        assert_eq!(over(color(0xFFFFFFFF), color(0x000000FF)), color(0xFFFFFFFF));
+        assert_eq!(
+            over(color(0xFFFFFFFF), color(0x000000FF)),
+            color(0xFFFFFFFF)
+        );
     }
 }

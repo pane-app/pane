@@ -1222,7 +1222,11 @@ impl Theme {
                 keycap_text,
                 SECONDARY_STRENGTH,
                 contrast::TEXT,
-                &[keycap_on(panel_solid), keycap_on(footer), keycap_on(popover)],
+                &[
+                    keycap_on(panel_solid),
+                    keycap_on(footer),
+                    keycap_on(popover),
+                ],
             ),
             accent: color(0xC9EE6AFF),
             accent_ink: color(0x111210FF),
@@ -1386,7 +1390,11 @@ impl Theme {
                 keycap_text,
                 SECONDARY_STRENGTH,
                 contrast::TEXT,
-                &[keycap_on(panel_solid), keycap_on(footer), keycap_on(popover)],
+                &[
+                    keycap_on(panel_solid),
+                    keycap_on(footer),
+                    keycap_on(popover),
+                ],
             ),
             accent: color(0xC9EE6AFF),
             accent_ink: color(0x111210FF),
@@ -1499,13 +1507,7 @@ impl Theme {
         let keycap_on = |surface: Hsla| contrast::over(self.keycap_background, surface);
         Theme {
             text_muted: stepped,
-            text_secondary: level(
-                ink,
-                stepped,
-                SECONDARY_STRENGTH,
-                contrast::TEXT,
-                &[canvas],
-            ),
+            text_secondary: level(ink, stepped, SECONDARY_STRENGTH, contrast::TEXT, &[canvas]),
             text_tertiary: level(
                 ink,
                 label,
@@ -2105,7 +2107,11 @@ mod tests {
                 chosen: theme.keycap_text,
                 strength: SECONDARY_STRENGTH,
                 floor: TEXT,
-                surfaces: vec![cap_on(case.panel), cap_on(case.footer), cap_on(case.popover)],
+                surfaces: vec![
+                    cap_on(case.panel),
+                    cap_on(case.footer),
+                    cap_on(case.popover),
+                ],
                 present: keycap,
             },
             Role {
@@ -2134,7 +2140,11 @@ mod tests {
             // The primary level: the titles (4.5:1 on the panel, the footer
             // strip and the popover) and the query (4.5:1 on its field).
             let primaries = [
-                ("title", theme.text_title, vec![case.panel, case.footer, case.popover]),
+                (
+                    "title",
+                    theme.text_title,
+                    vec![case.panel, case.footer, case.popover],
+                ),
                 ("query", theme.text_query, vec![case.field]),
             ];
             for (name, chosen, surfaces) in primaries {
@@ -2167,20 +2177,15 @@ mod tests {
                 };
                 if reads(alpha, role.floor, &role.surfaces) {
                     assert_eq!(
-                        role.chosen,
-                        alpha,
+                        role.chosen, alpha,
                         "{} in {} should take the primary ink at {}",
-                        role.name,
-                        case.name,
-                        role.strength
+                        role.name, case.name, role.strength
                     );
                 } else {
                     assert_eq!(
-                        role.chosen,
-                        role.present,
+                        role.chosen, role.present,
                         "{} in {} should keep its accepted colour",
-                        role.name,
-                        case.name
+                        role.name, case.name
                     );
                 }
             }
