@@ -56,16 +56,27 @@ jobs:
             cat "$parts/wasm-parts.json"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-      # The repository builds JS/TS packages with the committed parts
-      # (tools/componentize-js/wasm-parts), so they must not drift from the
-      # vendored source this fresh build came from.
-      - name: Check the committed wasm parts against the fresh build
-        run: python tools/componentize-js/pane_js.py check-parts "$RUNNER_TEMP/wasm-parts"
+      # The parts are uploaded before the check, so a mismatch still leaves
+      # the fresh build to commit (the error message says exactly that).
       - uses: actions/upload-artifact@v4
         with:
           name: componentizer-wasm-parts
           path: ${{ runner.temp }}/wasm-parts
           if-no-files-found: error
+      # The lock the build resolved, for the first run or a pins change: at
+      # tools/componentize-js/componentize-qjs/crates/runtime/Cargo.lock it
+      # holds every later build to the same versions, which is what makes
+      # the runtime's bytes comparable by check-parts.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-lock
+          path: ~/.cache/pane/componentize-js/src/runtime/Cargo.lock
+          if-no-files-found: error
+      # The repository builds JS/TS packages with the committed parts
+      # (tools/componentize-js/wasm-parts), so they must not drift from the
+      # vendored source this fresh build came from.
+      - name: Check the committed wasm parts against the fresh build
+        run: python tools/componentize-js/pane_js.py check-parts "$RUNNER_TEMP/wasm-parts"
 
   componentizer:
     name: Componentizer (${{ matrix.target }})

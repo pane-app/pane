@@ -383,11 +383,7 @@ fn install_cli(folder: &Path) -> PathBuf {
     let cli = folder.join(format!("node_modules/@pane-app/cli-{target}"));
     fs::create_dir_all(&cli).unwrap();
     let parts = repository().join("tools/componentize-js/wasm-parts");
-    for part in [
-        binary,
-        parts.join("runtime.wasm"),
-        parts.join("libc.so"),
-    ] {
+    for part in [binary, parts.join("runtime.wasm"), parts.join("libc.so")] {
         fs::copy(&part, cli.join(part.file_name().unwrap())).unwrap();
     }
     cli

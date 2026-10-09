@@ -128,7 +128,9 @@ pub(crate) fn rebuild() -> Result<(), String> {
         match pane_build::build_js_command(&job, &root.join(source), &out, &componentizer()) {
             BuildOutcome::Built => {}
             BuildOutcome::Stopped => return Err(format!("{source} was stopped")),
-            BuildOutcome::Failed(reason) => return Err(format!("{source} did not build: {reason}")),
+            BuildOutcome::Failed(reason) => {
+                return Err(format!("{source} did not build: {reason}"));
+            }
         }
         let built = std::fs::read(&out).map_err(|error| format!("read {out:?} failed: {error}"))?;
         components.insert(
@@ -192,8 +194,7 @@ fn toolchain(root: &Path) -> serde_json::Value {
 /// The esbuild and TypeScript versions of the pin of record
 /// (`tools/componentize-js/package-lock.json`).
 fn tool_versions(root: &Path) -> [String; 2] {
-    let lock: serde_json::Value =
-        read_json(&root.join("tools/componentize-js/package-lock.json"));
+    let lock: serde_json::Value = read_json(&root.join("tools/componentize-js/package-lock.json"));
     let version = |name: &str| {
         lock["packages"][format!("node_modules/{name}")]["version"]
             .as_str()
@@ -207,7 +208,10 @@ fn tool_versions(root: &Path) -> [String; 2] {
 fn pins_patches(root: &Path) -> serde_json::Value {
     let pins: serde_json::Value = read_json(&root.join("tools/componentize-js/pins.json"));
     let mut patches = serde_json::Map::new();
-    for patch in pins["patches"].as_array().expect("pins.json names the patches") {
+    for patch in pins["patches"]
+        .as_array()
+        .expect("pins.json names the patches")
+    {
         let name = patch.as_str().expect("a patch name");
         let digest = std::fs::read(root.join("tools/componentize-js/patches").join(name))
             .expect("the patch queue is committed");
@@ -296,11 +300,15 @@ fn check_npm_licenses(root: &Path, problems: &mut Vec<String>) {
     for (_, source) in SAMPLES {
         let lock = package_lock(root, source);
         for (path, package) in lock["packages"].as_object().into_iter().flatten() {
-            let linked = package.get("link").is_some_and(|link| link.as_bool() == Some(true));
+            let linked = package
+                .get("link")
+                .is_some_and(|link| link.as_bool() == Some(true));
             if linked || path.starts_with("..") || path.is_empty() {
                 continue; // in-repo packages carry the repository's own license
             }
-            let dev = package.get("dev").is_some_and(|dev| dev.as_bool() == Some(true));
+            let dev = package
+                .get("dev")
+                .is_some_and(|dev| dev.as_bool() == Some(true));
             let license = package["license"].as_str().unwrap_or("");
             if !dev && !NPM_LICENSES.contains(&license) {
                 problems.push(format!("{source}: {path} is licensed {license:?}"));

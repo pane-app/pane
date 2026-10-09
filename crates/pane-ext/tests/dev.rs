@@ -378,7 +378,10 @@ fn pane_ext_dev_builds_a_typescript_package_with_the_componentizer_it_links() {
     terminal.wait_for("Pane: Hello TypeScript did not build");
 
     // A fix is built here and reloaded there.
-    js_save(&folder, r#"const GREETING: string = "Hello from pane-ext";"#);
+    js_save(
+        &folder,
+        r#"const GREETING: string = "Hello from pane-ext";"#,
+    );
     terminal.wait_for("Pane: Reloaded Hello TypeScript");
     assert_eq!(
         say_hello_typescript(&launcher),

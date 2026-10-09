@@ -23,11 +23,11 @@
 use std::path::{Path, PathBuf};
 
 mod build;
+mod js;
+mod js_assets;
 pub mod process_tree;
 mod session;
 mod sources;
-mod js;
-mod js_assets;
 
 pub use build::{
     Build, BuildJob, BuildOutcome, Builder, Componentizer, Echo, Toolchains, build_package,

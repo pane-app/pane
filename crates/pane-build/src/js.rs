@@ -97,7 +97,12 @@ pub fn build_js_command(
 ) -> BuildOutcome {
     let package = match crate::canonical(package) {
         Ok(package) => package,
-        Err(error) => return failed(&format!("{} cannot be resolved: {error}", package.display())),
+        Err(error) => {
+            return failed(&format!(
+                "{} cannot be resolved: {error}",
+                package.display()
+            ));
+        }
     };
     let manifest = match fs::read_to_string(package.join("package.json")) {
         Ok(manifest) => manifest,
@@ -178,7 +183,10 @@ pub fn build_js_command(
     }
     let world_file = wit.join("command.wit");
     if let Err(error) = fs::write(&world_file, world) {
-        return failed(&format!("{} cannot be written: {error}", world_file.display()));
+        return failed(&format!(
+            "{} cannot be written: {error}",
+            world_file.display()
+        ));
     }
 
     // The componentizer: this process's, or the binary a folder holds.
@@ -369,7 +377,10 @@ fn install(job: &BuildJob, staged: &Path) -> Option<BuildOutcome> {
                 }
             }
             if let Err(error) = fs::write(&marker, digest) {
-                return Some(failed(&format!("{} cannot be written: {error}", marker.display())));
+                return Some(failed(&format!(
+                    "{} cannot be written: {error}",
+                    marker.display()
+                )));
             }
             None
         }
@@ -447,7 +458,10 @@ fn adapted_entry(entry: &Path, types: &Path, options: &Map<String, Value>) -> St
         "export const command = adaptCommand(extension.command);".into(),
     ];
     for (option, name, handler) in ADAPTED_PROVIDERS {
-        if options.get(option).is_some_and(|value| value.as_bool() == Some(true)) {
+        if options
+            .get(option)
+            .is_some_and(|value| value.as_bool() == Some(true))
+        {
             lines.push(format!(
                 "export const {name} = adaptProvider(extension.{name}, {handler:?});"
             ));
@@ -514,7 +528,10 @@ fn command_world(
     let mut imports = String::new();
     let mut exports = String::new();
     for (option, interface) in IMPORT_OPTIONS {
-        if options.get(option).is_some_and(|value| value.as_bool() == Some(true)) {
+        if options
+            .get(option)
+            .is_some_and(|value| value.as_bool() == Some(true))
+        {
             imports.push_str(&format!("  import {interface};\n"));
         }
     }
@@ -525,7 +542,10 @@ fn command_world(
         imports.push_str(&format!("  import {PROGRAMS_IMPORT};\n"));
     }
     for (option, interface) in EXPORT_OPTIONS {
-        if options.get(option).is_some_and(|value| value.as_bool() == Some(true)) {
+        if options
+            .get(option)
+            .is_some_and(|value| value.as_bool() == Some(true))
+        {
             exports.push_str(&format!("  export {interface};\n"));
         }
     }
@@ -599,10 +619,19 @@ pub(crate) fn componentizer_parts(folder: &Path) -> Result<Parts, String> {
     let missing: Vec<String> = [&binary, &runtime, &libc]
         .into_iter()
         .filter(|path| !path.is_file())
-        .map(|path| path.file_name().unwrap_or_default().to_string_lossy().into_owned())
+        .map(|path| {
+            path.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        })
         .collect();
     if !missing.is_empty() {
-        return Err(format!("{} has no {}", folder.display(), missing.join(", ")));
+        return Err(format!(
+            "{} has no {}",
+            folder.display(),
+            missing.join(", ")
+        ));
     }
     Ok(Parts {
         binary,
@@ -691,8 +720,14 @@ mod tests {
              import pane:extension/files@0.1.0;\n  export pane:extension/root-results@0.1.0;\n}\n"
         );
         let world = command_world(&Map::new(), true, true).unwrap();
-        assert!(world.contains("  import wasi:http/client@0.3.0;\n"), "{world}");
-        assert!(world.contains("  import pane:extension/programs@0.1.0;\n"), "{world}");
+        assert!(
+            world.contains("  import wasi:http/client@0.3.0;\n"),
+            "{world}"
+        );
+        assert!(
+            world.contains("  import pane:extension/programs@0.1.0;\n"),
+            "{world}"
+        );
         let mut unknown = Map::new();
         unknown.insert("noSuchOption".into(), Value::Bool(true));
         assert!(
@@ -704,15 +739,21 @@ mod tests {
 
     #[test]
     fn the_bundle_decides_the_wasi_http_and_programs_imports() {
-        assert!(uses_http(r#"import { send } from "wasi:http/client@0.3.0";"#));
-        assert!(uses_http(r#"const m = await import ("wasi:http/types@0.3.0");"#));
+        assert!(uses_http(
+            r#"import { send } from "wasi:http/client@0.3.0";"#
+        ));
+        assert!(uses_http(
+            r#"const m = await import ("wasi:http/types@0.3.0");"#
+        ));
         assert!(uses_programs(
             r#"import { run } from "pane:extension/programs@0.1.0";"#
         ));
         assert!(!uses_http("import { send } from \"pane:extension/http\";"));
         // A mention without an import is not a use.
         assert!(!uses_http("const url = 'https://wasi:http/';"));
-        assert!(!uses_programs("import { run } from \"pane:extension/other\";"));
+        assert!(!uses_programs(
+            "import { run } from \"pane:extension/other\";"
+        ));
         assert!(!uses_http(""));
     }
 
@@ -724,9 +765,11 @@ mod tests {
             &Map::new(),
         );
         assert!(
-            entry.contains("import \"/work/js/console.js\";\nimport * as extension from \
+            entry.contains(
+                "import \"/work/js/console.js\";\nimport * as extension from \
                             \"/work/hello-ts/src/index.ts\";\nimport { adaptCommand, \
-                            adaptProvider } from \"/work/js/adapt.js\";"),
+                            adaptProvider } from \"/work/js/adapt.js\";"
+            ),
             "{entry}"
         );
         assert!(

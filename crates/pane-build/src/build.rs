@@ -334,9 +334,7 @@ fn default_componentizer(default: Option<PathBuf>) -> Componentizer {
     }
     #[cfg(not(feature = "componentizer"))]
     {
-        return match default
-            .filter(|folder| crate::js::componentizer_parts(folder).is_ok())
-        {
+        return match default.filter(|folder| crate::js::componentizer_parts(folder).is_ok()) {
             Some(folder) => Componentizer::Binary(Some(folder)),
             None => Componentizer::Binary(None),
         };
@@ -394,10 +392,12 @@ impl<M: ManifestFiles + Clone> Builder for Toolchains<M> {
                 Componentizer::Binary(Some(folder)) => {
                     match crate::js::componentizer_parts(&folder) {
                         Ok(_) => Componentizer::Binary(Some(folder)),
-                        Err(reason) => return Err(format!(
-                            "PANE_COMPONENTIZER ({}) holds no componentizer: {reason}",
-                            folder.display()
-                        )),
+                        Err(reason) => {
+                            return Err(format!(
+                                "PANE_COMPONENTIZER ({}) holds no componentizer: {reason}",
+                                folder.display()
+                            ));
+                        }
                     }
                 }
             };

@@ -21,49 +21,103 @@ use std::path::Path;
 /// Staged at `<work>/js` beside the package, where its `file:../js`
 /// devDependency resolves.
 const SDK: [(&str, &str); 34] = [
-    ("LICENSE-APACHE", include_str!("../../../guests/js/LICENSE-APACHE")),
-    ("LICENSE-MIT", include_str!("../../../guests/js/LICENSE-MIT")),
+    (
+        "LICENSE-APACHE",
+        include_str!("../../../guests/js/LICENSE-APACHE"),
+    ),
+    (
+        "LICENSE-MIT",
+        include_str!("../../../guests/js/LICENSE-MIT"),
+    ),
     ("README.md", include_str!("../../../guests/js/README.md")),
     ("adapt.js", include_str!("../../../guests/js/adapt.js")),
     (
         "applications.d.ts",
         include_str!("../../../guests/js/applications.d.ts"),
     ),
-    ("clipboard.d.ts", include_str!("../../../guests/js/clipboard.d.ts")),
-    ("commands.d.ts", include_str!("../../../guests/js/commands.d.ts")),
-    ("console.d.ts", include_str!("../../../guests/js/console.d.ts")),
+    (
+        "clipboard.d.ts",
+        include_str!("../../../guests/js/clipboard.d.ts"),
+    ),
+    (
+        "commands.d.ts",
+        include_str!("../../../guests/js/commands.d.ts"),
+    ),
+    (
+        "console.d.ts",
+        include_str!("../../../guests/js/console.d.ts"),
+    ),
     ("console.js", include_str!("../../../guests/js/console.js")),
     ("data.d.ts", include_str!("../../../guests/js/data.d.ts")),
     (
         "feedback-host.d.ts",
         include_str!("../../../guests/js/feedback-host.d.ts"),
     ),
-    ("feedback.d.ts", include_str!("../../../guests/js/feedback.d.ts")),
-    ("feedback.js", include_str!("../../../guests/js/feedback.js")),
-    ("file-index.d.ts", include_str!("../../../guests/js/file-index.d.ts")),
+    (
+        "feedback.d.ts",
+        include_str!("../../../guests/js/feedback.d.ts"),
+    ),
+    (
+        "feedback.js",
+        include_str!("../../../guests/js/feedback.js"),
+    ),
+    (
+        "file-index.d.ts",
+        include_str!("../../../guests/js/file-index.d.ts"),
+    ),
     ("files.d.ts", include_str!("../../../guests/js/files.d.ts")),
-    ("helpers.d.ts", include_str!("../../../guests/js/helpers.d.ts")),
+    (
+        "helpers.d.ts",
+        include_str!("../../../guests/js/helpers.d.ts"),
+    ),
     ("http.d.ts", include_str!("../../../guests/js/http.d.ts")),
     ("http.js", include_str!("../../../guests/js/http.js")),
     ("icons.d.ts", include_str!("../../../guests/js/icons.d.ts")),
     ("icons.js", include_str!("../../../guests/js/icons.js")),
     ("look.js", include_str!("../../../guests/js/look.js")),
-    ("operations.d.ts", include_str!("../../../guests/js/operations.d.ts")),
-    ("package.json", include_str!("../../../guests/js/package.json")),
+    (
+        "operations.d.ts",
+        include_str!("../../../guests/js/operations.d.ts"),
+    ),
+    (
+        "package.json",
+        include_str!("../../../guests/js/package.json"),
+    ),
     ("pane.d.ts", include_str!("../../../guests/js/pane.d.ts")),
-    ("preferences.d.ts", include_str!("../../../guests/js/preferences.d.ts")),
-    ("preferences.js", include_str!("../../../guests/js/preferences.js")),
+    (
+        "preferences.d.ts",
+        include_str!("../../../guests/js/preferences.d.ts"),
+    ),
+    (
+        "preferences.js",
+        include_str!("../../../guests/js/preferences.js"),
+    ),
     (
         "programs-host.d.ts",
         include_str!("../../../guests/js/programs-host.d.ts"),
     ),
-    ("programs.d.ts", include_str!("../../../guests/js/programs.d.ts")),
-    ("programs.js", include_str!("../../../guests/js/programs.js")),
-    ("system-host.d.ts", include_str!("../../../guests/js/system-host.d.ts")),
-    ("system.d.ts", include_str!("../../../guests/js/system.d.ts")),
+    (
+        "programs.d.ts",
+        include_str!("../../../guests/js/programs.d.ts"),
+    ),
+    (
+        "programs.js",
+        include_str!("../../../guests/js/programs.js"),
+    ),
+    (
+        "system-host.d.ts",
+        include_str!("../../../guests/js/system-host.d.ts"),
+    ),
+    (
+        "system.d.ts",
+        include_str!("../../../guests/js/system.d.ts"),
+    ),
     ("system.js", include_str!("../../../guests/js/system.js")),
     ("wasi.d.ts", include_str!("../../../guests/js/wasi.d.ts")),
-    ("wit/world.wit", include_str!("../../../guests/js/wit/world.wit")),
+    (
+        "wit/world.wit",
+        include_str!("../../../guests/js/wit/world.wit"),
+    ),
 ];
 
 /// Pane's WIT, copied into the world's `deps/pane-extension/`.
@@ -73,17 +127,32 @@ const PANE_WIT: [(&str, &str); 16] = [
     ("feedback.wit", include_str!("../../../wit/feedback.wit")),
     ("system.wit", include_str!("../../../wit/system.wit")),
     ("data.wit", include_str!("../../../wit/data.wit")),
-    ("preferences.wit", include_str!("../../../wit/preferences.wit")),
-    ("root-results.wit", include_str!("../../../wit/root-results.wit")),
-    ("operations.wit", include_str!("../../../wit/operations.wit")),
-    ("applications.wit", include_str!("../../../wit/applications.wit")),
+    (
+        "preferences.wit",
+        include_str!("../../../wit/preferences.wit"),
+    ),
+    (
+        "root-results.wit",
+        include_str!("../../../wit/root-results.wit"),
+    ),
+    (
+        "operations.wit",
+        include_str!("../../../wit/operations.wit"),
+    ),
+    (
+        "applications.wit",
+        include_str!("../../../wit/applications.wit"),
+    ),
     ("search.wit", include_str!("../../../wit/search.wit")),
     ("helpers.wit", include_str!("../../../wit/helpers.wit")),
     ("files.wit", include_str!("../../../wit/files.wit")),
     ("clipboard.wit", include_str!("../../../wit/clipboard.wit")),
     ("service.wit", include_str!("../../../wit/service.wit")),
     ("programs.wit", include_str!("../../../wit/programs.wit")),
-    ("file-index.wit", include_str!("../../../wit/file-index.wit")),
+    (
+        "file-index.wit",
+        include_str!("../../../wit/file-index.wit"),
+    ),
 ];
 
 /// WASI's WIT (`wit/deps`: clocks, and `wasi:http` with the packages it
@@ -91,7 +160,10 @@ const PANE_WIT: [(&str, &str); 16] = [
 const WASI_WIT: [(&str, &str); 6] = [
     ("cli.wit", include_str!("../../../wit/deps/cli.wit")),
     ("clocks.wit", include_str!("../../../wit/deps/clocks.wit")),
-    ("filesystem.wit", include_str!("../../../wit/deps/filesystem.wit")),
+    (
+        "filesystem.wit",
+        include_str!("../../../wit/deps/filesystem.wit"),
+    ),
     ("http.wit", include_str!("../../../wit/deps/http.wit")),
     ("random.wit", include_str!("../../../wit/deps/random.wit")),
     ("sockets.wit", include_str!("../../../wit/deps/sockets.wit")),

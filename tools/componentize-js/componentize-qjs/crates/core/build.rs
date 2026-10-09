@@ -13,7 +13,10 @@ use std::{env, fs, path::PathBuf};
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     for changed in ["src", "wit"] {
-        println!("cargo:rerun-if-changed={}", manifest_dir.join(changed).display());
+        println!(
+            "cargo:rerun-if-changed={}",
+            manifest_dir.join(changed).display()
+        );
     }
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     let output = "\

@@ -56,8 +56,8 @@
 //!   fails when a measure is over its generous ceiling. `ci-branch.yml`'s
 //!   Linux tests run it in one shard, after the tests.
 
-mod package;
 mod js_guests;
+mod package;
 mod zip;
 
 use std::collections::BTreeMap;
