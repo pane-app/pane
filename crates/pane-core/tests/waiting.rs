@@ -874,7 +874,11 @@ fn a_reload_of_the_dependency_that_fails_to_start_leaves_its_dependents_waiting(
 
     // The greeter's source is replaced by code that fails to start:
     // reloading it fails, and it is paused for that. The dependent waits.
-    fs::copy(guest("failing_start.wasm"), greeter.join("sample_operations.wasm")).unwrap();
+    fs::copy(
+        guest("failing_start.wasm"),
+        greeter.join("sample_operations.wasm"),
+    )
+    .unwrap();
     manage(&launcher);
     select_title(&launcher, "Reload Rust operations sample");
     block_on(launcher.activate_selected());
@@ -891,7 +895,11 @@ fn a_reload_of_the_dependency_that_fails_to_start_leaves_its_dependents_waiting(
     );
 
     // A reload that starts brings them back.
-    fs::copy(guest("sample_operations.wasm"), greeter.join("sample_operations.wasm")).unwrap();
+    fs::copy(
+        guest("sample_operations.wasm"),
+        greeter.join("sample_operations.wasm"),
+    )
+    .unwrap();
     manage(&launcher);
     select_title(&launcher, "Reload Rust operations sample");
     block_on(launcher.activate_selected());
@@ -927,10 +935,7 @@ impl Hotkeys for AnyHotkeys {
 /// user does in Manage extensions.
 fn set_hotkey(launcher: &Launcher, title: &str, shortcut: &str) {
     manage(launcher);
-    activate(
-        launcher,
-        &format!("Hotkey for {title}"),
-    );
+    activate(launcher, &format!("Hotkey for {title}"));
     assert!(
         matches!(launcher.view().screen, Screen::Hotkey { .. }),
         "{:?}",
