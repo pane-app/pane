@@ -163,7 +163,9 @@ fn check_helper_files(manifest: &Manifest, folder: &Path, report: &mut CheckRepo
             // targets are the author's to ship: warnings, because `cargo
             // xtask guests` assembles Pane's own sample packages with only
             // the current system's helper file.
-            let problem = if *target == pane_target::Target::current() {
+            let for_this_system =
+                pane_target::Target::current().is_some_and(|this| *target == this);
+            let problem = if for_this_system {
                 let error = PackageError::Helper {
                     helper: helper.id.clone(),
                     target: *target,
@@ -189,7 +191,7 @@ fn check_helper_files(manifest: &Manifest, folder: &Path, report: &mut CheckRepo
                     ),
                 }
             };
-            if *target == pane_target::Target::current() {
+            if for_this_system {
                 report.errors.push(problem);
             } else {
                 report.warnings.push(problem);
@@ -224,9 +226,7 @@ fn lint(manifest: &Manifest, folder: &Path, report: &mut CheckReport) {
                 message: format!(
                     "the required preference `{}` has no default, so Pane shows its Setup \
                      screen, but the package has no {} beside {} to show on it",
-                    preference.name,
-                    HELP_FILE,
-                    MANIFEST_FILE
+                    preference.name, HELP_FILE, MANIFEST_FILE
                 ),
             });
         }
@@ -327,8 +327,8 @@ fn lint_icon(icon: Option<&Icon>, folder: &Path, report: &mut CheckReport) {
 /// and last word: the usual English convention, as Pane's own titles are
 /// written.
 const SMALL_WORDS: [&str; 16] = [
-    "a", "an", "and", "as", "at", "but", "by", "for", "in", "nor", "of", "on", "or", "the",
-    "to", "with",
+    "a", "an", "and", "as", "at", "but", "by", "for", "in", "nor", "of", "on", "or", "the", "to",
+    "with",
 ];
 
 /// `title` in Title Case, as the lint rule reads it: each word starts with
@@ -343,7 +343,9 @@ fn title_case(title: &str) -> String {
         .map(|(at, word)| {
             let first = at == 0;
             let last = at + 1 == words.len();
-            let small = SMALL_WORDS.iter().any(|small| small.eq_ignore_ascii_case(word));
+            let small = SMALL_WORDS
+                .iter()
+                .any(|small| small.eq_ignore_ascii_case(word));
             if !first && !last && small {
                 return word.to_lowercase();
             }

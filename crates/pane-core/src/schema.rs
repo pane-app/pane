@@ -17,8 +17,8 @@
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde_json::Value;
 
-use crate::{MAX_ARGUMENTS, MAX_KEYWORDS};
 use crate::packages::{MANIFEST_FILE, MANIFEST_VERSION, ManifestJson};
+use crate::{MAX_ARGUMENTS, MAX_KEYWORDS};
 
 /// The committed JSON Schema for `pane.json`, as text: every field a
 /// `pane.json` may hold, each with its description, and the manifest
@@ -55,10 +55,7 @@ pub fn manifest_schema() -> String {
     // deserializing (`packages` reads it first, so a newer format is
     // explained rather than misread), so no type carries it: the schema
     // states it directly, at the version this Pane reads.
-    if let Some(properties) = object
-        .get_mut("properties")
-        .and_then(Value::as_object_mut)
-    {
+    if let Some(properties) = object.get_mut("properties").and_then(Value::as_object_mut) {
         properties.insert(
             MANIFEST_VERSION_KEY.into(),
             json_schema!({

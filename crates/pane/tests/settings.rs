@@ -1838,11 +1838,15 @@ fn the_extensions_group_lists_each_package_with_its_description(cx: &mut TestApp
     // under its source, cut like it (#224); the description itself is on
     // the extension's page.
     assert!(
-        settings_cx.debug_bounds("extension-item-Described sample").is_some(),
+        settings_cx
+            .debug_bounds("extension-item-Described sample")
+            .is_some(),
         "the extension is listed"
     );
     assert!(
-        settings_cx.debug_bounds("extension-item-description").is_some(),
+        settings_cx
+            .debug_bounds("extension-item-description")
+            .is_some(),
         "its description is drawn"
     );
 }

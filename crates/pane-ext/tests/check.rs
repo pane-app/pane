@@ -115,13 +115,12 @@ fn a_valid_sample_package_passes() {
 
 #[test]
 fn an_invalid_manifest_fails_with_panes_message() {
-    let repeated = manifest(r#""#
-        .replace(
-            r#""commands": ["#,
-            r#""commands": [
+    let repeated = manifest(r#""#.replace(
+        r#""commands": ["#,
+        r#""commands": [
     { "id": "hello", "title": "Say hello", "component": "hello.wasm" },
 "#,
-        ));
+    ));
     let keywords = format!(
         r#"{{ "manifestVersion": 1, "title": "Hello", "apiVersion": "0.1", "keywords": {}, "commands": [{{ "id": "hello", "title": "Say hello", "component": "hello.wasm" }}] }}"#,
         format!("{:?}", vec!["word"; 21])
@@ -173,7 +172,11 @@ fn the_same_invalid_package_is_refused_alike_by_pane_and_pane_ext_check() {
   ]
 }"#;
     let cases: [(&str, String, &str); 4] = [
-        ("unknown mode", manifest(r#", "mode": "sometimes""#), "sample_rust"),
+        (
+            "unknown mode",
+            manifest(r#", "mode": "sometimes""#),
+            "sample_rust",
+        ),
         ("source-only package", source_only.to_owned(), "sample_rust"),
         ("older api shape", manifest(""), "old_api"),
         ("wasi 0.2 component", manifest(""), "mixed_p2"),
@@ -271,11 +274,11 @@ fn every_lint_rule_has_a_fixture_that_triggers_it() {
 /// A 1×1 transparent PNG, to name an icon smaller than a published
 /// extension's.
 const TINY_PNG: &[u8] = &[
-    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
-    0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
-    0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00,
-    0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
-    0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+    0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+    0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+    0x42, 0x60, 0x82,
 ];
 
 #[test]
@@ -322,7 +325,9 @@ fn the_json_report_is_stable() {
     assert_eq!(report["ok"], serde_json::json!(true));
     assert_eq!(report["errors"], serde_json::json!([]));
     assert!(
-        report["warnings"].as_array().is_some_and(|list| !list.is_empty()),
+        report["warnings"]
+            .as_array()
+            .is_some_and(|list| !list.is_empty()),
         "{report}"
     );
     assert_eq!(

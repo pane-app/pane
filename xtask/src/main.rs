@@ -575,7 +575,10 @@ fn schema(write: bool) -> Result<(), String> {
             .map_err(|error| format!("read {} failed: {error}", path.display()))?
             .replace("\r\n", "\n");
         if committed == generated {
-            println!("{} matches what Pane's manifest types generate", path.display());
+            println!(
+                "{} matches what Pane's manifest types generate",
+                path.display()
+            );
             return Ok(());
         }
         return Err(format!(

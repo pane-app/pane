@@ -53,7 +53,9 @@ pub(crate) fn run(folder: Option<PathBuf>, json: bool, deny_warnings: bool) -> E
             // Only warnings failed it, and only because they were asked to.
             let count = report.warnings.len();
             let plural = if count == 1 { "" } else { "s" };
-            eprintln!("pane-ext: {count} warning{plural} failed the check, as --deny-warnings asks");
+            eprintln!(
+                "pane-ext: {count} warning{plural} failed the check, as --deny-warnings asks"
+            );
             ExitCode::FAILURE
         }
         (true, false) => {
@@ -122,8 +124,8 @@ fn json_report(folder: &Path, report: &CheckReport, eslint: &Eslint) -> String {
             "note": eslint.note(),
         },
     });
-    let mut text = serde_json::to_string_pretty(&document)
-        .expect("a report of strings is always writable");
+    let mut text =
+        serde_json::to_string_pretty(&document).expect("a report of strings is always writable");
     text.push('\n');
     text
 }
