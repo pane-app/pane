@@ -180,7 +180,9 @@ pub(crate) fn row_icon_at(
                     )
                     .child(bare)
                 }
-                None => div().flex_none().child(draw(drawn, sizes, id, scope, theme)),
+                None => div()
+                    .flex_none()
+                    .child(draw(drawn, sizes, id, scope, theme)),
             }
         }
     }

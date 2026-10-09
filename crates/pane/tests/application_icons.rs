@@ -319,7 +319,10 @@ fn a_pinned_applications_slot_draws_its_icon(cx: &mut TestAppContext) {
     }
     settle(&window, cx);
     until_drawn(cx, &format!("icon-slot-1-image-{dark}"));
-    assert!(!drawn(cx, "icon-slot-1-tile"), "the slot draws the icon bare");
+    assert!(
+        !drawn(cx, "icon-slot-1-tile"),
+        "the slot draws the icon bare"
+    );
 }
 
 /// Assistive technology reads an application's row by its title and

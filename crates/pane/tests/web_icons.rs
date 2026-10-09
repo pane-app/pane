@@ -188,7 +188,10 @@ fn a_web_image_draws_its_fallback_while_it_loads_then_the_image(cx: &mut TestApp
     server.release();
     until_drawn(cx, &slow);
     assert!(!drawn(cx, "icon-Slow web image-glyph-clock"));
-    assert!(!drawn(cx, "icon-Slow web image-tile"), "the image draws bare");
+    assert!(
+        !drawn(cx, "icon-Slow web image-tile"),
+        "the image draws bare"
+    );
     until_drawn(
         cx,
         &format!(

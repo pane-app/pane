@@ -238,7 +238,10 @@ fn root_search_draws_the_extensions_icons_and_pane_keeps_its_tiles(cx: &mut Test
     // first-letter tile: no neutral command tile behind either.
     assert!(!drawn(cx, "icon-Icons-tile"), "an image icon draws bare");
     assert!(!drawn(cx, "icon-Icons (package icon)-tile"));
-    assert!(!drawn(cx, "icon-Plain icons-tile"), "the letter tile is its own");
+    assert!(
+        !drawn(cx, "icon-Plain icons-tile"),
+        "the letter tile is its own"
+    );
     // A built-in glyph a command names: on Pane's neutral command tile.
     cx.simulate_keystrokes("backspace backspace backspace backspace backspace");
     cx.simulate_input("star");
@@ -271,18 +274,27 @@ fn icons_draw_for_the_dark_theme_tinted_masked_and_failing_to_their_fallback(
     let (window, cx, _fixture) = window(cx, "dark");
     open_icons(&window, cx);
     assert!(drawn(cx, "icon-Built-in icon-glyph-star"));
-    assert!(!drawn(cx, "icon-Built-in icon-tile"), "a list row's icon is bare");
+    assert!(
+        !drawn(cx, "icon-Built-in icon-tile"),
+        "a list row's icon is bare"
+    );
     assert!(drawn(cx, "icon-Packaged image-image-logo@dark.png"));
     assert!(!drawn(cx, "icon-Packaged image-image-logo@light.png"));
     assert!(drawn(cx, "icon-Light and dark pair-image-moon.svg"));
-    assert!(!drawn(cx, "icon-Light and dark pair-tile"), "images stay bare");
+    assert!(
+        !drawn(cx, "icon-Light and dark pair-tile"),
+        "images stay bare"
+    );
     // The raw colour reads on the dark panel as it is.
     assert!(drawn(cx, "icon-Tinted icon-glyph-heart"));
     assert!(!drawn(cx, "icon-Tinted icon-tile"));
     assert!(drawn(cx, "icon-Tinted icon-color-ff6363ff"));
     assert!(drawn(cx, "icon-Masked image-mask-circle"));
     assert!(drawn(cx, "icon-Masked image-image-photo.png"));
-    assert!(!drawn(cx, "icon-Masked image-tile"), "a masked image stays bare");
+    assert!(
+        !drawn(cx, "icon-Masked image-tile"),
+        "a masked image stays bare"
+    );
     // The image the package does not ship: its fallback, bare where the
     // image would have drawn.
     assert!(drawn(cx, "icon-Failing image-glyph-warning"));
@@ -331,7 +343,10 @@ fn a_named_glyph_draws_on_panes_neutral_tile_at_every_tile_size(cx: &mut TestApp
     settle(&window, cx);
     assert!(drawn(cx, "icon-actions-header-glyph-star"));
     assert!(drawn(cx, "icon-actions-header-tile"));
-    assert_eq!(drawn_size(cx, "icon-actions-header"), (MINI_TILE, MINI_TILE));
+    assert_eq!(
+        drawn_size(cx, "icon-actions-header"),
+        (MINI_TILE, MINI_TILE)
+    );
     cx.simulate_keystrokes("escape");
     settle(&window, cx);
 
