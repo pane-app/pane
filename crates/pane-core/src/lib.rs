@@ -8,6 +8,7 @@ mod arguments;
 mod atomic;
 pub mod autostart;
 pub mod changes;
+pub mod check;
 pub mod clipboard;
 pub mod defaults;
 mod dependencies;
@@ -44,6 +45,7 @@ mod preferences;
 mod programs;
 mod protection;
 mod runtime;
+pub mod schema;
 mod search;
 pub mod system;
 pub mod system_icons;
@@ -87,8 +89,9 @@ pub use links::LinkOpener;
 pub use operations::{MAX_CALL_DEPTH, MAX_OPERATION_JSON};
 pub use packages::{
     CommandMode, EXTENSION_API, InstalledPackage, ListedCommand, MANIFEST_FILE, MANIFEST_VERSION,
-    MAX_SCHEDULE_SECONDS, MIN_SCHEDULE_SECONDS, Manifest, ManifestCommand, ManifestHelper,
-    ManifestOperation, ManifestSchedule, PackageError, PackageIdentity, RetainedData, SavedData,
+    MAX_KEYWORDS, MAX_SCHEDULE_SECONDS, MIN_SCHEDULE_SECONDS, Manifest, ManifestCommand,
+    ManifestHelper, ManifestOperation, ManifestSchedule, PackageError, PackageIdentity,
+    RetainedData, SavedData,
 };
 #[doc(hidden)]
 pub use pane_build::process_tree;

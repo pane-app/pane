@@ -168,6 +168,34 @@ fn open_refusing(
     (window, cx)
 }
 
+/// Writes the settings sample as a package that declares what it does and
+/// where its issues go: the metadata a published package carries, whose
+/// description the Extensions group lists (#224).
+fn described_package(folder: &Path) -> PathBuf {
+    let assembled = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/guests/packages/sample-settings");
+    assert!(
+        assembled.exists(),
+        "{} is missing; run `cargo xtask guests`",
+        assembled.display()
+    );
+    fs::create_dir_all(folder).unwrap();
+    for file in ["pane.json", "sample_settings.wasm"] {
+        fs::copy(assembled.join(file), folder.join(file)).unwrap();
+    }
+    let manifest = fs::read_to_string(folder.join("pane.json")).unwrap();
+    let described = manifest.replace(
+        "\"title\": \"Settings sample\",",
+        "\"title\": \"Described sample\",\n  \"description\": \"Keeps a chosen greeting style in Pane's settings\",\n  \"author\": \"Ada Lovelace\",\n  \"repository\": \"https://github.com/pane-app/pane\",\n  \"issues\": \"https://github.com/pane-app/pane/issues\",\n  \"license\": \"Apache-2.0 OR MIT\",\n  \"keywords\": [\"sample\", \"settings\"],",
+    );
+    assert!(
+        described.contains("\"description\""),
+        "the settings sample's manifest changed"
+    );
+    fs::write(folder.join("pane.json"), described).unwrap();
+    folder.to_path_buf()
+}
+
 /// The assembled Rust settings sample, copied into `folder` as a package
 /// with its own identity, as the management-flow tests' fixture.
 fn settings_package(folder: &Path) -> PathBuf {
@@ -1797,6 +1825,26 @@ fn has_node(cx: &mut VisualTestContext, role: &str, label: &str) -> bool {
         .unwrap()
         .values()
         .any(|node| node["aria"]["role"] == role && node["aria"]["label"] == label)
+}
+
+#[gpui::test]
+fn the_extensions_group_lists_each_package_with_its_description(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = described_package(&sources.path().join("described"));
+    let (_launcher, cx) = open_installed(cx, &data, &folder);
+    let (_settings, mut settings_cx) = open_extensions(cx);
+
+    // The group's page lists the extension with what it does, one line
+    // under its source, cut like it (#224); the description itself is on
+    // the extension's page.
+    assert!(
+        settings_cx.debug_bounds("extension-item-Described sample").is_some(),
+        "the extension is listed"
+    );
+    assert!(
+        settings_cx.debug_bounds("extension-item-description").is_some(),
+        "its description is drawn"
+    );
 }
 
 #[gpui::test]

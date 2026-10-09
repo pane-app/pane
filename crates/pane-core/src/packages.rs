@@ -15,6 +15,7 @@ use std::fs;
 use std::io;
 use std::path::{Component as PathPart, Path, PathBuf};
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::arguments::{self, ManifestArgument};
@@ -331,8 +332,30 @@ use pane_build::without_verbatim_prefix;
 pub struct Manifest {
     pub title: String,
     /// What the package does, in a sentence (`"description"`): its page in
-    /// Settings shows it under the title. `None` when it does not say.
+    /// Settings, the install preview and the Extensions group in Settings
+    /// show it. `None` when it does not say.
     pub description: Option<String>,
+    /// Who wrote the package (`"author"`, #224): parsed and held for the
+    /// authoring tooling and future use; `None` when it does not say.
+    pub author: Option<String>,
+    /// The package's own page on the web (`"homepage"`, #224): `None` when
+    /// it does not say.
+    pub homepage: Option<String>,
+    /// Where the package's source lives (`"repository"`, #224): also where
+    /// "Report issue" opens when the manifest gives no `issues`; `None`
+    /// when it does not say.
+    pub repository: Option<String>,
+    /// Where the package's users should report its problems (`"issues"`,
+    /// #224): what "Report issue" opens with a prefilled report; `None`
+    /// when it does not say.
+    pub issues: Option<String>,
+    /// The package's license (`"license"`, #224), as an identifier or a
+    /// human-readable name; `None` when it does not say.
+    pub license: Option<String>,
+    /// The words a person would search for to find the package
+    /// (`"keywords"`, #224), at most [`MAX_KEYWORDS`], empty entries
+    /// dropped.
+    pub keywords: Vec<String>,
     pub version: Option<String>,
     /// The package's own icon (`"icon"`, #139): a built-in icon or an
     /// image the package ships. `None` for none, which Pane shows as a
@@ -484,7 +507,8 @@ pub struct ManifestSchedule {
 /// What a command does when it is launched (`"mode"` in its `pane.json`
 /// entry, ADR 0037). Pane reads it from the manifest, so it knows at Enter
 /// whether to open a screen without running any guest code.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
 pub enum CommandMode {
     /// `"view"`, also the mode of a command whose entry does not say: it
     /// opens a screen, its list (`render`).
@@ -518,6 +542,9 @@ pub const MAX_SCHEDULE_SECONDS: u64 = 30 * 86_400;
 
 /// The longest item id a command's schedule may name, in characters.
 const MAX_SCHEDULE_ITEM: usize = 256;
+
+/// The most keywords a package's manifest may list.
+pub const MAX_KEYWORDS: usize = 20;
 
 /// A command a package contributes to root search.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -582,112 +609,265 @@ impl ManifestCommand {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ManifestJson {
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename = "Manifest", rename_all = "camelCase")]
+pub(crate) struct ManifestJson {
+    /// The name the package is known by, in Title Case: root search and the
+    /// extension's page in Settings show it. Not empty.
     title: String,
+    /// What the package does, in a sentence: Pane shows it in the install
+    /// preview and in the Extensions group in Settings. Empty when it does
+    /// not say.
     #[serde(default)]
     description: Option<String>,
+    /// Who wrote the package, as people write it ("Ada Lovelace"). Empty
+    /// when it does not say.
+    #[serde(default)]
+    author: Option<String>,
+    /// The package's own page on the web, which people can open to read
+    /// more about it. Empty when it does not say.
+    #[serde(default)]
+    homepage: Option<String>,
+    /// Where the package's source lives (a web page or a Git repository
+    /// address); also where "Report issue" opens when the manifest gives
+    /// no `issues`. Empty when it does not say.
+    #[serde(default)]
+    repository: Option<String>,
+    /// Where the package's users should report its problems, which "Report
+    /// issue" opens with a prefilled report. Empty when it does not say;
+    /// Pane then falls back to `repository`.
+    #[serde(default)]
+    issues: Option<String>,
+    /// The package's license, as an identifier ("MIT", "Apache-2.0") or a
+    /// human-readable name. Empty when it does not say.
+    #[serde(default)]
+    license: Option<String>,
+    /// The words a person would search for to find the package, one word or
+    /// short phrase each: at most 20, and empty entries are ignored.
+    #[serde(default)]
+    #[schemars(schema_with = "crate::schema::keywords")]
+    keywords: Vec<String>,
+    /// The package's own version, as dotted numbers ("1.2.0"): Pane shows
+    /// it in the install preview and on the extension's page. Empty when it
+    /// does not say.
     #[serde(default)]
     version: Option<String>,
-    /// Checked by [`icons::parse_manifest_icon`].
+    /// What the package's own icon is: a built-in icon's name, or an
+    /// image the package ships. Without one, Pane draws a tile from the
+    /// package's first letter; a published extension's icon is a
+    /// 512×512 image.
     #[serde(default)]
+    #[schemars(with = "Option<crate::schema::Icon>")]
     icon: Option<serde_json::Value>,
+    /// The extension API the package needs, such as "0.1": the version of
+    /// Pane's `pane:extension` interface it was built against. Every
+    /// breaking change to that interface gets a new version.
     api_version: String,
+    /// The operating systems the package supports: `windows`, `macos` and
+    /// `linux`. Without the field it supports every system; an empty list
+    /// supports none, and a package that does not support this system is
+    /// explained instead of installed.
     #[serde(default)]
+    #[schemars(with = "Option<Vec<crate::schema::PlatformId>>")]
     platforms: Option<Vec<String>>,
+    /// What the package contributes to root search. A package needs at
+    /// least one command or one operation.
     #[serde(default)]
     commands: Vec<CommandJson>,
+    /// The operations the package publishes for other extensions to call
+    /// through Pane. Only these are callable: a command is not an
+    /// operation.
     #[serde(default)]
     operations: Vec<OperationJson>,
+    /// The native helpers the package ships: a prebuilt program per
+    /// operating system and processor, which its commands run by name
+    /// through Pane.
     #[serde(default)]
     helpers: Vec<HelperJson>,
+    /// The other packages whose operations this one calls, required or
+    /// optional.
     #[serde(default)]
     dependencies: Vec<DependencyJson>,
+    /// The package asks for access to one folder the user chooses: Pane
+    /// offers its own "Choose folder" row in the package's commands, and
+    /// lists only that folder for it.
     #[serde(default)]
     folder_access: bool,
+    /// The package uses Pane's file index: Pane keeps the index of the home
+    /// folder open, caught up and watched while at least one enabled,
+    /// unpaused package says so, and its commands may search it.
     #[serde(default)]
     file_index: bool,
+    /// The preferences the package declares for all its commands: typed
+    /// fields whose values the user sets in Pane and the commands read.
     #[serde(default)]
+    #[schemars(with = "Vec<crate::schema::Preference>")]
     preferences: Vec<serde_json::Value>,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct HelperJson {
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename = "Helper", deny_unknown_fields)]
+pub(crate) struct HelperJson {
+    /// The name the package's commands run the helper by, through Pane.
     id: String,
+    /// The helper's file for each system it is built for, relative to the
+    /// package folder: keyed by target, such as `linux-x86_64` or
+    /// `macos-aarch64`. At least one.
+    #[schemars(schema_with = "crate::schema::targets")]
     targets: BTreeMap<String, String>,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DependencyJson {
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename = "Dependency", deny_unknown_fields)]
+pub(crate) struct DependencyJson {
+    /// The name the package's code calls the dependency by in place of its
+    /// package identity: unique in the package; lowercase letters, digits
+    /// and `-`.
     id: String,
+    /// Where the dependency is installed from: `local:` and a folder path
+    /// separated by `/`, relative to this package's folder or absolute;
+    /// `npm:` and a package name with an optional exact version
+    /// (`npm:@scope/name@1.2.3`); or `git:` and a repository with an
+    /// optional reference. Other sources are not supported yet.
     source: String,
+    /// Whether the package only uses the dependency when the user installed
+    /// it; the default is to need it, and installing the package installs
+    /// its missing required dependencies with it.
     #[serde(default)]
     optional: bool,
+    /// The operations the package calls, each at the version it calls: the
+    /// dependency is compatible when it publishes all of them.
     operations: Vec<RequiredOperationJson>,
+    /// The operating systems on which the package needs it; without the
+    /// field, every system. Elsewhere it is neither installed nor checked.
     #[serde(default)]
+    #[schemars(with = "Option<Vec<crate::schema::PlatformId>>")]
     platforms: Option<Vec<String>>,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RequiredOperationJson {
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename = "RequiredOperation", deny_unknown_fields)]
+pub(crate) struct RequiredOperationJson {
+    /// The id of the operation the package calls, as the dependency
+    /// publishes it.
     id: String,
+    /// The version of the operation's input and result the package was
+    /// written for, from 1: any other is refused.
     version: u32,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct OperationJson {
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename = "Operation", deny_unknown_fields)]
+pub(crate) struct OperationJson {
+    /// The operation's id, unique in the package: other extensions call the
+    /// operation by the package's source, this id and its version.
     id: String,
+    /// The version of the operation's input and result: a caller names the
+    /// version it was written for, and any other is refused. From 1; a
+    /// change that breaks callers publishes a new version.
     version: u32,
+    /// The component serving the operation, relative to the package folder;
+    /// often a command's component too.
     component: String,
+    /// The operating systems the operation works on; without the field,
+    /// every system the package supports. Elsewhere a call to it is
+    /// unavailable.
     #[serde(default)]
+    #[schemars(with = "Option<Vec<crate::schema::PlatformId>>")]
     platforms: Option<Vec<String>>,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CommandJson {
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename = "Command", rename_all = "camelCase")]
+pub(crate) struct CommandJson {
+    /// The command's id in the package, unique among its commands and
+    /// without `#`: Pane's own records name the command by it.
     id: String,
+    /// The command's name in root search, in Title Case. Not empty.
     title: String,
+    /// One line under the title in root search, saying what the command
+    /// does. Empty when it does not say.
     #[serde(default)]
     subtitle: Option<String>,
-    /// Checked by [`icons::parse_manifest_icon`].
+    /// The command's own icon, drawn instead of the package's: a built-in
+    /// icon's name, or an image the package ships.
     #[serde(default)]
+    #[schemars(with = "Option<crate::schema::Icon>")]
     icon: Option<serde_json::Value>,
+    /// The command's component, relative to the package folder: the
+    /// WebAssembly component Pane runs for it. Not empty, and inside the
+    /// package folder.
     component: String,
+    /// The operating systems the command supports; without the field,
+    /// every system the package supports. Elsewhere it is listed as
+    /// unavailable.
     #[serde(default)]
+    #[schemars(with = "Option<Vec<crate::schema::PlatformId>>")]
     platforms: Option<Vec<String>>,
+    /// What the command does when it is launched: `view` (it opens a
+    /// screen, the default), `no-view` (it runs without one) or `provider`
+    /// (it only answers root search through its `rootResults` or
+    /// `indexedResults`, and is never launched).
     #[serde(default)]
+    #[schemars(with = "Option<CommandMode>")]
     mode: Option<String>,
+    /// The command computes root results from root search's query, such as
+    /// a calculator's answer: its component then also exports
+    /// `pane:extension/root-results`.
     #[serde(default)]
     root_results: bool,
+    /// The command supplies root results ahead of the query, such as the
+    /// installed applications: its component then also exports
+    /// `pane:extension/indexed-results`.
     #[serde(default)]
     indexed_results: bool,
+    /// The command takes a query: text typed into root search that Pane
+    /// sends it when the user invokes it through its alias or as a
+    /// fallback, as its launch record's fallback text.
     #[serde(default)]
     takes_query: bool,
+    /// The command searches as the user types into its own search field
+    /// once it is open, such as a command searching an online service; root
+    /// search never asks it. Its component then also exports
+    /// `pane:extension/command-search`.
     #[serde(default)]
     search: bool,
+    /// The scheduled work the command declares, if any: every
+    /// `everySeconds` seconds while the package's code may run, Pane runs
+    /// the action of `item` (a view command) or the command itself in the
+    /// background (a no-view command, which names no item).
     #[serde(default)]
     schedule: Option<ScheduleJson>,
+    /// The command runs a continuing service: while the package's code may
+    /// run, Pane calls the component's `run-cycle` export in a cycle the
+    /// service itself paces, with no interval the manifest declares.
     #[serde(default)]
     service: bool,
+    /// The preferences the command declares for itself, besides the
+    /// package's: typed fields whose values the user sets in Pane and the
+    /// command reads. A name the package or another command already
+    /// declares is refused.
     #[serde(default)]
+    #[schemars(with = "Vec<crate::schema::Preference>")]
     preferences: Vec<serde_json::Value>,
-    /// Checked by `arguments::parse`, which says what is wrong in Pane's
-    /// words.
+    /// The typed values the command asks for before each run, in the order
+    /// its fields show them: at most three, each with a `name` and a `type`
+    /// of `text`, `password` or `dropdown`.
     #[serde(default)]
+    #[schemars(schema_with = "crate::schema::arguments")]
     arguments: Option<serde_json::Value>,
 }
 
 /// A command's `schedule`, as `pane.json` writes it.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ScheduleJson {
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename = "Schedule", rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ScheduleJson {
+    /// How often the work runs, in seconds: from 1 to 2,592,000 (30 days).
     every_seconds: u64,
+    /// The id of the item whose action runs, for a view command: Pane asks
+    /// for the command's tree and runs that item's action, as choosing it
+    /// would. A no-view command names no `item`; Pane runs the command
+    /// itself.
     #[serde(default)]
     item: Option<String>,
 }
@@ -1027,12 +1207,16 @@ impl Manifest {
             });
         }
         let dependencies = parse_dependencies(json.dependencies)?;
+        let keywords = parse_keywords(json.keywords)?;
         Ok(Manifest {
             title: json.title,
-            description: json
-                .description
-                .map(|description| description.trim().to_owned())
-                .filter(|description| !description.is_empty()),
+            description: trimmed(json.description),
+            author: trimmed(json.author),
+            homepage: trimmed(json.homepage),
+            repository: trimmed(json.repository),
+            issues: trimmed(json.issues),
+            license: trimmed(json.license),
+            keywords,
             version: json.version,
             icon,
             api_version: json.api_version,
@@ -1229,6 +1413,33 @@ fn check_source(source: &str, id: &str) -> Result<(), PackageError> {
         );
     }
     Ok(())
+}
+
+/// `text` as a manifest's optional text field holds it: trimmed, with an
+/// empty answer read as the field's absence (as `description` always was).
+fn trimmed(text: Option<String>) -> Option<String> {
+    text.map(|text| text.trim().to_owned())
+        .filter(|text| !text.is_empty())
+}
+
+/// The `keywords` of a manifest, checked: at most
+/// [`MAX_KEYWORDS`], each trimmed, empty ones dropped (an empty entry reads
+/// as its absence, as an empty `description` does).
+fn parse_keywords(keywords: Vec<String>) -> Result<Vec<String>, PackageError> {
+    let keywords: Vec<String> = keywords
+        .into_iter()
+        .map(|keyword| keyword.trim().to_owned())
+        .filter(|keyword| !keyword.is_empty())
+        .collect();
+    if keywords.len() > MAX_KEYWORDS {
+        return Err(PackageError::InvalidManifest(format!(
+            "`keywords` lists {} entries; at most {} — keep it to the words a person would \
+             search for",
+            keywords.len(),
+            MAX_KEYWORDS
+        )));
+    }
+    Ok(keywords)
 }
 
 fn parse_dependencies(json: Vec<DependencyJson>) -> Result<Vec<ManifestDependency>, PackageError> {

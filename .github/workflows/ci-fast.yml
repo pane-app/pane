@@ -208,12 +208,44 @@ jobs:
           name: js-guests
           path: guests/prebuilt
 
+  # The pane.json schema is generated from pane-core's manifest types and
+  # committed (guests/js/schema, shipped in the npm packages); a plain push
+  # whose committed copy no longer matches the types regenerates it here
+  # and uploads it as the `manifest-schema` artifact, which the implementing
+  # agent commits (`gh run download <run> -n manifest-schema -D
+  # guests/js/schema`) before a verify run, whose `ci-lints` leg would
+  # otherwise fail it. A push whose copy is current only checks it.
+  schema:
+    name: Regenerate a stale pane.json schema (ubuntu-24.04)
+    if: ${{ !inputs.verify && !inputs.tests }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Check whether the committed schema is current
+        id: stale
+        run: |
+          if cargo xtask schema; then
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Regenerate the schema
+        if: steps.stale.outputs.stale == 'true'
+        run: cargo xtask schema --write
+      - name: Upload the regenerated schema
+        if: steps.stale.outputs.stale == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: manifest-schema
+          path: guests/js/schema/pane.schema.json
+
   # The one check to require, as in ci-branch.yml: green when every job
   # above passed or was skipped. A job added here is added to `needs`.
   passed:
     name: CI passed
     if: always()
-    needs: [check, lints, tests, macos-check, chosen, js-guests]
+    needs: [check, lints, tests, macos-check, chosen, js-guests, schema]
     runs-on: ubuntu-24.04
     steps:
       - name: Every job passed or was skipped

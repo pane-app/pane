@@ -6,6 +6,10 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+# The manifest types the `schema` task generates `pane.json`'s JSON Schema
+# from (#224): the schema cannot drift from what Pane reads when it is
+# generated where the types are.
+pane-core = { path = "../crates/pane-core" }
 pane-target = { path = "../crates/pane-target" }
 # Packing the npm sample as `npm pack` does, without npm.
 tar.workspace = true

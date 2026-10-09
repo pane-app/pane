@@ -15,6 +15,9 @@ rust-version.workspace = true
 pane-build = { path = "../pane-build" }
 # Pane's manifest rules, and the local channel to the running Pane.
 pane-core = { path = "../pane-core" }
+# `check --json` reports the problems as one machine-readable document
+# (#224); already in the workspace's tree.
+serde_json.workspace = true
 
 [dev-dependencies]
 # Driving the launcher the tests host as the running Pane.

@@ -64,6 +64,11 @@ futures.workspace = true
 fst = "0.4"
 memmap2 = "0.9"
 ignore = "0.4"
+# The JSON Schema of `pane.json`, generated from the manifest types
+# themselves (see `schema`) so it cannot drift from what Pane reads (#224);
+# already in the dependency tree through GPUI CE, so it adds no package to
+# the lockfile.
+schemars = "1.2"
 # Decoding PNG images (MIT OR Apache-2.0, already in the tree through
 # GPUI's `image`): putting a kept clipboard image back as a bitmap
 # (`CF_DIB`) beside its PNG on Windows (#167), and cropping an

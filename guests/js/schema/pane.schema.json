@@ -1,0 +1,699 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pane package manifest",
+  "description": "A Pane extension package's `pane.json`: what the package is, the commands it contributes to root search, the operations it publishes, the helpers it ships and the preferences it declares. Pane ignores fields it does not know, so a newer manifest may hold more than this schema describes.",
+  "type": "object",
+  "properties": {
+    "apiVersion": {
+      "description": "The extension API the package needs, such as \"0.1\": the version of Pane's `pane:extension` interface it was built against. Every breaking change to that interface gets a new version.",
+      "type": "string"
+    },
+    "author": {
+      "description": "Who wrote the package, as people write it (\"Ada Lovelace\"). Empty when it does not say.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "commands": {
+      "description": "What the package contributes to root search. A package needs at least one command or one operation.",
+      "items": {
+        "$ref": "#/$defs/Command"
+      },
+      "type": "array"
+    },
+    "dependencies": {
+      "description": "The other packages whose operations this one calls, required or optional.",
+      "items": {
+        "$ref": "#/$defs/Dependency"
+      },
+      "type": "array"
+    },
+    "description": {
+      "description": "What the package does, in a sentence: Pane shows it in the install preview and in the Extensions group in Settings. Empty when it does not say.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "fileIndex": {
+      "default": false,
+      "description": "The package uses Pane's file index: Pane keeps the index of the home folder open, caught up and watched while at least one enabled, unpaused package says so, and its commands may search it.",
+      "type": "boolean"
+    },
+    "folderAccess": {
+      "default": false,
+      "description": "The package asks for access to one folder the user chooses: Pane offers its own \"Choose folder\" row in the package's commands, and lists only that folder for it.",
+      "type": "boolean"
+    },
+    "helpers": {
+      "description": "The native helpers the package ships: a prebuilt program per operating system and processor, which its commands run by name through Pane.",
+      "items": {
+        "$ref": "#/$defs/Helper"
+      },
+      "type": "array"
+    },
+    "homepage": {
+      "description": "The package's own page on the web, which people can open to read more about it. Empty when it does not say.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "icon": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Icon"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "issues": {
+      "description": "Where the package's users should report its problems, which \"Report issue\" opens with a prefilled report. Empty when it does not say; Pane then falls back to `repository`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "keywords": {
+      "description": "The words a person would search for to find the package, one word or short phrase each: at most 20, and empty entries are ignored.",
+      "items": {
+        "description": "One word or short phrase a person would search for to find the package.",
+        "type": "string"
+      },
+      "maxItems": 20,
+      "type": "array"
+    },
+    "license": {
+      "description": "The package's license, as an identifier (\"MIT\", \"Apache-2.0\") or a human-readable name. Empty when it does not say.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "manifestVersion": {
+      "const": 1,
+      "description": "The pane.json format version: 1. A newer Pane is needed for a newer one."
+    },
+    "operations": {
+      "description": "The operations the package publishes for other extensions to call through Pane. Only these are callable: a command is not an operation.",
+      "items": {
+        "$ref": "#/$defs/Operation"
+      },
+      "type": "array"
+    },
+    "platforms": {
+      "description": "The operating systems the package supports: `windows`, `macos` and `linux`. Without the field it supports every system; an empty list supports none, and a package that does not support this system is explained instead of installed.",
+      "items": {
+        "$ref": "#/$defs/Platform"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "preferences": {
+      "description": "The preferences the package declares for all its commands: typed fields whose values the user sets in Pane and the commands read.",
+      "items": {
+        "$ref": "#/$defs/Preference"
+      },
+      "type": "array"
+    },
+    "repository": {
+      "description": "Where the package's source lives (a web page or a Git repository address); also where \"Report issue\" opens when the manifest gives no `issues`. Empty when it does not say.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "title": {
+      "description": "The name the package is known by, in Title Case: root search and the extension's page in Settings show it. Not empty.",
+      "type": "string"
+    },
+    "version": {
+      "description": "The package's own version, as dotted numbers (\"1.2.0\"): Pane shows it in the install preview and on the extension's page. Empty when it does not say.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "$comment": "Generated from Pane's own manifest types (crates/pane-core) by `cargo xtask schema`; regenerate with `cargo xtask schema --write` rather than editing by hand.",
+  "required": [
+    "title",
+    "apiVersion",
+    "manifestVersion"
+  ],
+  "$defs": {
+    "Argument": {
+      "properties": {
+        "name": {
+          "description": "The argument's name, unique among the command's arguments: its value reaches the command by it, in its launch record.",
+          "type": "string"
+        },
+        "options": {
+          "anyOf": [
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "title": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "value": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "value"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "placeholder": {
+          "description": "What its field shows while it is empty; its name when the entry gives none.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "required": {
+          "default": false,
+          "description": "Whether the command needs a value before it runs.",
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/ArgumentType"
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ],
+      "type": "object",
+      "additionalProperties": false
+    },
+    "ArgumentType": {
+      "description": "What an argument holds. Kept to `arguments::ArgumentKind` by [`argument_types_match`], below.",
+      "enum": [
+        "text",
+        "password",
+        "dropdown"
+      ],
+      "type": "string"
+    },
+    "Command": {
+      "properties": {
+        "arguments": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/Argument"
+              },
+              "maxItems": 3,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "component": {
+          "description": "The command's component, relative to the package folder: the WebAssembly component Pane runs for it. Not empty, and inside the package folder.",
+          "type": "string"
+        },
+        "icon": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Icon"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "description": "The command's id in the package, unique among its commands and without `#`: Pane's own records name the command by it.",
+          "type": "string"
+        },
+        "indexedResults": {
+          "default": false,
+          "description": "The command supplies root results ahead of the query, such as the installed applications: its component then also exports `pane:extension/indexed-results`.",
+          "type": "boolean"
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CommandMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "platforms": {
+          "description": "The operating systems the command supports; without the field, every system the package supports. Elsewhere it is listed as unavailable.",
+          "items": {
+            "$ref": "#/$defs/Platform"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "preferences": {
+          "description": "The preferences the command declares for itself, besides the package's: typed fields whose values the user sets in Pane and the command reads. A name the package or another command already declares is refused.",
+          "items": {
+            "$ref": "#/$defs/Preference"
+          },
+          "type": "array"
+        },
+        "rootResults": {
+          "default": false,
+          "description": "The command computes root results from root search's query, such as a calculator's answer: its component then also exports `pane:extension/root-results`.",
+          "type": "boolean"
+        },
+        "schedule": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Schedule"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "search": {
+          "default": false,
+          "description": "The command searches as the user types into its own search field once it is open, such as a command searching an online service; root search never asks it. Its component then also exports `pane:extension/command-search`.",
+          "type": "boolean"
+        },
+        "service": {
+          "default": false,
+          "description": "The command runs a continuing service: while the package's code may run, Pane calls the component's `run-cycle` export in a cycle the service itself paces, with no interval the manifest declares.",
+          "type": "boolean"
+        },
+        "subtitle": {
+          "description": "One line under the title in root search, saying what the command does. Empty when it does not say.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "takesQuery": {
+          "default": false,
+          "description": "The command takes a query: text typed into root search that Pane sends it when the user invokes it through its alias or as a fallback, as its launch record's fallback text.",
+          "type": "boolean"
+        },
+        "title": {
+          "description": "The command's name in root search, in Title Case. Not empty.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "component"
+      ],
+      "type": "object"
+    },
+    "CommandMode": {
+      "enum": [
+        "view",
+        "no-view",
+        "provider"
+      ],
+      "type": "string"
+    },
+    "Dependency": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "The name the package's code calls the dependency by in place of its package identity: unique in the package; lowercase letters, digits and `-`.",
+          "type": "string"
+        },
+        "operations": {
+          "description": "The operations the package calls, each at the version it calls: the dependency is compatible when it publishes all of them.",
+          "items": {
+            "$ref": "#/$defs/RequiredOperation"
+          },
+          "type": "array"
+        },
+        "optional": {
+          "default": false,
+          "description": "Whether the package only uses the dependency when the user installed it; the default is to need it, and installing the package installs its missing required dependencies with it.",
+          "type": "boolean"
+        },
+        "platforms": {
+          "description": "The operating systems on which the package needs it; without the field, every system. Elsewhere it is neither installed nor checked.",
+          "items": {
+            "$ref": "#/$defs/Platform"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "source": {
+          "description": "Where the dependency is installed from: `local:` and a folder path separated by `/`, relative to this package's folder or absolute; `npm:` and a package name with an optional exact version (`npm:@scope/name@1.2.3`); or `git:` and a repository with an optional reference. Other sources are not supported yet.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "operations"
+      ],
+      "type": "object"
+    },
+    "Helper": {
+      "additionalProperties": false,
+      "minProperties": 1,
+      "patternProperties": {
+        "^(windows|macos|linux)-(x86_64|aarch64)$": {
+          "description": "The helper's file for that target, a relative path inside the package folder.",
+          "type": "string"
+        }
+      },
+      "properties": {
+        "id": {
+          "description": "The name the package's commands run the helper by, through Pane.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "targets"
+      ],
+      "type": "object"
+    },
+    "Icon": {
+      "properties": {
+        "builtin": {
+          "description": "A built-in icon Pane has, by its reicon name in kebab case, such as `arrow-up-right`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dark": {
+          "description": "The image drawn in the dark theme, with `light` naming the one drawn in the light theme.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fallback": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Icon"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "filled": {
+          "description": "Whether the built-in icon is drawn in its Filled weight instead of the Outline one.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "light": {
+          "description": "The image drawn in the light theme, with `dark` naming the one drawn in the dark theme: a pair names both.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mask": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Mask"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path": {
+          "description": "An image the package ships (PNG or SVG), by its path relative to the package folder: one file for both themes, which may also have `name@light.png` and `name@dark.png` variants beside it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tooltip": {
+          "description": "Shown on hover and read by assistive technology; without one the icon is decorative and assistive technology skips it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Mask": {
+      "enum": [
+        "circle",
+        "rounded-rectangle"
+      ],
+      "type": "string"
+    },
+    "Operation": {
+      "additionalProperties": false,
+      "properties": {
+        "component": {
+          "description": "The component serving the operation, relative to the package folder; often a command's component too.",
+          "type": "string"
+        },
+        "id": {
+          "description": "The operation's id, unique in the package: other extensions call the operation by the package's source, this id and its version.",
+          "type": "string"
+        },
+        "platforms": {
+          "description": "The operating systems the operation works on; without the field, every system the package supports. Elsewhere a call to it is unavailable.",
+          "items": {
+            "$ref": "#/$defs/Platform"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "version": {
+          "description": "The version of the operation's input and result: a caller names the version it was written for, and any other is refused. From 1; a change that breaks callers publishes a new version.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "component"
+      ],
+      "type": "object"
+    },
+    "Platform": {
+      "enum": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "type": "string"
+    },
+    "Preference": {
+      "properties": {
+        "default": true,
+        "description": {
+          "description": "What the value is for, shown under the field.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "description": "A checkbox's label, beside it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "The preference's name, unique among the package's preferences and each command's together, without `#`: the command receives its value by it.",
+          "type": "string"
+        },
+        "options": {
+          "anyOf": [
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "title": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "value": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "value"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "placeholder": {
+          "description": "Shown in an empty text field.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "required": {
+          "default": false,
+          "description": "Whether the command needs a value before it runs; a declared `default` satisfies that.",
+          "type": "boolean"
+        },
+        "title": {
+          "description": "The field's name on screen.",
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/PreferenceType"
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "title"
+      ],
+      "type": "object"
+    },
+    "PreferenceType": {
+      "enum": [
+        "text",
+        "password",
+        "checkbox",
+        "dropdown",
+        "file",
+        "folder",
+        "application",
+        "applications"
+      ],
+      "type": "string"
+    },
+    "RequiredOperation": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "The id of the operation the package calls, as the dependency publishes it.",
+          "type": "string"
+        },
+        "version": {
+          "description": "The version of the operation's input and result the package was written for, from 1: any other is refused.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "type": "object"
+    },
+    "Schedule": {
+      "additionalProperties": false,
+      "properties": {
+        "everySeconds": {
+          "description": "How often the work runs, in seconds: from 1 to 2592000.",
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "item": {
+          "description": "The id of the item whose action runs, for a view command: Pane asks for the command's tree and runs that item's action, as choosing it would. A no-view command names no `item`; Pane runs the command itself.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "everySeconds"
+      ],
+      "type": "object"
+    },
+    "Tint": {
+      "anyOf": [
+        {
+          "description": "One colour for both themes: a theme tone's name, or a raw colour as `0xRRGGBBAA`.",
+          "type": "string"
+        },
+        {
+          "properties": {
+            "dark": {
+              "description": "The colour for the dark theme.",
+              "type": "string"
+            },
+            "light": {
+              "description": "The colour for the light theme.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "light",
+            "dark"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  }
+}

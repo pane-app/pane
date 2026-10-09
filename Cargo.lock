@@ -4480,6 +4480,7 @@ dependencies = [
  "png",
  "rustls",
  "rustls-native-certs",
+ "schemars",
  "serde",
  "serde_json",
  "sha1-checked",
@@ -4504,6 +4505,7 @@ dependencies = [
  "futures",
  "pane-build",
  "pane-core",
+ "serde_json",
  "tempfile",
 ]
 
@@ -8117,6 +8119,7 @@ version = "0.1.0"
 dependencies = [
  "crc32fast",
  "flate2",
+ "pane-core",
  "pane-target",
  "serde_json",
  "sha2",

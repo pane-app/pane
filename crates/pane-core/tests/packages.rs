@@ -172,6 +172,48 @@ fn error(launcher: &Launcher) -> String {
     }
 }
 
+#[test]
+fn a_package_that_describes_itself_shows_it_in_the_install_preview() {
+    let dirs = Dirs::new();
+    let folder = package(&dirs.source("hello"), "Hello", "1.0.0", "sample_rust");
+    // The metadata a published package carries (#224): what it does, who
+    // wrote it, where it lives, where its problems go, under which
+    // license, and the words a person would search for it by.
+    let manifest = manifest("Hello", "1.0.0", "hello.wasm").replace(
+        "\"title\": \"Hello\",",
+        "\"title\": \"Hello\",\n  \"description\": \"Greets you warmly\",\n  \"author\": \"Ada Lovelace\",\n  \"homepage\": \"https://example.com/hello\",\n  \"repository\": \"https://github.com/example/hello\",\n  \"issues\": \"https://github.com/example/hello/issues\",\n  \"license\": \"MIT\",\n  \"keywords\": [\"greeting\", \" hello \"],",
+    );
+    with_manifest(&folder, &manifest);
+    let launcher = dirs.launcher();
+
+    block_on(launcher.preview_package(&folder));
+
+    // The description is a line of the preview's details, under the
+    // source and version (#224); the rest of the metadata is held for the
+    // authoring tooling and reporting.
+    let details = launcher.view().details();
+    let source = details
+        .iter()
+        .position(|line| line.starts_with("Source:"))
+        .expect("the source line");
+    let version = details
+        .iter()
+        .position(|line| line.starts_with("Version:"))
+        .expect("the version line");
+    let described = details
+        .iter()
+        .position(|line| line == "Greets you warmly")
+        .expect("the description line");
+    assert!(source < described && described < version, "{details:?}");
+
+    block_on(launcher.install_package(&folder));
+    // A keyword of only spaces reads as its absence, like an empty
+    // description; the description itself round-trips into the installed
+    // copy, which the Extensions group in Settings shows.
+    let packages = launcher.packages();
+    assert_eq!(packages[0].description(), Some("Greets you warmly"));
+}
+
 /// (identity, title, version) of every installed package.
 fn installed(launcher: &Launcher) -> Vec<(PackageIdentity, String, Option<String>)> {
     launcher

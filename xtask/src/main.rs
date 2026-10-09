@@ -19,6 +19,11 @@
 //!   publish --dry-run` packages `pane-extension` and builds it from the
 //!   package alone, and `npm pack` packs `@pane-app/extension` into
 //!   `target/sdks/`. Publishing them is a person's step, never CI's (#128).
+//! - `schema`: generate `pane.json`'s JSON Schema from pane-core's own
+//!   manifest types and check the committed copy against it (`--write` to
+//!   rewrite the file), so the schema cannot drift from what Pane reads
+//!   (#224). `ci-lints` runs it, and ci-fast.yml regenerates a stale copy
+//!   on a push and uploads it as an artifact, as it does the JS/TS samples.
 //! - `ci-tests`: build the guests, then run the workspace's tests with
 //!   cargo-nextest, which retries a failing test twice before the run
 //!   fails for it, so one flaky failure costs time, not the run. Options
@@ -125,6 +130,8 @@ fn main() -> ExitCode {
         };
     }
     let dev = std::env::args().any(|arg| arg == "--dev");
+    // `schema --write` rewrites the committed schema it differs from.
+    let write = std::env::args().any(|arg| arg == "--write");
     // The version a package names its program by, when it is not this
     // workspace's own: dotted numbers, as Pane reads versions.
     let version = std::env::args()
@@ -149,15 +156,17 @@ fn main() -> ExitCode {
         (Some("js-guests"), _) => js_guests(),
         (Some("ci-lints"), _) => ci_lints(),
         (Some("sdks"), _) => sdks(),
+        (Some("schema"), _) => schema(write),
         (Some("file-index-guard"), _) => file_index_guard(),
         (Some("package-linux"), Ok(version)) => package::linux(dev, version),
         (Some("package-windows"), Ok(version)) => package::windows(dev, version),
         (Some("package-macos"), Ok(version)) => package::macos(dev, version),
         (_, Err(why)) => Err(why),
         _ => Err("usage: cargo xtask \
-             <guests|js-guests|ci-lints|sdks|file-index-guard|package-linux|package-windows|\
-             package-macos> [--dev] [--package-version <version>], cargo xtask \
-             <ci|ci-tests> [nextest options], or cargo xtask file-index-bench [options]"
+             <guests|js-guests|ci-lints|sdks|schema|file-index-guard|package-linux|\
+             package-windows|package-macos> [--dev] [--package-version <version>], cargo xtask \
+             schema [--write], cargo xtask <ci|ci-tests> [nextest options], or cargo xtask \
+             file-index-bench [options]"
             .into()),
     };
     match result {
@@ -501,11 +510,12 @@ fn pane_js(subcommand: &str) -> Command {
     command
 }
 
-/// The lints half of `ci`: the formatting checks, the prebuilt-samples
-/// check, the SDKs' packages and clippy — everything that runs no tests
-/// and builds no guest but the Rust SDK, which `sdks` builds from its
-/// package. `ci-branch.yml` runs this as a job beside `ci-tests`, so the
-/// lints and the tests of a push finish in the time of the slower one.
+/// The lints half of `ci`: the formatting checks, the committed pane.json
+/// schema, the prebuilt-samples check, the SDKs' packages and clippy —
+/// everything that runs no tests and builds no guest but the Rust SDK,
+/// which `sdks` builds from its package. `ci-branch.yml` runs this as a job
+/// beside `ci-tests`, so the lints and the tests of a push finish in the
+/// time of the slower one.
 fn ci_lints() -> Result<(), String> {
     // Formatting first: it is free, so a formatting error is seen at once
     // instead of after the guests and the checks have been built.
@@ -521,6 +531,9 @@ fn ci_lints() -> Result<(), String> {
             .current_dir(root.join(dir))
             .args(["fmt", "--all", "--check"]))?;
     }
+    // The committed pane.json schema is the one Pane's manifest types
+    // generate, before anything slower runs.
+    schema(false)?;
     // The prebuilt JS/TS samples must match their sources and pins.
     run(&mut pane_js("check"))?;
     sdks()?;
@@ -538,6 +551,46 @@ fn ci_lints() -> Result<(), String> {
     run(cargo()
         .current_dir(root.join("guests/helpers/echo"))
         .args(clippy))
+}
+
+/// Where the generated schema is committed: beside the SDK that ships it,
+/// inside the `@pane-app/extension` package (`npm pack` carries the folder).
+const SCHEMA: &str = "guests/js/schema/pane.schema.json";
+
+/// Generates `pane.json`'s JSON Schema from pane-core's manifest types and
+/// checks the committed copy against it, or rewrites it with `--write`.
+/// Because the schema is generated where the types are, the two cannot
+/// drift: a change to what `pane.json` may hold changes the schema, and
+/// this task makes the committed copy follow (CI runs it in `ci-lints` and
+/// regenerates a stale copy on a push, uploading it as the `manifest-schema`
+/// artifact for the implementing agent to commit, as it does the JS/TS
+/// samples).
+fn schema(write: bool) -> Result<(), String> {
+    let path = root().join(SCHEMA);
+    let generated = pane_core::schema::manifest_schema();
+    if !write {
+        // The file is committed with LF endings and checked out with
+        // whatever this system uses; the generated schema is one text.
+        let committed = std::fs::read_to_string(&path)
+            .map_err(|error| format!("read {} failed: {error}", path.display()))?
+            .replace("\r\n", "\n");
+        if committed == generated {
+            println!("{} matches what Pane's manifest types generate", path.display());
+            return Ok(());
+        }
+        return Err(format!(
+            "{} does not match what Pane's manifest types generate: rewrite it with \
+             `cargo xtask schema --write`",
+            path.display()
+        ));
+    }
+    if let Some(folder) = path.parent() {
+        std::fs::create_dir_all(folder).map_err(|error| error.to_string())?;
+    }
+    std::fs::write(&path, generated)
+        .map_err(|error| format!("write {} failed: {error}", path.display()))?;
+    println!("wrote {}", path.display());
+    Ok(())
 }
 
 /// Checks that the SDKs package as they would be published, publishing

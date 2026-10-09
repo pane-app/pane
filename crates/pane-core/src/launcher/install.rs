@@ -832,6 +832,12 @@ fn preview_view(
     };
     let manifest = &package.manifest;
     let mut details = vec![format!("Source: {}", package.identity)];
+    // What the package does, in a sentence: the preview shows it beside
+    // the source, as the extension's page in Settings does under the
+    // title (#224).
+    if let Some(description) = &manifest.description {
+        details.push(description.clone());
+    }
     if let Some(version) = &manifest.version {
         details.push(format!("Version: {version}"));
     }

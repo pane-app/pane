@@ -21,6 +21,7 @@
   "files": [
     "*.js",
     "*.d.ts",
+    "schema/pane.schema.json",
     "wit/world.wit",
     "LICENSE-APACHE",
     "LICENSE-MIT"
