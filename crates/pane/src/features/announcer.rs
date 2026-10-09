@@ -539,6 +539,7 @@ impl LauncherWindow {
         cx: &App,
     ) -> Option<Listing> {
         self.panel_listing(cx)
+            .or_else(|| self.toast_details_listing())
             .or_else(|| self.menu_listing())
             .or_else(|| self.screen_listing(view, sections, nothing_found))
     }

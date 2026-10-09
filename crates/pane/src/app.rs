@@ -1699,9 +1699,11 @@ impl Render for LauncherWindow {
             self.drawn_over = self.actions.is_some() || self.launcher.confirmation().is_some();
             self.results.drawn_rows.clear();
         }
-        // The toast the footer shows, if any, and its time (#141).
+        // The toast the footer shows, if any, and its time (#141): an
+        // outcome of the status line is a toast too, timed here and
+        // cleared through the launcher when its time is up (#249).
         let toast = self.footer_toast(&view.status);
-        self.time_toast(toast.as_ref(), window, cx);
+        self.time_toast(toast.as_ref(), &view.status, window, cx);
         // Pane's Clipboard History and Search Files draw their own split
         // view (#102, #177), with a confirmation the command asks for over
         // it (#146).
@@ -1806,13 +1808,24 @@ impl Render for LauncherWindow {
         let status_busy = view.status != Status::Idle;
         let (status_selector, status, status_color): (&str, Option<SharedString>, Hsla) =
             match view.status.clone() {
-                // A toast speaks where the status line would (#141).
-                _ if toast.is_some() => ("status-toast", None, theme.text_body),
+                // An extension's toast speaks where the status line would
+                // (#141), while the launcher is idle or working.
+                Status::Idle | Status::Running if toast.is_some() => {
+                    ("status-toast", None, theme.text_body)
+                }
                 Status::Idle => ("status-idle", None, theme.text_muted),
                 Status::Running => ("status-running", Some("Running…".into()), theme.warning),
                 Status::Progress(work) => ("status-progress", Some(work.into()), theme.warning),
-                Status::Result(answer) => ("status-result", Some(answer.into()), theme.success),
-                Status::Error(message) => ("status-error", Some(message.into()), theme.danger),
+                // An outcome is the toast itself now (#249), drawn
+                // through the toast controls and timed to leave; the
+                // strip keeps the identity it always had, so a test or
+                // smoke still finds the footer where it was.
+                Status::Result(answer) => {
+                    ("status-result", Some(answer.into()), theme.success)
+                }
+                Status::Error(message) => {
+                    ("status-error", Some(message.into()), theme.danger)
+                }
             };
         // The strip's name for assistive technology: the status, or the
         // toast's title and message.
@@ -1826,14 +1839,19 @@ impl Render for LauncherWindow {
             .as_ref()
             .filter(|_| announcer::says_message(&view.status, toast.is_some()))
             .map(SharedString::to_string);
-        // The toast's actions take the footer's buttons' place.
-        let toast_buttons = match &toast {
-            Some(shown) => self.toast_buttons(shown, &theme, cx),
-            None => Vec::new(),
-        };
-        let toast_middle = toast
-            .as_ref()
-            .map(|shown| self.render_toast(shown, &theme, cx).into_any_element());
+        // The toast in the footer's middle, in the hint's place, with
+        // the window as it is this frame: its size decides whether a
+        // toast's text fits on one line, and whether its controls have
+        // the focus decides the close button (#249). While a status
+        // shows, the primary action steps aside, which is what the
+        // one-line room accounts for.
+        let viewport = window.viewport_size();
+        let toast_middle = toast.as_ref().map(|shown| {
+            self.render_toast(shown, &theme, viewport, status_busy, window, cx)
+                .into_any_element()
+        });
+        // The toast's open details, above the strip (#249).
+        let toast_details = self.render_toast_details_layer(&theme, material, viewport, cx);
         // The selected action: the one definition ([`SelectedAction`])
         // that drives the idle strip's button — its label, its
         // availability — and the dispatch both the button and Enter take.
@@ -2016,7 +2034,7 @@ impl Render for LauncherWindow {
             .on_action(cx.listener(Self::dismiss))
             .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(Self::toggle_actions))
-            .on_action(cx.listener(Self::focus_toast))
+            .on_action(cx.listener(Self::open_toast_details))
             .map(|content| Self::on_quick_slot_keys(content, cx))
             // A toast's actions' shortcuts first: the toast is what was
             // said last (#141).
@@ -2091,6 +2109,9 @@ impl Render for LauncherWindow {
                         .when_some(self.render_actions_layer(window, cx), |strip, panel| {
                             strip.child(panel)
                         })
+                        // The open toast's details, above the strip as the
+                        // panel is (#249).
+                        .when_some(toast_details, |strip, details| strip.child(details))
                         // The strip is the live region: it carries the
                         // message as its name, so assistive technology
                         // announces it. While idle the strip carries no
@@ -2121,16 +2142,13 @@ impl Render for LauncherWindow {
                                 )
                                 .into_any_element(),
                             },
-                            // A toast's actions, when it has any. While a
-                            // status shows, the primary action steps aside —
-                            // nothing is dispatched again from a frame the
-                            // status has already overtaken (a double click on
-                            // a quick open) — and Actions stays.
-                            if toast_buttons.is_empty() {
-                                self.footer_buttons(&action, with_actions, status_busy, &theme, cx)
-                            } else {
-                                toast_buttons
-                            },
+                            // While a status shows — a toast now — the
+                            // primary action steps aside: nothing is
+                            // dispatched again from a frame the status has
+                            // already overtaken (a double click on a quick
+                            // open). A toast's actions are in its details
+                            // (#249), and Actions stays.
+                            self.footer_buttons(&action, with_actions, status_busy, &theme, cx),
                             &theme,
                         )),
                 )

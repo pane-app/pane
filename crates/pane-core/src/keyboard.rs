@@ -622,10 +622,10 @@ pub fn move_pin_keys(earlier: bool) -> [Binding; 2] {
     [vertical, horizontal].map(|arrow| default_binding(&format!("{PIN_MODIFIER}-alt-{arrow}")))
 }
 
-/// The launcher's key that moves the focus to the toast in its footer,
-/// when the toast offers actions (#141): Ctrl+T (Command+T on macOS). Tab
-/// then moves between its actions and Enter chooses one. Window-local and
-/// fixed, as [`pin_key`] is.
+/// The launcher's key that opens the toast's details in the footer
+/// (#249): Ctrl+T (Command+T on macOS) shows the toast's full text, and
+/// the actions it carries, in a popover above the footer. Window-local
+/// and fixed, as [`pin_key`] is.
 pub fn toast_key() -> Binding {
     default_binding(&format!("{PIN_MODIFIER}-t"))
 }
@@ -710,7 +710,7 @@ impl PaneKeys {
             add(number_key(number), "picks a numbered result");
         }
         add(pin_key(), "pins the selected result");
-        add(toast_key(), "moves the focus to the toast");
+        add(toast_key(), "opens the toast's details");
         for earlier in [true, false] {
             for key in move_pin_keys(earlier) {
                 add(key, "moves a pin");

@@ -680,7 +680,18 @@ impl LauncherWindow {
             // The Actions panel, over the footer as the launcher's is.
             .when_some(self.render_actions_layer(window, cx), |footer, panel| {
                 footer.child(panel)
-            });
+            })
+            // The open toast's details, above the footer as the
+            // launcher's are (#249).
+            .when_some(
+                self.render_toast_details_layer(
+                    &theme,
+                    visuals.material,
+                    window.viewport_size(),
+                    cx,
+                ),
+                |footer, details| footer.child(details),
+            );
 
         let content = split_view::compose(
             header,
@@ -690,7 +701,10 @@ impl LauncherWindow {
         );
         // The window's live region (#132): the open Actions panel's list,
         // else the files'.
-        let followed = self.panel_listing(cx).or(Some(followed));
+        let followed = self
+            .panel_listing(cx)
+            .or_else(|| self.toast_details_listing())
+            .or(Some(followed));
         let announcer = self.announce(followed, said.as_deref(), cx);
         let root = div()
             .key_context(KEY_CONTEXT)
@@ -706,7 +720,7 @@ impl LauncherWindow {
             .on_action(cx.listener(Self::dismiss))
             .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(Self::toggle_actions))
-            .on_action(cx.listener(Self::focus_toast))
+            .on_action(cx.listener(Self::open_toast_details))
             // A toast's actions' shortcuts first, then the selected
             // file's action chords (Ctrl+Enter), as on any command's
             // search.

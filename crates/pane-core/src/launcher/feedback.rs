@@ -274,6 +274,20 @@ impl Launcher {
         }
     }
 
+    /// The outcome status the window drew as a toast (#249) —
+    /// [`Status::Result`] or [`Status::Error`] — has been shown for its
+    /// [`crate::feedback::TOAST_DURATION`] (the window counts it, pausing
+    /// while the pointer is over the toast or it has the focus): the
+    /// status line goes back to rest, so a later screen never shows a
+    /// stale outcome. The core keeps the status; the window owns the
+    /// timing. Nothing happens once the status changed.
+    pub fn outcome_left(&self, outcome: &Status) {
+        let mut state = self.lock();
+        if state.view.status == *outcome {
+            state.view.status = Status::Idle;
+        }
+    }
+
     /// The window lost the focus: an animated toast leaves the footer (its
     /// command may still update it, which shows it again), while a success
     /// or failure toast keeps its time. A confirmation the window showed is

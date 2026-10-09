@@ -531,6 +531,9 @@ impl LauncherWindow {
     /// a command's list, with focus in its search field. Root search and
     /// commands' lists have Actions.
     pub(crate) fn open_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // The toast's details are another popover over the same strip:
+        // one at a time (#249).
+        self.close_toast_details(window, cx);
         if let Some(slot) = self.focused_slot(window) {
             self.open_slot_actions(slot, window, cx);
             return;
