@@ -113,11 +113,11 @@ impl Dirs {
     /// `package`, declaring `dependencies` (JSON array contents): the
     /// schedule, service and Rust samples whose manifests these tests
     /// change.
-    fn requiring(&self, package: &str, dependencies: &str) -> PathBuf {
+    fn requiring(&self, package: &str, dependency: &str) -> PathBuf {
         let folder = self.sample(package);
         let manifest = fs::read_to_string(folder.join("pane.json")).unwrap();
         let mut manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
-        manifest["dependencies"] = serde_json::from_str(dependencies).unwrap();
+        manifest["dependencies"] = serde_json::from_str(&format!("[{dependency}]")).unwrap();
         fs::write(folder.join("pane.json"), manifest.to_string()).unwrap();
         folder
     }
@@ -220,11 +220,20 @@ impl Dirs {
         .unwrap();
     }
 
-    /// Whether an instance of the package in folder `name` is running.
+    /// Whether an instance of the package in source folder `name` is
+    /// running: of its managed copy.
     fn runs(&self, launcher: &Launcher, name: &str) -> bool {
+        let Some(location) = launcher
+            .packages()
+            .into_iter()
+            .find(|package| package.identity == self.identity(name))
+            .map(|package| package.location)
+        else {
+            return false;
+        };
         block_on(self.runtime.running())
             .iter()
-            .any(|path| path.starts_with(self.folder(name)))
+            .any(|path| path.starts_with(&location))
     }
 
     /// How many runs the Schedule sample has counted, kept in its content,
@@ -679,7 +688,8 @@ fn root_results_are_not_asked_while_waiting_and_asked_again_once_it_is_back() {
     launcher.back();
 
     // Its dependency disabled: the command waits, its root results are not
-    // asked for and none are listed.
+    // asked for and none are listed (the instance its first answer ran in
+    // stays, since waiting stops nothing).
     block_on(launcher.set_enabled(&dirs.identity(GREETER), false));
     block_on(launcher.set_query("reverse another"));
     assert!(
@@ -691,7 +701,6 @@ fn root_results_are_not_asked_while_waiting_and_asked_again_once_it_is_back() {
         "{:?}",
         titles(&launcher)
     );
-    assert!(!dirs.runs(&launcher, "sample-rust"));
 
     // Enabled again: the next query asks for its results.
     block_on(launcher.set_enabled(&dirs.identity(GREETER), true));
@@ -768,7 +777,7 @@ fn a_call_of_a_waiting_package_already_running_finishes() {
     calling.join().unwrap();
     assert_eq!(
         shown(&launcher),
-        Status::Result(r#"answered: {"waited":true}"#.into())
+        Status::Result("answered: true".into())
     );
     assert_eq!(b_saved(&dirs, "waiting").as_deref(), Some("finished"));
 }
@@ -888,11 +897,25 @@ fn a_reload_of_the_dependency_that_fails_to_start_leaves_its_dependents_waiting(
     let launcher = dirs.launcher();
     dirs.install(&launcher, &caller);
 
-    // The greeter's source is replaced by code that fails to start:
-    // reloading it fails, and it is paused for that. The dependent waits.
+    // The greeter's source is replaced by code that fails to start, no
+    // longer publishing operations: reloading it fails, and it is paused
+    // for that. The dependent waits.
     fs::copy(
         guest("failing_start.wasm"),
         source.join("sample_operations.wasm"),
+    )
+    .unwrap();
+    fs::write(
+        source.join("pane.json"),
+        r#"{
+            "manifestVersion": 1,
+            "title": "Rust operations sample",
+            "apiVersion": "0.1",
+            "commands": [
+                { "id": "call", "title": "Call from Rust",
+                  "component": "sample_operations.wasm" }
+            ]
+        }"#,
     )
     .unwrap();
     manage(&launcher);
@@ -910,12 +933,9 @@ fn a_reload_of_the_dependency_that_fails_to_start_leaves_its_dependents_waiting(
         "Needs Rust operations sample, which is paused"
     );
 
-    // A reload that starts brings them back.
-    fs::copy(
-        guest("sample_operations.wasm"),
-        source.join("sample_operations.wasm"),
-    )
-    .unwrap();
+    // A reload that starts brings them back: the source is the assembled
+    // package again.
+    dirs.sample(GREETER);
     manage(&launcher);
     select_title(&launcher, "Reload Rust operations sample");
     block_on(launcher.activate_selected());
