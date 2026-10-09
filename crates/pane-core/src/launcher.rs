@@ -4787,7 +4787,11 @@ fn computed_results(
             let mut listed: Vec<Computed> = results
                 .into_iter()
                 .filter_map(|result| {
-                    let ComputedResult { listing, action, answer } = result;
+                    let ComputedResult {
+                        listing,
+                        action,
+                        answer,
+                    } = result;
                     // Only a result whose action copies is an answer's
                     // card: a detail on another action is not shown.
                     let detail = answer.filter(|_| matches!(action, RootAction::Copy(_)));
@@ -4807,7 +4811,11 @@ fn computed_results(
                             return Some(computed(row, Entry::File(file), None));
                         }
                     };
-                    Some(computed(Row::listed(listing, Some(&command.id)), entry, detail))
+                    Some(computed(
+                        Row::listed(listing, Some(&command.id)),
+                        entry,
+                        detail,
+                    ))
                 })
                 .collect();
             if indexed > 0

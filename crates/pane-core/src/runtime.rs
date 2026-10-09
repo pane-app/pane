@@ -3142,7 +3142,9 @@ impl Host {
                 data,
                 mut reply,
             } => Box::pin(async move {
-                let result = self.root_results(&component, query, at, data, &mut reply).await;
+                let result = self
+                    .root_results(&component, query, at, data, &mut reply)
+                    .await;
                 let _ = reply.send(result);
             }),
 

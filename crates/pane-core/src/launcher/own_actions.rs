@@ -38,7 +38,9 @@ use super::files::FileRow;
 use super::item_actions::Listed;
 use super::{Entry, Launcher, Screen, State, Status, off_thread};
 use crate::feedback::{Caller, GivenConfirmation, Hud, ToastStyle, WindowPresence};
-use crate::runtime::{Action, ActionKind, ActionStyle, ActionSubmenu, AnswerDetail, SubmenuEntries};
+use crate::runtime::{
+    Action, ActionKind, ActionStyle, ActionSubmenu, AnswerDetail, SubmenuEntries,
+};
 use crate::system::{self, Clip, PASTE_FALLBACK, SystemError};
 
 /// The callback ids of Pane's own actions. A row of Pane's never reaches a
@@ -136,7 +138,10 @@ fn answer_actions(detail: Option<&AnswerDetail>) -> Vec<Action> {
         .flat_map(|detail| detail.copies.iter())
         .enumerate()
     {
-        actions.push(action(copy.title.clone(), &format!("{COPY_ANSWER}/{index}")));
+        actions.push(action(
+            copy.title.clone(),
+            &format!("{COPY_ANSWER}/{index}"),
+        ));
     }
     actions
 }

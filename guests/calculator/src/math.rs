@@ -84,35 +84,29 @@ fn reduced(radians: f64) -> (i32, f64) {
     (quadrant as i32, turn - quadrant * QUARTER)
 }
 
-/// The sine of `u` in [0, π/2]: Taylor series through u^15.
+/// The sine of `u` in [0, π/2]: Taylor series through u^15, nested
+/// inward (Horner's form).
 fn sin_of(u: f64) -> f64 {
     let z = u * u;
-    u * (1.0
-        - z / 6.0
-            * (1.0
-                - z / 20.0
-                    * (1.0
-                        - z / 42.0
-                            * (1.0
-                                - z / 72.0
-                                    * (1.0
-                                        - z / 110.0
-                                            * (1.0 - z / 156.0 * (1.0 - z / 210.0)))))))
+    let series = 1.0 - z / 210.0;
+    let series = 1.0 - z / 156.0 * series;
+    let series = 1.0 - z / 110.0 * series;
+    let series = 1.0 - z / 72.0 * series;
+    let series = 1.0 - z / 42.0 * series;
+    let series = 1.0 - z / 20.0 * series;
+    u * (1.0 - z / 6.0 * series)
 }
 
-/// The cosine of `u` in [0, π/2]: Taylor series through u^14.
+/// The cosine of `u` in [0, π/2]: Taylor series through u^14, nested
+/// inward (Horner's form).
 fn cos_of(u: f64) -> f64 {
     let z = u * u;
-    1.0 - z / 2.0
-        * (1.0
-            - z / 12.0
-                * (1.0
-                    - z / 30.0
-                        * (1.0
-                            - z / 56.0
-                                * (1.0
-                                    - z / 90.0
-                                        * (1.0 - z / 132.0 * (1.0 - z / 182.0))))))
+    let series = 1.0 - z / 182.0;
+    let series = 1.0 - z / 132.0 * series;
+    let series = 1.0 - z / 90.0 * series;
+    let series = 1.0 - z / 56.0 * series;
+    let series = 1.0 - z / 30.0 * series;
+    1.0 - z / 2.0 * (1.0 - z / 12.0 * series)
 }
 
 /// The angle from the x axis to the point (`y`, `x`), in radians in

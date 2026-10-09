@@ -154,12 +154,10 @@ pub(crate) fn answer_card(card: &AnswerCard, theme: &Theme) -> Div {
             // The answer's swatch, when it is a colour: under the answer's
             // value, where a board authors a caption, named by it for
             // assistive technology.
-            side(&card.answer, colors.card_answer, "answer-value").when_some(
-                card.swatch,
-                |column, colour| {
+            side(&card.answer, colors.card_answer, "answer-value")
+                .when_some(card.swatch, |column, colour| {
                     column.child(swatch(colour, &card.answer.value, theme))
-                },
-            ),
+                }),
         );
     let also = (!card.also.is_empty()).then(|| {
         div()

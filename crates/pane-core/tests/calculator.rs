@@ -668,7 +668,15 @@ fn a_colour_answer_is_presented_with_its_swatch_under_color() {
 fn colour_names_are_not_answered() {
     let dirs = Dirs::new();
     let launcher = dirs.launcher(dirs.runtime());
-    for query in ["red", "cornflower", "sea green", "#3a", "#33aaaab", "rgb(51, 170)", "1 + 2"] {
+    for query in [
+        "red",
+        "cornflower",
+        "sea green",
+        "#3a",
+        "#33aaaab",
+        "rgb(51, 170)",
+        "1 + 2",
+    ] {
         search(&launcher, query);
         assert_eq!(titles(&launcher), Vec::<String>::new(), "{query}");
     }
@@ -748,7 +756,12 @@ fn each_percentage_phrase_answers_as_its_value() {
     }
     // Not phrases: an operator the phrases do not apply, a word they do
     // not use, a sign, a zero divided by.
-    for query in ["20% of 50 + 1", "20% from 50", "-20% of 50", "1 as a % of 0"] {
+    for query in [
+        "20% of 50 + 1",
+        "20% from 50",
+        "-20% of 50",
+        "1 as a % of 0",
+    ] {
         search(&launcher, query);
         assert_eq!(titles(&launcher), Vec::<String>::new(), "{query}");
     }
@@ -779,7 +792,11 @@ fn each_date_and_time_word_answers_at_the_clocks_time() {
     for (query, answer) in answers {
         search(&launcher, query);
         assert_eq!(titles(&launcher), [answer], "{query}");
-        assert_eq!(selected_title(&launcher).as_deref(), Some(answer), "{query}");
+        assert_eq!(
+            selected_title(&launcher).as_deref(),
+            Some(answer),
+            "{query}"
+        );
         assert_eq!(launcher.selected_copy().as_deref(), Some(answer), "{query}");
     }
     search(&launcher, "now");
@@ -836,7 +853,12 @@ fn a_date_or_time_word_offers_iso_8601_and_a_unix_timestamp() {
             .collect();
         assert_eq!(
             actions,
-            ["Copy answer", "Paste answer", "Copy ISO 8601", "Copy Unix timestamp"]
+            [
+                "Copy answer",
+                "Paste answer",
+                "Copy ISO 8601",
+                "Copy Unix timestamp"
+            ]
         );
         block_on(launcher.run_selected_action(2));
         assert_eq!(
@@ -879,7 +901,10 @@ fn date_and_time_words_answer_in_the_clocks_zone() {
     let launcher = east.launcher(east.runtime()).with_clock(Arc::new(clock));
     search(&launcher, "now");
     assert_eq!(titles(&launcher), ["Jun 1, 2025, 19:53"]);
-    assert_eq!(launcher.selected_copy().as_deref(), Some("Jun 1, 2025, 19:53"));
+    assert_eq!(
+        launcher.selected_copy().as_deref(),
+        Some("Jun 1, 2025, 19:53")
+    );
     search(&launcher, "today");
     assert_eq!(titles(&launcher), ["Jun 1, 2025"]);
 
