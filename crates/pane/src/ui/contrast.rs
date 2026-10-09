@@ -5,7 +5,7 @@
 //! dark surface, or toward black on a light one, keeping its hue, until
 //! its contrast ratio (WCAG's) reaches what its role needs.
 
-use gpui::{Hsla, hsla_to_rgba};
+use gpui::{Hsla, Rgba, hsla_to_rgba, rgb_to_hsla};
 
 /// The contrast an icon, a non-text graphic, needs (WCAG 1.4.11).
 pub(crate) const GRAPHIC: f32 = 3.0;
@@ -31,6 +31,23 @@ pub(crate) fn ratio(a: Hsla, b: Hsla) -> f32 {
     let (a, b) = (luminance(a), luminance(b));
     let (light, dark) = if a > b { (a, b) } else { (b, a) };
     (light + 0.05) / (dark + 0.05)
+}
+
+/// `fg` drawn over `surface`, flattened to opaque: the colour a
+/// translucent colour leaves on the surface beneath it, as GPUI composites
+/// straight alpha in sRGB. The launcher's text levels (ADR 0035) are judged
+/// through this — a level's alpha form against the surface it is drawn on.
+pub(crate) fn over(fg: Hsla, surface: Hsla) -> Hsla {
+    let fg = hsla_to_rgba(fg);
+    let surface = hsla_to_rgba(surface);
+    let alpha = fg.alpha;
+    let mix = |fg: f32, surface: f32| alpha * fg + (1. - alpha) * surface;
+    rgb_to_hsla(Rgba::new(
+        mix(fg.red, surface.red),
+        mix(fg.green, surface.green),
+        mix(fg.blue, surface.blue),
+        1.,
+    ))
 }
 
 /// `color`, drawn on `surface`, moved toward white (on a dark surface) or
@@ -85,5 +102,21 @@ mod tests {
         assert!(ratio(fixed, light) >= GRAPHIC);
         assert!(fixed.lightness < color(0xFFF3A0FF).lightness);
         assert!((ratio(color(0x000000FF), color(0xFFFFFFFF)) - 21.).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_translucent_colour_composites_over_the_surface_beneath_it() {
+        // White at half alpha over black paints the grey between them; an
+        // opaque colour leaves the surface nothing to show through.
+        let half = Hsla {
+            alpha: 0.5,
+            ..color(0xFFFFFFFF)
+        };
+        let grey = hsla_to_rgba(over(half, color(0x000000FF)));
+        for channel in [grey.red, grey.green, grey.blue] {
+            assert!((channel - 0.5).abs() < 1e-3);
+        }
+        assert_eq!(grey.alpha, 1.);
+        assert_eq!(over(color(0xFFFFFFFF), color(0x000000FF)), color(0xFFFFFFFF));
     }
 }
