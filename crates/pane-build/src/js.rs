@@ -239,6 +239,7 @@ pub fn build_js_command(
 }
 
 /// The componentizer folder resolved to: its binary, runtime and libc.
+#[derive(Debug)]
 struct Parts {
     binary: PathBuf,
     runtime: PathBuf,
@@ -509,10 +510,11 @@ fn command_world(
     http: bool,
     programs: bool,
 ) -> Result<String, String> {
-    let known = EXPORT_OPTIONS
+    let known: Vec<&str> = EXPORT_OPTIONS
         .iter()
         .chain(IMPORT_OPTIONS.iter())
-        .map(|(option, _)| *option);
+        .map(|(option, _)| *option)
+        .collect();
     let mut unknown: Vec<&str> = options
         .keys()
         .map(String::as_str)
@@ -676,7 +678,7 @@ fn linked_componentize(wit: &Path, bundle: &Path) -> Result<Vec<u8>, String> {
         .enable_all()
         .build()
         .map_err(|error| format!("a runtime to componentize with could not start: {error}"))?;
-    let componentize = componentize_qjs::componentize(&componentize_qjs::ComponentizeOpts {
+    let binding = componentize_qjs::ComponentizeOpts {
         wit_path: wit,
         js_source: &js,
         js_path: Some(bundle),
@@ -686,7 +688,8 @@ fn linked_componentize(wit: &Path, bundle: &Path) -> Result<Vec<u8>, String> {
         disable_gc: false,
         runtime: componentize_qjs::Runtime::Custom(js_assets::RUNTIME_WASM),
         libc: Some(js_assets::LIBC_SO),
-    });
+    };
+    let componentize = componentize_qjs::componentize(&binding);
     runtime
         .block_on(componentize)
         .map_err(|error| format!("the componentizer failed: {error:#}"))
