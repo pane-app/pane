@@ -240,7 +240,7 @@ pub fn build_js_command(
 
 /// The componentizer folder resolved to: its binary, runtime and libc.
 #[derive(Debug)]
-struct Parts {
+pub(crate) struct Parts {
     binary: PathBuf,
     runtime: PathBuf,
     libc: PathBuf,
