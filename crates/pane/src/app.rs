@@ -50,7 +50,7 @@ use crate::ui::material::Material;
 use crate::ui::motion;
 use crate::ui::result_row::{RowContent, RowMeta, result_row_with};
 use crate::ui::shell;
-use crate::ui::theme::{Theme, pressed};
+use crate::ui::theme::{TERTIARY_STRENGTH, Theme, pressed};
 use crate::ui::virtual_list;
 use crate::{
     Back, Confirm, DismissLauncher, FocusNext, FocusPrevious, OpenSettings, ReturnToRoot,
@@ -2275,7 +2275,13 @@ pub(crate) fn action_button(
     .aria_keyshortcuts(keys.name())
     .when(action.available, |button| button.cursor_pointer())
     .when(!action.available, |button| {
-        button.opacity(0.5).cursor_default().aria_disabled(true)
+        // Disabled text is the ink at the tertiary strength (ADR 0035);
+        // the whole button dims with it, label and keys as one, as the
+        // reference's disabled fields do.
+        button
+            .opacity(TERTIARY_STRENGTH)
+            .cursor_default()
+            .aria_disabled(true)
     })
 }
 

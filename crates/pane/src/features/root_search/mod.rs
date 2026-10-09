@@ -257,7 +257,7 @@ pub(crate) fn search_header(
             text_input("query")
                 .state(input.downgrade())
                 .placeholder(placeholder)
-                .placeholder_color(theme.text_placeholder)
+                .placeholder_color(theme.query_placeholder)
                 .caret_color(theme.accent_text)
                 .selection_color(theme.row_selected)
                 .marked_color(theme.accent_text)
@@ -277,7 +277,7 @@ pub(crate) fn search_header(
             .h(geometry.search_height)
             .px(geometry.search_padding_x)
             .border_b_1()
-            .border_color(theme.hairline_soft),
+            .border_color(theme.separator),
         // Over a background image (ADR 0028), the field is a frosted pill
         // inside the header's row, with no hairline under it.
         Some(frost) => {

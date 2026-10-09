@@ -28,7 +28,7 @@ pub(crate) enum HintPart {
 
 /// The footer's hint line: "Type to filter actions · Esc goes back" while
 /// Actions is open (at rest the footer's buttons already show the keys,
-/// so it shows none) — muted 12.5px text and regular caps, 6px apart, on
+/// so it shows none) — tertiary text and regular caps, 6px apart, on
 /// one line.
 pub(crate) fn hint_line(parts: Vec<HintPart>, theme: &Theme) -> Div {
     div()
@@ -40,7 +40,7 @@ pub(crate) fn hint_line(parts: Vec<HintPart>, theme: &Theme) -> Div {
         .overflow_hidden()
         .whitespace_nowrap()
         .text_size(theme.typography.footer_size)
-        .text_color(theme.text_muted)
+        .text_color(theme.text_tertiary)
         .children(parts.into_iter().enumerate().map(|(index, part)| {
             match part {
                 HintPart::Text(text) => div().flex_none().child(text).into_any_element(),
@@ -204,13 +204,13 @@ fn line(theme: &Theme) -> gpui::Pixels {
     theme.geometry.footer_height - px(1.)
 }
 
-/// The 1×16 rule between the footer's buttons.
+/// The 1×16 rule between the footer's buttons, at the separator level.
 pub(crate) fn divider(theme: &Theme) -> Div {
     div()
         .flex_none()
         .w(px(1.))
         .h(theme.geometry.footer_divider_height)
-        .bg(theme.footer_divider)
+        .bg(theme.separator)
 }
 
 /// The footer's content row over the strip's 50px floor: `lead` (the

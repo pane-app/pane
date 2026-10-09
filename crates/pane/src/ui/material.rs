@@ -310,7 +310,7 @@ impl Material {
             })
             .bg(theme.footer_tint)
             .border_t_1()
-            .border_color(theme.hairline_soft)
+            .border_color(theme.separator)
     }
 
     /// The L2 popover: the reference's `.pop` surface, for a small floating

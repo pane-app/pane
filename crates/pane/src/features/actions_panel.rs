@@ -77,7 +77,7 @@ use crate::ui::icon::{Glyph, IconTone, TileSize, glyph, tile_at};
 use crate::ui::input::TextEditingKeys;
 use crate::ui::keycap::{CapStyle, KeySequence, key_sequence};
 use crate::ui::material::{Material, popover_shadows};
-use crate::ui::theme::{Theme, pressed};
+use crate::ui::theme::{TERTIARY_STRENGTH, Theme, pressed};
 use crate::ui::virtual_list::{self, VirtualList};
 
 actions!(
@@ -1574,7 +1574,10 @@ pub(crate) fn action_row(
             });
             row.active(move |row| row.bg(press))
         })
-        .when(!available && !note, |row| row.opacity(0.5))
+        // Disabled text is the ink at the tertiary strength (ADR 0035),
+        // as the reference's disabled fields are; the whole row dims with
+        // it, glyph and keys as one.
+        .when(!available && !note, |row| row.opacity(TERTIARY_STRENGTH))
         .when(!available, |row| row.aria_disabled(true))
         .child(match &entry.icon {
             // The action's own icon (#139), at the glyph's size, its web
@@ -1619,7 +1622,7 @@ pub(crate) fn rule(theme: &Theme) -> Div {
         .h(px(1.))
         .my(geometry.rule_margin_y)
         .mx(geometry.rule_margin_x)
-        .bg(theme.action_rule)
+        .bg(theme.separator)
 }
 
 /// A group label (`.alabel`): 26 high, its 11.5px/500 text at the bottom
@@ -1641,7 +1644,8 @@ pub(crate) fn group_label(label: impl Into<SharedString>, theme: &Theme) -> Div 
         // label's bottom padding, as the reference's does.
         .line_height(theme.typography.action_group_size * theme.typography.line_height)
         .font_weight(theme.typography.medium)
-        .text_color(theme.text_muted)
+        // The tertiary level: the Actions panel's groups are sections.
+        .text_color(theme.text_tertiary)
         .child(label)
 }
 
@@ -1710,13 +1714,13 @@ pub(crate) fn search_field(
         .h(geometry.search_height)
         .px(geometry.search_padding_x)
         .border_t_1()
-        .border_color(theme.action_rule)
+        .border_color(theme.separator)
         .child(glyph(Glyph::Search, geometry.search_glyph_size, theme.text_muted).flex_none())
         .child(
             text_input("actions-filter")
                 .state(filter.downgrade())
                 .placeholder(PLACEHOLDER)
-                .placeholder_color(theme.text_placeholder)
+                .placeholder_color(theme.query_placeholder)
                 .caret_color(theme.accent_text)
                 .selection_color(theme.row_selected)
                 .marked_color(theme.accent_text)

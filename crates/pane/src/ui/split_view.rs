@@ -92,7 +92,7 @@ pub(crate) fn header(
         .pl(split.header_padding_left)
         .pr(split.header_padding_right)
         .border_b_1()
-        .border_color(theme.hairline_soft)
+        .border_color(theme.separator)
         .child(back)
         .child(field)
         .child(
@@ -136,7 +136,7 @@ pub(crate) fn search_field(
         text_input("clipboard-query")
             .state(input.downgrade())
             .placeholder(placeholder)
-            .placeholder_color(theme.text_placeholder)
+            .placeholder_color(theme.query_placeholder)
             .caret_color(theme.accent_text)
             .selection_color(theme.row_selected)
             .marked_color(theme.accent_text)
@@ -169,7 +169,7 @@ pub(crate) fn list(theme: &Theme) -> Stateful<Div> {
         .flex()
         .flex_col()
         .border_r_1()
-        .border_color(theme.hairline_soft)
+        .border_color(theme.separator)
 }
 
 /// What a record's row shows.
@@ -562,7 +562,7 @@ pub(crate) fn info_section(
                 .justify_between()
                 .gap(split.info_gap)
                 .border_t_1()
-                .border_color(theme.hairline_soft)
+                .border_color(theme.separator)
                 .child(
                     div()
                         .flex_none()
@@ -634,7 +634,7 @@ pub(crate) fn footer(lead: Div, buttons: Vec<AnyElement>, theme: &Theme) -> Div 
         .pl(geometry.footer_padding_left)
         .pr(geometry.footer_padding_right)
         .border_t_1()
-        .border_color(theme.hairline_soft)
+        .border_color(theme.separator)
         .bg(theme.footer_tint)
         .child(lead)
         .child(
