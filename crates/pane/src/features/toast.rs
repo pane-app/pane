@@ -300,9 +300,10 @@ fn text_is_long(
     }
     let style = footer_text_style(theme);
     let run = style.to_run(text.len());
+    let font_size = style.font_size.to_pixels(window.rem_size());
     let width = window
         .text_system()
-        .layout_line(&text, style.font_size, &[run], None)
+        .layout_line(&text, font_size, &[run], None)
         .width;
     width > one_line_room(viewport, theme, busy)
 }
@@ -861,14 +862,16 @@ impl LauncherWindow {
             .enumerate()
             .map(|(index, slot)| {
                 // A listed slot has its action; the slots came from it.
+                // The slot is copied for the row's click, which owns it.
+                let slot = *slot;
                 let action = details
                     .toast
                     .toast
-                    .action(*slot)
+                    .action(slot)
                     .expect("the action of a listed slot");
                 let label = action.title.clone();
                 let shortcut = action.shortcut.as_ref().map(crate::keyboard::binding_keys);
-                let row = slot_name(*slot);
+                let row = slot_name(slot);
                 div()
                     .id(("toast-action", index))
                     .debug_selector(move || format!("toast-details-action-{row}"))
@@ -890,7 +893,7 @@ impl LauncherWindow {
                     .role(Role::MenuItem)
                     .aria_label(label.clone())
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                        this.choose_toast_action(*slot, window, cx);
+                        this.choose_toast_action(slot, window, cx);
                     }))
                     .cursor_pointer()
                     .child(label)
