@@ -17,11 +17,11 @@
 //! — the same rows, the target still selected, the outcome in the status —
 //! where the same flows opened from the extension list return there.
 
+use super::aliases::Via;
 use super::{
     Entry, Launcher, LauncherView, Mode, Screen, SelectedAction, State, Status, quick_slots,
     shortcuts,
 };
-use super::aliases::Via;
 use crate::packages::SavedData;
 
 /// One kind of action on a result.

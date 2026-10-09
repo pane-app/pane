@@ -317,8 +317,7 @@ fn sections(state: &State) -> Vec<Section> {
             // The rows declared for the address or path the query is
             // (#195), below the results and above the files.
             Entry::Send(Sending {
-                via: Via::Typed,
-                ..
+                via: Via::Typed, ..
             }) => Some("Addresses"),
             _ => None,
         })
@@ -394,7 +393,8 @@ pub(super) fn kind(entry: &Entry) -> Option<RowKind> {
             via: Via::Fallback, ..
         }) => Some(RowKind::Fallback),
         Entry::Send(Sending {
-            via: Via::Alias | Via::Typed, ..
+            via: Via::Alias | Via::Typed,
+            ..
         }) => Some(RowKind::Command),
         Entry::OpenApplication { .. } => Some(RowKind::Application),
         Entry::OpenTarget { .. } => Some(RowKind::Link),

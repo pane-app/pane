@@ -94,7 +94,11 @@ fn path_like(query: &str, home: Option<&Path>) -> Option<String> {
         {
             return Some(drive.to_owned());
         }
-        return Some(if rest.is_empty() { "/".to_owned() } else { rest.to_owned() });
+        return Some(if rest.is_empty() {
+            "/".to_owned()
+        } else {
+            rest.to_owned()
+        });
     }
     // `~` alone is the home folder; `~/rest` and `~\rest` are below it.
     if let Some(rest) = query.strip_prefix('~')
@@ -109,8 +113,7 @@ fn path_like(query: &str, home: Option<&Path>) -> Option<String> {
         };
         return Some(joined.to_string_lossy().into_owned());
     }
-    (is_drive(query) || query.starts_with('\\') || query.starts_with('/'))
-        .then(|| query.to_owned())
+    (is_drive(query) || query.starts_with('\\') || query.starts_with('/')).then(|| query.to_owned())
 }
 
 /// Whether `text` starts with a drive letter and a separator, as
@@ -118,9 +121,7 @@ fn path_like(query: &str, home: Option<&Path>) -> Option<String> {
 /// Windows path is understood wherever Pane runs.
 fn is_drive(text: &str) -> bool {
     let bytes = text.as_bytes();
-    bytes.len() >= 2
-        && bytes[0].is_ascii_alphabetic()
-        && (bytes[1] == b'/' || bytes[1] == b'\\')
+    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && (bytes[1] == b'/' || bytes[1] == b'\\')
 }
 
 /// The address of a URL-like `query`, if it is one: as typed when it has a
@@ -151,7 +152,10 @@ fn has_scheme(query: &str) -> bool {
     let Some((scheme, rest)) = query.split_once(':') else {
         return false;
     };
-    scheme.chars().next().is_some_and(|first| first.is_ascii_alphabetic())
+    scheme
+        .chars()
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic())
         && scheme.len() >= 2
         && !scheme.contains('.')
         && scheme
@@ -168,9 +172,7 @@ fn has_scheme(query: &str) -> bool {
 /// IPv6 is bracketed and not understood as a host.
 fn plausible_host(text: &str) -> bool {
     let host = match text.rsplit_once(':') {
-        Some((host, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
-            host
-        }
+        Some((host, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => host,
         _ => text,
     };
     let labels: Vec<&str> = host.split('.').collect();
@@ -231,7 +233,11 @@ fn address_row(result: &RootResult, text: &str) -> Option<(Row, Entry)> {
         Entry::Open(opening) => opening.clone(),
         Entry::Unavailable(_) => {
             let target = result.target.as_ref()?;
-            Opening::of(&target.registration, target.no_view, LaunchSource::RootSearch)
+            Opening::of(
+                &target.registration,
+                target.no_view,
+                LaunchSource::RootSearch,
+            )
         }
         _ => return None,
     };

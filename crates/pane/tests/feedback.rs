@@ -15,8 +15,8 @@ use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, pr
 use pane::LauncherWindow;
 use pane_core::tray::TrayAction;
 use pane_core::{
-    CommandMatches, CommandRegistration, CommandWhen, Hud, Launcher, LauncherView, Runtime,
-    Screen, ShownToast, Status, ToastStyle,
+    CommandMatches, CommandRegistration, CommandWhen, Hud, Launcher, LauncherView, Runtime, Screen,
+    ShownToast, Status, ToastStyle,
 };
 
 #[path = "support/settle.rs"]
