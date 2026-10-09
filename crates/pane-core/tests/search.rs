@@ -159,7 +159,7 @@ fn composed_and_decomposed_accents_match_each_other() {
 /// result's title, subtitle or package title as a subsequence, and
 /// transliteration folds away the accents and diacritics in between.
 #[test]
-an_abbreviation_finds_the_command_by_its_word_starts() {
+fn an_abbreviation_finds_the_command_by_its_word_starts() {
     let launcher = without_runtime(vec![
         command("Visual Studio Code", None),
         command("Clear History", None),

@@ -546,7 +546,7 @@ fn place(query: &[char], text: &[char], trace: bool) -> Option<Placed> {
             if here == impossible {
                 continue;
             }
-            if winner.is_none_or(|&(wi, wj)| here > dp[wi * m + wj]) {
+            if winner.as_ref().is_none_or(|&(wi, wj)| here > dp[wi * m + wj]) {
                 winner = Some((i, j));
             }
         }
@@ -625,7 +625,7 @@ impl Folded {
                 space = false;
             }
             let end = start + character.len_utf8();
-            for folded in any_ascii::any_ascii_char(character).to_lowercase() {
+            for folded in any_ascii::any_ascii_char(character).chars().flat_map(char::to_lowercase) {
                 chars.push(folded);
                 origin.push(Some((start, end)));
             }
@@ -681,7 +681,7 @@ pub fn title_matches(
     for (index, (chars, _)) in texts.iter().enumerate() {
         if let Some(placed) = query.placed_in(chars.clone(), true) {
             let better = sensitivity.accepts(placed.score, query.letters)
-                && best.is_none_or(|(score, _, _)| placed.score > *score);
+                && best.as_ref().is_none_or(|(score, _, _)| placed.score > *score);
             if better {
                 best = Some((placed.score, index, placed.at));
             }
