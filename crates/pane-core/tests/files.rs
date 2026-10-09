@@ -35,7 +35,9 @@ mod rows;
 mod system;
 
 use feedback::RecordingWindow;
-use rows::{select_title, titles};
+#[cfg(unix)]
+use rows::select_title;
+use rows::titles;
 use system::{Done, RecordingSystem};
 
 /// Activates the selected row and answers what the HUD then said, if one

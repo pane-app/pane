@@ -1285,7 +1285,7 @@ fn arrow_keys_move_through_the_matches_while_the_query_keeps_focus(cx: &mut Test
     assert!(query_has_focus(&window, cx));
     // Editing keys still edit the query.
     cx.simulate_keystrokes("backspace backspace backspace");
-    assert_eq!(settle(&window, cx).query(), Some("scr"));
+    assert_eq!(settle(&window, cx).query(), Some("script sam"));
 
     cx.simulate_keystrokes("down enter");
     assert_eq!(settle(&window, cx).title, "TypeScript sample");

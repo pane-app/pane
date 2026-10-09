@@ -491,19 +491,32 @@ fn copies_from_other_sources_with_the_same_title_stay_distinct(fixture: &Fixture
     assert_eq!(&listed[listed.len() - 2..], ["Echo", "Echo"]);
     assert!(launcher.view().rows[0].id.ends_with("second#echo"));
 
-    // The rows name their sources, since the titles are the same.
+    // The rows name their sources, since the titles are the same. The
+    // Echo commands match the query's letters themselves now, and Pane's
+    // install row matches them below (#193), so the fallbacks sit last.
     search(&launcher, "ec hi");
-    assert_eq!(titles(&launcher), ["Echo", "Echo", "Echo"]);
+    let listed = titles(&launcher);
+    assert_eq!(
+        listed,
+        [
+            "Echo",
+            "Echo",
+            "Echo",
+            "Install extension from folder…",
+            "Echo",
+            "Echo"
+        ]
+    );
     assert_eq!(
         subtitle(&launcher, 0),
         format!("Send “hi” · alias ec · {second_source}")
     );
     assert_eq!(
-        subtitle(&launcher, 1),
+        subtitle(&launcher, listed.len() - 2),
         format!("Send “ec hi” · fallback · {first_source}")
     );
     assert_eq!(
-        subtitle(&launcher, 2),
+        subtitle(&launcher, listed.len() - 1),
         format!("Send “ec hi” · fallback · {second_source}")
     );
     block_on(launcher.activate_selected());
@@ -795,11 +808,11 @@ fn uninstalling_forgets_exactly_its_own_commands_not_those_of_a_longer_source() 
     let recorded = fs::read_to_string(dirs.aliases_file()).unwrap();
     assert!(recorded.contains("x#y#echo\": \"ec\""), "{recorded}");
     search(&launcher, "ec hi");
-    // Pane's install row matches the letters fuzzily below the send row
-    // (#193).
+    // The Echo command matches the query's letters too, and Pane's
+    // install row matches them below (#193).
     assert_eq!(
         titles(&launcher),
-        ["Echo", "Install extension from folder…"]
+        ["Echo", "Echo", "Install extension from folder…"]
     );
 }
 

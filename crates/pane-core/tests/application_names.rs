@@ -213,7 +213,10 @@ fn a_program_s_name_finds_its_application_unless_generic_shared_or_given_argumen
         titles_for(launcher, "code"),
         ["Manage Extensions", "Visual Studio Code"]
     );
-    assert_eq!(titles_for(launcher, "wt"), ["Windows Terminal"]);
+    assert_eq!(
+        titles_for(launcher, "wt"),
+        ["Windows Terminal", "Writer", "Writer Beta"]
+    );
     // Typing a role finds nothing by it.
     assert!(titles_for(launcher, "launcher").is_empty());
     assert!(titles_for(launcher, "setup").is_empty());
