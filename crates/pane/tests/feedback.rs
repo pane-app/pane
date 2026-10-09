@@ -180,7 +180,10 @@ fn pill_alpha(hud: &mut VisualTestContext) -> f32 {
         .into_iter()
         .filter_map(|quad| {
             let fill = quad.background.as_solid()?;
-            Some((quad.bounds.size.width.0 * quad.bounds.size.height.0, fill.alpha))
+            Some((
+                quad.bounds.size.width.0 * quad.bounds.size.height.0,
+                fill.alpha,
+            ))
         })
         .collect();
     fills.sort_by(|a, b| a.0.total_cmp(&b.0));

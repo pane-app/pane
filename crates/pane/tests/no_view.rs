@@ -281,7 +281,7 @@ fn a_no_view_hotkey_runs_the_command_without_showing_the_window(cx: &mut TestApp
 /// becomes the HUD.
 #[gpui::test]
 fn a_toast_is_a_hud_while_the_window_is_collapsed_to_its_field(cx: &mut TestAppContext) {
-    let system = Arc::default();
+    let system: Arc<FakeSystem> = Arc::default();
     let (window, cx, _sources, _data, folder) = installed_compact(cx, system.clone());
     let launcher = cx.read_entity(&window, |window, _| window.launcher().clone());
 
