@@ -6,10 +6,12 @@
 
 use std::path::{Path, PathBuf};
 
-use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext, px};
+use gpui::{Entity, Modifiers, Pixels, TestAppContext, VisualTestContext, px};
 use pane::LauncherWindow;
-use pane_core::{CommandRegistration, Launcher, Runtime, Screen};
+use pane_core::{CommandRegistration, Launcher, PackageIdentity, Runtime, Screen};
 
+#[path = "support/packages.rs"]
+mod packages;
 #[path = "support/settle.rs"]
 mod settle;
 
@@ -99,6 +101,23 @@ fn applied(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) {
     let size = cx.update(|window, _| window.bounds().size);
     cx.simulate_resize(size);
     settle(window, cx);
+}
+
+fn selector(name: impl Into<String>) -> &'static str {
+    Box::leak(name.into().into_boxed_str())
+}
+
+fn drawn(cx: &mut VisualTestContext, name: impl Into<String>) -> bool {
+    cx.debug_bounds(selector(name)).is_some()
+}
+
+/// The width and height of what `name` names, for a tile's own size.
+fn drawn_size(cx: &mut VisualTestContext, name: impl Into<String>) -> (Pixels, Pixels) {
+    let name = name.into();
+    let bounds = cx
+        .debug_bounds(selector(name.clone()))
+        .unwrap_or_else(|| panic!("{name} is not drawn"));
+    (bounds.size.width, bounds.size.height)
 }
 
 /// Every accessibility node's properties, as GPUI reports them to assistive
@@ -217,4 +236,49 @@ fn with_nothing_pinned_the_compact_window_is_the_search_field_alone(cx: &mut Tes
     assert_eq!(asked_height(cx), px(BAR), "the search field alone");
     applied(&window, cx);
     assert!(cx.debug_bounds("compact-pins").is_none());
+}
+
+/// A compact pin of a command that names one of Pane's built-in glyphs
+/// draws the glyph on Pane's neutral command tile, at the row tile's size,
+/// as the command's row does (ADR 0035, #247).
+#[gpui::test]
+fn a_compact_pin_of_a_named_glyph_draws_it_on_panes_neutral_tile(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let sources = tempfile::tempdir().unwrap();
+    let package = packages::glyph_package(&sources.path().join("glyph"));
+    let key = PackageIdentity::local(&package).unwrap().key();
+    std::fs::write(
+        data.path().join("settings.json"),
+        serde_json::json!({ "version": 1, "windowMode": "compact", "compactPinned": true })
+            .to_string(),
+    )
+    .unwrap();
+    let pin = serde_json::json!({ "command": format!("{key}#star") });
+    let record = serde_json::json!({ "version": 2, "pins": [pin] });
+    std::fs::write(data.path().join("quick-slots.json"), record.to_string()).unwrap();
+    cx.update(|cx| {
+        pane::settings::init_with_overrides(
+            Some(data.path().to_owned()),
+            pane::settings::Overrides::default(),
+            cx,
+        )
+    });
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"))
+            .with_quick_slots(data.path());
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    cx.foreground_executor()
+        .block_on(launcher.install_package(&package));
+    let (window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    settle(&window, cx);
+    assert_eq!(
+        asked_height(cx),
+        px(BAR + ROW),
+        "the search field and the pin's row"
+    );
+    applied(&window, cx);
+    assert!(drawn(cx, "icon-compact-pin-1-glyph-star"));
+    assert!(drawn(cx, "icon-compact-pin-1-tile"));
+    assert_eq!(drawn_size(cx, "icon-compact-pin-1"), (px(28.), px(28.)));
 }

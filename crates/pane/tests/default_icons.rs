@@ -7,8 +7,8 @@
 //! so its title starts where a Pane row's does. The tiles are drawn at the
 //! row tile's size, so GPUI's rasterization (twice an SVG's own size)
 //! gives them the device pixels of a 2x display, and more than enough for
-//! 1x and 1.5x. That an extension's bare symbol is still drawn bare is
-//! `icons.rs`'s.
+//! 1x and 1.5x. That a built-in glyph an extension names draws on Pane's
+//! neutral command tile, and its other icons bare, is `icons.rs`'s.
 
 use std::path::{Path, PathBuf};
 
@@ -165,6 +165,10 @@ fn the_tiles_draw_in(theme: &str, cx: &mut TestAppContext) {
                 "{title} draws {file} in the {theme} theme"
             );
             assert!(
+                !drawn(cx, format!("icon-{title}-tile")),
+                "{title}'s tile is the image it ships: nothing of Pane's behind it"
+            );
+            assert!(
                 !drawn(cx, format!("icon-{title}-mask-rounded")),
                 "{title}'s tile is drawn as its file is, unclipped"
             );
@@ -229,6 +233,10 @@ fn the_actions_panel_names_a_default_command_with_its_tile(cx: &mut TestAppConte
             assert!(
                 drawn(cx, format!("icon-actions-header-image-{file}")),
                 "the header draws {title}'s {file}"
+            );
+            assert!(
+                !drawn(cx, "icon-actions-header-tile"),
+                "the header draws the tile {title} ships, bare as the row does"
             );
             cx.simulate_keystrokes("escape");
             settle(&window, cx);

@@ -6,8 +6,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Writes a package folder whose one command is the Rust sample.
-pub fn package(folder: &Path) -> PathBuf {
+/// The Rust sample's guest, as `cargo xtask guests` builds it.
+fn rust_guest() -> PathBuf {
     let guest =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/sample_rust.wasm");
     assert!(
@@ -15,6 +15,11 @@ pub fn package(folder: &Path) -> PathBuf {
         "{} is missing; run `cargo xtask guests`",
         guest.display()
     );
+    guest
+}
+
+/// Writes a package folder whose one command is the Rust sample.
+pub fn package(folder: &Path) -> PathBuf {
     fs::create_dir_all(folder).unwrap();
     fs::write(
         folder.join("pane.json"),
@@ -27,7 +32,33 @@ pub fn package(folder: &Path) -> PathBuf {
 }"#,
     )
     .unwrap();
-    fs::copy(guest, folder.join("hello.wasm")).unwrap();
+    fs::copy(rust_guest(), folder.join("hello.wasm")).unwrap();
+    folder.to_path_buf()
+}
+
+/// Writes a package folder whose one command names one of Pane's built-in
+/// glyphs (reicon's `star`) as its icon: what the window draws on Pane's
+/// neutral command tile (ADR 0035, #247), run by the Rust sample.
+pub fn glyph_package(folder: &Path) -> PathBuf {
+    fs::create_dir_all(folder).unwrap();
+    fs::write(
+        folder.join("pane.json"),
+        r#"{
+  "manifestVersion": 1,
+  "title": "Star",
+  "version": "1.0.0",
+  "apiVersion": "0.1",
+  "commands": [{
+    "id": "star",
+    "title": "Star command",
+    "subtitle": "Names one of Pane's built-in glyphs as its icon",
+    "icon": "star",
+    "component": "star.wasm"
+  }]
+}"#,
+    )
+    .unwrap();
+    fs::copy(rust_guest(), folder.join("star.wasm")).unwrap();
     folder.to_path_buf()
 }
 
