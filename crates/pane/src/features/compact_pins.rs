@@ -155,8 +155,9 @@ impl LauncherWindow {
         let icon = crate::features::icons::row_icon_of(&self.launcher, &pin.target.key(), theme);
         let ready = pin.ready();
         // Hovering a pin moves no selection: the fainter wash, fading out
-        // once the pointer leaves (#245).
-        let look = self
+        // once the pointer leaves (#245). The hints' `look` below stays
+        // the number hint's own.
+        let hover = self
             .motion
             .hover
             .look(Spot::Pin(index), cx.background_executor().now());
@@ -171,7 +172,7 @@ impl LauncherWindow {
             .size(px(PIN_SIZE))
             .rounded(px(PIN_RADIUS))
             .cursor_pointer()
-            .when(look > 0., |style| style.bg(faded(theme.hover_wash, look)))
+            .when(hover > 0., |style| style.bg(faded(theme.hover_wash, hover)))
             .active(|style| style.bg(pressed(theme.hover_wash)))
             .on_hover(cx.listener(move |this, over: &bool, _, cx| {
                 this.motion.hover.set(Spot::Pin(index), *over, cx);

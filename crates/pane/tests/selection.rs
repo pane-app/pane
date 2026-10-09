@@ -22,7 +22,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use futures::executor::block_on;
-use gpui::{Bounds, Entity, Modifiers, MouseButton, Pixels, TestAppContext, VisualTestContext, px};
+use gpui::{
+    Bounds, Entity, Modifiers, MouseButton, Pixels, TestAppContext, VisualTestContext, prelude::*,
+    px,
+};
 use pane::LauncherWindow;
 use pane_core::{CommandRegistration, Launcher, LauncherView, Runtime, Screen, Status};
 
@@ -284,12 +287,13 @@ fn hovering_a_root_row_selects_it_so_only_the_selection_wash_shows(cx: &mut Test
         Some(1),
         "the pointer selected where it moved"
     );
+    let selected = row_bounds(cx, &view, 1);
     assert!(
-        paint::paints_fill_at(cx, row_bounds(cx, &view, 1), SELECTION_WASH),
+        paint::paints_fill_at(cx, selected, SELECTION_WASH),
         "the row it selected shows the selection wash"
     );
     assert!(
-        !paint::paints_fill_at(cx, row_bounds(cx, &view, 1), HOVER_WASH),
+        !paint::paints_fill_at(cx, selected, HOVER_WASH),
         "and no hover wash: hovering here is selecting"
     );
 }
@@ -431,8 +435,9 @@ fn root_rows_under_an_open_actions_panel_take_the_hover_wash(cx: &mut TestAppCon
         paint::paints_fill_at(cx, bravo, HOVER_WASH),
         "the row under the panel takes the hover wash"
     );
+    let target = row_bounds(cx, &view, 0);
     assert!(
-        paint::paints_fill_at(cx, row_bounds(cx, &view, 0), SELECTION_WASH),
+        paint::paints_fill_at(cx, target, SELECTION_WASH),
         "the panel's target keeps the selection wash"
     );
     let view = settle(&window, cx);
@@ -479,7 +484,8 @@ fn the_pane_menu_washes_its_entry_and_its_mark_fades_out(cx: &mut TestAppContext
     let (window, cx) = three_rows(cx);
     settle_frames(cx);
 
-    cx.simulate_click(bounds_of(cx, "footer-menu").center(), Modifiers::none());
+    let menu = bounds_of(cx, "footer-menu").center();
+    cx.simulate_click(menu, Modifiers::none());
     settle(&window, cx);
     settle_frames(cx);
     let item = bounds_of(cx, "menu-item-Settings");
