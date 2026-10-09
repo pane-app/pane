@@ -124,7 +124,13 @@ resume in the store. So:
   computes for 5 seconds in all (its own computing only) without finishing
   is stopped as unresponsive
   ([pausing](pausing.md#when-an-extension-stops-responding)). What such
-  code did before the stop is kept; nothing after it runs.
+  code did before the stop is kept; nothing after it runs. The ticker, and
+  the watchdog that gives up on a stuck runtime thread, run only while a
+  call is in flight on the thread: while none is, no guest code runs and
+  both sleep, and a call wakes them as it is sent, before its guest runs
+  ([pausing](pausing.md#when-an-extension-stops-responding), #190). A
+  computing guest's call is in flight, so a generation that ends still
+  stops it within a tick.
 - **No time limit on waiting, and no user cancellation** of an action: a
   call waiting on a clock or another extension's operation ends when the
   guest answers, or when a generation in its chain ends; only computing

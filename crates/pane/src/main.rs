@@ -247,6 +247,12 @@ fn main() {
             async {}
         })
         .detach();
+        // On Linux and macOS, SIGTERM, SIGINT and SIGHUP (the session's
+        // end, Ctrl+C in a terminal) quit cleanly too, on a thread of their
+        // own, before Pane ends: what clipboard history keeps waiting in a
+        // batch is written (#192).
+        let signalled = launcher.clone();
+        pane_core::diagnostics::quit_cleanly_on_signals(move || signalled.quit_cleanly());
         // Clipboard history: Pane watches the clipboard only while an
         // enabled package keeps history the user turned on.
         let launcher = launcher.with_clipboard(pane_core::clipboard::native());

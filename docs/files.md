@@ -42,7 +42,9 @@ and one index serves every package that uses it:
 
 - **The index**, [`pane_core::file_index`](../crates/pane-core/src/file_index.rs):
   the walker, the engine, the scope and the NTFS change journal (#174,
-  [below](#the-engine-and-the-walker)); the reconciling walk
+  [below](#the-engine-and-the-walker)); what kind of volume holds a
+  folder (`file_index/volume.rs`, #184,
+  [below](#network-shares-and-removable-drives)); the reconciling walk
   (`file_index/reconcile.rs`); one change source per system behind the
   `ChangeSource` trait (`file_index/changes.rs` and `changes/{ntfs,macos,linux}.rs`);
   the coordinator, which opens, catches up, walks and watches the index,
@@ -116,8 +118,12 @@ while any walk runs, searches answer from what is indexed so far.
 One thread of its own per activation ("pane-file-index"), at background
 priority (background mode and EcoQoS on Windows, the background QoS class
 on macOS, nice 19 and the idle I/O class on Linux), does all the writing;
-the walker's threads run at the same priority. A query never runs at
-background priority and never waits for the coordinator.
+the walker's threads run at the same priority, and so does the index's own
+merge thread ("pane-file-index-merge", one per open index), which merges
+segments in the background (#187, [below](#the-engine-and-the-walker)). A
+query never runs at background priority and never waits for the
+coordinator or for a merge, and the coordinator never waits for a merge
+either.
 
 ### Where it is kept
 
@@ -127,9 +133,10 @@ In Pane's cache folder, since it can always be rebuilt:
 `$XDG_CACHE_HOME/pane/file-index` on Linux (`file_index::INDEX_DIR`). The
 folder is readable by the user only: mode 0700 (files 0600) on macOS and
 Linux, and on Windows a protected DACL for the user and SYSTEM, inherited
-by its files, as `credentials.json` is written. It carries a format version;
-an index of another version, or one that cannot be read, is deleted and
-rebuilt, never read. The folder is locked: a second Pane on the same cache
+by its files, as `credentials.json` is written. It carries a format version
+(`file_index::FORMAT_VERSION`, 2 since #185 added the fragment index and
+key filters); an index of another version, or one that cannot be read, is
+deleted and rebuilt, never read. The folder is locked: a second Pane on the same cache
 folder does not index, and its status says "Another Pane is using file
 search on this computer". It is never sent anywhere.
 
@@ -154,8 +161,9 @@ the walker, the reconciling walk and every live change alike
   repository), `.ignore`, `.git/info/exclude` and the global Git ignore file
   exclude, read as Git reads them without running `git`; `node_modules`,
   folders named `tmp`, `temp`, `cache` or `caches`, `*.tmp` and `*.temp`;
-  the home folder's `AppData` (Windows) or `Library` (macOS); network and
-  removable volumes mounted under a root.
+  the home folder's `AppData` (Windows) or `Library` (macOS); network
+  shares and removable drives, a root on one as well as one mounted under
+  a root ([below](#network-shares-and-removable-drives)).
 - The user's own: added roots, excluded folders and excluded patterns (in
   `.gitignore` syntax).
 
@@ -194,6 +202,47 @@ root the user added that is away (an unplugged drive) keeps its entries,
 hidden from searches until it is back (looked at no more than every two
 seconds).
 
+### Network shares and removable drives
+
+A root on a network share or a removable drive (a folder the user added
+there, or a home folder redirected to a share), and a network share or a
+removable drive mounted in a folder under a root, are left out unless the
+user turns on **Include network and removable drives**
+(`includeOtherVolumes`, #184): nothing of them is walked, watched or
+looked at, and what an earlier index held of such a root goes. With the
+switch on they are indexed like any folder, except that a network share is
+never watched (#126 leaves live watching of shares out): a root on one is
+caught up by a reconciling walk at start and every 5 minutes
+(`file_index::RECONCILE_UNWATCHED`, as Linux's unwatched folders), so a
+change made there is found by the next one.
+
+What a folder is on is the system's answer (`file_index::volume_kind`,
+`VolumeKind`), asked once for each root when the index opens, and for a
+folder the walker meets on another volume than the folder it is in; the
+coordinator asks it through `IndexerConfig::volumes`, which tests replace.
+It is asked on a helper thread of its own, given 2 seconds to answer
+(`VOLUME_ANSWER`), so a stalled network mount holds up only that thread:
+a root that does not answer in time is taken for a network share (left
+out unless the switch is on, never watched) and the status says so; a
+mounted folder that does not answer is taken for one too. The answers:
+
+| | A network share | A removable drive |
+| --- | --- | --- |
+| Windows | a network path (`\\server\share`, told from its text, before any call); any other path is resolved to the root of the volume holding it (`GetVolumePathNameW`: a drive letter, a mapped drive's letter, the folder a volume is mounted in) and `GetDriveTypeW` says that root is remote | `GetDriveTypeW` says removable or CD-ROM |
+| macOS | `statfs`'s flags (`f_flags`) without `MNT_LOCAL` | `MNT_REMOVABLE` (removable media) |
+| Linux | `statfs`'s type (`f_type`): NFS, SMB, CIFS, FUSE (sshfs, rclone and the like), AFS, Lustre | FAT or exFAT |
+
+On Windows another volume under a root is reached only through a mount
+point or a junction, which is a link and never followed, so only roots are
+asked there. A folder the system says nothing about (a call that failed)
+is of an unknown kind (`VolumeKind::Unknown`), left out as a share or a
+removable drive is unless the switch is on, as Linux's walker left out a
+mount it could not ask about before #184. A root that is away (an
+unplugged drive) is not asked: it keeps its entries, hidden from searches,
+and is asked once it is back, so a removable drive plugged in after Pane
+started is left out from then on (its entries hidden, and gone the next
+time the index opens) unless the switch is on.
+
 ### Catching up and watching
 
 | | Windows | macOS | Linux |
@@ -202,25 +251,114 @@ seconds).
 | Live changes | `ReadDirectoryChangesW` on each root (the `notify` crate) | The same FSEvents stream | inotify, one watch per indexed folder, shallowest first |
 | When the records cannot be used | A recreated journal, discarded records, more than a million records, a volume without a journal (FAT, exFAT, a network share) or a refused read: the volume's roots are reconciled | A new volume UUID: its roots are reconciled; a folder FSEvents asks to rescan (history purged or coalesced, events dropped) is reconciled alone; wrapped event ids reconcile every root | The folders past the watch limit (`fs.inotify.max_user_watches`) are reconciled every 5 minutes, and counted in the status |
 
+Only the roots the rules keep are caught up and watched, and a root on a
+network share the user included is not watched on any system: it is
+reconciled at start and every 5 minutes instead
+([above](#network-shares-and-removable-drives)).
+
+The **folder-id table** (each indexed folder's file id and path,
+`FileIndex::folder_ids`) takes reading every entry of every segment. It
+is read at most once each time the index opens (#187,
+`file_index::FolderIds`): by the NTFS catch-up, the first time a volume's
+records need resolving, then brought up to the changes the catch-up
+applied and handed to the watch setup; and by the watch setup only where
+the source watches each folder (Linux). Windows and macOS watch each root
+whole and never read it for watching, nor after a first walk. It is let go
+once watching has started, and is not kept on disk: that would change the
+index's format, which is left for when the benchmark shows the catch-up
+still needs it.
+
 A **reconciling walk** (`file_index::reconcile`) compares the index's own
 folders with the disk and reads again only a folder whose modified time
 changed (a folder's time changes when an entry is added, removed or renamed
 in it); a folder new to the index is walked whole, and a folder gone takes
-everything under it out. A watcher's overflow reconciles the root it
-concerns.
+everything under it out. A folder it reads again that holds a
+`.gitignore`, an `.ignore` or a `.git` is then re-checked whole (below),
+since the rules below it may have changed with it. A watcher's overflow
+reconciles the root it concerns, then re-checks it whole: an ignore file
+changed in place while the buffer overflowed changes no folder's time.
 
 Live changes are gathered for about 100 ms (`file_index::SETTLE`) and
 applied together: each path reported is looked at again (indexed if it
 exists and the rules admit it, removed otherwise, a new folder walked
 whole), so a change is visible to queries well within a second of the
 system reporting it. While nothing changes, nothing runs, except Linux's
-reconciliation of the folders it cannot watch. The status
+reconciliation of the folders it cannot watch and that of network shares
+the user included. The status
 (`Indexer::status`, `Launcher::file_index_status`, and
 `pane:extension/file-index`'s `status`) says whether the index is off,
 building (and how many entries the walk found so far), current or stopped
 and why, how it last caught up (`CaughtUpBy`: the journal, the event
 history, a reconciling walk or a full walk) and when, and how many folders
 could not be read or are not watched.
+
+**The ignore rules are kept between batches** (#186). To tell whether the
+rules admit a path, each folder above it is judged and its ignore files
+are read (`.ignore`, `.gitignore`, `.git/info/exclude`, whether it holds
+`.git` or `CACHEDIR.TAG`). The scope keeps what it learned of each folder
+(`Scope::admits_kept`), so the next batch reads only what changed: a file
+changed deep in a repository costs its own folder's files, not every
+folder's above it. The live batches, the catch-up at start
+(`catch_up_changes`) and the check before a file is acted on
+([Opening](#opening)) use the same record. Correctness comes first, so
+the record drops more than it strictly has to:
+
+- A folder that a change names (made, deleted, renamed, its attributes
+  changed; Windows also names a folder whose entries changed) is dropped
+  with every folder under it.
+- A `.gitignore`, `.ignore`, `CACHEDIR.TAG` or `.git/info/exclude` that
+  changes, or a `.git` that appears or goes, drops its folder and every
+  folder under it, and the folder is **re-checked**: every folder under it
+  is read again whatever its time, under the rules as they are now (no
+  ignore file read before is used), and compared with what the index holds
+  there (`reconcile::recheck`, the reconciling walk's comparison): what
+  the rules leave out now goes (a whole folder at once if the folder
+  itself is left out), and what they admit now comes in; a folder that
+  does not answer keeps what the index holds of it. A re-check reads 64
+  folders (`RECHECK_FOLDERS`) and lets the changes reported meanwhile be
+  applied before it goes on, so re-checking a whole root never holds up a
+  live change; it runs with the other walks, once the launcher was shown
+  or a minute passed. Windows also reports what Git does inside a
+  repository as a change of its `.git`, so a `.git` counts only when it
+  appears or goes since a change last named it. The first time one is
+  named, a `.git` made before Pane started counts as there already (the
+  index was built or caught up with it); one made since, or whose time the
+  system does not say, is re-checked. On Linux, where inotify watches each
+  folder, a repository's `.git/info` is watched with its folder (and with
+  a repository made while Pane runs), so a change of its `exclude` is
+  reported too; where that watch cannot be added, the folder counts as not
+  watched (below).
+- At start, a catch-up that names one of these files re-checks its folder
+  with the walks it waits for, and so does one whose records say less:
+  Windows' records read without administrator rights carry no names, so a
+  folder from which an entry the index did not hold went (a hidden
+  `.gitignore` or `.git` deleted; its id is not among the folder's indexed
+  entries and names nothing now) is re-checked, and so is a repository
+  whose `.git/info` a record was in (the folder looked up by its id, at
+  most 4,096 such folders per catch-up); and a folder Linux's reconciling
+  catch-up reads again holding an ignore file or a repository is
+  re-checked. A folder the records make visible (its hidden attribute
+  taken off) is walked whole.
+- The global Git ignore file, and the files Git reads to find it
+  (`core.excludesFile` in `~/.gitconfig`, `git/config` under
+  `XDG_CONFIG_HOME` or `~/.config`, `GIT_CONFIG_GLOBAL`, the system's
+  `gitconfig`), are looked at (their size and modified time) before each
+  batch. When one changed, the rules are read again with nothing kept, and
+  every root is re-checked if the global ignore file itself changed.
+- A change of the user's rules (`file-search.json`, through the File
+  Search page or a folder taken out for churn) builds the rules again with
+  nothing kept. So does a watcher's overflow, which drops everything kept
+  and re-checks the root it concerns, and so does the start of watching,
+  which drops what the catch-up learned: a change made between the two is
+  reported by neither.
+- Nothing is kept of a folder no change is reported from
+  (`Scope::keep_nothing_under`): a root on a network share the user
+  included, a folder past Linux's watch limit, every root when watching
+  could not start, a root away when watching started. Its ignore files are
+  read each time a path under it is judged, the check at Enter included,
+  and a folder its reconciling walk reads again holding an ignore file is
+  re-checked.
+- The record holds at most 20,000 folders; past that it is dropped whole.
 
 ## The File Search page
 
@@ -271,7 +409,13 @@ All four are the coordinator's (`file_index::Indexer`, thresholds in
 tests), and each is listed on the page:
 
 - **Churn quarantine**: the changes each folder reports are counted, per
-  folder they are in, in windows of a minute (`Valves::churn_window`); a
+  folder they are in, in windows of a minute (`Valves::churn_window`),
+  only for entries the index scope admits (#184): a change in `.git`,
+  `node_modules`, a cache or temporary folder, a folder an ignore file
+  ignores, a hidden or an excluded folder never counts, so such a folder is
+  never taken out, recorded or listed. Whether a change counts is told
+  with the ignore rules the scope keeps between batches
+  (`Scope::admits_kept`, #186), which the batch is then looked at with. A
   folder with more than 1,000 changes (`churn_changes`) in 3 windows in a
   row (`churn_windows`) is taken out of the index: its entries go, the rules
   leave it out from then on (it is added to `UserRules::quarantined`,
@@ -299,7 +443,8 @@ tests), and each is listed on the page:
   folders through a helper thread of its own, and waits at most 10 seconds
   (`WalkOptions::hung_after`, `HUNG_AFTER`) for a folder; one that does not
   answer is skipped for this walk (indexed, its contents not; a reconciling
-  walk keeps what the index held of it), listed, and its helper left behind
+  walk or a re-check keeps what the index held of it, however many folders
+  do not answer), listed, and its helper left behind
   to end whenever the system answers it, so a stalled network mount or a
   dying disk holds up only itself.
 
@@ -470,9 +615,11 @@ off the window's thread, the host checks the entry again
    file or folder was indexed ("it is now a link"; a link itself is never
    opened: "it is a link, which Pane does not follow").
 3. It is still in the index scope ("it is no longer in the folders file
-   search covers"), and its canonical path is under a root's (a folder
-   above it replaced by a link outside: "it is no longer inside the folders
-   file search covers").
+   search covers"), told with the ignore rules the coordinator keeps
+   between batches ([above](#catching-up-and-watching); read again when
+   the global ignore file changed), and its canonical path is under a
+   root's (a folder above it replaced by a link outside: "it is no longer
+   inside the folders file search covers").
 4. Whether it is a **program**: any entry of the types below, the same on
    every system, or on macOS and Linux a file with an executable bit
    ([`files::runs_as_program`](../crates/pane-core/src/files.rs)): the
@@ -676,12 +823,16 @@ which the coordinator above builds on:
   repository's `.git/info/exclude` and the global Git ignore file, matched
   by ripgrep's `ignore` crate as Git matches them; `node_modules`, folders
   named `tmp`, `temp`, `cache` or `caches`, `*.tmp` and `*.temp`; the home
-  folder's `AppData` (Windows) or `Library` (macOS); network and FAT or
-  exFAT volumes mounted under a root (Linux); and always the system's
+  folder's `AppData` (Windows) or `Library` (macOS); network shares and
+  removable drives, a root on one or one mounted under a root
+  (`file_index/volume.rs`,
+  [above](#network-shares-and-removable-drives)); and always the system's
   recycle and setup folders, folders tagged with `CACHEDIR.TAG` and Pane's
   own folders. Each but the last is a switch, and the user's folders and
   `.gitignore`-style patterns add to them. `Scope::admits` applies the same
-  rules to one path, reading the ignore files above it, for changes.
+  rules to one path, reading the ignore files above it, for changes;
+  `Scope::admits_kept` does so with what the scope keeps of those folders
+  between batches (#186, [above](#catching-up-and-watching)).
 - **The engine** (`file_index/store.rs`), in the shape of `minidex`: a
   memory table of recent changes, logged first to a write-ahead log
   (`file_index/wal.rs`, records with a CRC, a torn tail dropped); immutable
@@ -689,29 +840,82 @@ which the coordinator above builds on:
   front-coded in blocks of 16, each with a fixed 4-byte hint (day modified,
   depth, kind) and the postings of its terms, whose dictionary is an `fst`
   map read through a memory map; prefix tombstones hiding a deleted or
-  renamed folder's entries in older segments; and a merge of all segments
-  into one, which drops superseded versions, deletions and what tombstones
-  hide, once there are more than 8. A first walk writes segments directly,
-  without the log, and merges them at the end. Terms are the folded words
-  (case and accents ignored, split at camel case and digits) of the name
-  and, separately, of the folders below the root. A query reads, per
-  segment, at most 1,000 candidates matching every word, those with every
-  word in the name first, ranked by their hints, then scores them as #126's
-  "Matching and ranking" describes (`file_index/text.rs`): an exact name,
-  then an exact stem, a name starting with the query, every word starting
-  a word of the name, then of the folders. A query with `/` or `\`
+  renamed folder's entries in older segments; and **tiered merges in the
+  background** (#187). Each time a segment is written (the memory table at
+  65,536 entries, at a save of the cursors, when Pane stops), the index's
+  merge thread looks for 4 neighbouring segments of similar size (the
+  largest at most 4 times the smallest, a segment under 4,096 entries
+  counted as 4,096), the smallest such run, and merges it into one segment
+  that takes its place; with more than 8 segments it merges the smallest 4
+  neighbours whatever their sizes, so a query reads about 8 at most. Only
+  neighbours are merged, so each segment's entries stay newer than every
+  older one's. A merge keeps the newest version of each path and drops
+  what tombstones hide; it drops deletions and the tombstones its segments
+  carry only when it starts at the oldest segment, since only then is
+  nothing older left for them to hide (a merge above it carries them on).
+  So that tombstones do not pile up above a first index's large segment,
+  which the tiers seldom reach, every segment is merged into one once the
+  segments above the oldest carry more than 4,096 tombstones
+  (`TOMBSTONES_DUE`) and more than a 32nd of the oldest segment's entries.
+  It holds the writer only to name its file and to put the merged segment
+  in place, never while writing it: the coordinator applies changes and
+  writes segments meanwhile, and queries read the old segments until the
+  new one replaces them. A merge the index's closing cuts short stops
+  reading at once and deletes its file without sorting or writing what it
+  read, so closing waits for it no longer than that; one Pane's stopping
+  cuts short leaves its file out of `index.json`, which the next open
+  deletes; what changed meanwhile is in the log or a segment of its own,
+  so nothing is lost. A merge that fails is tried again when a segment is
+  next written; one that panics is given up the same way and said so on
+  the standard error, the merge thread going on. A first walk writes
+  segments directly, without the log, with no merge running, and merges
+  them into one at its end; so does `FileIndex::compact`, which the
+  benchmark uses (it also holds the merges off,
+  `FileIndex::hold_merges`, to time queries on unmerged segments). Terms
+  are the folded words (case and accents ignored, split at camel case and
+  digits) of the name and, separately, of the folders below the root. A
+  query reads, per segment, at most 1,000 candidates matching every word,
+  those with every word in the name first, ranked by their hints, then
+  scores them as #126's "Matching and ranking" describes
+  (`file_index/text.rs`): an exact name, then an exact stem, a name
+  starting with the query, every word starting a word of the name, then
+  of the folders. A query with `/` or `\`
   matches path segments in order: the words of each part start words of
   one folder below the root, those folders in the parts' order (others may
   lie between), and the last part's the name ("documents/plan",
   `docs\work\` for anything inside); it ranks just below a name prefix.
   When the words' starts find fewer entries than the page asks for, a
   second pass looks for words of three letters or more inside words
-  ("port" finds "report", in a name or a folder), reading every term of the
-  dictionary, and lists those after every match by the start of words
-  (`text::score_inside`, its score put 100 below). Keys are the
-  path's exact bytes (WTF-8 on Windows), so a name that is not valid
+  ("port" finds "report", in a name or a folder), and lists those after
+  every match by the start of words (`text::score_inside`, its score put
+  100 below). It does not read the whole dictionary (#185): each segment,
+  and the memory table, keeps a **fragment index**, the terms having each
+  run of 3 bytes of their words ("rep", "epo", "por", "ort" for "report"),
+  name and folder terms apart. The pass takes the terms having every
+  fragment of the word (the shortest list first, the others only keeping
+  what it found), checks that each really holds the word, and reads their
+  entries in the dictionary's order, as reading every term did, so the
+  same entries are found and stop at the same place. A word no term holds
+  usually ends at its first fragment. Checking that a candidate is the
+  current version of its path looks up the folders above it among the
+  tombstones (kept by prefix, not read one by one), and asks a newer
+  segment for the path only when the segment's **key filter** (a Bloom
+  filter of its paths, about 1 in 100 wrong) does not rule it out. Keys are
+  the path's exact bytes (WTF-8 on Windows), so a name that is not valid
   Unicode is shown with replacement characters and still opened exactly.
   Each entry keeps its kind, size, modified time, file id and volume.
+- **A segment's file** (`file_index/segment.rs`, format version 2 since
+  #185): the entries, front-coded in blocks of 16; each block's offset and
+  each entry's hint; then each term followed by its postings (the term
+  stored again so that its ordinal, its place in the dictionary's order,
+  leads to it); the `fst` dictionary; the tombstones it carries; each
+  term's offset by ordinal (4 bytes); the fragment lists (each fragment's
+  term ordinals as gaps) and the fragment table (4-byte fragment, 4-byte
+  offset, sorted, searched by halves); the key filter (10 bits per entry,
+  7 bits set by each path); and a footer of 21 numbers. Next to version 1
+  this adds, per term, about 4 bytes of offset, the term again (its length
+  and bytes) and a byte or two per fragment of it, and 1.25 bytes per
+  entry for the filter. An index of version 1 is rebuilt.
 - **Its folder**: `index.json` (the format version, the live segments, and
   Pane's record: whether a first walk finished, each volume's journal
   cursor, and the roots and rules it was built under), `<n>.seg`, `<n>.wal`, and `lock`, which the index holds locked,
@@ -746,7 +950,9 @@ crate Raycast uses), before the measurement, which is to confirm it:
 - **Threads and priority.** It starts its own flush, compaction and
   recovery threads with its own priority policy; #126 wants Pane's
   coordinator to own background priority, pausing for sleep and "no
-  periodic work while nothing changes".
+  periodic work while nothing changes". (Pane's index has one merge thread
+  of its own since #187, at the same background priority, which waits
+  without waking while no segment is written.)
 - **Matching.** Its tokenizer and candidate pruning are fixed; #126 wants
   folding consistent with root search's and weights tuned against Pane's
   fixtures, with name and folder matches told apart.
@@ -774,7 +980,7 @@ comment.
 
 `cargo xtask file-index-bench [options]` builds
 [`crates/pane-core/examples/file_index_bench.rs`](../crates/pane-core/examples/file_index_bench.rs)
-in release and runs it; it runs on demand, never in CI. By default it
+in release and runs it on demand. By default it
 generates a home-shaped tree of about 450,000 indexable entries (9 files
 per folder, paths about 8 folders deep, accented names, and, left out by
 the rules, hidden folders, `node_modules` and Git repositories with ignored
@@ -789,17 +995,70 @@ there), `--root <folder>` another folder. It prints, as a table against
   it (Linux as root, macOS with `sudo purge`; Windows has no way without
   administrator rights);
 - the index on disk, and per entry;
-- query latency over a fixed set (`--queries`, default 1,000: whole names,
-  3-letter prefixes, words, folder and name words, one letter), the first
-  pass after opening and a warm pass, with the 50th, 95th and 99th
-  percentiles and per kind;
-- a changed file re-indexed: written, read, applied and found by a query,
-  100 times;
+- query latency over a fixed set (`--queries`, default 1,000, about as
+  many of each kind), on two shapes of the index: one segment, as the
+  first index leaves it, and several segments with changes in memory, as
+  a stream of changes leaves it (5 batches, about one change for every 50
+  entries a batch, between 500 and 10,000: files added, entries changed,
+  files and a folder deleted; 4 written as segments and the last in
+  memory), the background merges held off while it is timed
+  (`FileIndex::hold_merges`), so it holds 5 segments and the changes in
+  memory however fast the merges would have been. Each shape gets a first
+  pass and a warm pass. A third row times the same set once more while
+  changes arrive (#187): another thread applies streams of 5 batches of a
+  tenth of that size, each but the last written as a segment, 100 ms
+  apart, so that segments are merged in the background while the queries
+  run; it says how many changes arrived meanwhile. The overall 95th
+  percentile covers every kind (#183):
+  - whole names, 3-letter prefixes, a word, folder and name words, one
+    letter;
+  - misses: a word no entry holds (3 to 8 letters, so the pass inside
+    words runs too), and a real word followed by such a word,
+    each checked to find nothing;
+  - typed-out names: every prefix of a name, from its first letter to the
+    whole name, one keystroke after the other;
+  - the kind filters Folder (the index's own) and Document (run as Search
+    Files runs it: at least 500 asked for and the documents kept, asking
+    again for more while fewer than a page are kept);
+  - three or four letters from inside a word of a name.
+
+  The set is built from the names the walk found, sorted, and a seeded
+  generator, so runs over the same tree time the same queries (the first
+  entry of each batch the walk hands over, which is each folder walked,
+  and every 400th after it in a large folder). A table gives each kind's
+  50th, 95th and 99th percentiles on both shapes;
+- a changed file re-indexed, 100 times, as the indexer takes a change:
+  what the index holds at its path, the file read, the rules applied to it
+  as a batch applies them (#186: the global ignore file looked at, the
+  file's own folder dropped from what the scope keeps and its ignore files
+  read again, as when Windows reports that folder too, the folders above it
+  kept from the time before), the change applied and found by a query. The
+  first of the 100 reads every folder above it. One row is for a file near
+  the root. The next is for a file in the deepest folder the walk found
+  with ignore files on the way down, with its depth and how many of its
+  folders hold ignore files; that file is written beside the first and
+  indexed as if it were in that folder, which is not written to. A third
+  row times that deep file with nothing kept, every folder above it read
+  again each time, as the first change after a start, or after what was
+  kept of the folders above was dropped (and as #183 measured every
+  change);
 - on Windows with the generated tree, the catch-up after 10,000 files
-  created: the journal read from a saved cursor, resolved, looked at,
-  applied and found;
+  created: the journal read from a saved cursor, resolved (the folder-id
+  table read once, as the coordinator does since #187), looked at, applied
+  and found;
 - the time to open the index at start, the private memory it adds while
   idle, and the peak memory while indexing.
+
+The row labels stay as they are, so runs compare.
+
+**The regression guard.** `cargo xtask file-index-guard` runs the same
+benchmark in CI (`ci-branch.yml`'s Linux tests, shard 2): a generated tree
+of about 20,000 entries, one run, built in the development profile as the
+tests built it, with `--guard`. It fails when the first index, the index's
+size per entry, any kind's 95th percentile on either shape, or any
+re-index row's 95th percentile is over its ceiling. The ceilings are set
+for that unoptimized build, far above what it should take, so they catch
+only a large regression; [CI](agents/ci.md) lists them.
 
 ### The NTFS change journal without administrator rights
 
@@ -823,7 +1082,12 @@ opened with `OpenFileById` for reading attributes only, its name read from
 the handle, each id once, at most 100,000 per catch-up); an entry gone has
 no name to read, so a folder gone is known by the id the index holds, and
 a file gone puts its folder in `CatchUp::listed`, whose entries the disk no
-longer holds are removed (`file_index::missing_from`).
+longer holds are removed (`file_index::missing_from`). An entry gone that
+the index did not hold (`CatchUp::gone`: a hidden `.gitignore` or `.git`
+deleted, say) has its folder re-checked, and a record in a folder the
+index does not hold has that folder looked up by its id
+(`CatchUp::unresolved_folders`, `Names::path`) in case it is a
+repository's `.git/info` ([above](#catching-up-and-watching)).
 
 The test
 `file_index::journal::tests::the_journal_is_read_without_administrator_rights_and_resolves_to_paths`
@@ -871,7 +1135,26 @@ milestone is merged).
   without a restart; a folder taken out for churn listed and included
   again; a folder granted to Files under #29 outside the home folder added
   to the roots and the grant forgotten, and one the index covers simply
-  forgotten.
+  forgotten. For the ignore rules kept between batches (#186), each over
+  several batches of changes: a `.gitignore` line added hiding what it
+  matches (and what a later batch adds) and removed showing it again; a
+  new `.git` folder applying its `.gitignore`, and deleting it lifting it;
+  a repository's own `.git/info/exclude` applied and lifted while Pane
+  runs; the user's excluded pattern applied and lifted without a restart; a
+  file an ignore file hides since it was found explained at Enter, not
+  opened. `file_index::scope` tests that what is kept of a folder holds
+  until it, a folder above it, or everything is forgotten, and that
+  nothing is kept of a folder not watched live. The coordinator's tests
+  (below) re-check an ignore file changed in place after an overflow, a
+  folder a catch-up asks to re-check, and every folder after an ignore
+  file in the home folder changed, a few at a time with a change reported
+  meanwhile applied too; and read again, at Enter, the rules of a folder
+  not watched. `file_index::reconcile` tests a re-check reading every
+  folder a few at a time under the rules as they are now, a folder read
+  again holding an ignore file named for one, and a folder that does not
+  answer keeping its entries; `file_index::journal` tests which folders
+  Windows' nameless records have re-checked; `changes::linux` that a
+  repository's `.git/info` is watched with its folder.
 - **The coordinator through the change source's seam**
   (`file_index::indexer` unit tests): a fake source the test scripts (what
   a catch-up finds) and drives (the live changes it reports), with the real
@@ -886,9 +1169,21 @@ milestone is merged).
   forgetting its ids; the user's rules (hidden entries, an added root, an
   excluded folder, a removed root); an added root away and back; the
   folders a source cannot watch counted, listed and reconciled every few
-  minutes. Each safety valve triggered: a folder churning taken out,
-  listed, recorded, kept out across a rule change and included again, and
-  one busy now and then never taken out; a walk stopped at the ceiling;
+  minutes; an added root the system says is on a network share or a
+  removable drive (a fake answer through `IndexerConfig::volumes`,
+  standing for Windows' and macOS's) left out, indexed once other volumes
+  are included (the removable drive watched, the share never, a change on
+  it found by the reconciling walk) and left out again, and a home folder
+  on a share left out until then (#184); the folder-id table read once for
+  a catch-up that reads it and a watch given each folder, the watch given
+  the folders as the catch-up's changes left them, and on Windows a
+  restart through the real NTFS journal reading it once (#187, through
+  `FileIndex`'s count of reads). Each safety valve triggered: a
+  folder churning taken out, listed, recorded, kept out across a rule
+  change and included again, one busy now and then never taken out, and
+  the same burst of changes in `node_modules`, a repository's `.git`, an
+  ignored and a hidden folder taking nothing out while it takes out an
+  indexed folder (#184); a walk stopped at the ceiling;
   indexing stopped while the disk is short of space (nothing written, a
   change let go) and started again by itself once there is room (the walk,
   then the change caught up); a folder that does not answer skipped and
@@ -901,13 +1196,46 @@ milestone is merged).
   goes back; `file_index::privacy` tells a refusal from the system's
   answer (`EPERM` on macOS only) on every system. Excluding a folder takes only it out
   and including it again walks only it. The walker's own tests hold up a
-  folder's listing to show the walk does not wait for it.
+  folder's listing to show the walk does not wait for it, and walk a root
+  on a share only once other volumes are included; `file_index::scope`
+  tests which roots are kept, watched and reconciled as each volume's kind
+  and the switch say, that a root away is asked about again once it is
+  back, and that a volume that does not answer in time, or of which the
+  system says nothing, is left out; `file_index::volume` tests what each
+  system's answer (a drive type, `statfs`'s flags or type) means, that a
+  temporary folder is on a local disk, that a system that does not answer
+  holds up only the helper asking it, and (Windows) that a network path is
+  a share by its text (#184).
   `file_index::reconcile` and `store` unit tests cover reading only changed
   folders, a missing root keeping its entries, a folder's children
   across segments and memory, a query found inside words after the words
   it starts (segments and memory alike, not when the words' starts fill
   the page) and a query with `/` or `\` matching path segments in order;
-  `file_index::text` tests the ranks of each.
+  `file_index::text` tests the ranks of each. `store`'s reference test
+  (#185) answers a fixed set of queries (prefixes, words inside words,
+  misses, accents and letter case, several words, paths), on pages of
+  several sizes and the Folder kind, by brute force over a model of the
+  changes, and checks that the index gives the same entries in the same
+  order on one segment, on several segments with changes in memory and
+  tombstones, after opening again and after a merge; on the way, that the
+  fragment index finds what reading every term finds, in the same order.
+  Other `store` and `segment` tests cover the tombstones looked up by
+  prefix against reading each one, the term ordinals, the fragment lists,
+  the key filter, and an index of the previous and of a later format
+  version rebuilt. The merges (#187): which run of segments is merged
+  (similar sizes, the smallest run, any run past 8 segments); a merge held
+  before it puts its segment in place while changes arrive (a batch
+  written as a segment, one in memory), the same reference queries
+  answering from what is current during it and after it, and after
+  opening again, for a merge from the oldest segment (its tombstones
+  dropped) and one above it (carried on); a restart from the folder as a
+  merge cut short leaves it, its merged segment deleted and every change
+  found through the log; many small segments merged a few at a time;
+  tombstones piling up above the oldest segment merging every segment; a
+  merge that panics given up, the next one running; and a segment's write
+  given up leaving no file. A word of one or two letters stops gathering
+  entries at 50,000, in memory and in a segment, and a query matching more
+  entries than the 1,000 it reads still finds the best first (#185).
 - **Per system**: the NTFS journal read without administrator rights
   (`file_index::journal` tests, #174); inotify reporting a change in a
   watched folder and a folder added later, and stopping when dropped
@@ -982,9 +1310,30 @@ milestone is merged).
   writing across many folders at once is taken out folder by folder, only
   where one folder alone changes more than the threshold. A root itself is
   never taken out.
+- A disk the system reports as fixed is indexed as a local disk even when
+  it is plugged in by USB: Windows' `GetDriveTypeW` says removable of
+  memory sticks and cards, not of most USB hard disks, and macOS sets
+  `MNT_REMOVABLE` only for removable media.
+- A root left out for being on a network share or a removable drive is
+  still listed among the indexed folders on the File Search page, and not
+  under Needs attention; a home folder on a share (a Linux home on NFS
+  included) is left out until the switch is on.
+- With the switch on, a network share mounted under a root (macOS, Linux)
+  is watched with that root: only a root on a share is reconciled rather
+  than watched. An entry under a root given as a network path
+  (`\\server\share`) is found but not opened, since the check before any
+  action refuses network paths ([Opening](#opening), step 1); one under a
+  mapped drive's letter is opened.
+- Which volume a root is on is asked when the index opens (a start, a
+  change of the rules), not again while it runs, but for a root that was
+  away, asked once it is back. A root that did not answer in time is taken
+  for a network share until the index opens again; with the switch on it
+  is reconciled like one, and a reconciling walk looks at the root itself
+  without a time limit, so a share that stays stalled can still hold up
+  the coordinator there (only listing its folders is bounded).
 - A folder that hangs leaves its helper thread blocked until the system
   answers it; a mount that never answers keeps one thread per walk that met
-  it.
+  it, and one per question about its volume.
 - The free space is read on the volume holding the cache, not on the
   volumes being indexed (which the index never writes to).
 - Search Files' Recently Used is the most recently modified entries, as
@@ -999,8 +1348,10 @@ milestone is merged).
   title (`features::settings::file_search::TITLE`).
 - A query inside a word ("port" in "report") is looked for only when the
   words' starts find fewer entries than the page asks for, and only for
-  words of three letters or more; that pass reads every term of the index,
-  so it is slower than a match by the start of words on a large index.
+  words of three letters or more. That pass reads the terms having every
+  fragment of the word, so a word made of common fragments ("ing", "pdf")
+  reads long lists and is slower than a match by the start of words on a
+  large index.
 - macOS asks before Pane reads Desktop, Documents and Downloads (and
   removable and network volumes); the File Search page says so before the
   first walk and lists a refused folder with how to allow it, telling a
@@ -1012,9 +1363,42 @@ milestone is merged).
   change within the second a folder was indexed is not seen until the
   folder changes again, and a file changed in place while Pane was stopped
   keeps its old size and time until it changes again while Pane runs.
+- The ignore rules kept between batches (#186), changed while Pane was
+  stopped: Linux's reconciling catch-up re-checks a folder it reads again
+  (its time changed) that holds an ignore file or a repository, so an
+  ignore file edited in place, or one deleted (its folder no longer holds
+  one), is not seen there until the folder changes again or the index is
+  rebuilt. Windows' records read without administrator rights name no
+  file: an ignore file deleted has its folder re-checked, but one renamed
+  away (its id still names an entry) does not, and a repository's
+  `.git/info/exclude` is found by looking its folder up by id, at most
+  4,096 such folders a catch-up, those past it not looked at. A folder not
+  watched live (a share, past Linux's watch limit) keeps nothing, but its
+  reconciling walk sees an ignore file edited in place there only as on
+  Linux's catch-up. A share mounted under a root (macOS, Linux) is watched
+  with its root, though the system may report nothing of what other
+  computers change there.
+- The global ignore file is looked at with each batch of changes, so a
+  change of it alone is applied with the next change under a root. The
+  check before a file is acted on uses what the coordinator keeps, so for
+  about the settle time (100 ms) after an ignore file changes, before its
+  change is handled, it judges by the rules from before; and until a
+  re-check under way reaches a folder, the index holds what it held there
+  before. Re-checking a folder reads every folder under it again, so an
+  ignore file changed in the home folder itself, the global ignore file,
+  or an overflow, reads every root again (at background priority, 64
+  folders at a time between batches of changes, the index answering
+  meanwhile from what it holds). Where the system does not say when a
+  `.git` was made, the first change named in it re-checks its repository
+  once.
 - The roots and rules an index was built under are recorded as JSON; a
   root whose path is not valid Unicode cannot be recorded.
-- The benchmark's numbers against Raycast's are not measured yet (#174).
+- The benchmark's numbers against Raycast's are not measured yet (#174),
+  nor the catch-up after 10,000 changes and the queries while changes
+  arrive since #187's merges and shared folder-id table.
+- A merge does not follow the sleep pause: one under way when the
+  computer sleeps finishes after the wake, at background priority. A first
+  walk waits for a merge under way to finish before it writes.
 - A handler slow to fail (over three seconds) is reported as having opened
   the file. Screen reader behaviour is unverified, as for all of root
   search.

@@ -1087,10 +1087,12 @@ Windows; overwriting one is not) are proven only there.
 
 The [documented workload](../research/resource-measurements.md)
 (`scripts/measure-linux.sh`, the smoke's runner, guests and binary) runs
-Pane through cold and warm start, an idle core, seven installed-but-unused
-extensions, repeated calculator use, the Watching service and the Counting
-schedule, and repeated reload and disable, sampling Pane's whole process
-tree from `/proc` at 1 s into a machine-readable record. It is wired into
+Pane through cold and warm start, an idle core, Pane hidden with its
+default extensions (#189), seven installed-but-unused extensions, repeated
+calculator use, the Watching service and the Counting schedule, and
+repeated reload and disable, sampling Pane's whole process tree and the
+wake-ups of each of its threads from `/proc` at 1 s into a
+machine-readable record. It is wired into
 CI's Linux leg, its record uploaded as the `resource-measurements`
 artifact, and its summary checked against the proposed targets
 (`scripts/resource-targets.json`), which are **all pending numbers**: this

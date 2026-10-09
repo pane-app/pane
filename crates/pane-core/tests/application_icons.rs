@@ -5,12 +5,16 @@
 //! failures the tests decide: a row shows its application's own icon, and a
 //! neutral placeholder of the same kind until it is extracted; a packaged
 //! app keeps its light and dark icons; the cache in Pane's cache folder
-//! draws them at once after a restart and refreshes each once per start; a
-//! changed source is extracted again; a failure keeps the placeholder and is
-//! not tried again that start; an unreadable cache is rebuilt; the cache is
-//! bounded, the least recently drawn going first; rows on screen go before
-//! the background; a pinned application's slot shows its icon; disabling
-//! the extension stops the refresh; and an extension's own list shows an
+//! draws them at once after a restart and extracts nothing again for an
+//! unchanged application; a changed source (a shortcut whose target was
+//! updated) is extracted again, on screen at once and in the background; a
+//! picture past the refresh age is extracted again in the background while
+//! a row draws it from the cache; an index an earlier Pane wrote is read
+//! without loss; a failure keeps the placeholder and is not tried again
+//! that start; an unreadable cache is rebuilt; the cache is bounded, the
+//! least recently drawn going first; rows on screen go before the
+//! background; a pinned application's slot shows its icon; disabling the
+//! extension stops the refresh; and an extension's own list shows an
 //! application's icon by the reference the import gives. The extraction
 //! adapters are `application_icon_adapters.rs`; the pure rules are unit
 //! tests of `pane_core::applications::icons`.
@@ -22,8 +26,11 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use futures::executor::block_on;
-use pane_core::applications::icons::{BATCH, Extracted, FOLDER, IconCache, IconExtractor};
+use pane_core::applications::icons::{
+    BATCH, Extracted, FOLDER, IconCache, IconExtractor, REFRESH_AGE, Shown,
+};
 use pane_core::applications::{Applications, Cached, Discovery, Key, Source};
+use pane_core::clipboard::ManualClock;
 use pane_core::icons::encode_png;
 use pane_core::system_icons::SystemIcon;
 use pane_core::{
@@ -360,7 +367,7 @@ fn a_packaged_apps_light_and_dark_icons_are_both_kept() {
 }
 
 #[test]
-fn icons_are_drawn_from_the_cache_after_a_restart_and_refreshed_once_each_start() {
+fn after_a_restart_an_unchanged_applications_icon_is_drawn_from_the_cache_and_not_extracted() {
     let dirs = Dirs::new();
     let icons = FakeIcons::new();
     let green = png(256, [0, 200, 0, 255]);
@@ -373,7 +380,8 @@ fn icons_are_drawn_from_the_cache_after_a_restart_and_refreshed_once_each_start(
     }
     assert_eq!(icons.extracted().len(), 1);
 
-    // Pane starts again: the kept icon draws while the refresh waits.
+    // Pane starts again: the kept icon draws at once, with every
+    // extraction held back.
     icons.close();
     let system = Arc::new(FakeSystem {
         sources: Mutex::new(vec![shortcut("Editor", EDITOR)]),
@@ -384,13 +392,18 @@ fn icons_are_drawn_from_the_cache_after_a_restart_and_refreshed_once_each_start(
     assert_eq!(fs::read(&light).unwrap(), green);
     assert_eq!(icons.extracted().len(), 1, "drawn without extracting");
 
-    // The refresh after this start extracts it once, however often root
+    // Its source and its picture's file are unchanged and its picture is
+    // young: nothing extracts it again this start, however often root
     // search lists it.
     icons.open();
     settle(&launcher);
     search_again(&launcher, "edit");
     settle(&launcher);
-    assert_eq!(icons.extracted().len(), 2, "{:?}", icons.extracted());
+    assert_eq!(icons.extracted().len(), 1, "{:?}", icons.extracted());
+    assert_eq!(
+        files(&row_icon(&launcher, "Editor")),
+        Some((light.clone(), light))
+    );
 }
 
 #[test]
@@ -527,6 +540,138 @@ fn the_cache_is_bounded_and_the_least_recently_drawn_go_first() {
         .filter(|entry| entry.file_name() != "index.json")
         .count();
     assert_eq!(kept, 1);
+}
+
+/// Waits until `cache` draws the icon of `id`, which a row on screen asks
+/// for, never extracting to answer.
+fn shown(cache: &IconCache, id: &str) -> Shown {
+    let deadline = std::time::Instant::now() + PATIENCE;
+    loop {
+        if let Some(shown) = cache.shown(id) {
+            return shown;
+        }
+        assert!(std::time::Instant::now() < deadline, "{id} is never drawn");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Lists the applications "a", "b" and "c", as root search does after a
+/// start.
+fn list(cache: &IconCache) {
+    cache.listed(["a", "b", "c"].map(str::to_owned));
+}
+
+#[test]
+fn a_restart_extracts_nothing_unchanged_and_a_shortcut_whose_target_changed_again() {
+    let folder = tempfile::tempdir().unwrap();
+    let icons = FakeIcons::new();
+    for id in ["a", "b", "c"] {
+        icons.draw(id, png(16, [1, 2, 3, 255]), None);
+    }
+    let first = cache(folder.path(), &icons);
+    list(&first);
+    assert!(first.wait_idle(PATIENCE));
+    assert_eq!(icons.extracted(), ["a", "b", "c"]);
+
+    // Pane starts again over the same cache, nothing changed: the
+    // background extracts nothing.
+    let again = cache(folder.path(), &icons);
+    list(&again);
+    assert!(again.wait_idle(PATIENCE));
+    assert_eq!(icons.extracted(), ["a", "b", "c"]);
+    assert!(again.shown("a").is_some());
+
+    // "b" is a shortcut whose target program was updated: the shortcut is
+    // the same file, but its fingerprint covers the target, and changed.
+    let updated = png(16, [200, 0, 0, 255]);
+    icons.draw("b", updated.clone(), None);
+    icons.fingerprint_of("b", "its target updated");
+    let restarted = cache(folder.path(), &icons);
+    list(&restarted);
+    assert!(restarted.wait_idle(PATIENCE));
+    assert_eq!(icons.extracted(), ["a", "b", "c", "b"]);
+    assert_eq!(fs::read(shown(&restarted, "b").light).unwrap(), updated);
+}
+
+#[test]
+fn a_picture_past_the_refresh_age_is_extracted_again_in_the_background() {
+    let folder = tempfile::tempdir().unwrap();
+    let icons = FakeIcons::new();
+    for id in ["a", "b", "c"] {
+        icons.draw(id, png(16, [4, 5, 6, 255]), None);
+    }
+    // A day in 2027, in milliseconds since the Unix epoch.
+    let clock = ManualClock::at(1_800_000_000_000);
+    let started = || cache(folder.path(), &icons).with_clock(clock.clone());
+    let first = started();
+    list(&first);
+    assert!(first.wait_idle(PATIENCE));
+    assert_eq!(icons.extracted().len(), 3);
+
+    // Started again an hour before the refresh age: nothing is extracted.
+    let hour = Duration::from_secs(60 * 60);
+    clock.advance(REFRESH_AGE - hour);
+    let young = started();
+    list(&young);
+    assert!(young.wait_idle(PATIENCE));
+    assert_eq!(icons.extracted().len(), 3, "{:?}", icons.extracted());
+
+    // Started again an hour past it: a row on screen draws "c" from the
+    // cache at once, while the extractions are held back.
+    clock.advance(2 * hour);
+    icons.close();
+    let old = started();
+    list(&old);
+    let kept = shown(&old, "c");
+    assert!(kept.light.exists());
+    assert_eq!(icons.extracted().len(), 3, "drawn without extracting");
+    // Every old picture is extracted again in the background, once.
+    icons.open();
+    assert!(old.wait_idle(PATIENCE));
+    let mut again = icons.extracted()[3..].to_vec();
+    again.sort();
+    assert_eq!(again, ["a", "b", "c"]);
+
+    // Their pictures are young again.
+    let restarted = started();
+    list(&restarted);
+    assert!(restarted.wait_idle(PATIENCE));
+    assert_eq!(icons.extracted().len(), 6, "{:?}", icons.extracted());
+}
+
+#[test]
+fn an_index_an_earlier_pane_wrote_is_read_without_loss() {
+    let folder = tempfile::tempdir().unwrap();
+    // The index as a Pane before extraction times wrote it, and its image.
+    let old = png(16, [7, 7, 7, 255]);
+    fs::write(folder.path().join("kept.png"), &old).unwrap();
+    let index = r#"{"version":3,"tick":5,"icons":{"a":
+        {"fingerprint":"first","light":"kept.png","dark":null,"bytes":1,"drawn":4}}}"#;
+    let path = folder.path().join("index.json");
+    fs::write(&path, index).unwrap();
+    let icons = FakeIcons::new();
+    let new = png(16, [8, 8, 8, 255]);
+    icons.draw("a", new.clone(), None);
+    icons.close();
+    let cache = cache(folder.path(), &icons);
+    cache.listed(["a".to_owned()]);
+
+    // What it kept draws at once: nothing was deleted or rebuilt.
+    let kept = shown(&cache, "a");
+    assert_eq!(kept.light, folder.path().join("kept.png"));
+    assert_eq!(fs::read(&kept.light).unwrap(), old);
+    assert!(icons.extracted().is_empty());
+
+    // Its picture counts as old: extracted again in the background, and
+    // its extraction time recorded.
+    icons.open();
+    assert!(cache.wait_idle(PATIENCE));
+    assert_eq!(icons.extracted(), ["a"]);
+    assert_eq!(fs::read(shown(&cache, "a").light).unwrap(), new);
+    assert!(!kept.light.exists(), "the old image is replaced");
+    let index: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let extracted = index["icons"]["a"]["extracted"].as_u64().unwrap_or(0);
+    assert!(extracted > 0, "{index}");
 }
 
 #[test]

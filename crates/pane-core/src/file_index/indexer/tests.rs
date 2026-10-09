@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize};
 
 use super::*;
 use crate::file_index::Entry;
+use crate::file_index::volume::tests::fake_volumes;
 
 /// A change source the test scripts and drives.
 #[derive(Default)]
@@ -19,8 +20,16 @@ struct Fake {
     sink: Mutex<Option<Sink>>,
     /// Watches running now.
     watching: Arc<AtomicUsize>,
+    /// The roots the latest watch was asked to watch.
+    watched: Mutex<Vec<PathBuf>>,
     /// Catch-ups made.
     catch_ups: AtomicUsize,
+    /// Its catch-up reads the folder-id table, as the NTFS journal's does.
+    reads_folder_ids: AtomicBool,
+    /// It watches each indexed folder, as Linux's inotify does.
+    watches_each_folder: AtomicBool,
+    /// The folders the latest watch was given.
+    folders: Mutex<Vec<PathBuf>>,
 }
 
 struct FakeWatch(Arc<AtomicUsize>);
@@ -51,27 +60,38 @@ impl ChangeSource for Fake {
         _index: &FileIndex,
         _scope: &Scope,
         cursors: &[JournalCursor],
+        folders: &mut FolderIds<'_>,
         _cancel: &AtomicBool,
     ) -> Caught {
         assert_eq!(cursors, [cursor()], "the cursors saved with the index");
         self.catch_ups.fetch_add(1, Ordering::SeqCst);
+        if self.reads_folder_ids.load(Ordering::SeqCst) {
+            assert!(!folders.ids().is_empty(), "the folders indexed");
+        }
         lock(&self.caught).take().unwrap_or(Caught::Changes {
             changes: Vec::new(),
             walk: Vec::new(),
             reconcile: Vec::new(),
+            recheck: Vec::new(),
             cursors: vec![cursor()],
             how: CaughtUpBy::Journal,
             note: None,
         })
     }
 
+    fn watches_folders(&self) -> bool {
+        self.watches_each_folder.load(Ordering::SeqCst)
+    }
+
     fn watch(
         &self,
-        _scope: &Scope,
+        scope: &Scope,
         _cursors: &[JournalCursor],
-        _folders: Vec<PathBuf>,
+        folders: Vec<PathBuf>,
         sink: Sink,
     ) -> Result<Box<dyn Watching>, String> {
+        *lock(&self.watched) = scope.watched_roots();
+        *lock(&self.folders) = folders;
         *lock(&self.sink) = Some(sink);
         self.watching.fetch_add(1, Ordering::SeqCst);
         Ok(Box::new(FakeWatch(self.watching.clone())))
@@ -151,6 +171,7 @@ fn config(index_dir: &Path, home: &Path, fake: Arc<Fake>) -> IndexerConfig {
         },
         reconcile_unwatched: Duration::from_secs(3600),
         valves: Valves::default(),
+        volumes: Arc::new(volume_kind),
     }
 }
 
@@ -517,6 +538,7 @@ fn disabling_stops_watching_and_enabling_again_catches_up_without_walking() {
         changes: vec![Change::Put(Entry::read(&new).unwrap())],
         walk: Vec::new(),
         reconcile: Vec::new(),
+        recheck: Vec::new(),
         cursors: vec![cursor()],
         how: CaughtUpBy::Journal,
         note: None,
@@ -1099,4 +1121,397 @@ fn a_walk_under_way_when_the_computer_sleeps_waits_out_the_pause_and_finishes() 
     assert_eq!(status.hung, 0, "the sleep is not counted as hanging");
     assert_eq!(fixture.names("plan"), ["plan.txt"]);
     assert_eq!(fixture.names("song"), ["song.mp3"]);
+}
+
+/// The fixture's own temporary folder, from its configuration: where a test
+/// puts the folders it says are on other volumes.
+fn temporary_folder(config: &IndexerConfig) -> PathBuf {
+    config
+        .dir
+        .parent()
+        .and_then(Path::parent)
+        .expect("the index is in the fixture's cache folder")
+        .to_path_buf()
+}
+
+#[test]
+fn a_root_on_a_network_share_or_a_removable_drive_is_left_out_until_other_volumes_are_included() {
+    // What Windows (GetDriveTypeW: a mapped drive, a USB stick) or macOS
+    // (statfs: a mounted share, removable media) would say, through the
+    // seam.
+    let fixture = Fixture::indexed_with(|config| {
+        let folder = temporary_folder(config);
+        config.volumes = fake_volumes(&folder.join("share"), &folder.join("stick"));
+        // The share is reconciled at once, as the few minutes are up.
+        config.reconcile_unwatched = Duration::from_millis(50);
+    });
+    let share = fixture._dir.path().join("share");
+    let stick = fixture._dir.path().join("stick");
+    for (file, text) in [
+        (share.join("Projects/far plan.txt"), "x"),
+        (stick.join("Photos/holiday.jpg"), "x"),
+    ] {
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(file, text).unwrap();
+    }
+    let added = vec![share.clone(), stick.clone()];
+
+    // Added as roots: left out by default, neither walked nor watched.
+    fixture.indexer.set_user_rules(UserRules {
+        added_roots: added.clone(),
+        ..UserRules::default()
+    });
+    fixture.settle();
+    assert!(fixture.names("far plan").is_empty());
+    assert!(fixture.names("holiday").is_empty());
+    assert_eq!(fixture.names("plan"), ["plan.txt"], "the home folder is");
+    assert_eq!(
+        *lock(&fixture.fake.watched),
+        std::slice::from_ref(&fixture.home)
+    );
+
+    // Included: both are indexed; the removable drive is watched, the
+    // network share never is.
+    fixture.indexer.set_user_rules(UserRules {
+        added_roots: added.clone(),
+        include_other_volumes: true,
+        ..UserRules::default()
+    });
+    fixture.settle();
+    assert_eq!(fixture.names("far plan"), ["far plan.txt"]);
+    assert_eq!(fixture.names("holiday"), ["holiday.jpg"]);
+    assert_eq!(
+        *lock(&fixture.fake.watched),
+        [fixture.home.clone(), stick.clone()]
+    );
+    // A change on the share, which nothing reports, is found by the
+    // reconciling walk made every few minutes.
+    fs::write(share.join("Projects/later plan.txt"), "x").unwrap();
+    touch(&share.join("Projects"));
+    until(|| fixture.names("later plan") == ["later plan.txt"]);
+
+    // Left out again: what was indexed of them goes.
+    fixture.indexer.set_user_rules(UserRules {
+        added_roots: added,
+        ..UserRules::default()
+    });
+    fixture.settle();
+    assert!(fixture.names("far plan").is_empty());
+    assert!(fixture.names("holiday").is_empty());
+    assert_eq!(fixture.names("plan"), ["plan.txt"]);
+}
+
+#[test]
+fn a_home_folder_on_a_network_share_is_left_out_until_other_volumes_are_included() {
+    // A home folder redirected to a share, as the system would say.
+    let fixture = Fixture::indexed_with(|config| {
+        let folder = temporary_folder(config);
+        config.volumes = fake_volumes(&folder.join("home"), &folder.join("stick"));
+    });
+    assert_eq!(fixture.indexer.status().state, IndexState::Current);
+    assert!(fixture.names("plan").is_empty());
+    assert!(lock(&fixture.fake.watched).is_empty());
+
+    fixture.indexer.set_user_rules(UserRules {
+        include_other_volumes: true,
+        ..UserRules::default()
+    });
+    fixture.settle();
+    assert_eq!(fixture.names("plan"), ["plan.txt"]);
+    assert!(
+        lock(&fixture.fake.watched).is_empty(),
+        "a network share is never watched"
+    );
+}
+
+#[test]
+fn churn_in_folders_the_index_leaves_out_never_takes_anything_out() {
+    // The thresholds of the test above.
+    let fixture = Fixture::indexed_with(|config| {
+        config.valves.churn_changes = 20;
+        config.valves.churn_window = Duration::from_secs(1);
+        config.valves.churn_windows = 3;
+    });
+    let home = &fixture.home;
+    for (file, text) in [
+        ("repo/.git/HEAD", "ref: refs/heads/main\n"),
+        ("repo/.git/index", "x"),
+        ("repo/.gitignore", "build/\n"),
+        ("repo/build/out.o", "x"),
+        (".config/app/state.json", "x"),
+        ("Busy/busy log.txt", "x"),
+    ] {
+        let path = home.join(file);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+    // A busy `node_modules` (in the fixture), a Git repository's own
+    // folder, an ignored build folder and a hidden folder, none of them
+    // indexed; and a folder that is.
+    let left_out = [
+        home.join("node_modules/left out.js"),
+        home.join("repo/.git/index"),
+        home.join("repo/build/out.o"),
+        home.join(".config/app/state.json"),
+    ];
+    let busy = home.join("Busy");
+    let log = busy.join("busy log.txt");
+    let burst = |paths: &[PathBuf]| {
+        let reports: Vec<PathBuf> = paths
+            .iter()
+            .flat_map(|path| vec![path.clone(); 10])
+            .collect();
+        fixture.fake.report(Changed::Paths(reports));
+    };
+
+    // The same burst in each, far more often than the valve allows, until
+    // the indexed folder is taken out: had the others been counted, they
+    // would have been taken out with it.
+    until(|| {
+        burst(&left_out);
+        burst(std::slice::from_ref(&log));
+        std::thread::sleep(Duration::from_millis(10));
+        fixture.indexer.user_rules().quarantined.contains(&busy)
+    });
+    // And on for more than a window: still nothing else.
+    let deadline = Instant::now() + Duration::from_millis(1500);
+    while Instant::now() < deadline {
+        burst(&left_out);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    fixture.settle();
+    assert_eq!(
+        fixture.indexer.user_rules().quarantined,
+        std::slice::from_ref(&busy)
+    );
+    let churned: Vec<Problem> = fixture
+        .indexer
+        .problems()
+        .into_iter()
+        .filter(|problem| problem.kind == ProblemKind::Churned)
+        .collect();
+    assert_eq!(churned.len(), 1, "{churned:?}");
+    assert_eq!(churned[0].folder.as_deref(), Some(busy.as_path()));
+    assert_eq!(fixture.names("plan"), ["plan.txt"]);
+}
+
+/// The folder-id table is read from the index once per open and shared by
+/// the catch-up and the watch setup (#187): a source whose catch-up reads
+/// it (as the NTFS journal's does) and that watches each folder (as
+/// Linux's inotify does) has it read once, and the watch is given the
+/// folders as the catch-up's changes left them.
+#[test]
+fn the_catch_up_and_the_watch_share_one_read_of_the_folder_ids() {
+    let fixture = Fixture::indexed();
+    fixture.indexer.set_users(BTreeSet::new());
+    until(|| fixture.fake.watching.load(Ordering::SeqCst) == 0);
+
+    // While off, a folder was made and another one deleted.
+    let home = &fixture.home;
+    let projects = home.join("Projects");
+    fs::create_dir_all(&projects).unwrap();
+    fs::remove_dir_all(home.join("Music")).unwrap();
+    *lock(&fixture.fake.caught) = Some(Caught::Changes {
+        changes: vec![
+            Change::Put(Entry::read(&projects).unwrap()),
+            Change::RemoveUnder(home.join("Music")),
+        ],
+        walk: Vec::new(),
+        reconcile: Vec::new(),
+        recheck: Vec::new(),
+        cursors: vec![cursor()],
+        how: CaughtUpBy::Journal,
+        note: None,
+    });
+    fixture.fake.reads_folder_ids.store(true, Ordering::SeqCst);
+    fixture
+        .fake
+        .watches_each_folder
+        .store(true, Ordering::SeqCst);
+    fixture.indexer.set_users(users(&[OWNER]));
+    fixture.settle();
+
+    let index = fixture.indexer.shared().index.clone().expect("open");
+    assert_eq!(index.folder_id_reads(), 1, "read once, for both");
+    let folders = lock(&fixture.fake.folders).clone();
+    assert!(folders.contains(&projects), "{folders:?}");
+    assert!(folders.contains(&home.join("Documents")), "{folders:?}");
+    assert!(!folders.contains(&home.join("Music")), "{folders:?}");
+    let depths: Vec<usize> = folders
+        .iter()
+        .map(|folder| folder.components().count())
+        .collect();
+    assert!(depths.is_sorted(), "shallowest first: {folders:?}");
+}
+
+/// On Windows a restart reads the folder-id table from the index once
+/// (#187): the NTFS catch-up resolves the journal's records through it,
+/// and watching each root whole needs none. Run on the runner's NTFS
+/// volume; where the temporary folder's volume keeps no journal, the
+/// catch-up reconciles and never reads it.
+#[cfg(windows)]
+#[test]
+fn a_restart_on_windows_reads_the_folder_ids_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    fs::create_dir_all(home.join("Documents/Drafts")).unwrap();
+    fs::write(home.join("Documents/plan.txt"), "plan").unwrap();
+    let index_dir = dir.path().join("cache").join(INDEX_DIR);
+    let native = || IndexerConfig {
+        source: crate::file_index::native_changes(),
+        ..config(&index_dir, &home, Arc::new(Fake::default()))
+    };
+    let first = Indexer::default();
+    first.configure(native(), UserRules::default());
+    first.launcher_shown();
+    first.set_users(users(&[OWNER]));
+    assert!(first.wait_until_settled(LIMIT), "{:?}", first.status());
+    first.set_users(BTreeSet::new());
+    drop(first);
+
+    // Changed while Pane is not running.
+    fs::write(home.join("Documents/Drafts/letter.txt"), "x").unwrap();
+    let indexer = Indexer::default();
+    // Its index may be let go by the old coordinator a moment later.
+    indexer.configure(native(), UserRules::default());
+    indexer.launcher_shown();
+    indexer.set_users(users(&[OWNER]));
+    assert!(indexer.wait_until_settled(LIMIT), "{:?}", indexer.status());
+    let index = indexer.shared().index.clone().expect("open");
+    let reads = index.folder_id_reads();
+    match indexer.status().caught_up.map(|(by, _)| by) {
+        Some(CaughtUpBy::Journal) => assert_eq!(reads, 1, "read once, for both"),
+        how => assert_eq!(reads, 0, "caught up {how:?}, never resolving records"),
+    }
+}
+
+/// Makes a repository in the fixture's home folder whose `.gitignore`
+/// ignores nothing yet, holding `src/trace.draft`, and has it indexed.
+fn repository(fixture: &Fixture) -> PathBuf {
+    let repo = fixture.home.join("repo");
+    for (file, text) in [
+        ("repo/.git/HEAD", "ref: refs/heads/main\n"),
+        ("repo/.gitignore", ""),
+        ("repo/src/trace.draft", "x"),
+    ] {
+        let path = fixture.home.join(file);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+    fixture.fake.report(Changed::Paths(vec![repo.clone()]));
+    fixture.settle();
+    assert_eq!(fixture.names("trace"), ["trace.draft"]);
+    repo
+}
+
+/// A watcher's overflow (#186): an ignore file changed in place while the
+/// system's buffer overflowed changes no folder's time, so the reconciling
+/// walk does not see it; the folder is re-checked whole after it.
+#[test]
+fn an_overflow_rechecks_an_ignore_file_changed_in_place() {
+    let fixture = Fixture::indexed();
+    let repo = repository(&fixture);
+    fs::write(repo.join(".gitignore"), "*.draft\n").unwrap();
+    fixture.fake.report(Changed::Rescan(fixture.home.clone()));
+    fixture.settle();
+    assert!(fixture.names("trace").is_empty());
+    assert_eq!(fixture.names("plan"), ["plan.txt"]);
+}
+
+/// A catch-up whose records do not name what changed a folder's ignore
+/// rules (a hidden `.gitignore` deleted, read without administrator
+/// rights; a folder Linux's reconciling walk read again holding one) asks
+/// for that folder to be re-checked, which runs with the walks (#186).
+#[test]
+fn a_folder_the_catch_up_asks_to_recheck_is_rechecked_with_the_walks() {
+    let fixture = Fixture::indexed();
+    let repo = repository(&fixture);
+    fixture.indexer.set_users(BTreeSet::new());
+    until(|| fixture.fake.watching.load(Ordering::SeqCst) == 0);
+
+    fs::write(repo.join(".gitignore"), "*.draft\n").unwrap();
+    *lock(&fixture.fake.caught) = Some(Caught::Changes {
+        changes: Vec::new(),
+        walk: Vec::new(),
+        reconcile: Vec::new(),
+        recheck: vec![repo],
+        cursors: vec![cursor()],
+        how: CaughtUpBy::Journal,
+        note: None,
+    });
+    fixture.indexer.set_users(users(&[OWNER]));
+    fixture.settle();
+    assert!(fixture.names("trace").is_empty());
+}
+
+/// An ignore file in the home folder re-checks every folder, a few at a
+/// time (#186): the result is the same as one walk, and a change reported
+/// meanwhile is applied too.
+#[test]
+fn an_ignore_file_in_the_home_folder_rechecks_every_folder_a_few_at_a_time() {
+    let fixture = Fixture::indexed();
+    let home = &fixture.home;
+    // More folders than a re-check reads before it lets changes through.
+    let count = RECHECK_FOLDERS * 2;
+    let mut made = Vec::new();
+    for n in 0..count {
+        let folder = home.join(format!("Folder {n}"));
+        fs::create_dir_all(folder.join("deep")).unwrap();
+        fs::write(folder.join(format!("deep/note {n}.draft")), "x").unwrap();
+        made.push(folder);
+    }
+    fixture.fake.report(Changed::Paths(made));
+    fixture.settle();
+    let notes = || {
+        fixture
+            .indexer
+            .search(
+                OWNER,
+                "note",
+                SearchOptions {
+                    limit: MAX_RESULTS,
+                    ..SearchOptions::default()
+                },
+            )
+            .unwrap()
+            .len()
+    };
+    assert_eq!(notes(), count);
+
+    fs::write(home.join(".ignore"), "*.draft\n").unwrap();
+    fixture
+        .fake
+        .report(Changed::Paths(vec![home.join(".ignore")]));
+    let meanwhile = home.join("Documents/meanwhile.txt");
+    fs::write(&meanwhile, "x").unwrap();
+    fixture.fake.report(Changed::Paths(vec![meanwhile]));
+    fixture.settle();
+    assert_eq!(notes(), 0);
+    assert_eq!(fixture.names("meanwhile"), ["meanwhile.txt"]);
+    assert_eq!(fixture.names("plan"), ["plan.txt"]);
+}
+
+/// Of a folder no change is reported from (here past Linux's watch limit),
+/// the scope keeps nothing (#186): the check at Enter reads its ignore
+/// files again, and sees one that changed since.
+#[test]
+fn the_check_at_enter_reads_again_the_rules_of_a_folder_not_watched() {
+    let fixture = Fixture::indexed();
+    let documents = fixture.home.join("Documents");
+    let found = fixture
+        .indexer
+        .search(OWNER, "plan", SearchOptions::default())
+        .unwrap();
+    // Checked once: what the rules learned of Documents was kept.
+    assert!(fixture.indexer.checked(OWNER, &found[0].id).is_ok());
+    fixture
+        .fake
+        .report(Changed::Unwatched(vec![documents.clone()]));
+    until(|| fixture.indexer.status().unwatched == 1);
+
+    fs::write(documents.join(".ignore"), "plan.txt\n").unwrap();
+    assert_eq!(
+        fixture.indexer.checked(OWNER, &found[0].id),
+        Err("it is no longer in the folders file search covers".into())
+    );
 }

@@ -1,0 +1,39 @@
+{
+    "format":  1,
+    "script":  "measure-windows.ps1",
+    "date":  "2026-10-09T20:34:27.1934313+07:00",
+    "os":  "Microsoft Windows NT 10.0.26200.0",
+    "windowsBuild":  {
+                         "DisplayVersion":  "25H2",
+                         "CurrentBuild":  "26200",
+                         "UBR":  8737
+                     },
+    "architecture":  "AMD64",
+    "processors":  16,
+    "pane":  {
+                 "path":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane-wt\\_target\\debug\\pane.exe",
+                 "bytes":  107403776,
+                 "sha256":  "A8C927ECF4BD268E482E0C260B50A36772A715E7A3DE08674090B87C28C01F43",
+                 "profile":  "debug"
+             },
+    "commit":  "26c8e2240291c72035fe0d94472248b70b3148bf",
+    "workload":  {
+                     "hiddenSeconds":  60,
+                     "settleSeconds":  30,
+                     "sampleSeconds":  1,
+                     "setupSeconds":  600,
+                     "defaultExtensions":  [
+                                               "calculator",
+                                               "applications",
+                                               "quicklinks",
+                                               "files",
+                                               "clipboard-history"
+                                           ]
+                 },
+    "counted":  "context switches of each thread (SYSTEM_THREAD_INFORMATION.ContextSwitches); CPU in 100 ns; rss_kb is the working set",
+    "otherPaneProcesses":  0,
+    "loginRegistered":  false,
+    "loginRegistrationRestored":  false,
+    "hiddenBy":  "posted Escape",
+    "scratchKept":  false
+}

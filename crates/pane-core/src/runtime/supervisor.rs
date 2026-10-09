@@ -36,7 +36,11 @@
 //! (the two share the restart window), and the launcher is told without
 //! any package named. The stuck thread cannot be ended: it is abandoned,
 //! its fence closes so nothing it still runs changes anything, and it
-//! frees what it holds only once it returns.
+//! frees what it holds only once it returns. The watchdog looks only while
+//! there is something to watch: while no request is in flight on the
+//! thread and the thread is outside any poll of its work, it waits without
+//! a timeout, and a request sent ([`Shared::send`]), the thread starting a
+//! poll or its end wakes it (see `deadlines`).
 //!
 //! A fresh thread must not wait on something an abandoned one holds, or it
 //! would fail in turn, using up the restart window for the first failure.
@@ -59,13 +63,13 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, watch};
 
-use super::deadlines::{self, Limits, Quiet, Verdict, Watch, Watched};
+use super::deadlines::{self, Limits, Quiet, Timer, Verdict, Watch, Watched};
 #[cfg(any(test, debug_assertions))]
 use super::faults::Fault;
 use super::faults::Faults;
 
 use super::{
-    CallError, Code, HealthReport, Host, Request, SharedApplications, SharedClipboard,
+    CallError, Code, HealthReport, Host, Request, Sent, SharedApplications, SharedClipboard,
     SharedDirectory, SharedHostFunctions, SharedLaunches, lock, unavailable,
 };
 use crate::helpers::runner::Helpers;
@@ -314,14 +318,14 @@ struct Current {
 /// A runtime thread's end of its requests.
 #[derive(Clone)]
 struct Thread {
-    requests: mpsc::UnboundedSender<Request>,
+    requests: mpsc::UnboundedSender<Sent>,
     /// Its number among the threads started.
     number: u64,
     /// Where faults are injected into it.
     #[cfg(any(test, debug_assertions))]
     faults: Arc<Faults>,
-    /// Where a slow host call is injected into it.
-    #[cfg(any(test, debug_assertions))]
+    /// Where its requests are counted in flight, and a slow host call is
+    /// injected into it.
     watch: Arc<Watch>,
 }
 
@@ -372,18 +376,34 @@ impl Shared {
         Ok(shared)
     }
 
-    /// Sends `request` to the runtime thread, returning its number.
+    /// Sends `request` to the runtime thread, returning its number. It is
+    /// in flight there from now until it has been served (see
+    /// [`Watch::call`]): the thread's epoch ticker and watchdog, which wait
+    /// while none is, wake for it.
     pub(super) fn send(&self, request: Request) -> Result<u64, NotSent> {
-        let (requests, number) = match &lock(&self.current).thread {
-            Some(thread) => (thread.requests.clone(), thread.number),
-            None => return Err(NotSent::Stopped),
+        let Some(thread) = lock(&self.current).thread.clone() else {
+            return Err(NotSent::Stopped);
+        };
+        let sent = Sent {
+            request,
+            in_flight: Some(thread.watch.call()),
         };
         // A thread that just crashed has dropped its requests: this one is
         // not sent, nor sent again to the next thread.
-        requests
-            .send(request)
+        let number = thread.number;
+        thread
+            .requests
+            .send(sent)
             .map(|()| number)
             .map_err(|_| NotSent::Lost(number))
+    }
+
+    /// What the epoch ticker and the watchdog of the thread serving calls
+    /// now are doing; `None` while the runtime is stopped.
+    #[cfg(any(test, debug_assertions))]
+    pub(super) fn timers(&self) -> Option<deadlines::Timers> {
+        let watch = lock(&self.current).thread.as_ref()?.watch.clone();
+        Some(watch.timers())
     }
 
     /// Tells, through [`lost`], when a thread that fails after this call
@@ -497,7 +517,7 @@ impl Shared {
             requests.downgrade(),
         );
         let shared = Arc::downgrade(self);
-        {
+        let spawned = {
             let (watch, shared) = (watch.clone(), shared.clone());
             std::thread::Builder::new()
                 .name("pane-extension-runtime".into())
@@ -527,7 +547,11 @@ impl Shared {
                         );
                     }
                 })
-                .map_err(unavailable)?;
+        };
+        if let Err(error) = spawned {
+            // Its epoch ticker, waiting for a call that never comes, stops.
+            watch.end();
+            return Err(unavailable(error));
         }
         watchdog(shared, watch.clone(), number);
         Ok(Thread {
@@ -535,7 +559,6 @@ impl Shared {
             number,
             #[cfg(any(test, debug_assertions))]
             faults,
-            #[cfg(any(test, debug_assertions))]
             watch,
         })
     }
@@ -545,13 +568,29 @@ impl Shared {
 /// heartbeat (see [`Watch`] and [`Quiet`]): says when it is not responding
 /// yet, and when it carries on, and gives up on it once it made no progress
 /// for its limit. It stops once the thread's end was handled, or every
-/// runtime handle is gone.
+/// runtime handle is gone. While no request is in flight on the thread and
+/// the thread is outside any poll of its work, nothing can be stuck: it
+/// waits without looking until a request is sent, the thread starts a poll
+/// or it ends (see [`Watch::wait`]).
 fn watchdog(shared: Weak<Shared>, watch: Arc<Watch>, number: u64) {
     let _ = std::thread::Builder::new()
         .name("pane-runtime-watchdog".into())
         .spawn(move || {
             let mut quiet = Quiet::new(Instant::now());
             loop {
+                if watch.idle(Timer::Watchdog) {
+                    // Seen outside any poll: it carried on, if it was said
+                    // not to be responding yet.
+                    if quiet.warned() {
+                        let Some(runtime) = shared.upgrade() else {
+                            return;
+                        };
+                        report_slow(&runtime, number, false);
+                    }
+                    watch.wait(Timer::Watchdog);
+                    // The time it waited is not the thread's quiet time.
+                    quiet = Quiet::new(Instant::now());
+                }
                 std::thread::sleep(deadlines::WATCH_EVERY);
                 if watch.ended() {
                     return;
@@ -561,12 +600,8 @@ fn watchdog(shared: Weak<Shared>, watch: Arc<Watch>, number: u64) {
                 };
                 let limits = runtime.limits();
                 let verdict = quiet.observe(Instant::now(), watch.progress(), &limits);
-                let slow = |slow: bool| {
-                    let report = lock(&runtime.slow).clone();
-                    if let Some(report) = report {
-                        report(number, slow);
-                    }
-                };
+                watch.looked();
+                let slow = |slow: bool| report_slow(&runtime, number, slow);
                 match verdict {
                     Verdict::Fine => {}
                     Verdict::Slow => slow(true),
@@ -598,6 +633,15 @@ fn watchdog(shared: Weak<Shared>, watch: Arc<Watch>, number: u64) {
                 }
             }
         });
+}
+
+/// Tells the launcher that runtime thread `number` is not responding yet
+/// (`true`), or carries on after that (`false`).
+fn report_slow(runtime: &Shared, number: u64, slow: bool) {
+    let report = lock(&runtime.slow).clone();
+    if let Some(report) = report {
+        report(number, slow);
+    }
 }
 
 /// Runtime thread `number` failed (`failure`) with `why`: it crashed, and

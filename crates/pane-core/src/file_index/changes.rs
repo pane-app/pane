@@ -14,11 +14,13 @@
 //! history was purged or the volume changed) asks for a reconciling walk,
 //! and an overflow of live changes asks for one of the folder it concerns.
 
-use std::path::PathBuf;
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
 use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 
+use super::format::EntryKind;
 use super::journal::JournalCursor;
 use super::scope::Scope;
 use super::store::{Change, FileIndex};
@@ -68,6 +70,10 @@ pub enum Caught {
         walk: Vec<PathBuf>,
         /// Folders (roots, when a volume's records are gone) to reconcile.
         reconcile: Vec<PathBuf>,
+        /// Folders whose ignore rules may have changed in ways the changes
+        /// do not name (an ignore file deleted, one read again), to
+        /// re-check with everything under them (#186).
+        recheck: Vec<PathBuf>,
         /// The cursors to keep once the changes are in the index.
         cursors: Vec<JournalCursor>,
         how: CaughtUpBy,
@@ -146,6 +152,94 @@ pub trait Watching: Send {
     }
 }
 
+/// Each indexed folder's file id and path, as [`FileIndex::folder_ids`]
+/// reads them, for one opening of the index (#187): read from the index
+/// only when the catch-up or the watch setup first asks, and shared by
+/// both. Reading it visits every entry of every segment, so a start reads
+/// it once at most, never once for each; and it is let go once watching
+/// has started, so the idle index keeps nothing of it.
+pub struct FolderIds<'a> {
+    index: &'a FileIndex,
+    ids: Option<HashMap<u64, PathBuf>>,
+}
+
+impl<'a> FolderIds<'a> {
+    pub fn new(index: &'a FileIndex) -> FolderIds<'a> {
+        FolderIds { index, ids: None }
+    }
+
+    /// The table, read from the index the first time it is asked for. The
+    /// NTFS catch-up changes it as the journal's records go (folders
+    /// created, renamed, deleted), so that later records resolve.
+    pub fn ids(&mut self) -> &mut HashMap<u64, PathBuf> {
+        let index = self.index;
+        self.ids.get_or_insert_with(|| index.folder_ids())
+    }
+
+    /// Brings the table, if it was read, up to `changes`, as they were
+    /// applied to the index after it was read: each path changed or
+    /// removed leaves it (a folder removed with everything under it), and
+    /// each folder put with a file id comes in, in their order.
+    pub fn apply(&mut self, changes: &[Change]) {
+        let Some(ids) = &mut self.ids else {
+            return;
+        };
+        if changes.is_empty() {
+            return;
+        }
+        // Each path's id, so that a path is found without reading them all.
+        let mut by_path: BTreeMap<PathBuf, u64> =
+            ids.iter().map(|(&id, path)| (path.clone(), id)).collect();
+        ids.retain(|id, path| by_path.get(path.as_path()) == Some(id));
+        for change in changes {
+            match change {
+                Change::Put(entry) => {
+                    forget(ids, &mut by_path, &entry.path);
+                    let meta = entry.meta;
+                    if meta.kind == EntryKind::Folder && meta.file_id != 0 {
+                        if let Some(moved) = ids.insert(meta.file_id, entry.path.clone()) {
+                            by_path.remove(&moved);
+                        }
+                        by_path.insert(entry.path.clone(), meta.file_id);
+                    }
+                }
+                Change::Remove(path) => forget(ids, &mut by_path, path),
+                Change::RemoveUnder(folder) => {
+                    // Below a folder, paths sort right after it.
+                    let under: Vec<PathBuf> = by_path
+                        .range(folder.clone()..)
+                        .take_while(|(path, _)| path.starts_with(folder))
+                        .map(|(path, _)| path.clone())
+                        .collect();
+                    for path in &under {
+                        forget(ids, &mut by_path, path);
+                    }
+                }
+            }
+        }
+    }
+
+    /// The folders in the table, but those `leave_out` says, shallowest
+    /// first: what a source that watches each folder is given.
+    pub fn folders(&mut self, leave_out: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
+        let mut folders: Vec<PathBuf> = self
+            .ids()
+            .values()
+            .filter(|folder| !leave_out(folder.as_path()))
+            .cloned()
+            .collect();
+        folders.sort_by_key(|folder| folder.components().count());
+        folders
+    }
+}
+
+/// Takes `path` out of the folder-id table and its index by path.
+fn forget(ids: &mut HashMap<u64, PathBuf>, by_path: &mut BTreeMap<PathBuf, u64>, path: &Path) {
+    if let Some(id) = by_path.remove(path) {
+        ids.remove(&id);
+    }
+}
+
 /// One system's way of learning what changed (see the module docs).
 pub trait ChangeSource: Send + Sync + 'static {
     /// The cursors to keep with the index once a full walk is done, taken
@@ -157,17 +251,30 @@ pub trait ChangeSource: Send + Sync + 'static {
     /// when Pane last ran. Called on the coordinator's thread at
     /// background priority; may read the system's records but should not
     /// walk folders itself, except where that is the catch-up (Linux).
+    /// `folders` is the folder-id table the watch setup shares (#187): a
+    /// source that resolves records by folder ids (NTFS) reads it there,
+    /// never from the index itself.
     fn catch_up(
         &self,
         index: &FileIndex,
         scope: &Scope,
         cursors: &[JournalCursor],
+        folders: &mut FolderIds<'_>,
         cancel: &AtomicBool,
     ) -> Caught;
 
+    /// Whether [`ChangeSource::watch`] watches each indexed folder, and so
+    /// must be given them (Linux's inotify). The others watch each root
+    /// whole and are given none, so that the folders are not read for
+    /// them (#187).
+    fn watches_folders(&self) -> bool {
+        false
+    }
+
     /// Starts reporting live changes under the roots to `sink`, from
     /// `cursors` where the system replays history (macOS); `folders` are
-    /// the folders indexed now, shallowest first (Linux watches each).
+    /// the folders indexed now, shallowest first, when the source
+    /// [watches each](ChangeSource::watches_folders), and none otherwise.
     fn watch(
         &self,
         scope: &Scope,

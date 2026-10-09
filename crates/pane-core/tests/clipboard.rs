@@ -307,8 +307,9 @@ impl Pane {
     }
 
     /// The texts kept on disk, newest first, for the only package that
-    /// keeps any.
-    fn kept_on_disk(&self) -> Vec<String> {
+    /// keeps any, once `launcher` wrote what it batched (#192).
+    fn kept_on_disk(&self, launcher: &Launcher) -> Vec<String> {
+        written(launcher);
         let Some(file) = self.history_file() else {
             return Vec::new();
         };
@@ -392,8 +393,10 @@ impl Pane {
         choices.iter().map(|choice| choice.label.clone()).collect()
     }
 
-    /// The only package's history as the file holds it.
-    fn history_of_the_package(&self) -> Value {
+    /// The only package's history as the file holds it, once `launcher`
+    /// wrote what it batched (#192).
+    fn history_of_the_package(&self, launcher: &Launcher) -> Value {
+        written(launcher);
         let file = self.history_file().expect("the history file");
         let packages = file["packages"].as_object().unwrap();
         assert_eq!(packages.len(), 1, "{packages:?}");
@@ -488,6 +491,23 @@ fn submit(launcher: &Launcher, title: &str, values: &[(&str, &str)]) -> Status {
     launcher.view().status
 }
 
+/// Waits until Pane wrote what its clipboard history batched (#192): the
+/// copies kept and the items expired, written together a moment after the
+/// first.
+fn written(launcher: &Launcher) {
+    assert!(
+        launcher.wait_for_clipboard_writes(Duration::from_secs(300)),
+        "the clipboard history was never written"
+    );
+}
+
+/// Quits Pane cleanly, as the user does before starting it again: what
+/// its clipboard history batched is written first (#192).
+fn quit(launcher: Launcher) {
+    launcher.quit_cleanly();
+    drop(launcher);
+}
+
 /// Waits until Pane's expiry thread swept after the clock last moved.
 fn expiry_swept(launcher: &Launcher) {
     assert!(
@@ -548,7 +568,10 @@ fn nothing_is_watched_or_kept_until_history_is_turned_on(fixture: &'static Fixtu
         subtitle(&launcher, PAUSE),
         "On · 2 items kept · Text you copy is kept on this computer"
     );
-    assert_eq!(pane.kept_on_disk(), ["second line\nand more", "hello"]);
+    assert_eq!(
+        pane.kept_on_disk(&launcher),
+        ["second line\nand more", "hello"]
+    );
     let file = fs::read_to_string(pane.history_path()).unwrap();
     assert!(!file.contains("before"));
     #[cfg(unix)]
@@ -576,7 +599,7 @@ fn turning_history_off_stops_the_watch_and_keeps_the_items(fixture: &'static Fix
     assert!(!pane.clipboard.watching());
     assert!(!pane.clipboard.copy("while off", None));
     // Off after a restart too, with its item still listed.
-    drop(launcher);
+    quit(launcher);
     let launcher = pane.start();
     assert!(!pane.clipboard.watching());
     assert_eq!(pane.listed(&launcher), ["kept"]);
@@ -633,7 +656,7 @@ fn marked_blank_other_and_long_content_is_not_kept(fixture: &'static Fixture) {
     pane.clipboard.copy("kept", None);
 
     assert_eq!(pane.listed(&launcher), ["kept"]);
-    assert_eq!(pane.kept_on_disk(), ["kept"]);
+    assert_eq!(pane.kept_on_disk(&launcher), ["kept"]);
     let file = fs::read_to_string(pane.history_path()).unwrap();
     assert!(!file.contains("hunter2"));
 }
@@ -687,7 +710,7 @@ fn pausing_stops_the_watch_and_resuming_starts_it_again(fixture: &'static Fixtur
         "Paused · 1 item kept · Nothing you copy is kept until you resume"
     );
     // Paused stays paused after a restart.
-    drop(launcher);
+    quit(launcher);
     let launcher = pane.start();
     assert!(!pane.clipboard.watching());
     pane.open(&launcher);
@@ -711,16 +734,16 @@ fn disabling_stops_the_watch_and_a_restart_watches_only_while_enabled(fixture: &
     assert!(!pane.clipboard.watching());
     assert!(!pane.clipboard.copy("while disabled", None));
     // Disabled, it stays unwatched after a restart; its history is kept.
-    drop(launcher);
+    quit(launcher);
     let launcher = pane.start();
     assert!(!pane.clipboard.watching());
-    assert_eq!(pane.kept_on_disk(), ["kept"]);
+    assert_eq!(pane.kept_on_disk(&launcher), ["kept"]);
 
     block_on(launcher.set_enabled(&identity, true));
     assert!(pane.clipboard.watching());
     pane.clipboard.copy("after enabling", None);
     // Enabled and on, a restart watches again at once.
-    drop(launcher);
+    quit(launcher);
     assert!(!pane.clipboard.watching());
     let launcher = pane.start();
     assert!(pane.clipboard.watching());
@@ -748,14 +771,14 @@ fn a_slow_read_never_delays_stopping_and_is_not_kept_after_it(fixture: &'static 
     block_on(launcher.set_enabled(&identity, true));
     assert!(pane.clipboard.watching());
     reading.finish("read too late");
-    assert!(pane.kept_on_disk().is_empty());
+    assert!(pane.kept_on_disk(&launcher).is_empty());
 
     // Pausing likewise.
     let reading = pane.clipboard.begin_read().unwrap();
     pane.open(&launcher);
     assert_eq!(run(&launcher, PAUSE), result("Clipboard history is paused"));
     reading.finish("paused meanwhile");
-    assert!(pane.kept_on_disk().is_empty());
+    assert!(pane.kept_on_disk(&launcher).is_empty());
     assert!(pane.listed(&launcher).is_empty());
 }
 
@@ -768,7 +791,7 @@ fn a_read_begun_before_clearing_is_not_kept_after_it(fixture: &'static Fixture) 
     pane.open(&launcher);
     assert_eq!(run(&launcher, CLEAR), result("Deleted 1 kept item"));
     reading.finish("read before clearing");
-    assert!(pane.kept_on_disk().is_empty());
+    assert!(pane.kept_on_disk(&launcher).is_empty());
     // A change read after clearing is kept.
     pane.clipboard.copy("after clearing", None);
     assert_eq!(pane.listed(&launcher), ["after clearing"]);
@@ -821,7 +844,7 @@ fn enter_pastes_an_item_or_copies_it_where_paste_is_not_available(fixture: &'sta
     assert_eq!(huds(&window), ["Copied — paste is not available here yet"]);
     assert!(pane.system.take().is_empty(), "nothing was pasted");
     assert_eq!(pane.listed(&launcher), ["first", "second"]);
-    assert_eq!(pane.kept_on_disk(), ["first", "second"]);
+    assert_eq!(pane.kept_on_disk(&launcher), ["first", "second"]);
 
     // Where it can, Enter pastes it into the application in front, which
     // closes the window, and copies nothing the history keeps.
@@ -859,7 +882,7 @@ fn copy_puts_an_item_on_the_clipboard_again_and_closes_the_window(fixture: &'sta
     assert_eq!(huds(&window), ["Copied to Clipboard"]);
     // Copied again, it moves to the front.
     assert_eq!(pane.listed(&launcher), ["first", "second"]);
-    assert_eq!(pane.kept_on_disk(), ["first", "second"]);
+    assert_eq!(pane.kept_on_disk(&launcher), ["first", "second"]);
 }
 
 fn at_most_the_newest_items_are_kept_and_clear_deletes_them_all(fixture: &'static Fixture) {
@@ -869,7 +892,7 @@ fn at_most_the_newest_items_are_kept_and_clear_deletes_them_all(fixture: &'stati
     for number in 0..=MAX_ITEMS {
         pane.clipboard.copy(&format!("item {number}"), None);
     }
-    let kept = pane.kept_on_disk();
+    let kept = pane.kept_on_disk(&launcher);
     assert_eq!(kept.len(), MAX_ITEMS);
     assert_eq!(kept[0], format!("item {MAX_ITEMS}"));
     assert!(!kept.contains(&"item 0".to_string()));
@@ -879,7 +902,7 @@ fn at_most_the_newest_items_are_kept_and_clear_deletes_them_all(fixture: &'stati
         run(&launcher, CLEAR),
         result(&format!("Deleted {MAX_ITEMS} kept items"))
     );
-    assert!(pane.kept_on_disk().is_empty());
+    assert!(pane.kept_on_disk(&launcher).is_empty());
     // History is still on.
     assert!(pane.clipboard.watching());
     pane.clipboard.copy("after clearing", None);
@@ -899,7 +922,7 @@ fn uninstalling_stops_the_watch_and_deletes_the_history_if_asked(fixture: &'stat
         "{details:?}"
     );
     assert!(!pane.clipboard.watching());
-    assert!(pane.kept_on_disk().is_empty());
+    assert!(pane.kept_on_disk(&launcher).is_empty());
     assert!(launcher.retained_data().is_empty());
 }
 
@@ -911,7 +934,7 @@ fn uninstalling_and_keeping_the_history_keeps_it_for_a_reinstall(fixture: &'stat
 
     pane.uninstall(&launcher, "Uninstall and keep saved data");
     assert!(!pane.clipboard.watching());
-    assert_eq!(pane.kept_on_disk(), ["kept"]);
+    assert_eq!(pane.kept_on_disk(&launcher), ["kept"]);
     assert_eq!(launcher.retained_data().len(), 1);
     launcher.back();
     select_title(&launcher, MANAGE_ROW);
@@ -926,7 +949,7 @@ fn uninstalling_and_keeping_the_history_keeps_it_for_a_reinstall(fixture: &'stat
         launcher.view().rows
     );
     // Installed again from the same folder, it keeps history as it did.
-    drop(launcher);
+    quit(launcher);
     let launcher = pane.installed();
     assert!(pane.clipboard.watching());
     assert_eq!(pane.listed(&launcher), ["kept"]);
@@ -1013,7 +1036,7 @@ fn items_expire_after_the_retention_also_while_disabled_or_stopped(fixture: &'st
 
     // Disabled, then Pane stopped, until "old" is 7 days old.
     block_on(launcher.set_enabled(&identity, false));
-    drop(launcher);
+    quit(launcher);
     pane.clock.advance(4 * DAY);
     let launcher = pane.start();
     // Gone from the file once Pane starts, before the package runs or
@@ -1021,7 +1044,7 @@ fn items_expire_after_the_retention_also_while_disabled_or_stopped(fixture: &'st
     // caller's thread, so the disk is polled until it agrees, with a
     // deadline that still fails if the expired item were kept.
     wait_until("the expired item is gone from the file", || {
-        pane.kept_on_disk() == ["new".to_owned()]
+        pane.kept_on_disk(&launcher) == ["new".to_owned()]
     });
     block_on(launcher.set_enabled(&identity, true));
     assert_eq!(pane.listed(&launcher), ["new"]);
@@ -1032,7 +1055,7 @@ fn items_expire_after_the_retention_also_while_disabled_or_stopped(fixture: &'st
     pane.clock.advance(MINUTE);
     assert!(pane.listed(&launcher).is_empty());
     wait_until("the expired items are gone from the file", || {
-        pane.kept_on_disk().is_empty()
+        pane.kept_on_disk(&launcher).is_empty()
     });
     // History is still on.
     assert!(pane.clipboard.copy("after", None));
@@ -1073,10 +1096,13 @@ fn the_retention_can_be_changed_and_applies_to_kept_items(fixture: &'static Fixt
     block_on(launcher.submit_form());
     assert_eq!(launcher.view().status, result("Items are kept for 1 hour"));
     assert_eq!(pane.listed(&launcher), ["new"]);
-    assert_eq!(pane.history_of_the_package()["retentionSeconds"], 3600);
+    assert_eq!(
+        pane.history_of_the_package(&launcher)["retentionSeconds"],
+        3600
+    );
     assert!(titles(&launcher).contains(&"Keep items for 1 hour".to_string()));
     // Kept across a restart.
-    drop(launcher);
+    quit(launcher);
     let launcher = pane.start();
     pane.clock.advance(HOUR - MINUTE);
     assert_eq!(pane.listed(&launcher), ["new"]);
@@ -1110,13 +1136,13 @@ fn expired_items_leave_the_file_while_pane_runs_without_the_extension(fixture: &
     // (The test reads the file itself, never through Pane.)
     pane.clock.advance(6 * DAY);
     expiry_swept(&launcher);
-    assert_eq!(pane.kept_on_disk(), ["kept longer"]);
+    assert_eq!(pane.kept_on_disk(&launcher), ["kept longer"]);
     assert!(!pane.clipboard.watching());
     pane.clock.advance(DAY);
     expiry_swept(&launcher);
-    assert!(pane.kept_on_disk().is_empty());
+    assert!(pane.kept_on_disk(&launcher).is_empty());
     // What the user chose stays.
-    assert_eq!(pane.history_of_the_package()["capture"], "on");
+    assert_eq!(pane.history_of_the_package(&launcher)["capture"], "on");
 }
 
 fn an_item_can_be_deleted_on_its_own(fixture: &'static Fixture) {
@@ -1134,7 +1160,7 @@ fn an_item_can_be_deleted_on_its_own(fixture: &'static Fixture) {
     assert_eq!(shown(&launcher), result("Deleted the kept item"));
     // A read begun before the deletion does not bring anything back.
     reading.finish("delete me");
-    assert_eq!(pane.kept_on_disk(), ["keep me too", "keep me"]);
+    assert_eq!(pane.kept_on_disk(&launcher), ["keep me too", "keep me"]);
     // The list is drawn again without it.
     assert!(!titles(&launcher).contains(&"delete me".to_owned()));
     assert_eq!(pane.listed(&launcher), ["keep me too", "keep me"]);
@@ -1162,7 +1188,7 @@ fn recent_items_can_be_deleted_together(fixture: &'static Fixture) {
         submit(&launcher, DELETE_RECENT, &[("since", "3600")]),
         result("Deleted 2 kept items")
     );
-    assert_eq!(pane.kept_on_disk(), ["earlier"]);
+    assert_eq!(pane.kept_on_disk(&launcher), ["earlier"]);
     assert_eq!(
         pane.submit(&launcher, DELETE_RECENT, &[("since", "900")]),
         result("Deleted 0 kept items")
@@ -1190,9 +1216,9 @@ fn turning_off_and_deleting_keeps_nothing_more(fixture: &'static Fixture) {
     reading.finish("copied meanwhile");
     assert!(!pane.clipboard.watching());
     assert!(!pane.clipboard.copy("after", None));
-    assert!(pane.kept_on_disk().is_empty());
+    assert!(pane.kept_on_disk(&launcher).is_empty());
     // Off after a restart too, unlike Clear, which keeps history on.
-    drop(launcher);
+    quit(launcher);
     let launcher = pane.start();
     assert!(!pane.clipboard.watching());
     assert!(pane.listed(&launcher).is_empty());
@@ -1205,13 +1231,13 @@ fn retained_history_expires_without_the_extension(fixture: &'static Fixture) {
     pane.turn_on(&launcher);
     pane.clipboard.copy("kept", None);
     pane.uninstall(&launcher, "Uninstall and keep saved data");
-    drop(launcher);
+    quit(launcher);
     pane.clock.advance(7 * DAY);
     let launcher = pane.start();
     // The sweep that expires writes the file off the caller's thread, so
     // the disk is polled until it agrees (see wait_until).
     wait_until("the expired retained items are gone from the file", || {
-        pane.kept_on_disk().is_empty()
+        pane.kept_on_disk(&launcher).is_empty()
     });
     select_title(&launcher, MANAGE_ROW);
     block_on(launcher.activate_selected());
@@ -1263,7 +1289,7 @@ fn the_rust_package_lists_its_items_under_pause_and_resume_recording() {
         result("Recording paused")
     );
     assert!(!pane.clipboard.watching());
-    assert_eq!(pane.kept_on_disk(), ["hello"]);
+    assert_eq!(pane.kept_on_disk(&launcher), ["hello"]);
 }
 
 /// #130, Windows: a kept item reads back while the history file holds no
@@ -1280,17 +1306,17 @@ fn the_history_is_encrypted_on_disk_and_a_damaged_item_is_explained(fixture: &'s
     pane.clipboard.copy("another copy", None);
     let both = ["another copy", "a secret copied"];
     assert_eq!(pane.listed(&launcher), both);
+    assert_eq!(pane.kept_on_disk(&launcher), both);
     let raw = || fs::read_to_string(pane.history_path()).unwrap();
     let file = raw();
     assert!(
         !file.contains("a secret copied") && !file.contains("another copy"),
         "{file}"
     );
-    assert_eq!(pane.kept_on_disk(), both);
-    drop(launcher);
+    quit(launcher);
     let launcher = pane.start();
     assert_eq!(pane.listed(&launcher), both);
-    drop(launcher);
+    quit(launcher);
 
     // As an earlier Pane left it: version 1, every item as it is.
     let mut earlier = pane.history_file().unwrap();
@@ -1302,7 +1328,7 @@ fn the_history_is_encrypted_on_disk_and_a_damaged_item_is_explained(fixture: &'s
     assert!(!file.contains("a secret copied"), "{file}");
     assert_eq!(serde_json::from_str::<Value>(&file).unwrap()["version"], 2);
     assert_eq!(pane.listed(&launcher), both);
-    drop(launcher);
+    quit(launcher);
 
     // The older item's protected bytes damaged.
     let mut file: Value = serde_json::from_str(&raw()).unwrap();
@@ -1324,6 +1350,7 @@ fn the_history_is_encrypted_on_disk_and_a_damaged_item_is_explained(fixture: &'s
     );
     // A later copy is written beside it; it is kept as it was.
     assert!(pane.clipboard.copy("a third copy", None));
+    written(&launcher);
     let file: Value = serde_json::from_str(&raw()).unwrap();
     let history = file["packages"]
         .as_object()

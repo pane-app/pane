@@ -1,11 +1,17 @@
-//! The file index's benchmark (#174): first index time (first run and
-//! warm runs), index size on disk, query latency percentiles, a changed
-//! file re-indexed, the catch-up after 10,000 changes (Windows), and
-//! memory, against the targets of #126 (Raycast: 450,097 entries in 12.9 s,
-//! 61.8 MB on disk).
+//! The file index's benchmark (#174, #183): first index time (first run
+//! and warm runs), index size on disk, query latency percentiles per kind
+//! of query on two shapes of the index (one segment, as the first index
+//! leaves it; several segments and changes in memory, as a stream of
+//! changes leaves it) and while changes arrive and segments are merged in
+//! the background (#187), a changed file re-indexed near the root and in a
+//! deep folder under ignore files (the folders above kept between changes,
+//! #186, and with nothing kept), the catch-up after 10,000 changes
+//! (Windows), and memory, against the targets of #126 (Raycast: 450,097
+//! entries in 12.9 s, 61.8 MB on disk).
 //!
 //! Run through `cargo xtask file-index-bench [options]`, which builds this
-//! in release. Options:
+//! in release. CI runs it over a reduced tree as a regression guard
+//! (`cargo xtask file-index-guard`, with `--guard`). Options:
 //!
 //! - `--home`: index the real home folder with the default rules (read
 //!   only: nothing is written there).
@@ -21,24 +27,84 @@
 //!   temporary folder); deleted before each run and at the end.
 //! - `--runs <n>` (default 3): first index runs; run 1 is the first, the
 //!   others are warm.
-//! - `--queries <n>` (default 1000): queries timed, twice each.
+//! - `--queries <n>` (default 1000): queries in the set, about as many of
+//!   each kind (a typed-out name counts each keystroke); the set is timed
+//!   twice on each shape of the index.
 //! - `--threads <n>`: walker threads (default: as Pane uses).
 //! - `--foreground`: walk at normal priority instead of background.
 //! - `--drop-caches`: before run 1, drop the system's file cache where that
 //!   is allowed (Linux as root, macOS with `sudo purge`), so that run 1 is
 //!   cold. Windows offers no way without administrator rights: there run 1
 //!   is cold only when it is the first after a restart.
+//! - `--guard`: check the measures against the regression guard's ceilings
+//!   (`GUARD_*` below, set for CI's reduced run) and exit with 1 when one
+//!   is over its ceiling.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use pane_core::file_index::{
-    self, Change, Entry, EntryKind, FileIndex, JournalRead, Opened, Query, Scope, ScopeRules,
-    WalkOptions,
+    self, Admitted, Category, Change, Entry, EntryKind, FileIndex, JournalRead, Meta, Opened,
+    Query, Scope, ScopeRules, WalkOptions,
 };
+
+/// The regression guard's ceilings (#183, `--guard`), for the run CI makes
+/// (`cargo xtask file-index-guard`: a generated tree of about 20,000
+/// entries, one run, built in the development profile, unoptimized, on a
+/// shared runner). They are set far above what that run should take, so
+/// that only a large regression (a query or a change gone quadratic, an
+/// index several times larger) fails it, never a slow runner.
+const GUARD_FIRST_INDEX: Duration = Duration::from_secs(180);
+const GUARD_BYTES_PER_ENTRY: f64 = 400.0;
+/// For the 95th percentile of every kind of query and of all of them, on
+/// each shape of the index (warm).
+const GUARD_QUERY_P95: Duration = Duration::from_millis(2_500);
+/// For the 95th percentile of each re-index row.
+const GUARD_REINDEX_P95: Duration = Duration::from_millis(2_500);
+
+/// The batches of the stream of changes timed queries see on the second
+/// shape of the index: all but the last are written as a segment of their
+/// own, the last stays in the memory table (at most 10,000 changes, below
+/// the 65,536 entries past which it is written). The index's background
+/// merges (#187) are held off while that shape is timed, so it holds 5
+/// segments (the one the first index left, and the stream's 4) and the
+/// changes in memory; the row while changes arrive lets them run.
+const STREAM_BATCHES: usize = 5;
+
+/// The words and extensions of the generated tree's names, and of the
+/// stream's.
+const WORDS: [&str; 24] = [
+    "report",
+    "invoice",
+    "photo",
+    "IMG",
+    "notes",
+    "draft",
+    "Résumé",
+    "budget",
+    "plan",
+    "meeting",
+    "project",
+    "src",
+    "lib",
+    "test",
+    "data",
+    "backup",
+    "music",
+    "video",
+    "design",
+    "final",
+    "café",
+    "Übersicht",
+    "año",
+    "summary",
+];
+const EXTENSIONS: [&str; 10] = [
+    ".txt", ".pdf", ".jpg", ".docx", ".rs", ".md", ".png", ".xlsx", ".mp3", ".zip",
+];
 
 struct Options {
     mode: Mode,
@@ -49,6 +115,7 @@ struct Options {
     threads: Option<usize>,
     foreground: bool,
     drop_caches: bool,
+    guard: bool,
 }
 
 enum Mode {
@@ -61,7 +128,7 @@ fn usage() -> ! {
     eprintln!(
         "usage: file_index_bench [--home | --root <folder> | --generate <entries>] \
          [--tree <folder>] [--index <folder>] [--runs <n>] [--queries <n>] [--threads <n>] \
-         [--foreground] [--drop-caches]"
+         [--foreground] [--drop-caches] [--guard]"
     );
     std::process::exit(2)
 }
@@ -76,6 +143,7 @@ fn options() -> Options {
         threads: None,
         foreground: false,
         drop_caches: false,
+        guard: false,
     };
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -96,6 +164,7 @@ fn options() -> Options {
             "--threads" => options.threads = Some(value().parse().unwrap_or_else(|_| usage())),
             "--foreground" => options.foreground = true,
             "--drop-caches" => options.drop_caches = true,
+            "--guard" => options.guard = true,
             _ => usage(),
         }
     }
@@ -221,6 +290,18 @@ fn main() {
     }
     let peak_after_index = memory().peak;
 
+    // The query set, the same for the same tree (see `query_set`): built
+    // from the names the walk found, sorted, not in the order the walk's
+    // threads found them. Its misses are checked on an index opened for
+    // that and closed again, so that the index timed below is opened
+    // afresh, as Pane opens it.
+    sample.sort();
+    let queries = {
+        let (index, _) =
+            FileIndex::open(&index_dir, std::slice::from_ref(&root)).expect("the index opens");
+        query_set(&index, &sample, options.queries)
+    };
+
     // Pane starting again: the index opened, as it is while idle.
     let before_open = memory().private;
     let opened_at = Instant::now();
@@ -230,13 +311,13 @@ fn main() {
     assert_eq!(opened, Opened::Existing);
     let after_open = memory().private;
 
-    // Queries.
-    let queries = query_set(&sample, options.queries);
-    let first_pass = time_queries(&index, &queries);
-    let second_pass = time_queries(&index, &queries);
+    // Queries on the first index: one segment, nothing in memory.
+    let one_first = time_queries(&index, &queries);
+    let one_warm = time_queries(&index, &queries);
     let idle = memory().private;
 
-    // A changed file re-indexed: written, read, applied, found.
+    // A changed file re-indexed, near the root and in a deep folder under
+    // ignore files.
     let changes = if generated {
         root.join("pane-bench-changes")
     } else {
@@ -244,40 +325,28 @@ fn main() {
     };
     let _ = std::fs::remove_dir_all(&changes);
     std::fs::create_dir_all(&changes).expect("a folder for the changed files");
-    let mut reindexed = Vec::new();
-    for n in 0..100 {
-        let file = changes.join(format!("changed report {n} zqx.txt"));
-        std::fs::write(&file, b"changed").expect("a changed file");
-        let started = Instant::now();
-        let entry = Entry::read(&file).expect("the changed file");
-        // Outside the root (the home folder is never written to), the
-        // entry is indexed under the root, as the engine does not mind.
-        let entry = if generated {
-            entry
-        } else {
-            Entry {
-                path: root.join(file.file_name().unwrap()),
-                meta: entry.meta,
-            }
-        };
-        let path = entry.path.clone();
-        index.apply(&[Change::Put(entry)]).expect("applied");
-        let text = format!("changed report {n} zqx");
-        let found = index
-            .search(&Query {
-                text: &text,
-                limit: 5,
-                offset: 0,
-                kind: None,
-            })
-            .iter()
-            .any(|hit| hit.path == path);
-        reindexed.push(started.elapsed());
-        assert!(found, "the changed file is found");
-        if !generated {
-            index.apply(&[Change::Remove(path)]).expect("removed again");
-        }
-    }
+    // Outside the root (the home folder is never written to), the file is
+    // indexed as if it were in the root, as the engine does not mind.
+    let near_root = reindex(
+        &index,
+        &scope,
+        &changes,
+        "report",
+        (!generated).then_some(root.as_path()),
+        false,
+    );
+    let deep = deep_folder(&root, &scope, &sample);
+    let deep_times = deep.as_ref().map(|deep| {
+        let folder = Some(deep.path.as_path());
+        reindex(&index, &scope, &changes, "deep report", folder, false)
+    });
+    // The same with nothing kept, every folder above read again each time:
+    // the first change after a start, or after what the scope kept of the
+    // folders above was dropped (#186), as #183 measured every change.
+    let deep_cold = deep.as_ref().map(|deep| {
+        let folder = Some(deep.path.as_path());
+        reindex(&index, &scope, &changes, "deep cold report", folder, true)
+    });
 
     // The catch-up after 10,000 changes, from the change journal.
     let catch_up = if generated {
@@ -286,6 +355,28 @@ fn main() {
         None
     };
     let _ = std::fs::remove_dir_all(&changes);
+
+    // The same queries on the index a stream of changes left: several
+    // segments and changes in memory, below the merge threshold. It starts
+    // from one segment again, without what the changes above put in the
+    // generated tree's index. The background merges (#187) are held off
+    // meanwhile, so that the queries are timed on the segments the stream
+    // wrote, as they are before merges catch up, whatever the runner's speed.
+    if generated {
+        index
+            .apply(&[Change::RemoveUnder(changes.clone())])
+            .expect("the changed files removed again");
+    }
+    index.compact().expect("the index merged into one segment");
+    let per_batch = (runs[0].entries as usize / 50).clamp(500, 10_000);
+    index.hold_merges(true);
+    let streamed = stream_changes(&index, &root, &sample, per_batch);
+    let several_first = time_queries(&index, &queries);
+    let several_warm = time_queries(&index, &queries);
+    // The same queries while changes go on arriving and segments are merged
+    // in the background (#187), the merges let go.
+    index.hold_merges(false);
+    let arriving = while_changes_arrive(&index, &root, &sample, per_batch, &queries);
     drop(index);
     let _ = std::fs::remove_dir_all(&index_dir);
 
@@ -319,21 +410,49 @@ fn main() {
         first.bytes as f64 / entries as f64
     );
     println!(
-        "| Query, 95th percentile (first pass after opening) | {} | under 10 ms | not measured |",
-        millis(percentile(&first_pass, 95.0))
+        "| Query, 95th percentile, one segment (first pass after opening) | {} | under 10 ms | not measured |",
+        millis(percentile(&one_first, 95.0))
     );
     println!(
-        "| Query, 95th percentile (warm) | {} (p50 {}, p99 {}, max {}) | under 10 ms | not measured |",
-        millis(percentile(&second_pass, 95.0)),
-        millis(percentile(&second_pass, 50.0)),
-        millis(percentile(&second_pass, 99.0)),
-        millis(percentile(&second_pass, 100.0)),
+        "| Query, 95th percentile, one segment (warm) | {} | under 10 ms | not measured |",
+        spread(&one_warm)
     );
     println!(
-        "| A changed file re-indexed, 95th percentile | {} (p50 {}) | under 10 ms | 4–10 ms |",
-        millis(percentile(&reindexed, 95.0)),
-        millis(percentile(&reindexed, 50.0)),
+        "| Query, 95th percentile, several segments and changes in memory (first pass after the stream) | {} | under 10 ms | not measured |",
+        millis(percentile(&several_first, 95.0))
     );
+    println!(
+        "| Query, 95th percentile, several segments and changes in memory (warm) | {} | under 10 ms | not measured |",
+        spread(&several_warm)
+    );
+    println!(
+        "| Query, 95th percentile, while changes arrive and segments merge | {} | under 10 ms | not measured |",
+        spread(&arriving.times)
+    );
+    println!(
+        "| A changed file re-indexed near the root, 95th percentile | {} (p50 {}) | under 10 ms | 4–10 ms |",
+        millis(percentile(&near_root, 95.0)),
+        millis(percentile(&near_root, 50.0)),
+    );
+    match (&deep, &deep_times, &deep_cold) {
+        (Some(deep), Some(times), Some(cold)) => {
+            println!(
+                "| A changed file re-indexed in a deep folder under ignore files, 95th percentile | {} (p50 {}; {} folders down, {} of them or the root with ignore files) | under 10 ms | 4–10 ms |",
+                millis(percentile(times, 95.0)),
+                millis(percentile(times, 50.0)),
+                deep.depth,
+                deep.with_ignore_files,
+            );
+            println!(
+                "| A changed file re-indexed in a deep folder under ignore files, nothing kept (every folder above read again), 95th percentile | {} (p50 {}) | under 10 ms | 4–10 ms |",
+                millis(percentile(cold, 95.0)),
+                millis(percentile(cold, 50.0)),
+            );
+        }
+        _ => println!(
+            "| A changed file re-indexed in a deep folder under ignore files, 95th percentile | not measured: the walk found no folder | under 10 ms | |"
+        ),
+    }
     match &catch_up {
         Some(Ok((time, records))) => println!(
             "| Catch-up after 10,000 changes | {:.3} s ({records} records) | under 1 s | not measured |",
@@ -358,26 +477,136 @@ fn main() {
     );
     println!();
     println!(
-        "Queries: {} of 5 kinds (whole name, name prefix, a word, folder and name words, one letter), limit 20.",
-        queries.len()
+        "Queries: {} of {} kinds (a typed-out name counts each keystroke), limit 20, the same set on both shapes of the index; every query above counts in the 95th percentile. A miss finds nothing; a kind filter runs as Search Files runs it (Folder in the index's own query, Document by asking for more and keeping documents).",
+        queries.len(),
+        QueryKind::ALL.len()
     );
+    println!(
+        "Several segments and changes in memory: {} segments and {} changes in memory, left by a stream of {} changes in {STREAM_BATCHES} batches of about {per_batch}, the background merges held off while they were timed.",
+        streamed.segments, streamed.in_memory, streamed.changes,
+    );
+    println!(
+        "Re-indexed: each row's 100 changes are applied as a batch is, the file's own folder read again and the folders above it kept from the change before (#186); the row with nothing kept reads every folder above again each time, as the first change after a start does."
+    );
+    println!(
+        "While changes arrive: {} changes applied while the queries ran, in batches of about {} each written as a segment, a pause of 100 ms after every {STREAM_BATCHES}; {} segments at the end.",
+        arriving.changes, arriving.per_batch, arriving.segments,
+    );
+    println!();
+    println!(
+        "| Query kind (warm) | Queries | One segment: p50 | p95 | p99 | Several segments and changes in memory: p50 | p95 | p99 |"
+    );
+    println!("| --- | --- | --- | --- | --- | --- | --- | --- |");
+    let row = |label: &str, one: &[Duration], several: &[Duration]| {
+        println!(
+            "| {label} | {} | {} | {} | {} | {} | {} | {} |",
+            one.len(),
+            millis(percentile(one, 50.0)),
+            millis(percentile(one, 95.0)),
+            millis(percentile(one, 99.0)),
+            millis(percentile(several, 50.0)),
+            millis(percentile(several, 95.0)),
+            millis(percentile(several, 99.0)),
+        );
+    };
     for kind in QueryKind::ALL {
-        let times: Vec<Duration> = queries
-            .iter()
-            .zip(&second_pass)
-            .filter(|(query, _)| query.kind == kind)
-            .map(|(_, time)| *time)
-            .collect();
-        if !times.is_empty() {
-            println!(
-                "  {:<22} p50 {}  p95 {}  max {}",
-                kind.label(),
-                millis(percentile(&times, 50.0)),
-                millis(percentile(&times, 95.0)),
-                millis(percentile(&times, 100.0)),
-            );
+        let one = of_kind(&queries, &one_warm, kind);
+        if !one.is_empty() {
+            let several = of_kind(&queries, &several_warm, kind);
+            row(kind.label(), one.as_slice(), several.as_slice());
         }
     }
+    row("all kinds", one_warm.as_slice(), several_warm.as_slice());
+
+    if options.guard {
+        let mut over: Vec<String> = Vec::new();
+        let mut checked = 0;
+        let mut check = |what: String, value: Duration, ceiling: Duration| {
+            checked += 1;
+            if value > ceiling {
+                over.push(format!(
+                    "{what}: {}, over its ceiling of {}",
+                    millis(value),
+                    millis(ceiling)
+                ));
+            }
+        };
+        check("first index".into(), first.total, GUARD_FIRST_INDEX);
+        for (shape, times) in [
+            ("one segment", &one_warm),
+            ("several segments and changes in memory", &several_warm),
+        ] {
+            let p95 = percentile(times, 95.0);
+            check(
+                format!("query p95, {shape}, all kinds"),
+                p95,
+                GUARD_QUERY_P95,
+            );
+            for kind in QueryKind::ALL {
+                let of = of_kind(&queries, times, kind);
+                if !of.is_empty() {
+                    let what = format!("query p95, {shape}, {}", kind.label());
+                    check(what, percentile(&of, 95.0), GUARD_QUERY_P95);
+                }
+            }
+        }
+        let p95 = percentile(&near_root, 95.0);
+        check("re-index p95, near the root".into(), p95, GUARD_REINDEX_P95);
+        if let Some(times) = &deep_times {
+            let p95 = percentile(times, 95.0);
+            check("re-index p95, deep".into(), p95, GUARD_REINDEX_P95);
+        }
+        if let Some(times) = &deep_cold {
+            let p95 = percentile(times, 95.0);
+            check(
+                "re-index p95, deep, nothing kept".into(),
+                p95,
+                GUARD_REINDEX_P95,
+            );
+        }
+        let per_entry = first.bytes as f64 / entries as f64;
+        checked += 1;
+        if per_entry > GUARD_BYTES_PER_ENTRY {
+            over.push(format!(
+                "index on disk: {per_entry:.0} B per entry, over its ceiling of \
+                 {GUARD_BYTES_PER_ENTRY:.0} B"
+            ));
+        }
+        println!();
+        if over.is_empty() {
+            println!("Regression guard (#183): {checked} measures, each within its ceiling.");
+        } else {
+            println!(
+                "Regression guard (#183): {} of {checked} measures over their ceilings:",
+                over.len()
+            );
+            for line in &over {
+                println!("- {line}");
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
+/// The 95th percentile of `times`, with the 50th, the 99th and the most.
+fn spread(times: &[Duration]) -> String {
+    format!(
+        "{} (p50 {}, p99 {}, max {})",
+        millis(percentile(times, 95.0)),
+        millis(percentile(times, 50.0)),
+        millis(percentile(times, 99.0)),
+        millis(percentile(times, 100.0)),
+    )
+}
+
+/// The times of the queries of `kind`.
+fn of_kind(queries: &[TimedQuery], times: &[Duration], kind: QueryKind) -> Vec<Duration> {
+    queries
+        .iter()
+        .zip(times)
+        .filter(|(query, _)| query.kind == kind)
+        .map(|(_, time)| *time)
+        .collect()
 }
 
 struct Run {
@@ -408,7 +637,11 @@ fn index_once(
         let index = &index;
         let walker = threads.spawn(move || {
             let report = file_index::walk(scope, walk_options, &cancel, &|batch: Vec<Entry>| {
-                // About one entry in 400 named for the queries.
+                // Named for the queries: the first entry of each batch, and
+                // every 400th after it. The walk hands over one folder's
+                // entries at a time, its own entry first, so this is each
+                // folder walked, and a file of a folder holding more than
+                // 400 entries now and then.
                 for entry in batch.iter().step_by(400) {
                     let _ = sample_sender.send(entry.path.clone());
                 }
@@ -442,6 +675,8 @@ fn index_once(
     }
 }
 
+/// The kinds of query timed, each reported on a row of its own. Their
+/// labels name the rows, so that runs compare: a label is not changed.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum QueryKind {
     WholeName,
@@ -449,15 +684,35 @@ enum QueryKind {
     Word,
     FolderAndName,
     OneLetter,
+    /// A word no entry holds, of 3 to 8 letters: the pass inside words
+    /// runs too (before #185 it read every term).
+    Miss,
+    /// A word of a name, then a word no entry holds.
+    MissAfterWord,
+    /// Each prefix of a name, from its first letter to the whole name, one
+    /// after the other, as a user's keystrokes are.
+    TypedOut,
+    /// A word of a folder's name, only folders asked for.
+    FolderFilter,
+    /// A word of a name, only documents asked for (Search Files' type).
+    DocumentFilter,
+    /// Three or four letters from inside a word of a name, never its start.
+    InsideWord,
 }
 
 impl QueryKind {
-    const ALL: [QueryKind; 5] = [
+    const ALL: [QueryKind; 11] = [
         QueryKind::WholeName,
         QueryKind::NamePrefix,
         QueryKind::Word,
         QueryKind::FolderAndName,
         QueryKind::OneLetter,
+        QueryKind::Miss,
+        QueryKind::MissAfterWord,
+        QueryKind::TypedOut,
+        QueryKind::FolderFilter,
+        QueryKind::DocumentFilter,
+        QueryKind::InsideWord,
     ];
 
     fn label(self) -> &'static str {
@@ -467,10 +722,17 @@ impl QueryKind {
             QueryKind::Word => "a word",
             QueryKind::FolderAndName => "folder and name words",
             QueryKind::OneLetter => "one letter",
+            QueryKind::Miss => "miss: an absent word",
+            QueryKind::MissAfterWord => "miss: a word, then an absent one",
+            QueryKind::TypedOut => "typed out, each keystroke",
+            QueryKind::FolderFilter => "kind filter: Folder",
+            QueryKind::DocumentFilter => "kind filter: Document",
+            QueryKind::InsideWord => "inside a word",
         }
     }
 }
 
+#[derive(Clone)]
 struct TimedQuery {
     kind: QueryKind,
     text: String,
@@ -483,44 +745,197 @@ fn words_of(name: &str) -> Vec<String> {
         .collect()
 }
 
-/// A fixed set of queries from names the walk found: each kind in turn.
-fn query_set(sample: &[PathBuf], count: usize) -> Vec<TimedQuery> {
-    let mut queries = Vec::new();
-    let mut at = 0usize;
-    while queries.len() < count && !sample.is_empty() {
-        let path = &sample[at % sample.len()];
-        let kind = QueryKind::ALL[queries.len() % 5];
-        at += 7;
-        let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
-            continue;
-        };
-        let words = words_of(&name);
-        let text = match kind {
-            QueryKind::WholeName => name.clone(),
-            QueryKind::NamePrefix => name.chars().take(3).collect(),
-            QueryKind::Word => match words.get(at % words.len().max(1)) {
-                Some(word) => word.clone(),
-                None => continue,
-            },
-            QueryKind::FolderAndName => {
-                let folder = path
-                    .parent()
-                    .and_then(Path::file_name)
-                    .map(|n| words_of(&n.to_string_lossy()))
-                    .unwrap_or_default();
-                match (folder.first(), words.first()) {
-                    (Some(folder), Some(word)) => format!("{folder} {word}"),
-                    _ => continue,
-                }
+/// A name the walk found, with its words and its folder's.
+struct Named {
+    name: String,
+    words: Vec<String>,
+    folder_words: Vec<String>,
+}
+
+/// A fixed set of about `count` queries, as many of each kind (a typed-out
+/// name counts each keystroke), from the names the walk found (`sample`,
+/// sorted) and a seeded generator, so that runs over the same tree time
+/// the same queries. A miss is kept only when `index` finds nothing for
+/// it. The kinds take turns, a typed-out name's keystrokes together.
+fn query_set(index: &FileIndex, sample: &[PathBuf], count: usize) -> Vec<TimedQuery> {
+    let names: Vec<Named> = sample
+        .iter()
+        .filter_map(|path| {
+            let name = path.file_name()?.to_string_lossy().into_owned();
+            let folder_words = path
+                .parent()
+                .and_then(Path::file_name)
+                .map(|n| words_of(&n.to_string_lossy()))
+                .unwrap_or_default();
+            Some(Named {
+                words: words_of(&name),
+                name,
+                folder_words,
+            })
+        })
+        .filter(|named| !named.name.trim().is_empty())
+        .collect();
+    if names.is_empty() {
+        return Vec::new();
+    }
+    let per_kind = (count / QueryKind::ALL.len()).max(1);
+    let mut seeded = Seeded(183);
+    // Per kind, its queries in units: one query, or a typed-out name's
+    // keystrokes.
+    let mut units: Vec<Vec<Vec<TimedQuery>>> = Vec::new();
+    for (salt, kind) in QueryKind::ALL.into_iter().enumerate() {
+        let mut kind_units: Vec<Vec<TimedQuery>> = Vec::new();
+        let mut made = 0;
+        let mut at = 0usize;
+        while made < per_kind && at < per_kind * 20 {
+            let named = &names[(at * 7 + salt * 131) % names.len()];
+            at += 1;
+            let unit: Vec<TimedQuery> = texts(kind, named, at, &mut seeded)
+                .into_iter()
+                .map(|text| TimedQuery { kind, text })
+                .collect();
+            let Some(first) = unit.first() else {
+                continue;
+            };
+            if matches!(kind, QueryKind::Miss | QueryKind::MissAfterWord)
+                && run_query(index, first) > 0
+            {
+                continue;
             }
-            QueryKind::OneLetter => name.chars().take(1).collect(),
-        };
-        if text.trim().is_empty() {
-            continue;
+            made += unit.len();
+            kind_units.push(unit);
         }
-        queries.push(TimedQuery { kind, text });
+        units.push(kind_units);
+    }
+    let rounds = units.iter().map(Vec::len).max().unwrap_or(0);
+    let mut queries = Vec::new();
+    for round in 0..rounds {
+        for kind_units in &units {
+            if let Some(unit) = kind_units.get(round) {
+                queries.extend(unit.iter().cloned());
+            }
+        }
     }
     queries
+}
+
+/// The texts of one unit of `kind` from `named` (none when the name has
+/// nothing of that kind); `at` varies the word taken.
+fn texts(kind: QueryKind, named: &Named, at: usize, seeded: &mut Seeded) -> Vec<String> {
+    let first_word = named.words.first();
+    let pick = |words: &[String]| words.get(at % words.len().max(1)).cloned();
+    let text = match kind {
+        QueryKind::WholeName => Some(named.name.clone()),
+        QueryKind::NamePrefix => Some(named.name.chars().take(3).collect()),
+        QueryKind::Word => pick(named.words.as_slice()),
+        QueryKind::FolderAndName => match (named.folder_words.first(), first_word) {
+            (Some(folder), Some(word)) => Some(format!("{folder} {word}")),
+            _ => None,
+        },
+        QueryKind::OneLetter => Some(named.name.chars().take(1).collect()),
+        QueryKind::Miss => Some(absent_word(seeded)),
+        QueryKind::MissAfterWord => {
+            first_word.map(|word| format!("{word} {}", absent_word(seeded)))
+        }
+        QueryKind::TypedOut => {
+            let letters: Vec<char> = named.name.chars().collect();
+            return (1..=letters.len())
+                .map(|typed| letters[..typed].iter().collect::<String>())
+                .filter(|text| !text.trim().is_empty())
+                .collect();
+        }
+        QueryKind::FolderFilter => pick(named.folder_words.as_slice()),
+        QueryKind::DocumentFilter => first_word.cloned(),
+        QueryKind::InsideWord => inside_fragment(&named.words, at),
+    };
+    text.filter(|text| !text.trim().is_empty())
+        .into_iter()
+        .collect()
+}
+
+/// Three or four letters from inside the first word of five letters or
+/// more of `words`, never its start, so that only the pass inside words
+/// finds it there; `at` varies which.
+fn inside_fragment(words: &[String], at: usize) -> Option<String> {
+    let letters: Vec<char> = words
+        .iter()
+        .map(|word| word.chars().collect::<Vec<char>>())
+        .find(|letters| letters.len() >= 5)?;
+    let len = 3 + at % 2;
+    let start = 1 + at % (letters.len() - len);
+    Some(letters[start..start + len].iter().collect())
+}
+
+/// A seeded generator (SplitMix64), so that the misses are the same in
+/// every run.
+struct Seeded(u64);
+
+impl Seeded {
+    fn draw(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    fn below(&mut self, bound: usize) -> usize {
+        (self.draw() % bound as u64) as usize
+    }
+}
+
+/// A word no name is likely to hold, of 3 to 8 letters: a `q`, a letter
+/// that seldom follows one, then consonants.
+fn absent_word(seeded: &mut Seeded) -> String {
+    const AFTER_Q: &[u8] = b"xzjkvw";
+    const CONSONANTS: &[u8] = b"bcdfghjklmnpqrstvwxz";
+    let len = 3 + seeded.below(6);
+    let mut word = String::with_capacity(len);
+    word.push('q');
+    word.push(char::from(AFTER_Q[seeded.below(AFTER_Q.len())]));
+    while word.len() < len {
+        word.push(char::from(CONSONANTS[seeded.below(CONSONANTS.len())]));
+    }
+    word
+}
+
+/// Runs `query` as Search Files does (`Indexer::search` in
+/// `file_index/indexer.rs`, without the ids it gives), for a page of 20:
+/// the Folder filter is the index's own; the Document filter asks the
+/// index for at least 500 and keeps the documents, asking again for four
+/// times as many while fewer than a page are kept, up to 20,000. Answers
+/// how many entries it found.
+fn run_query(index: &FileIndex, query: &TimedQuery) -> usize {
+    const PAGE: usize = 20;
+    if query.kind == QueryKind::DocumentFilter {
+        // The indexer asks for the page or 500, whichever is more.
+        let mut asked = 500;
+        loop {
+            let page = index.search(&Query {
+                text: &query.text,
+                limit: asked,
+                offset: 0,
+                kind: None,
+            });
+            let exhausted = page.len() < asked;
+            let kept = page
+                .iter()
+                .filter(|hit| Category::Documents.holds(&hit.path, hit.meta.kind))
+                .count();
+            if kept >= PAGE || exhausted || asked >= 20_000 {
+                return kept.min(PAGE);
+            }
+            asked *= 4;
+        }
+    }
+    index
+        .search(&Query {
+            text: &query.text,
+            limit: PAGE,
+            offset: 0,
+            kind: (query.kind == QueryKind::FolderFilter).then_some(EntryKind::Folder),
+        })
+        .len()
 }
 
 fn time_queries(index: &FileIndex, queries: &[TimedQuery]) -> Vec<Duration> {
@@ -528,16 +943,301 @@ fn time_queries(index: &FileIndex, queries: &[TimedQuery]) -> Vec<Duration> {
         .iter()
         .map(|query| {
             let started = Instant::now();
-            let hits = index.search(&Query {
-                text: &query.text,
-                limit: 20,
-                offset: 0,
-                kind: None,
-            });
-            std::hint::black_box(hits);
+            let found = run_query(index, query);
+            std::hint::black_box(found);
             started.elapsed()
         })
         .collect()
+}
+
+/// A changed file re-indexed 100 times, as the indexer takes a change
+/// (`Indexer::look_at` in `file_index/indexer.rs`): the file written, then,
+/// timed, what the index holds at its path, the file read, the rules
+/// applied to it as each batch of changes applies them (#186: the global
+/// ignore file looked at, what the scope keeps of the file's folder
+/// dropped, as when Windows reports the folder changed too, so that its
+/// ignore files are read again, the folders above it kept from the run
+/// before), the change applied and a query finding it. The first change
+/// reads every folder above the file; with `nothing_kept`, every change
+/// does, as the first after a start does. The file is written in
+/// `changes`; with `indexed_in`, it is indexed as if it were in that
+/// folder, which is not written to, and taken out again.
+fn reindex(
+    index: &FileIndex,
+    scope: &Scope,
+    changes: &Path,
+    name: &str,
+    indexed_in: Option<&Path>,
+    nothing_kept: bool,
+) -> Vec<Duration> {
+    scope.forget_all_kept();
+    let mut times = Vec::new();
+    for n in 0..100 {
+        let text = format!("changed {name} {n} zqx");
+        let file = changes.join(format!("{text}.txt"));
+        std::fs::write(&file, b"changed").expect("a changed file");
+        if nothing_kept {
+            scope.forget_all_kept();
+        }
+        let started = Instant::now();
+        let path = match indexed_in {
+            Some(folder) => folder.join(file.file_name().expect("the file's name")),
+            None => file.clone(),
+        };
+        let indexed = index.get(&path);
+        let mut entry = Entry::read(&file).expect("the changed file");
+        entry.path = path.clone();
+        let is_dir = entry.meta.kind == EntryKind::Folder;
+        std::hint::black_box(scope.global_ignore_changed());
+        scope.forget_kept(&path);
+        if let Some(folder) = path.parent() {
+            scope.forget_kept(folder);
+        }
+        let admitted = scope.admits_kept(&path, is_dir);
+        if admitted {
+            index.apply(&[Change::Put(entry)]).expect("applied");
+        }
+        let found = index
+            .search(&Query {
+                text: &text,
+                limit: 5,
+                offset: 0,
+                kind: None,
+            })
+            .iter()
+            .any(|hit| hit.path == path);
+        times.push(started.elapsed());
+        std::hint::black_box(indexed);
+        assert!(admitted, "the rules admit {}", path.display());
+        assert!(found, "the changed file is found");
+        if indexed_in.is_some() {
+            index.apply(&[Change::Remove(path)]).expect("removed again");
+            let _ = std::fs::remove_file(&file);
+        }
+    }
+    times
+}
+
+/// The folder the deep re-index row indexes its file in.
+struct DeepFolder {
+    path: PathBuf,
+    /// Folders below the root, down to this one.
+    depth: usize,
+    /// Of those folders and the root, how many hold an ignore file
+    /// (`.gitignore` or `.ignore`).
+    with_ignore_files: usize,
+}
+
+/// The deepest folder of the sampled entries with ignore files on the way
+/// down from the root, or the deepest when none has any, among the 1,000
+/// deepest, in a fixed order; one whose rules admit the changed file.
+fn deep_folder(root: &Path, scope: &Scope, sample: &[PathBuf]) -> Option<DeepFolder> {
+    let mut folders: Vec<(usize, &Path)> = sample
+        .iter()
+        .filter_map(|path| path.parent())
+        .filter_map(|folder| {
+            let depth = folder.strip_prefix(root).ok()?.components().count();
+            Some((depth, folder))
+        })
+        .collect();
+    folders.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(b.1)));
+    folders.dedup_by(|a, b| a.1 == b.1);
+    let mut holds: HashMap<PathBuf, bool> = HashMap::new();
+    let mut best: Option<DeepFolder> = None;
+    for &(depth, folder) in folders.iter().take(1_000) {
+        let mut with_ignore_files = 0;
+        for above in folder.ancestors() {
+            if !above.starts_with(root) {
+                break;
+            }
+            let has = *holds.entry(above.to_path_buf()).or_insert_with(|| {
+                [".gitignore", ".ignore"]
+                    .iter()
+                    .any(|file| above.join(file).symlink_metadata().is_ok())
+            });
+            if has {
+                with_ignore_files += 1;
+            }
+        }
+        let probe = folder.join("changed deep report 0 zqx.txt");
+        if !scope.admits(&probe, false, &mut Admitted::default()) {
+            continue;
+        }
+        let rank = (with_ignore_files > 0, depth, with_ignore_files);
+        let better = best.as_ref().is_none_or(|best| {
+            rank > (
+                best.with_ignore_files > 0,
+                best.depth,
+                best.with_ignore_files,
+            )
+        });
+        if better {
+            best = Some(DeepFolder {
+                path: folder.to_path_buf(),
+                depth,
+                with_ignore_files,
+            });
+        }
+    }
+    best
+}
+
+/// The queries timed while changes arrived, and what arrived.
+struct Arriving {
+    times: Vec<Duration>,
+    /// Changes applied while the queries ran.
+    changes: usize,
+    per_batch: usize,
+    /// Segments when the queries were done.
+    segments: usize,
+}
+
+/// `queries` timed while another thread applies changes, as the indexer's
+/// coordinator does (#187): streams of [`STREAM_BATCHES`] batches of about
+/// a tenth of `per_batch` changes, each but the last written as a segment
+/// of its own, 100 ms apart, so that the index merges segments in the
+/// background while the queries run. A query never waits for a merge,
+/// only for a batch being put in memory.
+fn while_changes_arrive(
+    index: &FileIndex,
+    root: &Path,
+    sample: &[PathBuf],
+    per_batch: usize,
+    queries: &[TimedQuery],
+) -> Arriving {
+    let per_batch = (per_batch / 10).max(50);
+    let done = AtomicBool::new(false);
+    let (times, changes) = std::thread::scope(|threads| {
+        let stream = threads.spawn(|| {
+            let mut changes = 0;
+            while !done.load(Ordering::Relaxed) {
+                changes += stream_changes(index, root, sample, per_batch).changes;
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            changes
+        });
+        let times = time_queries(index, queries);
+        done.store(true, Ordering::Relaxed);
+        (times, stream.join().unwrap_or(0))
+    });
+    Arriving {
+        times,
+        changes,
+        per_batch,
+        segments: index.stats().segments,
+    }
+}
+
+/// What the stream of changes left.
+struct Streamed {
+    segments: usize,
+    /// Changes applied in all.
+    changes: usize,
+    /// Changes in the memory table, not yet in a segment.
+    in_memory: usize,
+}
+
+/// A stream of changes over the index, as days of use bring them:
+/// [`STREAM_BATCHES`] batches of about `per_batch` changes, each
+/// written as a segment of its own but the last, which stays in memory.
+/// Each batch adds files beside entries the walk found (six tenths),
+/// changes found entries, a newer version over the segment's (three
+/// tenths), deletes files the batch before added (a tenth), and adds a
+/// folder with files, deleting the folder the batch before added (a
+/// tombstone). Only the index changes, never the disk.
+fn stream_changes(
+    index: &FileIndex,
+    root: &Path,
+    sample: &[PathBuf],
+    per_batch: usize,
+) -> Streamed {
+    let folders: Vec<&Path> = sample
+        .iter()
+        .filter_map(|path| path.parent())
+        .filter(|folder| folder.starts_with(root))
+        .collect();
+    let mut streamed = Streamed {
+        segments: index.stats().segments,
+        changes: 0,
+        in_memory: 0,
+    };
+    if folders.is_empty() {
+        return streamed;
+    }
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    let file = |size: usize| Meta {
+        kind: EntryKind::File,
+        size: size as u64,
+        modified: now,
+        file_id: 0,
+        volume: 0,
+    };
+    let mut added: Vec<PathBuf> = Vec::new();
+    let mut added_folder: Option<PathBuf> = None;
+    for batch in 0..STREAM_BATCHES {
+        let mut changes = Vec::with_capacity(per_batch + 16);
+        if let Some(folder) = added_folder.take() {
+            changes.push(Change::RemoveUnder(folder));
+        }
+        for path in added.drain(..).step_by(6).take(per_batch / 10) {
+            changes.push(Change::Remove(path));
+        }
+        for k in 0..per_batch * 3 / 10 {
+            let path = &sample[((batch * per_batch + k) * 13) % sample.len()];
+            if let Some(meta) = index.get(path) {
+                changes.push(Change::Put(Entry {
+                    path: path.clone(),
+                    meta: Meta {
+                        size: meta.size + 1,
+                        modified: now,
+                        ..meta
+                    },
+                }));
+            }
+        }
+        for k in 0..per_batch * 6 / 10 {
+            let n = batch * per_batch + k;
+            let name = format!(
+                "{} {} stream_{n}{}",
+                WORDS[n % WORDS.len()],
+                WORDS[(n / 7) % WORDS.len()],
+                EXTENSIONS[n % EXTENSIONS.len()]
+            );
+            let path = folders[(n * 7) % folders.len()].join(name);
+            changes.push(Change::Put(Entry {
+                path: path.clone(),
+                meta: file(n),
+            }));
+            added.push(path);
+        }
+        let parent = folders[(batch * 7919) % folders.len()];
+        let folder = parent.join(format!("stream folder {batch}"));
+        changes.push(Change::Put(Entry {
+            path: folder.clone(),
+            meta: Meta {
+                kind: EntryKind::Folder,
+                size: 0,
+                ..file(0)
+            },
+        }));
+        for k in 0..10 {
+            changes.push(Change::Put(Entry {
+                path: folder.join(format!("stream notes {batch}-{k}.txt")),
+                meta: file(k),
+            }));
+        }
+        added_folder = Some(folder);
+        index.apply(&changes).expect("the stream applied");
+        streamed.changes += changes.len();
+        streamed.in_memory = changes.len();
+        if batch + 1 < STREAM_BATCHES {
+            index.flush().expect("the batch written as a segment");
+        }
+    }
+    streamed.segments = index.stats().segments;
+    streamed
 }
 
 /// The catch-up after 10,000 files created while "Pane was not running":
@@ -563,6 +1263,8 @@ fn catch_up(
             return Some(Err(error.to_string()));
         }
     }
+    // A catch-up runs at start, with a scope that keeps nothing yet (#186).
+    scope.forget_all_kept();
     let started = Instant::now();
     let records = match file_index::read_journal(root, Some(&start), 1_000_000) {
         JournalRead::Records { records, .. } => records,
@@ -602,35 +1304,6 @@ fn generate(tree: &Path, entries: usize) -> bool {
         return false;
     }
     let _ = std::fs::remove_dir_all(tree);
-    const WORDS: [&str; 24] = [
-        "report",
-        "invoice",
-        "photo",
-        "IMG",
-        "notes",
-        "draft",
-        "Résumé",
-        "budget",
-        "plan",
-        "meeting",
-        "project",
-        "src",
-        "lib",
-        "test",
-        "data",
-        "backup",
-        "music",
-        "video",
-        "design",
-        "final",
-        "café",
-        "Übersicht",
-        "año",
-        "summary",
-    ];
-    const EXTENSIONS: [&str; 10] = [
-        ".txt", ".pdf", ".jpg", ".docx", ".rs", ".md", ".png", ".xlsx", ".mp3", ".zip",
-    ];
     let folders = (entries / 10).max(1);
     let mut paths: Vec<PathBuf> = Vec::with_capacity(folders);
     paths.push(tree.to_path_buf());

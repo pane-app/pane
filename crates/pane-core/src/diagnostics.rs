@@ -132,8 +132,9 @@ fn test_sink() -> Option<Arc<Log>> {
 /// `version`, sends every diagnostic and panic there from now on, and
 /// opens this run's crash record: whether the run before ended
 /// unexpectedly, and the marker a clean quit removes. On Linux and macOS a
-/// SIGTERM, SIGINT or SIGHUP removes the marker too before it ends Pane as
-/// it always did. Pane's binary calls this once, first thing.
+/// SIGTERM, SIGINT or SIGHUP quits cleanly too ([`quit_cleanly_on_signals`])
+/// before it ends Pane as it always did. Pane's binary calls this once,
+/// first thing.
 pub fn start(folder: &Path, version: &str) -> CrashRecord {
     let _ = create_private_dir(folder);
     let log = Arc::new(Log::open(folder, Redactor::of_this_system()));
@@ -234,18 +235,68 @@ pub(crate) fn create_private_dir(dir: &Path) -> io::Result<()> {
     }
 }
 
-/// The signals that end Pane on Linux and macOS, each of which removes the
-/// marker first: the system ending the session (SIGTERM, SIGHUP) and the
+/// Has `quit` run, on a thread of its own, when SIGTERM, SIGINT or SIGHUP
+/// ends Pane on Linux or macOS, before the marker goes and Pane ends with
+/// the signal's own action: Pane's binary passes the launcher's clean quit
+/// (`Launcher::quit_cleanly`), which writes what clipboard history keeps
+/// waiting in a batch (#192). Given at most two seconds; past them, or
+/// before this was called, the marker is removed directly. Only the first
+/// call counts. Does nothing elsewhere: Windows' session end reaches the
+/// app's quit hooks.
+pub fn quit_cleanly_on_signals(quit: impl FnOnce() + Send + 'static) {
+    #[cfg(unix)]
+    signals::on_quit(Box::new(quit));
+    #[cfg(not(unix))]
+    let _ = quit;
+}
+
+/// The signals that end Pane on Linux and macOS, each of which quits
+/// cleanly first: the system ending the session (SIGTERM, SIGHUP) and the
 /// user's Ctrl+C in a terminal (SIGINT) are clean quits.
+///
+/// The handler does only what is safe in a signal handler: it writes one
+/// byte to a pipe, which wakes the thread `pane-signals`, and returns. That
+/// thread runs the clean quit (`quit_cleanly_on_signals`) on a thread of
+/// its own, waits for it at most `QUIT_LIMIT`, removes the marker whether
+/// it ended or not, restores the signal's default action and raises the
+/// signal again, so that Pane ends as it always did. A signal received
+/// meanwhile changes nothing. Should the pipe or the thread not exist, the
+/// handler itself removes the marker and ends Pane at once, as before.
 #[cfg(unix)]
 mod signals {
     use std::ffi::CString;
+    use std::io;
     use std::path::Path;
-    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+    use std::sync::{Mutex, OnceLock, PoisonError, mpsc};
+    use std::time::Duration;
+
+    /// The longest a signal waits for the clean quit before Pane ends.
+    pub(super) const QUIT_LIMIT: Duration = Duration::from_secs(2);
 
     /// The marker's path, for the handler, which may only call what is
     /// safe in a signal handler.
     static MARKER: OnceLock<CString> = OnceLock::new();
+
+    /// The pipe's end the handler writes to, while `pane-signals` waits on
+    /// the other; -1 otherwise.
+    static PIPE: AtomicI32 = AtomicI32::new(-1);
+
+    /// Whether a signal was received already.
+    static PASSED: AtomicBool = AtomicBool::new(false);
+
+    /// The signal passed on to `pane-signals`.
+    static RECEIVED: AtomicI32 = AtomicI32::new(0);
+
+    /// What a signal runs before Pane ends (see `quit_cleanly_on_signals`).
+    static QUIT: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
+
+    pub(super) fn on_quit(quit: Box<dyn FnOnce() + Send>) {
+        let mut kept = QUIT.lock().unwrap_or_else(PoisonError::into_inner);
+        if kept.is_none() {
+            *kept = Some(quit);
+        }
+    }
 
     pub(super) fn remove_marker_on_signals(marker: &Path) {
         use std::os::unix::ffi::OsStrExt;
@@ -255,9 +306,10 @@ mod signals {
         if MARKER.set(path).is_err() {
             return;
         }
-        let handler = quit as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        listen();
+        let handler = received as extern "C" fn(libc::c_int) as libc::sighandler_t;
         for signal in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
-            // SAFETY: `quit` calls only async-signal-safe functions.
+            // SAFETY: `received` calls only async-signal-safe functions.
             let before = unsafe { libc::signal(signal, handler) };
             // A signal Pane was started ignoring (`nohup`) stays ignored.
             if before == libc::SIG_IGN {
@@ -267,9 +319,106 @@ mod signals {
         }
     }
 
-    /// Removes the marker, then ends Pane with the signal's own default
-    /// action, as it ended before.
-    extern "C" fn quit(signal: libc::c_int) {
+    /// Makes the pipe and starts `pane-signals`, which waits on it; on
+    /// failure the handler ends Pane itself.
+    fn listen() {
+        let mut ends: [libc::c_int; 2] = [-1, -1];
+        // SAFETY: `ends` has room for the two descriptors `pipe` writes.
+        if unsafe { libc::pipe(ends.as_mut_ptr()) } != 0 {
+            return;
+        }
+        let [reading, writing] = ends;
+        for descriptor in ends {
+            // Not inherited by the programs Pane starts.
+            // SAFETY: a descriptor this function just opened.
+            unsafe { libc::fcntl(descriptor, libc::F_SETFD, libc::FD_CLOEXEC) };
+        }
+        // The handler never blocks on it.
+        // SAFETY: as above.
+        unsafe { libc::fcntl(writing, libc::F_SETFL, libc::O_NONBLOCK) };
+        let started = std::thread::Builder::new()
+            .name("pane-signals".into())
+            .spawn(move || wait(reading));
+        if started.is_ok() {
+            PIPE.store(writing, Ordering::SeqCst);
+        } else {
+            // SAFETY: descriptors this function opened, used by nothing.
+            unsafe {
+                libc::close(reading);
+                libc::close(writing);
+            }
+        }
+    }
+
+    /// `pane-signals`: waits for the handler's byte, then quits cleanly and
+    /// ends Pane with the signal received.
+    fn wait(reading: libc::c_int) {
+        let mut byte = 0u8;
+        loop {
+            // SAFETY: reads at most one byte into `byte`.
+            let read = unsafe { libc::read(reading, (&raw mut byte).cast(), 1) };
+            if read == 1 {
+                break;
+            }
+            if read < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            // The pipe failed: the handler ends Pane itself from now on.
+            PIPE.store(-1, Ordering::SeqCst);
+            return;
+        }
+        let signal = RECEIVED.load(Ordering::SeqCst);
+        let quit = QUIT.lock().unwrap_or_else(PoisonError::into_inner).take();
+        if let Some(quit) = quit {
+            let (done, ended) = mpsc::channel();
+            let quitting = std::thread::Builder::new()
+                .name("pane-quit".into())
+                .spawn(move || {
+                    quit();
+                    let _ = done.send(());
+                });
+            if quitting.is_ok() {
+                // Past the limit (a lock held by a thread that hangs), Pane
+                // ends anyway: what was written stays.
+                let _ = ended.recv_timeout(QUIT_LIMIT);
+            }
+        }
+        end(signal);
+    }
+
+    /// The handler: passes the signal on to `pane-signals`, once; ends Pane
+    /// at once if it cannot (see the module).
+    extern "C" fn received(signal: libc::c_int) {
+        let errno = errno();
+        // SAFETY: this thread's `errno`, when known.
+        let saved = (!errno.is_null()).then(|| unsafe { *errno });
+        // A signal after one was passed on (the session's end sends
+        // SIGTERM and SIGHUP together) leaves it to end Pane, within
+        // `QUIT_LIMIT`.
+        let passed = PASSED.swap(true, Ordering::SeqCst);
+        let writing = PIPE.load(Ordering::SeqCst);
+        if !passed && writing >= 0 {
+            RECEIVED.store(signal, Ordering::SeqCst);
+            let byte = 1u8;
+            // SAFETY: writes one byte from `byte`; `write` is
+            // async-signal-safe.
+            let written = unsafe { libc::write(writing, (&raw const byte).cast(), 1) };
+            if written != 1 {
+                end(signal);
+            }
+        } else if !passed {
+            end(signal);
+        }
+        // The interrupted code finds `errno` as it left it.
+        if let Some(saved) = saved {
+            // SAFETY: as above.
+            unsafe { *errno = saved };
+        }
+    }
+
+    /// Removes the marker, then ends Pane with `signal`'s own default
+    /// action, as it ended before. Async-signal-safe.
+    fn end(signal: libc::c_int) {
         if let Some(path) = MARKER.get() {
             // SAFETY: a NUL-terminated path that lives as long as the
             // process; `unlink` is async-signal-safe.
@@ -280,6 +429,25 @@ mod signals {
             libc::signal(signal, libc::SIG_DFL);
             libc::raise(signal);
         }
+    }
+
+    /// Where this thread's `errno` is, which the handler leaves as it found
+    /// it; null where unknown.
+    #[cfg(target_os = "linux")]
+    fn errno() -> *mut libc::c_int {
+        // SAFETY: returns this thread's `errno`; async-signal-safe.
+        unsafe { libc::__errno_location() }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn errno() -> *mut libc::c_int {
+        // SAFETY: as above.
+        unsafe { libc::__error() }
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    fn errno() -> *mut libc::c_int {
+        std::ptr::null_mut()
     }
 }
 

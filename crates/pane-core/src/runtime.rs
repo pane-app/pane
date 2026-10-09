@@ -62,6 +62,9 @@ mod tree;
 use deadlines::Doing;
 #[doc(hidden)]
 pub use deadlines::Limits;
+#[cfg(any(test, debug_assertions))]
+#[doc(hidden)]
+pub use deadlines::Timers;
 pub use deadlines::{COMPUTE_LIMIT, UNRESPONSIVE_LIMIT, WARN_AFTER};
 pub(crate) use deadlines::{HostCall, Hosted, Watch};
 #[cfg(any(test, debug_assertions))]
@@ -894,6 +897,19 @@ impl Request {
     }
 }
 
+/// A request on its way to a runtime thread, with what counts it in flight
+/// there until it has been served or dropped (see [`Watch::call`]): the
+/// thread's epoch ticker and watchdog wait while none is. Every request
+/// sent through the runtime ([`Shared::send`]) is counted, whatever it is:
+/// guest calls of every kind, a custom view's destructor, and the host
+/// work that waits on guests (`Runtime::running`, `view_count`). The
+/// thread's own nudge to drop stopped instances runs no guest code and is
+/// not.
+struct Sent {
+    request: Request,
+    in_flight: Option<deadlines::InFlight>,
+}
+
 /// How a call into an installed package's code failed, for deciding
 /// whether to pause the package (see the launcher's `pausing`). Only the
 /// package's own failures are reported: an error the guest answers with is
@@ -1004,6 +1020,16 @@ impl Runtime {
     #[doc(hidden)]
     pub fn set_limits(&self, limits: Limits) {
         self.shared.set_limits(limits);
+    }
+
+    /// What the epoch ticker and the watchdog of the runtime thread serving
+    /// calls now are doing ([`Timers`]), so tests see them wait while no
+    /// call runs and wake for one; `None` while the runtime is stopped. For
+    /// tests only; debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn timers(&self) -> Option<Timers> {
+        self.shared.timers()
     }
 
     /// The limits the runtime applies ([`Limits`]).
@@ -2654,7 +2680,7 @@ struct Host {
     /// Where an instance's undo asks this thread to drop the instances of
     /// ended generations; weak, so that the thread still stops once every
     /// runtime handle is gone.
-    nudge: mpsc::WeakUnboundedSender<Request>,
+    nudge: mpsc::WeakUnboundedSender<Sent>,
     /// The installed packages operation calls are resolved against, and
     /// guests' helpers found in.
     directory: SharedDirectory,
@@ -2911,7 +2937,7 @@ impl Host {
         number: u64,
         faults: Arc<Faults>,
         watch: Arc<Watch>,
-        nudge: mpsc::WeakUnboundedSender<Request>,
+        nudge: mpsc::WeakUnboundedSender<Sent>,
     ) -> Host {
         Host {
             code,
@@ -2950,7 +2976,7 @@ impl Host {
     /// user, a program, a helper, the network, a clock), the others run.
     /// Calls into one instance still run one after another ([`Host::turn`]).
     /// An injected [`Fault::Crash`] panics here, wherever the thread waits.
-    async fn serve(self, mut requests: mpsc::UnboundedReceiver<Request>) {
+    async fn serve(self, mut requests: mpsc::UnboundedReceiver<Sent>) {
         let host = &self;
         let mut tasks: Tasks<'_> = FuturesUnordered::new();
         let faults = self.faults.clone();
@@ -2975,16 +3001,19 @@ impl Host {
                 // Given up on, every handle gone, or Pane quitting: the work
                 // in progress is dropped with its instances, ending its
                 // waits (helpers, web requests) where they are.
-                None | Some(None) | Some(Some(Request::Quit)) => return,
-                Some(Some(request)) => host.dispatch(request, &mut tasks),
+                None | Some(None) => return,
+                Some(Some(sent)) if matches!(sent.request, Request::Quit) => return,
+                Some(Some(sent)) => host.dispatch(sent, &mut tasks),
             }
         }
     }
 
-    /// Starts serving `request`: what it changes at once (forgetting
+    /// Starts serving `sent`: what it changes at once (forgetting
     /// components, closing a view) is done here, in the order the requests
-    /// were sent, and its calls become a task in `tasks`.
-    fn dispatch<'a>(&'a self, request: Request, tasks: &mut Tasks<'a>) {
+    /// were sent, and its calls become a task in `tasks`, which holds it in
+    /// flight until it has been served.
+    fn dispatch<'a>(&'a self, sent: Sent, tasks: &mut Tasks<'a>) {
+        let Sent { request, in_flight } = sent;
         let watch = self.watch.clone();
         let _handling = watch.doing(Doing::Handling);
         self.drop_stopped();
@@ -3139,7 +3168,12 @@ impl Host {
                 let _ = reply.send(Ok(self.running()));
             }),
         };
-        tasks.push(task);
+        // In flight until it has been served, or dropped with the thread.
+        let served: Task<'a> = Box::pin(async move {
+            let _in_flight = in_flight;
+            task.await;
+        });
+        tasks.push(served);
     }
 
     /// A new chain, for a request.
@@ -4466,7 +4500,10 @@ impl Host {
             let nudge = self.nudge.clone();
             generation.on_end("extension instance", move || {
                 if let Some(requests) = nudge.upgrade() {
-                    let _ = requests.send(Request::DropStopped);
+                    let _ = requests.send(Sent {
+                        request: Request::DropStopped,
+                        in_flight: None,
+                    });
                 }
                 Ok(())
             })

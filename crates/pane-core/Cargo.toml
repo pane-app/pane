@@ -161,7 +161,9 @@ name = "program_adapters"
 path = "tests/program_adapters.rs"
 
 # The file index's benchmark (#174), run by `cargo xtask file-index-bench`
-# in release: it is a program, not a test, and runs only on demand.
+# in release: it is a program, not a test, and runs on demand. CI runs it
+# over a reduced tree as a regression guard (`cargo xtask
+# file-index-guard`, #183), as the tests build it.
 [[example]]
 name = "file_index_bench"
 path = "examples/file_index_bench.rs"

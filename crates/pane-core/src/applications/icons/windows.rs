@@ -26,6 +26,14 @@
 //!   ClickOnce installs it ([`super::click_once`]), before the shell's
 //!   image of the reference itself.
 //!
+//! An icon's fingerprint covers the file its picture is read from as well
+//! as its source ([`super::sources_fingerprint`]): a packaged app's
+//! manifest and the logos chosen from it; a shortcut, its own icon
+//! location if it names one, and its target, to which extraction falls
+//! back (an update rewrites the target program, not the shortcut); an
+//! internet shortcut and its `IconFile`; a ClickOnce
+//! reference and its deployed program.
+//!
 //! Everything runs on the worker's thread, with COM initialized as a
 //! single-threaded apartment for the call.
 
@@ -48,7 +56,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{Interface, PCWSTR, PWSTR};
 
-use super::{Extracted, appx, click_once, covers_enough, file_fingerprint};
+use super::{Extracted, appx, click_once, covers_enough, sources_fingerprint};
 use crate::applications::start_menu::{click_once_deployment, shortcut_text};
 use crate::system_icons::{ICON_SIZE, SystemIcon};
 use crate::util::wide;
@@ -70,12 +78,59 @@ fn packaged(source: &str) -> Option<&str> {
 pub(super) fn fingerprint(source: &str) -> Option<String> {
     match packaged(source) {
         // A package's version is in its install folder's name, and its
-        // manifest changes with it.
+        // manifest changes with it; its logo is the picture.
         Some(aumid) => {
-            let (family, _) = appx::split_app_user_model_id(aumid)?;
-            file_fingerprint(&package_folder(family)?.join("AppxManifest.xml"))
+            let (family, app) = appx::split_app_user_model_id(aumid)?;
+            let folder = package_folder(family)?;
+            let logos: Vec<PathBuf> = package_logos(&folder, app)
+                .map(|(dark, light)| std::iter::once(dark).chain(light).collect::<Vec<_>>())
+                .unwrap_or_default();
+            sources_fingerprint(&folder.join("AppxManifest.xml"), &logos)
         }
-        None => file_fingerprint(Path::new(source)),
+        None => sources_fingerprint(Path::new(source), &picture_files(source)),
+    }
+}
+
+/// The files other than `source` itself whose pictures its icon is drawn
+/// from (see the module docs): a shortcut's (`.lnk`) own icon location and
+/// its target, to which extraction falls back; an internet shortcut's
+/// (`.url`) `IconFile`; a ClickOnce
+/// reference's (`.appref-ms`) deployed program. None for a program, or for
+/// a source that cannot be read.
+fn picture_files(source: &str) -> Vec<PathBuf> {
+    let has_extension = |wanted: &str| {
+        Path::new(source)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case(wanted))
+    };
+    if has_extension("lnk") {
+        let Ok(_com) = Com::new() else {
+            return Vec::new();
+        };
+        let Ok(link) = read_link(Path::new(source)) else {
+            return Vec::new();
+        };
+        // The target too when an icon location is named: extraction falls
+        // back to the target when that location yields no picture.
+        let mut files: Vec<PathBuf> = link
+            .icon_location
+            .map(|(file, _)| PathBuf::from(file))
+            .into_iter()
+            .collect();
+        if !link.target.is_empty() {
+            files.push(PathBuf::from(link.target));
+        }
+        files
+    } else if has_extension("url") {
+        std::fs::read(source)
+            .ok()
+            .and_then(|bytes| internet_shortcut_icon(&String::from_utf8_lossy(&bytes)))
+            .map(|(file, _)| vec![PathBuf::from(file)])
+            .unwrap_or_default()
+    } else if has_extension("appref-ms") {
+        click_once_program(source).into_iter().collect()
+    } else {
+        Vec::new()
     }
 }
 
@@ -438,7 +493,21 @@ fn package_path(full: &str) -> Option<PathBuf> {
 /// read.
 fn packaged_logo(aumid: &str) -> Option<Extracted> {
     let (family, app) = appx::split_app_user_model_id(aumid)?;
-    let folder = package_folder(family)?;
+    let (dark, light) = package_logos(&package_folder(family)?, app)?;
+    Some(match light {
+        Some(light) => Extracted {
+            light: SystemIcon::File(light),
+            dark: Some(SystemIcon::File(dark)),
+        },
+        None => Extracted::one(SystemIcon::File(dark)),
+    })
+}
+
+/// The logo files of the app `app` of the package installed in `folder`,
+/// as its manifest names them ([`appx::manifest_logo`], [`appx::pick_logos`]):
+/// the dark theme's, and the light theme's when the package ships one.
+/// `None` when the manifest or the logo cannot be read.
+fn package_logos(folder: &Path, app: &str) -> Option<(PathBuf, Option<PathBuf>)> {
     let manifest = std::fs::read_to_string(folder.join("AppxManifest.xml")).ok()?;
     let logo = appx::manifest_logo(&manifest, app)?;
     let logo = folder.join(logo.replace('/', "\\"));
@@ -450,14 +519,10 @@ fn packaged_logo(aumid: &str) -> Option<Extracted> {
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
         .collect();
     let (dark, light) = appx::pick_logos(&logo_name, &files)?;
-    let file = |name: &str| SystemIcon::File(logo_folder.join(name));
-    Some(match light {
-        Some(light) => Extracted {
-            light: file(&light),
-            dark: Some(file(&dark)),
-        },
-        None => Extracted::one(file(&dark)),
-    })
+    Some((
+        logo_folder.join(dark),
+        light.map(|light| logo_folder.join(light)),
+    ))
 }
 
 #[cfg(test)]

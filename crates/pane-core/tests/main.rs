@@ -64,6 +64,7 @@ mod result_actions;
 mod root_providers;
 mod runtime_cache;
 mod runtime_crash;
+mod runtime_timers;
 mod samples;
 mod schedules;
 mod search;

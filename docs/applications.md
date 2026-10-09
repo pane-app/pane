@@ -340,22 +340,49 @@ The host extracts and keeps the icons (ADR 0038,
   compiled extension code: `%LOCALAPPDATA%\Pane\cache`,
   `~/Library/Caches/Pane`, `$XDG_CACHE_HOME/pane`), not extension data and
   not a managed copy. Each icon is a PNG (or a Linux theme's SVG) named by
-  a digest of the application's id and its source's fingerprint (the
-  source's path, size and modification time; a packaged app's manifest's),
-  a dark variant beside it, written atomically, with an index
-  (`index.json`). An index that cannot be read, or that an older Pane made
-  (its version records how the images were made: version 2 since icons are
-  cropped to fill their place, 3 since a framed thumbnail is cropped to
-  what its frame holds), is deleted with every image and rebuilt,
-  so every icon is extracted again; images the index does not name are removed. It holds at
-  most 64 MiB and 10,000 icons, the least recently drawn going first.
-  Deleting it loses nothing but the time to extract the icons again.
+  a digest of the application's id and its fingerprint, a dark variant
+  beside it, written atomically, with an index (`index.json`) recording
+  when each was extracted. The fingerprint is the path, size and
+  modification time of the application's source and of the file its
+  picture is read from, since an update often rewrites only that file:
+  - Windows: a shortcut, its own icon location if it names one, and its
+    target program, to which extraction falls back when that location
+    yields no picture (an update rewrites the program, not the shortcut); an
+    internet shortcut and its `IconFile`; a ClickOnce reference and its
+    deployed program; a program alone; a packaged app's manifest and the
+    logo files chosen from it.
+  - macOS: the bundle's `Info.plist` and its icon file, the
+    `CFBundleIconFile` in `Contents/Resources` (`.icns` added when the
+    name has none), else the asset catalog `Contents/Resources/Assets.car`
+    when it names a `CFBundleIconName`.
+  - Linux: the desktop entry and the file its `Icon` resolves to in the
+    icon themes now, so a theme changed or an icon installed is seen too.
+
+  A picture's file that cannot be read counts by its path. An index that
+  cannot be read, or that an older Pane made (its version records how the
+  images were made: version 2 since icons are cropped to fill their place,
+  3 since a framed thumbnail is cropped to what its frame holds), is
+  deleted with every image and rebuilt, so every icon is extracted again;
+  an index of version 3 from before extraction times were recorded is read
+  as it is, every picture in it old, so nothing is lost and it is not
+  rebuilt. Images the index does not name are removed. It holds at most
+  64 MiB and 10,000 icons, the least recently drawn going first. Deleting
+  it loses nothing but the time to extract the icons again.
 - **Refreshing**: a single worker thread at low priority (Windows'
   background mode, a lower `nice` on Linux, the background band on macOS)
-  extracts eight icons at a time. After each start it re-extracts once
-  every application root search lists; an icon a row on screen wants goes
-  first, drawn from the cache at once when its source's fingerprint has
-  not changed, and extracted at once when it has. A failed extraction is
+  looks at eight icons at a time. After each start it looks once at every
+  application root search lists and extracts its icon again only when it
+  is missing, its fingerprint changed, or its picture is older than the
+  refresh age, 7 days (to catch a change no fingerprint sees); an
+  unchanged, younger icon is drawn from the cache and not extracted. An
+  icon a row on screen wants goes first: drawn from the cache at once when
+  its fingerprint has not changed (an old one is then extracted again in
+  the background), and extracted at once when it has. The worker rests
+  after each background batch, one that only read fingerprints too, so the
+  start's look at every application is not a busy loop. On Linux the
+  fingerprints read the user's icon themes (the configuration naming the
+  theme and each theme's `index.theme`) once for every look within 2
+  seconds, not once per application. A failed extraction is
   remembered until the next start, and the row keeps its placeholder (or
   the icon kept from before). Disabling the Applications extension drops
   its applications from the refresh with its results. Extraction never
@@ -483,9 +510,15 @@ and returns `open-application(id)`; only the adapter differs.
   extraction: a row shows its application's own icon, and the placeholder
   until it is extracted, decorative; a packaged app keeps its light and
   dark icons, from the package even when a shortcut is its primary source;
-  after a restart the kept icon draws without extracting and the refresh
-  extracts it once per start, however often root search lists it; a
-  changed source is extracted again at once and its old image removed; a
+  after a restart the kept icon draws without extracting and an unchanged
+  application is not extracted again, however often root search lists it;
+  a changed source is extracted again at once and its old image removed,
+  and in the background after a restart (a shortcut whose target was
+  updated, by its fingerprint); a picture past the refresh age (a test
+  clock) is extracted again in the background while a row draws it from
+  the cache at once, and is young again after; an index from before
+  extraction times draws its pictures at once, without a rebuild, and
+  extracts them again in the background, recording their time; a
   failure keeps the placeholder and is not tried again that start; an
   unreadable cache is rebuilt and stray images removed; the cache is
   bounded by count and by bytes, the least recently drawn going first; a
@@ -498,8 +531,12 @@ and returns `open-application(id)`; only the adapter differs.
   down, a filling icon and an empty one left alone), finding a framed
   thumbnail's content and cropping it without the frame (a synthetic copy
   of Windows' frame, and an opaque light one; a coloured plate, a white
-  plate and a dark fill not taken for a frame), the batch order, the manifest's logo and its variants, the icon
-  theme lookup and an internet shortcut's icon file are unit tests of
+  plate and a dark fill not taken for a frame), the batch order, a
+  fingerprint following the file the picture is read from, the refresh
+  age, an index without extraction times read with every picture old, a
+  bundle's icon file named by its `Info.plist`, the manifest's logo and its
+  variants, the icon theme lookup and the file a desktop entry's icon
+  resolves to, and an internet shortcut's icon file are unit tests of
   `icons`, `appx`, `theme` and the Windows extractor.
 - Icon adapters ([`crates/pane-core/tests/application_icon_adapters.rs`](../crates/pane-core/tests/application_icon_adapters.rs)):
   on every system, a desktop entry's icon is found in a fixture `hicolor`
@@ -507,9 +544,14 @@ and returns `open-application(id)`; only the adapter differs.
   that is not there. On Windows, the command interpreter's icon extracts
   at 256 pixels filling its box; a shortcut whose own icon file holds only
   a 16-pixel image is drawn by a fallback filling its box, and its
-  fingerprint follows the shortcut; an inbox packaged app (Calculator or
-  Settings) yields its light and dark logos. On macOS, Calculator's bundle
-  icon is at least 256 pixels.
+  fingerprint follows the shortcut; a shortcut's fingerprint changes when
+  its target program is updated in place, the shortcut untouched, and,
+  with an icon location of its own, when that icon file or the target
+  changes; an inbox
+  packaged app (Calculator or Settings) yields its light and dark logos,
+  its fingerprint covering its manifest and the logo drawn. On macOS,
+  Calculator's bundle icon is at least 256 pixels, its fingerprint
+  covering its `Info.plist` and its icon file in `Contents/Resources`.
 - Window ([`crates/pane/tests/application_icons.rs`](../crates/pane/tests/application_icons.rs)):
   an application's row draws the placeholder bare while its icon is held
   back, then its own icon in the same box, the dark file in the dark theme
@@ -635,10 +677,19 @@ and returns `open-application(id)`; only the adapter differs.
   applications yet, as when only a pinned slot shows one), finding what an
   icon is extracted from scans the system's folders without keeping or
   watching them.
-  The first refresh after a start extracts every application's icon once
-  in the background (Raycast measured about 7 seconds for about 125
-  icons); the timing on Pane's runners is to be recorded with the resource
-  measurements.
+  The first start, or the first after an upgrade from a Pane without
+  extraction times, extracts every application's icon once in the
+  background (Raycast measured about 7 seconds for about 125 icons); the
+  timing on Pane's runners is to be recorded with the resource
+  measurements. Every later start reads each listed application's
+  fingerprint (on Windows a shortcut is read through the shell for its
+  icon location and target) and extracts only what changed or grew old,
+  so the pictures of the applications whose icons did not change are
+  extracted again about once a week. A change that touches neither the
+  source nor the file its picture is read from (a shell icon handler
+  drawing differently, a Linux theme's file replaced with one of the same
+  size and time) shows within the refresh age, or at once after deleting
+  the cache.
 - The adapters trust the host's own listing: `open` accepts any existing
   shortcut, bundle or desktop entry path, which any trusted extension could
   pass (Q9's trust model).

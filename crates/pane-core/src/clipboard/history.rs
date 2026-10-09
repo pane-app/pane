@@ -12,11 +12,26 @@
 //!
 //! Changes are made in memory under the store's lock and written after it
 //! is released, so a copy never waits for another's write while holding it,
-//! and a write never holds up a capture. Writes are made one at a time, and
-//! a write older than the last one written is skipped, so the file always
-//! ends with the latest state. A change is on disk once the call that made
-//! it returns; a crash before that loses it (the file is replaced
-//! atomically, so it holds the state before or after, never a torn one).
+//! and a write never holds up a capture. Writes are made one at a time, each
+//! of the history as it is then, so the file always ends with the latest
+//! state. The file is replaced atomically, so it holds the state before or
+//! after a change, never a torn one, and it is written compactly.
+//!
+//! Writes are batched (#192). What a copy keeps and what expires is written
+//! by the store's own thread ([`HistoryStore::keep_expiring`])
+//! [`WRITE_DELAY`] after the first change not written yet, together with
+//! every change made meanwhile, so a burst of copies is one write. A change
+//! a command makes (deleting, clearing, pausing, a retention) and a removal
+//! are written before their call returns, with whatever waited, since the
+//! command reports a failure to write. A clean quit and the system's
+//! session end write what waits ([`HistoryStore::flush`]); a crash loses
+//! what was copied less than [`WRITE_DELAY`] before it. A store whose
+//! thread does not run (one no launcher keeps) writes every change at once.
+//!
+//! Every change counts ([`HistoryStore::changes`]): a copy kept, a deletion,
+//! a choice changed, an expiry. A reader that keeps what it made of the
+//! history reads it again only once the count moved, as the launcher keeps
+//! the Clipboard History view's records (`launcher::clipboard_view`).
 //!
 //! Items expire: each is kept for its package's retention after it was
 //! copied ([`PackageHistory::retention`]), by the store's [`Clock`]. Every
@@ -30,11 +45,13 @@
 //! An image item names its PNG by the PNG's SHA-256; the PNG is kept in
 //! `clipboard-images/<owner>/<digest>.png` beside the file (the owner's
 //! folder named as its web images are), readable by the user only, as the
-//! file is. It is written before the item is, and every write of the file
-//! then deletes the PNGs no item names any more
-//! ([`HistoryStore::prune_images`]): those of items that expired, were
-//! deleted or cleared, or dropped past [`MAX_ITEMS`], and an owner's whole
-//! folder once its history is removed. A files item keeps only the paths.
+//! file is. It is written before the item is. Once an item holding an image
+//! went — it expired, was deleted or cleared, or dropped past
+//! [`MAX_ITEMS`], or its history was removed — the next write of the file
+//! deletes the PNGs no item names any more, and an owner's whole folder
+//! left with none ([`HistoryStore::prune_images`]); a write that took no
+//! image away leaves the folder alone. The sweep when Pane starts deletes
+//! those a capture left behind. A files item keeps only the paths.
 //!
 //! On Windows each item's text and files are written encrypted (#130, see
 //! `protection`), in version 2 of the file:
@@ -61,8 +78,9 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -220,10 +238,12 @@ impl Item {
     }
 
     /// Encrypts its text and files for the file, once, where this system
-    /// protects clipboard history (#130); nothing elsewhere.
-    fn seal(&self) -> Result<(), String> {
+    /// protects clipboard history (#130); nothing elsewhere. Says whether
+    /// it encrypted them now, rather than reusing what an earlier write
+    /// made.
+    fn seal(&self) -> Result<bool, String> {
         if !protection::PROTECTS || self.sealed.stored.get().is_some() {
-            return Ok(());
+            return Ok(false);
         }
         let copy = SealedCopy {
             text: self.text.clone(),
@@ -233,7 +253,7 @@ impl Item {
         // A write on another thread may have sealed it meanwhile: either
         // holds the same.
         let _ = self.sealed.stored.set(Stored::protect(&copy)?);
-        Ok(())
+        Ok(true)
     }
 
     /// Decrypts the text and files the file held protected, once read
@@ -555,6 +575,30 @@ impl HistoryJson {
             .flat_map(|history| history.items.iter())
     }
 
+    /// The images its items name, by their owner and digest.
+    fn images(&self) -> BTreeSet<(String, String)> {
+        self.packages
+            .iter()
+            .flat_map(|(owner, history)| {
+                history.items.iter().filter_map(move |item| {
+                    let image = item.image.as_ref()?;
+                    Some((owner.clone(), image.digest.clone()))
+                })
+            })
+            .collect()
+    }
+
+    /// Whether an item of `owner` holds the image with `digest`.
+    fn names_image(&self, owner: &str, digest: &str) -> bool {
+        self.packages.get(owner).is_some_and(|history| {
+            history.items.iter().any(|item| {
+                item.image
+                    .as_ref()
+                    .is_some_and(|image| image.digest == digest)
+            })
+        })
+    }
+
     /// Decrypts every item read protected ([`Item::open`]).
     fn open_items(&mut self) {
         for history in self.packages.values_mut() {
@@ -574,18 +618,22 @@ impl HistoryJson {
                 || self.items().any(|item| item.sealed.stored.get().is_none()))
     }
 
-    /// The file's text, its items protected where this system protects
-    /// clipboard history (#130): version 2 there, or where an item is
-    /// protected (as one written on Windows and read elsewhere, which is
-    /// kept as it was); version 1 otherwise. An item that cannot be
-    /// protected there is left out of this write, with a diagnostic, and
+    /// The file's text, written compactly, its items protected where this
+    /// system protects clipboard history (#130): version 2 there, or where
+    /// an item is protected (as one written on Windows and read elsewhere,
+    /// which is kept as it was); version 1 otherwise. An item that cannot
+    /// be protected there is left out of this write, with a diagnostic, and
     /// never written as it is; it stays in memory, and the next write tries
-    /// again. The rest, deletions included, is written.
-    fn to_json(&self) -> Result<String, String> {
+    /// again. The rest, deletions included, is written. Also says how many
+    /// items were encrypted for it: those never written before, since a
+    /// written item's protected bytes are reused.
+    fn to_json(&self) -> Result<(String, u64), String> {
+        let mut sealed = 0;
         let mut failed = None;
         for item in self.items() {
-            if let Err(why) = item.seal() {
-                failed = Some(why);
+            match item.seal() {
+                Ok(now) => sealed += u64::from(now),
+                Err(why) => failed = Some(why),
             }
         }
         let sealed_only: BTreeMap<String, PackageHistory>;
@@ -619,26 +667,50 @@ impl HistoryJson {
             },
             packages,
         };
-        serde_json::to_string_pretty(&file).map_err(|error| error.to_string())
+        let text = serde_json::to_string(&file).map_err(|error| error.to_string())?;
+        Ok((text, sealed))
     }
 }
 
-/// Writes `file` to `path`, as [`HistoryJson::to_json`] makes it.
-fn write_file(path: &Path, file: &HistoryJson) -> io::Result<()> {
-    let text = file.to_json().map_err(io::Error::other)?;
-    write_atomically(path, text.as_bytes(), Readers::OwnerOnly)
+/// Writes `file` to `path`, as [`HistoryJson::to_json`] makes it; returns
+/// how many items were encrypted for it.
+fn write_file(path: &Path, file: &HistoryJson) -> io::Result<u64> {
+    let (text, sealed) = file.to_json().map_err(io::Error::other)?;
+    write_atomically(path, text.as_bytes(), Readers::OwnerOnly)?;
+    Ok(sealed)
 }
+
+/// How long what a copy keeps, or what expires, waits before it is written,
+/// with every change made meanwhile (#192, proposed): a burst of copies is
+/// written once. A crash loses a copy made less than this before it.
+pub(crate) const WRITE_DELAY: Duration = Duration::from_millis(500);
 
 /// The longest the expiry thread waits before looking again, so that a
 /// change of the system's time, or a computer waking from sleep, delays an
 /// expiry on disk by at most this much (what is read is always expired).
 const MAX_EXPIRY_WAIT: Duration = Duration::from_secs(3600);
 
+/// The longest the store's thread waits before trying again a write that
+/// failed ([`retry_delay`]).
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(60);
+
+/// How long the store's thread waits before trying again a write that
+/// failed, after `failed` failures in a row: [`WRITE_DELAY`], doubled with
+/// each failure after the first, at most [`MAX_RETRY_DELAY`].
+fn retry_delay(failed: u32) -> Duration {
+    let doubled = 2u32.saturating_pow(failed.saturating_sub(1).min(16));
+    WRITE_DELAY.saturating_mul(doubled).min(MAX_RETRY_DELAY)
+}
+
 /// The file as Pane last read or changed it.
 struct State {
     file: Result<HistoryJson, String>,
-    /// Counts changes, so that an older write is never made after a newer.
+    /// Counts changes, so that a write knows whether the file holds the
+    /// latest (see the store's `written`).
     changes: u64,
+    /// Counts changes and every time the file was read again: what
+    /// [`HistoryStore::changes`] tells a reader.
+    version: u64,
     /// Counts the times items were deleted (Clear, deleting items, turning
     /// history off and deleting it, uninstall): a capture that began
     /// reading before one keeps nothing (see [`Ticket`]). Expiry is not
@@ -646,10 +718,25 @@ struct State {
     ///
     /// [`Ticket`]: super::Ticket
     deletions: u64,
+    /// Whether an item holding an image went since the file was last
+    /// written: the next write then prunes the PNGs no item names.
+    images_went: bool,
+    /// When the changes not written yet are written by the store's thread,
+    /// while some wait ([`WRITE_DELAY`] after the first).
+    due: Option<Instant>,
+    /// How many writes failed in a row: the store's thread tries again
+    /// after a pause that doubles with each ([`retry_delay`]).
+    failed_writes: u32,
 }
+
+/// Gives every store opened its own [`HistoryStore::id`].
+static NEXT_STORE: AtomicU64 = AtomicU64::new(1);
 
 /// Every package's clipboard history, kept in one file.
 pub(crate) struct HistoryStore {
+    /// Tells this store from every other opened in this process, whose
+    /// count of changes also began at 0 ([`HistoryStore::id`]).
+    id: u64,
     path: PathBuf,
     /// The folder of the kept images' PNGs ([`IMAGES_DIR`]).
     images: PathBuf,
@@ -657,18 +744,19 @@ pub(crate) struct HistoryStore {
     /// folder and digest: not yet named by an item, and not to be pruned.
     pending_images: Mutex<HashSet<(String, String)>>,
     state: Mutex<State>,
-    /// The number of the last change written, held while writing.
+    /// The number of the last change written, held while writing (always
+    /// before the state's lock, never after).
     written: Mutex<u64>,
     /// Tells when items expire.
     clock: Mutex<Arc<dyn Clock>>,
-    /// Wakes the thread that removes expired items, if it runs.
+    /// Wakes the thread that removes expired items and writes the batched
+    /// changes, if it runs.
     wake: Arc<Wake>,
-}
-
-/// A change made in memory, to be written once the store is unlocked.
-pub(crate) struct Pending {
-    change: u64,
-    file: HistoryJson,
+    /// How many times the file was written, for tests.
+    writes: AtomicU64,
+    /// How many items were encrypted to be written (#130), for tests: each
+    /// once, however many times the file is written after.
+    protected: AtomicU64,
 }
 
 /// A package's change made in memory by [`HistoryStore::stage`], with its
@@ -678,14 +766,16 @@ pub(crate) struct Staged<R> {
     capture_changed: bool,
     /// Whether the change changed the package's history.
     changed: bool,
-    /// The write of the change; or, when it failed or changed nothing, the
-    /// write removing what expired meanwhile, if anything did.
-    pending: Option<Pending>,
+    /// Whether items expired meanwhile, which is a change to write even
+    /// when the change itself failed or changed nothing.
+    expired: bool,
 }
 
 impl Drop for HistoryStore {
     fn drop(&mut self) {
         self.wake.stop();
+        // Nothing that waits in a batch goes with the store.
+        self.flush();
     }
 }
 
@@ -699,28 +789,40 @@ impl HistoryStore {
     pub fn open(dir: &Path) -> HistoryStore {
         let path = dir.join(FILE);
         let file = read(&path);
+        let mut protected = 0;
         if let Ok(held) = &file
             && held.holds_unprotected()
-            && let Err(error) = write_file(&path, held)
         {
-            crate::diagnostic!(
-                "Pane could not protect the clipboard history in {}: {error}. It reads it as it is \
-                 and tries again when it next starts.",
-                path.display()
-            );
+            match write_file(&path, held) {
+                Ok(sealed) => protected = sealed,
+                Err(error) => {
+                    crate::diagnostic!(
+                        "Pane could not protect the clipboard history in {}: {error}. It reads it \
+                         as it is and tries again when it next starts.",
+                        path.display()
+                    );
+                }
+            }
         }
         HistoryStore {
+            id: NEXT_STORE.fetch_add(1, Ordering::Relaxed),
             path,
             images: dir.join(IMAGES_DIR),
             pending_images: Mutex::new(HashSet::new()),
             state: Mutex::new(State {
                 file,
                 changes: 0,
+                version: 0,
                 deletions: 0,
+                images_went: false,
+                due: None,
+                failed_writes: 0,
             }),
             written: Mutex::new(0),
             clock: Mutex::new(Arc::new(SystemClock)),
             wake: Arc::new(Wake::default()),
+            writes: AtomicU64::new(0),
+            protected: AtomicU64::new(protected),
         }
     }
 
@@ -825,26 +927,28 @@ impl HistoryStore {
         }
     }
 
-    /// Deletes the kept images' PNGs that no item of `file` names, except
-    /// those of a capture in progress, and the folder of an owner left
-    /// with none: run after each write of the file and each sweep, so an
-    /// image goes with its item, however the item went (expired, deleted,
-    /// cleared, dropped past [`MAX_ITEMS`], its history removed). A failure
-    /// is reported on standard error; the next write tries again.
-    fn prune_images(&self, file: &HistoryJson) {
+    /// Deletes the kept images' PNGs that no item names — neither of
+    /// `written`, the file just written, nor of the history as it is now —
+    /// except those of a capture in progress, and the folder of an owner
+    /// left with none. Run after a write that follows an image item's
+    /// going, however it went (expired, deleted, cleared, dropped past
+    /// [`MAX_ITEMS`], its history removed), and by the sweep when Pane
+    /// starts, for those a capture left behind; never otherwise (#192). A
+    /// failure is reported on standard error, and the next write tries
+    /// again.
+    fn prune_images(&self, written: Option<&HistoryJson>) {
         let Ok(folders) = fs::read_dir(&self.images) else {
             return;
         };
-        let mut named: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
-        for (owner, history) in &file.packages {
-            let digests = named.entry(HistoryStore::image_folder(owner)).or_default();
-            for item in &history.items {
-                if let Some(image) = &item.image {
-                    digests.insert(image.digest.as_str());
-                }
-            }
+        let mut named: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        if let Some(file) = written {
+            name_images(&mut named, file);
+        }
+        if let Ok(file) = &self.lock().file {
+            name_images(&mut named, file);
         }
         let pending = self.pending_images().clone();
+        let mut failed = false;
         for folder in folders.flatten() {
             let name = folder.file_name().to_string_lossy().into_owned();
             let Ok(images) = fs::read_dir(folder.path()) else {
@@ -866,12 +970,13 @@ impl HistoryStore {
                     .unwrap_or_default();
                 let kept = named
                     .get(&name)
-                    .is_some_and(|digests| digests.contains(digest.as_str()))
+                    .is_some_and(|digests| digests.contains(&digest))
                     || pending.contains(&(name.clone(), digest));
                 if kept {
                     left += 1;
                 } else if let Err(error) = fs::remove_file(&path) {
                     left += 1;
+                    failed = true;
                     crate::diagnostic!(
                         "Pane could not delete a clipboard image no longer kept, {}: {error}",
                         path.display()
@@ -882,33 +987,69 @@ impl HistoryStore {
                 let _ = fs::remove_dir(folder.path());
             }
         }
+        if failed {
+            self.lock().images_went = true;
+        }
     }
 
-    /// The state with every expired item removed, and the write that
-    /// removes them from the file too, if any expired.
-    fn expired(&self) -> (MutexGuard<'_, State>, Option<Pending>) {
+    /// The state with every expired item removed, and whether any expired:
+    /// a change, which the caller has written ([`HistoryStore::queue`])
+    /// once it let go of the state.
+    fn expired(&self) -> (MutexGuard<'_, State>, bool) {
         let now = self.now();
         let mut state = self.lock();
-        let pending = state.expire(now);
-        (state, pending)
+        let expired = state.expire(now);
+        (state, expired)
     }
 
     /// The history of `owner`, without the items that expired, or why it
     /// cannot be read.
     pub fn get(&self, owner: &str) -> Result<PackageHistory, String> {
-        let (history, pending) = {
-            let (state, pending) = self.expired();
-            let file = state.file.as_ref().map_err(Clone::clone)?;
-            (
+        self.get_counted(owner).1
+    }
+
+    /// How many times the history changed, or its file was read again,
+    /// since the store was opened, once the items that expired by now are
+    /// removed (which is a change too): a copy kept, a deletion, a choice
+    /// changed, an expiry. What was read of the history at one count is
+    /// what is read at the same count, so a reader that keeps what it made
+    /// of it (the Clipboard History view's records) reads again only once
+    /// the count moved. Clones nothing.
+    pub fn changes(&self) -> u64 {
+        let (version, expired) = {
+            let (state, expired) = self.expired();
+            (state.version, expired)
+        };
+        if expired {
+            self.queue();
+        }
+        version
+    }
+
+    /// Identifies this store among those opened in this process: a count
+    /// of changes ([`HistoryStore::changes`]) means something only with
+    /// the store it was read from, since each store's begins at 0.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// The history of `owner` as [`HistoryStore::get`] reads it, with the
+    /// count of changes ([`HistoryStore::changes`]) it was read at.
+    pub fn get_counted(&self, owner: &str) -> (u64, Result<PackageHistory, String>) {
+        let (version, history, expired) = {
+            let (state, expired) = self.expired();
+            let history = state.file.as_ref().map_err(Clone::clone).map(|file| {
                 file.packages
                     .get(owner)
                     .cloned()
-                    .unwrap_or_else(|| fresh(owner)),
-                pending,
-            )
+                    .unwrap_or_else(|| fresh(owner))
+            });
+            (state.version, history, expired)
         };
-        self.write_logged(pending);
-        Ok(history)
+        if expired {
+            self.queue();
+        }
+        (version, history)
     }
 
     /// The owners whose capture is on: those the file says so of, and Pane's
@@ -967,7 +1108,7 @@ impl HistoryStore {
                     answer,
                     capture_changed: false,
                     changed: false,
-                    pending: expired,
+                    expired,
                 });
             }
         };
@@ -976,7 +1117,7 @@ impl HistoryStore {
         }
         history.expire(now);
         let capture_changed = history.capture != before.capture;
-        let pending = state.change(|file| {
+        state.change(|file| {
             if forgettable(owner, &history) {
                 file.packages.remove(owner);
             } else {
@@ -987,23 +1128,24 @@ impl HistoryStore {
             answer: Ok(answer),
             capture_changed,
             changed: true,
-            pending: Some(pending),
+            expired,
         })
     }
 
     /// Writes what [`HistoryStore::stage`] changed, if anything, before
-    /// returning its answer and whether the capture state changed. What
-    /// only expired is written as the expiry thread writes it: a failure
-    /// is reported on standard error, not to the change.
+    /// returning its answer and whether the capture state changed: the
+    /// history as it is then, with whatever waited in a batch. What only
+    /// expired is batched as the expiry thread's removals are: a failure is
+    /// reported on standard error, not to the change.
     pub fn write_staged<R>(&self, staged: Staged<R>) -> Result<(R, bool), String> {
         if !staged.changed {
-            self.write_logged(staged.pending);
+            if staged.expired {
+                self.queue();
+            }
             return staged.answer.map(|answer| (answer, false));
         }
-        if let Some(pending) = staged.pending {
-            self.write(pending)
-                .map_err(|error| format!("Could not save the clipboard history: {error}"))?;
-        }
+        self.write_now()
+            .map_err(|error| format!("Could not save the clipboard history: {error}"))?;
         self.wake.poke();
         staged.answer.map(|answer| (answer, staged.capture_changed))
     }
@@ -1021,17 +1163,18 @@ impl HistoryStore {
     }
 
     /// Changes every history `change` asks to, given the time now, if items
-    /// were not deleted since `deletions`, then writes them; a failed write
-    /// is reported on standard error, never with what was copied.
+    /// were not deleted since `deletions`; the change is written in a batch
+    /// ([`WRITE_DELAY`]), and a failed write is reported on standard error,
+    /// never with what was copied.
     pub fn capture(
         &self,
         deletions: u64,
         change: impl FnOnce(&mut BTreeMap<String, PackageHistory>, u64) -> bool,
     ) {
         let now = self.now();
-        let (pending, changed) = {
+        let (changed, expired) = {
             let (mut state, expired) = self.expired();
-            match &state.file {
+            let changed = match &state.file {
                 Ok(file) if state.deletions == deletions => {
                     let mut packages = file.packages.clone();
                     // Pane's own Clipboard History records while the file
@@ -1041,7 +1184,8 @@ impl HistoryStore {
                         let history = fresh(&default);
                         packages.insert(default.clone(), history);
                     }
-                    if change(&mut packages, now) {
+                    let changed = change(&mut packages, now);
+                    if changed {
                         // Kept only once it keeps something: a package that
                         // is not installed leaves no entry behind.
                         if packages
@@ -1050,28 +1194,33 @@ impl HistoryStore {
                         {
                             packages.remove(&default);
                         }
-                        (Some(state.change(|file| file.packages = packages)), true)
-                    } else {
-                        (expired, false)
+                        state.change(|file| file.packages = packages);
                     }
+                    changed
                 }
-                _ => (expired, false),
-            }
+                _ => false,
+            };
+            (changed, expired)
         };
-        self.write_logged(pending);
-        if changed {
+        // The thread is told once: of the batch, and of a copy, which may
+        // change when the next item expires.
+        let first = (changed || expired) && self.batch();
+        if first || changed {
             self.wake.poke();
         }
     }
 
-    /// Removes the history of `owner`, and nothing else; the file is read
-    /// again first if it could not be read before, so one the user repaired
-    /// is used without restarting Pane. On failure nothing is removed.
+    /// Removes the history of `owner`, and nothing else, and writes the
+    /// file before it returns; the file is read again first if it could not
+    /// be read before, so one the user repaired is used without restarting
+    /// Pane. On failure nothing is removed.
     pub fn remove(&self, owner: &str) -> Result<(), Removal> {
-        let pending = {
+        {
             let mut state = self.lock();
             if state.file.is_err() {
                 state.file = read(&self.path);
+                // What a reader made of the history may be out of date.
+                state.version += 1;
             }
             let file = state
                 .file
@@ -1085,16 +1234,18 @@ impl HistoryStore {
             state.deletions += 1;
             state.change(|file| {
                 file.packages.remove(owner);
-            })
-        };
-        self.write(pending)
+            });
+        }
+        self.write_now()
             .map_err(|error| Removal::Unwritable(self.path.clone(), error))
     }
 
     /// How many unexpired items each owner keeps, read from the file now
     /// (an owner that keeps only its choices counts 0), or why it cannot be
-    /// read.
+    /// read. What waits in a batch is written first, so the file holds what
+    /// Pane keeps.
     pub fn counts_now(&self) -> Result<BTreeMap<String, usize>, String> {
+        self.flush();
         let now = self.now();
         // Counted without decrypting any item (#130).
         Ok(read_unopened(&self.path)?
@@ -1107,40 +1258,55 @@ impl HistoryStore {
             .collect())
     }
 
-    /// Removes every expired item of every package, from the file too;
-    /// returns when the next item expires, if any is kept.
+    /// Removes every expired item of every package, from the file too (in
+    /// a batch), and the images a capture left behind (Pane stopped
+    /// between writing a PNG and its item): as Pane starts. Returns when
+    /// the next item expires, if any is kept.
     pub fn sweep(&self) -> Option<u64> {
-        let (next, pending) = {
-            let (state, pending) = self.expired();
+        let next = self.expire_now();
+        self.prune_images(None);
+        next
+    }
+
+    /// Removes every expired item of every package, its write batched;
+    /// returns when the next item expires, if any is kept.
+    fn expire_now(&self) -> Option<u64> {
+        let (next, expired) = {
+            let (state, expired) = self.expired();
             let next = state.file.as_ref().ok().and_then(|file| {
                 file.packages
                     .values()
                     .filter_map(PackageHistory::next_expiry)
                     .min()
             });
-            (next, pending)
+            (next, expired)
         };
-        self.write_logged(pending);
-        // Images a capture left behind (Pane stopped between writing a PNG
-        // and its item) go too.
-        let file = self.lock().file.clone();
-        if let Ok(file) = file {
-            self.prune_images(&file);
+        if expired {
+            self.queue();
         }
         next
     }
 
-    /// Removes expired items on a thread of its own while this store is
-    /// kept: whenever an item expires (or at least every
-    /// [`MAX_EXPIRY_WAIT`]), whether its package runs or not. The thread
-    /// ends once the store is dropped.
+    /// Removes expired items, and writes the batched changes, on a thread
+    /// of its own while this store is kept: whenever an item expires (or
+    /// at least every [`MAX_EXPIRY_WAIT`]), whether its package runs or
+    /// not, and [`WRITE_DELAY`] after a change waits to be written. The
+    /// thread ends once the store is dropped. Until it runs, and if it
+    /// ended (as by a panic), every change is written at once.
     pub fn keep_expiring(self: &Arc<Self>) {
         let store = Arc::downgrade(self);
         let wake = self.wake.clone();
+        // Noted before it starts, so that its end, however early, is noted
+        // after.
+        self.wake.run();
         let started = std::thread::Builder::new()
             .name("pane-clipboard-expiry".into())
-            .spawn(move || expire_until_dropped(&store, &wake));
+            .spawn(move || {
+                let _ended = Ended(&wake);
+                expire_until_dropped(&store, &wake);
+            });
         if let Err(error) = started {
+            self.wake.ended();
             crate::diagnostic!("Pane cannot expire clipboard history in the background: {error}");
         }
     }
@@ -1154,11 +1320,98 @@ impl HistoryStore {
         self.wake.wait_swept(limit)
     }
 
-    /// Writes `pending`, if any, reporting a failure on standard error.
-    fn write_logged(&self, pending: Option<Pending>) {
-        if let Some(pending) = pending
-            && let Err(error) = self.write(pending)
-        {
+    /// Waits until nothing waits to be written: the store's thread wrote
+    /// the batch, its [`WRITE_DELAY`] after the first change in it (or a
+    /// command, a clean quit or a count wrote it before); `false` if it did
+    /// not within `limit`. For tests and development builds, which so wait
+    /// for the batched write without timing it.
+    #[cfg(any(test, debug_assertions))]
+    pub fn wait_written(&self, limit: Duration) -> bool {
+        let deadline = Instant::now() + limit;
+        loop {
+            let seen = self.wake.writes();
+            if !self.waiting() {
+                return true;
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            self.wake.wait_write(seen, left);
+        }
+    }
+
+    /// Whether a change is not written yet.
+    #[cfg(any(test, debug_assertions))]
+    fn waiting(&self) -> bool {
+        let written = *self
+            .written
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let state = self.lock();
+        state.due.is_some() || (state.file.is_ok() && state.changes > written)
+    }
+
+    /// How many times the file was written since the store was opened, the
+    /// conversion of an earlier Pane's file aside: for tests, which so see
+    /// that a burst of changes is written once.
+    #[cfg(any(test, debug_assertions))]
+    pub fn writes(&self) -> u64 {
+        self.writes.load(Ordering::Relaxed)
+    }
+
+    /// How many items were encrypted to be written since the store was
+    /// opened (#130): for tests, which so see that an item is encrypted
+    /// once, however many writes follow. 0 where nothing is protected.
+    #[cfg(any(test, debug_assertions))]
+    pub fn items_protected(&self) -> u64 {
+        self.protected.load(Ordering::Relaxed)
+    }
+
+    /// Has what changed written: by the store's thread, [`WRITE_DELAY`]
+    /// after the first change not written yet, with every change made
+    /// meanwhile; at once while that thread does not run.
+    fn queue(&self) {
+        if self.batch() {
+            self.wake.poke();
+        }
+    }
+
+    /// What [`HistoryStore::queue`] does but telling the store's thread:
+    /// returns whether it is to be told, the change being the first of its
+    /// batch. Writes at once, and returns `false`, while the thread does
+    /// not run.
+    fn batch(&self) -> bool {
+        if !self.wake.running() {
+            self.flush();
+            return false;
+        }
+        let mut state = self.lock();
+        let first = state.due.is_none();
+        if first {
+            state.due = Some(Instant::now() + WRITE_DELAY);
+        }
+        first
+    }
+
+    /// Writes the batch, if its time came; returns when the batch waiting
+    /// then is due, if one is.
+    fn write_due(&self) -> Option<Instant> {
+        let due = self.lock().due?;
+        if due > Instant::now() {
+            return Some(due);
+        }
+        self.flush();
+        // A change made while it wrote waits for its own time.
+        self.lock().due
+    }
+
+    /// Writes now what changed and is not written yet, reporting a failure
+    /// on standard error: what a clean quit and the system's session end do
+    /// (`Launcher::quit_cleanly`), so that nothing waiting in a batch is
+    /// lost, and what the store's thread does when a batch is due.
+    pub fn flush(&self) {
+        if let Err(error) = self.write_now() {
             crate::diagnostic!(
                 "Pane could not save the clipboard history in {}: {error}",
                 self.path.display()
@@ -1166,20 +1419,79 @@ impl HistoryStore {
         }
     }
 
-    /// Writes `pending`, unless a newer change was written meanwhile.
-    fn write(&self, pending: Pending) -> io::Result<()> {
+    /// Writes the history as it is now, if it changed since it was last
+    /// written: whatever waited in a batch goes with it. Once an item
+    /// holding an image went, the images no item names any more go too.
+    fn write_now(&self) -> io::Result<()> {
+        let outcome = self.write_latest();
+        self.wake.wrote();
+        outcome
+    }
+
+    /// What [`HistoryStore::write_now`] does, one write at a time.
+    fn write_latest(&self) -> io::Result<()> {
         let mut written = self
             .written
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if pending.change <= *written {
-            return Ok(());
+        let (change, file, prune) = {
+            let mut state = self.lock();
+            state.due = None;
+            if state.changes <= *written {
+                return Ok(());
+            }
+            let Ok(file) = state.file.clone() else {
+                return Ok(());
+            };
+            let prune = std::mem::take(&mut state.images_went);
+            (state.changes, file, prune)
+        };
+        let outcome = write_file(&self.path, &file);
+        match &outcome {
+            Ok(sealed) => {
+                *written = change;
+                self.writes.fetch_add(1, Ordering::Relaxed);
+                self.protected.fetch_add(*sealed, Ordering::Relaxed);
+                self.lock().failed_writes = 0;
+                if prune {
+                    self.prune_images(Some(&file));
+                }
+            }
+            Err(_) => {
+                // Tried again by the store's thread, if it runs, so that
+                // what failed is not left only in memory: after a pause
+                // that doubles with each failure in a row. (Without it,
+                // the next change, command or clean quit writes it.)
+                let running = self.wake.running();
+                {
+                    let mut state = self.lock();
+                    // The next write prunes them.
+                    state.images_went |= prune;
+                    state.failed_writes = state.failed_writes.saturating_add(1);
+                    if running {
+                        let retry = Instant::now() + retry_delay(state.failed_writes);
+                        state.due = Some(state.due.map_or(retry, |due| due.min(retry)));
+                    }
+                }
+                if running {
+                    self.wake.poke();
+                }
+            }
         }
-        write_file(&self.path, &pending.file)?;
-        *written = pending.change;
-        // The images no item written names any more go with it.
-        self.prune_images(&pending.file);
-        Ok(())
+        outcome.map(|_| ())
+    }
+}
+
+/// Adds the digests of the images `file`'s items name to `named`, by their
+/// owner's folder.
+fn name_images(named: &mut BTreeMap<String, BTreeSet<String>>, file: &HistoryJson) {
+    for (owner, history) in &file.packages {
+        let digests = named.entry(HistoryStore::image_folder(owner)).or_default();
+        for item in &history.items {
+            if let Some(image) = &item.image {
+                digests.insert(image.digest.clone());
+            }
+        }
     }
 }
 
@@ -1205,9 +1517,9 @@ impl KeptImage {
     }
 }
 
-/// The expiry thread: removes expired items, then waits until the next
-/// expires, the history changes or the clock is changed, until the store
-/// is dropped.
+/// The expiry thread: removes expired items and writes the batch once it is
+/// due, then waits until the next item expires, the batch is due, the
+/// history changes or the clock is changed, until the store is dropped.
 fn expire_until_dropped(store: &Weak<HistoryStore>, wake: &Wake) {
     loop {
         let Some(seen) = wake.pokes() else {
@@ -1216,21 +1528,36 @@ fn expire_until_dropped(store: &Weak<HistoryStore>, wake: &Wake) {
         let Some(kept) = store.upgrade() else {
             return;
         };
-        let next = kept.sweep();
+        let next = kept.expire_now();
+        let due = kept.write_due();
         let now = kept.now();
         drop(kept);
         wake.swept(seen);
-        let wait = next.map_or(MAX_EXPIRY_WAIT, |at| {
+        let mut wait = next.map_or(MAX_EXPIRY_WAIT, |at| {
             Duration::from_millis(at.saturating_sub(now)).min(MAX_EXPIRY_WAIT)
         });
+        if let Some(due) = due {
+            wait = wait.min(due.saturating_duration_since(Instant::now()));
+        }
         if !wake.wait(seen, wait) {
             return;
         }
     }
 }
 
+/// Notes, when dropped, that the expiry thread ended, as it does once the
+/// store is dropped, and also if it panicked: [`HistoryStore::queue`] then
+/// writes every change at once rather than waiting for it.
+struct Ended<'a>(&'a Wake);
+
+impl Drop for Ended<'_> {
+    fn drop(&mut self) {
+        self.0.ended();
+    }
+}
+
 /// Wakes the expiry thread when the time the next item expires may have
-/// changed, and stops it.
+/// changed or a batch waits to be written, and stops it.
 #[derive(Default)]
 struct Wake {
     state: Mutex<WakeState>,
@@ -1239,12 +1566,18 @@ struct Wake {
 
 #[derive(Default)]
 struct WakeState {
+    /// Whether the thread was started: until then every change is written
+    /// at once.
+    running: bool,
     stopped: bool,
     pokes: u64,
     /// The pokes seen before the thread's last sweep began, told once that
     /// sweep ended and the thread let go of the store (for tests).
     #[cfg_attr(not(any(test, debug_assertions)), allow(dead_code))]
     swept: u64,
+    /// How many times the file was written, or found written (for tests).
+    #[cfg_attr(not(any(test, debug_assertions)), allow(dead_code))]
+    writes: u64,
 }
 
 impl Wake {
@@ -1262,6 +1595,46 @@ impl Wake {
     fn stop(&self) {
         self.lock().stopped = true;
         self.condvar.notify_all();
+    }
+
+    /// Notes that the thread was started.
+    fn run(&self) {
+        self.lock().running = true;
+    }
+
+    /// Notes that the thread ended, or could not start: every change is
+    /// written at once from now on.
+    fn ended(&self) {
+        self.lock().running = false;
+        self.condvar.notify_all();
+    }
+
+    /// Whether the thread runs: it was started and the store is kept.
+    fn running(&self) -> bool {
+        let state = self.lock();
+        state.running && !state.stopped
+    }
+
+    /// Notes that a write ended (or found nothing to write).
+    fn wrote(&self) {
+        self.lock().writes += 1;
+        self.condvar.notify_all();
+    }
+
+    /// How many writes ended so far.
+    #[cfg(any(test, debug_assertions))]
+    fn writes(&self) -> u64 {
+        self.lock().writes
+    }
+
+    /// Waits at most `limit` for a write after the `seen`th to end.
+    #[cfg(any(test, debug_assertions))]
+    fn wait_write(&self, seen: u64, limit: Duration) {
+        let state = self.lock();
+        let _ = self
+            .condvar
+            .wait_timeout_while(state, limit, |state| state.writes == seen)
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
     }
 
     /// Notes that a sweep that began after `seen` pokes ended.
@@ -1302,31 +1675,49 @@ impl Wake {
 }
 
 impl State {
-    /// Applies `change` to the file in memory, returning it to be written.
-    fn change(&mut self, change: impl FnOnce(&mut HistoryJson)) -> Pending {
+    /// Applies `change` to the file in memory, counting it; the caller has
+    /// it written.
+    fn change(&mut self, change: impl FnOnce(&mut HistoryJson)) {
         let file = self
             .file
             .as_mut()
             .expect("only a file that could be read is changed");
+        // Whether it takes an image away: only then are PNGs pruned. The
+        // images held before are gathered only when some item holds one
+        // (most copies are text), and looked for after without gathering
+        // them again.
+        let images = (!self.images_went && file.items().any(|item| item.image.is_some()))
+            .then(|| file.images());
         change(file);
-        self.changes += 1;
-        Pending {
-            change: self.changes,
-            file: file.clone(),
+        if let Some(images) = images {
+            self.images_went = images
+                .iter()
+                .any(|(owner, digest)| !file.names_image(owner, digest));
         }
+        self.changes += 1;
+        self.version += 1;
     }
 
     /// Removes the items that expired by `now` from every package (and a
-    /// package left with nothing), returning the write that removes them
-    /// from the file, if any expired.
-    fn expire(&mut self, now: u64) -> Option<Pending> {
-        let file = self.file.as_mut().ok()?;
-        let mut expired = 0;
-        file.packages.retain(|owner, history| {
-            expired += history.expire(now);
-            !forgettable(owner, history)
-        });
-        (expired > 0).then(|| self.change(|_| {}))
+    /// package left with nothing); returns whether any expired, which is a
+    /// change to write. Clones nothing when none did.
+    fn expire(&mut self, now: u64) -> bool {
+        let Ok(file) = &self.file else {
+            return false;
+        };
+        let due = file
+            .packages
+            .values()
+            .any(|history| history.next_expiry().is_some_and(|at| at <= now));
+        if due {
+            self.change(|file| {
+                file.packages.retain(|owner, history| {
+                    history.expire(now);
+                    !forgettable(owner, history)
+                });
+            });
+        }
+        due
     }
 }
 
@@ -1456,6 +1847,45 @@ mod tests {
         assert!(!text.contains("secret"), "{text}");
     }
 
+    /// #192: a batched write that failed is tried again by the store's
+    /// thread, so the copy is not left only in memory; and once that thread
+    /// ended, a change is written at once again.
+    #[test]
+    fn a_failed_batched_write_is_tried_again() {
+        assert_eq!(retry_delay(1), WRITE_DELAY);
+        assert_eq!(retry_delay(2), WRITE_DELAY * 2);
+        assert_eq!(retry_delay(u32::MAX), MAX_RETRY_DELAY);
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = store_at(dir.path(), DAY);
+        store.keep_expiring();
+        let own = default_owner();
+        let taken = dir.path().join(FILE).join("taken");
+        fs::create_dir_all(&taken).unwrap();
+        store.capture(store.deletions(), |packages, now| {
+            let history = packages.get_mut(&own).expect("its fresh history");
+            history.add("kept through a failure", None, now);
+            true
+        });
+        // The batch's write ends, failing.
+        store.wake.wait_write(0, Duration::from_secs(300));
+        assert_eq!(store.writes(), 0, "nothing could be written yet");
+        fs::remove_dir_all(dir.path().join(FILE)).unwrap();
+        assert!(store.wait_written(Duration::from_secs(300)), "tried again");
+        assert_eq!(store.writes(), 1);
+        let items = &on_disk(dir.path())["packages"][&own]["items"];
+        assert_eq!(items[0]["text"], "kept through a failure");
+
+        // The thread ended: the next copy is written before `capture`
+        // returns.
+        store.wake.ended();
+        store.capture(store.deletions(), |packages, now| {
+            let history = packages.get_mut(&own).expect("its history");
+            history.add("written at once", None, now);
+            true
+        });
+        assert_eq!(store.writes(), 2);
+    }
+
     #[test]
     fn items_are_newest_first_once_per_text_and_bounded() {
         let mut history = PackageHistory::default();
@@ -1559,6 +1989,10 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(dir.path().join(FILE)).unwrap()).unwrap()
         };
         let first = raw();
+        // Written compactly (#192).
+        let text = fs::read_to_string(dir.path().join(FILE)).unwrap();
+        assert!(!text.contains('\n') && !text.contains(": "), "{text}");
+        assert_eq!(store.items_protected(), u64::from(protection::PROTECTS));
         let item = &first["packages"]["a"]["items"][0];
         assert_eq!(item["copiedAt"], DAY);
         assert_eq!(item["source"], "notepad.exe");
@@ -1578,7 +2012,12 @@ mod tests {
             })
             .unwrap();
         assert_eq!(raw()["packages"]["a"]["items"][1], *item);
-        // Read back after a restart.
+        // Two writes, each item encrypted once: the first one's bytes were
+        // reused, never encrypted again.
+        assert_eq!(store.writes(), 2);
+        assert_eq!(store.items_protected(), 2 * u64::from(protection::PROTECTS));
+        // Read back after a restart (by the same clock, so that nothing
+        // expired).
         let (reopened, _) = store_at(dir.path(), DAY);
         assert_eq!(
             texts(&reopened.get("a").unwrap()),
@@ -1832,6 +2271,98 @@ mod tests {
         assert!(!orphan_path.exists());
     }
 
+    /// #192: a write prunes the images' folder only once an item holding
+    /// an image went; a write that took none away leaves it alone. A PNG
+    /// no item names (as one left behind) shows which writes pruned.
+    #[test]
+    fn images_are_pruned_only_when_an_image_item_goes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, clock) = store_at(dir.path(), DAY);
+        let own = default_owner();
+        let kept = capture_image(&store, &image(1, 2));
+        let stray = kept.with_file_name("0000.png");
+        let leave_stray = || fs::write(&stray, b"not named by any item").unwrap();
+        leave_stray();
+        // Text kept and deleted, a choice changed: the stray PNG stays.
+        store
+            .update(&own, |history| {
+                history.add("text", None, DAY);
+                Ok(())
+            })
+            .unwrap();
+        let text_id = store.get(&own).unwrap().items[0].id;
+        store
+            .update(&own, |history| Ok(history.delete(&[text_id])))
+            .unwrap();
+        store
+            .update(&own, |history| history.set_retention(86_400))
+            .unwrap();
+        assert!(stray.is_file(), "no image went: nothing was pruned");
+        // The same image copied again moves to the front: none went.
+        capture_image(&store, &image(1, 2));
+        assert!(stray.is_file() && kept.is_file());
+        // An image item deleted: its PNG goes, and the stray one with it.
+        let second = capture_image(&store, &image(2, 2));
+        let second_id = store.get(&own).unwrap().items[0].id;
+        store
+            .update(&own, |history| Ok(history.delete(&[second_id])))
+            .unwrap();
+        assert!(!second.exists() && !stray.exists());
+        assert!(kept.is_file());
+        // An image item expired: the same.
+        leave_stray();
+        clock.advance(Duration::from_secs(86_400));
+        assert!(store.get(&own).unwrap().items.is_empty());
+        assert!(!kept.exists() && !stray.exists());
+    }
+
+    /// #192: while the store's thread runs, copies made in a burst are
+    /// written once, [`WRITE_DELAY`] after the first, all of them; a flush
+    /// (a clean quit) writes what waits at once.
+    #[test]
+    fn a_burst_of_copies_is_written_once_and_a_flush_writes_what_waits() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = store_at(dir.path(), DAY);
+        store.keep_expiring();
+        let own = default_owner();
+        let copy = |text: &str| {
+            store.capture(store.deletions(), |packages, now| {
+                let history = packages.get_mut(&own).expect("its fresh history");
+                history.add(text, None, now);
+                true
+            });
+        };
+        let kept_on_disk = || -> Vec<String> {
+            on_disk(dir.path())["packages"][&own]["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item["text"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        let before = store.writes();
+        for text in ["one", "two", "three"] {
+            copy(text);
+        }
+        assert!(store.wait_written(Duration::from_secs(300)));
+        assert_eq!(store.writes(), before + 1, "one write for the burst");
+        assert_eq!(kept_on_disk(), ["three", "two", "one"]);
+        // Read back by another store, as after a restart (by the same
+        // clock, so that nothing expired).
+        let (reopened, _) = store_at(dir.path(), DAY);
+        assert_eq!(texts(&reopened.get(&own).unwrap()), ["three", "two", "one"]);
+        drop(reopened);
+
+        // A flush writes what waits now, without waiting for the delay.
+        copy("four");
+        store.flush();
+        assert_eq!(store.writes(), before + 2);
+        assert_eq!(kept_on_disk(), ["four", "three", "two", "one"]);
+        // Nothing waits any more: the thread's turn writes nothing.
+        assert!(store.wait_written(Duration::from_secs(300)));
+        assert_eq!(store.writes(), before + 2);
+    }
+
     #[test]
     fn a_capture_begun_before_items_were_deleted_keeps_nothing() {
         let dir = tempfile::tempdir().unwrap();
@@ -2025,8 +2556,10 @@ mod tests {
             .unwrap();
         store.keep_expiring();
         clock.advance(std::time::Duration::from_secs(7 * 86_400));
-        // Nothing reads the store: the thread does it once the clock moved.
+        // Nothing reads the store: the thread does it once the clock moved,
+        // and writes it in a batch (#192).
         assert!(store.wait_swept(Duration::from_secs(300)));
+        assert!(store.wait_written(Duration::from_secs(300)));
         let package = &on_disk(dir.path())["packages"]["a"];
         assert_eq!(package["items"], Value::Null);
         // Its ids are not given again.

@@ -2130,13 +2130,13 @@ open_history
 capture 280-clipboard-recording.png
 check 280-clipboard-recording.png hint   # the split view: Today, the two records, the field's placeholder
 history_action 'Pause Recording'
-wait_for "$history" '"capture": "paused"' present
+wait_for "$history" '"capture":"paused"' present
 capture_until 281-clipboard-paused.png success 10   # its toast: "Recording paused"
 copy pane-smoke-paused
 not_kept pane-smoke-paused
 open_history
 history_action 'Resume Recording'
-wait_for "$history" '"capture": "on"' present
+wait_for "$history" '"capture":"on"' present
 copy pane-smoke-resumed
 wait_for "$history" pane-smoke-resumed present
 open_history
@@ -2222,7 +2222,7 @@ capture_until 401-clipboard-item-deleted.png success 10   # its toast: "Deleted 
 [ "$(kept_texts)" = pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-resumed ] || { echo "kept: $(kept_texts)"; exit 1; }
 open_history
 history_action '1 Hour'   # Keep History For: 1 Hour
-wait_for "$history" '"retentionSeconds": 3600' present
+wait_for "$history" '"retentionSeconds":3600' present
 capture_until 402-clipboard-retention-changed.png success 10   # its toast: "History is kept for 1 hour; deleted 1 kept item older"
 [ "$(kept_texts)" = pane-smoke-after-restart,pane-smoke-resumed ] || { echo "kept: $(kept_texts)"; exit 1; }
 copy pane-smoke-final

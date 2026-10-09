@@ -23,21 +23,27 @@
 //!   others.
 //! - **The cache** ([`IconCache`]): image files in Pane's cache folder
 //!   ([`FOLDER`]), keyed by the application's id and a fingerprint of its
-//!   source (its path, size and modification time), each written
-//!   atomically, with an index of them. An index that cannot be read is
-//!   deleted with every image and rebuilt; files the index does not name
-//!   are removed. It holds at most [`MAX_BYTES`] and [`MAX_ICONS`], the
-//!   least recently drawn going first. Deleting it loses nothing but the
-//!   time to extract the icons again.
+//!   source and of the file its picture is read from (each one's path, size
+//!   and modification time, [`sources_fingerprint`]: a shortcut's icon
+//!   location or else its target, a packaged app's logo, a bundle's icon
+//!   file, a desktop entry's themed icon), each written atomically, with an
+//!   index of them recording when each was extracted. An index that cannot
+//!   be read is deleted with every image and rebuilt; one an earlier Pane
+//!   wrote without extraction times is read with every picture old. Files
+//!   the index does not name are removed. It holds at most [`MAX_BYTES`]
+//!   and [`MAX_ICONS`], the least recently drawn going first. Deleting it
+//!   loses nothing but the time to extract the icons again.
 //! - **Refreshing**: one worker thread at low priority extracts a small
-//!   batch at a time ([`BATCH`]). After each start it re-extracts every
-//!   listed application's icon once; an icon a row on screen wants goes
-//!   first, drawn from the cache at once when its source has not changed
-//!   and extracted at once when it has. A failed extraction is remembered
-//!   for the session, and the row keeps its placeholder (or the icon kept
-//!   from before). Extraction never runs on the window's thread or the
-//!   extension runtime's: asking what an icon shows only looks at what is
-//!   kept.
+//!   batch at a time ([`BATCH`]). After each start it looks once at every
+//!   listed application's icon and extracts it again only when it is
+//!   missing, its fingerprint changed, or its picture is older than
+//!   [`REFRESH_AGE`]; an icon a row on screen wants goes first, drawn from
+//!   the cache at once when its fingerprint has not changed (an old one is
+//!   then extracted again in the background) and extracted at once when it
+//!   has. A failed extraction is remembered for the session, and the row
+//!   keeps its placeholder (or the icon kept from before). Extraction never
+//!   runs on the window's thread or the extension runtime's: asking what an
+//!   icon shows only looks at what is kept.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -46,6 +52,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::clipboard::{Clock, SystemClock};
 use crate::system_icons::{ICON_SIZE, SystemIcon};
 
 pub mod appx;
@@ -73,6 +80,12 @@ pub const CHECKED_ABOVE: u32 = 48;
 /// on screen want.
 pub const BATCH: usize = 8;
 
+/// How old a kept picture may grow before the background refresh extracts
+/// it again although its fingerprint has not changed: a change no
+/// fingerprint sees (the system drawing the same file differently) is
+/// caught within a week.
+pub const REFRESH_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
 /// The alpha above which a pixel is visible content ([`covers_enough`]).
 const VISIBLE_ALPHA: u8 = 16;
 
@@ -99,7 +112,9 @@ const INDEX: &str = "index.json";
 /// The index's format, and how its images were made: 2 since they are
 /// cropped to fill their place ([`fill_its_place`]), 3 since a framed
 /// thumbnail's content is found within its frame ([`frame`]), so that the
-/// icons a Pane before that kept are extracted again.
+/// icons a Pane before that kept are extracted again. When each picture was
+/// extracted ([`Kept::extracted`]) was added within 3: an index without it
+/// is read, its pictures old, not rebuilt.
 const INDEX_VERSION: u32 = 3;
 
 /// An icon whose visible content spans at least this share of its canvas,
@@ -470,9 +485,11 @@ impl Extracted {
 /// a test's.
 pub trait IconExtractor: Send + Sync + 'static {
     /// What the source at `source` (an application's primary source path,
-    /// [`super::Applications::icon_source`]) is now: when it changes, the
-    /// icon kept for it is extracted again at once. `None` when it cannot
-    /// be read, which extracts again on every start like an unchanged one.
+    /// [`super::Applications::icon_source`]) and the file its picture is
+    /// read from are now: when it changes, the icon kept for it is
+    /// extracted again. `None` when it cannot be read, which is taken as
+    /// unchanged: the icon is extracted again once its picture is old
+    /// ([`REFRESH_AGE`]).
     fn fingerprint(&self, source: &str) -> Option<String> {
         file_fingerprint(Path::new(source))
     }
@@ -499,6 +516,54 @@ pub fn file_fingerprint(path: &Path) -> Option<String> {
     ))
 }
 
+/// The fingerprint of an application's icon whose source is the file at
+/// `source` and whose picture is read from `pictures` (a shortcut's icon
+/// location or target, a packaged app's logos, a bundle's icon file, a
+/// desktop entry's themed icon): each file's [`file_fingerprint`], so that
+/// a change to any of them extracts the icon again, though the source
+/// itself did not change. A picture's file that cannot be read counts by
+/// its path, so that its appearing changes the fingerprint too. `None` when
+/// the source cannot be read.
+pub fn sources_fingerprint(source: &Path, pictures: &[PathBuf]) -> Option<String> {
+    let mut fingerprint = file_fingerprint(source)?;
+    for picture in pictures
+        .iter()
+        .filter(|picture| picture.as_path() != source)
+    {
+        fingerprint.push_str("\n\n");
+        match file_fingerprint(picture) {
+            Some(file) => fingerprint.push_str(&file),
+            None => fingerprint.push_str(&picture.display().to_string()),
+        }
+    }
+    Some(fingerprint)
+}
+
+/// The file the icon of the application bundle at `bundle` is read from:
+/// the `CFBundleIconFile` its `Info.plist` names, in `Contents/Resources`
+/// (`.icns` added when no file has the name as it is written), else, for an
+/// icon its asset catalog names (`CFBundleIconName`), that catalog,
+/// `Contents/Resources/Assets.car`. `None` when the bundle names neither.
+#[cfg(any(target_os = "macos", test))]
+fn bundle_icon_file(bundle: &Path) -> Option<PathBuf> {
+    let info = std::fs::read(bundle.join("Contents/Info.plist")).ok()?;
+    let resources = bundle.join("Contents").join("Resources");
+    let named = |key: &str| {
+        super::plist::string(&info, key)
+            .map(|name| name.trim().to_owned())
+            .filter(|name| !name.is_empty())
+    };
+    if let Some(name) = named("CFBundleIconFile") {
+        let file = resources.join(&name);
+        return Some(if file.is_file() {
+            file
+        } else {
+            resources.join(format!("{name}.icns"))
+        });
+    }
+    named("CFBundleIconName").map(|_| resources.join("Assets.car"))
+}
+
 /// This system's extraction (see the module docs).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NativeExtractor;
@@ -521,15 +586,17 @@ mod platform {
     //! macOS: the workspace's icon of the bundle (`NSWorkspace`), its
     //! largest image up to twice 256 pixels, as Finder and the Dock show
     //! it. A bundle's fingerprint is its `Info.plist`'s, which an update
-    //! rewrites.
-    use std::path::Path;
+    //! rewrites, with its icon file's ([`super::bundle_icon_file`]).
+    use std::path::{Path, PathBuf};
 
-    use super::{Extracted, file_fingerprint};
+    use super::{Extracted, bundle_icon_file, sources_fingerprint};
     use crate::system_icons::{NativeIcons, SystemIcons};
 
     pub(super) fn fingerprint(source: &str) -> Option<String> {
         let bundle = Path::new(source);
-        file_fingerprint(&bundle.join("Contents/Info.plist")).or_else(|| file_fingerprint(bundle))
+        let pictures: Vec<PathBuf> = bundle_icon_file(bundle).into_iter().collect();
+        sources_fingerprint(&bundle.join("Contents/Info.plist"), &pictures)
+            .or_else(|| sources_fingerprint(bundle, &pictures))
     }
 
     pub(super) fn extract(source: &str) -> Result<Extracted, String> {
@@ -540,15 +607,41 @@ mod platform {
 #[cfg(target_os = "linux")]
 mod platform {
     //! Linux: the icon a desktop entry names, looked up in the user's icon
-    //! theme ([`super::theme`]).
-    use std::path::Path;
+    //! theme ([`super::theme`]). An entry's fingerprint is its own with the
+    //! file its icon resolves to in the themes now.
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex, PoisonError};
+    use std::time::{Duration, Instant};
 
-    use super::theme::{IconThemes, entry_icon};
-    use super::{Extracted, file_fingerprint};
+    use super::theme::{IconThemes, ThemeLookup, entry_icon, entry_icon_file_in};
+    use super::{Extracted, sources_fingerprint};
     use crate::system_icons::SystemIcon;
 
+    /// How long the themes read for fingerprints are kept ([`themes`]).
+    const THEMES_KEPT: Duration = Duration::from_secs(2);
+
     pub(super) fn fingerprint(source: &str) -> Option<String> {
-        file_fingerprint(Path::new(source))
+        let entry = Path::new(source);
+        let pictures: Vec<PathBuf> = entry_icon_file_in(entry, &themes()).into_iter().collect();
+        sources_fingerprint(entry, &pictures)
+    }
+
+    /// The user's icon themes as read for fingerprints, kept
+    /// [`THEMES_KEPT`]: a batch, and the start's look at every
+    /// application, read the user's configuration and the themes' indexes
+    /// once, not once per application. A theme changed is seen once they
+    /// are read again.
+    fn themes() -> Arc<ThemeLookup> {
+        static KEPT: Mutex<Option<(Instant, Arc<ThemeLookup>)>> = Mutex::new(None);
+        let mut kept = KEPT.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((read, themes)) = kept.as_ref()
+            && read.elapsed() < THEMES_KEPT
+        {
+            return themes.clone();
+        }
+        let themes = Arc::new(IconThemes::from_env().lookup());
+        *kept = Some((Instant::now(), themes.clone()));
+        themes
     }
 
     pub(super) fn extract(source: &str) -> Result<Extracted, String> {
@@ -628,6 +721,8 @@ struct Shared {
     source_of: SourceOf,
     changed: Changed,
     limits: (u64, usize),
+    /// Tells how old the kept pictures are ([`REFRESH_AGE`]).
+    clock: Arc<dyn Clock>,
     state: Mutex<State>,
 }
 
@@ -644,6 +739,20 @@ struct Kept {
     bytes: u64,
     /// When a row last drew it, as the cache counts ([`Index::tick`]).
     drawn: u64,
+    /// When it was extracted, in milliseconds since the Unix epoch by the
+    /// cache's clock; 0 in an index an earlier Pane wrote, which makes its
+    /// picture old ([`is_old`]).
+    #[serde(default)]
+    extracted: u64,
+}
+
+/// Whether a picture extracted at `extracted` is old at `now` (both in
+/// milliseconds since the Unix epoch): extracted [`REFRESH_AGE`] or longer
+/// ago, at a time an earlier Pane did not record (0), or as far in the
+/// future, by a clock that was wrong then.
+fn is_old(extracted: u64, now: u64) -> bool {
+    let age = u64::try_from(REFRESH_AGE.as_millis()).unwrap_or(u64::MAX);
+    extracted == 0 || now.saturating_sub(extracted) >= age || extracted.saturating_sub(now) >= age
 }
 
 /// The index file.
@@ -662,9 +771,12 @@ enum Session {
     Queued,
     /// Wanted by a row on screen, ahead of the background.
     Wanted,
-    /// Wanted, and drawn from the cache, its source unchanged; still to be
-    /// refreshed in the background.
+    /// Wanted, and drawn from the cache, its fingerprint unchanged but its
+    /// picture old; still to be refreshed in the background.
     Kept,
+    /// Kept as it is this start: its fingerprint unchanged and its picture
+    /// younger than [`REFRESH_AGE`].
+    Current,
     /// Extracted this start.
     Refreshed,
     /// Its extraction failed this start: not tried again until the next.
@@ -716,6 +828,7 @@ impl IconCache {
                 source_of,
                 changed,
                 limits: (MAX_BYTES, MAX_ICONS),
+                clock: Arc::new(SystemClock),
                 state: Mutex::default(),
             }),
         }
@@ -725,6 +838,22 @@ impl IconCache {
     /// applications' icons instead of [`MAX_BYTES`] and [`MAX_ICONS`]: a
     /// test's bounds. Call it before using them.
     pub fn with_limits(self, bytes: u64, icons: usize) -> IconCache {
+        let clock = self.shared.clock.clone();
+        self.remade((bytes, icons), clock)
+    }
+
+    /// These icons, telling how old their pictures are ([`REFRESH_AGE`]) by
+    /// `clock` rather than the system's clock: a test's, which moves it.
+    /// Call it before using them.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn with_clock(self, clock: Arc<dyn Clock>) -> IconCache {
+        let limits = self.shared.limits;
+        self.remade(limits, clock)
+    }
+
+    /// These icons afresh, with `limits` and `clock`.
+    fn remade(self, limits: (u64, usize), clock: Arc<dyn Clock>) -> IconCache {
         let shared = &self.shared;
         IconCache {
             shared: Arc::new(Shared {
@@ -732,7 +861,8 @@ impl IconCache {
                 extractor: shared.extractor.clone(),
                 source_of: shared.source_of.clone(),
                 changed: shared.changed.clone(),
-                limits: (bytes, icons),
+                limits,
+                clock,
                 state: Mutex::default(),
             }),
         }
@@ -780,9 +910,11 @@ impl IconCache {
         }
     }
 
-    /// The applications listed now, by id: each one's icon not refreshed
-    /// since this start is refreshed in the background, in this order;
-    /// what was queued for an application no longer listed is dropped.
+    /// The applications listed now, by id: each one's icon not looked at
+    /// since this start is looked at in the background, in this order, and
+    /// extracted again when it is missing, its fingerprint changed or its
+    /// picture is old ([`REFRESH_AGE`]); what was queued for an application
+    /// no longer listed is dropped.
     pub fn listed(&self, ids: impl IntoIterator<Item = String>) {
         let mut state = self.shared.lock();
         let listed: Vec<String> = ids.into_iter().collect();
@@ -853,8 +985,9 @@ impl Shared {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// The worker: reads the index, then extracts batch after batch, rows
-    /// on screen first, until nothing is left.
+    /// The worker: reads the index, then runs batch after batch, rows on
+    /// screen first, until nothing is left, resting after every background
+    /// batch.
     fn work(&self) {
         if !self.lock().loaded {
             let index = self.load();
@@ -876,8 +1009,9 @@ impl Shared {
                 let background = jobs.iter().any(|job| !job.urgent);
                 (jobs, background)
             };
+            let mut extracted = false;
             for job in jobs {
-                self.run(job);
+                extracted |= self.run(job);
             }
             {
                 let mut state = self.lock();
@@ -903,7 +1037,12 @@ impl Shared {
                     }
                 }
             }
-            (self.changed)();
+            // A batch that kept every icon as it was changes no row.
+            if extracted {
+                (self.changed)();
+            }
+            // Every background batch rests, one that only read fingerprints
+            // too: the start's look at every application is not a busy loop.
             if background {
                 std::thread::sleep(BACKGROUND_REST);
             }
@@ -912,8 +1051,9 @@ impl Shared {
 
     /// The index in the folder: empty when there is none; deleted with
     /// every image and rebuilt when it cannot be read, or is of another
-    /// [`INDEX_VERSION`] (its images made differently). Images it does not
-    /// name, and icons whose images are gone, are dropped.
+    /// [`INDEX_VERSION`] (its images made differently); one without
+    /// extraction times is read as it is, its pictures old. Images it does
+    /// not name, and icons whose images are gone, are dropped.
     fn load(&self) -> Index {
         let path = self.folder.join(INDEX);
         let read = match std::fs::read(&path) {
@@ -959,28 +1099,45 @@ impl Shared {
         index
     }
 
-    /// Runs one extraction: keeps what it extracted, or remembers that it
-    /// failed for this start.
-    fn run(&self, job: Job) {
+    /// Runs one job: keeps the icon as it is when its fingerprint has not
+    /// changed and its picture is not old (an old one a row wants is drawn
+    /// from the cache and queued for the background), else extracts it and
+    /// keeps what it extracted, or remembers that it failed for this start.
+    /// Whether it extracted (or tried to).
+    fn run(&self, job: Job) -> bool {
         let Some(source) = (self.source_of)(&job.id) else {
             self.lock().session.insert(job.id, Session::Failed);
-            return;
+            return false;
         };
         let fingerprint = self.extractor.fingerprint(&source).unwrap_or_default();
-        if job.urgent {
+        {
+            let now = self.clock.now();
             let mut state = self.lock();
+            // Whether the kept picture is old, when its fingerprint is
+            // unchanged.
             let unchanged = state
                 .index
                 .icons
                 .get(&job.id)
-                .is_some_and(|kept| kept.fingerprint == fingerprint);
-            if unchanged {
-                // Drawn from the cache; refreshed in the background later.
-                state.session.insert(job.id.clone(), Session::Kept);
-                if !state.background.contains(&job.id) {
-                    state.background.push_back(job.id);
+                .filter(|kept| kept.fingerprint == fingerprint)
+                .map(|kept| is_old(kept.extracted, now));
+            match unchanged {
+                Some(false) => {
+                    // Drawn from the cache, and not extracted this start.
+                    state.session.insert(job.id, Session::Current);
+                    return false;
                 }
-                return;
+                Some(true) if job.urgent => {
+                    // Drawn from the cache; refreshed in the background
+                    // later.
+                    state.session.insert(job.id.clone(), Session::Kept);
+                    if !state.background.contains(&job.id) {
+                        state.background.push_back(job.id);
+                    }
+                    return false;
+                }
+                // Missing, changed, or old in the background: extracted.
+                _ => {}
             }
         }
         let outcome = self
@@ -1015,10 +1172,11 @@ impl Shared {
                 state.session.insert(job.id, Session::Failed);
             }
         }
+        true
     }
 
     /// Writes `extracted`, the icon of the application `id` from a source
-    /// with `fingerprint`, into the folder.
+    /// with `fingerprint`, into the folder, extracted now.
     fn keep(&self, id: &str, fingerprint: &str, extracted: Extracted) -> Result<Kept, String> {
         let stem = crate::icons::web_image_stem(&format!("{id}\n{fingerprint}"));
         let (light, light_bytes) = self.write(&stem, extracted.light)?;
@@ -1035,6 +1193,7 @@ impl Shared {
             dark,
             bytes: light_bytes + dark_bytes,
             drawn: 0,
+            extracted: self.clock.now(),
         })
     }
 
@@ -1096,8 +1255,8 @@ impl Shared {
 /// The next jobs: what rows on screen want first, then the background
 /// refresh of the applications listed, at most [`BATCH`]. An application
 /// is in a batch once: a row's icon wanted while its background refresh
-/// waits is extracted for the row alone (which queues the refresh again
-/// when it draws the kept icon instead).
+/// waits is looked at for the row alone (which queues the refresh again
+/// when it draws a kept icon whose picture is old).
 fn next_batch(state: &mut State) -> Vec<Job> {
     let mut jobs: Vec<Job> = Vec::new();
     let taken = |jobs: &[Job], id: &str| jobs.iter().any(|job| job.id == id);
@@ -1416,6 +1575,109 @@ mod tests {
         assert!(first.contains("app.lnk"), "{first}");
         std::fs::write(&file, b"three").unwrap();
         assert_ne!(file_fingerprint(&file).unwrap(), first);
+    }
+
+    #[test]
+    fn the_fingerprint_follows_the_file_the_picture_is_read_from() {
+        let folder = tempfile::tempdir().unwrap();
+        let link = folder.path().join("app.lnk");
+        let target = folder.path().join("app.exe");
+        std::fs::write(&link, b"shortcut").unwrap();
+        let of = |pictures: &[PathBuf]| sources_fingerprint(&link, pictures);
+        // A picture's file not there yet counts by its path.
+        let missing = of(std::slice::from_ref(&target)).unwrap();
+        assert!(missing.contains("app.exe"), "{missing}");
+        std::fs::write(&target, b"one").unwrap();
+        let first = of(std::slice::from_ref(&target)).unwrap();
+        assert_ne!(first, missing);
+        // The target is updated, the shortcut is not.
+        let shortcut = file_fingerprint(&link).unwrap();
+        std::fs::write(&target, b"three").unwrap();
+        let second = of(std::slice::from_ref(&target)).unwrap();
+        assert_ne!(second, first);
+        assert_eq!(file_fingerprint(&link).unwrap(), shortcut);
+        assert!(second.starts_with(&shortcut), "{second}");
+        // The source is not counted twice; without it there is none.
+        assert_eq!(of(std::slice::from_ref(&link)), Some(shortcut));
+        let gone = folder.path().join("gone.lnk");
+        assert_eq!(sources_fingerprint(&gone, &[target]), None);
+    }
+
+    #[test]
+    fn a_picture_is_old_past_the_refresh_age_or_without_its_extraction_time() {
+        let day: u64 = 24 * 60 * 60 * 1000;
+        let at: u64 = 1_800_000_000_000;
+        assert!(!is_old(at, at));
+        assert!(!is_old(at, at + 6 * day));
+        assert!(is_old(at, at + 7 * day));
+        // An earlier Pane recorded no time.
+        assert!(is_old(0, at));
+        // Extracted by a clock a little ahead: young; far ahead: old.
+        assert!(!is_old(at + day, at));
+        assert!(is_old(at + 8 * day, at));
+    }
+
+    #[test]
+    fn an_index_an_earlier_pane_wrote_is_read_with_every_picture_old() {
+        let json = r#"{"version":3,"tick":4,"icons":{"editor":
+            {"fingerprint":"f","light":"a.png","dark":null,"bytes":10,"drawn":2}}}"#;
+        let index: Index = serde_json::from_str(json).unwrap();
+        assert_eq!(index.version, INDEX_VERSION);
+        let kept = &index.icons["editor"];
+        assert_eq!(kept.light, "a.png");
+        assert_eq!((kept.bytes, kept.drawn), (10, 2));
+        assert_eq!(kept.extracted, 0);
+        assert!(is_old(kept.extracted, 1_800_000_000_000));
+    }
+
+    /// Writes the `Info.plist` of the bundle whose `Contents` folder is
+    /// `contents`, holding `entries` (keys and values), in the XML form.
+    fn info_plist(contents: &Path, entries: &str) {
+        let plist = format!("<plist>\n<dict>\n{entries}</dict>\n</plist>\n");
+        std::fs::write(contents.join("Info.plist"), plist).unwrap();
+    }
+
+    #[test]
+    fn a_bundle_s_icon_file_is_the_one_its_info_plist_names() {
+        let folder = tempfile::tempdir().unwrap();
+        let bundle = folder.path().join("Editor.app");
+        let contents = bundle.join("Contents");
+        let resources = contents.join("Resources");
+        std::fs::create_dir_all(&resources).unwrap();
+        assert_eq!(bundle_icon_file(&bundle), None, "no Info.plist");
+        // Named without its extension.
+        info_plist(
+            &contents,
+            "<key>CFBundleIconFile</key>\n<string>AppIcon</string>\n",
+        );
+        assert_eq!(
+            bundle_icon_file(&bundle),
+            Some(resources.join("AppIcon.icns"))
+        );
+        // Named with it.
+        std::fs::write(resources.join("Editor.icns"), b"icns").unwrap();
+        info_plist(
+            &contents,
+            "<key>CFBundleIconFile</key>\n<string>Editor.icns</string>\n",
+        );
+        assert_eq!(
+            bundle_icon_file(&bundle),
+            Some(resources.join("Editor.icns"))
+        );
+        // Named in its asset catalog.
+        info_plist(
+            &contents,
+            "<key>CFBundleIconName</key>\n<string>AppIcon</string>\n",
+        );
+        assert_eq!(
+            bundle_icon_file(&bundle),
+            Some(resources.join("Assets.car"))
+        );
+        info_plist(
+            &contents,
+            "<key>CFBundleName</key>\n<string>Editor</string>\n",
+        );
+        assert_eq!(bundle_icon_file(&bundle), None);
     }
 
     #[test]

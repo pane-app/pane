@@ -2233,13 +2233,13 @@ try {
     Capture "280-clipboard-recording.png"
     Check "280-clipboard-recording.png" "hint"   # the split view: Today, the two records, the field's placeholder
     History-Action "Pause Recording"
-    Wait-For $history '"capture": "paused"' $true
+    Wait-For $history '"capture":"paused"' $true
     Capture-Until "281-clipboard-paused.png" "success" 10   # its toast: "Recording paused"
     Copy-Text "pane-smoke-paused" $null
     Not-Kept "pane-smoke-paused"
     Open-History
     History-Action "Resume Recording"
-    Wait-For $history '"capture": "on"' $true
+    Wait-For $history '"capture":"on"' $true
     Copy-Text "pane-smoke-resumed" $null
     Wait-Kept "pane-smoke-resumed" $true
     Open-History
@@ -2323,7 +2323,7 @@ try {
     if ([PaneClip]::GetText() -ne $onClipboard) { throw "deleting a record changed the clipboard" }
     Open-History
     History-Action "1 Hour"   # Keep History For: 1 Hour
-    Wait-For $history '"retentionSeconds": 3600' $true
+    Wait-For $history '"retentionSeconds":3600' $true
     Capture-Until "402-clipboard-retention-changed.png" "success" 10   # its toast: "History is kept for 1 hour; deleted 1 kept item older"
     if ((Kept-Joined) -ne "pane-smoke-after-restart,pane-smoke-resumed") { throw "kept: $(Kept-Joined)" }
     $copiedFile = Join-Path $clipboardHome "pane-smoke-file.txt"

@@ -798,6 +798,9 @@ struct State {
     /// This run's crash record, and whether root search still tells that
     /// Pane quit unexpectedly last time (see `crash_notice`).
     crash: crash_notice::Notice,
+    /// The Clipboard History view's records, as last made from the history,
+    /// shared until it changes (see `clipboard_view`, #192).
+    clipboard_records: clipboard_view::Projected,
     /// The query root search showed when the status line began showing a
     /// no-view command's answer (or its running), launched from it with
     /// that query typed, so that changing the query clears it.
@@ -1493,6 +1496,7 @@ impl Launcher {
             acquisitions: Acquisitions::default(),
             updates: Updates::default(),
             crash: crash_notice::Notice::default(),
+            clipboard_records: clipboard_view::Projected::default(),
             sent_from: None,
             list_entered: false,
             window_wanted: false,
@@ -1668,6 +1672,40 @@ impl Launcher {
         self.installation
             .as_ref()
             .is_some_and(|installation| installation.data.clipboard_history().wait_swept(limit))
+    }
+
+    /// Waits until nothing of Pane's clipboard history waits to be written
+    /// (#192): the batch of copies and expiries was written, its delay
+    /// after the first; `false` if it was not within `limit`. For tests and
+    /// development builds, which so read the file once Pane wrote it,
+    /// without timing the delay.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn wait_for_clipboard_writes(&self, limit: std::time::Duration) -> bool {
+        self.installation
+            .as_ref()
+            .is_some_and(|installation| installation.data.clipboard_history().wait_written(limit))
+    }
+
+    /// How many times Pane wrote its clipboard history file since it
+    /// started (#192), for tests: a burst of copies is one write.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn clipboard_history_writes(&self) -> u64 {
+        self.installation.as_ref().map_or(0, |installation| {
+            installation.data.clipboard_history().writes()
+        })
+    }
+
+    /// How many clipboard history items Pane encrypted to write them since
+    /// it started (#130, #192), for tests: each once, however many writes
+    /// follow; 0 where the system protects nothing.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn clipboard_items_protected(&self) -> u64 {
+        self.installation.as_ref().map_or(0, |installation| {
+            installation.data.clipboard_history().items_protected()
+        })
     }
 
     /// Waits until the scheduler looked at every change of the clock and of

@@ -21,6 +21,9 @@
 //! - `power`: whether the computer is awake, so indexing pauses while it
 //!   sleeps ([`Awake`]).
 //! - `privacy`: macOS's privacy refusals, told from the system's answer.
+//! - `volume`: what kind of volume holds a folder, so that network shares
+//!   and removable drives are left out unless the user includes them
+//!   ([`VolumeKind`]).
 //! - `wording`: counts, sizes and spans for people ([`size_words`]).
 //! - `host`: `pane:extension/file-index` for guests.
 
@@ -40,6 +43,7 @@ mod space;
 mod store;
 mod terms;
 mod text;
+mod volume;
 mod wal;
 mod walker;
 mod wording;
@@ -62,7 +66,8 @@ pub use walker::{HUNG_AFTER, MAX_ENTRIES, WalkOptions, WalkReport, walk, walk_fo
 
 pub use category::Category;
 pub use changes::{
-    Caught, CaughtUpBy, ChangeSource, Changed, Sink, SinkClosed, Watching, native as native_changes,
+    Caught, CaughtUpBy, ChangeSource, Changed, FolderIds, Sink, SinkClosed, Watching,
+    native as native_changes,
 };
 pub use indexer::{
     Checked, FIRST_WALK_DELAY, Found, INDEX_DIR, IndexState, IndexStatus, Indexer, IndexerConfig,
@@ -72,6 +77,7 @@ pub use indexer::{
 pub use power::{Awake, SystemAwake};
 pub use reconcile::{Reconciled, reconcile};
 pub use space::{FREE_SPACE_FLOOR, FreeSpace, free_space};
+pub use volume::{VolumeKind, VolumeKinds, volume_kind};
 pub use wording::{count_words, size_words};
 
 /// An entry to index: a path and what the index keeps of it.
@@ -93,8 +99,10 @@ impl Entry {
 
 /// The changes a catch-up asks for, in order (removals first), and the
 /// folders to walk again with [`walk_folders`]: each path it touched is
-/// looked at now, indexed if it exists and `scope` admits it, removed
-/// otherwise.
+/// looked at now, indexed if it exists and `scope` admits it (told with
+/// what the scope keeps of the folders, [`Scope::admits_kept`]), removed
+/// otherwise. A touched ignore file, repository or cache tag is among the
+/// changes, so that the coordinator re-checks its folder (#186).
 pub fn catch_up_changes(scope: &Scope, catch_up: &CatchUp) -> (Vec<Change>, Vec<PathBuf>) {
     let mut changes = Vec::new();
     for folder in &catch_up.removed_folders {
@@ -105,10 +113,9 @@ pub fn catch_up_changes(scope: &Scope, catch_up: &CatchUp) -> (Vec<Change>, Vec<
             changes.push(Change::Remove(path.clone()));
         }
     }
-    let mut known = Admitted::default();
     for path in &catch_up.touched {
         match Entry::read(path) {
-            Ok(entry) if scope.admits(path, entry.meta.kind == EntryKind::Folder, &mut known) => {
+            Ok(entry) if scope.admits_kept(path, entry.meta.kind == EntryKind::Folder) => {
                 changes.push(Change::Put(entry));
             }
             _ => changes.push(Change::Remove(path.clone())),
@@ -167,6 +174,8 @@ mod tests {
             walk: vec![home.join("Documents")],
             listed: Vec::new(),
             unresolved: 0,
+            gone: Vec::new(),
+            unresolved_folders: Vec::new(),
         };
         let (changes, walk) = catch_up_changes(&scope, &catch_up);
         assert_eq!(walk, [home.join("Documents")]);

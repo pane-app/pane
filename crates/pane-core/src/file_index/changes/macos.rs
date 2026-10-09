@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 use fsevent_sys as fse;
 use fsevent_sys::core_foundation as cf;
 
-use super::{Caught, CaughtUpBy, ChangeSource, Changed, Sink, Watching};
+use super::{Caught, CaughtUpBy, ChangeSource, Changed, FolderIds, Sink, Watching};
 use crate::file_index::journal::JournalCursor;
 use crate::file_index::scope::Scope;
 use crate::file_index::store::FileIndex;
@@ -94,7 +94,7 @@ impl ChangeSource for FsEvents {
     fn cursors(&self, scope: &Scope) -> Vec<JournalCursor> {
         // SAFETY: no arguments.
         let id = unsafe { fse::FSEventsGetCurrentEventId() };
-        cursors_at(&scope.rules().roots, id)
+        cursors_at(&scope.kept_roots(), id)
     }
 
     fn catch_up(
@@ -102,6 +102,7 @@ impl ChangeSource for FsEvents {
         _index: &FileIndex,
         scope: &Scope,
         cursors: &[JournalCursor],
+        _folders: &mut FolderIds<'_>,
         _cancel: &AtomicBool,
     ) -> Caught {
         // The replay itself comes through the live stream (`watch`), from
@@ -109,7 +110,11 @@ impl ChangeSource for FsEvents {
         let mut reconcile = Vec::new();
         let mut kept = Vec::new();
         let mut note = None;
-        for root in &scope.rules().roots {
+        // A root the rules leave out (a network share or a removable drive)
+        // holds nothing in the index; a network share kept is reconciled by
+        // the coordinator.
+        let roots = scope.kept_roots();
+        for root in &roots {
             // Missing (an unplugged drive): its entries are kept.
             let Some((_, uuid)) = volume_of(root) else {
                 continue;
@@ -131,13 +136,16 @@ impl ChangeSource for FsEvents {
                 }
             }
         }
-        if !reconcile.is_empty() && reconcile.len() == scope.rules().roots.len() {
+        if !reconcile.is_empty() && reconcile.len() == roots.len() {
             return Caught::Reconcile(note.unwrap_or_default());
         }
         Caught::Changes {
             changes: Vec::new(),
             walk: Vec::new(),
             reconcile,
+            // The history, replayed by the live stream, names each ignore
+            // file changed, hidden or not.
+            recheck: Vec::new(),
             cursors: kept,
             how: CaughtUpBy::EventHistory,
             note,
@@ -151,7 +159,8 @@ impl ChangeSource for FsEvents {
         _folders: Vec<PathBuf>,
         sink: Sink,
     ) -> Result<Box<dyn Watching>, String> {
-        let roots = scope.rules().roots.clone();
+        // A network share is reconciled now and then instead.
+        let roots = scope.watched_roots();
         let since = cursors
             .iter()
             .filter_map(|cursor| u64::try_from(cursor.next_usn).ok())

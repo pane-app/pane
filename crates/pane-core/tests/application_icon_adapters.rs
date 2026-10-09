@@ -1,12 +1,14 @@
 //! Each system's extraction of the applications' own icons (#172) against
 //! the real system: on Windows the command interpreter's icon at 256 pixels
 //! filling its box, a shortcut whose own icon holds only a small image
-//! drawn by a fallback that fills its box, and an inbox packaged app's
-//! light and dark logos; on macOS Calculator's bundle icon; and on every
-//! system a desktop entry's icon found in a fixture `hicolor` theme placed
-//! on the data folders, as the Linux adapter looks it up. These never touch
-//! the user's Start menu, Desktop, taskbar or registry, and remove what they
-//! make.
+//! drawn by a fallback that fills its box, a shortcut's fingerprint
+//! following its target's update or its own icon file's, and an inbox
+//! packaged app's light and dark logos, which its fingerprint covers; on
+//! macOS Calculator's bundle icon, its fingerprint covering its icon file;
+//! and on every system a desktop entry's icon found in a fixture `hicolor`
+//! theme placed on the data folders, as the Linux adapter looks it up.
+//! These never touch the user's Start menu, Desktop, taskbar or registry,
+//! and remove what they make.
 
 use pane_core::applications::icons::theme::{IconThemes, entry_icon};
 
@@ -99,7 +101,9 @@ mod windows {
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
-    use pane_core::applications::icons::{IconExtractor, NativeExtractor, covers_enough};
+    use pane_core::applications::icons::{
+        IconExtractor, NativeExtractor, covers_enough, file_fingerprint,
+    };
     use pane_core::system_icons::SystemIcon;
 
     use super::decode_png;
@@ -153,15 +157,18 @@ mod windows {
         fs::write(path, ico).unwrap();
     }
 
-    /// A shortcut to `target` whose own icon is `icon`, made as the shell
-    /// makes them.
-    fn shortcut(path: &Path, target: &Path, icon: &Path) {
+    /// A shortcut to `target` whose own icon is `icon`, if it has one, made
+    /// as the shell makes them.
+    fn shortcut(path: &Path, target: &Path, icon: Option<&Path>) {
+        let icon = match icon {
+            Some(icon) => format!("$s.IconLocation = '{},0'; ", icon.display()),
+            None => String::new(),
+        };
         let script = format!(
             "$s = (New-Object -ComObject WScript.Shell).CreateShortcut('{}'); \
-             $s.TargetPath = '{}'; $s.IconLocation = '{},0'; $s.Save()",
+             $s.TargetPath = '{}'; {icon}$s.Save()",
             path.display(),
-            target.display(),
-            icon.display()
+            target.display()
         );
         let status = Command::new("powershell")
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])
@@ -178,7 +185,7 @@ mod windows {
         let icon = dir.path().join("small.ico");
         small_icon(&icon);
         let link = dir.path().join("Tool.lnk");
-        shortcut(&link, &program, &icon);
+        shortcut(&link, &program, Some(&icon));
 
         let extracted = NativeExtractor.extract(&link.to_string_lossy()).unwrap();
 
@@ -191,11 +198,59 @@ mod windows {
         let before = NativeExtractor
             .fingerprint(&link.to_string_lossy())
             .unwrap();
-        shortcut(&link, &system32("cmd.exe"), &icon);
+        shortcut(&link, &system32("cmd.exe"), Some(&icon));
         let after = NativeExtractor
             .fingerprint(&link.to_string_lossy())
             .unwrap();
         assert_ne!(before, after);
+    }
+
+    /// Appends `bytes` zeros to the file at `path`, as an update rewriting
+    /// it changes its size and modification time.
+    fn grow(path: &Path, bytes: usize) {
+        let mut contents = fs::read(path).unwrap();
+        contents.resize(contents.len() + bytes, 0);
+        fs::write(path, contents).unwrap();
+    }
+
+    /// The fingerprint of the shortcut at `link`, as Pane takes it.
+    fn fingerprint(link: &Path) -> String {
+        NativeExtractor
+            .fingerprint(&link.to_string_lossy())
+            .unwrap()
+    }
+
+    #[test]
+    fn a_shortcuts_fingerprint_follows_its_target_or_its_own_icon_location() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("tool.exe");
+        fs::copy(system32("cmd.exe"), &program).unwrap();
+        let link = dir.path().join("Tool.lnk");
+        shortcut(&link, &program, None);
+        let before = fingerprint(&link);
+        assert!(before.contains("tool.exe"), "{before}");
+
+        // The program is updated in place; the shortcut is not touched.
+        let shortcut_file = file_fingerprint(&link).unwrap();
+        grow(&program, 16);
+        assert_eq!(file_fingerprint(&link).unwrap(), shortcut_file);
+        let updated = fingerprint(&link);
+        assert_ne!(updated, before, "the target's update is seen");
+
+        // With an icon location of its own, that file is followed, and the
+        // target still is: extraction falls back to it when the location
+        // yields no picture.
+        let icon = dir.path().join("small.ico");
+        small_icon(&icon);
+        shortcut(&link, &program, Some(&icon));
+        let with_icon = fingerprint(&link);
+        assert!(with_icon.contains("small.ico"), "{with_icon}");
+        assert!(with_icon.contains("tool.exe"), "{with_icon}");
+        grow(&icon, 4);
+        let icon_grown = fingerprint(&link);
+        assert_ne!(icon_grown, with_icon, "the icon file changed");
+        grow(&program, 16);
+        assert_ne!(fingerprint(&link), icon_grown, "the target changed");
     }
 
     #[test]
@@ -249,9 +304,13 @@ mod windows {
         if extracted.dark.is_some() {
             assert_ne!(extracted.light, dark, "{source}");
         }
-        // Its fingerprint is its package's manifest.
+        // Its fingerprint is its package's manifest and the logos drawn.
         let fingerprint = NativeExtractor.fingerprint(source).unwrap();
         assert!(fingerprint.contains("AppxManifest.xml"), "{fingerprint}");
+        if let SystemIcon::File(logo) = &dark {
+            let logo = logo.to_string_lossy();
+            assert!(fingerprint.contains(&*logo), "{fingerprint}");
+        }
     }
 
     /// Whether the folder of `logo`, a packaged app's logo file, holds a
@@ -284,10 +343,10 @@ fn calculators_bundle_icon_is_extracted_at_256_pixels_or_more() {
     };
     let (width, height) = png_size(png);
     assert!(width >= 256 && height >= 256, "{width}×{height}");
-    assert!(
-        NativeExtractor
-            .fingerprint(&bundle.to_string_lossy())
-            .unwrap()
-            .contains("Info.plist")
-    );
+    // Its fingerprint is its Info.plist's and its icon file's.
+    let fingerprint = NativeExtractor
+        .fingerprint(&bundle.to_string_lossy())
+        .unwrap();
+    assert!(fingerprint.contains("Info.plist"), "{fingerprint}");
+    assert!(fingerprint.contains("/Resources/"), "{fingerprint}");
 }

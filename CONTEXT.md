@@ -185,7 +185,7 @@ The host's index of the names of the files and folders under the index scope, ke
 _Avoid_: Search index (Windows Search, Spotlight), database, cache (it is kept in the cache folder because it can be rebuilt, but it is the index)
 
 **Index scope**:
-The roots (the home folder, and the folders the user adds) and the rules deciding what under them the file index holds: hidden entries, what ignore files exclude, caches, temporary folders, `node_modules` and the home folder's `AppData` or `Library` left out by default, each a switch, with the user's own excluded folders and patterns, and the folders taken out for churn; Pane's own folders and the system's recycle and setup folders always left out. Pane's own record, not extension data, changed on the File Search page in Settings and applied without a restart.
+The roots (the home folder, and the folders the user adds) and the rules deciding what under them the file index holds: hidden entries, what ignore files exclude, caches, temporary folders, `node_modules` and the home folder's `AppData` or `Library` left out by default, each a switch, as are network shares and removable drives (a root on one, or one mounted under a root; a share the user includes is reconciled now and then, never watched), with the user's own excluded folders and patterns, and the folders taken out for churn; Pane's own folders and the system's recycle and setup folders always left out. Pane's own record, not extension data, changed on the File Search page in Settings and applied without a restart.
 _Avoid_: Search scope, library, watched folders
 
 **Safety valve**:

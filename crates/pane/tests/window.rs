@@ -3442,7 +3442,12 @@ mod clipboard_split {
             window
                 .launcher()
                 .clipboard_history()
-                .map(|view| view.records.into_iter().map(|record| record.text).collect())
+                .map(|view| {
+                    view.records
+                        .iter()
+                        .map(|record| record.text.to_string())
+                        .collect()
+                })
                 .unwrap_or_default()
         })
     }
@@ -3710,6 +3715,62 @@ mod clipboard_split {
         settle(&window, cx);
         assert!(listed(&window, cx).is_empty());
         assert!(cx.debug_bounds("clipboard-empty").is_some());
+    }
+
+    /// #192: the view is drawn again, frame after frame, without making its
+    /// records again while the history does not change: the launcher shares
+    /// them. Moving the selection and searching work over the same records;
+    /// a copy kept, or a record deleted, makes them once more.
+    #[gpui::test]
+    fn drawing_again_with_nothing_changed_makes_no_records(cx: &mut TestAppContext) {
+        let world = World::new();
+        let launcher = world.launcher(cx, &["alpha", "beta", "gamma"]);
+        let (window, cx) = open_history(cx, launcher);
+        let made = |window: &Entity<LauncherWindow>, cx: &mut VisualTestContext| {
+            cx.read_entity(window, |window, _| {
+                window.launcher().clipboard_records_made()
+            })
+        };
+        let before = made(&window, cx);
+        assert!(before > 0, "the records were made to be drawn");
+
+        // Two more frames, each drawn after a key, with nothing changed.
+        cx.simulate_keystrokes("down");
+        settle(&window, cx);
+        cx.simulate_keystrokes("up");
+        settle(&window, cx);
+        assert_eq!(made(&window, cx), before, "no records were made again");
+
+        // Searching filters the same records.
+        cx.simulate_input("al");
+        settle(&window, cx);
+        assert!(cx.debug_bounds("clip-alpha").is_some());
+        assert!(cx.debug_bounds("clip-beta").is_none());
+        assert!(cx.debug_bounds("clip-gamma").is_none());
+        cx.simulate_keystrokes("escape");
+        settle(&window, cx);
+        assert!(cx.debug_bounds("clip-beta").is_some());
+        assert_eq!(made(&window, cx), before);
+
+        // A copy kept changes the history: the records are made once more,
+        // for the next frame, and shared again after it.
+        assert!(world.clipboard.copy("delta", Some("notepad.exe")));
+        cx.simulate_keystrokes("down");
+        settle(&window, cx);
+        assert_eq!(made(&window, cx), before + 1);
+        assert!(cx.debug_bounds("clip-delta").is_some());
+        cx.simulate_keystrokes("up");
+        settle(&window, cx);
+        assert_eq!(made(&window, cx), before + 1);
+        assert_eq!(listed(&window, cx), ["delta", "gamma", "beta", "alpha"]);
+
+        // Ctrl+D still deletes the selected record (gamma, chosen above),
+        // which changes the history once more.
+        cx.simulate_keystrokes("ctrl-d");
+        settle(&window, cx);
+        assert_eq!(listed(&window, cx), ["delta", "beta", "alpha"]);
+        assert!(cx.debug_bounds("clip-gamma").is_none());
+        assert_eq!(made(&window, cx), before + 2);
     }
 
     /// No badge on the search field and no tabs under it (#166): the

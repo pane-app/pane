@@ -103,6 +103,9 @@ pub use runtime::Fault;
 pub use runtime::Limits;
 #[cfg(debug_assertions)]
 #[doc(hidden)]
+pub use runtime::Timers;
+#[cfg(debug_assertions)]
+#[doc(hidden)]
 pub use runtime::memory_peak;
 pub use runtime::{
     Action, ActionKind, ActionStyle, ActionSubmenu, Answer, COMPUTE_LIMIT, CallError, Choice,

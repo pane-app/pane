@@ -2,28 +2,40 @@
 # Resource and latency measurement of Pane's whole process tree on X11 (#4).
 # One fixed workload, documented in docs/research/resource-measurements.md:
 # a cold start (a fresh data folder, nothing installed), warm restarts, an
-# idle core, seven installed-but-unused extensions, the calculator run
-# repeatedly, the Watching continuing service and the Counting scheduled
-# work running, and repeated reload and disable of one package. Pane's whole
-# process tree — Pane and any helper it started — is sampled from /proc at a
-# fixed cadence (scripts/proc_tree.py watch) while the workload runs, and the
-# record is written beside the workload's screenshots: samples.jsonl (one
-# JSON line per sample), events.jsonl, summary.json and record.json in the
-# output folder. The summary is checked against scripts/resource-targets.json
-# (the proposed targets; a null ceiling is pending, not checked).
+# idle core, Pane hidden with its default extensions (#189), seven
+# installed-but-unused extensions, the calculator run repeatedly, the
+# Watching continuing service and the Counting scheduled work running, and
+# repeated reload and disable of one package. Pane's whole process tree —
+# Pane and any helper it started, and every thread of it — is sampled from
+# /proc at a fixed cadence (scripts/proc_tree.py watch) while the workload
+# runs, and the record is written beside the workload's screenshots:
+# samples.jsonl (one JSON line per sample), events.jsonl, summary.json and
+# record.json in the output folder. The summary is checked against
+# scripts/resource-targets.json (the proposed targets; a null ceiling is
+# pending, not checked).
 #
 # Requires what scripts/smoke-linux.sh requires: Xvfb, xdotool, Pillow (the
 # one screenshot check), a Vulkan driver, and for Settings, where the
 # lifecycle's reloads and disables happen (#168), dbus-launch (dbus-x11),
 # at-spi2-core, python3-gi and gir1.2-atspi-2.0; plus the guests built
-# (`cargo xtask ci` or `cargo xtask guests`). The binary measured is the one
-# given (target/debug/pane by default, the smoke's; record.json records the
-# profile: a release build reaches for the not-yet-deployed artifact source
-# at start, so the release profile's workload waits for that source).
+# (`cargo xtask ci` or `cargo xtask guests`) and, for the hidden phase
+# only, the default extensions' payloads in target/dist/artifacts (`cargo
+# xtask package-linux --dev`, which CI's smoke run, before this one, leaves
+# there): without them that phase is skipped, said so on standard error
+# and in record.json ("skipped"), and the other phases run and are checked
+# as before. The hidden phase serves those payloads with an index whose
+# `application` entry is left out, so the measured Pane is offered no
+# update of its own (the smoke leaves a 99.0.0 package named there). The
+# binary measured
+# is the one given (target/debug/pane by default, the smoke's; record.json
+# records the profile: a release build reaches for the not-yet-deployed
+# artifact source at start, so the release profile's workload waits for
+# that source).
 # Set PANE_XVFB / PANE_XDOTOOL to use binaries outside PATH.
 #
 # The workload's fixed durations can be shortened for a quick run; the
 # documented record is the defaults: PANE_MEASURE_IDLE_SECONDS (60),
+# PANE_MEASURE_HIDDEN_SECONDS (60), PANE_MEASURE_SETTLE_SECONDS (30),
 # PANE_MEASURE_UNUSED_SECONDS (60), PANE_MEASURE_SERVICE_SECONDS (90),
 # PANE_MEASURE_CALCULATOR_RUNS (10), PANE_MEASURE_WARM_RESTARTS (3),
 # PANE_MEASURE_RELOADS (6), PANE_MEASURE_DISABLES (5),
@@ -37,6 +49,8 @@ sampler=$here/proc_tree.py
 xvfb=${PANE_XVFB:-Xvfb}
 xdotool=${PANE_XDOTOOL:-xdotool}
 idle_seconds=${PANE_MEASURE_IDLE_SECONDS:-60}
+hidden_seconds=${PANE_MEASURE_HIDDEN_SECONDS:-60}
+settle_seconds=${PANE_MEASURE_SETTLE_SECONDS:-30}
 unused_seconds=${PANE_MEASURE_UNUSED_SECONDS:-60}
 service_seconds=${PANE_MEASURE_SERVICE_SECONDS:-90}
 calculator_runs=${PANE_MEASURE_CALCULATOR_RUNS:-10}
@@ -47,8 +61,18 @@ sample_seconds=${PANE_MEASURE_SAMPLE_SECONDS:-1}
 # The seven packages installed but never invoked: the four default
 # extensions and the three language samples.
 unused_packages=(calculator quicklinks applications files sample-rust sample-js sample-ts)
+# Pane's default extensions (#60), acquired at the hidden phase's first
+# setup from the artifact source the workload serves on 127.0.0.1.
+default_extensions=(calculator applications quicklinks files clipboard-history)
+artifacts=target/dist/artifacts
 
 [ -x "$pane" ] || { echo "no pane binary at $pane (cargo build -p pane)"; exit 1; }
+# The hidden phase needs the default extensions' payloads; the rest does not.
+skipped=
+if [ ! -f "$artifacts/pane-defaults.json" ]; then
+  echo "SKIPPED the hidden phase (#189): $artifacts holds no default extensions (cargo xtask package-linux --dev)" >&2
+  skipped=hidden-idle
+fi
 for package in "${unused_packages[@]}" sample-service sample-schedule; do
   [ -f "target/guests/packages/$package/pane.json" ] || { echo "target/guests/packages/$package is missing (cargo xtask guests)"; exit 1; }
 done
@@ -59,7 +83,7 @@ done
 python3 "$sampler" selfcheck
 
 mkdir -p "$out"
-rm -rf "$out/data" "$out/lifecycle-data" "$out/lifecycle-package"
+rm -rf "$out/data" "$out/hidden-data" "$out/hidden-home" "$out/lifecycle-data" "$out/lifecycle-package"
 export PANE_DATA_DIR=$out/data
 { grep PRETTY_NAME /etc/os-release; uname -srm; } >"$out/system.txt"   # the measured OS and architecture
 
@@ -67,10 +91,14 @@ export PANE_DATA_DIR=$out/data
 profile=release; case "$pane" in *debug*) profile=debug;; esac
 python3 - "$out/record.json" "$pane" "$profile" "$idle_seconds" "$unused_seconds" \
   "$service_seconds" "$calculator_runs" "$warm_restarts" "$reloads" "$disables" \
-  "$sample_seconds" <<'PY'
+  "$sample_seconds" "$hidden_seconds" "$settle_seconds" "$skipped" <<'PY'
 import json, os, subprocess, sys
-(out, pane, profile, idle, unused, service, calculator, warm, reloads, disables, cadence) = sys.argv[1:]
+(out, pane, profile, idle, unused, service, calculator, warm, reloads, disables, cadence,
+ hidden, settle, skipped) = sys.argv[1:]
 record = {
+    # Phases the workload skipped, their inputs absent: `proc_tree.py check`
+    # reports them as skipped rather than as not measured.
+    "skipped": skipped.split() if skipped else [],
     "format": 1,
     "date": subprocess.run(["date", "-Is"], capture_output=True, text=True).stdout.strip(),
     "os": open("/etc/os-release", encoding="utf-8").read(),
@@ -86,7 +114,9 @@ record = {
         "idleSeconds": int(idle), "unusedSeconds": int(unused), "serviceSeconds": int(service),
         "calculatorRuns": int(calculator), "warmRestarts": int(warm), "reloads": int(reloads),
         "disables": int(disables), "sampleSeconds": float(cadence),
+        "hiddenSeconds": int(hidden), "settleSeconds": int(settle),
         "unusedPackages": ["calculator", "quicklinks", "applications", "files", "sample-rust", "sample-js", "sample-ts"],
+        "defaultExtensions": ["calculator", "applications", "quicklinks", "files", "clipboard-history"],
     },
 }
 for key, command in (("commit", ["git", "rev-parse", "HEAD"]), ("rustc", ["rustc", "--version"])):
@@ -105,9 +135,11 @@ pane_pid=
 sampler_pid=
 a11y_bus_pid=
 dbus_pid=
+artifact_server_pid=
 cleanup() {
   [ -n "$pane_pid" ] && kill "$pane_pid" 2>/dev/null || true
   [ -n "$sampler_pid" ] && kill "$sampler_pid" 2>/dev/null || true
+  [ -n "$artifact_server_pid" ] && kill "$artifact_server_pid" 2>/dev/null || true
   [ -n "$a11y_bus_pid" ] && kill "$a11y_bus_pid" 2>/dev/null || true
   [ -n "$dbus_pid" ] && kill "$dbus_pid" 2>/dev/null || true
   [ -n "$xvfb_pid" ] && kill "$xvfb_pid" 2>/dev/null || true
@@ -195,6 +227,19 @@ focus_launcher() {
 }
 # Back to a blank root search, with the return to root key (Shift+Escape).
 to_root() { "$xdotool" key shift+Escape; sleep 1; }
+# Hides the launcher as a user does, with Escape at a blank root search
+# (where a start leaves it), until X window $window is no longer viewable.
+# Never focus_launcher after it: the Open Pane hotkey would show it again.
+hide_launcher() {
+  local _
+  for _ in 1 2 3; do
+    viewable "$window" || return 0
+    focus_window "$window" && "$xdotool" key Escape
+    sleep 1
+  done
+  viewable "$window" && { echo "the launcher did not hide on Escape"; exit 1; }
+  return 0
+}
 # Extensions are managed in Settings (#168), one page per extension, whose
 # switch and Actions menu answer the pointer: they are found by their
 # accessible names and invoked, as the smoke does (scripts/smoke-linux.sh
@@ -359,9 +404,10 @@ stop_pane() {
   pane_pid=
 }
 
-# Waits until file $1 holds text $2 ("present") or no longer does ("absent").
+# Waits until file $1 holds text $2 ("present") or no longer does ("absent"),
+# trying $4 times, a tenth of a second apart (300 by default).
 wait_for() {
-  for _ in $(seq 300); do
+  for _ in $(seq "${4:-300}"); do
     if grep -q "$2" "$1" 2>/dev/null; then [ "$3" = present ] && return; else [ "$3" = absent ] && return; fi
     sleep 0.1
   done
@@ -398,7 +444,73 @@ sleep "$idle_seconds"
 capture 2-idle-root.png
 stop_pane
 
-# 4. Installed but unused: the seven packages, none of them invoked. The
+# 4. Hidden idle (#189): Pane with its default extensions and nothing
+# else, hidden after the one show of its start and left alone, as it sits
+# in the background most of a user's day. A data folder of its own; the
+# defaults are acquired at its first setup from the payloads in
+# target/dist/artifacts, served on 127.0.0.1 as the smoke serves them.
+# Files' index covers an empty folder of the workload's
+# (PANE_TEST_FILE_INDEX_HOME), not the runner's home, so the phase
+# measures Pane idling, not a first walk of a home folder. The launcher is
+# hidden while the setup runs; the phase starts once the five defaults are
+# recorded and Pane has settled for PANE_MEASURE_SETTLE_SECONDS. Whatever
+# still runs then (the applications' icons, say) is part of the phase, and
+# the per-thread wake-ups and CPU in summary.json say whose it is. The
+# payloads are served from a folder of links to them beside an index
+# without its `application` entry: the smoke leaves a newer Pane package
+# named there, and an update offered would be no part of idling. Skipped
+# without the payloads (see above); its lines are left unindented.
+if [ -z "$skipped" ]; then
+set_phase hidden-setup
+main_data=$PANE_DATA_DIR
+export PANE_DATA_DIR=$out/hidden-data
+mkdir -p "$out/hidden-home"
+file_index_home=$(cd "$out/hidden-home" && pwd)
+export PANE_TEST_FILE_INDEX_HOME=$file_index_home
+hidden_artifacts=$out/hidden-artifacts
+rm -rf "$hidden_artifacts"
+mkdir -p "$hidden_artifacts"
+artifacts_path=$(cd "$artifacts" && pwd)
+for payload in "$artifacts_path"/*; do
+  [ "$(basename "$payload")" = pane-defaults.json ] || ln -s "$payload" "$hidden_artifacts/"
+done
+python3 - "$artifacts/pane-defaults.json" "$hidden_artifacts/pane-defaults.json" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    index = json.load(handle)
+index.pop("application", None)   # no update of Pane's own is offered
+with open(sys.argv[2], "w", encoding="utf-8") as handle:
+    json.dump(index, handle, indent=2)
+PY
+rm -f "$out/artifact-server.port"
+python3 "$here/artifact_server.py" "$hidden_artifacts" "$out/artifact-server.port" 2>>"$out/artifact-server.log" &
+artifact_server_pid=$!
+for _ in $(seq 600); do [ -s "$out/artifact-server.port" ] && break; kill -0 "$artifact_server_pid" 2>/dev/null || break; sleep 0.1; done
+[ -s "$out/artifact-server.port" ] || { echo "the local artifact source did not start (see $out/artifact-server.log)"; exit 1; }
+export PANE_ARTIFACTS="http://127.0.0.1:$(cat "$out/artifact-server.port")/"
+start_pane
+hide_launcher
+# Generous, as the smoke's: a slow runner may take a while to check every
+# payload's components.
+for default_ in "${default_extensions[@]}"; do
+  wait_for "$PANE_DATA_DIR/extensions/installed.json" "\"default\": \"$default_\"" present 6000
+done
+sleep "$settle_seconds"
+set_phase hidden-idle
+note default_extensions "${#default_extensions[@]}"
+sleep "$hidden_seconds"
+if viewable "$window"; then echo "the launcher showed itself during the hidden phase"; exit 1; fi
+stop_pane
+# The server may have ended already: under `set -e` a failed kill must not
+# end the workload.
+kill "$artifact_server_pid" 2>/dev/null || true
+wait "$artifact_server_pid" 2>/dev/null || true
+artifact_server_pid=
+unset PANE_ARTIFACTS PANE_TEST_FILE_INDEX_HOME
+export PANE_DATA_DIR=$main_data
+fi   # the hidden phase
+
+# 5. Installed but unused: the seven packages, none of them invoked. The
 # applications extension's host-side scan of desktop entries runs, as it
 # does for a user's Pane; no command is opened and nothing is typed.
 set_phase install-unused-packages
@@ -412,7 +524,7 @@ sleep "$unused_seconds"
 capture 3-installed-root.png
 stop_pane
 
-# 5. The calculator, a default extension, run repeatedly: an expression
+# 6. The calculator, a default extension, run repeatedly: an expression
 # typed into root search, Enter copies the answer, Escape clears it. The
 # first answer is checked to be sure the workload runs the calculator.
 start_pane
@@ -430,7 +542,7 @@ for run in $(seq $((calculator_runs - 1))); do
 done
 stop_pane
 
-# 6. Continuing work: the Watching service (a cycle a second) and the
+# 7. Continuing work: the Watching service (a cycle a second) and the
 # Counting schedule (a run a minute) keep running while Pane sits at root
 # search. Their counts in the packages' content are the proof the work ran.
 set_phase install-continuing-work
@@ -464,7 +576,7 @@ capture 6-counting.png
 "$xdotool" key Escape; sleep 1
 stop_pane
 
-# 7. Repeated lifecycle: one package of its own in a fresh data folder,
+# 8. Repeated lifecycle: one package of its own in a fresh data folder,
 # managed on its page in Settings (#168), which stays open through both
 # phases. Each reload (Reload, an item of the page's Actions menu) swaps
 # the component between the Rust and the JavaScript sample and waits until

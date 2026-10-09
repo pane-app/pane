@@ -731,8 +731,11 @@ runner can prove end to end.
 ## Remaining limits
 
 - Only a CI runner (Windows Server) was used, not a Windows 10/11 desktop.
-- The #4 resource and latency workload exists for Linux only; this
-  platform's measurements and targets are not started
+- The #4 resource and latency workload exists for Linux only. On this
+  platform only Pane's cost while hidden has a script
+  (`scripts/measure-windows.ps1`, #189), run on the user's machine with
+  their consent and not run yet; the other measurements and every target
+  are not started
   ([the measurement record](../research/resource-measurements.md)).
 - The installer (#51, [above](#installing-pane-and-acquiring-its-calculator-51))
   and the application update (#54, [above](#installing-a-pane-application-update-by-user-choice-54))

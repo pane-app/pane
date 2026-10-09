@@ -6,17 +6,80 @@
 //! more than a walk would cost, the volume keeps none, the system refused)
 //! has its roots reconciled instead.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 
-use super::{Caught, CaughtUpBy, ChangeSource, NotifyWatch, Sink, Watching};
-use crate::file_index::journal::{JournalCursor, JournalRead, Names, read_journal, resolve};
+use super::{Caught, CaughtUpBy, ChangeSource, FolderIds, NotifyWatch, Sink, Watching};
+use crate::file_index::journal::{
+    CatchUp, JournalCursor, JournalRead, Names, gone_unheld, read_journal, repository_of_info,
+    resolve,
+};
 use crate::file_index::scope::Scope;
-use crate::file_index::store::FileIndex;
-use crate::file_index::{catch_up_changes, missing_from};
+use crate::file_index::store::{Change, FileIndex};
+use crate::file_index::{EntryKind, catch_up_changes, missing_from};
 
 /// Records past which reading the journal costs more than reconciling.
 const MAX_RECORDS: usize = 1_000_000;
+
+/// The most folders the index does not hold that one catch-up looks up by
+/// id, for a repository's `.git/info` (#186); past it, an `exclude` changed
+/// while Pane was not running in a folder not looked up is not seen.
+const MAX_FOLDER_LOOKUPS: usize = 4_096;
+
+/// The folders whose ignore rules `caught`'s records may have changed
+/// without naming the file that sets them, to re-check (#186): a folder an
+/// entry the index did not hold went from ([`gone_unheld`]: a hidden
+/// `.gitignore` or `.git` deleted), and a repository whose `.git/info` a
+/// record was in (its `exclude`; `.git` is never indexed, so such records
+/// resolve to nothing).
+fn rules_changed(
+    index: &FileIndex,
+    scope: &Scope,
+    caught: &CatchUp,
+    names: &mut Names,
+) -> Vec<PathBuf> {
+    let mut folders = gone_unheld(
+        caught,
+        &mut |folder: &std::path::Path| {
+            index
+                .children(folder)
+                .into_iter()
+                .map(|(_, meta)| meta.file_id)
+                .collect::<HashSet<u64>>()
+        },
+        &mut |id| names.name(id).is_some(),
+    );
+    for &id in caught.unresolved_folders.iter().take(MAX_FOLDER_LOOKUPS) {
+        if let Some(path) = names.path(id)
+            && let Some(repository) = repository_of_info(&path)
+            && scope.root_of(repository).is_some()
+        {
+            folders.push(repository.to_path_buf());
+        }
+    }
+    folders
+}
+
+/// The folders among `found` that the index did not hold as folders: made,
+/// moved in or no longer hidden, so that what they hold is not indexed
+/// either; walked whole.
+fn newly_admitted(index: &FileIndex, found: &[Change]) -> Vec<PathBuf> {
+    found
+        .iter()
+        .filter_map(|change| match change {
+            Change::Put(entry)
+                if entry.meta.kind == EntryKind::Folder
+                    && index
+                        .get(&entry.path)
+                        .is_none_or(|meta| meta.kind != EntryKind::Folder) =>
+            {
+                Some(entry.path.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
 
 pub(crate) struct Journal;
 
@@ -48,7 +111,7 @@ fn why(read: &JournalRead) -> String {
 impl ChangeSource for Journal {
     fn cursors(&self, scope: &Scope) -> Vec<JournalCursor> {
         let mut cursors: Vec<JournalCursor> = Vec::new();
-        for root in &scope.rules().roots {
+        for root in &scope.kept_roots() {
             if let Some(cursor) = current(root)
                 && !cursors.iter().any(|known| known.volume == cursor.volume)
             {
@@ -63,15 +126,19 @@ impl ChangeSource for Journal {
         index: &FileIndex,
         scope: &Scope,
         cursors: &[JournalCursor],
+        folders: &mut FolderIds<'_>,
         _cancel: &AtomicBool,
     ) -> Caught {
         let mut changes = Vec::new();
         let mut walk = Vec::new();
+        let mut recheck = Vec::new();
         let mut reconcile: Vec<PathBuf> = Vec::new();
         let mut kept: Vec<JournalCursor> = Vec::new();
         let mut note = None;
-        let mut folders = index.folder_ids();
-        for root in &scope.rules().roots {
+        // A root the rules leave out (a network share or a removable drive)
+        // is not caught up: it holds nothing in the index.
+        let roots = scope.kept_roots();
+        for root in &roots {
             // The volume the root is on now, and where Pane left its journal.
             let Some(now) = current(root) else {
                 reconcile.push(root.clone());
@@ -91,10 +158,14 @@ impl ChangeSource for Journal {
             match read {
                 JournalRead::Records { records, cursor } => {
                     // Read without administrator rights, the records carry
-                    // no names: entries are named by their ids.
+                    // no names: entries are named by their ids. The folder
+                    // ids are read from the index here, the first time
+                    // records need them, and once for every volume.
                     let mut names = Names::for_volume_of(root);
-                    let caught = resolve(&records, &mut folders, &mut |id| names.name(id));
+                    let caught = resolve(&records, folders.ids(), &mut |id| names.name(id));
                     let (found, folders_to_walk) = catch_up_changes(scope, &caught);
+                    recheck.extend(rules_changed(index, scope, &caught, &mut names));
+                    walk.extend(newly_admitted(index, &found));
                     changes.extend(missing_from(index, &caught.listed));
                     changes.extend(found);
                     walk.extend(folders_to_walk);
@@ -105,7 +176,7 @@ impl ChangeSource for Journal {
                         note.get_or_insert_with(|| why(&other));
                     }
                     // Every root on this volume is reconciled.
-                    for same in &scope.rules().roots {
+                    for same in &roots {
                         if current(same).is_some_and(|cursor| cursor.volume == now.volume) {
                             reconcile.push(same.clone());
                         }
@@ -116,7 +187,9 @@ impl ChangeSource for Journal {
         }
         reconcile.sort();
         reconcile.dedup();
-        if !reconcile.is_empty() && reconcile.len() == scope.rules().roots.len() {
+        walk.sort();
+        walk.dedup();
+        if !reconcile.is_empty() && reconcile.len() == roots.len() {
             return Caught::Reconcile(
                 note.unwrap_or_else(|| "no change journal could be read".into()),
             );
@@ -125,6 +198,7 @@ impl ChangeSource for Journal {
             changes,
             walk,
             reconcile,
+            recheck,
             cursors: kept,
             how: CaughtUpBy::Journal,
             note,
@@ -138,6 +212,7 @@ impl ChangeSource for Journal {
         _folders: Vec<PathBuf>,
         sink: Sink,
     ) -> Result<Box<dyn Watching>, String> {
-        Ok(Box::new(NotifyWatch::start(&scope.rules().roots, sink)?))
+        // A network share is reconciled now and then instead.
+        Ok(Box::new(NotifyWatch::start(&scope.watched_roots(), sink)?))
     }
 }

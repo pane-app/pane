@@ -8,13 +8,14 @@ name: CI (branch)
 # tests, split into three shards that run at once (`cargo xtask ci-tests
 # --partition hash:N/3`, under cargo-nextest, which retries a flaky
 # failure instead of failing the run for it), so a push's wall time is
-# the slowest shard's. Windows and macOS run the same lints, which
-# type-check and lint the code only they compile (the cfg-gating class of
-# error) in minutes: one full test run per push is the verification an
-# iterating branch needs, and the full suite on every operating system
-# runs at ci-fast.yml's verify tier and in ci.yml's release matrix. A
-# push that changes only documentation runs nothing but the summary.
-# docs/agents/ci.md describes the tiers.
+# the slowest shard's; shard 2 then runs the file index's regression
+# guard (`cargo xtask file-index-guard`). Windows and macOS run the same
+# lints, which type-check and lint the code only they compile (the
+# cfg-gating class of error) in minutes: one full test run per push is
+# the verification an iterating branch needs, and the full suite on every
+# operating system runs at ci-fast.yml's verify tier and in ci.yml's
+# release matrix. A push that changes only documentation runs nothing but
+# the summary. docs/agents/ci.md describes the tiers.
 on:
   push:
     branches-ignore:
@@ -120,6 +121,16 @@ jobs:
         run: xvfb-run -a cargo nextest run --locked --workspace --retries 2 -E 'binary(clipboard_adapter_linux)'
         env:
           PANE_TEST_REAL_CLIPBOARD: "1"
+      # The file index's regression guard (#183): its benchmark over a
+      # reduced generated tree (about 20,000 entries), built in the
+      # development profile as the tests built it, failing when a measure
+      # (first index, index size, each kind of query's 95th percentile on
+      # one segment and on several, a changed file re-indexed) is over its
+      # generous ceiling. In shard 2, after its tests, reusing their build
+      # (shard 1 already runs the Xvfb step).
+      - name: Run the file index's regression guard
+        if: runner.os == 'Linux' && matrix.shard == '2/3'
+        run: cargo xtask file-index-guard
 
   # The one check to require: green when every job above passed or was
   # skipped, red when one failed or was cancelled, so jobs and shards may

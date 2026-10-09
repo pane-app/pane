@@ -41,8 +41,13 @@
 //!   run it with the options that follow (#174; by default a generated
 //!   tree of 450,000 entries; `--home` indexes the real home folder, read
 //!   only; the options are listed in
-//!   `crates/pane-core/examples/file_index_bench.rs`). It runs on demand,
-//!   never in CI.
+//!   `crates/pane-core/examples/file_index_bench.rs`). It runs on demand;
+//!   CI runs only `file-index-guard`.
+//! - `file-index-guard`: the file index's regression guard (#183): the
+//!   same benchmark, as the tests built it (development profile), over a
+//!   reduced generated tree of about 20,000 entries with `--guard`, which
+//!   fails when a measure is over its generous ceiling. `ci-branch.yml`'s
+//!   Linux tests run it in one shard, after the tests.
 
 mod package;
 mod zip;
@@ -144,14 +149,15 @@ fn main() -> ExitCode {
         (Some("js-guests"), _) => js_guests(),
         (Some("ci-lints"), _) => ci_lints(),
         (Some("sdks"), _) => sdks(),
+        (Some("file-index-guard"), _) => file_index_guard(),
         (Some("package-linux"), Ok(version)) => package::linux(dev, version),
         (Some("package-windows"), Ok(version)) => package::windows(dev, version),
         (Some("package-macos"), Ok(version)) => package::macos(dev, version),
         (_, Err(why)) => Err(why),
         _ => Err("usage: cargo xtask \
-             <guests|js-guests|ci-lints|sdks|package-linux|package-windows|package-macos> \
-             [--dev] [--package-version <version>], cargo xtask <ci|ci-tests> \
-             [nextest options], or cargo xtask file-index-bench [options]"
+             <guests|js-guests|ci-lints|sdks|file-index-guard|package-linux|package-windows|\
+             package-macos> [--dev] [--package-version <version>], cargo xtask \
+             <ci|ci-tests> [nextest options], or cargo xtask file-index-bench [options]"
             .into()),
     };
     match result {
@@ -641,4 +647,42 @@ fn file_index_bench(args: Vec<String>) -> Result<(), String> {
             "--",
         ])
         .args(args))
+}
+
+/// The file index's regression guard (#183): the benchmark over a reduced
+/// generated tree (about 20,000 entries, one run, the walk at normal
+/// priority) with its ceilings (`--guard`), failing when a measure is over
+/// one. It runs the benchmark as the workspace's tests build it, in the
+/// development profile, so that CI reuses their build instead of building
+/// Pane's dependencies again in release: `cargo build --workspace
+/// --examples` selects the packages and features the tests do, so it only
+/// builds the example, if the tests have not already. Its ceilings are set
+/// for that unoptimized build.
+fn file_index_guard() -> Result<(), String> {
+    let root = root();
+    run(cargo()
+        .current_dir(&root)
+        .args(["build", "--locked", "--workspace", "--examples"]))?;
+    // Where cargo built it: `CARGO_TARGET_DIR`, else `CARGO_BUILD_TARGET_DIR`
+    // (`build.target-dir` from the environment), else `target`, in the
+    // development profile's `debug`. A `build.target-dir` in a cargo
+    // configuration file is not read: Pane's `.cargo/config.toml` sets none.
+    let target = ["CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR"]
+        .into_iter()
+        .find_map(std::env::var_os)
+        .map(|dir| root.join(dir))
+        .unwrap_or_else(|| root.join("target"));
+    let program = format!("file_index_bench{}", std::env::consts::EXE_SUFFIX);
+    let program = target.join("debug").join("examples").join(program);
+    let options = [
+        "--generate",
+        "20000",
+        "--runs",
+        "1",
+        "--queries",
+        "550",
+        "--foreground",
+        "--guard",
+    ];
+    run(Command::new(program).current_dir(&root).args(options))
 }

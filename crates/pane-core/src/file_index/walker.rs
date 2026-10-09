@@ -252,7 +252,9 @@ struct Shared<'a> {
 
 /// Walks every root of `scope` (or, with [`walk_folders`], some folders
 /// below them), handing each folder's admitted entries to `sink` from the
-/// walker's threads. Stops early when `cancel` is set.
+/// walker's threads. A root on a network share or a removable drive is
+/// left out unless other volumes are included. Stops early when `cancel` is
+/// set.
 pub fn walk(
     scope: &Scope,
     options: &WalkOptions,
@@ -260,22 +262,30 @@ pub fn walk(
     sink: &(dyn Fn(Vec<Entry>) + Sync),
 ) -> WalkReport {
     let mut jobs = Vec::new();
+    let mut excluded = 0;
     for (root, path) in scope.rules().roots.iter().enumerate() {
-        if let Ok(meta) = meta_at(path) {
-            jobs.push(Job {
-                path: path.clone(),
-                meta,
-                parent: None,
-                root,
-            });
+        // Asked first, so that a share left out is not even looked at.
+        if scope.leaves_out_root(root) {
+            excluded += 1;
+            continue;
         }
+        let Ok(meta) = meta_at(path) else {
+            continue;
+        };
+        jobs.push(Job {
+            path: path.clone(),
+            meta,
+            parent: None,
+            root,
+        });
     }
-    run(scope, options, cancel, sink, jobs)
+    run(scope, options, cancel, sink, jobs, excluded)
 }
 
 /// Walks the folders `folders` again, each with everything under it the
 /// rules admit, as a catch-up does for a folder renamed or moved into the
-/// scope. A folder the rules do not admit is skipped.
+/// scope. A folder the rules do not admit is skipped, and so is one that
+/// is another volume mounted there the rules leave out.
 pub fn walk_folders(
     scope: &Scope,
     folders: &[PathBuf],
@@ -289,14 +299,25 @@ pub fn walk_folders(
         let Some(root) = scope.root_of(folder) else {
             continue;
         };
+        // Asked first, so that a share left out is not even looked at.
+        if !scope.admits(folder, true, &mut known) {
+            continue;
+        }
         let Ok(meta) = meta_at(folder) else {
             continue;
         };
-        if meta.kind != EntryKind::Folder || !scope.admits(folder, true, &mut known) {
+        if meta.kind != EntryKind::Folder {
             continue;
         }
         let parent = match folder.parent() {
             Some(parent) if *folder != scope.rules().roots[root] => {
+                // Another volume mounted there, the rules leave out.
+                if !scope.rules().include_other_volumes
+                    && let Ok(above) = meta_at(parent)
+                    && scope.leaves_out_mount(folder, meta.volume, above.volume)
+                {
+                    continue;
+                }
                 scope.context_at(root, parent, &mut known)
             }
             _ => None,
@@ -308,15 +329,18 @@ pub fn walk_folders(
             root,
         });
     }
-    run(scope, options, cancel, sink, jobs)
+    run(scope, options, cancel, sink, jobs, 0)
 }
 
+/// Lists `jobs` and everything under them the rules admit; `excluded`
+/// entries were left out already.
 fn run(
     scope: &Scope,
     options: &WalkOptions,
     cancel: &AtomicBool,
     sink: &(dyn Fn(Vec<Entry>) + Sync),
     jobs: Vec<Job>,
+    excluded: u64,
 ) -> WalkReport {
     let shared = Shared {
         scope,
@@ -326,7 +350,7 @@ fn run(
         wake: Condvar::new(),
         entries: AtomicU64::new(0),
         folders: AtomicU64::new(0),
-        excluded: AtomicU64::new(0),
+        excluded: AtomicU64::new(excluded),
         ceiling: AtomicBool::new(false),
         unreadable: Mutex::new((0, Vec::new())),
         refused: Mutex::new((0, Vec::new())),
@@ -490,9 +514,9 @@ fn list_job(shared: &Shared<'_>, job: Job, lister: &mut Option<Lister>) -> (Vec<
         };
         if shared.scope.excludes(&context, &candidate).is_some()
             || (listed.kind == EntryKind::Folder
-                && !shared.scope.rules().include_other_volumes
-                && listed.volume != job.meta.volume
-                && other_volume(&path))
+                && shared
+                    .scope
+                    .leaves_out_mount(&path, listed.volume, job.meta.volume))
         {
             shared.excluded.fetch_add(1, Ordering::Relaxed);
             continue;
@@ -557,45 +581,6 @@ fn file_id_and_volume(path: &Path, _metadata: &std::fs::Metadata) -> (u64, u64) 
 #[cfg(not(any(unix, windows)))]
 fn file_id_and_volume(_path: &Path, _metadata: &std::fs::Metadata) -> (u64, u64) {
     (0, 0)
-}
-
-/// Whether the folder at `path`, on another volume than its parent, is on a
-/// network or removable file system, which a walk does not enter unless the
-/// user includes other volumes. Only Linux mounts other volumes under a
-/// home folder in practice; on Windows another volume under a root is
-/// reached only through a junction or mount point, a link never followed.
-#[cfg(target_os = "linux")]
-fn other_volume(path: &Path) -> bool {
-    use std::os::unix::ffi::OsStrExt;
-    const NETWORK: [i64; 9] = [
-        0x6969,      // NFS
-        0x517B,      // SMB
-        0xFF53_4D42, // CIFS
-        0xFE53_4D42, // SMB2
-        0x6573_5546, // FUSE (sshfs, rclone and the like)
-        0x5346_414F, // AFS
-        0x0BD0_0BD0, // Lustre
-        0x0000_4D44, // FAT (removable drives)
-        0x2011_BAB0, // exFAT
-    ];
-    let Ok(path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
-        return true;
-    };
-    // SAFETY: a plain C structure, for which all zeroes is a valid value.
-    let mut stats: libc::statfs = unsafe { std::mem::zeroed() };
-    // SAFETY: a NUL-terminated path and a structure of the call's own type.
-    if unsafe { libc::statfs(path.as_ptr(), &mut stats) } != 0 {
-        return true;
-    }
-    // `f_type` is an `i64` on the 64-bit targets Pane builds for, and narrower elsewhere.
-    #[allow(clippy::unnecessary_cast)]
-    let kind = stats.f_type as i64;
-    NETWORK.contains(&kind)
-}
-
-#[cfg(not(target_os = "linux"))]
-fn other_volume(_path: &Path) -> bool {
-    false
 }
 
 /// The entries of the folder at `path`, on the volume `volume`, without
@@ -1013,6 +998,49 @@ mod tests {
         let mut found = relative(&home, &found.into_inner().unwrap());
         found.sort();
         assert_eq!(found, ["b", "b/two.txt"]);
+    }
+
+    #[test]
+    fn a_root_on_a_network_share_is_walked_only_once_other_volumes_are_included() {
+        let (dir, home) = tree(&["notes.txt"]);
+        let share = dir.path().join("share");
+        fs::create_dir_all(share.join("Projects")).unwrap();
+        fs::write(share.join("Projects/far plan.txt"), b"x").unwrap();
+        let mut rules = ScopeRules::for_home(home.clone());
+        rules.roots.push(share.clone());
+        // As the system would answer for a mapped drive or a mounted share.
+        let volumes =
+            crate::file_index::volume::tests::fake_volumes(&share, &dir.path().join("stick"));
+        let scope = Scope::with_volumes(rules.clone(), volumes.clone());
+        let (report, entries) = walked(&scope, &WalkOptions::default());
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.path == home.join("notes.txt"))
+        );
+        assert!(
+            entries.iter().all(|entry| !entry.path.starts_with(&share)),
+            "the share is left out"
+        );
+        assert_eq!(report.excluded, 1);
+        let found = Mutex::new(Vec::new());
+        walk_folders(
+            &scope,
+            std::slice::from_ref(&share),
+            &WalkOptions::default(),
+            &AtomicBool::new(false),
+            &|batch| found.lock().unwrap().extend(batch),
+        );
+        assert!(found.into_inner().unwrap().is_empty());
+
+        rules.include_other_volumes = true;
+        let scope = Scope::with_volumes(rules, volumes);
+        let (_, entries) = walked(&scope, &WalkOptions::default());
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.path == share.join("Projects/far plan.txt"))
+        );
     }
 
     #[cfg(unix)]

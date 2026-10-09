@@ -44,13 +44,24 @@
 //!   nothing, a guest it runs traps at its next epoch check, and it frees
 //!   what it holds only once it returns.
 //!
+//! The epoch ticker and the watchdog run only while there is something to
+//! time or watch (#190). A runtime thread's guest code runs only inside a
+//! call, and every request is counted in flight from when it is sent until
+//! it has been served ([`Watch::call`]). While none is, the ticker waits
+//! without a timeout; so does the watchdog while the thread is also outside
+//! any poll of its work. A call starting wakes both, the thread entering a
+//! poll wakes the watchdog, and the thread's end wakes both for the last
+//! time. Each checks and waits under the lock those change under, so a call
+//! that starts as a timer goes to wait still wakes it. While a call is in
+//! flight they tick and look exactly as they always did.
+//!
 //! The values are explicit choices, not measurements (provisional); tests
 //! and smokes may shorten them ([`Limits`], debug builds only).
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
@@ -170,8 +181,17 @@ pub(crate) struct Watch {
     host_time: AtomicU64,
     /// How many exemptions (compiling a component) are in force.
     exempt: AtomicUsize,
-    /// Which poll of its work the thread is inside, if any.
+    /// Which poll of its work the thread is inside, if any, how many
+    /// requests are in flight on it, and whether its timers wait.
     polls: Mutex<Polls>,
+    /// Wakes the epoch ticker and the watchdog where they wait (see
+    /// [`Watch::wait`]): a call starting, the thread entering a poll while
+    /// the watchdog waits, or the thread's end.
+    awake: Condvar,
+    /// How many times the epoch ticker ticked, for tests ([`Timers`]).
+    ticks: AtomicU64,
+    /// How many times the watchdog looked, for tests ([`Timers`]).
+    looks: AtomicU64,
     /// Set once Pane gave up on the thread.
     given_up: AtomicBool,
     /// Set once the thread's end was handled: it stopped, crashed or was
@@ -191,6 +211,76 @@ pub(crate) struct Watch {
 struct Polls {
     current: Option<u64>,
     started: u64,
+    /// How many requests are in flight on the thread ([`Watch::call`]).
+    calls: usize,
+    /// Whether the epoch ticker waits for a call ([`Watch::wait`]).
+    ticker_waits: bool,
+    /// Whether the watchdog waits for a call or a poll ([`Watch::wait`]).
+    watchdog_waits: bool,
+}
+
+impl Polls {
+    /// Whether `timer` has nothing to do: no call is in flight, and, for
+    /// the watchdog, the thread is outside any poll of its work.
+    fn idle(&self, timer: Timer) -> bool {
+        self.calls == 0 && (timer == Timer::Ticker || self.current.is_none())
+    }
+
+    /// Where it is noted that `timer` waits.
+    fn waits(&mut self, timer: Timer) -> &mut bool {
+        match timer {
+            Timer::Ticker => &mut self.ticker_waits,
+            Timer::Watchdog => &mut self.watchdog_waits,
+        }
+    }
+}
+
+/// One of a runtime thread's two timer threads, which wait while they have
+/// nothing to do (see [`Watch::wait`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Timer {
+    /// The epoch ticker ([`tick`]): needed only while a call is in flight,
+    /// the only time guest code runs.
+    Ticker,
+    /// The watchdog (`supervisor`): needed while a call is in flight or
+    /// the thread is inside a poll of its work, the only times it can be
+    /// stuck.
+    Watchdog,
+}
+
+/// What a runtime thread's epoch ticker and watchdog are doing, for tests
+/// that check they wait while no call runs. Debug builds only.
+#[cfg(any(test, debug_assertions))]
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Timers {
+    /// The epoch ticker waits for a call to start.
+    pub ticker_waiting: bool,
+    /// The watchdog waits for a call to start or the thread to work.
+    pub watchdog_waiting: bool,
+    /// How many requests are in flight on the thread.
+    pub calls: usize,
+    /// How many times the epoch ticker has ticked.
+    pub ticks: u64,
+    /// How many times the watchdog has looked.
+    pub looks: u64,
+}
+
+/// One request in flight on a runtime thread (see [`Watch::call`]); it no
+/// longer is once this is dropped.
+pub(crate) struct InFlight(Arc<Watch>);
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        // Never panics while the thread unwinds from a crash; otherwise a
+        // debug build (the tests) says so when a call is let go of twice.
+        let mut polls = self.0.polls();
+        debug_assert!(
+            polls.calls > 0 || std::thread::panicking(),
+            "a request in flight was counted out twice"
+        );
+        polls.calls = polls.calls.saturating_sub(1);
+    }
 }
 
 impl Default for Watch {
@@ -202,6 +292,9 @@ impl Default for Watch {
             host_time: AtomicU64::new(0),
             exempt: AtomicUsize::new(0),
             polls: Mutex::new(Polls::default()),
+            awake: Condvar::new(),
+            ticks: AtomicU64::new(0),
+            looks: AtomicU64::new(0),
             given_up: AtomicBool::new(false),
             ended: AtomicBool::new(false),
             finished: AtomicBool::new(false),
@@ -306,6 +399,65 @@ impl Watch {
     /// Tells the watchdog the thread made progress.
     pub(crate) fn beat(&self) {
         self.beats.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Counts a request in flight on the thread until the guard is
+    /// dropped: from when it is sent until it has been served, or dropped
+    /// with the thread. Guest code runs only meanwhile, so the epoch ticker
+    /// and the watchdog, which wait while none is, are woken as it starts.
+    pub(crate) fn call(self: &Arc<Watch>) -> InFlight {
+        let mut polls = self.polls();
+        polls.calls += 1;
+        if polls.ticker_waits || polls.watchdog_waits {
+            self.awake.notify_all();
+        }
+        drop(polls);
+        InFlight(self.clone())
+    }
+
+    /// Waits, without a timeout, while `timer` has nothing to do (see
+    /// [`Timer`]) and the thread's end was not handled; returns at once
+    /// otherwise. A call starting, the thread entering a poll (for the
+    /// watchdog) or its end wakes it. What it waits for is checked and
+    /// waited on under the lock it changes under, so a call that starts
+    /// as the timer goes to wait is never missed.
+    pub(super) fn wait(&self, timer: Timer) {
+        let mut polls = self.polls();
+        while polls.idle(timer) && !self.ended() {
+            *polls.waits(timer) = true;
+            polls = self.awake.wait(polls).unwrap_or_else(|p| p.into_inner());
+        }
+        *polls.waits(timer) = false;
+    }
+
+    /// Whether `timer` has nothing to do now, and would wait (see
+    /// [`Watch::wait`]).
+    pub(super) fn idle(&self, timer: Timer) -> bool {
+        self.polls().idle(timer) && !self.ended()
+    }
+
+    /// Wakes the timers wherever they wait, to see the thread's end.
+    fn wake(&self) {
+        let _polls = self.polls();
+        self.awake.notify_all();
+    }
+
+    /// Notes that the watchdog looked, for tests ([`Timers`]).
+    pub(super) fn looked(&self) {
+        self.looks.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// What the thread's timers are doing now.
+    #[cfg(any(test, debug_assertions))]
+    pub(super) fn timers(&self) -> Timers {
+        let polls = self.polls();
+        Timers {
+            ticker_waiting: polls.ticker_waits,
+            watchdog_waiting: polls.watchdog_waits,
+            calls: polls.calls,
+            ticks: self.ticks.load(Ordering::SeqCst),
+            looks: self.looks.load(Ordering::SeqCst),
+        }
     }
 
     /// Marks a host call on the runtime thread until the guard is dropped:
@@ -414,6 +566,8 @@ impl Watch {
             }
             self.given_up.store(true, Ordering::SeqCst);
             self.ended.store(true, Ordering::SeqCst);
+            // The epoch ticker, for its last tick, and the watchdog see it.
+            self.awake.notify_all();
         }
         self.fence.close();
         true
@@ -421,9 +575,12 @@ impl Watch {
 
     /// Notes that the thread ended (it stopped or crashed); returns whether
     /// its end is this one to handle, rather than Pane having given up on
-    /// it before.
+    /// it before. Its timers are woken: the epoch ticker ticks a last time
+    /// and both stop.
     pub(super) fn end(&self) -> bool {
-        !self.ended.swap(true, Ordering::SeqCst)
+        let first = !self.ended.swap(true, Ordering::SeqCst);
+        self.wake();
+        first
     }
 
     /// Whether the thread's end was handled.
@@ -509,18 +666,28 @@ impl Quiet {
     pub(super) fn last(&self) -> Option<Progress> {
         self.last
     }
+
+    /// Whether it said the thread is not responding yet ([`Verdict::Slow`])
+    /// and has not seen it carry on since.
+    pub(super) fn warned(&self) -> bool {
+        self.warned
+    }
 }
 
 /// Advances `engine`'s epoch every [`TICK`] for the runtime thread `watch`
 /// watches, on a thread of its own, which stops once that thread's end was
-/// handled or the engine is gone. When Pane gave up on the thread, a last
-/// tick makes a guest it still runs reach its epoch check, where it traps.
+/// handled or the engine is gone. While no call is in flight on the thread,
+/// no guest code runs and it waits, without ticking, until one starts or
+/// the thread ends (see [`Watch::wait`]). When Pane gave up on the thread,
+/// a last tick makes a guest it still runs reach its epoch check, where it
+/// traps.
 pub(super) fn tick(engine: &wasmtime::Engine, watch: Arc<Watch>) {
     let engine = engine.weak();
     let _ = std::thread::Builder::new()
         .name("pane-runtime-epoch".into())
         .spawn(move || {
             loop {
+                watch.wait(Timer::Ticker);
                 std::thread::sleep(TICK);
                 let Some(engine) = engine.upgrade() else {
                     return;
@@ -528,6 +695,7 @@ pub(super) fn tick(engine: &wasmtime::Engine, watch: Arc<Watch>) {
                 // Read before the tick, so the last tick follows the end.
                 let ended = watch.ended();
                 engine.increment_epoch();
+                watch.ticks.fetch_add(1, Ordering::SeqCst);
                 if ended {
                     return;
                 }
@@ -684,6 +852,11 @@ impl<F: Future<Output = ()>> Future for Watched<'_, F> {
             let mut polls = self.watch.polls();
             polls.started += 1;
             polls.current = Some(polls.started);
+            // A thread working with no call in flight (a nudge, an injected
+            // fault) is watched too.
+            if polls.watchdog_waits {
+                self.watch.awake.notify_all();
+            }
         }
         self.watch.beat();
         let watch = self.watch;
@@ -968,5 +1141,193 @@ mod tests {
             Poll::<()>::Pending
         });
         assert!(!meter.exhausted(), "{:?}", meter.spent);
+    }
+
+    /// A core module whose `spin` computes for ever without waiting:
+    /// `(module (func (export "spin") (loop (br 0))))`. Line by line: the
+    /// header, the type `() -> ()`, one function of it, its export as
+    /// `spin`, and its body (no locals, `loop`, `br 0`, `end`, `end`).
+    const SPIN: &[u8] = b"\0asm\x01\0\0\0\
+        \x01\x04\x01\x60\0\0\
+        \x03\x02\x01\0\
+        \x07\x08\x01\x04spin\0\0\
+        \x0a\x09\x01\x07\0\x03\x40\x0c\0\x0b\x0b";
+
+    /// An engine whose guests yield at each epoch tick, as the runtime's.
+    fn epoch_engine() -> wasmtime::Engine {
+        let mut config = wasmtime::Config::new();
+        config.epoch_interruption(true);
+        wasmtime::Engine::new(&config).unwrap()
+    }
+
+    /// Waits until `done`, failing with `what` after a generous minute.
+    fn until(done: impl Fn() -> bool, what: &str) {
+        let started = Instant::now();
+        while !done() {
+            assert!(started.elapsed() < Duration::from_secs(60), "{what}");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    /// Runs `module`'s `spin` as the runtime thread runs a guest call:
+    /// metered against `limits`, yielding at each epoch tick, polled until
+    /// it ends. How long it computed before it was stopped.
+    fn spin(
+        engine: &wasmtime::Engine,
+        module: &wasmtime::Module,
+        watch: &Arc<Watch>,
+        limits: &Arc<Mutex<Limits>>,
+    ) -> Duration {
+        let mut store = wasmtime::Store::new(engine, ());
+        store.set_epoch_deadline(1);
+        store.epoch_deadline_callback(|_| Ok(wasmtime::UpdateDeadline::Yield(1)));
+        let module = module.clone();
+        let mut running = metered(watch.clone(), limits.clone(), async move {
+            let instance = wasmtime::Instance::new_async(&mut store, &module, &[]).await?;
+            let spin = instance.get_typed_func::<(), ()>(&mut store, "spin")?;
+            spin.call_async(&mut store, ()).await
+        });
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        loop {
+            match Pin::new(&mut running).poll(&mut cx) {
+                Poll::Ready(Err(_)) => return running.meter.spent,
+                Poll::Ready(Ok(result)) => panic!("spin ended by itself: {result:?}"),
+                Poll::Pending => {}
+            }
+        }
+    }
+
+    /// The ticker has work only while a call is in flight; the watchdog
+    /// also while the thread is inside a poll of its work. The thread's end
+    /// is work for both: the ticker's last tick, and both stopping.
+    #[test]
+    fn the_timers_have_work_only_while_a_call_is_in_flight_or_the_thread_works() {
+        let watch = Arc::new(Watch::default());
+        let idle = |timer: Timer| watch.idle(timer);
+        assert!(idle(Timer::Ticker) && idle(Timer::Watchdog));
+        watch.polls().current = Some(1);
+        assert!(idle(Timer::Ticker) && !idle(Timer::Watchdog));
+        watch.polls().current = None;
+        let call = watch.call();
+        let another = watch.call();
+        assert!(!idle(Timer::Ticker) && !idle(Timer::Watchdog));
+        drop(call);
+        assert!(!idle(Timer::Ticker), "one call is still in flight");
+        drop(another);
+        assert!(idle(Timer::Ticker) && idle(Timer::Watchdog));
+        assert!(watch.end());
+        assert!(!idle(Timer::Ticker) && !idle(Timer::Watchdog));
+    }
+
+    /// With no call in flight the ticker waits and does not tick; a call
+    /// starting wakes it, and it ticks every [`TICK`] until the call was
+    /// served. The thread's end gets one last tick, then it stops.
+    #[test]
+    fn the_ticker_waits_while_no_call_is_in_flight_and_ticks_for_one() {
+        let engine = epoch_engine();
+        let watch = Arc::new(Watch::default());
+        tick(&engine, watch.clone());
+        until(|| watch.timers().ticker_waiting, "the ticker never waited");
+        let ticks = watch.timers().ticks;
+        std::thread::sleep(TICK * 10);
+        assert_eq!(
+            watch.timers().ticks,
+            ticks,
+            "it ticked with no call in flight"
+        );
+        assert!(watch.timers().ticker_waiting);
+
+        let call = watch.call();
+        until(
+            || watch.timers().ticks >= ticks + 3,
+            "it did not tick for a call in flight",
+        );
+        assert!(!watch.timers().ticker_waiting);
+        drop(call);
+        until(
+            || watch.timers().ticker_waiting,
+            "it did not wait again once the call was served",
+        );
+
+        let ticks = watch.timers().ticks;
+        assert!(watch.end());
+        until(
+            || watch.timers().ticks == ticks + 1,
+            "no last tick followed the end",
+        );
+        std::thread::sleep(TICK * 10);
+        assert_eq!(
+            watch.timers().ticks,
+            ticks + 1,
+            "it ticked after its last tick"
+        );
+    }
+
+    /// The race a waiting ticker must not lose: calls start just before, as
+    /// and just after the ticker goes to wait, each running a guest that
+    /// computes without ever waiting. Every one is still ticked, so it
+    /// yields, and is stopped once it computed for its limit; a lost
+    /// wake-up would leave it computing for ever.
+    ///
+    /// A smoke test, not a proof. What rules a lost wake-up out is the
+    /// lock discipline of [`Watch::wait`] and [`Watch::call`]: the ticker
+    /// checks that no call is in flight, notes that it waits and goes to
+    /// wait under the lock `call` counts a call under (the condition
+    /// variable lets go of it only once the ticker waits), so a call
+    /// counted before the check is seen by it, and one counted after finds
+    /// the ticker noted as waiting and wakes it. The even rounds start a
+    /// call only once the ticker is seen waiting, so they exercise the
+    /// wake-up of a ticker already asleep; the odd rounds start one at
+    /// varied moments around the tick after the last call, which may or
+    /// may not land between the check and the wait. Neither forces that
+    /// interleaving.
+    #[test]
+    fn a_call_starting_as_the_ticker_goes_to_wait_is_still_stopped_within_its_limit() {
+        const CALLS: u32 = 60;
+        let engine = epoch_engine();
+        let module = wasmtime::Module::from_binary(&engine, SPIN).unwrap();
+        let watch = Arc::new(Watch::default());
+        tick(&engine, watch.clone());
+        let limit = Duration::from_millis(30);
+        let limits = Arc::new(Mutex::new(Limits {
+            compute: limit,
+            ..Limits::default()
+        }));
+        let (stopped, results) = std::sync::mpsc::channel();
+        let caller = {
+            let (engine, watch) = (engine.clone(), watch.clone());
+            std::thread::spawn(move || {
+                for round in 0..CALLS {
+                    if round % 2 == 0 {
+                        // The moment the ticker is seen waiting.
+                        while !watch.timers().ticker_waiting {
+                            std::hint::spin_loop();
+                        }
+                    } else {
+                        // Across the tick after the previous call was
+                        // served, which finds it gone and goes to wait.
+                        std::thread::sleep(TICK * (round % 23) / 10);
+                    }
+                    let call = watch.call();
+                    let spent = spin(&engine, &module, &watch, &limits);
+                    drop(call);
+                    if stopped.send(spent).is_err() {
+                        return;
+                    }
+                }
+            })
+        };
+        for round in 0..CALLS {
+            let Ok(spent) = results.recv_timeout(Duration::from_secs(60)) else {
+                panic!("call {round} was never stopped: the ticker slept through its start");
+            };
+            // Generous for a loaded machine: a missed tick never ends.
+            assert!(
+                spent >= limit && spent < limit + Duration::from_secs(1),
+                "call {round} computed for {spent:?}"
+            );
+        }
+        caller.join().unwrap();
+        assert!(watch.end());
     }
 }

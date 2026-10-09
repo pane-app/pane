@@ -5,9 +5,14 @@ Resource measurement for [#4](https://github.com/pane-app/pane/issues/4):
 the workload driver (scripts/measure-linux.sh) runs Pane through a fixed
 sequence and this script watches its process tree — Pane and every helper
 it started — at a fixed cadence, so the record covers the full tree, not
-one process. Linux only: /proc is where it reads. The macOS and Windows
-legs need their own samplers; what they should measure is recorded in
-docs/research/resource-measurements.md.
+one process. Each sample also holds every thread of the tree: its name,
+its voluntary context switches (how often it blocked and was woken
+again) and its CPU ticks, read from /proc/<pid>/task/<tid>, so the
+summary can say which thread wakes how often (#189). Sampling is Linux
+only: /proc is where it reads. The Windows script
+(scripts/measure-windows.ps1) writes samples of the same shape itself, and
+`summary` and `check` read either; what the macOS leg should measure is
+recorded in docs/research/resource-measurements.md.
 
 Usage:
   proc_tree.py watch <interval-seconds> <control-file> <samples-file>
@@ -18,13 +23,16 @@ Usage:
   proc_tree.py summary <samples> <events> <summary.json> [environment.json]
       Turns the samples and the workload's event lines into one summary
       record: per phase, RSS statistics, CPU seconds and share, growth,
-      the window latencies the workload measured, and any extra values
-      the events carried (how many extensions were installed, how many
-      service cycles ran, ...).
+      the wake-ups of the tree's threads by thread name (cut to 15 bytes,
+      as Linux keeps it, on every platform), the window
+      latencies the workload measured, and any extra values the events
+      carried (how many extensions were installed, how many service
+      cycles ran, ...).
   proc_tree.py check <summary.json> <targets.json>
       Compares the summary with the recorded targets. A null target is
-      reported as pending, not checked; a phase that was not measured,
-      or a value above its ceiling, fails.
+      reported as pending, not checked; a phase the workload's record says
+      it skipped is reported as skipped; a phase that was not measured
+      otherwise, or a value above its ceiling, fails.
   proc_tree.py selfcheck
       Runs watch, summary and check against a throwaway process with
       children of its own, so the sampling logic is checked without a
@@ -48,9 +56,11 @@ else:  # Not Linux: watch and selfcheck cannot work; summary and check can.
     PAGE_SIZE = 4096
 
 
-def read_stat(pid):
-    """comm, parent pid and CPU ticks of one process, from /proc."""
-    with open(f"/proc/{pid}/stat", "rb") as handle:
+def read_stat(pid, tid=None):
+    """comm, parent pid and CPU ticks of one process, from /proc; of one
+    of its threads with `tid` (the parent is then the process's)."""
+    path = f"/proc/{pid}/stat" if tid is None else f"/proc/{pid}/task/{tid}/stat"
+    with open(path, "rb") as handle:
         data = handle.read().decode("utf-8", "replace")
     close = data.rfind(")")
     comm = data[data.find("(") + 1 : close]
@@ -58,6 +68,56 @@ def read_stat(pid):
     # Field 4 (ppid) is fields[1], fields 14 and 15 (utime, stime) are
     # fields[11] and fields[12] once the comm is taken out.
     return comm, int(fields[1]), int(fields[11]) + int(fields[12])
+
+
+def read_switches(pid, tid):
+    """Voluntary and involuntary context switches of one thread, from
+    /proc/<pid>/task/<tid>/status. A voluntary switch is the thread
+    giving up the CPU to wait (a sleep, a lock, a read), so each one is a
+    wake-up to come."""
+    voluntary = involuntary = None
+    with open(f"/proc/{pid}/task/{tid}/status", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            key, _, value = line.partition(":")
+            if key == "voluntary_ctxt_switches":
+                voluntary = int(value)
+            elif key == "nonvoluntary_ctxt_switches":
+                involuntary = int(value)
+    if voluntary is None or involuntary is None:
+        raise ValueError(f"/proc/{pid}/task/{tid}/status counts no context switches")
+    return voluntary, involuntary
+
+
+def read_threads(pid):
+    """Every thread of one process: its id, its name (the kernel's comm,
+    at most 15 bytes: a longer name set with pthread_setname_np is cut
+    there), its context switches and its CPU ticks. A thread that ends
+    between the reads is left out."""
+    try:
+        names = os.listdir(f"/proc/{pid}/task")
+    except OSError:
+        return []
+    threads = []
+    for name in names:
+        if not name.isdigit():
+            continue
+        tid = int(name)
+        try:
+            comm, _, cpu_ticks = read_stat(pid, tid)
+            voluntary, involuntary = read_switches(pid, tid)
+        except (OSError, ValueError, IndexError):
+            continue
+        threads.append(
+            {
+                "tid": tid,
+                "name": comm,
+                "switches": voluntary,
+                "involuntary": involuntary,
+                "cpu_ticks": cpu_ticks,
+            }
+        )
+    threads.sort(key=lambda thread: thread["tid"])
+    return threads
 
 
 def read_rss_kb(pid):
@@ -96,7 +156,14 @@ def tree(root):
         except (OSError, ValueError, IndexError):
             continue  # the process left between the two reads
         found.append(
-            {"pid": pid, "ppid": ppid, "comm": comm, "rss_kb": rss_kb, "cpu_ticks": cpu_ticks}
+            {
+                "pid": pid,
+                "ppid": ppid,
+                "comm": comm,
+                "rss_kb": rss_kb,
+                "cpu_ticks": cpu_ticks,
+                "threads": read_threads(pid),
+            }
         )
         kids = children_of(pid)
         if kids is None:
@@ -127,6 +194,10 @@ def sample(phase, root):
         "wall": round(time.time(), 3),
         "phase": phase,
         "root": root,
+        # What a tick and a thread's "switches" are: the Windows script's
+        # samples say 100 ns and every context switch instead.
+        "tick_hz": CLK_TCK,
+        "switch_kind": "voluntary",
         "processes": processes,
         "nproc": len(processes),
         "rss_kb": sum(process["rss_kb"] for process in processes),
@@ -193,15 +264,87 @@ def cpu_seconds(samples):
     deltas between consecutive samples of one live root pid, summed. A
     process that leaves the tree between samples can lose its last ticks
     (a negative delta), so a delta is never subtracted."""
-    total, previous = 0, None
+    total, previous = 0.0, None
     for entry in samples:
         if entry["nproc"] == 0:
             previous = None
             continue
         if previous and previous[0] == entry["root"]:
-            total += max(0, entry["cpu_ticks"] - previous[1])
+            total += max(0, entry["cpu_ticks"] - previous[1]) / tick_hz(entry)
         previous = (entry["root"], entry["cpu_ticks"])
-    return round(total / CLK_TCK, 3)
+    return round(total, 3)
+
+
+def tick_hz(entry):
+    """Ticks per second of a sample's CPU times: the sample says (the
+    Windows script's count 100 ns), or this system's clock ticks (samples
+    written before the field existed)."""
+    return entry.get("tick_hz") or CLK_TCK
+
+
+def thread_key(name):
+    """A thread's name as summary.json lists it: cut to its first 15 bytes,
+    as Linux keeps a thread's name (its comm), so that the Windows script's
+    whole names and Linux's cut ones list the same thread under the same
+    key ("pane-clipboard-expiry" is "pane-clipboard-" on both)."""
+    return name.encode("utf-8")[:15].decode("utf-8", "ignore")
+
+
+def wakeups(samples):
+    """The wake-ups of the tree's threads across the phase, by thread name,
+    or None when the samples hold no threads (a record from before #189).
+    Names are cut to 15 bytes on every platform (`thread_key`).
+
+    A thread's count is its switches at its last sample in the phase less
+    those at its first, when it was there at the phase's first sample of
+    its root; a thread first seen later was started within the phase, so
+    all its switches count. A thread that ends between samples loses the
+    switches since its last one, as the CPU deltas do. On Linux the count
+    is voluntary context switches, each the thread waiting and being
+    woken again; the Windows script counts every context switch of the
+    thread, which for a thread that mostly sleeps is the same."""
+    seen_roots, first, last, kinds = set(), {}, {}, set()
+    threaded = False
+    for entry in samples:
+        if entry["nproc"] == 0:
+            continue
+        root = entry["root"]
+        opening = root not in seen_roots
+        seen_roots.add(root)
+        hz = tick_hz(entry)
+        kinds.add(entry.get("switch_kind", "voluntary"))
+        for process in entry["processes"]:
+            for thread in process.get("threads", ()):
+                threaded = True
+                key = (root, process["pid"], thread["tid"])
+                now = (thread["switches"], thread["cpu_ticks"] / hz)
+                if key not in first:
+                    first[key] = now if opening else (0, 0.0)
+                last[key] = (thread_key(thread["name"]),) + now
+    if not threaded:
+        return None
+    by_name = {}
+    for key, (name, switches, cpu) in last.items():
+        start_switches, start_cpu = first[key]
+        record = by_name.setdefault(name, {"threads": 0, "count": 0, "cpu_seconds": 0.0})
+        record["threads"] += 1
+        record["count"] += max(0, switches - start_switches)
+        record["cpu_seconds"] += max(0.0, cpu - start_cpu)
+    seconds = samples[-1]["t"] - samples[0]["t"]
+    total = sum(record["count"] for record in by_name.values())
+    for record in by_name.values():
+        record["cpu_seconds"] = round(record["cpu_seconds"], 3)
+        if seconds > 0:
+            record["per_second"] = round(record["count"] / seconds, 2)
+    summary = {
+        "counted": "voluntary context switches" if kinds == {"voluntary"} else "context switches",
+        "names": "cut to 15 bytes, as Linux keeps them",
+        "total": total,
+        "by_thread": by_name,
+    }
+    if seconds > 0:
+        summary["per_second"] = round(total / seconds, 2)
+    return summary
 
 
 def growth_kb(samples):
@@ -240,6 +383,9 @@ def summarize(samples, events):
         growth = growth_kb(entries)
         if growth is not None:
             record["growth_kb"] = growth
+        woken = wakeups(entries)
+        if woken is not None:
+            record["wakeups"] = woken
         summary["phases"][phase] = record
     for event in events:
         phase = event.get("phase")
@@ -297,12 +443,19 @@ def lookup(record, path):
 
 
 def check(summary, targets):
-    """Compare a summary with the targets; returns the failure lines."""
-    problems, pending, passed = [], [], []
+    """Compare a summary with the targets; returns the failure lines. A
+    phase the workload's record says it skipped (its environment's
+    "skipped", as measure-linux.sh writes it when the hidden phase's
+    payloads are absent) is reported as skipped, not as not measured."""
+    problems, pending, passed, skipped = [], [], [], []
+    skips = set(summary.get("environment", {}).get("skipped", ()))
     for phase, metrics in targets["targets"].items():
         record = summary.get("phases", {}).get(phase)
         if record is None:
-            problems.append(f"{phase}: not measured")
+            if phase in skips:
+                skipped.append(f"{phase}: skipped by the workload")
+            else:
+                problems.append(f"{phase}: not measured")
             continue
         for path, ceiling in flatten("", metrics):
             name = f"{phase}.{path}"
@@ -320,9 +473,59 @@ def check(summary, targets):
         print(f"ok      {line}")
     for line in pending:
         print(f"pending {line}")
+    for line in skipped:
+        print(f"skipped {line}")
     for line in problems:
         print(f"FAIL    {line}")
     return problems
+
+
+def wakeup_problems():
+    """The wake-up arithmetic against hand-made samples, without /proc: a
+    thread there from the phase's start counts what it did since, one
+    started within the phase counts everything, a restart is a new root,
+    and threads of one name are added up."""
+
+    def thread(tid, name, switches, ticks):
+        return {"tid": tid, "name": name, "switches": switches, "cpu_ticks": ticks}
+
+    def entry(t, root, threads):
+        processes = [{"pid": root, "threads": threads}] if root else []
+        return {"t": t, "root": root, "nproc": len(processes), "tick_hz": 100,
+                "processes": processes}
+
+    samples = [
+        entry(0.0, 10, [thread(10, "pane", 50, 100), thread(11, "tick", 1000, 10)]),
+        entry(1.0, 10, [thread(10, "pane", 52, 101), thread(11, "tick", 1100, 11),
+                        thread(12, "tick", 7, 0)]),
+        entry(2.0, 0, []),
+        entry(3.0, 20, [thread(20, "pane", 9, 40), thread(21, "tick", 300, 1)]),
+        entry(4.0, 20, [thread(20, "pane", 10, 41), thread(21, "tick", 400, 2)]),
+    ]
+    woken = wakeups(samples)
+    expected = {
+        "counted": "voluntary context switches",
+        "names": "cut to 15 bytes, as Linux keeps them",
+        "total": 2 + 100 + 7 + 1 + 100,
+        "per_second": round(210 / 4, 2),
+        "by_thread": {
+            "pane": {"threads": 2, "count": 3, "cpu_seconds": 0.02, "per_second": 0.75},
+            "tick": {"threads": 3, "count": 207, "cpu_seconds": 0.02, "per_second": 51.75},
+        },
+    }
+    if woken != expected:
+        return [f"the wake-ups were not counted as expected: {woken} != {expected}"]
+    if wakeups([entry(0.0, 10, []), entry(1.0, 0, [])]) is not None:
+        return ["samples without threads were given wake-ups"]
+    # A whole name, as the Windows script reads it, and Linux's cut one
+    # are the same thread's.
+    whole = [
+        entry(0.0, 10, [thread(10, "pane-clipboard-expiry", 5, 0)]),
+        entry(1.0, 10, [thread(10, "pane-clipboard-expiry", 6, 0)]),
+    ]
+    if list(wakeups(whole)["by_thread"]) != ["pane-clipboard-"]:
+        return [f"a long thread name was not cut to 15 bytes: {wakeups(whole)}"]
+    return []
 
 
 def selfcheck():
@@ -392,6 +595,12 @@ def selfcheck():
             problems.append(f"two: the window event did not land: {two}")
         if two["extensions"] != 7:
             problems.append(f"two: the event's extra value did not land: {two}")
+        # Every thread of the tree is counted by its name: the shell's and
+        # the two sleeps' (one thread each).
+        threads = two.get("wakeups", {}).get("by_thread", {})
+        if threads.get("sleep", {}).get("threads") != 2 or "sh" not in threads:
+            problems.append(f"two: the threads were not counted by name: {two.get('wakeups')}")
+        problems.extend(wakeup_problems())
         with open(summary_path, "w", encoding="utf-8") as handle:
             json.dump(summary, handle, indent=2, sort_keys=True)
         with open(targets_path, "w", encoding="utf-8") as handle:
@@ -401,10 +610,13 @@ def selfcheck():
                         "one": {"rss_kb": {"max": 2_000_000}, "cpu_share": None},
                         "two": {"rss_kb": {"max": 1}},
                         "gone": {"growth_kb": 1},
+                        "left": {"growth_kb": 1},
                     }
                 },
                 handle,
             )
+        # The workload skipped "left": reported so, and not failed.
+        summary["environment"] = {"skipped": ["left"]}
         import io
         import contextlib
 
@@ -417,6 +629,9 @@ def selfcheck():
             problems.append(f"an unmeasured phase was not reported: {failures}")
         if "one.cpu_share: pending" not in printed.getvalue():
             problems.append(f"a null target was not pending: {printed.getvalue()!r}")
+        if any(failure.startswith("left") for failure in failures) \
+                or "skipped left" not in printed.getvalue():
+            problems.append(f"a skipped phase was not reported as skipped: {failures}")
         if problems:
             for problem in problems:
                 print(f"FAIL    {problem}")

@@ -139,11 +139,15 @@ impl Launcher {
         });
     }
 
-    /// Records that Pane quits cleanly: this run's marker goes, so the next
-    /// start reports nothing. The tray's or menu bar's Quit, closing the
-    /// launcher's window and the system ending the session all come here;
-    /// calling it again does nothing.
+    /// Records that Pane quits cleanly: what clipboard history keeps that
+    /// waits to be written in a batch is written now (#192), and this run's
+    /// marker goes, so the next start reports nothing. The tray's or menu
+    /// bar's Quit, closing the launcher's window and the system ending the
+    /// session all come here; calling it again does nothing more.
     pub fn quit_cleanly(&self) {
+        if let Some(installation) = &self.installation {
+            installation.data.clipboard_history().flush();
+        }
         let record = self.lock().crash.record.clone();
         if let Some(record) = record {
             record.clean_quit();

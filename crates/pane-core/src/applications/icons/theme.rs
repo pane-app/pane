@@ -12,6 +12,7 @@
 //! least that large, else the largest), is chosen.
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// The size, in pixels, an icon is chosen closest to.
 const WANTED: u32 = crate::system_icons::ICON_SIZE;
@@ -37,6 +38,72 @@ pub fn entry_icon(text: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// The file the icon of the desktop entry at `entry` is drawn from now: its
+/// `Icon` ([`entry_icon`]) found in `themes` ([`IconThemes::find`]). `None`
+/// when the entry cannot be read, names no icon, or the themes have none.
+pub fn entry_icon_file(entry: &Path, themes: &IconThemes) -> Option<PathBuf> {
+    entry_icon_file_in(entry, &themes.clone().lookup())
+}
+
+/// [`entry_icon_file`] through themes read once for many entries
+/// ([`ThemeLookup`]).
+pub fn entry_icon_file_in(entry: &Path, themes: &ThemeLookup) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(entry).ok()?;
+    themes.find(&entry_icon(&text)?)
+}
+
+/// A theme's folders, with the size of their icons and whether they are
+/// scalable ([`IconThemes::folders`]).
+type Folders = Vec<(String, u32, bool)>;
+
+/// [`IconThemes`] read for many lookups: the chain of themes looked in,
+/// read at the first lookup, and each theme's folders, read the first time
+/// it is looked in. Looking up many icons through one (a batch of
+/// fingerprints) reads the user's themes' `index.theme` files once, not
+/// once per icon; a theme changed after it read them is not seen by it.
+pub struct ThemeLookup {
+    themes: IconThemes,
+    chain: OnceLock<Vec<(String, OnceLock<Folders>)>>,
+}
+
+impl ThemeLookup {
+    /// What [`IconThemes::find`] finds, from the themes as this read them.
+    pub fn find(&self, name: &str) -> Option<PathBuf> {
+        let name = name.trim();
+        if name.is_empty() {
+            return None;
+        }
+        let path = Path::new(name);
+        if path.is_absolute() {
+            return path.is_file().then(|| path.to_path_buf());
+        }
+        let name = ["png", "svg", "xpm"]
+            .iter()
+            .find_map(|extension| name.strip_suffix(&format!(".{extension}")))
+            .unwrap_or(name);
+        let chain = self.chain.get_or_init(|| {
+            self.themes
+                .chain()
+                .into_iter()
+                .map(|theme| (theme, OnceLock::new()))
+                .collect()
+        });
+        for (theme, folders) in chain {
+            let folders = folders.get_or_init(|| self.themes.folders(theme));
+            if let Some(found) = self.themes.in_theme(theme, folders, name) {
+                return Some(found);
+            }
+        }
+        self.themes
+            .pixmaps
+            .iter()
+            .flat_map(|folder| {
+                ["png", "svg"].map(|extension| folder.join(format!("{name}.{extension}")))
+            })
+            .find(|file| file.is_file())
+    }
 }
 
 /// Where icon themes and pixmaps are, and the user's theme.
@@ -101,29 +168,15 @@ impl IconThemes {
     /// (`firefox.png`, which the specification allows for old entries) is
     /// looked up without it.
     pub fn find(&self, name: &str) -> Option<PathBuf> {
-        let name = name.trim();
-        if name.is_empty() {
-            return None;
+        self.clone().lookup().find(name)
+    }
+
+    /// These themes, to be read once for many lookups ([`ThemeLookup`]).
+    pub fn lookup(self) -> ThemeLookup {
+        ThemeLookup {
+            themes: self,
+            chain: OnceLock::new(),
         }
-        let path = Path::new(name);
-        if path.is_absolute() {
-            return path.is_file().then(|| path.to_path_buf());
-        }
-        let name = ["png", "svg", "xpm"]
-            .iter()
-            .find_map(|extension| name.strip_suffix(&format!(".{extension}")))
-            .unwrap_or(name);
-        for theme in self.chain() {
-            if let Some(found) = self.in_theme(&theme, name) {
-                return Some(found);
-            }
-        }
-        self.pixmaps
-            .iter()
-            .flat_map(|folder| {
-                ["png", "svg"].map(|extension| folder.join(format!("{name}.{extension}")))
-            })
-            .find(|file| file.is_file())
     }
 
     /// The themes looked in, in order: the user's, those it inherits
@@ -164,16 +217,16 @@ impl IconThemes {
             .find_map(|base| std::fs::read_to_string(base.join(theme).join("index.theme")).ok())
     }
 
-    /// The best file of the icon `name` in `theme`.
-    fn in_theme(&self, theme: &str, name: &str) -> Option<PathBuf> {
-        let folders = self.folders(theme);
+    /// The best file of the icon `name` in `theme`, whose folders are
+    /// `folders` ([`IconThemes::folders`]).
+    fn in_theme(&self, theme: &str, folders: &Folders, name: &str) -> Option<PathBuf> {
         let mut best: Option<((u8, u32), PathBuf)> = None;
         for base in &self.bases {
             let root = base.join(theme);
             if !root.is_dir() {
                 continue;
             }
-            for (folder, size, scalable) in &folders {
+            for (folder, size, scalable) in folders {
                 for extension in ["svg", "png"] {
                     let file = root.join(folder).join(format!("{name}.{extension}"));
                     if !file.is_file() {
@@ -200,7 +253,7 @@ impl IconThemes {
     /// with each one's `Size`, `Scale` and `Type`), or, without one, the
     /// folders two deep named by a size (`256x256/apps`, `scalable/apps`,
     /// `apps/48`).
-    fn folders(&self, theme: &str) -> Vec<(String, u32, bool)> {
+    fn folders(&self, theme: &str) -> Folders {
         if let Some(index) = self.index(theme) {
             let listed = key(&index, "Icon Theme", "Directories").unwrap_or_default();
             let scaled = key(&index, "Icon Theme", "ScaledDirectories").unwrap_or_default();
@@ -374,6 +427,50 @@ mod tests {
         let plain = IconThemes::new(std::slice::from_ref(&data), None, None);
         assert_eq!(plain.find("editor"), None);
         assert!(plain.find("viewer").is_some());
+    }
+
+    #[test]
+    fn a_desktop_entrys_icon_file_is_the_one_its_name_resolves_to() {
+        let folder = tempfile::tempdir().unwrap();
+        let data = folder.path().join("share");
+        let entry = data.join("applications/viewer.desktop");
+        write(&entry, "[Desktop Entry]\nName=Viewer\nIcon=viewer\n");
+        let themes = IconThemes::new(std::slice::from_ref(&data), None, None);
+        assert_eq!(entry_icon_file(&entry, &themes), None, "no icon yet");
+        let small = data.join("icons/hicolor/48x48/apps/viewer.png");
+        write(&small, "png");
+        assert_eq!(entry_icon_file(&entry, &themes), Some(small));
+        // A larger one installed resolves to another file.
+        let large = data.join("icons/hicolor/256x256/apps/viewer.png");
+        write(&large, "png");
+        assert_eq!(entry_icon_file(&entry, &themes), Some(large));
+        write(&entry, "[Desktop Entry]\nName=Viewer\n");
+        assert_eq!(entry_icon_file(&entry, &themes), None, "names no icon");
+        let gone = data.join("applications/gone.desktop");
+        assert_eq!(entry_icon_file(&gone, &themes), None);
+    }
+
+    /// #191: a lookup reads a theme's folders once, for every icon looked
+    /// up through it: a folder made after its first lookup is not seen by
+    /// it, and is by the next lookup.
+    #[test]
+    fn a_lookup_reads_the_themes_once_for_many_icons() {
+        let folder = tempfile::tempdir().unwrap();
+        let data = folder.path().join("share");
+        let small = data.join("icons/hicolor/48x48/apps/viewer.png");
+        write(&small, "png");
+        write(&data.join("icons/hicolor/48x48/apps/editor.png"), "png");
+        let themes = IconThemes::new(std::slice::from_ref(&data), None, None);
+        let lookup = themes.clone().lookup();
+        assert_eq!(lookup.find("viewer"), Some(small.clone()));
+        let large = data.join("icons/hicolor/256x256/apps/viewer.png");
+        write(&large, "png");
+        // The same lookup: the 256-pixel folder was not there when it read
+        // the theme's folders; another icon is still found through it.
+        assert_eq!(lookup.find("viewer"), Some(small));
+        assert!(lookup.find("editor").is_some());
+        assert_eq!(themes.clone().lookup().find("viewer"), Some(large.clone()));
+        assert_eq!(themes.find("viewer"), Some(large));
     }
 
     #[test]

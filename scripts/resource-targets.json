@@ -1,7 +1,7 @@
 {
   "format": 1,
   "status": "proposed-pending-measurement",
-  "note": "The resource and latency targets of #4 (G7). Every ceiling here is deliberately null: no number is inferred from the earlier CLI peaks. The workload (scripts/measure-linux.sh) fills summary.json on the next CI Linux leg; proposed ceilings are then recorded here — as numbers, only once the user confirms them — and a non-null ceiling makes proc_tree.py check fail the run when the summary is above it. Pending numbers keep the check reporting 'pending' and passing.",
+  "note": "The resource and latency targets of #4 (G7). Every ceiling here is deliberately null: no number is inferred from the earlier CLI peaks. The workload (scripts/measure-linux.sh) fills summary.json on the next CI Linux leg; proposed ceilings are then recorded here — as numbers, only once the user confirms them — and a non-null ceiling makes proc_tree.py check fail the run when the summary is above it. Pending numbers keep the check reporting 'pending' and passing. hidden-idle (#189) is Pane hidden with its default extensions; wakeups.per_second is the whole tree's thread wake-ups a second, whose per-thread counts summary.json lists beside it.",
   "targets": {
     "cold-start": {
       "window_ms": { "median": null }
@@ -11,7 +11,13 @@
     },
     "idle-core": {
       "rss_kb": { "max": null },
-      "cpu_share": null
+      "cpu_share": null,
+      "wakeups": { "per_second": null }
+    },
+    "hidden-idle": {
+      "rss_kb": { "max": null },
+      "cpu_share": null,
+      "wakeups": { "per_second": null }
     },
     "installed-unused": {
       "rss_kb": { "max": null },

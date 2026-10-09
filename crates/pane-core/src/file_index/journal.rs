@@ -18,7 +18,7 @@
 //! saved event id, and Linux, whose fanotify needs privileges, reconciles
 //! by walking the folders whose modified time changed (#175).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -105,6 +105,14 @@ pub struct CatchUp {
     /// Records naming a folder the index does not hold: outside the roots,
     /// excluded, or created and gone before it was read.
     pub unresolved: u64,
+    /// Entries gone that no record named, each with the folder it was in
+    /// and its file id: one the index did not hold (a hidden `.gitignore`
+    /// or `.git`) may have set that folder's ignore rules (#186).
+    pub gone: Vec<(PathBuf, u64)>,
+    /// The file ids of the folders [`CatchUp::unresolved`] records were in:
+    /// one may be a repository's `.git/info`, never indexed, holding its
+    /// `exclude` (#186).
+    pub unresolved_folders: Vec<u64>,
 }
 
 /// What `records` changed, given each indexed folder's file id (updated as
@@ -124,6 +132,7 @@ pub fn resolve(
     for record in records {
         let Some(parent) = folders.get(&record.parent_id) else {
             catch_up.unresolved += 1;
+            catch_up.unresolved_folders.push(record.parent_id);
             continue;
         };
         let gone = record.reasons & (REASON_FILE_DELETE | REASON_RENAME_OLD_NAME) != 0;
@@ -134,6 +143,7 @@ pub fn resolve(
                 Some(folder) => folder.clone(),
                 None => {
                     catch_up.listed.push(parent.clone());
+                    catch_up.gone.push((parent.clone(), record.file_id));
                     continue;
                 }
             }
@@ -190,7 +200,54 @@ pub fn resolve(
         paths.sort();
         paths.dedup();
     }
+    catch_up.gone.sort();
+    catch_up.gone.dedup();
+    catch_up.unresolved_folders.sort_unstable();
+    catch_up.unresolved_folders.dedup();
     catch_up
+}
+
+/// The folders an entry the index did not hold went from, which no record
+/// named (#186): a hidden `.gitignore`, `.ignore`, `CACHEDIR.TAG` or `.git`
+/// deleted (records read without administrator rights carry no names) may
+/// have set their ignore rules, so they are re-checked. Of
+/// [`CatchUp::gone`], an entry counts when the index held no entry of its
+/// file id in its folder (`held` answers the ids it held there) and no
+/// entry of that id is there now (`there`; one renamed is, and the record
+/// of its new name is looked at).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn gone_unheld(
+    catch_up: &CatchUp,
+    held: &mut dyn FnMut(&std::path::Path) -> HashSet<u64>,
+    there: &mut dyn FnMut(u64) -> bool,
+) -> Vec<PathBuf> {
+    let mut folders = Vec::new();
+    // Sorted, each folder's entries together.
+    for group in catch_up.gone.chunk_by(|a, b| a.0 == b.0) {
+        let folder = &group[0].0;
+        let ids = held(folder.as_path());
+        if group.iter().any(|(_, id)| !ids.contains(id) && !there(*id)) {
+            folders.push(folder.clone());
+        }
+    }
+    folders
+}
+
+/// The repository whose `.git/info` folder `path` is (`X` for
+/// `X/.git/info`, in any letter case), whose `exclude` sets its ignore
+/// rules (#186).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn repository_of_info(path: &std::path::Path) -> Option<&std::path::Path> {
+    let named = |at: &std::path::Path, wanted: &str| {
+        at.file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case(wanted))
+    };
+    let git = path.parent()?;
+    if named(path, "info") && named(git, ".git") {
+        git.parent()
+    } else {
+        None
+    }
 }
 
 /// The most entries [`Names`] looks up in one catch-up; past it, a record
@@ -203,6 +260,10 @@ const MAX_LOOKUPS: usize = 100_000;
 pub struct Names {
     #[cfg(windows)]
     volume: Option<imp::Handle>,
+    /// The volume's root folder (`C:\`), which [`Names::path`]'s paths are
+    /// below.
+    #[cfg(windows)]
+    root: Option<PathBuf>,
     known: HashMap<u64, Option<OsString>>,
 }
 
@@ -214,7 +275,25 @@ impl Names {
         Names {
             #[cfg(windows)]
             volume: imp::open_volume_root(root).ok(),
+            #[cfg(windows)]
+            root: imp::volume_root(root).ok().map(PathBuf::from),
             known: HashMap::new(),
+        }
+    }
+
+    /// The whole path now of the entry with file id `file_id`, if it is
+    /// there: what [`Names::name`] reads, with the folders above it. Not
+    /// kept, each asked for once.
+    pub fn path(&self, file_id: u64) -> Option<PathBuf> {
+        #[cfg(windows)]
+        {
+            let below = imp::path_by_id(self.volume.as_ref()?, file_id)?;
+            Some(self.root.as_ref()?.join(below))
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = file_id;
+            None
         }
     }
 
@@ -337,9 +416,30 @@ mod imp {
     }
 
     /// The name now of the entry with file id `file_id` on `volume`'s
-    /// volume, opened by its id for reading attributes only (a link not
-    /// followed); `None` when it is gone or cannot be opened.
+    /// volume (see [`units_by_id`]).
     pub(super) fn name_by_id(volume: &Handle, file_id: u64) -> Option<OsString> {
+        let units = units_by_id(volume, file_id)?;
+        let name = units
+            .rsplit(|&unit| unit == u16::from(b'\\'))
+            .next()
+            .filter(|name| !name.is_empty())?;
+        Some(OsString::from_wide(name))
+    }
+
+    /// The path now of the entry with file id `file_id` on `volume`'s
+    /// volume, below the volume's root folder (`Users\ana\notes.txt`; see
+    /// [`units_by_id`]).
+    pub(super) fn path_by_id(volume: &Handle, file_id: u64) -> Option<OsString> {
+        let units = units_by_id(volume, file_id)?;
+        let start = units.iter().position(|&unit| unit != u16::from(b'\\'))?;
+        Some(OsString::from_wide(&units[start..]))
+    }
+
+    /// The path the system gives the entry with file id `file_id` on
+    /// `volume`'s volume, from the volume's root folder (`\Users\ana`), in
+    /// UTF-16; the entry opened by its id for reading attributes only (a
+    /// link not followed). `None` when it is gone or cannot be opened.
+    fn units_by_id(volume: &Handle, file_id: u64) -> Option<Vec<u16>> {
         let descriptor = FILE_ID_DESCRIPTOR {
             dwSize: size_of::<FILE_ID_DESCRIPTOR>() as u32,
             Type: FileIdType,
@@ -376,15 +476,11 @@ mod imp {
         // SAFETY: the name's UTF-16 follows its length, within the buffer.
         let units =
             unsafe { std::slice::from_raw_parts(buffer.as_ptr().add(1).cast::<u16>(), bytes / 2) };
-        let name = units
-            .rsplit(|&unit| unit == u16::from(b'\\'))
-            .next()
-            .filter(|name| !name.is_empty())?;
-        Some(OsString::from_wide(name))
+        Some(units.to_vec())
     }
 
     /// The root folder of the volume holding `path`, such as `C:\`.
-    fn volume_root(path: &Path) -> io::Result<String> {
+    pub(super) fn volume_root(path: &Path) -> io::Result<String> {
         let mut buffer = [0u16; 1024];
         // SAFETY: a NUL-terminated path and a writable buffer.
         unsafe { GetVolumePathNameW(PCWSTR(wide(path).as_ptr()), &mut buffer) }
@@ -706,6 +802,60 @@ mod tests {
             ]
         );
         assert_eq!(catch_up.listed, [home(), home().join("Documents")]);
+        assert_eq!(catch_up.gone, [(home().join("Documents"), 11)]);
+    }
+
+    /// A deleted entry no record names, and the index did not hold (a
+    /// hidden `.gitignore` or `.git`), re-checks its folder (#186); one the
+    /// index held, or one renamed, does not. A record in a folder the index
+    /// does not hold keeps that folder's id, for a repository's `.git/info`.
+    #[test]
+    fn a_folder_an_unindexed_entry_went_from_is_rechecked() {
+        let mut folders = HashMap::from([
+            (1, home()),
+            (2, home().join("repo")),
+            (3, home().join("Documents")),
+        ]);
+        let records = [
+            // `.gitignore` (id 10) deleted from the repository.
+            record(10, 2, "", REASON_FILE_DELETE | REASON_CLOSE, false),
+            // An indexed file (id 20) deleted from Documents.
+            record(20, 3, "", REASON_FILE_DELETE | REASON_CLOSE, false),
+            // A file (id 30) renamed away from the home folder, still there.
+            record(30, 1, "", REASON_RENAME_OLD_NAME, false),
+            // `exclude` written in `repo/.git/info` (id 40, not indexed).
+            record(41, 40, "", REASON_DATA_OVERWRITE | REASON_CLOSE, false),
+            record(42, 40, "", REASON_DATA_EXTEND, false),
+        ];
+        let catch_up = resolve(&records, &mut folders, &mut |_| None);
+        assert_eq!(catch_up.unresolved, 2);
+        assert_eq!(catch_up.unresolved_folders, [40]);
+        let rechecked = gone_unheld(
+            &catch_up,
+            &mut |folder: &Path| {
+                if folder == home().join("Documents") {
+                    HashSet::from([20_u64])
+                } else {
+                    HashSet::new()
+                }
+            },
+            &mut |id| id == 30,
+        );
+        assert_eq!(rechecked, [home().join("repo")]);
+
+        assert_eq!(
+            repository_of_info(&home().join("repo").join(".git").join("info")),
+            Some(home().join("repo").as_path())
+        );
+        assert_eq!(
+            repository_of_info(&home().join("repo").join(".GIT").join("Info")),
+            Some(home().join("repo").as_path())
+        );
+        assert_eq!(
+            repository_of_info(&home().join("repo").join(".git").join("objects")),
+            None
+        );
+        assert_eq!(repository_of_info(&home().join("info")), None);
     }
 
     #[cfg(windows)]

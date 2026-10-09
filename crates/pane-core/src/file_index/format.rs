@@ -9,8 +9,9 @@ pub(crate) const MAGIC: [u8; 8] = *b"PANEFIX\0";
 
 /// The index's format version. An index of another version is rebuilt,
 /// never read: bump it whenever a file's layout, the key encoding or what
-/// the terms are changes.
-pub const FORMAT_VERSION: u32 = 1;
+/// the terms are changes. 2 (#185): segments carry their terms by ordinal,
+/// the terms having each fragment of their words, and a key filter.
+pub const FORMAT_VERSION: u32 = 2;
 
 /// What a file of the index holds, after the magic and version.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

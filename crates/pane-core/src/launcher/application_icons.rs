@@ -12,8 +12,9 @@
 //! row on screen ahead of the background refresh.
 //!
 //! The applications listed by the commands' kept results are the ones the
-//! cache refreshes after each start; a command disabled or replaced takes
-//! its applications out of that refresh with its results.
+//! cache refreshes after each start (extracting only an icon missing,
+//! changed or old); a command disabled or replaced takes its applications
+//! out of that refresh with its results.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -115,7 +116,8 @@ pub(super) fn of_row(state: &State, row: &str) -> Option<Icon> {
 }
 
 /// Tells the cache which applications the commands' kept results list
-/// now: their icons are refreshed in the background, the others' no more.
+/// now: their icons are refreshed in the background when missing, changed
+/// or old, the others' no more.
 pub(super) fn listed(state: &State) {
     let Some(cache) = &state.application_icons.cache else {
         return;

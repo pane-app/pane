@@ -1,8 +1,9 @@
 //! Linux: the system keeps no change history Pane can read without
 //! privileges (fanotify needs them), so the catch-up at start is a
 //! reconciling walk, which reads only the folders whose modified time
-//! changed. Live changes come from inotify, one watch per indexed folder,
-//! shallowest first; once the per-user watch limit
+//! changed. Live changes come from inotify, one watch per indexed folder
+//! (and one on a repository's `.git/info`, whose `exclude` sets ignore
+//! rules, #186), shallowest first; once the per-user watch limit
 //! (`fs.inotify.max_user_watches`) is reached, the folders left are
 //! reported as unwatched, and the coordinator reconciles them every few
 //! minutes and says so on the File search page.
@@ -14,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use super::{Caught, CaughtUpBy, ChangeSource, Changed, Sink, Watching};
+use super::{Caught, CaughtUpBy, ChangeSource, Changed, FolderIds, Sink, Watching};
 use crate::file_index::journal::JournalCursor;
 use crate::file_index::reconcile::reconcile;
 use crate::file_index::scope::Scope;
@@ -46,12 +47,13 @@ impl ChangeSource for Inotify {
         index: &FileIndex,
         scope: &Scope,
         _cursors: &[JournalCursor],
+        _folders: &mut FolderIds<'_>,
         cancel: &AtomicBool,
     ) -> Caught {
         let reconciled = reconcile(
             index,
             scope,
-            &scope.rules().roots,
+            &scope.kept_roots(),
             &WalkOptions::default(),
             cancel,
         );
@@ -59,10 +61,18 @@ impl ChangeSource for Inotify {
             changes: reconciled.changes,
             walk: Vec::new(),
             reconcile: Vec::new(),
+            // A folder read again holding an ignore file or a repository: the
+            // rules below it may have changed with it (#186).
+            recheck: reconciled.recheck,
             cursors: Vec::new(),
             how: CaughtUpBy::ReconcilingWalk,
             note: None,
         }
+    }
+
+    /// One watch per indexed folder.
+    fn watches_folders(&self) -> bool {
+        true
     }
 
     fn watch(
@@ -84,13 +94,15 @@ impl ChangeSource for Inotify {
             fd,
             stop: AtomicBool::new(false),
             watched: Mutex::new(HashMap::new()),
-            roots: scope.rules().roots.clone(),
+            roots: scope.watched_roots(),
             sink,
         });
         let mut watch = Watch {
             shared: shared.clone(),
         };
-        let mut all = scope.rules().roots.clone();
+        // A network share is reconciled now and then instead (the folders
+        // given are not on one).
+        let mut all = scope.watched_roots();
         all.extend(folders);
         watch.add_folders(&all);
         std::thread::Builder::new()
@@ -227,6 +239,22 @@ impl Watching for Watch {
             match add_watch(self.shared.fd, folder) {
                 Ok(wd) => {
                     self.shared.watched().insert(wd, folder.clone());
+                    // A repository's own ignore rules (`.git/info/exclude`)
+                    // are in a folder never indexed: watched too (#186), or
+                    // the folder is reported unwatched, so that what the
+                    // rules learned of it is read again each time instead.
+                    let info = folder.join(".git").join("info");
+                    if info.is_dir() {
+                        match add_watch(self.shared.fd, &info) {
+                            Ok(wd) => {
+                                self.shared.watched().insert(wd, info);
+                            }
+                            Err(error) => {
+                                full = error.raw_os_error() == Some(libc::ENOSPC);
+                                unwatched.push(folder.clone());
+                            }
+                        }
+                    }
                 }
                 Err(error) if error.raw_os_error() == Some(libc::ENOSPC) => {
                     // The watch limit: this folder and the rest are
@@ -311,6 +339,28 @@ mod tests {
         std::thread::sleep(Duration::from_millis(700));
         std::fs::write(home.join("Documents/after.txt"), "x").unwrap();
         assert!(!reported(&received, &home.join("Documents/after.txt")));
+    }
+
+    /// A repository's own ignore rules, in its `.git/info/exclude`, are
+    /// watched with its folder (#186), though `.git` is never indexed.
+    #[test]
+    fn a_repositorys_own_ignore_rules_are_watched_with_its_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        fs_create(&home.join("repo/.git/info"));
+        let scope = Scope::new(ScopeRules::for_home(home.clone()));
+        let (sender, received) = channel();
+        let _watch = Inotify
+            .watch(
+                &scope,
+                &[],
+                vec![home.join("repo")],
+                Sink::new(sender, None),
+            )
+            .unwrap();
+        let exclude = home.join("repo/.git/info/exclude");
+        std::fs::write(&exclude, "*.draft\n").unwrap();
+        assert!(reported(&received, &exclude));
     }
 
     fn fs_create(folder: &Path) {

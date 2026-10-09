@@ -10,8 +10,12 @@
 //! and a second Pane on it; and what the File search page (#176) reads and
 //! changes: the status, Rebuild index, turning off Search Files, every
 //! control applied without a restart, a folder taken out for churn included
-//! again, and a folder granted to Files under #29 kept in what is indexed. The coordinator's catch-up, live changes and
-//! fallbacks driven through the change source's seam are its unit tests
+//! again, and a folder granted to Files under #29 kept in what is indexed; and
+//! the ignore rules kept between batches of changes (#186): a `.gitignore`
+//! line added and removed, a repository made and deleted, its own
+//! `.git/info/exclude` changed, the user's patterns changed, each holding
+//! in later batches and at Enter. The coordinator's catch-up, live changes
+//! and fallbacks driven through the change source's seam are its unit tests
 //! (`pane_core::file_index::indexer`), and the actions on each row, in
 //! every language, `file_actions.rs`. The packages are the ones
 //! `cargo xtask guests` assembles in `target/guests/packages`.
@@ -23,7 +27,8 @@ use std::time::Duration;
 
 use futures::executor::block_on;
 use pane_core::file_index::{
-    CaughtUpBy, INDEX_DIR, IndexState, IndexerConfig, ProblemKind, UserRules, WalkOptions,
+    CaughtUpBy, INDEX_DIR, IndexState, IndexerConfig, ProblemKind, SearchOptions, UserRules,
+    WalkOptions,
 };
 use pane_core::{Launcher, LinkOpener, PackageIdentity, Runtime, Status, WindowPresence};
 use tempfile::TempDir;
@@ -839,4 +844,146 @@ fn a_folder_granted_to_files_that_the_index_covers_is_simply_forgotten() {
         serde_json::from_str(&fs::read_to_string(record.join("folders.json")).unwrap()).unwrap();
     assert!(grants["folders"].get(&key).is_none(), "{grants}");
     eventually(&launcher, "plan", lists("plan.txt"));
+}
+
+// ------------------------------ the ignore rules kept between batches (#186)
+
+/// Writes `text` to `relative` in the fixture home, making its folders.
+fn write(home: &Home, relative: &str, text: &str) {
+    let path = home.file(relative);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, text).unwrap();
+}
+
+#[test]
+fn a_gitignore_line_hides_what_it_matches_and_removing_it_shows_it_again() {
+    let home = Home::new();
+    let (launcher, _runtime) = home.with_files();
+    // Changes in the repository, each batch learning its rules.
+    write(&home, "Projects/app/src/trace.draft", "draft");
+    eventually(&launcher, "trace", lists("trace.draft"));
+    write(&home, "Projects/app/src/main.rs", "fn main() {}");
+    eventually(&launcher, "main", lists("main.rs"));
+
+    // A line added: what it matches goes, and stays out in later batches.
+    write(&home, "Projects/app/.gitignore", "build/\n*.draft\n");
+    eventually(&launcher, "trace", lacks("trace.draft"));
+    write(&home, "Projects/app/src/second.draft", "draft");
+    write(&home, "Projects/app/src/second.rs", "");
+    eventually(&launcher, "second", lists("second.rs"));
+    eventually(&launcher, "second", lacks("second.draft"));
+    eventually(&launcher, "main", lists("main.rs"));
+    eventually(&launcher, "plan output", lacks("plan output.txt"));
+
+    // The line removed: what it matched comes back, and later changes are
+    // admitted again.
+    write(&home, "Projects/app/.gitignore", "build/\n");
+    eventually(&launcher, "trace", lists("trace.draft"));
+    eventually(&launcher, "second", lists("second.draft"));
+    write(&home, "Projects/app/src/third.draft", "draft");
+    eventually(&launcher, "third", lists("third.draft"));
+    eventually(&launcher, "plan output", lacks("plan output.txt"));
+}
+
+#[test]
+fn a_new_repository_starts_applying_its_ignore_rules() {
+    let home = Home::new();
+    // Outside a repository Git reads no .gitignore.
+    write(&home, "Projects/site/.gitignore", "dist/\n");
+    write(&home, "Projects/site/dist/bundle.js", "js");
+    write(&home, "Projects/site/index.html", "html");
+    let (launcher, _runtime) = home.with_files();
+    eventually(&launcher, "bundle", lists("bundle.js"));
+    write(&home, "Projects/site/dist/chunk.js", "js");
+    eventually(&launcher, "chunk", lists("chunk.js"));
+
+    fs::create_dir_all(home.file("Projects/site/.git")).unwrap();
+    eventually(&launcher, "bundle", lacks("bundle.js"));
+    eventually(&launcher, "chunk", lacks("chunk.js"));
+    eventually(&launcher, "index", lists("index.html"));
+    // Later batches keep to it.
+    write(&home, "Projects/site/dist/later.js", "js");
+    write(&home, "Projects/site/page.html", "html");
+    eventually(&launcher, "page", lists("page.html"));
+    eventually(&launcher, "later", lacks("later.js"));
+
+    // The repository deleted: its .gitignore no longer applies.
+    fs::remove_dir_all(home.file("Projects/site/.git")).unwrap();
+    eventually(&launcher, "bundle", lists("bundle.js"));
+    eventually(&launcher, "later", lists("later.js"));
+    write(&home, "Projects/site/dist/last.js", "js");
+    eventually(&launcher, "last", lists("last.js"));
+}
+
+#[test]
+fn a_repositorys_own_exclude_file_applies_while_pane_runs() {
+    let home = Home::new();
+    // `.git` is never indexed: on Linux its `info` is watched apart.
+    write(&home, "Projects/tool/.git/info/exclude", "");
+    write(&home, "Projects/tool/notes.draft", "draft");
+    let (launcher, _runtime) = home.with_files();
+    eventually(&launcher, "notes", lists("notes.draft"));
+
+    write(&home, "Projects/tool/.git/info/exclude", "*.draft\n");
+    eventually(&launcher, "notes", lacks("notes.draft"));
+    write(&home, "Projects/tool/.git/info/exclude", "");
+    eventually(&launcher, "notes", lists("notes.draft"));
+}
+
+#[test]
+fn the_users_excluded_patterns_apply_without_a_restart_across_batches() {
+    let home = Home::new();
+    let (launcher, _runtime) = home.with_files();
+    write(&home, "Documents/report.bak", "old");
+    eventually(&launcher, "report", lists("report.bak"));
+
+    change_rules(&home, &launcher, |rules| {
+        rules.excluded_patterns.push("*.bak".into())
+    });
+    eventually(&launcher, "report", lacks("report.bak"));
+    write(&home, "Documents/later.bak", "old");
+    write(&home, "Documents/later.txt", "new");
+    eventually(&launcher, "later", lists("later.txt"));
+    eventually(&launcher, "later", lacks("later.bak"));
+
+    change_rules(&home, &launcher, |rules| rules.excluded_patterns.clear());
+    eventually(&launcher, "report", lists("report.bak"));
+    eventually(&launcher, "later", lists("later.bak"));
+    write(&home, "Documents/last.bak", "old");
+    eventually(&launcher, "last", lists("last.bak"));
+}
+
+#[test]
+fn a_file_an_ignore_file_hides_since_it_was_found_is_explained_not_opened() {
+    let home = Home::new();
+    let (launcher, _runtime) = home.with_files();
+    write(&home, "Projects/app/src/notes.draft", "draft");
+    eventually(&launcher, "notes", lists("notes.draft"));
+    select_title(&launcher, "notes.draft");
+
+    write(&home, "Projects/app/.gitignore", "build/\n*.draft\n");
+    // Waited for through the index itself, so that the row stays selected.
+    let indexer = launcher.file_indexer().unwrap();
+    let owner = files_identity(&launcher).key();
+    let deadline = std::time::Instant::now() + LIMIT;
+    loop {
+        settle(&launcher);
+        let found = indexer
+            .search(&owner, "notes", SearchOptions::default())
+            .unwrap();
+        if !found.iter().any(|entry| entry.name == "notes.draft") {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "{found:?}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    block_on(launcher.activate_selected());
+    assert!(home.opener.take().is_empty());
+    assert_eq!(
+        launcher.view().status,
+        Status::Error(
+            "Could not open notes.draft: it is no longer in the folders file search covers".into()
+        )
+    );
 }

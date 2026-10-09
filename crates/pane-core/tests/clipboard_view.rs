@@ -26,8 +26,8 @@ use std::sync::{Arc, Mutex};
 
 use futures::executor::block_on;
 use pane_core::clipboard::{
-    CaptureState, ClipboardSystem, Content, CopiedImage, MAX_IMAGE_BYTES, ManualClock, Markers,
-    Observation, Sink, Watch,
+    CaptureState, ClipboardSystem, Clock, Content, CopiedImage, MAX_IMAGE_BYTES, ManualClock,
+    Markers, Observation, Sink, SystemClock, Watch,
 };
 use pane_core::clipboard_view::{
     ClipboardAction, ClipboardBrowse, ClipboardDay, ClipboardFilter, ClipboardImage, ClipboardKind,
@@ -589,12 +589,21 @@ impl Pane {
     }
 
     fn with(clipboard: FakeClipboard) -> Pane {
+        // 14:02 UTC on 5 October 2026.
+        Pane::with_at(clipboard, 1_791_208_920_000)
+    }
+
+    /// Pane whose clock starts at `now`: the one test that restarts Pane
+    /// needs the clock at the system's now, because the start sweep judges
+    /// the file by the system's clock before the manual clock takes over,
+    /// so fixed-date records would be swept once the system's date passed
+    /// them by a retention.
+    fn with_at(clipboard: FakeClipboard, now: u64) -> Pane {
         let pane = Pane {
             data: tempfile::tempdir().unwrap(),
             artifacts: Artifacts::start(),
             clipboard,
-            // 14:02 UTC on 5 October 2026.
-            clock: ManualClock::at(1_791_208_920_000),
+            clock: ManualClock::at(now),
         };
         let files = package_files();
         let manifest: Value = serde_json::from_slice(
@@ -688,7 +697,40 @@ fn open(launcher: &Launcher, id: &str) {
 /// The texts the projection lists, newest first.
 fn listed(launcher: &Launcher) -> Vec<String> {
     let view = launcher.clipboard_history().expect("the history is shown");
-    view.records.into_iter().map(|record| record.text).collect()
+    view.records
+        .iter()
+        .map(|record| record.text.to_string())
+        .collect()
+}
+
+/// Waits until Pane wrote what its clipboard history batched (#192), so
+/// that the file holds what Pane keeps.
+fn written(launcher: &Launcher) {
+    assert!(
+        launcher.wait_for_clipboard_writes(std::time::Duration::from_secs(300)),
+        "the clipboard history was never written"
+    );
+}
+
+/// The history file's text.
+fn history_text(pane: &Pane) -> String {
+    fs::read_to_string(pane.data.path().join("extensions/clipboard-history.json")).unwrap()
+}
+
+/// The texts of Pane's own Clipboard History as its file holds them,
+/// newest first (on Windows the file holds them encrypted, #130).
+fn kept_on_disk(pane: &Pane) -> Vec<String> {
+    let file: Value = pane_core::clipboard::revealed_history(&history_text(pane)).unwrap();
+    let own = PackageIdentity::default_extension("clipboard-history").key();
+    file["packages"][&own]["items"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| item["text"].as_str().unwrap().to_owned())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[test]
@@ -741,14 +783,19 @@ fn only_the_registered_default_extension_on_its_own_screen_is_projected() {
 /// copy, with nothing turned on, before the command was ever opened.
 #[test]
 fn a_fresh_data_folder_records_the_first_copy_with_no_turn_on() {
-    let pane = Pane::new();
+    // The clock at the system's now: this test restarts Pane, and the
+    // start sweep judges the file by the system's clock before the manual
+    // clock takes over, so fixed-date records would be swept once the
+    // system's date passed them by a retention.
+    let pane = Pane::with_at(FakeClipboard::default(), SystemClock.now());
     let launcher = pane.start();
     // Watching as soon as the default extension is installed.
     assert!(pane.clipboard.copy("the first copy", Some("notepad.exe")));
     open(&launcher, COMMAND);
     assert_eq!(listed(&launcher), ["the first copy"]);
-    let text =
-        fs::read_to_string(pane.data.path().join("extensions/clipboard-history.json")).unwrap();
+    // Written in a batch, its delay after the copy (#192).
+    written(&launcher);
+    let text = history_text(&pane);
     // On Windows the file holds the copy encrypted (#130).
     assert_eq!(text.contains("the first copy"), !cfg!(windows), "{text}");
     let file: Value = pane_core::clipboard::revealed_history(&text).unwrap();
@@ -1009,7 +1056,7 @@ fn the_projection_lists_kept_records_newest_first_with_their_source_and_the_actu
 
     let view = launcher.clipboard_history().unwrap();
     assert_eq!(view.capture, CaptureState::On);
-    let texts: Vec<&str> = view.records.iter().map(|r| r.text.as_str()).collect();
+    let texts: Vec<&str> = view.records.iter().map(|r| &*r.text).collect();
     assert_eq!(texts, ["second\nline", "first"]);
     assert_eq!(view.records[1].source.as_deref(), Some("notepad.exe"));
     assert_eq!(view.records[1].copied_at, 1_791_208_920_000);
@@ -1102,7 +1149,7 @@ fn paste_pastes_a_record_or_copies_it_where_paste_is_not_available() {
     launcher.set_window_presence(pane_core::WindowPresence::Shown);
     let view = launcher.clipboard_history().unwrap();
     let newest = view.records[0].id.clone();
-    let text = view.records[0].text.clone();
+    let text = view.records[0].text.to_string();
     block_on(launcher.paste_clipboard_record(&view, &newest));
     assert_eq!(
         system.take(),
@@ -1251,12 +1298,14 @@ fn copied_images_and_files_are_kept_and_put_back_as_what_they_were() {
     pane.clock
         .advance(std::time::Duration::from_secs(7 * 86_400));
     assert!(listed(&launcher).is_empty());
-    // The background sweep can remove the records before it finishes
-    // deleting their PNGs. Wait for that sweep before checking the disk.
+    // The background sweep can remove the records before its batched
+    // write deletes their PNGs (#192). Wait for that sweep and that write
+    // before checking the disk.
     assert!(
         launcher.wait_for_clipboard_expiry(std::time::Duration::from_secs(300)),
         "the expiry thread never swept"
     );
+    written(&launcher);
     assert!(!kept_path.exists(), "an expired image's PNG is deleted");
     drop(window);
 }
@@ -1274,6 +1323,10 @@ fn a_reading_of_a_screen_left_or_a_package_stopped_runs_nothing() {
     // even the status of the screen now shown.
     launcher.back();
     assert!(launcher.view().query().is_some());
+    // The view closed: what was made for it goes (#192), and is made
+    // again once it opens.
+    let made = launcher.clipboard_records_made();
+    assert!(launcher.clipboard_history().is_none());
     let status = launcher.view().status;
     assert!(launcher.copy_clipboard_record(&view, &id).is_err());
     assert!(launcher.delete_clipboard_record(&view, &id).is_err());
@@ -1289,6 +1342,7 @@ fn a_reading_of_a_screen_left_or_a_package_stopped_runs_nothing() {
     // reading made before can no longer act.
     open(&launcher, COMMAND);
     let view = launcher.clipboard_history().unwrap();
+    assert_eq!(launcher.clipboard_records_made(), made + 1);
     let identity = PackageIdentity::default_extension("clipboard-history");
     block_on(launcher.set_enabled(&identity, false));
     assert!(launcher.clipboard_history().is_none());
@@ -1327,4 +1381,177 @@ fn a_clipboard_pane_cannot_watch_says_why_and_offers_no_copy() {
         launcher.clipboard_history().unwrap().capture,
         CaptureState::Paused
     );
+}
+
+// ------------------------------------------- batched writes (#192)
+
+/// Moves Pane's clock a year ahead of the system's: a restart expires what
+/// the system's clock says expired before the launcher is given this one,
+/// so what the test copies from now on is kept across it.
+fn ahead_of_the_system(pane: &Pane) {
+    let ahead = SystemClock.now() + 365 * 86_400_000;
+    let now = pane.clock.now();
+    pane.clock
+        .advance(std::time::Duration::from_millis(ahead.saturating_sub(now)));
+}
+
+/// #192: copies made within the batching delay are written once, all of
+/// them, compactly, and read back after a restart.
+#[test]
+fn several_copies_within_the_delay_are_written_once_and_read_back_after_a_restart() {
+    let pane = Pane::new();
+    ahead_of_the_system(&pane);
+    let launcher = pane.start();
+    written(&launcher);
+    let before = launcher.clipboard_history_writes();
+    for text in ["one", "two", "three"] {
+        assert!(pane.clipboard.copy(text, Some("notepad.exe")));
+    }
+    written(&launcher);
+    assert_eq!(
+        launcher.clipboard_history_writes(),
+        before + 1,
+        "one write for the copies"
+    );
+    assert_eq!(kept_on_disk(&pane), ["three", "two", "one"]);
+    assert!(!history_text(&pane).contains('\n'), "written compactly");
+
+    launcher.quit_cleanly();
+    drop(launcher);
+    let launcher = pane.restart();
+    open(&launcher, COMMAND);
+    assert_eq!(listed(&launcher), ["three", "two", "one"]);
+}
+
+/// #192: a clean quit writes the copies that wait in a batch at once,
+/// without waiting for its delay.
+#[test]
+fn a_clean_quit_writes_the_copies_that_wait() {
+    let pane = Pane::new();
+    ahead_of_the_system(&pane);
+    let launcher = pane.start();
+    written(&launcher);
+    let before = launcher.clipboard_history_writes();
+    let copied = std::time::Instant::now();
+    assert!(pane.clipboard.copy("copied just before quitting", None));
+    let waiting = launcher.clipboard_history_writes();
+    let quit_after = copied.elapsed();
+    launcher.quit_cleanly();
+    assert_eq!(kept_on_disk(&pane), ["copied just before quitting"]);
+    // Quit within the batching delay (500 ms after the copy was kept, so
+    // after `copied`), the batch could not have been written by the
+    // store's thread: the quit wrote it. (A machine so slow that the delay
+    // passed proves nothing here, and is not failed for it.)
+    if quit_after < std::time::Duration::from_millis(500) {
+        assert_eq!(waiting, before, "the copy waited in its batch");
+        assert_eq!(
+            launcher.clipboard_history_writes(),
+            before + 1,
+            "the clean quit wrote it"
+        );
+    }
+
+    drop(launcher);
+    let launcher = pane.restart();
+    open(&launcher, COMMAND);
+    assert_eq!(listed(&launcher), ["copied just before quitting"]);
+}
+
+/// #192: an image's PNG is deleted when its item is deleted or expires,
+/// and a write that takes no image away leaves the images' folder alone: a
+/// PNG no item names, put there by the test, shows which writes pruned it.
+#[test]
+fn an_images_png_is_pruned_only_when_an_image_item_goes() {
+    let pane = Pane::new();
+    let launcher = pane.start();
+    assert!(
+        pane.clipboard
+            .copy_content(Content::Image(copied_image(3, 2)), None)
+    );
+    assert!(pane.clipboard.copy("text", None));
+    open(&launcher, COMMAND);
+    let view = launcher.clipboard_history().unwrap();
+    let image = view.records[1].image.clone().expect("the image record");
+    let stray = image.path.with_file_name("0000.png");
+    let leave_stray = || fs::write(&stray, b"named by no item").unwrap();
+    leave_stray();
+
+    // A copy kept and a text deleted: no image went, nothing is pruned.
+    assert!(pane.clipboard.copy("more text", None));
+    let view = launcher.clipboard_history().unwrap();
+    let text = view
+        .records
+        .iter()
+        .find(|record| &*record.text == "text")
+        .expect("the text record")
+        .id
+        .clone();
+    launcher.delete_clipboard_record(&view, &text).unwrap();
+    written(&launcher);
+    assert!(stray.is_file(), "no image went: the folder was left alone");
+    assert!(image.path.is_file());
+
+    // Another image deleted: its PNG goes, and the stray one with it.
+    assert!(
+        pane.clipboard
+            .copy_content(Content::Image(copied_image(4, 4)), None)
+    );
+    let view = launcher.clipboard_history().unwrap();
+    let second = view.records[0].clone();
+    let second_path = second.image.expect("the second image record").path;
+    assert!(second_path.is_file());
+    launcher.delete_clipboard_record(&view, &second.id).unwrap();
+    assert!(!second_path.exists(), "a deleted image's PNG is deleted");
+    assert!(!stray.exists());
+    assert!(image.path.is_file());
+
+    // The first image expired: its PNG goes, and a stray one with it.
+    leave_stray();
+    pane.clock
+        .advance(std::time::Duration::from_secs(7 * 86_400));
+    assert!(listed(&launcher).is_empty());
+    written(&launcher);
+    assert!(!image.path.exists(), "an expired image's PNG is deleted");
+    assert!(!stray.exists());
+}
+
+/// #130, #192: on Windows each kept item is encrypted once, when it is
+/// first written, and later writes — one per batch of copies, one per
+/// deletion — reuse its protected bytes, so the file never holds a copied
+/// text in the clear. Elsewhere nothing is encrypted.
+#[test]
+fn kept_items_stay_protected_and_are_encrypted_once() {
+    let pane = Pane::new();
+    ahead_of_the_system(&pane);
+    let launcher = pane.start();
+    let once = |items: u64| if cfg!(windows) { items } else { 0 };
+    assert!(pane.clipboard.copy("first secret", None));
+    written(&launcher);
+    assert_eq!(launcher.clipboard_items_protected(), once(1));
+    for text in ["second secret", "third secret"] {
+        assert!(pane.clipboard.copy(text, None));
+    }
+    written(&launcher);
+    assert_eq!(launcher.clipboard_items_protected(), once(3));
+
+    // A deletion writes the file again, encrypting nothing again.
+    open(&launcher, COMMAND);
+    let view = launcher.clipboard_history().unwrap();
+    let writes = launcher.clipboard_history_writes();
+    launcher
+        .delete_clipboard_record(&view, &view.records[0].id)
+        .unwrap();
+    assert_eq!(launcher.clipboard_history_writes(), writes + 1);
+    assert_eq!(launcher.clipboard_items_protected(), once(3));
+    assert_eq!(kept_on_disk(&pane), ["second secret", "first secret"]);
+    let text = history_text(&pane);
+    assert_eq!(text.contains("secret"), !cfg!(windows), "{text}");
+
+    // Read back after a clean quit and a restart, which encrypts nothing.
+    launcher.quit_cleanly();
+    drop(launcher);
+    let launcher = pane.restart();
+    open(&launcher, COMMAND);
+    assert_eq!(listed(&launcher), ["second secret", "first secret"]);
+    assert_eq!(launcher.clipboard_items_protected(), 0);
 }

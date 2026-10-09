@@ -263,7 +263,12 @@ jobs:
       # The #4 resource and latency workload: the same runner, the same
       # guests and binary, its record checked against the proposed targets
       # (scripts/resource-targets.json; every ceiling is pending a number,
-      # so the check passes until one is confirmed and then breached).
+      # so the check passes until one is confirmed and then breached). Its
+      # hidden phases (#189) serve the default extensions' payloads the
+      # smoke above left in target/dist/artifacts, without the index's
+      # application entry, and add about two minutes (at most about twelve,
+      # waiting up to 600 s for the defaults); without the payloads they
+      # are skipped and reported so (docs/agents/ci.md).
       - name: Resource and latency workload (Linux, Xvfb)
         if: runner.os == 'Linux'
         run: bash scripts/measure-linux.sh measure

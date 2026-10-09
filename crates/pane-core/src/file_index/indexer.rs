@@ -35,14 +35,15 @@ use std::time::{Duration, Instant, SystemTime};
 use serde::{Deserialize, Serialize};
 
 use super::category::Category;
-use super::changes::{Caught, CaughtUpBy, ChangeSource, Changed, Sink, Watching};
+use super::changes::{Caught, CaughtUpBy, ChangeSource, Changed, FolderIds, Sink, Watching};
 use super::format::{EntryKind, Meta};
 use super::journal::JournalCursor;
 use super::power::{Awake, Pause, RESUME_AFTER, SystemAwake};
 use super::reconcile::reconcile;
-use super::scope::{Admitted, Scope, ScopeRules};
+use super::scope::{Admitted, CACHE_TAG, Scope, ScopeRules};
 use super::space::{FREE_SPACE_FLOOR, FreeSpace, free_space};
 use super::store::{Change, FileIndex, Hit, IndexError, IndexRecord, Opened, Query};
+use super::volume::{VolumeKinds, volume_kind};
 use super::walker::{WalkOptions, WalkReport, walk, walk_folders};
 use super::wording::{count_words, size_words, span_words};
 use super::{Entry, lower_current_thread};
@@ -57,7 +58,8 @@ pub const FIRST_WALK_DELAY: Duration = Duration::from_secs(60);
 /// How long changes are gathered before they are applied together.
 pub const SETTLE: Duration = Duration::from_millis(100);
 
-/// How often the folders Linux cannot watch are reconciled.
+/// How often the folders Linux cannot watch, and the roots on a network
+/// share (never watched), are reconciled.
 pub const RECONCILE_UNWATCHED: Duration = Duration::from_secs(5 * 60);
 
 /// The most entries one search answers.
@@ -66,6 +68,20 @@ pub const MAX_RESULTS: usize = 200;
 /// The ids Pane keeps per package, the newest; an older one is no longer
 /// known ("search again").
 const IDS_KEPT: usize = 10_000;
+
+/// The most folders whose repository (`.git`) the coordinator remembers
+/// seeing; past it, it forgets them all.
+const REPOSITORIES_KEPT: usize = 10_000;
+
+/// How long before a run started a repository must have been made for the
+/// run to count it as there already (file systems' clocks and times are
+/// not exact).
+const MADE_BEFORE: Duration = Duration::from_secs(2);
+
+/// Folders a re-check (#186) reads before the coordinator handles the
+/// changes reported meanwhile, so that re-checking a whole root never holds
+/// up live changes.
+const RECHECK_FOLDERS: usize = 64;
 
 /// The record of the user's file search rules, beside `installed.json`.
 pub const RULES_FILE: &str = "file-search.json";
@@ -133,6 +149,11 @@ pub struct IndexerConfig {
     pub reconcile_unwatched: Duration,
     /// See [`Valves`].
     pub valves: Valves,
+    /// How the kind of volume holding a folder is told (a network share or
+    /// a removable drive is left out unless the user includes other
+    /// volumes): the system's ([`volume_kind`]) unless a test says
+    /// otherwise.
+    pub volumes: VolumeKinds,
 }
 
 impl IndexerConfig {
@@ -152,7 +173,14 @@ impl IndexerConfig {
             walk: WalkOptions::default(),
             reconcile_unwatched: RECONCILE_UNWATCHED,
             valves: Valves::default(),
+            volumes: Arc::new(volume_kind),
         }
+    }
+
+    /// `rules` ready to apply, told what kind of volume holds a folder as
+    /// this configuration says.
+    fn scope(&self, rules: ScopeRules) -> Scope {
+        Scope::with_volumes(rules, self.volumes.clone())
     }
 }
 
@@ -1079,18 +1107,22 @@ impl Indexer {
                 return Vec::new();
             };
             let home = scope.rules().home.clone();
+            // A root left out (a network share or a removable drive) is not
+            // looked at; what the index may still hold of it (one away when
+            // the index opened, back since) is not found either (#184).
+            let kept = scope.kept_roots();
             scope
                 .rules()
                 .roots
                 .iter()
                 .filter(|root| Some(*root) != home.as_ref())
-                .cloned()
+                .map(|root| (root.clone(), kept.contains(root)))
                 .collect::<Vec<_>>()
         };
         let seen: Vec<(PathBuf, bool)> = roots
             .into_iter()
-            .map(|root| {
-                let there = root.is_dir();
+            .map(|(root, kept)| {
+                let there = kept && root.is_dir();
                 (root, there)
             })
             .collect();
@@ -1128,12 +1160,19 @@ impl Indexer {
     /// the index open now, the path is not a network path, it is still
     /// there, of the kind indexed and not a link, it is still in the index
     /// scope, and its canonical path is under a root. Blocking.
+    ///
+    /// The scope is told with what the coordinator keeps of the folders
+    /// between batches of changes (#186), read again for a folder not
+    /// watched live (a network share, a folder Linux cannot watch, any root
+    /// when watching could not start), or with the rules read again when
+    /// the global ignore file changed since they were.
     pub fn checked(&self, owner: &str, id: &str) -> Result<Checked, String> {
-        let (path, kind, scope) = {
+        let (path, kind, scope, volumes) = {
             let shared = self.shared();
             let (path, kind) =
                 lookup(&shared, owner, id).ok_or("Pane no longer knows it; search again")?;
-            (path, kind, shared.scope.clone())
+            let volumes = shared.config.as_ref().map(|config| config.volumes.clone());
+            (path, kind, shared.scope.clone(), volumes)
         };
         if is_network_path(&path) {
             return Err("it is on a network location".into());
@@ -1164,7 +1203,15 @@ impl Indexer {
             _ => {}
         }
         if let Some(scope) = &scope {
-            if !scope.admits(&path, now == EntryKind::Folder, &mut Admitted::default()) {
+            let is_dir = now == EntryKind::Folder;
+            let admitted = if scope.global_ignore_changed() {
+                let volumes = volumes.unwrap_or_else(|| Arc::new(volume_kind));
+                let fresh = Scope::with_volumes(scope.rules().clone(), volumes);
+                fresh.admits(&path, is_dir, &mut Admitted::default())
+            } else {
+                scope.admits_kept(&path, is_dir)
+            };
+            if !admitted {
                 return Err("it is no longer in the folders file search covers".into());
             }
             let resolved =
@@ -1284,9 +1331,14 @@ struct Coordinator {
     full_walk: bool,
     walk: Vec<PathBuf>,
     reconcile: Vec<PathBuf>,
-    /// Folders Linux cannot watch, and when they were last reconciled.
+    /// Folders Linux cannot watch, and when they were last reconciled
+    /// (with the roots on a network share).
     unwatched: Vec<PathBuf>,
     unwatched_reconciled: Instant,
+    /// The roots on a network share the rules keep (other volumes
+    /// included): never watched, and reconciled at start and every
+    /// [`IndexerConfig::reconcile_unwatched`].
+    network: Vec<PathBuf>,
     caught_up: Option<CaughtUpBy>,
     /// Changes counted per folder, for churn quarantine.
     churn: HashMap<PathBuf, Churn>,
@@ -1301,6 +1353,20 @@ struct Coordinator {
     /// How long the computer had slept when this run started: the first
     /// walk's delay counts awake time only.
     asleep_at_start: Duration,
+    /// When this run started, by the clock file times are told in.
+    started_at: SystemTime,
+    /// Folders whose ignore rules may have changed, still to re-check with
+    /// everything under them (#186): read [`RECHECK_FOLDERS`] at a time
+    /// between batches of changes, once walks may run, each read putting the
+    /// folders under it here in turn ([`Coordinator::queue_recheck`]).
+    recheck: Vec<PathBuf>,
+    /// Whether each folder whose `.git` a change named held a repository
+    /// then, so that what Git does inside one is told from one made or
+    /// deleted.
+    repositories: HashMap<PathBuf, bool>,
+    /// The system's event history (macOS) is being replayed: a repository
+    /// it names may have been made while Pane was not running.
+    replaying: bool,
 }
 
 /// The changes counted in one folder: in the window that started `since`,
@@ -1322,7 +1388,7 @@ impl Coordinator {
         stop: Arc<AtomicBool>,
         queued: Arc<Queued>,
     ) -> Option<Coordinator> {
-        let scope = Arc::new(Scope::new(rules));
+        let scope = Arc::new(config.scope(rules));
         let existing = {
             let inner = inner.upgrade()?;
             lock(&inner.shared).index.clone()
@@ -1374,6 +1440,18 @@ impl Coordinator {
             record.rules = Some(scope.rules().clone());
             let _ = index.set_record(record);
         }
+        // A root the rules leave out (on a network share or a removable
+        // drive, other volumes not included) holds nothing in the index:
+        // what an earlier index held of it goes.
+        let left_out: Vec<Change> = (0..scope.rules().roots.len())
+            .filter(|&root| scope.leaves_out_root(root))
+            .map(|root| scope.rules().roots[root].clone())
+            .filter(|path| index.get(path).is_some())
+            .map(Change::RemoveUnder)
+            .collect();
+        if !left_out.is_empty() {
+            let _ = index.apply(&left_out);
+        }
         if let Some(inner) = inner.upgrade() {
             lock(&inner.shared).status.entries = index.stats().stored;
         }
@@ -1381,17 +1459,41 @@ impl Coordinator {
             config.valves.awake.clone(),
             config.valves.resume_after,
         ));
+        // A network share is never watched: no change drops what the scope
+        // would keep of its folders, so it keeps nothing of them (#186).
+        let network = scope.network_roots();
+        scope.keep_nothing_under(&network);
+        // A root whose volume the system did not say in time (a stalled
+        // network mount) is taken for a network share (#184): said so.
+        let silent = scope.roots_not_answering();
+        if !silent.is_empty()
+            && let Some(inner) = inner.upgrade()
+        {
+            let named: Vec<String> = silent
+                .iter()
+                .map(|root| root.display().to_string())
+                .collect();
+            lock(&inner.shared).status.reason = Some(format!(
+                "{} did not answer in time, so Pane treats it as a network share",
+                named.join(", ")
+            ));
+        }
         let mut coordinator = Coordinator {
             inner,
             asleep_at_start: config.valves.awake.asleep(),
             pause,
             started: Instant::now(),
+            started_at: SystemTime::now(),
+            recheck: Vec::new(),
+            repositories: HashMap::new(),
+            replaying: false,
             cursors: Vec::new(),
             full_walk: false,
             walk: walk_again,
             reconcile: Vec::new(),
             unwatched: Vec::new(),
             unwatched_reconciled: Instant::now(),
+            network,
             watching: None,
             caught_up: None,
             churn: HashMap::new(),
@@ -1440,9 +1542,9 @@ impl Coordinator {
                 self.missed = false;
                 if !self.full_walk {
                     self.cursors = self.config.source.cursors(&self.scope);
-                    for root in &self.scope.rules().roots {
-                        if !self.reconcile.contains(root) {
-                            self.reconcile.push(root.clone());
+                    for root in self.scope.kept_roots() {
+                        if !self.reconcile.contains(&root) {
+                            self.reconcile.push(root);
                         }
                     }
                     self.caught_up = Some(CaughtUpBy::ReconcilingWalk);
@@ -1460,29 +1562,32 @@ impl Coordinator {
     /// Counts the changes `changed` reports, per folder they are in, at
     /// `now`: the folders that changed more than [`Valves::churn_changes`]
     /// times in each of [`Valves::churn_windows`] windows in a row, to take
-    /// out of the index. A root itself, and a folder out of the index
-    /// already, is never taken out.
+    /// out of the index. Only a change of an entry the rules admit counts
+    /// (one in `.git`, `node_modules`, an ignored or a hidden folder never
+    /// does), told with what the scope keeps of the folders between
+    /// batches (#186), which the batch is then looked at with. A root
+    /// itself, and a folder out of the index already, is never taken out.
     fn count_churn(&mut self, changed: &[PathBuf], now: Instant) -> Vec<PathBuf> {
-        let valves = &self.config.valves;
-        if valves.churn_windows == 0 {
+        if self.config.valves.churn_windows == 0 {
             return Vec::new();
         }
-        let window = valves.churn_window.max(Duration::from_millis(1));
+        let mut admitted: HashMap<&Path, bool> = HashMap::new();
         let mut per_folder: HashMap<&Path, u64> = HashMap::new();
         for path in changed {
-            if let Some(folder) = path.parent() {
+            let counts = *admitted
+                .entry(path.as_path())
+                .or_insert_with(|| self.admits_change(path));
+            if let Some(folder) = path.parent().filter(|_| counts) {
                 *per_folder.entry(folder).or_default() += 1;
             }
         }
+        let valves = &self.config.valves;
+        let window = valves.churn_window.max(Duration::from_millis(1));
         let rules = self.scope.rules();
         let mut churned = Vec::new();
         for (folder, count) in per_folder {
             let counted = self.scope.root_of(folder).is_some()
-                && !rules.roots.iter().any(|root| root == folder)
-                && !rules
-                    .excluded_folders
-                    .iter()
-                    .any(|out| folder.starts_with(out));
+                && !rules.roots.iter().any(|root| root == folder);
             if !counted {
                 continue;
             }
@@ -1518,6 +1623,118 @@ impl Coordinator {
         churned
     }
 
+    /// Whether the rules admit the entry at `path` that a change reported:
+    /// a folder or not as the disk says, or, once it is gone, as the index
+    /// held it.
+    fn admits_change(&self, path: &Path) -> bool {
+        let is_dir = match path.symlink_metadata() {
+            Ok(metadata) => metadata.is_dir(),
+            Err(_) => self
+                .index
+                .get(path)
+                .is_some_and(|meta| meta.kind == EntryKind::Folder),
+        };
+        self.scope.admits_kept(path, is_dir)
+    }
+
+    /// Drops what the scope keeps of the folders the changes `reports` name
+    /// (#186), and answers the folders whose ignore rules they may have
+    /// changed, to re-check with everything under them:
+    ///
+    /// - a folder named (made, deleted, renamed, its attributes changed):
+    ///   what is kept of it and of every folder under it;
+    /// - a folder's `.gitignore`, `.ignore`, `CACHEDIR.TAG` or
+    ///   `.git/info/exclude`: that folder, kept no more, and re-checked;
+    /// - a folder's `.git`: the same, once a repository was made or deleted
+    ///   there (not for what Git does inside one).
+    ///
+    /// Also answers the folders a repository was made in, so that a source
+    /// watching each folder watches the repository's own rules too (Linux,
+    /// `.git/info`).
+    fn forget_changed(&mut self, reports: &[PathBuf]) -> (Vec<PathBuf>, Vec<PathBuf>) {
+        let named: BTreeSet<&Path> = reports.iter().map(PathBuf::as_path).collect();
+        let mut recheck = Vec::new();
+        let mut made = Vec::new();
+        for path in named {
+            self.scope.forget_kept(path);
+            let Some((folder, repository)) = rules_folder(path) else {
+                continue;
+            };
+            if repository {
+                if !self.repository_changed(folder) {
+                    continue;
+                }
+                if self.repositories.get(folder) == Some(&true) {
+                    made.push(folder.to_path_buf());
+                }
+            }
+            self.scope.forget_kept(folder);
+            recheck.push(folder.to_path_buf());
+        }
+        (recheck, made)
+    }
+
+    /// Queues `folder` to re-check with everything under it (#186): not
+    /// when a folder queued already holds it (that one's re-check reads it
+    /// too, after this change), and in place of the folders queued under
+    /// it.
+    fn queue_recheck(&mut self, folder: PathBuf) {
+        if self.recheck.iter().any(|queued| folder.starts_with(queued)) {
+            return;
+        }
+        self.recheck.retain(|queued| !queued.starts_with(&folder));
+        self.recheck.push(folder);
+    }
+
+    /// Whether a repository was made or deleted in `folder`, whose `.git` a
+    /// change named: `.git` is there now and was not when last named, or
+    /// the other way. Named for the first time, it was there before only if
+    /// it was made before this run started, unless the system's history is
+    /// being replayed: on Windows, what Git does inside a repository names
+    /// its `.git` too.
+    fn repository_changed(&mut self, folder: &Path) -> bool {
+        let now = folder.join(".git").symlink_metadata();
+        let there = now.is_ok();
+        let before = self.repositories.get(folder).copied().or_else(|| {
+            let made = now.as_ref().ok()?.created().ok()?;
+            let early = made.checked_add(MADE_BEFORE)? < self.started_at;
+            (early && !self.replaying).then_some(true)
+        });
+        if self.repositories.len() >= REPOSITORIES_KEPT {
+            self.repositories.clear();
+        }
+        self.repositories.insert(folder.to_path_buf(), there);
+        before != Some(there)
+    }
+
+    /// Re-checks a few of the folders whose ignore rules may have changed
+    /// (#186, [`Coordinator::recheck`]): each read again under the rules as
+    /// they are now (`reconcile::recheck`), whatever its time, and compared
+    /// with what the index holds, so that what the rules leave out now goes
+    /// and what they admit now comes in; a folder that does not answer
+    /// keeps what the index holds of it. The changes to apply.
+    fn recheck_some(&mut self) -> Vec<Change> {
+        let rechecked = super::reconcile::recheck(
+            &self.index,
+            &self.scope,
+            &mut self.recheck,
+            &self.config.walk,
+            &self.stop,
+            RECHECK_FOLDERS,
+        );
+        self.note_hung(rechecked.hung_folders, false);
+        rechecked.changes
+    }
+
+    /// `rules` as this run's scope from now on would apply them: keeping
+    /// nothing, and nothing ever of the folders the scope before kept
+    /// nothing of (not watched live).
+    fn scope_with(&self, rules: ScopeRules) -> Arc<Scope> {
+        let scope = Arc::new(self.config.scope(rules));
+        scope.keep_nothing_under(&self.scope.kept_nothing_under());
+        scope
+    }
+
     /// Takes `folder`, which changes constantly, out of the index until the
     /// user includes it again: its entries go, the rules leave it out from
     /// now on, and Pane's own record and the File search page say so.
@@ -1526,7 +1743,7 @@ impl Coordinator {
         if !rules.excluded_folders.contains(&folder) {
             rules.excluded_folders.push(folder.clone());
         }
-        let scope = Arc::new(Scope::new(rules));
+        let scope = self.scope_with(rules);
         self.scope = scope.clone();
         let _ = self.index.apply(&[Change::RemoveUnder(folder.clone())]);
         let mut record = self.index.record();
@@ -1535,6 +1752,7 @@ impl Coordinator {
         self.walk.retain(|walked| !walked.starts_with(&folder));
         self.reconcile.retain(|walked| !walked.starts_with(&folder));
         self.unwatched.retain(|walked| !walked.starts_with(&folder));
+        self.recheck.retain(|walked| !walked.starts_with(&folder));
         let Some(inner) = self.inner.upgrade() else {
             return;
         };
@@ -1590,6 +1808,10 @@ impl Coordinator {
     /// that a first walk is due), and starts watching.
     fn catch_up(&mut self) {
         let record = self.index.record();
+        // The folder-id table, read from the index at most once for the
+        // catch-up and the watch setup together (#187).
+        let index = self.index.clone();
+        let mut folders = FolderIds::new(&index);
         if !record.built {
             self.full_walk = true;
             self.walk.clear();
@@ -1598,24 +1820,50 @@ impl Coordinator {
             // room.
             self.missed = true;
         } else {
-            match self
-                .config
-                .source
-                .catch_up(&self.index, &self.scope, &record.cursors, &self.stop)
-            {
+            match self.config.source.catch_up(
+                &self.index,
+                &self.scope,
+                &record.cursors,
+                &mut folders,
+                &self.stop,
+            ) {
                 Caught::Changes {
                     changes,
                     walk,
                     reconcile,
+                    recheck,
                     cursors,
                     how,
                     note,
                 } => {
                     let _ = self.index.apply(&changes);
+                    folders.apply(&changes);
+                    // An ignore file, a repository or a cache tag that
+                    // changed while Pane was not running: its folder is
+                    // re-checked with the walks (#186), as is each folder
+                    // the source found its rules may have changed in.
+                    for change in &changes {
+                        let path = match change {
+                            Change::Put(entry) => &entry.path,
+                            Change::Remove(path) | Change::RemoveUnder(path) => path,
+                        };
+                        if let Some((folder, repository)) = rules_folder(path) {
+                            if repository {
+                                let there = folder.join(".git").symlink_metadata().is_ok();
+                                self.repositories.insert(folder.to_path_buf(), there);
+                            }
+                            self.queue_recheck(folder.to_path_buf());
+                        }
+                    }
+                    for folder in recheck {
+                        self.queue_recheck(folder);
+                    }
                     self.walk.extend(walk);
                     self.reconcile = reconcile;
                     self.walk_added_roots();
                     self.cursors = cursors;
+                    // Replayed through the live stream (macOS).
+                    self.replaying = how == CaughtUpBy::EventHistory;
                     self.caught_up = Some(how);
                     if let Some(note) = note {
                         self.status(|shared| shared.status.reason = Some(note));
@@ -1623,28 +1871,55 @@ impl Coordinator {
                 }
                 Caught::Reconcile(why) => {
                     self.cursors = self.config.source.cursors(&self.scope);
-                    self.reconcile = self.scope.rules().roots.clone();
+                    self.reconcile = self.scope.kept_roots();
                     self.caught_up = Some(CaughtUpBy::ReconcilingWalk);
                     self.status(|shared| shared.status.reason = Some(why));
+                }
+            }
+            // A network share is not watched, and the system keeps no
+            // records of it Pane reads: it is caught up by a reconciling
+            // walk.
+            for root in &self.network {
+                if !self.reconcile.contains(root) && !self.walk.contains(root) {
+                    self.reconcile.push(root.clone());
                 }
             }
         }
         // Watching starts before any walk, so that what changes during it
         // is not lost (Linux adds its folders' watches once they are known).
-        let folders = if self.full_walk {
+        let watched = if self.full_walk || !self.config.source.watches_folders() {
             Vec::new()
         } else {
-            self.indexed_folders()
+            self.indexed_folders(&mut folders)
         };
         let sink = Sink::new(self.sender.clone(), self.queued());
         match self
             .config
             .source
-            .watch(&self.scope, &self.cursors, folders, sink)
+            .watch(&self.scope, &self.cursors, watched, sink)
         {
-            Ok(watching) => self.watching = Some(watching),
-            Err(why) => self.status(|shared| shared.status.reason = Some(why)),
+            Ok(watching) => {
+                self.watching = Some(watching);
+                // A root away is not watched once it is back: nothing would
+                // drop what the scope kept of it (#186).
+                let away: Vec<PathBuf> = self
+                    .scope
+                    .watched_roots()
+                    .into_iter()
+                    .filter(|root| !root.is_dir())
+                    .collect();
+                self.scope.keep_nothing_under(&away);
+            }
+            Err(why) => {
+                // Nothing reports a change: the scope keeps nothing (#186).
+                self.scope.keep_nothing_under(&self.scope.kept_roots());
+                self.status(|shared| shared.status.reason = Some(why));
+            }
         }
+        // What the catch-up learned of folders is dropped once watching
+        // started: an ignore file changed between the two is reported by
+        // neither (#186).
+        self.scope.forget_all_kept();
         if !self.deferred() {
             self.save();
             self.settled();
@@ -1656,30 +1931,38 @@ impl Coordinator {
         Some(Arc::downgrade(&self.queued) as Weak<dyn Counter>)
     }
 
-    /// Walks the roots that are there but not indexed yet: added since the
-    /// index was built, whatever the system's records say.
+    /// Walks the roots the rules keep that are there but not indexed yet:
+    /// added since the index was built, whatever the system's records say.
     fn walk_added_roots(&mut self) {
-        for root in &self.scope.rules().roots {
-            if self.index.get(root).is_none()
+        for root in self.scope.kept_roots() {
+            if self.index.get(&root).is_none()
                 && root.is_dir()
-                && !self.walk.contains(root)
-                && !self.reconcile.contains(root)
+                && !self.walk.contains(&root)
+                && !self.reconcile.contains(&root)
             {
-                self.walk.push(root.clone());
+                self.walk.push(root);
             }
         }
     }
 
-    /// Every folder indexed now, shallowest first.
-    fn indexed_folders(&self) -> Vec<PathBuf> {
-        let mut folders: Vec<PathBuf> = self.index.folder_ids().into_values().collect();
-        folders.sort_by_key(|folder| folder.components().count());
-        folders
+    /// Every folder indexed now that is watched (not on a network share),
+    /// shallowest first, from `table`.
+    fn indexed_folders(&self, table: &mut FolderIds<'_>) -> Vec<PathBuf> {
+        table.folders(|folder| self.on_network(folder))
+    }
+
+    /// Whether `folder` is under a root on a network share, which is not
+    /// watched.
+    fn on_network(&self, folder: &Path) -> bool {
+        self.network.iter().any(|root| folder.starts_with(root))
     }
 
     /// Whether walks wait to run.
     fn deferred(&self) -> bool {
-        self.full_walk || !self.walk.is_empty() || !self.reconcile.is_empty()
+        self.full_walk
+            || !self.walk.is_empty()
+            || !self.reconcile.is_empty()
+            || !self.recheck.is_empty()
     }
 
     /// Whether a deferred walk may run now: the launcher was shown, or the
@@ -1737,18 +2020,27 @@ impl Coordinator {
             if self.low_space && self.room() && !self.deferred() {
                 self.settled();
             }
+            // Folders are still to re-check after a few (#186): the changes
+            // reported meanwhile are handled before the next few.
+            let mut rechecking = false;
             if self.deferred() && !self.low_space {
                 if self.may_walk() {
                     self.do_walks();
-                    continue;
+                    rechecking = !self.recheck.is_empty() && !self.low_space && !self.stopped();
+                    if !rechecking {
+                        continue;
+                    }
+                } else {
+                    self.status(|shared| {
+                        shared.status.waiting = true;
+                        shared.status.state = IndexState::Building;
+                        shared.busy = false;
+                    });
                 }
-                self.status(|shared| {
-                    shared.status.waiting = true;
-                    shared.status.state = IndexState::Building;
-                    shared.busy = false;
-                });
             }
-            let timeout = if self.low_space {
+            let timeout = if rechecking {
+                Some(Duration::ZERO)
+            } else if self.low_space {
                 Some(
                     self.config
                         .valves
@@ -1762,7 +2054,7 @@ impl Coordinator {
                         .saturating_sub(self.awake_since_start())
                         .max(Duration::from_millis(10)),
                 )
-            } else if !self.unwatched.is_empty() {
+            } else if self.reconciles_now_and_then() {
                 Some(
                     self.config
                         .reconcile_unwatched
@@ -1784,7 +2076,7 @@ impl Coordinator {
                 },
             };
             let Some(first) = first else {
-                if !self.low_space && !self.deferred() && !self.unwatched.is_empty() {
+                if !self.low_space && !self.deferred() && self.reconciles_now_and_then() {
                     self.reconcile_unwatched();
                 }
                 continue;
@@ -1839,11 +2131,11 @@ impl Coordinator {
 
     /// Handles a batch of messages; `true` to stop.
     fn handle(&mut self, batch: Vec<Message>) -> bool {
-        let mut paths: BTreeSet<PathBuf> = BTreeSet::new();
+        // Every path reported, as often as it was: churn counts each report.
+        let mut reports: Vec<PathBuf> = Vec::new();
         let mut rescan: Vec<PathBuf> = Vec::new();
         let mut stop = false;
         let now = Instant::now();
-        let mut churned: Vec<PathBuf> = Vec::new();
         // The cursors the batch reports, and whether its history ended:
         // taken only once its changes are applied, so that cursors past a
         // change never are saved without it (a batch that stops, a run
@@ -1854,10 +2146,7 @@ impl Coordinator {
             match message {
                 Message::Stop => stop = true,
                 Message::Shown => {}
-                Message::Changed(Changed::Paths(changed)) => {
-                    churned.extend(self.count_churn(&changed, now));
-                    paths.extend(changed);
-                }
+                Message::Changed(Changed::Paths(changed)) => reports.extend(changed),
                 Message::Changed(Changed::Rescan(folder)) => rescan.push(folder),
                 Message::Changed(Changed::HistoryDone(cursors)) => {
                     reported = Some(cursors);
@@ -1865,6 +2154,9 @@ impl Coordinator {
                 }
                 Message::Changed(Changed::Cursors(cursors)) => reported = Some(cursors),
                 Message::Changed(Changed::Unwatched(folders)) => {
+                    // No change is reported there to drop what the scope
+                    // keeps (#186).
+                    self.scope.keep_nothing_under(&folders);
                     self.unwatched.extend(folders);
                     self.unwatched.sort();
                     self.unwatched.dedup();
@@ -1876,16 +2168,64 @@ impl Coordinator {
         if stop || self.stopped() {
             return true;
         }
+        // What the rules admit is told with what the scope keeps of the
+        // folders between batches (#186), first dropped for the folders
+        // these changes may have changed; churn is counted only for the
+        // paths the rules admit, and the paths are looked at the same way.
+        let (mut recheck, made) = self.forget_changed(&reports);
+        let rescan = self.rescan_folders(rescan);
+        if !rescan.is_empty() {
+            // Anything may have changed there, an ignore file changed in
+            // place too, which no folder's time shows: reconciled now, and
+            // re-checked whole after (#186).
+            self.scope.forget_all_kept();
+            recheck.extend(rescan.iter().cloned());
+        }
+        if self.scope.global_ignore_changed() {
+            // The rules are read again, and every root re-checked if the
+            // global ignore file itself changed.
+            let scope = self.scope_with(self.scope.rules().clone());
+            if !scope.same_global_ignore(&self.scope) {
+                recheck.extend(scope.kept_roots());
+            }
+            self.scope = scope.clone();
+            self.status(|shared| shared.scope = Some(scope));
+        }
+        // A repository made: its own rules are watched too where the source
+        // watches each folder (Linux, `.git/info`).
+        let made: Vec<PathBuf> = made
+            .into_iter()
+            .filter(|folder| !self.on_network(folder))
+            .collect();
+        if let Some(watching) = &mut self.watching
+            && !made.is_empty()
+        {
+            watching.add_folders(&made);
+        }
+        if self.full_walk {
+            // The first walk, still to come, reads every folder under the
+            // rules as they are then.
+            recheck.clear();
+        }
+        // A folder taken out for churn builds the rules again, keeping
+        // nothing.
+        let churned = self.count_churn(&reports, now);
         for folder in churned {
             self.quarantine(folder);
         }
-        if paths.is_empty() && rescan.is_empty() {
+        let paths: BTreeSet<PathBuf> = reports.into_iter().collect();
+        if paths.is_empty() && rescan.is_empty() && recheck.is_empty() {
             self.take_cursors(reported, history_done);
             return false;
         }
+        // Re-checked a few folders at a time between batches, like the other
+        // walks, never holding up the changes reported meanwhile.
+        for folder in recheck {
+            self.queue_recheck(folder);
+        }
         if !self.room() {
             // Nothing is written: what changed is caught up once there is
-            // room.
+            // room, and the folders to re-check are re-checked then.
             self.missed = true;
             self.take_cursors(reported, history_done);
             return false;
@@ -1895,11 +2235,10 @@ impl Coordinator {
         let mut new_folders = Vec::new();
         self.look_at(paths, &mut changes, &mut new_folders);
         if !rescan.is_empty() {
-            let folders = self.rescan_folders(rescan);
             let reconciled = reconcile(
                 &self.index,
                 &self.scope,
-                &folders,
+                &rescan,
                 &self.config.walk,
                 &self.stop,
             );
@@ -1923,6 +2262,7 @@ impl Coordinator {
             self.cursors = cursors;
         }
         if history_done {
+            self.replaying = false;
             self.caught_up = Some(CaughtUpBy::EventHistory);
             self.save();
         }
@@ -1959,14 +2299,15 @@ impl Coordinator {
     }
 
     /// Looks at each changed path now: indexed if it exists and the rules
-    /// admit it, removed otherwise; a folder new to the index is walked.
+    /// admit it (told with what the scope keeps of the folders between
+    /// batches, #186), removed otherwise; a folder new to the index is
+    /// walked.
     fn look_at(
         &self,
         paths: BTreeSet<PathBuf>,
         changes: &mut Vec<Change>,
         new_folders: &mut Vec<PathBuf>,
     ) {
-        let mut known = Admitted::default();
         for path in paths {
             if self.scope.root_of(&path).is_none() {
                 continue;
@@ -1985,7 +2326,7 @@ impl Coordinator {
                 Err(_) if is_root => {}
                 Ok(entry) => {
                     let is_dir = entry.meta.kind == EntryKind::Folder;
-                    if !self.scope.admits(&path, is_dir, &mut known) {
+                    if !self.scope.admits_kept(&path, is_dir) {
                         gone(changes, indexed);
                         continue;
                     }
@@ -2031,12 +2372,15 @@ impl Coordinator {
             .collect()
     }
 
-    /// Watches the folders `changes` put (Linux watches each folder).
+    /// Watches the folders `changes` put (Linux watches each folder), but
+    /// those on a network share.
     fn add_watches(&mut self, changes: &[Change]) {
         let folders: Vec<PathBuf> = changes
             .iter()
             .filter_map(|change| match change {
-                Change::Put(entry) if entry.meta.kind == EntryKind::Folder => {
+                Change::Put(entry)
+                    if entry.meta.kind == EntryKind::Folder && !self.on_network(&entry.path) =>
+                {
                     Some(entry.path.clone())
                 }
                 _ => None,
@@ -2050,7 +2394,10 @@ impl Coordinator {
     }
 
     /// Runs the walks that waited: the first full walk, then the folders
-    /// to walk and to reconcile the catch-up asked for.
+    /// to walk and to reconcile the catch-up asked for, then a few of the
+    /// folders to re-check ([`RECHECK_FOLDERS`]); with some still to
+    /// re-check, the coordinator handles the changes reported meanwhile and
+    /// comes back for the next few.
     fn do_walks(&mut self) {
         if !self.room() {
             return;
@@ -2077,13 +2424,19 @@ impl Coordinator {
             }
             self.full_walk = false;
             self.caught_up = Some(CaughtUpBy::FullWalk);
+            // The walk read every folder under the rules as they are.
+            self.recheck.clear();
             let mut record = self.index.record();
             record.built = !report.cancelled;
             let _ = self.index.flush();
             let _ = self.index.set_record(record);
-            let folders = self.indexed_folders();
-            if let Some(watching) = &mut self.watching {
-                watching.add_folders(&folders);
+            // Only a source watching each folder needs them read.
+            if self.config.source.watches_folders() {
+                let index = self.index.clone();
+                let folders = self.indexed_folders(&mut FolderIds::new(&index));
+                if let Some(watching) = &mut self.watching {
+                    watching.add_folders(&folders);
+                }
             }
             let ceiling = count_words(self.config.walk.max_entries);
             self.status(|shared| {
@@ -2114,16 +2467,26 @@ impl Coordinator {
             );
             changes.extend(reconciled.changes);
             self.note_hung(reconciled.hung_folders, !walked_all);
+            for folder in reconciled.recheck {
+                self.queue_recheck(folder);
+            }
         }
         if !self.walk.is_empty() {
             let folders = std::mem::take(&mut self.walk);
             changes.extend(self.walk_new(&folders));
+        }
+        if !self.recheck.is_empty() {
+            changes.extend(self.recheck_some());
         }
         if self.stopped() {
             return;
         }
         self.add_watches(&changes);
         let _ = self.index.apply(&changes);
+        if !self.recheck.is_empty() {
+            // More to re-check: the changes reported meanwhile come first.
+            return;
+        }
         self.save();
         self.settled();
     }
@@ -2207,10 +2570,19 @@ impl Coordinator {
         })
     }
 
-    /// Reconciles the folders Linux cannot watch.
+    /// Whether folders are reconciled every
+    /// [`IndexerConfig::reconcile_unwatched`]: those Linux cannot watch, and
+    /// the roots on a network share.
+    fn reconciles_now_and_then(&self) -> bool {
+        !self.unwatched.is_empty() || !self.network.is_empty()
+    }
+
+    /// Reconciles the folders Linux cannot watch, and the roots on a
+    /// network share.
     fn reconcile_unwatched(&mut self) {
         self.unwatched_reconciled = Instant::now();
-        let folders = self.unwatched.clone();
+        let mut folders = self.unwatched.clone();
+        folders.extend(self.network.iter().cloned());
         let reconciled = reconcile(
             &self.index,
             &self.scope,
@@ -2222,6 +2594,11 @@ impl Coordinator {
             let _ = self.index.apply(&reconciled.changes);
         }
         self.note_hung(reconciled.hung_folders, false);
+        // Read again holding an ignore file: re-checked whole with the walks
+        // (#186).
+        for folder in reconciled.recheck {
+            self.queue_recheck(folder);
+        }
         self.settled();
     }
 
@@ -2264,6 +2641,29 @@ impl Coordinator {
             }
         });
     }
+}
+
+/// The folder whose ignore rules a change of `path` may change (#186), and
+/// whether `path` is its repository (`.git`): `X` for `X/.gitignore`,
+/// `X/.ignore`, `X/CACHEDIR.TAG`, `X/.git`, `X/.git/info` and
+/// `X/.git/info/exclude`, in any letter case.
+fn rules_folder(path: &Path) -> Option<(&Path, bool)> {
+    let is = |name: &std::ffi::OsStr, wanted: &str| name.eq_ignore_ascii_case(wanted);
+    let named = |at: &Path, wanted: &str| at.file_name().is_some_and(|name| is(name, wanted));
+    let name = path.file_name()?;
+    let parent = path.parent()?;
+    if is(name, ".gitignore") || is(name, ".ignore") || is(name, CACHE_TAG) {
+        return Some((parent, false));
+    }
+    if is(name, ".git") {
+        return Some((parent, true));
+    }
+    let info = if is(name, "exclude") { parent } else { path };
+    let git = info.parent()?;
+    if named(info, "info") && named(git, ".git") {
+        return Some((git.parent()?, false));
+    }
+    None
 }
 
 /// Brings the index, built under the rules `before`, to the rules `after`,

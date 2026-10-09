@@ -139,6 +139,29 @@ pub(crate) fn terms_and_hint(
     (terms, hint(meta, folders.len()))
 }
 
+/// The bytes of a fragment: the pass inside words looks a word up by the
+/// fragments of this many bytes it is made of.
+pub(crate) const FRAGMENT: usize = 3;
+
+/// The fragments of a tagged term (its tag, then its word): each run of
+/// [`FRAGMENT`] bytes of the word with the tag in front, as a number whose
+/// order is the bytes' order; sorted, without repeats. A word shorter than
+/// a fragment has none. A term holding a word of [`FRAGMENT`] bytes or more
+/// has every fragment of it, so the terms having all of a word's fragments
+/// are the only ones that can hold it.
+pub(crate) fn fragments(term: &[u8]) -> Vec<u32> {
+    let Some((&tag, word)) = term.split_first() else {
+        return Vec::new();
+    };
+    let mut keys: Vec<u32> = word
+        .windows(FRAGMENT)
+        .map(|part| u32::from_be_bytes([tag, part[0], part[1], part[2]]))
+        .collect();
+    keys.sort_unstable();
+    keys.dedup();
+    keys
+}
+
 /// The hint: the day it was last modified (16 bits), how deep it is below
 /// its root (8 bits) and its kind (8 bits).
 pub(crate) fn hint(meta: &Meta, depth: usize) -> u32 {
@@ -200,6 +223,25 @@ mod tests {
         let (folders, name) = roots.split(&key);
         assert!(folders.is_empty());
         assert_eq!(name, b"home");
+    }
+
+    #[test]
+    fn a_terms_fragments_are_its_words_runs_of_three_bytes_with_its_tag() {
+        let key = |bytes: &[u8; 4]| u32::from_be_bytes(*bytes);
+        assert_eq!(
+            fragments(b"nreport"),
+            [key(b"nepo"), key(b"nort"), key(b"npor"), key(b"nrep")]
+        );
+        // Repeats once, and another tag is another fragment.
+        assert_eq!(fragments(b"naaaa"), [key(b"naaa")]);
+        assert_eq!(fragments(b"faaaa"), [key(b"faaa")]);
+        assert!(fragments(b"nab").is_empty());
+        assert!(fragments(b"").is_empty());
+        // Bytes, not characters: "é" is two.
+        assert_eq!(
+            fragments("né1".as_bytes()),
+            [key(&[b'n', 0xC3, 0xA9, b'1'])]
+        );
     }
 
     #[test]
