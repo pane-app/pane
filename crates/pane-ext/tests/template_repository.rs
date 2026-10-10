@@ -293,7 +293,11 @@ fn its_release_steps_tag_a_revision_pane_installs() {
     let pane = fs::read_to_string(folder.join("pane.json")).unwrap();
     let manifest: serde_json::Value = serde_json::from_str(&pane).unwrap();
     assert_eq!(format!("v{}", manifest["version"]), TAG);
-    git(&folder, home, &["init", "--quiet", "--initial-branch", "main"]);
+    git(
+        &folder,
+        home,
+        &["init", "--quiet", "--initial-branch", "main"],
+    );
     // `.gitignore` keeps `node_modules` and `dist` out, as an author's
     // does.
     git(&folder, home, &["add", "."]);
@@ -317,7 +321,11 @@ fn its_release_steps_tag_a_revision_pane_installs() {
         }
     }
     git(&folder, home, &["add", "-f", "dist"]);
-    git(&folder, home, &["commit", "--quiet", "-m", "Release v0.1.0"]);
+    git(
+        &folder,
+        home,
+        &["commit", "--quiet", "-m", "Release v0.1.0"],
+    );
     git(&folder, home, &["tag", "-f", TAG]);
     // The tag now names the release revision, and only it: the source
     // branch stays source-only, which Pane explains to a user who names
