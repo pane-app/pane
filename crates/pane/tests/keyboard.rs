@@ -216,7 +216,28 @@ fn until_record(cx: &mut VisualTestContext, data: &Path, field: &str, id: &str) 
     loop {
         cx.run_until_parked();
         let read = fs::read_to_string(&record);
-        if read.as_deref().is_some_and(|text| text.contains(&held)) {
+        if read.as_deref().is_ok_and(|text| text.contains(&held)) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for the record to hold {held}; it holds {}",
+            read.unwrap_or_else(|error| format!("nothing ({error})")),
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Waits, up to the same deadline, for the record to hold `held` whole —
+/// a field whose value is not a string, which [`until_record`] cannot
+/// spell.
+fn until_record_holds(cx: &mut VisualTestContext, data: &Path, held: &str) {
+    let record = data.join("settings.json");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        cx.run_until_parked();
+        let read = fs::read_to_string(&record);
+        if read.as_deref().is_ok_and(|text| text.contains(held)) {
             return;
         }
         assert!(

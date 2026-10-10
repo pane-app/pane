@@ -229,9 +229,7 @@ fn open_preview<'a>(
 
 /// The window over the Rust sample as a root command, its list opened
 /// with Enter: a command's own list, "Say hello" selected.
-fn open_command_list(
-    cx: &mut TestAppContext,
-) -> (Entity<LauncherWindow>, &mut VisualTestContext) {
+fn open_command_list(cx: &mut TestAppContext) -> (Entity<LauncherWindow>, &mut VisualTestContext) {
     let (window, cx) = open_with(cx, vec![command("sample_rust", "Rust sample")]);
     cx.simulate_input("rust sample");
     settle(&window, cx);
