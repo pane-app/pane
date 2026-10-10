@@ -2588,7 +2588,7 @@ impl WasiHttpView for GuestState {
 /// A running guest instance of one component.
 struct Instance {
     store: Store<GuestState>,
-    bindings: bindings::ExtensionWithFileIndex,
+    bindings: bindings::ExtensionWithTypedFolder,
     /// Its root results export, if it has one.
     root_results: Option<root_bindings::RootResultsProvider>,
     /// Its indexed results export, if it has one.
@@ -2976,7 +2976,7 @@ impl Code {
                 ))
             })?;
         }
-        bindings::ExtensionWithFileIndexPre::new(pre).map_err(interface)?;
+        bindings::ExtensionWithTypedFolderPre::new(pre).map_err(interface)?;
         Ok(Checked { network, programs })
     }
 }
@@ -4552,7 +4552,7 @@ impl Host {
             started => started?,
         };
         let bindings =
-            bindings::ExtensionWithFileIndex::new(&mut store, &instance).map_err(load)?;
+            bindings::ExtensionWithTypedFolder::new(&mut store, &instance).map_err(load)?;
         // Only a command that computes root results exports them.
         let root_results = root_bindings::RootResultsProvider::new(&mut store, &instance).ok();
         // Only a command that supplies results ahead of the query exports

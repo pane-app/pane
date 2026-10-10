@@ -287,12 +287,13 @@ fn entries_of(text: &str, home: Option<&Path>) -> Result<TypedListing, String> {
                 program: false,
             });
         } else if kind.is_file() {
+            let program = program_at(&path);
             listed.push(TypedEntry {
                 id: String::new(),
                 path,
                 name,
                 folder: false,
-                program: program_at(&path),
+                program,
             });
         }
         // Anything else (a socket, a fifo) is neither.
