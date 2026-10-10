@@ -149,7 +149,7 @@ jobs:
             echo '```json'
             cat "$RUNNER_TEMP/packages/cli-${{ matrix.id }}/toolchain.json"
             echo '```'
-          } >> "$GITHUB_STEP_SUM"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Pack the tarballs
         run: |
           tarballs="$RUNNER_TEMP/tarballs"

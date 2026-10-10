@@ -75,7 +75,11 @@ pub(crate) fn wasm_parts(into: &Path) -> Result<(), String> {
     let patches = patch_digests(&root)?;
     let rustc = nightly_rustc(&root)?;
     let record = json!({
-        "componentize_qjs": pins["componentize_qjs"],
+        "componentize_qjs": {
+            "repository": pins["componentize_qjs"]["repository"],
+            "version": pins["componentize_qjs"]["version"],
+            "commit": pins["componentize_qjs"]["commit"],
+        },
         "patches": patches,
         "runtime_rustc": rustc,
         "wasi_sdk": pins["wasi_sdk"]["version"],
@@ -88,15 +92,24 @@ pub(crate) fn wasm_parts(into: &Path) -> Result<(), String> {
 }
 
 /// `cargo xtask check-parts <dir>`: the committed wasm parts against the
-/// fresh build in `dir` — their bytes and the record of what built them,
-/// so the committed files cannot drift from the vendored source they
-/// should have been built from.
+/// fresh build in `dir` — the parts' bytes, and the record of what built
+/// them compared as the JSON it is (not as the bytes it is written with,
+/// which a hand-edit or a writer change would otherwise differ by) — so
+/// the committed files cannot drift from the vendored source they should
+/// have been built from.
 pub(crate) fn check_parts(fresh: &Path) -> Result<(), String> {
     let committed = crate::root().join(WASM_PARTS);
-    let different: Vec<&str> = ["runtime.wasm", "libc.so", "wasm-parts.json"]
-        .into_iter()
-        .filter(|name| sha256_file(&fresh.join(name)) != sha256_file(&committed.join(name)))
-        .collect();
+    let mut different: Vec<String> = Vec::new();
+    for name in ["runtime.wasm", "libc.so"] {
+        if sha256_file(&fresh.join(name))? != sha256_file(&committed.join(name))? {
+            different.push(name.to_owned());
+        }
+    }
+    let fresh_record = read_json(&fresh.join("wasm-parts.json"))?;
+    let committed_record = read_json(&committed.join("wasm-parts.json"))?;
+    if fresh_record != committed_record {
+        different.push("wasm-parts.json".to_owned());
+    }
     if !different.is_empty() {
         return Err(format!(
             "the committed wasm parts ({}) do not match the fresh build: {} differ. Rebuild \
