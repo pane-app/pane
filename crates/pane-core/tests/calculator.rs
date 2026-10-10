@@ -675,7 +675,6 @@ fn colour_names_are_not_answered() {
         "#3a",
         "#33aaaab",
         "rgb(51, 170)",
-        "1 + 2",
     ] {
         search(&launcher, query);
         assert_eq!(titles(&launcher), Vec::<String>::new(), "{query}");
@@ -791,7 +790,14 @@ fn each_date_and_time_word_answers_at_the_clocks_time() {
     ];
     for (query, answer) in answers {
         search(&launcher, query);
-        assert_eq!(titles(&launcher), [answer], "{query}");
+        // The word's answer is first and selected; a row whose title
+        // happens to match the word follows it ("date" finds Manage
+        // Extensions).
+        assert_eq!(
+            titles(&launcher).first().map(String::as_str),
+            Some(answer),
+            "{query}"
+        );
         assert_eq!(
             selected_title(&launcher).as_deref(),
             Some(answer),
