@@ -185,9 +185,7 @@ impl LauncherWindow {
         // Only a space could turn the query into an alias: any other
         // character is held just to keep the order.
         let alias = keystroke.key == "space" && self.launcher.could_still_be_alias();
-        if (self.held.held.is_some() || alias)
-            && self.hold_key(keystroke.clone(), window, cx)
-        {
+        if (self.held.held.is_some() || alias) && self.hold_key(keystroke.clone(), window, cx) {
             cx.stop_propagation();
         }
     }

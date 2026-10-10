@@ -93,33 +93,37 @@ impl QueryField {
     pub(crate) fn new(window: &mut Window, cx: &mut Context<LauncherWindow>) -> QueryField {
         let input = cx.new(|cx| EditableTextState::new(StringStorage::default(), cx));
         input.focus_handle(cx).tab_stop(true);
-        let changes = cx.subscribe_in(&input, window, |this, input, _: &TextChanged, window, cx| {
-            // Results computed from the query (the calculator's answer)
-            // arrive later, without holding up typing. The announcer waits
-            // for them before it says the selected row (#132).
-            //
-            // The sensitivity is pushed as the query changes, so the
-            // keystroke that changed it matches by the choice the
-            // Launcher page holds now.
-            this.launcher
-                .set_search_sensitivity(crate::settings::search_sensitivity_of(cx));
-            let computed = this.launcher.set_query(input.read(cx).as_str());
-            this.announcer.search_started();
-            cx.notify();
-            cx.spawn_in(window, async move |this, cx| {
-                computed.await;
-                this.update_in(cx, |this, window, cx| {
-                    this.announcer.search_ended();
-                    // The query's list is published once its search has
-                    // answered: the keys the window held for it are
-                    // applied (#203).
-                    this.replay_held_keys_if_published(window, cx);
-                    cx.notify();
+        let changes = cx.subscribe_in(
+            &input,
+            window,
+            |this, input, _: &TextChanged, window, cx| {
+                // Results computed from the query (the calculator's answer)
+                // arrive later, without holding up typing. The announcer waits
+                // for them before it says the selected row (#132).
+                //
+                // The sensitivity is pushed as the query changes, so the
+                // keystroke that changed it matches by the choice the
+                // Launcher page holds now.
+                this.launcher
+                    .set_search_sensitivity(crate::settings::search_sensitivity_of(cx));
+                let computed = this.launcher.set_query(input.read(cx).as_str());
+                this.announcer.search_started();
+                cx.notify();
+                cx.spawn_in(window, async move |this, cx| {
+                    computed.await;
+                    this.update_in(cx, |this, window, cx| {
+                        this.announcer.search_ended();
+                        // The query's list is published once its search has
+                        // answered: the keys the window held for it are
+                        // applied (#203).
+                        this.replay_held_keys_if_published(window, cx);
+                        cx.notify();
+                    })
+                    .ok();
                 })
-                .ok();
-            })
-            .detach();
-        });
+                .detach();
+            },
+        );
         QueryField {
             input,
             shown: true,

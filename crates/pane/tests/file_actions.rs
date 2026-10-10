@@ -405,9 +405,7 @@ fn query(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> Option<
 /// list's selected row, as a pressed Tab does (#204). Shift+Tab held the
 /// same way removes the last path component once the list is published.
 #[gpui::test]
-fn tab_and_shift_tab_held_for_the_typed_folders_entries_still_browse(
-    cx: &mut TestAppContext,
-) {
+fn tab_and_shift_tab_held_for_the_typed_folders_entries_still_browse(cx: &mut TestAppContext) {
     let (world, launcher) = World::launcher(cx);
     cx.update(pane::bind_keys);
     let (window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));

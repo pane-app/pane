@@ -54,8 +54,7 @@ fn calculator_folder() -> PathBuf {
 /// the faulty fixture, which answers "0 + 0" only after about a second of
 /// busy work.
 fn slow_package(sources: &Path) -> PathBuf {
-    let faulty =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/faulty.wasm");
+    let faulty = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/faulty.wasm");
     assert!(
         faulty.exists(),
         "{} is missing; run `cargo xtask guests`",
@@ -121,9 +120,8 @@ fn slow_window(
     data: &Path,
 ) -> (Entity<LauncherWindow>, &mut VisualTestContext) {
     cx.executor().allow_parking();
-    let launcher =
-        Launcher::with_packages(Runtime::start(), vec![], data.join("extensions"))
-            .with_clock(ManualClock::at(0));
+    let launcher = Launcher::with_packages(Runtime::start(), vec![], data.join("extensions"))
+        .with_clock(ManualClock::at(0));
     install(cx, &launcher, &calculator_folder());
     install(cx, &launcher, &slow_package(sources));
     open_launcher(cx, launcher)
@@ -311,9 +309,7 @@ fn a_space_typed_while_the_query_could_still_be_an_alias_waits(cx: &mut TestAppC
 }
 
 #[gpui::test]
-fn a_held_key_is_applied_after_its_time_when_a_provider_never_answers(
-    cx: &mut TestAppContext,
-) {
+fn a_held_key_is_applied_after_its_time_when_a_provider_never_answers(cx: &mut TestAppContext) {
     let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let (window, cx) = slow_window(cx, sources.path(), data.path());
 
