@@ -31,7 +31,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// The componentize-js toolchain's folder.
 const COMPONENTIZE_JS: &str = "tools/componentize-js";
@@ -157,7 +157,10 @@ pub(crate) fn cli_package(out: &Path) -> Result<(), String> {
         .join("release")
         .join("examples")
         .join(format!("p3_build{exe}"));
-    for (what, path) in [("pane-ext", &pane_ext), ("the componentizer", &componentizer)] {
+    for (what, path) in [
+        ("pane-ext", &pane_ext),
+        ("the componentizer", &componentizer),
+    ] {
         if !path.is_file() {
             return Err(format!("cargo built no {what} at {}", path.display()));
         }
@@ -196,7 +199,11 @@ pub(crate) fn cli_package(out: &Path) -> Result<(), String> {
     record["built_on"] = json!(format!("{arch}-{system}"));
     record["pane_ext"] = json!(version);
     write_json(&platform.join("toolchain.json"), &record)?;
-    println!("xtask: {} and {} are ready for npm pack", cli.display(), platform.display());
+    println!(
+        "xtask: {} and {} are ready for npm pack",
+        cli.display(),
+        platform.display()
+    );
     Ok(())
 }
 
@@ -214,10 +221,16 @@ pub(crate) fn check(root: &Path) -> Result<(), String> {
     };
     let mut problems = Vec::new();
     if cli["name"] != "@pane-app/cli" {
-        problems.push(format!("{}'s package.json is {}, not @pane-app/cli", CLI, name_of(&cli)));
+        problems.push(format!(
+            "{}'s package.json is {}, not @pane-app/cli",
+            CLI,
+            name_of(&cli)
+        ));
     }
     if cli["bin"]["pane-ext"] != "bin/pane-ext.js" {
-        problems.push(format!("{CLI}'s package.json does not run bin/pane-ext.js as pane-ext"));
+        problems.push(format!(
+            "{CLI}'s package.json does not run bin/pane-ext.js as pane-ext"
+        ));
     }
     if cli["dependencies"]["esbuild"].is_null() {
         problems.push(format!("{CLI}'s package.json does not depend on esbuild"));
@@ -243,15 +256,17 @@ pub(crate) fn check(root: &Path) -> Result<(), String> {
         let name = format!("@pane-app/cli-{}", target.id());
         match optional.remove(&name) {
             Some(at) if at.as_str() == Some(version) => {}
-            Some(_) => {
-                problems.push(format!("{name} is not at @pane-app/cli's version {version}"))
-            }
+            Some(_) => problems.push(format!(
+                "{name} is not at @pane-app/cli's version {version}"
+            )),
             None => problems.push(format!("@pane-app/cli does not list {name}")),
         }
         problems.extend(platform_problems(root, target, version));
     }
     for (left, _) in optional {
-        problems.push(format!("@pane-app/cli lists {left}, which is no platform package"));
+        problems.push(format!(
+            "@pane-app/cli lists {left}, which is no platform package"
+        ));
     }
     problems.extend(shim_problems(root, &targets));
     if !problems.is_empty() {
@@ -275,27 +290,38 @@ fn platform_problems(root: &Path, target: pane_target::Target, version: &str) ->
     let mut problems = Vec::new();
     let name = format!("@pane-app/cli-{id}");
     if package["name"].as_str() != Some(name.as_str()) {
-        problems.push(format!("{CLI}/{id}/package.json is {}, not {name}", name_of(&package)));
+        problems.push(format!(
+            "{CLI}/{id}/package.json is {}, not {name}",
+            name_of(&package)
+        ));
     }
     if package["version"].as_str() != Some(version) {
-        problems.push(format!("{CLI}/{id}/package.json is not at @pane-app/cli's version {version}"));
+        problems.push(format!(
+            "{CLI}/{id}/package.json is not at @pane-app/cli's version {version}"
+        ));
     }
     let (os, cpu) = (npm_os(target.os), cpu_of(target.arch));
     if package["os"] != json!([os]) {
-        problems.push(format!("{CLI}/{id}/package.json does not name its os as {os}"));
+        problems.push(format!(
+            "{CLI}/{id}/package.json does not name its os as {os}"
+        ));
     }
     if package["cpu"] != json!([cpu]) {
-        problems.push(format!("{CLI}/{id}/package.json does not name its cpu as {cpu}"));
+        problems.push(format!(
+            "{CLI}/{id}/package.json does not name its cpu as {cpu}"
+        ));
     }
     // The four files `cargo xtask cli-package` puts in the folder: the two
     // programs (a Windows program ends in .exe) and the wasm parts.
     let exe = target.exe_suffix();
-    if package["files"] != json!([
-        format!("pane-ext{exe}"),
-        format!("componentize-qjs-p3{exe}"),
-        "runtime.wasm",
-        "libc.so",
-    ]) {
+    if package["files"]
+        != json!([
+            format!("pane-ext{exe}"),
+            format!("componentize-qjs-p3{exe}"),
+            "runtime.wasm",
+            "libc.so",
+        ])
+    {
         problems.push(format!(
             "{CLI}/{id}/package.json does not list the pane-ext{exe}, \
              componentize-qjs-p3{exe}, runtime.wasm and libc.so the package carries"
@@ -348,7 +374,9 @@ fn shim_problems(root: &Path, targets: &[pane_target::Target]) -> Vec<String> {
     let mut problems = Vec::new();
     keys.sort();
     if keys != NPM_SYSTEMS {
-        problems.push(format!("{CLI}/bin/pane-ext.js maps {keys:?}, not the six systems Pane ships for"));
+        problems.push(format!(
+            "{CLI}/bin/pane-ext.js maps {keys:?}, not the six systems Pane ships for"
+        ));
     }
     let mut expected_values: Vec<String> = targets.iter().map(|target| target.id()).collect();
     expected_values.sort();
@@ -369,7 +397,9 @@ fn ensure_sdk(root: &Path) -> Result<PathBuf, String> {
     let (arch, system) = host()?;
     let pins = pins(root);
     let pinned = &pins["wasi_sdk"];
-    let version = pinned["version"].as_str().expect("pins.json names a version");
+    let version = pinned["version"]
+        .as_str()
+        .expect("pins.json names a version");
     let name = format!("wasi-sdk-{version}-{arch}-{system}");
     let cache = cache_root();
     let sdk = cache.join(&name);
@@ -381,7 +411,9 @@ fn ensure_sdk(root: &Path) -> Result<PathBuf, String> {
         .as_str()
         .ok_or_else(|| format!("pins.json names no wasi-sdk digest for {arch}-{system}"))?
         .to_owned();
-    let release = pinned["release"].as_str().expect("pins.json names a release");
+    let release = pinned["release"]
+        .as_str()
+        .expect("pins.json names a release");
     let archive = cache.join("downloads").join(format!("{name}.tar.gz"));
     let url = format!(
         "https://github.com/WebAssembly/wasi-sdk/releases/download/{release}/{name}.tar.gz"
@@ -427,7 +459,8 @@ fn build_runtime(root: &Path, sdk: &Path, out: &Path) -> Result<(), String> {
     let scratch = cache.join("src/runtime");
     let _ = std::fs::remove_dir_all(&scratch);
     copy_dir(
-        &root.join(COMPONENTIZE_JS)
+        &root
+            .join(COMPONENTIZE_JS)
             .join("componentize-qjs/crates/runtime"),
         &scratch,
     )?;
@@ -522,8 +555,8 @@ fn host() -> Result<(String, String), String> {
 /// `PANE_COMPONENTIZE_CACHE`, else `pane/componentize-js` in the user's
 /// cache folder.
 fn cache_root() -> PathBuf {
-    if let Some(configured) = std::env::var_os("PANE_COMPONENTIZE_CACHE")
-        .filter(|value| !value.is_empty())
+    if let Some(configured) =
+        std::env::var_os("PANE_COMPONENTIZE_CACHE").filter(|value| !value.is_empty())
     {
         return PathBuf::from(configured);
     }
@@ -563,8 +596,7 @@ fn without_cargo_environment(command: &mut Command) {
 /// The search path with `folder` in front: the SDK's tools first.
 fn path_with(folder: &Path) -> std::ffi::OsString {
     let existing = std::env::var_os("PATH").unwrap_or_default();
-    let with_folder =
-        std::iter::once(folder.to_path_buf()).chain(std::env::split_paths(&existing));
+    let with_folder = std::iter::once(folder.to_path_buf()).chain(std::env::split_paths(&existing));
     std::env::join_paths(with_folder).unwrap_or(existing)
 }
 
@@ -593,7 +625,13 @@ fn download(url: &str, path: &Path, expected: &str) -> Result<(), String> {
     let partial = path.with_extension("part");
     crate::run(
         Command::new("curl")
-            .args(["--fail", "--location", "--silent", "--show-error", "--output"])
+            .args([
+                "--fail",
+                "--location",
+                "--silent",
+                "--show-error",
+                "--output",
+            ])
             .arg(&partial)
             .arg(url),
     )?;
@@ -654,7 +692,10 @@ fn stable_rustc(root: &Path) -> Result<String, String> {
 /// the pins of record.
 fn check_committed_parts(root: &Path) -> Result<(), String> {
     let record = read_json(&root.join(WASM_PARTS).join("wasm-parts.json"))?;
-    for (file, key) in [("runtime.wasm", "runtime_sha256"), ("libc.so", "libc_sha256")] {
+    for (file, key) in [
+        ("runtime.wasm", "runtime_sha256"),
+        ("libc.so", "libc_sha256"),
+    ] {
         let actual = sha256_file(&root.join(WASM_PARTS).join(file))?;
         if record[key].as_str() != Some(actual.as_str()) {
             return Err(format!(
@@ -685,7 +726,10 @@ fn pins(root: &Path) -> Value {
 fn patch_digests(root: &Path) -> Result<Value, String> {
     let pins = pins(root);
     let mut patches = serde_json::Map::new();
-    for patch in pins["patches"].as_array().expect("pins.json names the patches") {
+    for patch in pins["patches"]
+        .as_array()
+        .expect("pins.json names the patches")
+    {
         let name = patch.as_str().expect("a patch name");
         let digest = sha256_file(&root.join(COMPONENTIZE_JS).join("patches").join(name))?;
         patches.insert(name.to_owned(), json!(digest));
