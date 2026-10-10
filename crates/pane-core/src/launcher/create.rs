@@ -31,6 +31,7 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Instant;
 
 use super::developing::slot;
 use super::off_thread;
@@ -225,7 +226,9 @@ impl Launcher {
         if let Some(open) = &mut state.form {
             open.submitting = true;
         }
-        state.view.status = Status::Running;
+        state.view.status = Status::Running {
+            since: Instant::now(),
+        };
         Some(Creation {
             parent,
             name,

@@ -30,6 +30,7 @@
 //! lines as it captures them; see `crate::source_map`).
 
 use std::path::Path;
+use std::time::Instant;
 
 use super::{
     Entry, Launcher, LauncherView, Opening, Pending, Row, Screen, State, Status, owner, reload,
@@ -246,7 +247,9 @@ impl Launcher {
                 if opening.no_view {
                     Launcher::begin_run(state);
                 } else {
-                    state.view.status = Status::Running;
+                    state.view.status = Status::Running {
+                        since: Instant::now(),
+                    };
                 }
                 Pending::Open(opening)
             }
@@ -285,7 +288,7 @@ impl Launcher {
 /// is the overlay's.
 fn covered(state: &State) -> (LauncherView, Vec<Entry>) {
     let mut view = state.view.clone();
-    if view.status == Status::Running {
+    if matches!(view.status, Status::Running { .. }) {
         view.status = Status::Idle;
     }
     (view, state.entries.clone())

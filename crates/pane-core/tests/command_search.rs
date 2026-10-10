@@ -507,7 +507,7 @@ fn a_newer_search_stops_the_one_the_service_is_still_answering() {
         // The service holds this one for ten seconds.
         let slow = pane.launcher.set_query("slow");
         wait_for_request(&service, "/search?q=slow");
-        assert_eq!(pane.view().status, Status::Running);
+        assert!(matches!(pane.view().status, Status::Running { .. }));
 
         let started = Instant::now();
         pane.search("basalt");

@@ -285,7 +285,7 @@ A short message a command shows in the launcher's footer, where the status line 
 _Avoid_: Status line (what it replaces), notification (the system's), HUD (outside the launcher)
 
 **HUD**:
-A small message in a window of its own over other applications, which never takes focus: showing one closes the launcher first, and it leaves after 1.2 seconds, or 3 for a failure.
+A small message in a window of its own over other applications, which never takes focus: showing one closes the launcher first, and it leaves after 1.2 seconds, or 3 for a failure, fading out over about a second; a pending one stays until it is updated or the launcher becomes active again.
 _Avoid_: Toast (inside the launcher), notification (the system's), tooltip
 
 **Command search**:

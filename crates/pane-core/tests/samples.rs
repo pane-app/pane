@@ -169,7 +169,7 @@ fn an_async_wasi_wait_shows_running_until_it_answers(sample: &Sample) {
     launcher.select(1);
 
     let pending = launcher.activate_selected();
-    assert_eq!(launcher.view().status, Status::Running);
+    assert!(matches!(launcher.view().status, Status::Running { .. }));
     block_on(pending);
 
     assert_eq!(

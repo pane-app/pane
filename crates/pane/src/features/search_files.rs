@@ -45,7 +45,7 @@ use pane_core::file_index::{IndexState, size_words};
 use pane_core::search_files::{FileDetails, FileType, SearchFilesView};
 use pane_core::{LauncherView, Screen, Status};
 
-use crate::app::{KEY_CONTEXT, LauncherWindow};
+use crate::app::{KEY_CONTEXT, LauncherWindow, Spot};
 use crate::features::announcer::{self, Listing, Noun, Opening, Selected, Target};
 use crate::features::root_search;
 use crate::ui::extension_icon::{self, IconSize};
@@ -350,6 +350,10 @@ impl LauncherWindow {
         let visuals = crate::settings::launcher_visuals(cx);
         let theme = visuals.theme;
         let selected = view.selected.filter(|index| *index < view.rows.len());
+        // A section jump landed on a row: the section's label scrolls
+        // into view with it (#258), as the launcher's own list reveals
+        // the jump's landing.
+        let jumped = self.take_jump_reveal().filter(|row| Some(*row) == selected);
         // The selected file's detail, read again when another is selected.
         let details = selected.and_then(|index| {
             let id = &view.rows[index].id;
@@ -413,12 +417,14 @@ impl LauncherWindow {
             // Other rows: their next page is asked for anew.
             state.asked_more = 0;
         }
-        if (changed || state.revealed != selected)
+        if (changed || state.revealed != selected || jumped.is_some())
             && let Some(selected) = selected
         {
-            state
-                .list
-                .reveal(virtual_list::child_of_row(false, &frame.sections, selected));
+            let child = virtual_list::child_of_row(false, &frame.sections, selected);
+            state.list.reveal(child);
+            if jumped.is_some() && child > 0 {
+                state.list.reveal(child - 1);
+            }
         }
         state.revealed = selected;
         // The list as the window's announcer follows it (#132): opening
@@ -633,11 +639,13 @@ impl LauncherWindow {
             let (selector, color) = super::toast::style_look(shown.toast.style, &theme);
             (selector, shown.toast.text(), color)
         });
-        let outcome = super::announcer::says_message(&view.status, toast.is_some());
+        let outcome = super::announcer::says_message(&view.status, toast.is_some(), false);
         let status = match &view.status {
             _ if toast.is_some() => toast,
             Status::Idle => None,
-            Status::Running => Some(("status-running", "Running…".to_owned(), theme.warning)),
+            Status::Running { .. } => {
+                Some(("status-running", "Running…".to_owned(), theme.warning))
+            }
             Status::Progress(work) => Some(("status-progress", work.clone(), theme.warning)),
             Status::Result(answer) => Some(("status-result", answer.clone(), theme.success)),
             Status::Error(message) => Some(("status-error", message.clone(), theme.danger)),
@@ -680,7 +688,18 @@ impl LauncherWindow {
             // The Actions panel, over the footer as the launcher's is.
             .when_some(self.render_actions_layer(window, cx), |footer, panel| {
                 footer.child(panel)
-            });
+            })
+            // The open toast's details, above the footer as the
+            // launcher's are (#249).
+            .when_some(
+                self.render_toast_details_layer(
+                    &theme,
+                    visuals.material,
+                    window.viewport_size(),
+                    cx,
+                ),
+                |footer, details| footer.child(details),
+            );
 
         let content = split_view::compose(
             header,
@@ -690,28 +709,40 @@ impl LauncherWindow {
         );
         // The window's live region (#132): the open Actions panel's list,
         // else the files'.
-        let followed = self.panel_listing(cx).or(Some(followed));
+        let followed = self
+            .panel_listing(cx)
+            .or_else(|| self.toast_details_listing())
+            .or(Some(followed));
         let announcer = self.announce(followed, said.as_deref(), cx);
         let root = div()
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(Self::select_next))
             .on_action(cx.listener(Self::select_previous))
             // Page Down and Up move by the rows of Search Files' list in
-            // view (`LauncherWindow::paged_list`).
+            // view (`LauncherWindow::paged_list`); Alt+Up and Alt+Down by
+            // five rows, and Ctrl+Up and Ctrl+Down cross the view's
+            // sections, as they do the launcher's own list (#258).
             .on_action(cx.listener(Self::select_next_page))
             .on_action(cx.listener(Self::select_previous_page))
+            .on_action(cx.listener(Self::select_next_five))
+            .on_action(cx.listener(Self::select_previous_five))
+            .on_action(cx.listener(Self::select_next_section))
+            .on_action(cx.listener(Self::select_previous_section))
             .on_action(cx.listener(Self::confirm))
             .on_action(cx.listener(Self::files_back))
             .on_action(cx.listener(Self::return_to_root))
             .on_action(cx.listener(Self::dismiss))
             .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(Self::toggle_actions))
-            .on_action(cx.listener(Self::focus_toast))
+            .on_action(cx.listener(Self::open_toast_details))
             // A toast's actions' shortcuts first, then the selected
             // file's action chords (Ctrl+Enter), as on any command's
             // search.
             .capture_key_down(cx.listener(Self::toast_action_keys))
             .capture_key_down(cx.listener(Self::item_action_keys))
+            // The Back-a-level key backs out of the view's empty search
+            // (#258), beneath the field's own Backspace.
+            .capture_key_down(cx.listener(Self::backspace_back_keys))
             .on_action(cx.listener(Self::focus_next))
             .on_action(cx.listener(Self::focus_previous))
             .size_full()
@@ -773,6 +804,10 @@ impl LauncherWindow {
                             title: title.clone().into(),
                             subtitle: folder.clone().into(),
                             selected: on,
+                            hover: self
+                                .motion
+                                .hover
+                                .look(Spot::Clip(row), cx.background_executor().now()),
                             icon,
                         },
                         &theme,
@@ -784,6 +819,9 @@ impl LauncherWindow {
                     .aria_selected(on)
                     .aria_position_in_set(row + 1)
                     .aria_size_of_set(frame.rows.len())
+                    .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+                        this.motion.hover.set(Spot::Clip(row), *over, cx);
+                    }))
                     // A click selects; a double click runs the primary
                     // action, as Enter does.
                     .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {

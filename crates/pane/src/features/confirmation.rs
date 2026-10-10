@@ -33,7 +33,7 @@ use gpui::{
 use pane_core::ConfirmAnswer;
 use pane_core::feedback::DONT_ASK_AGAIN;
 
-use crate::app::LauncherWindow;
+use crate::app::{LauncherWindow, Spot};
 use crate::features::actions_panel::DESTRUCTIVE;
 use crate::ui::footer::{self, ButtonWash};
 use crate::ui::keycap::{CapStyle, Key, KeySequence, key_sequence};
@@ -241,6 +241,8 @@ impl LauncherWindow {
     ) -> Option<AnyElement> {
         let asked = self.launcher.confirmation()?;
         let ticked = self.confirmation.dont_ask_again;
+        let now = cx.background_executor().now();
+        let look = |id: &'static str| self.motion.hover.look(Spot::Button(id), now);
         let primary_keys = one_key("↵", "Enter");
         let primary = footer::footer_button(
             "confirmation-primary",
@@ -251,7 +253,7 @@ impl LauncherWindow {
             } else {
                 CapStyle::Accent
             },
-            ButtonWash::Hover,
+            ButtonWash::Hover(look("confirmation-primary")),
             theme,
         )
         .when(asked.destructive, |button| {
@@ -263,6 +265,11 @@ impl LauncherWindow {
         .aria_label(asked.primary.clone())
         .aria_keyshortcuts(primary_keys.name())
         .cursor_pointer()
+        .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+            this.motion
+                .hover
+                .set(Spot::Button("confirmation-primary"), *over, cx);
+        }))
         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
             this.answer_confirmation(ConfirmAnswer::Confirmed, window, cx);
         }));
@@ -280,13 +287,18 @@ impl LauncherWindow {
             asked.dismiss.clone(),
             &dismiss_keys,
             CapStyle::Regular,
-            ButtonWash::Hover,
+            ButtonWash::Hover(look("confirmation-dismiss")),
             theme,
         )
         .role(Role::Button)
         .aria_label(asked.dismiss.clone())
         .aria_keyshortcuts(dismiss_keys.name())
         .cursor_pointer()
+        .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+            this.motion
+                .hover
+                .set(Spot::Button("confirmation-dismiss"), *over, cx);
+        }))
         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
             this.answer_confirmation(ConfirmAnswer::Dismissed, window, cx);
         }));

@@ -25,6 +25,23 @@
 //! rule, not a readability guarantee, and the light palette's body-level
 //! neutrals are a legibility choice, not a certified ratio. Opaque mode is
 //! the explicit deterministic fallback.
+//!
+//! The launcher's text levels (ADR 0035) are the primary text colour at
+//! strengths — secondary 60%, tertiary 40%, faint marks 20%, separators
+//! 10% — wherever that reads on the surface beneath: a level-carrying role
+//! keeps its accepted opaque colour wherever its alpha form would fall
+//! below its contrast floor (4.5:1 for secondary text, WCAG's
+//! [`contrast::TEXT`]; 3:1 for tertiary text and the placeholder; faint
+//! marks and separators are not read, so they take their strength
+//! outright). The check is made against each surface's own tint, flattened
+//! opaque: the panel, the footer strip and the popover. Glass over an
+//! unknown desktop is judged on its tint alone — the tint's own colour, as
+//! the tint's own legibility floor above is judged, never on a guess about
+//! the desktop — and over a background image every launcher surface's tint
+//! is the canvas (ADR 0028). The decision is made where the theme is built
+//! — each palette, and [`Theme::over_backdrop`] — so the theme tests can
+//! exercise every theme, material and background-image case. The Settings
+//! window's text roles are not levels: it keeps the palette's own values.
 
 use std::sync::Arc;
 
@@ -32,6 +49,8 @@ use gpui::{
     FontFeatures, FontWeight, Hsla, Pixels, SharedString, hsla, px, rgb_to_hsla, rgba,
     transparent_black,
 };
+
+use crate::ui::contrast;
 
 /// Which palette a [`Theme`] carries. The host settings pick one — the
 /// user's preference, or the system's appearance where the preference
@@ -65,22 +84,107 @@ pub(crate) fn pressed(wash: Hsla) -> Hsla {
     }
 }
 
+/// The secondary level's strength (ADR 0035, the Raycast deep dive's
+/// "Look and motion"): the primary text colour at 60%.
+const SECONDARY_STRENGTH: f32 = 0.6;
+/// The tertiary level's strength: 40%. Disabled text and unavailable
+/// controls dim to it as well, as the reference's own disabled fields do
+/// (the Settings controls' `disabled_opacity`).
+pub(crate) const TERTIARY_STRENGTH: f32 = 0.4;
+/// The faint level's strength: 20%.
+const FAINT_STRENGTH: f32 = 0.2;
+/// The separator level's strength: 10%.
+const SEPARATOR_STRENGTH: f32 = 0.1;
+/// The contrast floor tertiary text and the placeholder keep to take their
+/// alpha form (WCAG's large-text floor): these roles are small but
+/// auxiliary. Secondary text keeps [`contrast::TEXT`].
+const TERTIARY_FLOOR: f32 = 3.;
+
+/// One level-carrying role's chosen form: `primary` at `strength`
+/// wherever that reads on every one of the role's `surfaces` — each its own
+/// tint, flattened opaque (see the module's text-level notes) — or the
+/// role's `present` accepted colour wherever it would not. Called where the
+/// theme is built, once per case.
+fn level(primary: Hsla, present: Hsla, strength: f32, floor: f32, surfaces: &[Hsla]) -> Hsla {
+    let alpha = Hsla {
+        alpha: strength,
+        ..primary
+    };
+    if reads(alpha, floor, surfaces) {
+        alpha
+    } else {
+        present
+    }
+}
+
+/// Whether `chosen` reads — at least `floor` — on every one of `surfaces`,
+/// each its own tint, flattened opaque.
+fn reads(chosen: Hsla, floor: f32, surfaces: &[Hsla]) -> bool {
+    surfaces
+        .iter()
+        .all(|surface| contrast::ratio(contrast::over(chosen, *surface), *surface) >= floor)
+}
+
+/// `color` at `strength` of its alpha: a hover wash's look as it fades
+/// out behind the pointer (#245). Full strength is the wash itself; 0
+/// is nothing drawn at all.
+pub(crate) fn faded(color: Hsla, strength: f32) -> Hsla {
+    Hsla {
+        alpha: (color.alpha * strength.clamp(0., 1.)).min(1.),
+        ..color
+    }
+}
+
 /// The semantic tokens. Field groups follow the roles the launcher uses:
 /// text, background, borders, selection, focus, semantic states, control
 /// chrome — plus the typography and geometry the reference fixes.
 #[derive(Clone, Debug)]
 pub(crate) struct Theme {
     // -- Text roles ---------------------------------------------------------
-    /// Row titles, footer's primary label (reference Ink).
+    /// Row titles, footer's primary label (reference Ink). The primary text
+    /// level: the ink the levels below take their alpha of, at 100%.
     pub(crate) text_title: Hsla,
-    /// Body copy (reference Ink 2).
+    /// Body copy (reference Ink 2). Not a level: the reference's body role,
+    /// drawn as it is (the Settings window draws it too).
     pub(crate) text_body: Hsla,
-    /// Section labels, subtitles, the footer's hint (reference Ink 3).
+    /// Section labels, subtitles, the footer's hint (reference Ink 3) — the
+    /// muted text that is not a level (the empty line, form descriptions,
+    /// the Settings window's own roles) keeps this value, and it is what
+    /// the secondary and tertiary levels keep wherever their alpha form
+    /// would fall short.
     pub(crate) text_muted: Hsla,
-    /// Typed query text in the search field.
+    /// Row subtitles and kind labels — the secondary level: the primary ink
+    /// at 60% wherever it reads, this palette's muted ink wherever it would
+    /// not (see the module's text-level notes).
+    pub(crate) text_secondary: Hsla,
+    /// Section labels and the footer's hint — the tertiary level: the
+    /// primary ink at 40% wherever it reads, the accepted colour wherever
+    /// it would not.
+    pub(crate) text_tertiary: Hsla,
+    /// Typed query text in the search field: the primary level, at its own
+    /// accepted colour (the reference's input ink is a step brighter than
+    /// the title ink; primary has no lower strength to take).
     pub(crate) text_query: Hsla,
-    /// The search field's placeholder.
+    /// The search field's placeholder as the shared controls and the
+    /// Settings window draw it — not a level, so it is unchanged.
     pub(crate) text_placeholder: Hsla,
+    /// The placeholder in the launcher's own search fields (root search,
+    /// the Actions panel's, a command's) — the tertiary level. The
+    /// Settings window's fields keep [`Theme::text_placeholder`].
+    pub(crate) query_placeholder: Hsla,
+    /// The faint level, 20% of the primary ink: marks drawn in the text
+    /// colour. The launcher draws no such mark today; the level completes
+    /// the set the theme tests hold to its strength, so the field is read
+    /// only there and allowed to rest unread in the library itself.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) text_faint: Hsla,
+    /// The launcher's separators — the rule under the search field, the
+    /// footer's top rule and the rule between its buttons, the Actions
+    /// panel's rules, the split view's — the primary ink at 10% (the
+    /// separator level; a rule is not read, so it takes its strength
+    /// outright). The Settings window's rules keep
+    /// [`Theme::hairline_soft`].
+    pub(crate) separator: Hsla,
 
     // -- Background roles ---------------------------------------------------
     /// The panel's translucent tint over the frost (reference L1:
@@ -116,16 +220,28 @@ pub(crate) struct Theme {
     // -- Border roles -------------------------------------------------------
     /// The panel's inner edge (reference: rgba(255,255,255,.075)).
     pub(crate) hairline: Hsla,
-    /// Dividers between header/footer and the list (reference: .06).
+    /// The Settings window's rules — its titlebar's and its sidebar's —
+    /// the reference's soft divider (reference: .06). The launcher's own
+    /// separators take [`Theme::separator`], the separator level.
     pub(crate) hairline_soft: Hsla,
 
-    // -- Selection roles ----------------------------------------------------
-    /// A row under the pointer (reference: rgba(255,255,255,.035)).
-    pub(crate) row_hover: Hsla,
-    /// The selected row's wash (reference: rgba(255,255,255,.085)).
-    pub(crate) row_selected: Hsla,
-    /// The selected row's inset edge (reference: rgba(255,255,255,.05)).
-    pub(crate) row_selected_border: Hsla,
+    // -- Selection and hover (ADR 0035) -------------------------------
+    /// The selected row's wash in every launcher list — root search's
+    /// rows, a command's list, a command search, a confirmation's rows,
+    /// the Actions panel's and the Pane menu's entries: the text colour
+    /// at 10% (Raycast's value), with no inset edge and no ring (ADR
+    /// 0035). A selected row over a background image keeps this wash over
+    /// its frost, without the edge.
+    pub(crate) selection_wash: Hsla,
+    /// The hover wash where hovering does not move the selection (a
+    /// command's list, rows under an open overlay, pinned slots, the
+    /// footer's buttons, the Pane menu's entries): the text colour at
+    /// 5%, fainter than the selection, fading out over
+    /// [`crate::ui::motion::HOVER_FADE`] once the pointer leaves (ADR
+    /// 0035). Where hovering *does* move the selection — root search's
+    /// rows, the Actions panel's entries — only the selection wash ever
+    /// shows.
+    pub(crate) hover_wash: Hsla,
 
     // -- Root search's result layouts (#96) ----------------------------------
     /// The no-results notice, the computed answer's card and the empty
@@ -226,24 +342,15 @@ pub(crate) struct Theme {
     pub(crate) footer_mark: Hsla,
     /// A footer button's label (reference `.fbtn`: #D9DADD).
     pub(crate) footer_button_text: Hsla,
-    /// A footer button's hover wash, and an Actions row's (white 6%).
-    pub(crate) control_hover: Hsla,
     /// The Actions button while its panel is open (white 10%), with
     /// [`Theme::footer_button_open_text`] on it.
     pub(crate) footer_button_open: Hsla,
     /// The open Actions button's label (#FFFFFF).
     pub(crate) footer_button_open_text: Hsla,
-    /// The 1×16 rule between the footer's buttons (white 10%).
-    pub(crate) footer_divider: Hsla,
-    /// The selected Actions row's wash (reference `.arow.sel`: white 11%).
-    pub(crate) action_selected: Hsla,
     /// An Actions row's label (#E4E4E7).
     pub(crate) action_text: Hsla,
     /// An Actions row's glyph (#A3A4A9).
     pub(crate) action_icon: Hsla,
-    /// The Actions panel's rules: its separators and the line above its
-    /// search (white 7%).
-    pub(crate) action_rule: Hsla,
     /// The dimmer over the results while the Actions panel is open
     /// (rgba(6,7,8,.34)).
     pub(crate) actions_dimmer: Hsla,
@@ -265,8 +372,6 @@ pub(crate) struct Theme {
     pub(crate) slot_background: Hsla,
     /// A pinned slot's 1px inset edge (white 5%).
     pub(crate) slot_edge: Hsla,
-    /// A pinned slot under the pointer (`.slot:hover`: white 7%).
-    pub(crate) slot_hover: Hsla,
     /// A pinned slot's title (`.slot-t`: #D9DADD).
     pub(crate) slot_title: Hsla,
     /// The pin hint's dashed outline, in the strip's cell after the last
@@ -649,8 +754,8 @@ pub(crate) struct ResultColors {
     pub(crate) notice_disc: Hsla,
     pub(crate) notice_disc_edge: Hsla,
     pub(crate) notice_glyph: Hsla,
-    /// The answer card's fill (white 6%); its 1px ring while selected is
-    /// the accent stroke ([`Theme::accent_text`]).
+    /// The answer card's fill (white 6%); while selected the card shows
+    /// [`Theme::selection_wash`] instead, with no ring (ADR 0035).
     pub(crate) card_fill: Hsla,
     /// The value typed (#D9DADD) and the answer (#FFFFFF).
     pub(crate) card_source: Hsla,
@@ -1033,15 +1138,65 @@ impl Theme {
 
     /// The reference's dark palette, exactly as authored.
     pub(crate) fn dark() -> Theme {
+        let text_title = color(0xEDEDEFFF);
+        let text_muted = color(0x8E8F94FF);
+        let text_placeholder = color(0x86878CFF);
+        let panel_tint = color(0x16171AB3);
+        let panel_solid = color(0x16171AFF);
+        let footer_tint = color(0x00000024);
+        let popover_tint = color(0x26272BD1);
+        let popover_solid = color(0x26272BFF);
+        let keycap_background = color(0xFFFFFF12);
+        let keycap_text = color(0xC9CACEFF);
+        let footer_button_text = color(0xD9DADDFF);
+        // The text levels (ADR 0035), decided against the surfaces their
+        // text sits on — the panel, the footer strip (its wash over the
+        // panel) and the popover — each its own tint flattened opaque (the
+        // glass tint's own colour is its base, so the tint alone is the
+        // panel; see the module's level notes). A row's hover and selection
+        // washes lighten the panel by a few percent at most, so the tints
+        // bound the check.
+        let footer = contrast::over(footer_tint, panel_solid);
+        let popover = contrast::over(popover_tint, popover_solid);
+        let keycap_on = |surface: Hsla| contrast::over(keycap_background, surface);
         Theme {
-            text_title: color(0xEDEDEFFF),
+            text_title,
             text_body: color(0xA3A4A9FF),
-            text_muted: color(0x8E8F94FF),
+            text_muted,
+            text_secondary: level(
+                text_title,
+                text_muted,
+                SECONDARY_STRENGTH,
+                contrast::TEXT,
+                &[panel_solid],
+            ),
+            text_tertiary: level(
+                text_title,
+                text_muted,
+                TERTIARY_STRENGTH,
+                TERTIARY_FLOOR,
+                &[panel_solid, footer, popover],
+            ),
             text_query: color(0xF3F3F5FF),
-            text_placeholder: color(0x86878CFF),
+            text_placeholder,
+            query_placeholder: level(
+                text_title,
+                text_placeholder,
+                TERTIARY_STRENGTH,
+                TERTIARY_FLOOR,
+                &[panel_solid, popover],
+            ),
+            text_faint: Hsla {
+                alpha: FAINT_STRENGTH,
+                ..text_title
+            },
+            separator: Hsla {
+                alpha: SEPARATOR_STRENGTH,
+                ..text_title
+            },
 
-            panel_tint: color(0x16171AB3),
-            panel_solid: color(0x16171AFF),
+            panel_tint,
+            panel_solid,
             panel_sheen: color(0xFFFFFF0D),
             panel_top_highlight: color(0xFFFFFF1A),
             footer_tint: color(0x00000024),
@@ -1055,9 +1210,8 @@ impl Theme {
             hairline: color(0xFFFFFF13),
             hairline_soft: color(0xFFFFFF0F),
 
-            row_hover: color(0xFFFFFF09),
-            row_selected: color(0xFFFFFF16),
-            row_selected_border: color(0xFFFFFF0D),
+            selection_wash: color(0xEDEDEF1A),
+            hover_wash: color(0xEDEDEF0D),
 
             results: ResultColors::dark(),
 
@@ -1075,10 +1229,20 @@ impl Theme {
             tile_app_edge: color(0xFFFFFF24),
             tile_app_highlight: color(0xFFFFFF59),
             tile_drop: color(0x00000073),
-            keycap_background: color(0xFFFFFF12),
+            keycap_background,
             keycap_edge: color(0xFFFFFF14),
             keycap_bottom: color(0x00000059),
-            keycap_text: color(0xC9CACEFF),
+            keycap_text: level(
+                text_title,
+                keycap_text,
+                SECONDARY_STRENGTH,
+                contrast::TEXT,
+                &[
+                    keycap_on(panel_solid),
+                    keycap_on(footer),
+                    keycap_on(popover),
+                ],
+            ),
             accent: color(0xC9EE6AFF),
             accent_ink: color(0x111210FF),
             alias_text: color(0xB9BABEFF),
@@ -1100,15 +1264,17 @@ impl Theme {
             controls: ControlColors::dark(),
 
             footer_mark: color(0xEDEDEFEB),
-            footer_button_text: color(0xD9DADDFF),
-            control_hover: color(0xFFFFFF0F),
+            footer_button_text: level(
+                text_title,
+                footer_button_text,
+                SECONDARY_STRENGTH,
+                contrast::TEXT,
+                &[footer],
+            ),
             footer_button_open: color(0xFFFFFF1A),
             footer_button_open_text: color(0xFFFFFFFF),
-            footer_divider: color(0xFFFFFF1A),
-            action_selected: color(0xFFFFFF1C),
             action_text: color(0xE4E4E7FF),
             action_icon: color(0xA3A4A9FF),
-            action_rule: color(0xFFFFFF12),
             actions_dimmer: color(0x06070857),
             popover_outline: color(0x000000CC),
             popover_drop: color(0x000000BF),
@@ -1118,7 +1284,6 @@ impl Theme {
 
             slot_background: color(0xFFFFFF09),
             slot_edge: color(0xFFFFFF0D),
-            slot_hover: color(0xFFFFFF12),
             slot_title: color(0xD9DADDFF),
             slot_empty_edge: color(0xFFFFFF1A),
 
@@ -1137,15 +1302,62 @@ impl Theme {
     /// are the reference's, unchanged. This is a proposal for review, not
     /// reference truth.
     pub(crate) fn light() -> Theme {
+        let text_title = color(0x202126FF);
+        let text_muted = color(0x575A63FF);
+        let text_placeholder = color(0x575A63FF);
+        let panel_tint = color(0xF6F6F8CC);
+        let panel_solid = color(0xF6F6F8FF);
+        let footer_tint = color(0x0000000D);
+        let popover_tint = color(0xFBFBFDE6);
+        let popover_solid = color(0xFBFBFDFF);
+        let keycap_background = color(0x0000000D);
+        let keycap_text = color(0x3B3D44FF);
+        let footer_button_text = color(0x2A2B31FF);
+        // The text levels, decided as the dark palette's are. The light
+        // panel is bright enough that the alpha forms fall short of their
+        // floors, so every level-carrying role here keeps its accepted
+        // colour — the check, not a choice, keeps the light hierarchy.
+        let footer = contrast::over(footer_tint, panel_solid);
+        let popover = contrast::over(popover_tint, popover_solid);
+        let keycap_on = |surface: Hsla| contrast::over(keycap_background, surface);
         Theme {
-            text_title: color(0x202126FF),
+            text_title,
             text_body: color(0x575A63FF),
-            text_muted: color(0x575A63FF),
+            text_muted,
+            text_secondary: level(
+                text_title,
+                text_muted,
+                SECONDARY_STRENGTH,
+                contrast::TEXT,
+                &[panel_solid],
+            ),
+            text_tertiary: level(
+                text_title,
+                text_muted,
+                TERTIARY_STRENGTH,
+                TERTIARY_FLOOR,
+                &[panel_solid, footer, popover],
+            ),
             text_query: color(0x1D1E23FF),
-            text_placeholder: color(0x575A63FF),
+            text_placeholder,
+            query_placeholder: level(
+                text_title,
+                text_placeholder,
+                TERTIARY_STRENGTH,
+                TERTIARY_FLOOR,
+                &[panel_solid, popover],
+            ),
+            text_faint: Hsla {
+                alpha: FAINT_STRENGTH,
+                ..text_title
+            },
+            separator: Hsla {
+                alpha: SEPARATOR_STRENGTH,
+                ..text_title
+            },
 
-            panel_tint: color(0xF6F6F8CC),
-            panel_solid: color(0xF6F6F8FF),
+            panel_tint,
+            panel_solid,
             panel_sheen: color(0xFFFFFF4D),
             panel_top_highlight: color(0xFFFFFF66),
             footer_tint: color(0x0000000D),
@@ -1162,9 +1374,8 @@ impl Theme {
             hairline: color(0x00000017),
             hairline_soft: color(0x00000012),
 
-            row_hover: color(0x0000000B),
-            row_selected: color(0x00000016),
-            row_selected_border: color(0x0000000D),
+            selection_wash: color(0x2021261A),
+            hover_wash: color(0x2021260D),
 
             results: ResultColors::light(),
 
@@ -1182,10 +1393,20 @@ impl Theme {
             tile_app_edge: color(0xFFFFFF24),
             tile_app_highlight: color(0xFFFFFF59),
             tile_drop: color(0x00000073),
-            keycap_background: color(0x0000000D),
+            keycap_background,
             keycap_edge: color(0x00000014),
             keycap_bottom: color(0x00000026),
-            keycap_text: color(0x3B3D44FF),
+            keycap_text: level(
+                text_title,
+                keycap_text,
+                SECONDARY_STRENGTH,
+                contrast::TEXT,
+                &[
+                    keycap_on(panel_solid),
+                    keycap_on(footer),
+                    keycap_on(popover),
+                ],
+            ),
             accent: color(0xC9EE6AFF),
             accent_ink: color(0x111210FF),
             alias_text: color(0x3B3D44FF),
@@ -1210,15 +1431,17 @@ impl Theme {
             controls: ControlColors::light(),
 
             footer_mark: color(0x202126EB),
-            footer_button_text: color(0x2A2B31FF),
-            control_hover: color(0x0000000F),
+            footer_button_text: level(
+                text_title,
+                footer_button_text,
+                SECONDARY_STRENGTH,
+                contrast::TEXT,
+                &[footer],
+            ),
             footer_button_open: color(0x0000001A),
             footer_button_open_text: color(0x111214FF),
-            footer_divider: color(0x0000001A),
-            action_selected: color(0x0000001C),
             action_text: color(0x202126FF),
             action_icon: color(0x575A63FF),
-            action_rule: color(0x00000012),
             actions_dimmer: color(0x06070826),
             popover_outline: color(0x00000033),
             popover_drop: color(0x00000040),
@@ -1228,7 +1451,6 @@ impl Theme {
 
             slot_background: color(0x00000009),
             slot_edge: color(0x0000000D),
-            slot_hover: color(0x00000012),
             slot_title: color(0x2A2B31FF),
             slot_empty_edge: color(0x0000001A),
 
@@ -1247,10 +1469,17 @@ impl Theme {
     /// glass tint alpha on glass, so the window's frost still shows
     /// through it; the frosted surfaces blur what is behind
     /// them 30px under the canvas at 40% (the footer at 60%) and a cool
-    /// silver edge; hover and selection are plain white washes (dark ones
-    /// in the light palette); and the secondary text steps up a shade to
-    /// read over the picture. The light values are the dark ones turned
-    /// over, not yet tuned.
+    /// silver edge; selection and hover are the text colour's washes
+    /// (ADR 0035), which carry over from the palette beneath; and the
+    /// secondary text steps up a shade to read over the picture. The
+    /// light values are the dark ones turned over, not yet tuned.
+    ///
+    /// The text levels resolve again here, against the picture's case:
+    /// every launcher surface's tint is the canvas (the popover keeps the
+    /// palette's own), and the roles' accepted colours are the backdrop's
+    /// own — the stepped shades the muted ink takes here, and the label
+    /// the frost used to draw the section labels in (the tertiary level's
+    /// present value over the picture).
     pub(crate) fn over_backdrop(&self, canvas: Hsla) -> Theme {
         let light = self.panel_solid.lightness > 0.5;
         let at = |base: Hsla, alpha: f32| Hsla { alpha, ..base };
@@ -1260,45 +1489,76 @@ impl Theme {
         } else {
             hsla(210. / 360., 0.18, 0.78, 0.09)
         };
+        // The muted ink the picture's case keeps, a shade stepped up from
+        // the palette's own, and the section labels' present colour here.
+        let stepped = if light {
+            color(0x4A4D55FF)
+        } else {
+            color(0xA9AAAFFF)
+        };
+        let label = if light {
+            color(0x3B3D44FF)
+        } else {
+            color(0xC9CACEFF)
+        };
         let frost = Frost {
             blur: px(30.),
             tint: at(canvas, 0.4),
             edge,
             top: wash(0.06),
-            label: if light {
-                color(0x3B3D44FF)
-            } else {
-                color(0xC9CACEFF)
-            },
             pill_margin: (px(8.), px(4.), px(10.)),
             pill_padding_x: px(16.),
             pill_radius: px(16.),
         };
+        let ink = self.text_title;
+        let popover = self.popover_solid;
+        let keycap_on = |surface: Hsla| contrast::over(self.keycap_background, surface);
         Theme {
-            text_muted: if light {
-                color(0x4A4D55FF)
-            } else {
-                color(0xA9AAAFFF)
+            text_muted: stepped,
+            text_secondary: level(ink, stepped, SECONDARY_STRENGTH, contrast::TEXT, &[canvas]),
+            text_tertiary: level(
+                ink,
+                label,
+                TERTIARY_STRENGTH,
+                TERTIARY_FLOOR,
+                &[canvas, popover],
+            ),
+            text_placeholder: stepped,
+            query_placeholder: level(
+                ink,
+                stepped,
+                TERTIARY_STRENGTH,
+                TERTIARY_FLOOR,
+                &[canvas, popover],
+            ),
+            text_faint: Hsla {
+                alpha: FAINT_STRENGTH,
+                ..ink
             },
-            text_placeholder: if light {
-                color(0x4A4D55FF)
-            } else {
-                color(0xA9AAAFFF)
+            separator: Hsla {
+                alpha: SEPARATOR_STRENGTH,
+                ..ink
             },
             panel_tint: at(canvas, self.panel_tint.alpha),
             panel_solid: canvas,
             panel_sheen: transparent_black(),
             footer_tint: at(canvas, 0.6),
-            hairline_soft: edge,
-            row_hover: wash(0.06),
-            row_selected: wash(0.10),
-            row_selected_border: Hsla {
-                alpha: edge.alpha + 0.01,
-                ..edge
-            },
             slot_background: frost.tint,
             slot_edge: edge,
-            slot_hover: wash(0.09),
+            footer_button_text: level(
+                ink,
+                self.footer_button_text,
+                SECONDARY_STRENGTH,
+                contrast::TEXT,
+                &[canvas],
+            ),
+            keycap_text: level(
+                ink,
+                self.keycap_text,
+                SECONDARY_STRENGTH,
+                contrast::TEXT,
+                &[keycap_on(canvas), keycap_on(popover)],
+            ),
             frost: Some(frost),
             ..self.clone()
         }
@@ -1318,9 +1578,6 @@ pub(crate) struct Frost {
     pub(crate) edge: Hsla,
     /// A frosted surface's top inset line: white 6%.
     pub(crate) top: Hsla,
-    /// The section labels' ink over the picture (#C9CACE), a step above
-    /// the muted ink the rest of the secondary text takes.
-    pub(crate) label: Hsla,
     /// The search field as a frosted pill inside the search header's 64px
     /// row, which keeps its height (so the compact window's does not
     /// change): its margins above, below and either side (8, 4, 10), its
@@ -1697,5 +1954,288 @@ impl SplitTokens {
             footer_height: px(52.),
             footer_gap: px(16.),
         }
+    }
+}
+
+/// The launcher's text levels (ADR 0035), tested over every case they are
+/// decided for: for each theme, material and background-image case, each
+/// level-carrying role's chosen form meets its floor on each surface it is
+/// drawn on, takes the primary ink at its strength wherever that reads,
+/// and keeps its accepted opaque colour wherever it would not. The
+/// Settings window's text roles are not levels and stay as they were.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::contrast::{self, TEXT};
+    use crate::ui::material::MaterialMode;
+
+    /// One case the levels are decided for, with the surfaces it draws text
+    /// on, each flattened to its own tint — glass on the tint alone (the
+    /// tint over the palette's own base, as the tint's own legibility
+    /// floor is judged), the footer strip's wash over the panel, the
+    /// popover's tint on its base; over a picture, every launcher
+    /// surface's tint is the canvas (the search field's frosted pill
+    /// included) while the popover keeps the palette's own. `field` is
+    /// where the query and its placeholder sit: the panel, or the frosted
+    /// pill over a picture.
+    struct Case {
+        name: String,
+        theme: Theme,
+        panel: Hsla,
+        footer: Hsla,
+        popover: Hsla,
+        field: Hsla,
+        /// The accepted colour each level-carrying role keeps in this case
+        /// wherever its alpha form would fall short of its floor, in the
+        /// order [`roles`] lists them.
+        present: [Hsla; 5],
+    }
+
+    /// The roles' accepted colours: the palette's own, or over a picture the
+    /// backdrop's stepped shades and the frost's label. In order: the
+    /// subtitle's, the footer label's, the keycap label's, the section
+    /// label's and the placeholder's.
+    fn presents(theme: &Theme, backdrop: bool) -> [Hsla; 5] {
+        let light = theme.panel_solid.lightness > 0.5;
+        if backdrop {
+            // Over the picture: the stepped shades the muted ink takes
+            // here, and the label the frost used to draw the section
+            // labels in; the footer's and keycaps' labels keep the
+            // palette's own.
+            [
+                color(if light { 0x4A4D55FF } else { 0xA9AAAFFF }),
+                color(if light { 0x2A2B31FF } else { 0xD9DADDFF }),
+                color(if light { 0x3B3D44FF } else { 0xC9CACEFF }),
+                color(if light { 0x3B3D44FF } else { 0xC9CACEFF }),
+                color(if light { 0x4A4D55FF } else { 0xA9AAAFFF }),
+            ]
+        } else {
+            [
+                color(if light { 0x575A63FF } else { 0x8E8F94FF }),
+                color(if light { 0x2A2B31FF } else { 0xD9DADDFF }),
+                color(if light { 0x3B3D44FF } else { 0xC9CACEFF }),
+                color(if light { 0x575A63FF } else { 0x8E8F94FF }),
+                color(if light { 0x575A63FF } else { 0x86878CFF }),
+            ]
+        }
+    }
+
+    /// Every theme, material and background-image case Pane supports: both
+    /// palettes, both materials, and each palette over a canvas at both
+    /// edges of the range the backdrop's canvas is held to (lightness
+    /// 6–16% over a dark panel, 86–96% over a light one; see
+    /// `crate::background`'s `canvas`, which holds it there so the
+    /// palette's text keeps its contrast on it).
+    fn cases() -> Vec<Case> {
+        let mut cases = Vec::new();
+        for base in [Theme::dark(), Theme::light()] {
+            let light = base.panel_solid.lightness > 0.5;
+            let palette = if light { "light" } else { "dark" };
+            for material in [MaterialMode::Glass, MaterialMode::Opaque] {
+                let panel = match material {
+                    // The tint judged on its tint alone: the tint over the
+                    // palette's own base.
+                    MaterialMode::Glass => contrast::over(base.panel_tint, base.panel_solid),
+                    MaterialMode::Opaque => base.panel_solid,
+                };
+                let footer = contrast::over(base.footer_tint, panel);
+                let popover = contrast::over(base.popover_tint, base.popover_solid);
+                cases.push(Case {
+                    name: format!("{palette}-{:?}", material),
+                    theme: base.clone(),
+                    panel,
+                    footer,
+                    popover,
+                    field: panel,
+                    present: presents(&base, false),
+                });
+                let canvases = [
+                    color(if light { 0xDBDBDBFF } else { 0x0F0F0FFF }),
+                    color(if light { 0xF4F4F4FF } else { 0x292929FF }),
+                ];
+                for canvas in canvases {
+                    cases.push(Case {
+                        name: format!("{palette}-{:?}-backdrop", material),
+                        theme: base.over_backdrop(canvas),
+                        panel: canvas,
+                        footer: canvas,
+                        popover,
+                        field: canvas,
+                        present: presents(&base, true),
+                    });
+                }
+            }
+        }
+        cases
+    }
+
+    /// One level-carrying role as one case resolves it: the theme token it
+    /// reads, the strength it takes, the floor it must keep, the surfaces
+    /// it is drawn on, and the accepted colour it keeps.
+    struct Role {
+        name: &'static str,
+        chosen: Hsla,
+        strength: f32,
+        floor: f32,
+        surfaces: Vec<Hsla>,
+        present: Hsla,
+    }
+
+    /// The level-carrying roles of one case.
+    fn roles(case: &Case) -> Vec<Role> {
+        let theme = &case.theme;
+        let cap_on = |surface: Hsla| contrast::over(theme.keycap_background, surface);
+        let [subtitle, footer_label, keycap, section, placeholder] = case.present;
+        vec![
+            Role {
+                name: "subtitle",
+                chosen: theme.text_secondary,
+                strength: SECONDARY_STRENGTH,
+                floor: TEXT,
+                surfaces: vec![case.panel],
+                present: subtitle,
+            },
+            Role {
+                name: "footer label",
+                chosen: theme.footer_button_text,
+                strength: SECONDARY_STRENGTH,
+                floor: TEXT,
+                surfaces: vec![case.footer],
+                present: footer_label,
+            },
+            Role {
+                name: "keycap label",
+                chosen: theme.keycap_text,
+                strength: SECONDARY_STRENGTH,
+                floor: TEXT,
+                surfaces: vec![
+                    cap_on(case.panel),
+                    cap_on(case.footer),
+                    cap_on(case.popover),
+                ],
+                present: keycap,
+            },
+            Role {
+                name: "section label",
+                chosen: theme.text_tertiary,
+                strength: TERTIARY_STRENGTH,
+                floor: TERTIARY_FLOOR,
+                surfaces: vec![case.panel, case.footer, case.popover],
+                present: section,
+            },
+            Role {
+                name: "placeholder",
+                chosen: theme.query_placeholder,
+                strength: TERTIARY_STRENGTH,
+                floor: TERTIARY_FLOOR,
+                surfaces: vec![case.field, case.popover],
+                present: placeholder,
+            },
+        ]
+    }
+
+    #[test]
+    fn every_text_role_meets_its_floor_in_every_case() {
+        for case in cases() {
+            let theme = &case.theme;
+            // The primary level: the titles (4.5:1 on the panel, the footer
+            // strip and the popover) and the query (4.5:1 on its field).
+            let primaries = [
+                (
+                    "title",
+                    theme.text_title,
+                    vec![case.panel, case.footer, case.popover],
+                ),
+                ("query", theme.text_query, vec![case.field]),
+            ];
+            for (name, chosen, surfaces) in primaries {
+                assert!(
+                    reads(chosen, TEXT, &surfaces),
+                    "{name} in {} reads under the 4.5:1 floor",
+                    case.name
+                );
+            }
+            for role in roles(&case) {
+                assert!(
+                    reads(role.chosen, role.floor, &role.surfaces),
+                    "{} in {} reads under its {} floor",
+                    role.name,
+                    case.name,
+                    role.floor
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_levels_take_their_strengths_wherever_they_read() {
+        for case in cases() {
+            let ink = case.theme.text_title;
+            for role in roles(&case) {
+                let alpha = Hsla {
+                    alpha: role.strength,
+                    ..ink
+                };
+                if reads(alpha, role.floor, &role.surfaces) {
+                    assert_eq!(
+                        role.chosen, alpha,
+                        "{} in {} should take the primary ink at {}",
+                        role.name, case.name, role.strength
+                    );
+                } else {
+                    assert_eq!(
+                        role.chosen, role.present,
+                        "{} in {} should keep its accepted colour",
+                        role.name, case.name
+                    );
+                }
+            }
+            // Faint marks and separators are not read: no floor, so they
+            // take their strength in every case.
+            assert_eq!(
+                case.theme.text_faint,
+                Hsla {
+                    alpha: FAINT_STRENGTH,
+                    ..ink
+                },
+                "the faint level in {}",
+                case.name
+            );
+            assert_eq!(
+                case.theme.separator,
+                Hsla {
+                    alpha: SEPARATOR_STRENGTH,
+                    ..ink
+                },
+                "the separator level in {}",
+                case.name
+            );
+        }
+        // Disabled text and unavailable controls dim at the tertiary
+        // strength, as the reference's disabled fields do.
+        assert_eq!(TERTIARY_STRENGTH, 0.4);
+    }
+
+    #[test]
+    fn the_settings_windows_text_roles_keep_their_values() {
+        // The Settings window draws the palette's own text roles — the
+        // titles and body copy, the muted ink, its fields' placeholder and
+        // its rules — and no level touches them, in either palette.
+        let dark = Theme::dark();
+        assert_eq!(dark.text_title, color(0xEDEDEFFF));
+        assert_eq!(dark.text_body, color(0xA3A4A9FF));
+        assert_eq!(dark.text_muted, color(0x8E8F94FF));
+        assert_eq!(dark.text_query, color(0xF3F3F5FF));
+        assert_eq!(dark.text_placeholder, color(0x86878CFF));
+        assert_eq!(dark.hairline_soft, color(0xFFFFFF0F));
+        assert_eq!(dark.nav_text, color(0xB3B4B9FF));
+        let light = Theme::light();
+        assert_eq!(light.text_title, color(0x202126FF));
+        assert_eq!(light.text_body, color(0x575A63FF));
+        assert_eq!(light.text_muted, color(0x575A63FF));
+        assert_eq!(light.text_query, color(0x1D1E23FF));
+        assert_eq!(light.text_placeholder, color(0x575A63FF));
+        assert_eq!(light.hairline_soft, color(0x00000012));
+        assert_eq!(light.nav_text, color(0x3B3D44FF));
     }
 }

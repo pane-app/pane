@@ -37,9 +37,10 @@ Usage: python3 scripts/check_screenshot.py <png> <role or hex color> [min pixels
        python3 scripts/check_screenshot.py --preview <png>
 
 Selected rows must contain a broad connected wash, not just similarly colored
-text or icons. A computed answer is drawn as a card instead, on its own fill
-without the wash: selected, it is ringed in the accent, whose top and bottom
-edges must span the list. Host color roles are hint, details, success, error and warning;
+text or icons. A computed answer is drawn as a card instead: selected, it
+takes the same selection wash on the card's own bounds — no ring, no edge
+(ADR 0035) — so what tells the card from a row is the wash region's height,
+at least a card tall. Host color roles are hint, details, success, error and warning;
 progress and subtitle additionally restrict the region being checked.
 Literal hex colors remain available for extension-authored drawings.
 --preview waits for visible metadata below the package heading
@@ -60,7 +61,7 @@ HOST_COLORS = {
     "error": "ff9a92",
     "warning": "d6a36a",
 }
-# The selected answer card's ring (and the caret, and the pin hint).
+# The accent the caret and the pin hint draw (the answer card's ring is gone).
 ACCENT = "c9ee6a"
 PALETTE = ["16171a", "131416", "222326", "2a2b2e", "353639", "ededef",
            HOST_COLORS["details"], HOST_COLORS["hint"], "f3f3f5", "86878c", "e9e9ec",
@@ -271,20 +272,25 @@ def selected(path: str, minimum: int = 3000) -> None:
 
 
 def answer(path: str) -> None:
-    """The selected computed answer's card (#96): no row wash, but a 1px ring
-    in the accent. Its rounded corners split the ring, so what is looked for
-    is two rows of accent at least half the window wide — the card's top and
-    bottom edges, a card's height apart (79 pixels at 1x in CI 37430002287).
-    The caret and the pin hint are accent too, but never that wide."""
+    """The selected computed answer's card (#96): the selection wash like a
+    row's — the accent ring it used to draw is gone (ADR 0035) — on the
+    card's own bounds, which no row matches: the wash region must be broad
+    and at least 60 pixels tall (a card is padding, its values and their
+    captions, 79 and up; a row is 36; CI 37430002287 measured the ring's
+    edges 79 pixels apart, the card's height). The caret and the pin hint
+    are accent, but never that broad."""
     window = pane_window(path)
     width = window.width
-    rows = {}
-    for i in drawn_in(window, rgb(ACCENT)):
-        rows[i // width] = rows.get(i // width, 0) + 1
-    edges = sorted(y for y, count in rows.items() if count >= width / 2)
-    if len(edges) < 2 or edges[-1] - edges[0] < 40:
-        raise SystemExit(f"{path}: no selected answer card (an accent ring across the list)")
-    print(f"{path}: selected answer card, its ring's edges {edges[-1] - edges[0]} pixels apart")
+    matching = {i for i, pixel in enumerate(pixels_of(window))
+                if panel_surface(pixel) and 41 <= pixel[0] <= 54}
+    region = largest_region(matching, width)
+    xs = [i % width for i in region]
+    ys = [i // width for i in region]
+    if (len(region) < 3000
+            or max(xs, default=0) - min(xs, default=0) < width / 2
+            or max(ys, default=0) - min(ys, default=0) < 60):
+        raise SystemExit(f"{path}: no selected answer card (a tall broad wash)")
+    print(f"{path}: selected answer card wash contains {len(region)} pixels")
 
 
 def preview(path: str) -> None:

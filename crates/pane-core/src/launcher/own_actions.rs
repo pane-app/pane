@@ -25,17 +25,21 @@
 //! screen, in the status line.
 //!
 //! **A computed answer.** Copy answer (Enter: the window puts the text on
-//! the clipboard, `Launcher::selected_copy`) and Paste answer (Ctrl+Enter):
-//! Pane pastes it into the application that was in front, closing its
+//! the clipboard, `Launcher::selected_copy`; also the platform's copy
+//! chord, Ctrl+C — Command+C on macOS, which a focused field's own copy of
+//! its selection takes first) and Paste answer (Ctrl+Enter): Pane pastes
+//! it into the application that was in front, closing its
 //! window, or where it cannot paste yet (#125) copies it instead and says
 //! so in a HUD ([`crate::system::PASTE_FALLBACK`]).
 
 use std::path::PathBuf;
+use std::time::Instant;
 
 use super::files::FileRow;
 use super::item_actions::Listed;
 use super::{Entry, Launcher, Screen, State, Status, off_thread};
 use crate::feedback::{Caller, GivenConfirmation, Hud, ToastStyle, WindowPresence};
+use crate::keyboard::Binding;
 use crate::runtime::{Action, ActionKind, ActionStyle, ActionSubmenu, SubmenuEntries};
 use crate::system::{self, Clip, PASTE_FALLBACK, SystemError};
 
@@ -121,12 +125,31 @@ pub(super) fn file_actions(file: &FileRow) -> Vec<Action> {
     actions
 }
 
-/// The actions of a computed answer, in order.
+/// The actions of a computed answer, in order: its copy runs with Enter
+/// and the platform's copy chord, Ctrl+C (Command+C on macOS). A focused
+/// field's own copy of its selection comes first (the fork propagates a
+/// copy that has nothing selected), so the chord reaches the answer only
+/// when nothing is selected in the field (#251).
 fn answer_actions() -> Vec<Action> {
     vec![
-        action("Copy answer", COPY_ANSWER),
+        Action {
+            shortcut: Some(Ok(copy_chord())),
+            ..action("Copy answer", COPY_ANSWER)
+        },
         action("Paste answer", PASTE_ANSWER),
     ]
+}
+
+/// The platform's copy chord: Command+C on macOS, Ctrl+C elsewhere. Not
+/// one of Pane's own keys ([`crate::keyboard::PaneKeys`]), so an item's
+/// action may bind it.
+fn copy_chord() -> Binding {
+    let modifier = if cfg!(target_os = "macos") {
+        "cmd"
+    } else {
+        "ctrl"
+    };
+    Binding::parse(&format!("{modifier}-c")).expect("the copy chord is a binding")
 }
 
 /// What Enter does with `file`, as the footer names it.
@@ -245,7 +268,9 @@ pub(super) fn primary(file: FileRow) -> Work {
 pub(super) fn begin(state: &mut State, work: &Work) {
     state.sent_from = None;
     if !matches!(work, Work::Trash(_) | Work::Paste(_)) {
-        state.view.status = Status::Running;
+        state.view.status = Status::Running {
+            since: Instant::now(),
+        };
     }
 }
 
@@ -452,7 +477,9 @@ impl Launcher {
             Err(why) => return Ended::Failed(why),
         }
         if let Some(mut state) = self.lock_if_current(epoch) {
-            state.view.status = Status::Running;
+            state.view.status = Status::Running {
+                since: Instant::now(),
+            };
         }
         let system = self.system();
         let moved = self
@@ -522,10 +549,7 @@ impl Launcher {
             };
         }
         match ended {
-            Ended::Hud(title) => self.show_hud(Hud {
-                title,
-                style: ToastStyle::Success,
-            }),
+            Ended::Hud(title) => self.show_hud(Hud::new(ToastStyle::Success, title)),
             Ended::Quiet | Ended::Failed(_) => self.changed(),
         }
     }
@@ -568,10 +592,7 @@ impl Launcher {
                     if let Some(mut state) = self.lock_if_current(epoch) {
                         state.view.status = Status::Idle;
                     }
-                    self.show_hud(Hud {
-                        title: PASTE_FALLBACK.into(),
-                        style: ToastStyle::Success,
-                    });
+                    self.show_hud(Hud::new(ToastStyle::Success, PASTE_FALLBACK));
                     return;
                 }
                 Err(why) => Some(format!("Could not copy it: {why}")),
@@ -589,10 +610,7 @@ impl Launcher {
             state.feedback.presence == WindowPresence::Hidden
         };
         match failed {
-            Some(why) if hidden => self.show_hud(Hud {
-                title: why,
-                style: ToastStyle::Failure,
-            }),
+            Some(why) if hidden => self.show_hud(Hud::new(ToastStyle::Failure, why)),
             _ => self.changed(),
         }
     }

@@ -10,11 +10,11 @@ autotests = false
 
 [dependencies]
 pane-core = { path = "../pane-core" }
-gpui = { package = "gpui-ce", git = "https://github.com/hoangvu12/gpui-ce", rev = "5d27954ce5305447bb97d1d7b89b0db9b7a2c59c", default-features = false }
+gpui = { package = "gpui-ce", git = "https://github.com/hoangvu12/gpui-ce", rev = "70ed267181dc56e4739d5782eb56fae51a2afd29", default-features = false }
 # Editable text with input-method support, for form text fields.
-gpui_elements = { package = "gpui_ce_elements", git = "https://github.com/hoangvu12/gpui-ce", rev = "5d27954ce5305447bb97d1d7b89b0db9b7a2c59c" }
+gpui_elements = { package = "gpui_ce_elements", git = "https://github.com/hoangvu12/gpui-ce", rev = "70ed267181dc56e4739d5782eb56fae51a2afd29" }
 # font-kit is the macOS text system; without it no text renders on macOS.
-gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/hoangvu12/gpui-ce", rev = "5d27954ce5305447bb97d1d7b89b0db9b7a2c59c", features = ["font-kit"] }
+gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/hoangvu12/gpui-ce", rev = "70ed267181dc56e4739d5782eb56fae51a2afd29", features = ["font-kit"] }
 # The launcher's background image (ADR 0028): decoding the picture the user
 # chooses, keeping Pane's own copy of it, and baking the launcher's backdrop
 # into the frame GPUI draws; already in the tree through GPUI.
@@ -78,7 +78,7 @@ crc32fast.workspace = true
 # artifact test support's integrity hashes.
 serde_json.workspace = true
 sha2.workspace = true
-gpui ={ package = "gpui-ce", git = "https://github.com/hoangvu12/gpui-ce", rev = "5d27954ce5305447bb97d1d7b89b0db9b7a2c59c", default-features = false, features = ["test-support"] }
+gpui ={ package = "gpui-ce", git = "https://github.com/hoangvu12/gpui-ce", rev = "70ed267181dc56e4739d5782eb56fae51a2afd29", default-features = false, features = ["test-support"] }
 
 # The integration tests are one binary, whose `tests/main.rs` declares each
 # file: a binary per file meant a link, and a debug file, for each of them.

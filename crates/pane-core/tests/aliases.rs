@@ -401,7 +401,7 @@ fn an_answer_is_cleared_once_the_query_changes(fixture: &Fixture) {
     // the status line.
     search(&launcher, "ec two");
     let answer = launcher.activate_selected();
-    assert_eq!(launcher.view().status, Status::Running);
+    assert!(matches!(launcher.view().status, Status::Running { .. }));
     block_on(launcher.set_query("ec three"));
     assert_eq!(launcher.view().status, Status::Idle);
     block_on(answer);

@@ -29,6 +29,7 @@
 
 use std::future::Future;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use super::{
     Changing, Entry, Launcher, LauncherView, Question, Row, Screen, State, Status, dependents,
@@ -234,7 +235,9 @@ impl Launcher {
         } else {
             self.refresh(state);
         }
-        state.view.status = Status::Running;
+        state.view.status = Status::Running {
+            since: Instant::now(),
+        };
         Some(Uninstall { removed, saved })
     }
 

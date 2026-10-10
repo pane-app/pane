@@ -42,6 +42,7 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use super::{Launcher, Screen, State, Status, WeakLauncher, confirmations, item_actions, stopped};
 use crate::extension_data::PackageData;
@@ -251,7 +252,20 @@ impl Launcher {
             if same {
                 return;
             }
-            if presence != WindowPresence::Shown {
+            // Collapsed to its search field, the launcher has no footer for
+            // a toast: one still shown there becomes a HUD, as one that
+            // arrives while it is collapsed does (#141). An animated toast
+            // makes a pending one, which stays until the launcher is active
+            // again (#250).
+            if presence == WindowPresence::Compact
+                && state
+                    .feedback
+                    .toast
+                    .as_ref()
+                    .is_some_and(|current| current.in_footer)
+            {
+                present(&mut state.feedback);
+            } else if presence != WindowPresence::Shown {
                 leave_if_animated(&mut state.feedback);
             }
             match presence {
@@ -307,6 +321,20 @@ impl Launcher {
             && current.revision == revision
         {
             current.in_footer = false;
+        }
+    }
+
+    /// The outcome status the window drew as a toast (#249) —
+    /// [`Status::Result`] or [`Status::Error`] — has been shown for its
+    /// [`crate::feedback::TOAST_DURATION`] (the window counts it, pausing
+    /// while the pointer is over the toast or it has the focus): the
+    /// status line goes back to rest, so a later screen never shows a
+    /// stale outcome. The core keeps the status; the window owns the
+    /// timing. Nothing happens once the status changed.
+    pub fn outcome_left(&self, outcome: &Status) {
+        let mut state = self.lock();
+        if state.view.status == *outcome {
+            state.view.status = Status::Idle;
         }
     }
 
@@ -381,7 +409,9 @@ impl Launcher {
                 // The status line is about this action from now on: it
                 // runs until the command answered, as an item's action does.
                 state.sent_from = None;
-                state.view.status = Status::Running;
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 let data = self.data_in(&state, &owner);
                 run = Some((state.screen_epoch, owner, command, callback, data));
             }
@@ -755,7 +785,9 @@ fn present(feedback: &mut Feedback) {
     } else {
         current.in_footer = false;
         window.show_hud(&Hud {
-            title: current.toast.text(),
+            title: current.toast.title.clone(),
+            message: current.toast.message.clone(),
+            icon: None,
             style: current.toast.style,
         });
     }
@@ -1058,10 +1090,14 @@ mod tests {
                 [
                     WindowRequest::Hud(Hud {
                         title: "Working".into(),
+                        message: None,
+                        icon: None,
                         style: ToastStyle::Animated
                     }),
                     WindowRequest::Hud(Hud {
-                        title: "Done: 3 files".into(),
+                        title: "Done".into(),
+                        message: Some("3 files".into()),
+                        icon: None,
                         style: ToastStyle::Success
                     }),
                 ],
@@ -1125,10 +1161,7 @@ mod tests {
     #[test]
     fn a_hud_closes_the_window_first() {
         let (launcher, window) = launcher();
-        let hud = Hud {
-            title: "Copied to Clipboard".into(),
-            style: ToastStyle::Success,
-        };
+        let hud = Hud::new(ToastStyle::Success, "Copied to Clipboard");
         launcher.show_hud(hud.clone());
         assert_eq!(
             window.take(),

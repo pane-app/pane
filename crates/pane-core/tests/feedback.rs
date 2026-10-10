@@ -289,6 +289,8 @@ fn close_empties_root_search_when_asked(fixture: &Fixture) {
         requests.get(1),
         Some(&WindowRequest::Hud(Hud {
             title: "close: true, pop to root: true, clear search: true".into(),
+            message: None,
+            icon: None,
             style: ToastStyle::Success,
         })),
         "{requests:?}"
@@ -341,10 +343,7 @@ fn a_hud_closes_the_window_and_stays_its_time(fixture: &Fixture) {
     let pane = Pane::with(fixture);
     pane.open(fixture);
     pane.act("feedback", SHOW_HUD);
-    let copied = Hud {
-        title: "Copied to Clipboard".into(),
-        style: ToastStyle::Success,
-    };
+    let copied = Hud::new(ToastStyle::Success, "Copied to Clipboard");
     assert_eq!(
         pane.window.take(),
         [WindowRequest::Hide, WindowRequest::Hud(copied.clone())],
@@ -355,10 +354,7 @@ fn a_hud_closes_the_window_and_stays_its_time(fixture: &Fixture) {
     assert_eq!(pane.launcher.window_presence(), WindowPresence::Hidden);
 
     pane.act("feedback", SHOW_FAILURE_HUD);
-    let failed = Hud {
-        title: "Could not copy".into(),
-        style: ToastStyle::Failure,
-    };
+    let failed = Hud::new(ToastStyle::Failure, "Could not copy");
     // Already hidden: only the HUD.
     assert_eq!(pane.window.take(), [WindowRequest::Hud(failed.clone())]);
     assert_eq!(failed.duration(), Duration::from_secs(3));
@@ -463,10 +459,14 @@ fn while_the_window_is_hidden_or_compact_a_toast_is_a_hud(fixture: &Fixture) {
             [
                 Hud {
                     title: "Uploading…".into(),
+                    message: None,
+                    icon: None,
                     style: ToastStyle::Animated
                 },
                 Hud {
-                    title: "Uploaded: notes.txt".into(),
+                    title: "Uploaded".into(),
+                    message: Some("notes.txt".into()),
+                    icon: None,
                     style: ToastStyle::Success
                 },
             ],

@@ -77,8 +77,9 @@ use crate::ui::icon::{Glyph, IconTone, TileSize, glyph, tile_at};
 use crate::ui::input::TextEditingKeys;
 use crate::ui::keycap::{CapStyle, KeySequence, key_sequence};
 use crate::ui::material::{Material, popover_shadows};
-use crate::ui::theme::{Theme, pressed};
+use crate::ui::theme::{TERTIARY_STRENGTH, Theme, pressed};
 use crate::ui::virtual_list::{self, VirtualList};
+use crate::{SelectNextFive, SelectNextSection, SelectPreviousFive, SelectPreviousSection};
 
 actions!(
     actions_panel,
@@ -511,7 +512,7 @@ fn matching(entries: Vec<PanelEntry>, query: &str) -> Vec<PanelEntry> {
 
 impl ActionsPanel {
     /// The filter's text.
-    fn query(&self, cx: &App) -> String {
+    pub(crate) fn query(&self, cx: &App) -> String {
         self.filter.read(cx).as_str().to_owned()
     }
 }
@@ -537,6 +538,9 @@ impl LauncherWindow {
     /// a command's list, with focus in its search field. Root search and
     /// commands' lists have Actions.
     pub(crate) fn open_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // The toast's details are another popover over the same strip:
+        // one at a time (#249).
+        self.close_toast_details(window, cx);
         if let Some(slot) = self.focused_slot(window) {
             self.open_slot_actions(slot, window, cx);
             return;
@@ -905,6 +909,48 @@ impl LauncherWindow {
         self.move_action(false, cx);
     }
 
+    /// Alt+Down in the panel (#258): the selection moves five entries at
+    /// a time, over the ones that can run, staying put at the ends.
+    fn actions_five_next(&mut self, _: &SelectNextFive, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_action_five(true, cx);
+    }
+
+    /// Alt+Up in the panel (#258).
+    fn actions_five_previous(
+        &mut self,
+        _: &SelectPreviousFive,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_action_five(false, cx);
+    }
+
+    /// Ctrl+Down in the panel (#258): the selection moves to the first
+    /// entry of the next group of entries, or the last entry when there
+    /// is none, the group's label scrolling into view with it. A list the
+    /// filter has narrowed carries no groups: all of it is one, whose
+    /// next is the last entry.
+    fn actions_section_next(
+        &mut self,
+        _: &SelectNextSection,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_action_section(true, cx);
+    }
+
+    /// Ctrl+Up in the panel (#258): the first entry of the previous
+    /// group, the group the selection is in — its own first entry first —
+    /// and the first entry of all from the first group's.
+    fn actions_section_previous(
+        &mut self,
+        _: &SelectPreviousSection,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_action_section(false, cx);
+    }
+
     /// Moves the selection to the next (or previous) entry that can run,
     /// staying put at the ends.
     fn move_action(&mut self, forward: bool, cx: &mut Context<Self>) {
@@ -914,6 +960,113 @@ impl LauncherWindow {
         {
             panel.selected = next;
             self.announcer.user_moved();
+            cx.notify();
+        }
+    }
+
+    /// Moves the panel's selection five entries `forward` (or back),
+    /// stopping at the first and last that can run (#258).
+    fn move_action_five(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let listed = self.listed(cx);
+        let Some(selected) = self.actions.as_ref().map(|panel| panel.selected) else {
+            return;
+        };
+        let mut landed = selected;
+        for _ in 0..5 {
+            match next_available(&listed, landed, forward) {
+                Some(next) => landed = next,
+                None => break,
+            }
+        }
+        if let Some(panel) = self.actions.as_mut()
+            && panel.selected != landed
+        {
+            panel.selected = landed;
+            self.announcer.user_moved();
+            cx.notify();
+        }
+    }
+
+    /// Moves the panel's selection to the first entry of the next (or
+    /// previous) group of its entries, its own group's first entry first
+    /// on the way up, stopping at the ends and never wrapping, the
+    /// group's label scrolling into view with the entry it lands on
+    /// (#258).
+    fn move_action_section(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let Some(frame) = self.actions.as_ref().and_then(|panel| panel.frame.clone()) else {
+            return;
+        };
+        let listed = &frame.listed;
+        if listed.is_empty() {
+            return;
+        }
+        // The groups the panel draws, as the entries that begin them; a
+        // list with none — the filter has narrowed it — is one group of
+        // its own, from its first entry.
+        let mut groups: Vec<usize> = frame
+            .children
+            .iter()
+            .filter_map(|child| match child {
+                PanelChild::Group(at) => Some(*at),
+                _ => None,
+            })
+            .collect();
+        if !groups.contains(&0) {
+            groups.insert(0, 0);
+        }
+        let selected = frame.selected;
+        let target = if forward {
+            // The first group past the selection; the last entry when
+            // no group follows.
+            groups
+                .iter()
+                .find(|at| **at > selected)
+                .copied()
+                .unwrap_or(listed.len() - 1)
+        } else {
+            // The group the selection is in: its own first entry first,
+            // then the group above it, then the first entry of all.
+            match groups.iter().rposition(|at| *at <= selected) {
+                Some(at) if groups[at] < selected => groups[at],
+                Some(at) => at.checked_sub(1).map(|above| groups[above]).unwrap_or(0),
+                None => 0,
+            }
+        };
+        // The jump lands on a row that can run: the target itself when
+        // it can, else the nearest one that can, the list's end the last
+        // resort.
+        let available = |index: &usize| listed.get(*index).is_some_and(|entry| entry.available);
+        let landed = if forward {
+            next_available(listed, target.saturating_sub(1), true)
+                .or_else(|| (0..listed.len()).rev().find(available))
+        } else {
+            next_available(listed, (target + 1).min(listed.len()), false)
+                .or_else(|| (0..listed.len()).find(available))
+        };
+        let Some(landed) = landed else {
+            return;
+        };
+        if let Some(panel) = self.actions.as_mut()
+            && panel.selected != landed
+        {
+            panel.selected = landed;
+            self.announcer.user_moved();
+            // The group's label scrolls into view with the entry the jump
+            // lands on, as the section's does over the results.
+            if let Some(child) = frame
+                .children
+                .iter()
+                .position(|child| *child == PanelChild::Entry(landed))
+            {
+                panel.list.reveal(child);
+                if let Some(group) = frame
+                    .children
+                    .iter()
+                    .position(|child| *child == PanelChild::Group(landed))
+                {
+                    panel.list.reveal(group);
+                }
+            }
             cx.notify();
         }
     }
@@ -991,7 +1144,12 @@ impl LauncherWindow {
     /// Escape: steps back out of the submenu shown to the level above it,
     /// giving back the filter's text and the selection it had there; from
     /// the item's actions (or a result's), closes the panel.
-    fn actions_back(&mut self, _: &StepBack, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn actions_back(
+        &mut self,
+        _: &StepBack,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let above = self.actions.as_mut().and_then(|panel| panel.above.pop());
         let Some((query, selected)) = above else {
             self.close_actions(window, cx);
@@ -1351,6 +1509,10 @@ impl LauncherWindow {
             .capture_key_down(cx.listener(Self::panel_keys))
             .on_action(cx.listener(Self::actions_next))
             .on_action(cx.listener(Self::actions_previous))
+            .on_action(cx.listener(Self::actions_five_next))
+            .on_action(cx.listener(Self::actions_five_previous))
+            .on_action(cx.listener(Self::actions_section_next))
+            .on_action(cx.listener(Self::actions_section_previous))
             .on_action(cx.listener(Self::actions_back))
             .on_action(cx.listener(Self::actions_close))
             .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, window, cx| {
@@ -1617,8 +1779,10 @@ pub(crate) fn panel_child(
 
 /// An entry (`.arow`): 36 high, radius 8, 8px either side, its 16px glyph
 /// in the icon gray, its 13px/450 label filling the row, and its keys at
-/// the right in their caps' style; the 11% wash when selected, the 6% one
-/// on hover. A destructive entry draws its glyph and label in the
+/// the right in their caps' style; the selected entry's wash, and the
+/// only one an entry shows: hovering here selects, so the selection wash
+/// is the entry's wash under the pointer too (ADR 0035). A destructive
+/// entry draws its glyph and label in the
 /// destructive color, and says so to assistive technology; the keys are
 /// also the row's shortcut there. An entry that opens a submenu ends in a
 /// chevron (#140). A submenu's note (loading, or its error) is not dimmed
@@ -1667,21 +1831,24 @@ pub(crate) fn action_row(
             row.aria_description(description)
         })
         .when_some(keys, |row, (keys, _)| row.aria_keyshortcuts(keys.name()))
-        .when(selected, |row| row.bg(theme.action_selected))
-        .when(!selected && available, |row| {
-            row.hover(|row| row.bg(theme.control_hover))
-        })
+        // The selected entry's wash — and the only one an entry shows:
+        // hovering an entry selects it (a move over one moves the
+        // selection), so no fainter hover wash is drawn (ADR 0035).
+        .when(selected, |row| row.bg(theme.selection_wash))
         // While held, an available entry takes the stronger wash of its
-        // hover, or of its selected wash, at once.
+        // selected wash, or of the hover wash, at once.
         .when(available, |row| {
             let press = pressed(if selected {
-                theme.action_selected
+                theme.selection_wash
             } else {
-                theme.control_hover
+                theme.hover_wash
             });
             row.active(move |row| row.bg(press))
         })
-        .when(!available && !note, |row| row.opacity(0.5))
+        // Disabled text is the ink at the tertiary strength (ADR 0035),
+        // as the reference's disabled fields are; the whole row dims with
+        // it, glyph and keys as one.
+        .when(!available && !note, |row| row.opacity(TERTIARY_STRENGTH))
         .when(!available, |row| row.aria_disabled(true))
         .child(match &entry.icon {
             // The action's own icon (#139), at the glyph's size, its web
@@ -1726,7 +1893,7 @@ pub(crate) fn rule(theme: &Theme) -> Div {
         .h(px(1.))
         .my(geometry.rule_margin_y)
         .mx(geometry.rule_margin_x)
-        .bg(theme.action_rule)
+        .bg(theme.separator)
 }
 
 /// A group label (`.alabel`): 26 high, its 11.5px/500 text at the bottom
@@ -1748,7 +1915,8 @@ pub(crate) fn group_label(label: impl Into<SharedString>, theme: &Theme) -> Div 
         // label's bottom padding, as the reference's does.
         .line_height(theme.typography.action_group_size * theme.typography.line_height)
         .font_weight(theme.typography.medium)
-        .text_color(theme.text_muted)
+        // The tertiary level: the Actions panel's groups are sections.
+        .text_color(theme.text_tertiary)
         .child(label)
 }
 
@@ -1817,15 +1985,15 @@ pub(crate) fn search_field(
         .h(geometry.search_height)
         .px(geometry.search_padding_x)
         .border_t_1()
-        .border_color(theme.action_rule)
+        .border_color(theme.separator)
         .child(glyph(Glyph::Search, geometry.search_glyph_size, theme.text_muted).flex_none())
         .child(
             text_input("actions-filter")
                 .state(filter.downgrade())
                 .placeholder(PLACEHOLDER)
-                .placeholder_color(theme.text_placeholder)
+                .placeholder_color(theme.query_placeholder)
                 .caret_color(theme.accent_text)
-                .selection_color(theme.row_selected)
+                .selection_color(theme.selection_wash)
                 .marked_color(theme.accent_text)
                 .text_size(theme.typography.action_size)
                 .text_color(theme.text_title)

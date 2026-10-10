@@ -24,7 +24,7 @@ use gpui::{
 };
 use pane_core::{Row, Screen, Status, UpdateResultsAction};
 
-use crate::app::{LauncherWindow, section_labels};
+use crate::app::{LauncherWindow, Spot, section_labels};
 use crate::features::announcer::section_at;
 use crate::ui::result_row::{AccessoryLook, RowContent, RowMeta, result_row_with};
 use crate::ui::shell::{self, SectionLabel};
@@ -228,6 +228,13 @@ impl LauncherWindow {
     ) -> Stateful<Div> {
         let theme = crate::settings::launcher_visuals(cx).theme;
         let icon = crate::features::icons::row_icon_of(&self.launcher, &row.id, &theme);
+        // The rows are a list whose hovering does not move the selection:
+        // an unselected row under the pointer takes the hover wash, fading
+        // once it leaves (#245, `crate::app::hover_wash`).
+        let hover = self
+            .motion
+            .hover
+            .look(Spot::Row(index), cx.background_executor().now());
         // The row's status tag: the group its row is listed under.
         let (tag, tone) = match section_at(sections, index).as_deref() {
             Some("Skipped") => ("Skipped", theme.text_muted),
@@ -241,6 +248,7 @@ impl LauncherWindow {
                 unavailable_reason: None,
                 selected,
                 unavailable_id: ("unavailable", index).into(),
+                hover,
                 icon: Some(icon),
             },
             RowMeta {
@@ -262,6 +270,9 @@ impl LauncherWindow {
         .aria_selected(selected)
         .aria_position_in_set(index + 1)
         .when(selected, |row| row.aria_active_descendant())
+        .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+            this.motion.hover.set(Spot::Row(index), *over, cx);
+        }))
         .when_some(row.subtitle.clone(), |element, subtitle| {
             element.aria_description(subtitle)
         })

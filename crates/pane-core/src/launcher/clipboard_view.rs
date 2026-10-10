@@ -48,6 +48,7 @@ use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 
 use super::own_actions::COPIED;
 use super::{Launcher, Screen, State, Status, owner};
@@ -885,10 +886,7 @@ impl Launcher {
         if let Some(mut state) = self.lock_if_current(view.reading.epoch) {
             state.view.status = Status::Idle;
         }
-        self.show_hud(Hud {
-            title: COPIED.into(),
-            style: ToastStyle::Success,
-        });
+        self.show_hud(Hud::new(ToastStyle::Success, COPIED));
         Ok(())
     }
 
@@ -928,7 +926,9 @@ impl Launcher {
                 state.view.status = match &clip {
                     Err(why) => Status::Error(why.clone()),
                     // Running until it is pasted, or copied instead.
-                    Ok(_) => Status::Running,
+                    Ok(_) => Status::Running {
+                        since: Instant::now(),
+                    },
                 };
             }
         }

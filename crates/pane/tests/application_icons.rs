@@ -29,6 +29,13 @@ use tempfile::TempDir;
 /// How long extraction may take on a slow machine.
 const LOADED: Duration = Duration::from_secs(30);
 
+/// Open actions' default binding on this system.
+const OPEN_ACTIONS: &str = if cfg!(target_os = "macos") {
+    "cmd-k"
+} else {
+    "ctrl-k"
+};
+
 /// Firefox's id, and the source its icon is extracted from.
 const FIREFOX: &str = "/apps/firefox.desktop";
 
@@ -219,7 +226,9 @@ fn icon_files(launcher: &Launcher) -> (String, String) {
 
 /// An application's row draws the placeholder, bare, while its icon is
 /// held back, then its own icon in the same box; in the dark theme the
-/// dark file. Pane's own row keeps its tile.
+/// dark file. Nothing of Pane's is drawn behind either (ADR 0035), and
+/// the Actions panel's header draws the icon bare too. Pane's own row
+/// keeps its tile.
 #[gpui::test]
 fn an_applications_row_draws_its_own_icon_bare_where_its_placeholder_was(cx: &mut TestAppContext) {
     let icons = HeldIcons::closed();
@@ -231,6 +240,10 @@ fn an_applications_row_draws_its_own_icon_bare_where_its_placeholder_was(cx: &mu
         drawn(cx, "icon-Launch Firefox-glyph-category"),
         "the placeholder, drawn bare"
     );
+    assert!(
+        !drawn(cx, "icon-Launch Firefox-tile"),
+        "the placeholder draws bare: no tile behind it"
+    );
     let waiting = bounds(cx, "icon-Launch Firefox").expect("the icon's box");
     let row = bounds(cx, "row-Launch Firefox").unwrap();
 
@@ -240,9 +253,28 @@ fn an_applications_row_draws_its_own_icon_bare_where_its_placeholder_was(cx: &mu
     until_drawn(cx, &format!("icon-Launch Firefox-image-{dark}"));
     assert!(!drawn(cx, format!("icon-Launch Firefox-image-{light}")));
     assert!(!drawn(cx, "icon-Launch Firefox-glyph-category"));
+    assert!(
+        !drawn(cx, "icon-Launch Firefox-tile"),
+        "the application's own icon draws bare"
+    );
     // Nothing moved: the icon is where the placeholder was, the row as tall.
     assert_eq!(bounds(cx, "icon-Launch Firefox").unwrap(), waiting);
     assert_eq!(bounds(cx, "row-Launch Firefox").unwrap().size, row.size);
+
+    // The Actions panel's header: the application's own icon, bare too.
+    let view = cx.read_entity(&window, |window, _| window.launcher().view());
+    let at = view
+        .rows
+        .iter()
+        .position(|row| row.title == "Launch Firefox")
+        .expect("Firefox's row");
+    cx.read_entity(&window, |window, _| window.launcher().select(at));
+    cx.simulate_keystrokes(OPEN_ACTIONS);
+    settle(&window, cx);
+    assert!(drawn(cx, format!("icon-actions-header-image-{dark}")));
+    assert!(!drawn(cx, "icon-actions-header-tile"));
+    cx.simulate_keystrokes("escape");
+    settle(&window, cx);
 
     // Pane's own row: its tile, no icon drawn bare.
     for _ in 0.."fire".len() {
@@ -290,6 +322,10 @@ fn a_pinned_applications_slot_draws_its_icon(cx: &mut TestAppContext) {
     }
     settle(&window, cx);
     until_drawn(cx, &format!("icon-slot-1-image-{dark}"));
+    assert!(
+        !drawn(cx, "icon-slot-1-tile"),
+        "the slot draws the icon bare"
+    );
 }
 
 /// Assistive technology reads an application's row by its title and

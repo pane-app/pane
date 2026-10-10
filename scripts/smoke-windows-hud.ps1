@@ -1,13 +1,17 @@
-# Opt-in native smoke on Windows for the HUD (#141): with another
+# Opt-in native smoke on Windows for the HUD (#141, #250): with another
 # application's window in front (a window of this script's own), a
-# development build of Pane shows a HUD at
-# once (`PANE_TEST_SHOW_HUD`, a failure's HUD, 3 seconds), and this checks
-# its window as the system has it: centred near the bottom of its monitor,
-# over other applications (topmost), letting the pointer through and never
-# activating (transparent, non-activating), never the foreground window,
-# and gone once its time is up. A screenshot of it over that window goes in the
-# output folder for the release-validation ticket. Not part of the release
-# matrix's smoke: run it by hand, or from a ticket's validation.
+# development build of Pane shows a HUD at once (`PANE_TEST_SHOW_HUD`, a
+# failure's HUD, 3 seconds, then a fade out over about a second), and
+# this checks its window as the system has it: centred on its monitor,
+# its bottom edge 150 logical pixels above that monitor's bottom (through
+# the window's own DPI), 46 logical pixels tall (the smoke's HUD has no
+# message line), content-sized at most 500 wide, over other applications
+# (topmost), letting the pointer through and never activating
+# (transparent, non-activating), never the foreground window, and gone
+# once its time and its fade are up. A screenshot of it over that window
+# goes in the output folder for the release-validation ticket. Not part
+# of the release matrix's smoke: run it by hand, or from a ticket's
+# validation.
 # Usage: scripts/smoke-windows-hud.ps1 [-OutDir smoke-hud] [-Program target/debug/pane.exe]
 param([string]$OutDir = "smoke-hud", [string]$Program = "target/debug/pane.exe")
 $ErrorActionPreference = "Stop"
@@ -42,6 +46,7 @@ public static class HudWin {
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] public static extern IntPtr GetWindowLongPtr(IntPtr window, int index);
     [DllImport("user32.dll")] public static extern IntPtr MonitorFromWindow(IntPtr window, uint flags);
     [DllImport("user32.dll")] public static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
+    [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
     // The visible window of process `process` titled `title`; zero if none.
     public static IntPtr Find(uint process, string title) {
         IntPtr found = IntPtr.Zero;
@@ -116,11 +121,17 @@ try {
     $centre = ($rect.Left + $rect.Right) / 2
     $monitorCentre = ($m.Left + $m.Right) / 2
     if ([math]::Abs($centre - $monitorCentre) -gt 2) { throw "the HUD is not centred: $centre against $monitorCentre" }
-    # Near the bottom: in the monitor's lowest quarter, above its edge.
-    $height = $m.Bottom - $m.Top
-    $gap = $m.Bottom - $rect.Bottom
-    if ($gap -lt 0 -or $gap -gt $height / 4) { throw "the HUD is not near the bottom: $gap px above it" }
-    if ($rect.Top -lt $m.Top + $height / 2) { throw "the HUD is not in the lower half" }
+    # 150 logical pixels above the bottom: the window's own DPI turns its
+    # physical rectangle into logical pixels.
+    $dpi = [HudWin]::GetDpiForWindow($hud)
+    $gap = ($m.Bottom - $rect.Bottom) * 96 / $dpi
+    if ([math]::Abs($gap - 150) -gt 2) { throw "the HUD's bottom edge is $gap logical pixels above the monitor's, not 150" }
+    # 46 logical pixels tall (the smoke's HUD has no message line),
+    # content-sized within 160 to 500 wide.
+    $height = ($rect.Bottom - $rect.Top) * 96 / $dpi
+    if ([math]::Abs($height - 46) -gt 2) { throw "the HUD is $height logical pixels tall, not 46" }
+    $width = ($rect.Right - $rect.Left) * 96 / $dpi
+    if ($width -lt 158 -or $width -gt 502) { throw "the HUD is $width logical pixels wide, outside 160 to 500" }
 
     # Over other applications, letting the pointer through, never activating.
     $style = [HudWin]::GetWindowLongPtr($hud, -20).ToInt64()   # GWL_EXSTYLE
@@ -129,7 +140,8 @@ try {
     if (($style -band 0x08000000) -eq 0) { throw "the HUD may activate" }              # WS_EX_NOACTIVATE
     if ([HudWin]::GetForegroundWindow() -eq $hud) { throw "the HUD took the focus" }
 
-    # Gone once its time is up (a failure's 3 seconds), within a margin.
+    # Gone once its time and its fade are up (a failure's 3 seconds and
+    # the fade's second), within a margin.
     while ([HudWin]::Find([uint32]$pane.Id, "Pane HUD") -ne [IntPtr]::Zero) {
         if (((Get-Date) - $shownAt).TotalSeconds -gt 8) { throw "the HUD stayed past its time" }
         Pump 100

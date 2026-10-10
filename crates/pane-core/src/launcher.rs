@@ -34,6 +34,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Instant;
 
 mod acquire;
 mod actions;
@@ -434,8 +435,14 @@ impl Unavailable {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Status {
     Idle,
-    /// An extension call or package operation is in progress.
-    Running,
+    /// Work the user is waiting for has begun: an invoked action or a
+    /// command call, or an opened command's search. `since` is when it
+    /// began, the core's own clock — what [`Launcher::pending_since`]
+    /// answers, so the window can hold its late loading bar back until
+    /// the work has outlasted a moment (#248).
+    Running {
+        since: Instant,
+    },
     /// Work Pane does in the background is in progress, saying what, such
     /// as building a package being developed.
     Progress(String),
@@ -762,6 +769,13 @@ struct State {
     /// dropping it, when the query changes or root search is left, cancels
     /// those still pending (see [`State::next_screen`]).
     search_alive: Option<tokio::sync::oneshot::Sender<()>>,
+    /// Root search waiting on its providers for the current query, since
+    /// when: asked something for the query and not answered yet. This is
+    /// work the user waits for, like [`Status::Running`] is, so the
+    /// window's loading bar shows for it too (#248; see
+    /// [`Launcher::pending_since`]). `None` while the query is blank,
+    /// every provider has answered, or root search is not on screen.
+    root_search_since: Option<Instant>,
     /// The folders granted to packages and their listings, shared with the
     /// runtime; `None` without a runtime.
     files: Option<FileAccess>,
@@ -1036,6 +1050,7 @@ impl State {
     fn next_screen(&mut self) {
         self.screen_epoch += 1;
         self.search_alive = None;
+        self.root_search_since = None;
         // A submenu belongs to the screen it opened on; an answer still on
         // its way finds it gone.
         self.submenus.close_all();
@@ -1571,6 +1586,7 @@ impl Launcher {
             indexes: indexed::Indexes::default(),
             search_epoch: 0,
             search_alive: None,
+            root_search_since: None,
             files: runtime.as_ref().ok().map(Runtime::file_access),
             open: None,
             launch: LaunchRecord::default(),
@@ -2006,6 +2022,23 @@ impl Launcher {
         self.lock().view.status.clone()
     }
 
+    /// When work the user is waiting for began, if any is pending: an
+    /// invoked action or command call or an opened command's search (the
+    /// status running, `since` when it began), or root search waiting on
+    /// its providers for the current query. The window's loading bar and
+    /// its busy announcement measure from this (#248), so the work a
+    /// moment's wait outruns shows nothing; `None` when no such work is
+    /// pending. Work Pane describes in words in the footer (the
+    /// [`Status::Progress`] it keeps) is not waited-for and is not named
+    /// here.
+    pub fn pending_since(&self) -> Option<Instant> {
+        let state = self.lock();
+        match &state.view.status {
+            Status::Running { since } => Some(*since),
+            _ => state.root_search_since,
+        }
+    }
+
     /// The installed packages, as read from their managed copies.
     pub fn packages(&self) -> Vec<InstalledPackage> {
         self.lock().packages.clone()
@@ -2161,6 +2194,10 @@ impl Launcher {
         let mut state = self.lock();
         let in_command = match &state.view.screen {
             Screen::CommandSearch { query: current } if current != query => {
+                // The command's search has taken the field: root search is
+                // not waiting on anything (#248; its own wait is the
+                // status running, `command_search` stamps it).
+                state.root_search_since = None;
                 self.search_in_command(&mut state, query)
             }
             _ => None,
@@ -2173,19 +2210,22 @@ impl Launcher {
         {
             self.search_update_results(&mut state, query);
         }
-        let (asked, indexing, cancelled) = match &state.view.screen {
+        let (asked, indexing, cancelled, searched) = match &state.view.screen {
             Screen::Root { query: current } if current != query => {
                 let cancelled = self.search(&mut state, query);
                 let indexing = self.ask_for_indexed_results(&mut state, query);
-                (
-                    self.ask_for_root_results(&state, query),
-                    indexing,
-                    Some(cancelled),
-                )
+                let asked = self.ask_for_root_results(&state, query);
+                // Root search is waiting on its providers for this query
+                // (#248): the computed results asked of them, or the
+                // indexed ones this search still owes. A blank query asks
+                // nothing and waits on nothing.
+                state.root_search_since =
+                    (!asked.is_empty() || !indexing.is_empty()).then(Instant::now);
+                (asked, indexing, Some(cancelled), true)
             }
             // Searching the same query again changes nothing, not even the
             // selection.
-            _ => (Vec::new(), Vec::new(), None),
+            _ => (Vec::new(), Vec::new(), None, false),
         };
         let query = query.to_owned();
         let epoch = state.screen_epoch;
@@ -2198,6 +2238,12 @@ impl Launcher {
             }
             let Some(mut cancelled) = cancelled.filter(|_| !asked.is_empty()) else {
                 launcher.show_indexed_results(indexing).await;
+                // Asked no computed results, so the indexed ones were the
+                // whole wait and it is over. A same-again search dispatched
+                // nothing and waits as it did.
+                if searched {
+                    launcher.search_ended(search);
+                }
                 return;
             };
             let listing = launcher
@@ -2217,6 +2263,20 @@ impl Launcher {
                     return;
                 }
             }
+            // Every provider the query was asked of has answered, so the
+            // wait is over (a search replaced meanwhile stamps its own).
+            launcher.search_ended(search);
+        }
+    }
+
+    /// Notes that the search numbered `search` has all its results, so
+    /// root search waits on its providers no longer (#248). A newer
+    /// search (or leaving root search) has stamped or cleared the wait of
+    /// its own, so nothing is done for it here.
+    fn search_ended(&self, search: u64) {
+        let mut state = self.lock();
+        if state.search_epoch == search {
+            state.root_search_since = None;
         }
     }
 
@@ -2382,6 +2442,10 @@ impl Launcher {
         // Dropping the earlier search's cancels its pending calls.
         state.search_alive = Some(alive);
         state.computed.clear();
+        // The earlier query's wait is over: a blank query (Escape, or
+        // backing out) waits on nothing, and a new one stamps its own
+        // wait once it is asked of a provider (#248).
+        state.root_search_since = None;
         // A command's answer to the query sent is not an answer to this one.
         if state.sent_from.take().is_some_and(|sent| sent != query) {
             state.view.status = Status::Idle;
@@ -2916,7 +2980,9 @@ impl Launcher {
                 }
                 None => {
                     state.sent_from = state.view.query().map(str::to_owned);
-                    state.view.status = Status::Running;
+                    state.view.status = Status::Running {
+                        since: Instant::now(),
+                    };
                     Pending::Send(sending)
                 }
             },
@@ -2935,7 +3001,9 @@ impl Launcher {
             // Any scheme, as Raycast opens it (ADR 0037): the extension is
             // trusted, and a filter here would protect nothing.
             Entry::OpenUrl(url) => {
-                state.view.status = Status::Running;
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 Pending::OpenUrl(url)
             }
             Entry::StopSharingFolder(identity) => Pending::StopSharing(identity),
@@ -3089,23 +3157,33 @@ impl Launcher {
                 .begin_install(state, request, mode, assumptions)
                 .map_or(Pending::Nothing, Pending::Install),
             Entry::Acquire(id) => {
-                state.view.status = Status::Running;
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 Pending::Acquire(id)
             }
             Entry::InstallUpdate => {
-                state.view.status = Status::Running;
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 Pending::InstallUpdate
             }
             Entry::CheckUpdate => {
-                state.view.status = Status::Running;
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 Pending::CheckUpdate
             }
             Entry::CheckExtensionUpdates => {
-                state.view.status = Status::Running;
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 Pending::CheckExtensionUpdates
             }
             Entry::OpenLogFolder => {
-                state.view.status = Status::Running;
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 Pending::OpenLogFolder
             }
             Entry::AskNpm => {
@@ -3127,17 +3205,23 @@ impl Launcher {
                 if opening.no_view {
                     Launcher::begin_run(state);
                 } else {
-                    state.view.status = Status::Running;
+                    state.view.status = Status::Running {
+                        since: Instant::now(),
+                    };
                 }
                 Pending::Open(opening)
             }
             Entry::Run(callback) => {
-                state.view.status = Status::Running;
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 Pending::Run(callback)
             }
             Entry::Actions(listed) => match listed.actions[0].callback() {
                 Some(callback) => {
-                    state.view.status = Status::Running;
+                    state.view.status = Status::Running {
+                        since: Instant::now(),
+                    };
                     Pending::Run(callback.to_owned())
                 }
                 // A primary action that opens a submenu (#140): the window
@@ -3149,11 +3233,15 @@ impl Launcher {
                 Pending::Nothing
             }
             Entry::CustomView(item_id, info) => {
-                state.view.status = Status::Running;
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 Pending::CustomView(item_id, info)
             }
             Entry::OpenApplication { id, name } => {
-                state.view.status = Status::Running;
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 Pending::OpenApplication { id, name }
             }
             Entry::OpenTarget {
@@ -3161,7 +3249,9 @@ impl Launcher {
                 application,
                 name,
             } => {
-                state.view.status = Status::Running;
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 Pending::OpenTarget {
                     target,
                     application,
@@ -3176,7 +3266,9 @@ impl Launcher {
                 Pending::Own(work)
             }
             Entry::ClearCache(identity) => {
-                state.view.status = Status::Running;
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 Pending::ClearCache(identity)
             }
         }
@@ -3250,7 +3342,9 @@ impl Launcher {
         for identity in &identities {
             self.apply_enabled(state, identity, enabled);
         }
-        state.view.status = Status::Running;
+        state.view.status = Status::Running {
+            since: Instant::now(),
+        };
         Some(Change {
             identities,
             enabled,
@@ -3351,7 +3445,9 @@ impl Launcher {
 
     fn start_running(&self) -> u64 {
         let mut state = self.lock();
-        state.view.status = Status::Running;
+        state.view.status = Status::Running {
+            since: Instant::now(),
+        };
         state.screen_epoch
     }
 
@@ -3940,7 +4036,9 @@ impl Launcher {
                 ),
             ) => {
                 open.submitting = true;
-                state.view.status = Status::Running;
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 let git = matches!(open.purpose, FormPurpose::Git);
                 form.fields.first().map(|field| (git, field.value.clone()))
             }
@@ -3980,7 +4078,9 @@ impl Launcher {
             _ => None,
         };
         if submission.is_some() {
-            state.view.status = Status::Running;
+            state.view.status = Status::Running {
+                since: Instant::now(),
+            };
         }
         let epoch = state.screen_epoch;
         let data = submission
@@ -4700,7 +4800,7 @@ impl Launcher {
                 // are in root search again. Unless the reload or update has
                 // reported its outcome meanwhile, this opening is still shown as
                 // running, so it ends here.
-                if state.view.status == Status::Running {
+                if matches!(state.view.status, Status::Running { .. }) {
                     state.view.status = Status::Error(
                         "The extension changed while its command was opening; open it again".into(),
                     );
@@ -4716,7 +4816,7 @@ impl Launcher {
                 // Paused before it was asked (by its hotkey), or while it was
                 // opening (this opening crashed or could not start, which said
                 // so).
-                if state.view.status == Status::Running {
+                if matches!(state.view.status, Status::Running { .. }) {
                     state.view.status = Status::Error(paused(&state, &component));
                 }
                 return;

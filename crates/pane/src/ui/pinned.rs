@@ -9,9 +9,10 @@
 //! - **A slot** is 80 high, radius 12, padded 8 all round — Pane's compact
 //!   strip, lower than the reference's. Its 30px tile and its title
 //!   (12.5/500, #D9DADD, one line with an ellipsis) are centered down it,
-//!   7px apart. It is white 3.5% with a white 5% inset edge at rest and
-//!   white 7% under the pointer; keyboard focus draws the reference's 2px
-//!   focus outline inside it.
+//!   7px apart. It is white 3.5% with a white 5% inset edge at rest, the
+//!   fainter hover wash under the pointer — a layer over that rest look,
+//!   fading out once the pointer leaves (#245); keyboard focus draws the
+//!   reference's 2px focus outline inside it.
 //! - **The vertical layout** lists the pinned results as result rows under
 //!   the label instead; the launcher draws those rows.
 //!
@@ -38,7 +39,7 @@ use crate::ui::extension_icon::{RowIcon, row_icon_at};
 use crate::ui::icon::{Glyph, TileSize, glyph};
 use crate::ui::keycap::slot_number_hint;
 use crate::ui::shell::section_label;
-use crate::ui::theme::{Theme, pressed};
+use crate::ui::theme::{Theme, faded, pressed};
 
 /// The label over the strip.
 pub(crate) const PINNED_LABEL: &str = "Pinned";
@@ -66,6 +67,11 @@ pub(crate) struct SlotContent {
     /// Its number and the number hint's look (0 hidden, 1 shown) while Ctrl
     /// is held; `None` draws none (a pin past the numbered ones has none).
     pub(crate) number: Option<(usize, f32)>,
+    /// The hover wash's strength, 0 to 1 (see `crate::app::hover_wash`):
+    /// full while the pointer rests on the slot, fading once it has left.
+    /// Hovering a slot moves no selection, so its wash is the fainter
+    /// one (#245).
+    pub(crate) hover: f32,
     /// Why what it holds cannot run now, if it cannot.
     pub(crate) unavailable: Option<SharedString>,
 }
@@ -241,8 +247,21 @@ pub(crate) fn pinned_slot(content: SlotContent, theme: &Theme) -> Stateful<Div> 
                     .inset(),
             ],
         })
-        .hover(|slot| slot.bg(theme.slot_hover))
-        .active(|slot| slot.bg(pressed(theme.slot_hover)))
+        .active(|slot| slot.bg(pressed(theme.hover_wash)))
+        .when(content.hover > 0., |slot| {
+            // The hover wash is a layer over the slot's own background,
+            // not a replacement of it, so the exit fade runs down to the
+            // slot's rest look instead of through nothing (#245).
+            // Hovering a slot moves no selection, so its wash is the
+            // fainter one.
+            slot.child(
+                div()
+                    .absolute()
+                    .size_full()
+                    .rounded(geometry.slot_radius)
+                    .bg(faded(theme.hover_wash, content.hover)),
+            )
+        })
         .child(
             row_icon_at(
                 &content.icon,

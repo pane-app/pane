@@ -16,7 +16,7 @@
 use gpui::{AnyElement, Div, IntoElement, SharedString, Stateful, div, prelude::*, px};
 
 use crate::ui::keycap::{CapStyle, KeySequence, key_sequence};
-use crate::ui::theme::{Theme, pressed};
+use crate::ui::theme::{Theme, faded, pressed};
 
 /// One part of the footer's hint line.
 pub(crate) enum HintPart {
@@ -28,7 +28,7 @@ pub(crate) enum HintPart {
 
 /// The footer's hint line: "Type to filter actions · Esc goes back" while
 /// Actions is open (at rest the footer's buttons already show the keys,
-/// so it shows none) — muted 12.5px text and regular caps, 6px apart, on
+/// so it shows none) — tertiary text and regular caps, 6px apart, on
 /// one line.
 pub(crate) fn hint_line(parts: Vec<HintPart>, theme: &Theme) -> Div {
     div()
@@ -40,7 +40,7 @@ pub(crate) fn hint_line(parts: Vec<HintPart>, theme: &Theme) -> Div {
         .overflow_hidden()
         .whitespace_nowrap()
         .text_size(theme.typography.footer_size)
-        .text_color(theme.text_muted)
+        .text_color(theme.text_tertiary)
         .children(parts.into_iter().enumerate().map(|(index, part)| {
             match part {
                 HintPart::Text(text) => div().flex_none().child(text).into_any_element(),
@@ -56,10 +56,14 @@ pub(crate) fn hint_line(parts: Vec<HintPart>, theme: &Theme) -> Div {
 }
 
 /// How a footer button answers the pointer and its panel.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum ButtonWash {
-    /// Transparent at rest, the 6% wash on hover (`.fbtn:hover`).
-    Hover,
+    /// Transparent at rest, the hover wash at `look`'s strength under
+    /// the pointer (`.fbtn:hover`), fading out once it leaves (#245): the
+    /// caller passes the strength it read from the window's hover state
+    /// and reports the pointer's arrivals and departures through its
+    /// `.on_hover`.
+    Hover(f32),
     /// Transparent, with no hover wash: the reference's Actions button,
     /// whose inline background (transparent while its panel is closed)
     /// overrides `.fbtn:hover`.
@@ -100,10 +104,10 @@ pub(crate) fn footer_button(
             ButtonWash::Pressed => button
                 .bg(theme.footer_button_open)
                 .text_color(theme.footer_button_open_text),
-            ButtonWash::Hover => button
+            ButtonWash::Hover(look) => button
                 .text_color(theme.footer_button_text)
-                .hover(|button| button.bg(theme.control_hover))
-                .active(|button| button.bg(pressed(theme.control_hover))),
+                .when(look > 0., |button| button.bg(faded(theme.hover_wash, look)))
+                .active(|button| button.bg(pressed(theme.hover_wash))),
             ButtonWash::None => button.text_color(theme.footer_button_text),
         })
         .child(
@@ -204,13 +208,13 @@ fn line(theme: &Theme) -> gpui::Pixels {
     theme.geometry.footer_height - px(1.)
 }
 
-/// The 1×16 rule between the footer's buttons.
+/// The 1×16 rule between the footer's buttons, at the separator level.
 pub(crate) fn divider(theme: &Theme) -> Div {
     div()
         .flex_none()
         .w(px(1.))
         .h(theme.geometry.footer_divider_height)
-        .bg(theme.footer_divider)
+        .bg(theme.separator)
 }
 
 /// The footer's content row over the strip's 50px floor: `lead` (the

@@ -38,7 +38,7 @@ use gpui::{
 use gpui_elements::editable_text::{EditableTextState, text_input};
 
 use crate::ui::icon::{self, Glyph, IconTone};
-use crate::ui::theme::{Theme, pressed};
+use crate::ui::theme::{Theme, faded, pressed};
 
 /// The split view's client size in the reference, in logical pixels: the
 /// clipboard board's 940×600.
@@ -92,7 +92,7 @@ pub(crate) fn header(
         .pl(split.header_padding_left)
         .pr(split.header_padding_right)
         .border_b_1()
-        .border_color(theme.hairline_soft)
+        .border_color(theme.separator)
         .child(back)
         .child(field)
         .child(
@@ -136,9 +136,9 @@ pub(crate) fn search_field(
         text_input("clipboard-query")
             .state(input.downgrade())
             .placeholder(placeholder)
-            .placeholder_color(theme.text_placeholder)
+            .placeholder_color(theme.query_placeholder)
             .caret_color(theme.accent_text)
-            .selection_color(theme.row_selected)
+            .selection_color(theme.selection_wash)
             .marked_color(theme.accent_text)
             .text_size(typography.search_size)
             .text_color(theme.text_query)
@@ -169,7 +169,7 @@ pub(crate) fn list(theme: &Theme) -> Stateful<Div> {
         .flex()
         .flex_col()
         .border_r_1()
-        .border_color(theme.hairline_soft)
+        .border_color(theme.separator)
 }
 
 /// What a record's row shows.
@@ -178,6 +178,9 @@ pub(crate) struct ClipRow {
     pub(crate) title: SharedString,
     pub(crate) time: SharedString,
     pub(crate) selected: bool,
+    /// The hover wash's strength, 0 to 1 (see `crate::app::hover_wash`):
+    /// full while the pointer rests on the row, fading once it has left.
+    pub(crate) hover: f32,
 }
 
 /// A text record's mark: `glyph` (its kind) on the row's neutral tile.
@@ -210,10 +213,11 @@ pub(crate) fn thumbnail_mark(path: PathBuf, theme: &Theme) -> AnyElement {
 /// either side, 12 between its `mark` (its kind's tile, an image's
 /// thumbnail or a file's system icon), its 13.5px/500 title (truncating)
 /// and its time in Geist Mono 11.5. The hover wash shows on an unselected
-/// row; the selected one keeps its wash and inset edge. While held, a row
-/// takes the [`pressed`] wash of its hover, or of its selected wash, at
-/// once. The row is `id`; the caller attaches accessibility and the click,
-/// which selects.
+/// row at `hover`'s strength, fading out once the pointer has left (#245);
+/// the selected one keeps its wash, with no inset edge (ADR 0035). While
+/// held, a row takes the [`pressed`] wash of its hover, or of its
+/// selected wash, at once. The row is `id`; the caller attaches its
+/// hover report, accessibility and the click, which selects.
 pub(crate) fn clip_row(
     id: impl Into<ElementId>,
     row: ClipRow,
@@ -223,9 +227,9 @@ pub(crate) fn clip_row(
     let geometry = &theme.geometry;
     let split = &theme.split;
     let press = pressed(if row.selected {
-        theme.row_selected
+        theme.selection_wash
     } else {
-        theme.row_hover
+        theme.hover_wash
     });
     div()
         .id(id)
@@ -239,16 +243,10 @@ pub(crate) fn clip_row(
         .px(geometry.row_padding_x)
         .rounded(geometry.row_radius)
         .cursor_pointer()
-        .when(!row.selected, |line| {
-            line.hover(|line| line.bg(theme.row_hover))
+        .when(!row.selected && row.hover > 0., |line| {
+            line.bg(faded(theme.hover_wash, row.hover))
         })
-        .when(row.selected, |line| {
-            line.bg(theme.row_selected).shadow(vec![
-                BoxShadow::new(px(0.), px(0.), theme.row_selected_border)
-                    .spread_radius(px(1.))
-                    .inset(),
-            ])
-        })
+        .when(row.selected, |line| line.bg(theme.selection_wash))
         .child(mark)
         .child(
             div()
@@ -276,21 +274,24 @@ pub(crate) struct FoundFile {
     /// Its folder below the home folder (`~/…`).
     pub(crate) subtitle: SharedString,
     pub(crate) selected: bool,
+    /// The hover wash's strength, 0 to 1 (see `crate::app::hover_wash`):
+    /// full while the pointer rests on the row, fading once it has left.
+    pub(crate) hover: f32,
     /// The system's icon for the file, drawn bare.
     pub(crate) icon: AnyElement,
 }
 
 /// A file's row: a record's row (see [`clip_row`]) with the file's own
 /// icon in the tile's place and its folder, muted and truncating first,
-/// after its title. The caller attaches identity, accessibility and the
-/// click.
+/// after its title. The caller attaches identity, accessibility, its
+/// hover report and the click.
 pub(crate) fn file_row(id: impl Into<ElementId>, row: FoundFile, theme: &Theme) -> Stateful<Div> {
     let geometry = &theme.geometry;
     let split = &theme.split;
     let press = pressed(if row.selected {
-        theme.row_selected
+        theme.selection_wash
     } else {
-        theme.row_hover
+        theme.hover_wash
     });
     div()
         .id(id)
@@ -304,16 +305,10 @@ pub(crate) fn file_row(id: impl Into<ElementId>, row: FoundFile, theme: &Theme) 
         .px(geometry.row_padding_x)
         .rounded(geometry.row_radius)
         .cursor_pointer()
-        .when(!row.selected, |line| {
-            line.hover(|line| line.bg(theme.row_hover))
+        .when(!row.selected && row.hover > 0., |line| {
+            line.bg(faded(theme.hover_wash, row.hover))
         })
-        .when(row.selected, |line| {
-            line.bg(theme.row_selected).shadow(vec![
-                BoxShadow::new(px(0.), px(0.), theme.row_selected_border)
-                    .spread_radius(px(1.))
-                    .inset(),
-            ])
-        })
+        .when(row.selected, |line| line.bg(theme.selection_wash))
         .child(div().flex_none().child(row.icon))
         .child(
             div()
@@ -562,7 +557,7 @@ pub(crate) fn info_section(
                 .justify_between()
                 .gap(split.info_gap)
                 .border_t_1()
-                .border_color(theme.hairline_soft)
+                .border_color(theme.separator)
                 .child(
                     div()
                         .flex_none()
@@ -634,7 +629,7 @@ pub(crate) fn footer(lead: Div, buttons: Vec<AnyElement>, theme: &Theme) -> Div 
         .pl(geometry.footer_padding_left)
         .pr(geometry.footer_padding_right)
         .border_t_1()
-        .border_color(theme.hairline_soft)
+        .border_color(theme.separator)
         .bg(theme.footer_tint)
         .child(lead)
         .child(

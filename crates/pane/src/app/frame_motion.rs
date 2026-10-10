@@ -1,5 +1,6 @@
 //! The launcher window's frame motion: the view transition, the footer
-//! menu popup's entrance and exit, and the number hints' slide — what
+//! menu popup's entrance and exit, the number hints' slide, the hover
+//! washes' exits and the loading bar under the search field's rule — what
 //! moves between frames, presentation only (see [`crate::ui::motion`] for
 //! the whole policy).
 //!
@@ -18,6 +19,8 @@ use std::time::Instant;
 
 use pane_core::Screen;
 
+use crate::app::hover_wash::HoverWashes;
+use crate::features::loading::{self, Loading, LoadingFrame};
 use crate::features::number_hints::Numbers;
 use crate::ui::motion::{self, Direction};
 
@@ -34,6 +37,10 @@ pub(crate) struct Frame {
     pub(crate) menu_popup: Option<(f32, f32)>,
     /// The number hints' look: 0 hidden, 1 shown.
     pub(crate) numbers: f32,
+    /// The loading bar's frame: what it draws, whether it asks for
+    /// another, and when the window must wake for the threshold (#248;
+    /// see `crate::features::loading`).
+    pub(crate) loading: LoadingFrame,
     /// Whether anything is still in flight, so another frame is needed.
     pub(crate) animating: bool,
 }
@@ -79,9 +86,18 @@ pub(crate) struct FrameMotion {
     /// open, absent while closed. Test and debug builds only.
     #[cfg(any(test, debug_assertions))]
     drawn_menu_popup: Option<(f32, f32)>,
+    /// The loading bar's bookkeeping and its wake, the threshold it waits
+    /// for while work runs beneath it (#248; see
+    /// `crate::features::loading`).
+    pub(crate) loading: Loading,
     /// The number hints Ctrl reveals: the hold that shows them is the
     /// number hints module's, their slide is advanced here each frame.
     pub(crate) numbers: Numbers,
+    /// The hover washes the launcher's surfaces take under the pointer,
+    /// and the fade each leaves behind (#245; see
+    /// [`crate::app::hover_wash`]): the surfaces report their hover, and
+    /// their renders read the washes' strength as they draw.
+    pub(crate) hover: HoverWashes,
 }
 
 impl FrameMotion {
@@ -99,7 +115,9 @@ impl FrameMotion {
             drawn_menu: false,
             #[cfg(any(test, debug_assertions))]
             drawn_menu_popup: None,
+            loading: Loading::default(),
             numbers: Numbers::default(),
+            hover: HoverWashes::default(),
         }
     }
 
@@ -142,12 +160,15 @@ impl FrameMotion {
 
     /// Advances everything in motion to the frame about to be drawn, at
     /// `now`, for a frame showing a screen of kind `screen` with the footer
-    /// menu `menu_open` or not; `reduced` is [`gpui::App::reduce_motion`],
+    /// menu `menu_open` or not, and waited-for work pending since `pending`
+    /// (the core's `pending_since`, `None` when none is) for the loading
+    /// bar to follow; `reduced` is [`gpui::App::reduce_motion`],
     /// under which everything settles at once.
     pub(crate) fn frame(
         &mut self,
         screen: Discriminant<Screen>,
         menu_open: bool,
+        pending: Option<Instant>,
         reduced: bool,
         now: Instant,
     ) -> Frame {
@@ -202,15 +223,32 @@ impl FrameMotion {
         if menu_open || menu_popup.is_none() {
             self.menu_exit = None;
         }
+        // The hover washes' exits, on the same frame discipline: a fade
+        // in flight keeps the frames coming; the frame that settles the
+        // last one asks for none. Reduced motion settles them at once.
+        let hover = self.hover.advance(reduced, now);
+        // The loading bar: the waited-for work the core says is pending,
+        // since when, becomes the line under the search field's rule once
+        // it has outlasted the threshold (#248; see
+        // `crate::features::loading` for the whole policy).
+        let loading = self.loading.advance(pending, reduced, now);
         // While the arriving content is still in flight, frames keep
         // coming; the frame that completes the transition asks for none,
         // so a settled window is idle. The same holds for the footer menu
-        // popup's entrance or exit and the number hints' slide.
-        let animating = arriving.is_some() || menu_popup.is_some() || self.numbers.reveal.is_some();
+        // popup's entrance or exit, the number hints' slide, the hover
+        // washes' exits and the loading bar — which, while the work it
+        // stands for is pending, keeps asking for its sweep (the one
+        // animation that runs while its cause does).
+        let animating = arriving.is_some()
+            || menu_popup.is_some()
+            || self.numbers.reveal.is_some()
+            || hover
+            || loading.animating;
         Frame {
             arriving,
             menu_popup,
             numbers,
+            loading,
             animating,
         }
     }
@@ -229,5 +267,13 @@ impl FrameMotion {
     #[cfg(any(test, debug_assertions))]
     pub(crate) fn menu_popup_presentation(&self) -> Option<(f32, f32)> {
         self.drawn_menu_popup
+    }
+
+    /// The loading bar the last frame drew (see
+    /// [`super::LauncherWindow::loading_presentation`]). Test and debug
+    /// builds only.
+    #[cfg(any(test, debug_assertions))]
+    pub(crate) fn loading_presentation(&self) -> Option<loading::LoadingBar> {
+        self.loading.drawn_bar
     }
 }

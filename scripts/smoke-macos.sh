@@ -1008,10 +1008,11 @@ key 36; sleep 2   # Install; Helper sample is selected
 key 36; sleep 2   # open Helper sample
 key 125; key 36; sleep 2   # Echo after waiting
 helpers_running || { echo "the waiting helper is not running"; exit 1; }
-# The helper can already be running while the compositor still shows the
-# prior idle footer (CI 36957014594). Require a frame showing Running before
-# quitting, within the helper's ten-second wait; never accept the idle frame.
-capture_until 94-helper-before-quit.png progress 5
+# The footer's "Running…" text is gone (#248): waited-for work is the late
+# loading bar under the search field's rule, and a command's list has no
+# rule, so there is nothing to check in the picture — the helper process
+# check above is the state check, and the capture below is for the record.
+capture 94-helper-before-quit.png
 helpers_running || { echo "the helper ended before the quit check"; exit 1; }
 alive=$(find "$PANE_DATA_DIR/extensions/packages" -name pane-echo.alive | head -1)
 [ -n "$alive" ] || { echo "the waiting helper does not beat"; exit 1; }
@@ -1259,7 +1260,10 @@ key 36; sleep 2   # open Helper sample
 key 125; key 36; sleep 2   # Echo after waiting
 helpers_running || { echo "the waiting helper is not running"; exit 1; }
 capture 201-runtime-helper-waiting.png
-check 201-runtime-helper-waiting.png progress   # "Running…"
+# The footer's "Running…" text is gone (#248): waited-for work is the late
+# loading bar under the search field's rule, and a command's list has no
+# rule, so there is nothing to check in the picture — the helper process
+# check above is the state check.
 alive=$(find "$PANE_DATA_DIR/extensions/packages" -name pane-echo.alive | head -1)
 [ -n "$alive" ] || { echo "the waiting helper does not beat"; exit 1; }
 inject crash

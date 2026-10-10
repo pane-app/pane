@@ -1130,7 +1130,10 @@ focus_launcher
 "$xdotool" key Down Return; sleep 2   # Echo after waiting
 helpers_running || { echo "the waiting helper is not running"; exit 1; }
 capture 94-helper-before-quit.png
-check 94-helper-before-quit.png progress   # "Running…"
+# The footer's "Running…" text is gone (#248): waited-for work is the late
+# loading bar under the search field's rule, and a command's list has no
+# rule, so there is nothing to check in the picture — the helper process
+# check above is the state check.
 alive=$(find "$PANE_DATA_DIR/extensions/packages" -name pane-echo.alive | head -1)
 [ -n "$alive" ] || { echo "the waiting helper does not beat"; exit 1; }
 python3 "$(dirname "$0")/close_window.py" "$window"
@@ -1366,7 +1369,10 @@ check 200-runtime-counted.png success   # "Counted 1"
 "$xdotool" key Down Return; sleep 2   # Echo after waiting
 helpers_running || { echo "the waiting helper is not running"; exit 1; }
 capture 201-runtime-helper-waiting.png
-check 201-runtime-helper-waiting.png progress   # "Running…"
+# The footer's "Running…" text is gone (#248): waited-for work is the late
+# loading bar under the search field's rule, and a command's list has no
+# rule, so there is nothing to check in the picture — the helper process
+# check above is the state check.
 alive=$(find "$PANE_DATA_DIR/extensions/packages" -name pane-echo.alive | head -1)
 [ -n "$alive" ] || { echo "the waiting helper does not beat"; exit 1; }
 inject crash

@@ -736,7 +736,7 @@ impl Launcher {
         if !self.update_own_toast(state, id, ending.clone()) {
             self.put_own_toast(state, ending);
         }
-        if state.view.status == Status::Running {
+        if matches!(state.view.status, Status::Running { .. }) {
             state.view.status = Status::Idle;
         }
         self.changed();

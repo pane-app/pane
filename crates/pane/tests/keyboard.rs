@@ -56,7 +56,7 @@ use setup::{
     CTRL, actions_shortcut, actions_shortcut_name, init_settings, settings_shortcut,
     settings_shortcut_name,
 };
-use wait::{until, until_record_holds};
+use wait::until;
 
 /// The fake system: what Pane registered, for checking the launcher's
 /// dismissal leaves the global hotkeys running (a press still works
@@ -266,10 +266,47 @@ fn node<'a>(nodes: &'a [serde_json::Value], role: &str, label: &str) -> &'a serd
 
 /// Runs `cx` until the settings record in `data` holds `field` mapped to
 /// `id`, as the Keyboard page writes them: the save the page started is
-/// written off the window's thread.
+/// written off the window's thread. A timeout reports what the record
+/// holds, so a failure says what was saved instead of only that it never
+/// held the binding.
 fn until_record(cx: &mut VisualTestContext, data: &Path, field: &str, id: &str) {
     let held = format!("\"{field}\": \"{id}\"");
-    until_record_holds(cx, data, &held);
+    let record = data.join("settings.json");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        cx.run_until_parked();
+        let read = fs::read_to_string(&record);
+        if read.as_deref().is_ok_and(|text| text.contains(&held)) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for the record to hold {held}; it holds {}",
+            read.unwrap_or_else(|error| format!("nothing ({error})")),
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Waits, up to the same deadline, for the record to hold `held` whole —
+/// a field whose value is not a string, which [`until_record`] cannot
+/// spell.
+fn until_record_holds(cx: &mut VisualTestContext, data: &Path, held: &str) {
+    let record = data.join("settings.json");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        cx.run_until_parked();
+        let read = fs::read_to_string(&record);
+        if read.as_deref().is_ok_and(|text| text.contains(held)) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for the record to hold {held}; it holds {}",
+            read.unwrap_or_else(|error| format!("nothing ({error})")),
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 /// Whether the record in `data` holds `field` mapped to `id`.
@@ -577,10 +614,10 @@ fn the_menus_hint_follows_the_settings_binding(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
     let (_window, cx) = open_sample(cx, Some(data.path()));
 
-    // Record Ctrl+9 as the open-Settings binding.
+    // Record Ctrl+O as the open-Settings binding.
     let (_settings, mut settings_cx) = keyboard_page(cx);
-    record(&mut settings_cx, "keyboard-open-settings", "ctrl-9");
-    until_record(&mut settings_cx, data.path(), "open-settings", "ctrl-9");
+    record(&mut settings_cx, "keyboard-open-settings", "ctrl-o");
+    until_record(&mut settings_cx, data.path(), "open-settings", "ctrl-o");
 
     // The menu's Settings entry shows the binding in force as its hint.
     click(cx, "footer-menu");
@@ -590,7 +627,7 @@ fn the_menus_hint_follows_the_settings_binding(cx: &mut TestAppContext) {
     assert!(
         nodes
             .iter()
-            .any(|node| node["role"] == "Image" && node["label"] == format!("{CTRL}+9")),
+            .any(|node| node["role"] == "Image" && node["label"] == format!("{CTRL}+O")),
         "the menu's hint shows the binding, {nodes:#?}"
     );
     cx.simulate_keystrokes("escape");
@@ -601,7 +638,7 @@ fn the_menus_hint_follows_the_settings_binding(cx: &mut TestAppContext) {
     settings_cx.update(|window, _| window.remove_window());
     cx.run_until_parked();
     assert_eq!(settings_windows(cx), 0, "Settings closed");
-    cx.simulate_keystrokes("ctrl-9");
+    cx.simulate_keystrokes("ctrl-o");
     cx.run_until_parked();
     assert_eq!(
         settings_windows(cx),
@@ -609,7 +646,7 @@ fn the_menus_hint_follows_the_settings_binding(cx: &mut TestAppContext) {
         "the recorded binding opens Settings"
     );
     // A second press focuses the same window, not another one.
-    cx.simulate_keystrokes("ctrl-9");
+    cx.simulate_keystrokes("ctrl-o");
     cx.run_until_parked();
     assert_eq!(settings_windows(cx), 1);
     cx.simulate_keystrokes(settings_shortcut());
@@ -794,10 +831,10 @@ fn a_reset_returns_to_the_default_through_the_same_checks(cx: &mut TestAppContex
     node(&nodes, "Button", "Reset Back");
 
     // A reset that would land on another action's binding is refused:
-    // Open Settings moves to Ctrl+9, Dismiss takes the freed default's
+    // Open Settings moves to Ctrl+O, Dismiss takes the freed default's
     // place, and resetting Open Settings back to its default is refused.
-    record(&mut settings_cx, "keyboard-open-settings", "ctrl-9");
-    until_record(&mut settings_cx, data.path(), "open-settings", "ctrl-9");
+    record(&mut settings_cx, "keyboard-open-settings", "ctrl-o");
+    until_record(&mut settings_cx, data.path(), "open-settings", "ctrl-o");
     record(
         &mut settings_cx,
         "keyboard-dismiss-launcher",
@@ -820,7 +857,7 @@ fn a_reset_returns_to_the_default_through_the_same_checks(cx: &mut TestAppContex
         "the reset collision is explained, {tree}"
     );
     assert!(
-        record_holds(data.path(), "open-settings", "ctrl-9"),
+        record_holds(data.path(), "open-settings", "ctrl-o"),
         "the reset kept nothing"
     );
 }
@@ -1389,16 +1426,17 @@ fn the_navigation_bindings_move_the_selection_unless_an_action_has_their_keys(
     cx.simulate_input("script");
     assert_eq!(settle(&window, cx).selected, Some(0));
 
-    // The choices are Raycast's, each labelled with the keys it binds,
-    // and none clashes with the default keys: Vim Motions is available
-    // beside Open actions' Ctrl+K.
+    // The choices are Raycast's, each labelled with the keys it binds —
+    // the selection's pair and Left and Right (#258) — and none clashes
+    // with the default keys: Vim Motions is available beside Open
+    // actions' Ctrl+K.
     let (_settings, mut settings_cx) = keyboard_page(cx);
     click(&mut settings_cx, "keyboard-navigation");
     settings_cx.run_until_parked();
     let tree = a11y(&mut settings_cx);
     for label in [
-        format!("Emacs ({NAV_NAME}+P, {NAV_NAME}+N)"),
-        format!("Vim Motions ({NAV_NAME}+K, {NAV_NAME}+J)"),
+        format!("Emacs ({NAV_NAME}+P, {NAV_NAME}+N, {NAV_NAME}+B, {NAV_NAME}+F)"),
+        format!("Vim Motions ({NAV_NAME}+K, {NAV_NAME}+J, {NAV_NAME}+H, {NAV_NAME}+L)"),
     ] {
         assert!(tree.contains(&label), "{label} is offered, {tree}");
     }

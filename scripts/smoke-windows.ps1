@@ -1234,7 +1234,10 @@ Send "{ENTER}"; Start-Sleep -Seconds 2   # open Helper sample
 Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 2   # Echo after waiting
 if (-not (Helpers-Running)) { throw "the waiting helper is not running" }
 Capture "94-helper-before-quit.png"
-Check "94-helper-before-quit.png" "progress"   # "Running…"
+# The footer's "Running…" text is gone (#248): waited-for work is the late
+# loading bar under the search field's rule, and a command's list has no
+# rule, so there is nothing to check in the picture — the helper process
+# check above is the state check.
 $alive = Get-ChildItem -Recurse -Filter "pane-echo.alive" $packages | Select-Object -First 1
 if (-not $alive) { throw "the waiting helper does not beat" }
 if (-not $process.CloseMainWindow()) { throw "Pane's window did not take the close request" }
@@ -1485,7 +1488,10 @@ Send "{ENTER}"; Start-Sleep -Seconds 2   # open Helper sample
 Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 2   # Echo after waiting
 if (-not (Helpers-Running)) { throw "the waiting helper is not running" }
 Capture "201-runtime-helper-waiting.png"
-Check "201-runtime-helper-waiting.png" "progress"   # "Running…"
+# The footer's "Running…" text is gone (#248): waited-for work is the late
+# loading bar under the search field's rule, and a command's list has no
+# rule, so there is nothing to check in the picture — the helper process
+# check above is the state check.
 $alive = Get-ChildItem -Recurse -Filter "pane-echo.alive" $packages | Select-Object -First 1
 if (-not $alive) { throw "the waiting helper does not beat" }
 Inject-Fault "crash"
