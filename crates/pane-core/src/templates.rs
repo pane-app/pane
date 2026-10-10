@@ -496,7 +496,9 @@ fn insert_after_marker(source: &str, marker: &str, added: &str) -> Result<String
              cannot be added to it; add it by hand instead"
         ));
     };
-    let line_end = source[at..].find('\n').map_or(source.len(), |end| at + end + 1);
+    let line_end = source[at..]
+        .find('\n')
+        .map_or(source.len(), |end| at + end + 1);
     let indent = source[..at].rfind('\n').map_or(0, |start| start + 1);
     let indent = &source[indent..at];
     let mut written = String::with_capacity(source.len() + added.len() + 1);
@@ -653,7 +655,10 @@ fn shared(language: Language) -> &'static [(&'static str, &'static str)] {
                 "rust-toolchain.toml",
                 include_str!("../templates/rust/rust-toolchain.toml"),
             ),
-            ("rustfmt.toml", include_str!("../templates/rust/rustfmt.toml")),
+            (
+                "rustfmt.toml",
+                include_str!("../templates/rust/rustfmt.toml"),
+            ),
         ],
         Language::TypeScript => &[
             (
@@ -789,7 +794,10 @@ mod tests {
                 for file in &files {
                     let path = folder.path().join(file);
                     let contents = fs::read_to_string(&path).unwrap_or_default();
-                    assert!(!contents.contains("__"), "{file} keeps a placeholder: {contents}");
+                    assert!(
+                        !contents.contains("__"),
+                        "{file} keeps a placeholder: {contents}"
+                    );
                 }
                 let (manifest, _) = Manifest::read_parsed(folder.path()).unwrap();
                 assert_eq!(manifest.title, "Word Count");
@@ -847,7 +855,11 @@ mod tests {
         assert_eq!(Name::parse("  say  hello  ").unwrap().title, "Say Hello");
         assert_eq!(Name::parse("notes!").unwrap().package, "notes");
         assert_eq!(Name::parse("Say \"Hello\"").unwrap().title, "Say Hello");
-        for refused in [Name::parse("!!!"), Name::parse(""), Name::parse("42 Things")] {
+        for refused in [
+            Name::parse("!!!"),
+            Name::parse(""),
+            Name::parse("42 Things"),
+        ] {
             assert!(refused.is_err());
         }
     }
@@ -907,10 +919,16 @@ mod tests {
             match language {
                 Language::Rust => {
                     assert!(entry.contains("mod note;"), "{entry}");
-                    assert!(entry.contains("\"note\" => note::render().await,"), "{entry}");
+                    assert!(
+                        entry.contains("\"note\" => note::render().await,"),
+                        "{entry}"
+                    );
                 }
                 Language::TypeScript => {
-                    assert!(entry.contains("import * as note from \"./note\";"), "{entry}");
+                    assert!(
+                        entry.contains("import * as note from \"./note\";"),
+                        "{entry}"
+                    );
                     let arm = "case \"note\": return note.render(launch);";
                     assert!(entry.contains(arm), "{entry}");
                 }
@@ -918,7 +936,11 @@ mod tests {
             // A second command of the same name is refused.
             let again = NewCommand::parse(Some("note"), None).unwrap();
             let refused = add_command(folder.path(), &again, Kind::Form);
-            assert!(refused.unwrap_err().contains("already has a command named `note`"));
+            assert!(
+                refused
+                    .unwrap_err()
+                    .contains("already has a command named `note`")
+            );
         }
     }
 
@@ -966,7 +988,11 @@ mod tests {
         fs::write(&entry, without).unwrap();
         let note = NewCommand::parse(Some("note"), None).unwrap();
         let refused = add_command(folder.path(), &note, Kind::List);
-        assert!(refused.unwrap_err().contains("no longer carries pane-ext's marker"));
+        assert!(
+            refused
+                .unwrap_err()
+                .contains("no longer carries pane-ext's marker")
+        );
         // Nothing was written: a refused command leaves the package as it
         // was.
         assert!(!folder.path().join("src/note.ts").exists());
@@ -984,7 +1010,11 @@ mod tests {
         fs::write(folder.path().join("package.json"), "{}").unwrap();
         let note = NewCommand::parse(Some("note"), None).unwrap();
         let refused = add_command(folder.path(), &note, Kind::List);
-        assert!(refused.unwrap_err().contains("neither the Rust nor the TypeScript entry"));
+        assert!(
+            refused
+                .unwrap_err()
+                .contains("neither the Rust nor the TypeScript entry")
+        );
     }
 
     #[test]
@@ -995,7 +1025,10 @@ mod tests {
         };
         let by_id = NewCommand::parse(Some("word-count"), None).unwrap();
         assert_eq!(by_id, expected);
-        assert_eq!(NewCommand::parse(None, Some("Word Count")).unwrap(), expected);
+        assert_eq!(
+            NewCommand::parse(None, Some("Word Count")).unwrap(),
+            expected
+        );
         let named = NewCommand::parse(Some("note"), Some("Say Hello")).unwrap();
         assert_eq!(named.title, "Say Hello");
         assert!(NewCommand::parse(None, None).is_err());

@@ -177,7 +177,10 @@ fn new_command_adds_a_command_to_a_package_pane_ext_wrote() {
         "form",
     ]);
     assert!(!passed, "{printed}");
-    assert!(printed.contains("already has a command named `note`"), "{printed}");
+    assert!(
+        printed.contains("already has a command named `note`"),
+        "{printed}"
+    );
 }
 
 #[test]
@@ -189,5 +192,8 @@ fn new_command_refuses_a_folder_that_is_no_package() {
 
     let (passed, printed) = new(&["command"]);
     assert!(!passed, "{printed}");
-    assert!(printed.contains("new command needs the folder"), "{printed}");
+    assert!(
+        printed.contains("new command needs the folder"),
+        "{printed}"
+    );
 }

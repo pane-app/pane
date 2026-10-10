@@ -59,7 +59,8 @@ pub(crate) fn run(args: std::iter::Skip<std::env::ArgsOs>) -> ExitCode {
 
 /// The arguments after `new`, as strings: flags and package folders.
 fn strings(args: std::iter::Skip<std::env::ArgsOs>) -> Vec<String> {
-    args.map(|argument| argument.to_string_lossy().into_owned()).collect()
+    args.map(|argument| argument.to_string_lossy().into_owned())
+        .collect()
 }
 
 /// The arguments after `new`: an optional folder, then the flags, with
@@ -84,15 +85,13 @@ fn parse(mut rest: Vec<String>) -> Result<Arguments, String> {
             match flag.as_str() {
                 "--name" => arguments.name = Some(argument),
                 "--language" => {
-                    let language = Language::parse(&argument).ok_or_else(|| {
-                        not_a_choice("--language", &argument, LANGUAGES)
-                    })?;
+                    let language = Language::parse(&argument)
+                        .ok_or_else(|| not_a_choice("--language", &argument, LANGUAGES))?;
                     arguments.language = Some(language);
                 }
                 "--template" => {
-                    let kind = Kind::parse(&argument).ok_or_else(|| {
-                        not_a_choice("--template", &argument, TEMPLATES)
-                    })?;
+                    let kind = Kind::parse(&argument)
+                        .ok_or_else(|| not_a_choice("--template", &argument, TEMPLATES))?;
                     arguments.kind = Some(kind);
                 }
                 "--id" => arguments.id = Some(argument),
@@ -323,7 +322,12 @@ mod tests {
         assert_eq!(parsed.kind, Some(Kind::Form));
 
         // `new command` switches to adding a command.
-        let given = vec!["command".into(), "notes".into(), "--id".into(), "note".into()];
+        let given = vec![
+            "command".into(),
+            "notes".into(),
+            "--id".into(),
+            "note".into(),
+        ];
         let command = parse(given).unwrap();
         assert!(command.command);
         assert_eq!(command.folder, Some(PathBuf::from("notes")));
@@ -405,7 +409,10 @@ mod tests {
         };
         let mut answers = Cursor::new("Note\n".repeat(2));
         let next = command(&adding, &mut answers, true).unwrap();
-        assert!(next.contains("added the command `note` (the list template)"), "{next}");
+        assert!(
+            next.contains("added the command `note` (the list template)"),
+            "{next}"
+        );
         assert!(folder.path().join("src/note.ts").is_file());
     }
 

@@ -179,9 +179,6 @@ fn the_create_bin_says_how_to_get_pane_ext_when_it_finds_none() {
         &[work.path().join("nowhere").to_str().unwrap()],
     );
     assert!(!passed, "{printed}");
-    assert!(
-        printed.contains("found no pane-ext to run"),
-        "{printed}"
-    );
+    assert!(printed.contains("found no pane-ext to run"), "{printed}");
     assert!(printed.contains("@pane-app/cli"), "{printed}");
 }

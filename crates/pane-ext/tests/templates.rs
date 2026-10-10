@@ -98,8 +98,11 @@ fn scaffold(kind: Kind, language: Language) -> PathBuf {
             let dependency = format!("pane-extension = {{ path = {:?} }}", sdk.display());
             let manifest = manifest.replace(r#"pane-extension = "0.1""#, &dependency);
             fs::write(folder.join("Cargo.toml"), manifest).unwrap();
-            fs::copy(repository().join("rust-toolchain.toml"), folder.join("rust-toolchain.toml"))
-                .unwrap();
+            fs::copy(
+                repository().join("rust-toolchain.toml"),
+                folder.join("rust-toolchain.toml"),
+            )
+            .unwrap();
         }
         Language::TypeScript => {
             // The SDK comes from npm for an author; here it is a copy of
@@ -170,7 +173,11 @@ fn build(folder: &Path) {
         let _ = fs::remove_file(&component);
         fs::copy(staging.path().join(&command.component), &component).unwrap();
     }
-    println!("built {} in {} s", folder.display(), started.elapsed().as_secs());
+    println!(
+        "built {} in {} s",
+        folder.display(),
+        started.elapsed().as_secs()
+    );
 }
 
 /// What the launcher shows of the last outcome: the status line, else the
@@ -220,14 +227,19 @@ fn opens(kind: Kind, launcher: &Launcher) {
         Kind::List => {
             assert_eq!(launcher.view().screen, Screen::Command, "{kind:?}");
             choose(launcher, "Say hello");
-            assert_eq!(shown(launcher), Status::Result(format!("Hello from {}", title(kind))));
+            assert_eq!(
+                shown(launcher),
+                Status::Result(format!("Hello from {}", title(kind)))
+            );
         }
         // Without text sent, the detail says so.
         Kind::Detail => {
             assert_eq!(launcher.view().screen, Screen::Command, "{kind:?}");
             let view = launcher.view();
             assert!(
-                view.rows.iter().any(|row| row.title.starts_with("Nothing yet")),
+                view.rows
+                    .iter()
+                    .any(|row| row.title.starts_with("Nothing yet")),
                 "{:?}",
                 view.rows
             );

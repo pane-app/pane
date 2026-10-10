@@ -605,7 +605,11 @@ fn ci_lints() -> Result<(), String> {
     }
     // The command files pane-ext new command writes are no package's
     // source, so rustfmt checks them directly.
-    let rustfmt = if cfg!(windows) { "rustfmt.exe" } else { "rustfmt" };
+    let rustfmt = if cfg!(windows) {
+        "rustfmt.exe"
+    } else {
+        "rustfmt"
+    };
     run(Command::new(rustfmt)
         .current_dir(&root)
         .arg("--check")
