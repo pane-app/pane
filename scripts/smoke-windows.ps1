@@ -844,20 +844,44 @@ python "$PSScriptRoot/check_screenshot.py" --same @shots
 if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the released hotkey still did something" }
 Stop-Pane $process
 
-# A hook-dispatched binding: the smoke holds Ctrl+Alt+J from its own
-# process first, as another application would (RegisterHotKey from this
-# PowerShell thread), so Windows refuses the chord to Pane and Pane's own
-# low-level keyboard hook takes the binding instead (#252, ADR 0039):
-# assigning it to Greeting in Settings says so on the row ("Dispatched
-# through Pane's keyboard hook"), and pressing it with the launcher
-# unfocused opens Greeting exactly as the registered chord does. A data
-# folder of its own.
+# A hook-dispatched binding: another application holds Ctrl+Alt+J first,
+# so Windows refuses the chord to Pane and Pane's own low-level keyboard
+# hook takes the binding instead (#252, ADR 0039): assigning it to
+# Greeting in Settings says so on the row ("Dispatched through Pane's
+# keyboard hook"), and pressing it with the launcher unfocused opens
+# Greeting exactly as the registered chord does. A data folder of its
+# own.
+# The holder is a process of its own, not this thread, because the keys
+# this thread's SendKeys synthesizes would be consumed as its own
+# WM_HOTKEY before the input pipeline — the low-level hook among it —
+# ever saw them: the recorder stood listening and nothing arrived (the
+# first matrix runs' 77-hook-recorder.png shows it, with no record
+# written). A separate holder is what the ticket meant by "another
+# process" all along.
 $data = Join-Path $OutDir "hook-hotkeys-data"
 if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 $env:PANE_DATA_DIR = $data
 # MOD_NOREPEAT 0x4000 | MOD_CONTROL 0x2 | MOD_ALT 0x1, 'J' 0x4A: an
 # unlikely combination, so the session's own shortcuts are not disturbed.
-if (-not [Win]::RegisterHotKey([IntPtr]::Zero, 0x5A4A, 0x4003, 0x4A)) { throw "the smoke could not hold the chord" }
+$hold = @'
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class Hold {
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern bool RegisterHotKey(IntPtr window, int id, uint modifiers, uint key);
+}
+"@
+if (-not [Hold]::RegisterHotKey([IntPtr]::Zero, 0x5A4A, 0x4003, 0x4A)) { exit 1 }
+Start-Sleep -Seconds 300
+'@
+$holderScript = Join-Path $env:TEMP "pane-smoke-hold-hotkey.ps1"
+Set-Content -Path $holderScript -Value $hold
+$holder = Start-Process powershell -PassThru -WindowStyle Hidden -ArgumentList @(
+    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$holderScript`""
+)
+Start-Sleep -Seconds 2
+if ($holder.HasExited) { throw "the smoke could not hold the chord" }
 $process = Start-Pane "stderr-hook.log" @("--install", "target/guests/packages/sample-settings")
 Send "{ENTER}"; Start-Sleep -Seconds 2   # Install; Greeting is selected
 Open-Extension "Settings sample"
@@ -882,7 +906,8 @@ $shots = "78-hook-unfocused", "79-hook-opened" | ForEach-Object { Join-Path $Out
 python "$PSScriptRoot/check_screenshot.py" --distinct @shots
 if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the hook-dispatched hotkey opened nothing" }
 Stop-Pane $process
-[void][Win]::UnregisterHotKey([IntPtr]::Zero, 0x5A4A)
+if (-not $holder.HasExited) { Stop-Process -Id $holder.Id -Force }
+Remove-Item -Force $holderScript -ErrorAction SilentlyContinue
 
 # A lone tap of the Windows key (#260): the recorder's session with the
 # hook holds the keys back from Windows while it listens, so the tap is

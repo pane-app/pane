@@ -1172,12 +1172,11 @@ mod extension {
         ToastStyle,
     };
 
-    use super::defaults;
     use super::feedback::RecordingWindow;
     use super::recording::{Done, RecordingSystemCommands};
     use super::repo_server;
     use super::rows::{manage, select_title, titles};
-    use super::{Appearance, capabilities, guests, microphone, volume};
+    use super::{Appearance, capabilities, microphone, volume};
 
     /// How long a launch or a guest call may take: compiling the guest
     /// once is included; a slow, busy machine is not.
