@@ -75,17 +75,22 @@ pub(crate) fn field_context() -> String {
 /// editing keys.
 pub(crate) fn bind_keys(cx: &mut App, _: &TextEditingKeys, keyboard: &Keyboard) {
     let context = field_context();
+    let previous = keyboard.binding(KeyboardAction::PreviousResult).id();
+    let next = keyboard.binding(KeyboardAction::NextResult).id();
     cx.bind_keys([
-        KeyBinding::new(
-            &keyboard.binding(KeyboardAction::NextResult).id(),
-            SelectNext,
-            Some(&context),
-        ),
-        KeyBinding::new(
-            &keyboard.binding(KeyboardAction::PreviousResult).id(),
-            SelectPrevious,
-            Some(&context),
-        ),
+        // The element's own Up would otherwise take the key after the
+        // selection's action hands it on: when the previous-result key is
+        // the history's (#206), `select_previous` propagates so the key
+        // listener that walks the recent queries — the one that sees the
+        // press itself — takes it, but the element's binding is still
+        // matched and dispatched after the action, and its handler
+        // consumes the key before the listener ever sees it. Suppressed
+        // here — registered before the selection's own binding, so that
+        // binding still wins — the key reaches the walk's listener as
+        // Enter does, the element binds no Enter of its own.
+        KeyBinding::new(&previous, gpui::NoAction, Some(&context)),
+        KeyBinding::new(&next, SelectNext, Some(&context)),
+        KeyBinding::new(&previous, SelectPrevious, Some(&context)),
     ]);
 }
 

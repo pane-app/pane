@@ -429,6 +429,17 @@ fn the_actions_panel_keeps_its_field_focused_and_says_its_entries(cx: &mut TestA
 #[gpui::test]
 fn the_actions_panel_over_root_search_says_its_entries(cx: &mut TestAppContext) {
     let (window, cx) = open_samples(cx);
+    // The panel tells of the row it is opened over: the blank query's
+    // order (#199) collates Pane's own rows among the commands, so the
+    // Rust sample is reached by its title, not its place.
+    let rows = view(&window, cx).rows;
+    let rust = rows
+        .iter()
+        .position(|row| row.title == "Rust sample")
+        .expect("the Rust sample is listed");
+    for _ in 0..rust {
+        cx.simulate_keystrokes("down");
+    }
     cx.simulate_keystrokes(OPEN_ACTIONS);
     cx.run_until_parked();
     assert!(cx.read_entity(&window, |window, _| window.actions_open()));

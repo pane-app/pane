@@ -132,16 +132,23 @@ impl LauncherWindow {
             return;
         }
         let keys = held.keys;
-        // Dispatching a key can re-render (a press changes what is drawn),
-        // so the replay waits for the end of this update, as GPUI's own
-        // deferred action dispatch does.
-        cx.defer_in(window, move |this, window, cx| {
-            this.held.replaying = true;
+        // Dispatching a key runs the window's listeners — an action's, a
+        // field's — each updating the window itself, so the replay must
+        // not run inside an update of it: deferred at the window's level,
+        // as GPUI's own action dispatch is, the keys are dispatched as
+        // the platform's own would be, in press order.
+        let entity = cx.entity();
+        window.defer(cx, move |window, cx| {
+            entity.update(cx, |this, cx| {
+                this.held.replaying = true;
+            });
             for keystroke in keys {
                 window.dispatch_keystroke(keystroke, cx);
             }
-            this.held.replaying = false;
-            cx.notify();
+            entity.update(cx, |this, cx| {
+                this.held.replaying = false;
+                cx.notify();
+            });
         });
     }
 

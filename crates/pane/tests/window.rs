@@ -7,7 +7,8 @@ use std::time::Duration;
 use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, prelude::*, px};
 use pane::LauncherWindow;
 use pane_core::{
-    CommandMatches, CommandRegistration, CommandWhen, Launcher, Runtime, Screen, Status,
+    CommandMatches, CommandRegistration, CommandWhen, Launcher, LauncherView, Runtime, Screen,
+    Status,
 };
 
 #[path = "../../pane-core/tests/support/platforms.rs"]
@@ -887,18 +888,21 @@ fn the_mouse_wheel_scrolls_away_until_the_rows_reload(cx: &mut TestAppContext) {
     let (window, cx) = open_launcher(cx, launcher.clone());
     cx.simulate_resize(gpui::size(gpui::px(640.), gpui::px(420.)));
     // An install that finishes after the user has moved on: it reloads root
-    // search in the background and keeps the selected row, the first.
+    // search in the background and keeps the selected row, the first. The
+    // blank query's order (#199) collates Pane's own rows among the
+    // commands, so the first row is Pane's install row — reached by title,
+    // as the "Row" commands no longer lead the list.
     let install = launcher.install_package(&folder);
     cx.foreground_executor()
         .block_on(launcher.activate_selected());
     launcher.back();
     redraw(&window, cx);
-    assert!(row_is_visible(cx, "row-Row 1"));
+    assert!(row_is_visible(cx, "row-Install extension from folder…"));
 
     wheel(cx, -400.);
     redraw(&window, cx);
     assert!(
-        !row_is_visible(cx, "row-Row 1"),
+        !row_is_visible(cx, "row-Install extension from folder…"),
         "redrawing does not undo the wheel"
     );
 
@@ -908,7 +912,7 @@ fn the_mouse_wheel_scrolls_away_until_the_rows_reload(cx: &mut TestAppContext) {
     assert_eq!((view.query(), view.selected), (Some(""), Some(0)));
     assert!(view.rows.iter().any(|row| row.title == "Say hello"));
     assert!(
-        row_is_visible(cx, "row-Row 1"),
+        row_is_visible(cx, "row-Install extension from folder…"),
         "the reloaded list shows the selected row again"
     );
 }
@@ -1264,6 +1268,15 @@ fn row_titles(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> Ve
     view.rows.into_iter().map(|row| row.title).collect()
 }
 
+/// The title of the row `view` selects, read by title — the blank
+/// query's order (#199) collates Pane's own rows among the commands, so
+/// a row's place is not stable.
+fn selected_title(view: &LauncherView) -> Option<&str> {
+    view.selected
+        .and_then(|selected| view.rows.get(selected))
+        .map(|row| row.title.as_str())
+}
+
 /// Whether root search's query field has keyboard focus.
 fn query_has_focus(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> bool {
     use gpui::Focusable;
@@ -1467,11 +1480,15 @@ fn assistive_technology_sees_the_search_field_and_the_selected_result(cx: &mut T
     node(&nodes, "ListBox", "Results");
     node(&nodes, "ListBoxOption", "TypeScript sample");
     // The search field keeps the focus whatever is selected (#132); the
-    // announcer says the selected result once typing has settled.
+    // announcer says the selected result once typing has settled. The
+    // blank query's order (#199) collates the commands by title, so the
+    // JavaScript sample is the first row before this query as after it:
+    // a selection that stayed on its row is not said again, and the move
+    // below is what names the row.
     assert_eq!(focused_label(cx).as_deref(), Some("Search"));
     typing_settles(cx);
+    assert_eq!(announcement(cx), "");
     let count = row_titles(&window, cx).len();
-    until_announced(cx, &format!("JavaScript sample, 1 of {count}"));
     cx.simulate_keystrokes("down");
     assert_eq!(focused_label(cx).as_deref(), Some("Search"));
     assert_eq!(announcement(cx), format!("TypeScript sample, 2 of {count}"));
@@ -1891,8 +1908,10 @@ fn reset_ranking_from_the_actions_panel_clears_that_result(cx: &mut TestAppConte
         "the uses were recorded"
     );
 
-    // The panel offers the reset, and Enter on it runs it once: the toast
-    // says the ranking was reset, and the panel closes.
+    // The panel offers the reset, and Enter on it runs it once: the
+    // status line says the ranking was reset (the reset is Pane's own
+    // action, which reports through the status line, not a toast), and
+    // the panel closes.
     cx.simulate_keystrokes(OPEN_ACTIONS);
     settle(&window, cx);
     assert!(
@@ -1909,8 +1928,8 @@ fn reset_ranking_from_the_actions_panel_clears_that_result(cx: &mut TestAppConte
         Status::Result("Ranking reset for Python".into())
     );
     assert!(
-        cx.debug_bounds("toast-success").is_some(),
-        "the toast is rendered"
+        cx.debug_bounds("status-result").is_some(),
+        "the status line is rendered"
     );
 
     // The entry went, and the provider's order is back for the query.
@@ -2809,17 +2828,21 @@ fn root_rows_select_under_the_moving_pointer_at_once(cx: &mut TestAppContext) {
     );
     let view = settle(&window, cx);
     settle_frames(cx);
-    assert_eq!(view.selected, Some(0));
+    // The blank query's order (#199) collates the commands by title, so
+    // the JavaScript sample is the first row: the Rust sample is the
+    // unselected row the pointer moves onto, and every row the test
+    // reads is read by its title, never by its place.
+    assert_eq!(selected_title(&view), Some("JavaScript sample"));
 
     let row = cx
-        .debug_bounds("row-JavaScript sample")
+        .debug_bounds("row-Rust sample")
         .expect("an unselected row");
     // The first event after the window shows only records where the
     // pointer is (a window appearing under a resting pointer gets one).
     arrive(cx, row.center());
     assert_eq!(
-        settle(&window, cx).selected,
-        Some(0),
+        selected_title(&settle(&window, cx)),
+        Some("JavaScript sample"),
         "the first event selected nothing"
     );
     cx.simulate_mouse_move(
@@ -2828,7 +2851,11 @@ fn root_rows_select_under_the_moving_pointer_at_once(cx: &mut TestAppContext) {
         Modifiers::none(),
     );
     let view = settle(&window, cx);
-    assert_eq!(view.selected, Some(1), "the pointer's movement selected it");
+    assert_eq!(
+        selected_title(&view),
+        Some("Rust sample"),
+        "the pointer's movement selected it"
+    );
     assert_eq!(settle_frames(cx), 0, "the root wash does not fade");
 
     // The footer's action follows what the pointer selected: Pane's own
@@ -2836,13 +2863,13 @@ fn root_rows_select_under_the_moving_pointer_at_once(cx: &mut TestAppContext) {
     let own = view
         .rows
         .iter()
-        .position(|row| !["Rust sample", "JavaScript sample"].contains(&row.title.as_str()))
-        .expect("Pane lists its own rows after the commands");
+        .position(|row| !matches!(row.title.as_str(), "Rust sample" | "JavaScript sample"))
+        .expect("Pane lists its own rows among the commands");
     let own_row = cx
         .debug_bounds(selector(&format!("row-{}", view.rows[own].title)))
         .expect("Pane's own row is drawn");
     cx.simulate_mouse_move(own_row.center(), None::<MouseButton>, Modifiers::none());
-    assert_eq!(settle(&window, cx).selected, Some(own));
+    assert_eq!(selected_title(&settle(&window, cx)), Some("Settings…"));
     let nodes = accessible_nodes(cx);
     assert!(
         !nodes
@@ -2851,14 +2878,14 @@ fn root_rows_select_under_the_moving_pointer_at_once(cx: &mut TestAppContext) {
         "the footer names the selected row's own action"
     );
     cx.simulate_mouse_move(row.center(), None::<MouseButton>, Modifiers::none());
-    assert_eq!(settle(&window, cx).selected, Some(1));
+    assert_eq!(selected_title(&settle(&window, cx)), Some("Rust sample"));
     node(&accessible_nodes(cx), "Button", "Open command");
 
     // Enter opens what the pointer selected.
     cx.simulate_keystrokes("enter");
     let view = settle(&window, cx);
     assert!(matches!(view.screen, Screen::Command));
-    assert_eq!(view.title, "JavaScript sample");
+    assert_eq!(view.title, "Rust sample");
     settle_frames(cx);
 
     // The opened command's items share root search's visuals (#100):

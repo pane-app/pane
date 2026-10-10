@@ -74,7 +74,8 @@ fn slow_package(sources: &Path) -> PathBuf {
 }
 
 /// Installs `folder` in `launcher`, answering once the install's guest
-/// check has, and back at root search.
+/// check has, and back at root search: shown afresh, which leaves the
+/// launcher idle, so the tests' "nothing ran" assertions start clean.
 fn install(cx: &mut TestAppContext, launcher: &Launcher, folder: &Path) {
     cx.foreground_executor()
         .block_on(launcher.install_package(folder));
@@ -84,6 +85,7 @@ fn install(cx: &mut TestAppContext, launcher: &Launcher, folder: &Path) {
         launcher.view().status
     );
     launcher.back();
+    launcher.show_root_search();
 }
 
 /// The window over `launcher`, on root search.
@@ -284,8 +286,9 @@ fn a_space_typed_while_the_query_could_still_be_an_alias_waits(cx: &mut TestAppC
     install(cx, &launcher, &calculator_folder());
     let folder = assembled_package("sample-query", &sources.path().join("query"));
     install(cx, &launcher, &folder);
+    let echo = format!("{}#echo", pane_core::PackageIdentity::local(&folder).unwrap().key());
     cx.foreground_executor()
-        .block_on(launcher.set_alias("echo", "ec").expect("“ec” is one word"));
+        .block_on(launcher.set_alias(&echo, "ec").expect("“ec” is one word"));
     let (window, cx) = open_launcher(cx, launcher);
 
     // "ec" is the alias, so the space could invoke it: held for the

@@ -104,6 +104,34 @@ fn open_sample<'a>(
     )
 }
 
+/// Moves the selection to the root row titled `title`, with the down
+/// key, as the blank query's order (#199) no longer puts any command
+/// first: the row is found by its title, never its place.
+fn select_row(
+    window: &gpui::Entity<LauncherWindow>,
+    cx: &mut VisualTestContext,
+    title: &str,
+) -> pane_core::LauncherView {
+    let view = settle(window, cx);
+    let index = view
+        .rows
+        .iter()
+        .position(|row| row.title == title)
+        .unwrap_or_else(|| panic!("the {title} row is listed"));
+    for _ in 0..index {
+        cx.simulate_keystrokes("down");
+    }
+    assert_eq!(
+        settle(window, cx)
+            .selected
+            .and_then(|selected| view.rows.get(selected))
+            .map(|row| row.title.as_str()),
+        Some(title),
+        "the down keys selected the {title} row"
+    );
+    view
+}
+
 /// The launcher window's handle, for liveness checks.
 fn handle_of(cx: &mut VisualTestContext) -> WindowHandle<LauncherWindow> {
     cx.update(|window, _| window.window_handle())
@@ -991,7 +1019,10 @@ fn a_form_still_submits_with_the_rebound_key_and_the_footer_button(cx: &mut Test
     let data = tempfile::tempdir().unwrap();
     let (window, cx) = open_sample(cx, Some(data.path()));
 
-    // Open the form, and rebind the invoke action to Ctrl+J.
+    // Open the form. The blank query's order (#199) collates Pane's own
+    // rows among the commands, so the Rust sample's row is reached by
+    // its title, not its place.
+    select_row(&window, cx, "Rust sample");
     cx.simulate_keystrokes("enter");
     settle(&window, cx);
     cx.simulate_keystrokes("down down down down enter");

@@ -91,6 +91,7 @@ impl World {
         fs::create_dir(&folder).unwrap();
         fs::write(folder.join("plan.txt"), "plan").unwrap();
         fs::write(folder.join("run plan.bat"), "@echo off").unwrap();
+        fs::create_dir(folder.join("notes")).unwrap();
         fs::write(folder.join("notes/todo.md"), "todo").unwrap();
         let runtime = Runtime::start().unwrap();
         let system = Arc::new(RecordingSystem::default());

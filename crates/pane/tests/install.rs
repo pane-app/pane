@@ -44,6 +44,34 @@ fn titles(view: &LauncherView) -> Vec<&str> {
     view.rows.iter().map(|row| row.title.as_str()).collect()
 }
 
+/// Moves the selection to the root row titled `title`, with the down key:
+/// the blank query's order (#199) collates Pane's own rows among the
+/// commands, so the row is found by its title, never its place.
+fn select_row(
+    window: &Entity<LauncherWindow>,
+    cx: &mut VisualTestContext,
+    title: &str,
+) -> LauncherView {
+    let view = settle(window, cx);
+    let index = view
+        .rows
+        .iter()
+        .position(|row| row.title == title)
+        .unwrap_or_else(|| panic!("the {title} row is listed"));
+    for _ in 0..index {
+        cx.simulate_keystrokes("down");
+    }
+    assert_eq!(
+        settle(window, cx)
+            .selected
+            .and_then(|selected| view.rows.get(selected))
+            .map(|row| row.title.as_str()),
+        Some(title),
+        "the down keys selected the {title} row"
+    );
+    view
+}
+
 /// Previews the package in `folder` in the window, as the folder Settings'
 /// picker chose is previewed (#168), or as `pane --install` names one.
 fn choose_folder(
@@ -346,9 +374,12 @@ fn an_installed_package_is_reloaded_from_the_extension_list(cx: &mut TestAppCont
     assert_eq!(view.status, Status::Result("Reloaded Hello".into()));
     assert!(cx.debug_bounds("status-result").is_some());
 
-    // Pane stayed open; the command now runs the new code.
+    // Pane stayed open; the command now runs the new code. The blank
+    // query's order (#199) collates Pane's own rows among the commands,
+    // so "Say hello" is reached by its title, not its place.
     cx.simulate_keystrokes("escape");
     settle(&window, cx);
+    select_row(&window, cx, "Say hello");
     cx.simulate_keystrokes("enter");
     assert_eq!(settle(&window, cx).title, "JavaScript sample");
     cx.simulate_keystrokes("enter");
