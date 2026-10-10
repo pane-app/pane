@@ -433,9 +433,10 @@ fn bundle_command(
             "--external:pane:*",
             "--main-fields=module,main",
             "--log-level=warning",
-            "--outfile",
         ])
-        .arg(bundle);
+        // esbuild takes the output path attached to the flag, never as the
+        // argument after it.
+        .arg(format!("--outfile={}", bundle.display()));
     crate::build::without_pane_build_environment(&mut command);
     match job.run_command(command, "esbuild --bundle", None) {
         BuildOutcome::Built => None,
