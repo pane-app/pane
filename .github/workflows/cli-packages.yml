@@ -28,7 +28,11 @@ on:
   workflow_dispatch:
   push:
     paths:
+      # `packages/extension-template` is the template repository's content
+      # (#223), not an npm package this workflow builds, so it does not
+      # count.
       - "packages/**"
+      - "!packages/extension-template/**"
       - "tools/componentize-js/**"
       - "crates/**"
       - "wit/**"
