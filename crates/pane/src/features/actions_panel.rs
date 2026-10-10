@@ -816,12 +816,7 @@ impl LauncherWindow {
 
     /// Alt+Down in the panel (#258): the selection moves five entries at
     /// a time, over the ones that can run, staying put at the ends.
-    fn actions_five_next(
-        &mut self,
-        _: &SelectNextFive,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn actions_five_next(&mut self, _: &SelectNextFive, _: &mut Window, cx: &mut Context<Self>) {
         self.move_action_five(true, cx);
     }
 
@@ -938,10 +933,7 @@ impl LauncherWindow {
             // then the group above it, then the first entry of all.
             match groups.iter().rposition(|at| *at <= selected) {
                 Some(at) if groups[at] < selected => groups[at],
-                Some(at) => at
-                    .checked_sub(1)
-                    .map(|above| groups[above])
-                    .unwrap_or(0),
+                Some(at) => at.checked_sub(1).map(|above| groups[above]).unwrap_or(0),
                 None => 0,
             }
         };

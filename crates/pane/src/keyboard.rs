@@ -149,9 +149,7 @@ fn launcher_binding(id: &str, action: KeyboardAction) -> KeyBinding {
         KeyboardAction::PreviousSection => {
             KeyBinding::new(id, SelectPreviousSection, Some(KEY_CONTEXT))
         }
-        KeyboardAction::NextSection => {
-            KeyBinding::new(id, SelectNextSection, Some(KEY_CONTEXT))
-        }
+        KeyboardAction::NextSection => KeyBinding::new(id, SelectNextSection, Some(KEY_CONTEXT)),
         KeyboardAction::InvokeSelectedAction => KeyBinding::new(id, Confirm, Some(KEY_CONTEXT)),
         KeyboardAction::Back => KeyBinding::new(id, Back, Some(KEY_CONTEXT)),
         KeyboardAction::BackspaceBack => {

@@ -353,9 +353,7 @@ impl LauncherWindow {
         // A section jump landed on a row: the section's label scrolls
         // into view with it (#258), as the launcher's own list reveals
         // the jump's landing.
-        let jumped = self
-            .take_jump_reveal()
-            .filter(|row| Some(*row) == selected);
+        let jumped = self.take_jump_reveal().filter(|row| Some(*row) == selected);
         // The selected file's detail, read again when another is selected.
         let details = selected.and_then(|index| {
             let id = &view.rows[index].id;

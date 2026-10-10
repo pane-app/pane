@@ -121,7 +121,12 @@ fn command(id: &str, title: &str) -> CommandRegistration {
 /// `count` root commands, "Command 01" and so on, never run.
 fn numbered(count: usize) -> Vec<CommandRegistration> {
     (1..=count)
-        .map(|index| command(&format!("command-{index:02}"), &format!("Command {index:02}")))
+        .map(|index| {
+            command(
+                &format!("command-{index:02}"),
+                &format!("Command {index:02}"),
+            )
+        })
         .collect()
 }
 
@@ -172,8 +177,7 @@ fn open_installed<'a>(
     data: &Path,
     name: &str,
 ) -> (Entity<LauncherWindow>, &'a mut VisualTestContext) {
-    let launcher =
-        Launcher::with_packages(Runtime::start(), commands, data.join("extensions"));
+    let launcher = Launcher::with_packages(Runtime::start(), commands, data.join("extensions"));
     install(&launcher, name);
     let (window, cx) = open_launcher(cx, launcher);
     settle(&window, cx);
@@ -189,8 +193,7 @@ fn open_preview<'a>(
 ) -> (Entity<LauncherWindow>, &'a mut VisualTestContext) {
     let sources = tempfile::tempdir().unwrap();
     let folder = packages::assembled_package(name, &sources.path().join(name));
-    let launcher =
-        Launcher::with_packages(Runtime::start(), vec![], data.join("extensions"));
+    let launcher = Launcher::with_packages(Runtime::start(), vec![], data.join("extensions"));
     let preview = folder.clone();
     cx.executor().allow_parking();
     cx.update(pane::bind_keys);
@@ -301,7 +304,10 @@ fn press_held(cx: &mut VisualTestContext, key: &'static str) {
 fn select(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, title: &str) {
     for _ in 0..40 {
         let view = settle(window, cx);
-        if view.selected.is_some_and(|index| view.rows[index].title == title) {
+        if view
+            .selected
+            .is_some_and(|index| view.rows[index].title == title)
+        {
             return;
         }
         cx.simulate_keystrokes("down");
@@ -313,7 +319,7 @@ fn select(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, title: &s
 /// between the search header and the footer: a label scrolled past is
 /// drawn no further down than the header, one scrolled into view is
 /// (#258).
-fn in_view(cx: &mut VisualTestContext, selector: &str) -> bool {
+fn in_view(cx: &mut VisualTestContext, selector: &'static str) -> bool {
     let Some(label) = cx.debug_bounds(selector) else {
         return false;
     };
@@ -326,15 +332,17 @@ fn in_view(cx: &mut VisualTestContext, selector: &str) -> bool {
 /// level without clearing anything — and with text in the field, the
 /// field's own Backspace deletes it, the command staying open.
 #[gpui::test]
-fn backspace_backs_out_of_an_empty_command_search_but_not_one_with_text(
-    cx: &mut TestAppContext,
-) {
+fn backspace_backs_out_of_an_empty_command_search_but_not_one_with_text(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
     let (window, cx) = open_command_search(cx, data.path());
 
     cx.simulate_keystrokes("backspace");
     let view = settle(&window, cx);
-    assert!(matches!(view.screen, Screen::Root { .. }), "{:?}", view.screen);
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "{:?}",
+        view.screen
+    );
 
     // Reopened, with text: the field keeps the key.
     cx.simulate_keystrokes("escape");
@@ -359,9 +367,7 @@ fn backspace_backs_out_of_an_empty_command_search_but_not_one_with_text(
 /// details screen — screens no text field has focus on — and a repeat of
 /// a held key backs out of nothing.
 #[gpui::test]
-fn backspace_backs_out_of_a_command_list_a_preview_and_a_details_screen(
-    cx: &mut TestAppContext,
-) {
+fn backspace_backs_out_of_a_command_list_a_preview_and_a_details_screen(cx: &mut TestAppContext) {
     // The command's own list: no text field in focus.
     let (window, cx) = open_command_list(cx);
 
@@ -373,7 +379,11 @@ fn backspace_backs_out_of_a_command_list_a_preview_and_a_details_screen(
     // The press is.
     cx.simulate_keystrokes("backspace");
     let view = settle(&window, cx);
-    assert!(matches!(view.screen, Screen::Root { .. }), "{:?}", view.screen);
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "{:?}",
+        view.screen
+    );
 
     // A package preview, over a window of its own.
     let data = tempfile::tempdir().unwrap();
@@ -386,7 +396,11 @@ fn backspace_backs_out_of_a_command_list_a_preview_and_a_details_screen(
     );
     preview_cx.simulate_keystrokes("backspace");
     let view = settle(&preview, preview_cx);
-    assert!(matches!(view.screen, Screen::Root { .. }), "{:?}", view.screen);
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "{:?}",
+        view.screen
+    );
 
     // A details screen of the extension list, and the list itself.
     let data = tempfile::tempdir().unwrap();
@@ -410,7 +424,11 @@ fn backspace_backs_out_of_a_command_list_a_preview_and_a_details_screen(
     );
     cx.simulate_keystrokes("backspace");
     let view = settle(&window, cx);
-    assert!(matches!(view.screen, Screen::Root { .. }), "{:?}", view.screen);
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "{:?}",
+        view.screen
+    );
 }
 
 /// Backspace does nothing in root search — an empty query has nothing to
@@ -420,7 +438,12 @@ fn backspace_backs_out_of_a_command_list_a_preview_and_a_details_screen(
 fn backspace_does_nothing_in_root_search_and_never_from_a_form(cx: &mut TestAppContext) {
     let (window, cx) = open_with(cx, numbered(3));
     let view = settle(&window, cx);
-    assert_eq!(view.screen, Screen::Root { query: String::new() });
+    assert_eq!(
+        view.screen,
+        Screen::Root {
+            query: String::new()
+        }
+    );
 
     cx.simulate_keystrokes("backspace backspace");
     let view = settle(&window, cx);
@@ -465,7 +488,9 @@ fn a_held_backspace_that_empties_a_field_does_not_back_out(cx: &mut TestAppConte
     let view = settle(&window, cx);
     assert_eq!(
         view.screen,
-        Screen::CommandSearch { query: String::new() },
+        Screen::CommandSearch {
+            query: String::new()
+        },
         "the repeats backed out of nothing"
     );
     assert_eq!(field_text(&window, cx), "");
@@ -473,7 +498,11 @@ fn a_held_backspace_that_empties_a_field_does_not_back_out(cx: &mut TestAppConte
     // A fresh press backs out.
     cx.simulate_keystrokes("backspace");
     let view = settle(&window, cx);
-    assert!(matches!(view.screen, Screen::Root { .. }), "{:?}", view.screen);
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "{:?}",
+        view.screen
+    );
 }
 
 /// Alt+Down and Alt+Up move root search's selection five rows at a time,
@@ -574,9 +603,7 @@ fn a_command_search_moves_five_rows(cx: &mut TestAppContext) {
 /// there is no next section, and the section's label scrolling into view
 /// over the row the jump lands on.
 #[gpui::test]
-fn ctrl_arrows_cross_root_searches_sections_scrolling_the_label_into_view(
-    cx: &mut TestAppContext,
-) {
+fn ctrl_arrows_cross_root_searches_sections_scrolling_the_label_into_view(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
     let commands: Vec<_> = (1..=20)
         .map(|index| command(&format!("command-{index:02}"), &format!("6*7 {index:02}")))
@@ -609,7 +636,10 @@ fn ctrl_arrows_cross_root_searches_sections_scrolling_the_label_into_view(
     cx.simulate_keystrokes("ctrl-up");
     let view = settle(&window, cx);
     assert_eq!(selected_title(&view), "6*7 01");
-    assert!(in_view(cx, "section-Results"), "the label scrolled into view");
+    assert!(
+        in_view(cx, "section-Results"),
+        "the label scrolled into view"
+    );
 
     // From the section's first row, up: the "Calculator" answer, and
     // nothing above it to reach.
@@ -849,12 +879,18 @@ fn a_rebound_back_a_level_and_section_jump_take_effect(cx: &mut TestAppContext) 
     let view = settle(&window, cx);
     assert_eq!(
         view.screen,
-        Screen::CommandSearch { query: String::new() },
+        Screen::CommandSearch {
+            query: String::new()
+        },
         "the Backspace no longer backs out"
     );
     cx.simulate_keystrokes("f9");
     let view = settle(&window, cx);
-    assert!(matches!(view.screen, Screen::Root { .. }), "{:?}", view.screen);
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "{:?}",
+        view.screen
+    );
 
     // Root search's one section: F6 jumps to the last row, Ctrl+Down —
     // the key it superseded — no longer jumps at all.

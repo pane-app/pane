@@ -122,8 +122,7 @@ fn navigation_label(navigation: NavigationBindings, name: &str) -> String {
     let Some((previous, next)) = navigation.bindings() else {
         return name.to_owned();
     };
-    let shown =
-        |id: &str| Binding::parse(id).map_or_else(|_| id.to_owned(), |b| b.to_string());
+    let shown = |id: &str| Binding::parse(id).map_or_else(|_| id.to_owned(), |b| b.to_string());
     let mut keys = vec![shown(previous), shown(next)];
     if let Some((left, right)) = navigation.left_right() {
         keys.push(shown(left));

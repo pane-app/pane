@@ -20,8 +20,8 @@ use std::path::Path;
 use gpui::{
     App, ClipboardItem, Context, Div, EntityInputHandler, FocusHandle, Focusable, Hsla,
     KeyDownEvent, MouseMoveEvent, ObjectFit, PathPromptOptions, Pixels, Point, Role,
-    ScrollWheelEvent, SharedString, Size, Stateful, Subscription, Window, div, img, prelude::*,
-    px, relative,
+    ScrollWheelEvent, SharedString, Size, Stateful, Subscription, Window, div, img, prelude::*, px,
+    relative,
 };
 use pane_core::changes::Changes;
 use pane_core::feedback::WindowRequest;
@@ -722,7 +722,6 @@ impl LauncherWindow {
     fn pins_as_first_section(&self, cx: &App) -> usize {
         let settings = crate::settings::shared(cx).read(cx);
         let vertical = settings.pinned_layout() == pane_core::PinnedLayout::Vertical;
-        drop(settings);
         if vertical && quick_slots::home_shown(&self.launcher.view()) {
             self.launcher.quick_slots().len()
         } else {

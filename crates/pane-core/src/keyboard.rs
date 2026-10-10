@@ -1111,10 +1111,7 @@ mod tests {
         keyboard
             .checked_set(KeyboardAction::BackspaceBack, binding("backspace"))
             .unwrap();
-        assert_eq!(
-            Keyboard::parse(&keyboard.recorded()).unwrap(),
-            keyboard
-        );
+        assert_eq!(Keyboard::parse(&keyboard.recorded()).unwrap(), keyboard);
         // Every other action is refused the plain Backspace, and so is
         // Back a level itself for Shift+Backspace, which a field's own
         // Backspace does not cover.
