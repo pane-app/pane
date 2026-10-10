@@ -284,15 +284,16 @@ async fn wizer_init(
     // 0003 patch for the async half of this.
     wasmtime_wasi::p3::add_to_linker(&mut linker)?;
     // The p3 bindings register each resource once, in the interface that
-    // owns it (`wasi:cli/terminal-input`, `wasi:cli/terminal-output`); the
-    // interfaces that `use` it (terminal-stdin, terminal-stdout,
-    // terminal-stderr) leave the aliased export to Wasmtime's eq-import
-    // rule, which holds only while nothing else supplies it — and the trap
-    // stubber below supplies every resource it finds with a host type of
-    // its own. Wasmtime 47's linker never let it reach the aliases: its
-    // bindgen registered them in every using instance itself. Register them
-    // here, with the same host types the bindings map their owners to, so
-    // the stubber finds them defined and leaves them alone.
+    // owns it (`wasi:cli/terminal-input`, `wasi:cli/terminal-output`,
+    // `wasi:filesystem/types`); the interfaces that `use` it
+    // (terminal-stdin, terminal-stdout, terminal-stderr, preopens) leave
+    // the aliased export to Wasmtime's eq-import rule, which holds only
+    // while nothing else supplies it — and the trap stubber below supplies
+    // every resource it finds with a host type of its own. Wasmtime 47's
+    // linker never let it reach the aliases: its bindgen registered them in
+    // every using instance itself. Register them here, with the same host
+    // types the bindings map their owners to, so the stubber finds them
+    // defined and leaves them alone.
     let terminal_input = ResourceType::host::<wasmtime_wasi::p3::cli::TerminalInput>();
     let terminal_output = ResourceType::host::<wasmtime_wasi::p3::cli::TerminalOutput>();
     linker.instance("wasi:cli/terminal-stdin@0.3.0")?.resource(
@@ -308,6 +309,11 @@ async fn wizer_init(
     linker.instance("wasi:cli/terminal-stderr@0.3.0")?.resource(
         "terminal-output",
         terminal_output,
+        |_, _| Ok(()),
+    )?;
+    linker.instance("wasi:filesystem/preopens@0.3.0")?.resource(
+        "descriptor",
+        ResourceType::host::<wasmtime_wasi::filesystem::Descriptor>(),
         |_, _| Ok(()),
     )?;
     register_module_loader(&mut linker, resolver.clone())?;
