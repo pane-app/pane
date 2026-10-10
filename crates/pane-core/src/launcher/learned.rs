@@ -453,10 +453,7 @@ impl Launcher {
         // Nothing runs while the record cannot be read: it is never
         // replaced (see `choices`), and the page's entry says so.
         let refused = state.learned.unreadable().map(str::to_owned);
-        let reset = refused
-            .is_none()
-            .then(|| state.learned.chosen.forget_all())
-            .flatten();
+        let reset = refused.is_none().then(|| state.learned.chosen.forget_all());
         if reset.is_some() {
             super::reranked(state);
             self.changed();
