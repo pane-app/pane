@@ -1949,7 +1949,7 @@ fn reset_ranking_from_the_actions_panel_clears_that_result(cx: &mut TestAppConte
     // for, as the Settings' reset is.
     let record = data.path().join("extensions/learned.json");
     until(&window, cx, |_| {
-        std::fs::read_to_string(&record).is_some_and(|text| !text.contains("python-Python312"))
+        std::fs::read_to_string(&record).is_ok_and(|text| !text.contains("python-Python312"))
     });
     cx.simulate_keystrokes("escape");
     settle(&window, cx);
