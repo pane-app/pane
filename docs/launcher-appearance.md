@@ -44,7 +44,10 @@ dark/glass.
 
 The retained `PANE_MATERIAL=glass` path requests desktop composition on
 Windows/macOS and normalizes to opaque on Linux; the Appearance page says
-so under the material choice where it happens. On Windows, the material's
+so under the material choice where it happens. On macOS the request reaches
+the fork's under-window vibrancy material (see [docs/gpui-fork.md](gpui-fork.md));
+no suppression check runs there, and the page's caveat that a glass request
+is not proof of blur still applies. On Windows, the material's
 construction reads the OS build, [transparency setting](https://learn.microsoft.com/en-us/uwp/api/windows.ui.viewmanagement.uisettings.advancedeffectsenabled)
 and [high-contrast setting](https://learn.microsoft.com/en-us/uwp/api/windows.ui.viewmanagement.accessibilitysettings.highcontrast).
 Builds below 17763, disabled transparency, enabled high contrast, or a
@@ -67,7 +70,10 @@ the panel radius, a 64-pixel query region, minimum 44-pixel rows,
 28-pixel tiles and a minimum 50-pixel footer. The reference's 18-pixel
 panel radius shows where the window's corners are transparent (Linux's
 desktop shows through the curve) or platform-rounded (macOS's authored
-curve stands until #66 validates native materials); on Windows the panel
+curve stands over the window's vibrancy, which the fork's under-window
+material now requests — see [docs/gpui-fork.md](gpui-fork.md); native macOS
+material validation is outstanding in
+[docs/launcher-ui-validation.md](launcher-ui-validation.md)); on Windows the panel
 fills the window to its edges and the Desktop Window Manager rounds the
 window's own corners (`pane::prefer_rounded_window_corners`), so neither
 the acrylic frost nor the opaque surface shows as a plate behind the

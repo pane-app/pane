@@ -38,7 +38,9 @@ not run and keep final validation open.
 
 The user subsequently scoped execution to Windows first, with a final CI run on
 every OS after integration. Native macOS/Linux validation is deferred; it is not
-a prerequisite for completing this Windows-focused implementation pass.
+a prerequisite for completing this Windows-focused implementation pass. The
+2026-10-10 night pass had no macOS or Linux desktop connected either;
+macOS/Linux native validation remains open.
 
 ## Current result
 
@@ -160,6 +162,48 @@ queries. Those suppressed configurations were not exercised natively here, and
 no system setting was changed. Standard 96-DPI display coverage only; scaled
 displays, native IME and screen-reader operation remain not run. Native macOS
 and Linux validation remains deferred under the user's Windows-first scope.
+
+### macOS vibrancy (#66)
+
+The correction: the fork's `blurred_view_init_with_frame` now selects
+`NSVisualEffectMaterial::UnderWindowBackground` with behind-window blending
+and an active state, replacing `Selection`, which on macOS 26+ no longer
+vends the `CABackdropLayer` that `remove_layer_background` walks and left
+blur requests rendered with no blur. `blurred_view_update_layer` lays an
+opaque black base under the backdrop sublayer so Mission Control and Spaces
+snapshots read as a solid dark surface. Integrated through fork revision
+`beb5a6dada242a4aad9f972546021a6fb6c869ba` (above
+`70ed267181dc56e4739d5782eb56fae51a2afd29`, which carries #251's empty-copy
+propagation for the in-flight launcher-polish PR), with all four Pane pins
+and the lockfile's 19 source entries moved together.
+
+The regression seams: the fork's two new macOS tests — one reading
+`material`/`blendingMode`/`state` back from the real registered subclass,
+one exercising the real layer-tree function for the snapshot base — run by
+the release matrix's macos-renderer job on macos-15, and the app-side macOS
+policy test in `crates/pane/src/ui/material.rs` (a glass request stands and
+asks for the blurred window appearance).
+
+What CI establishes: compile on all three operating systems in the quick
+tier, macOS compile via the verify tier's Check leg, and — post-merge, on
+real macOS runners — the two material tests and the macOS default-startup
+smoke exercising the default-glass startup path. What it does NOT establish,
+listed as outstanding native work, not run: dark and light desktop vibrancy
+against a known external edge pattern with opaque controls,
+text/selection/focus readability, window movement/resizing and
+activation-deactivation, standard/scaled or Retina displays,
+reduced-transparency behavior in a controlled environment, and native
+IME/assistive-technology operation. No macOS display was connected
+during this implementation pass (2026-10-10); nothing native was faked.
+
+### Repeat the macOS checks
+
+The macOS analogue of the Windows capture workflow: run
+`PANE_THEME=dark PANE_MATERIAL=glass cargo run -p pane` over a controlled
+external background with known sharp edges, compare the light/dark
+background response and an opaque control, and record OS version, display
+scaling and settings — mirroring the Windows evidence rules at the top of
+this file.
 
 ## Repeat the Windows checks
 

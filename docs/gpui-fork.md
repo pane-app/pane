@@ -1,10 +1,11 @@
 # Maintained GPUI CE dependency
 
 Pane uses [hoangvu12/gpui-ce](https://github.com/hoangvu12/gpui-ce), branch
-`pane/source-over-alpha`, to carry the Windows alpha correction and macOS startup ABI repair required by
+`pane/source-over-alpha`, to carry the Windows alpha correction, the macOS
+startup ABI repair and the under-window vibrancy material selection required by
 [#63](https://github.com/pane-app/pane/issues/63), under
 [#61](https://github.com/pane-app/pane/issues/61). Cargo uses an immutable commit,
-not the branch tip: `5d27954ce5305447bb97d1d7b89b0db9b7a2c59c`. All four declarations in `crates/pane/Cargo.toml` (including
+not the branch tip: `beb5a6dada242a4aad9f972546021a6fb6c869ba`. All four declarations in `crates/pane/Cargo.toml` (including
 the test dependency) move together. The fork's internal path dependencies resolve
 to that same Git source, preserving one GPUI type identity across renderer,
 platforms and editable controls. `Cargo.lock` records the full closure, and
@@ -24,9 +25,9 @@ The Windows correction changes ordinary scene blending and path-sprite destinati
 additive to source-over (`As + Ad * (1 - As)`). RGB behavior is unchanged.
 Path rasterization already uses source-over and subpixel text intentionally does
 not write alpha; neither needs a patch. CE already has in-window blur support;
-no additional Zui blur engine is imported. macOS still selects the old Selection
-material; its material change and native verification belong to later work.
-No Linux compositor integration is added.
+no additional Zui blur engine is imported. macOS now selects the under-window
+vibrancy material, adapted from Zui (see the macOS section below). No Linux
+compositor integration is added.
 
 This renderer correction alone does not establish useful native glass. The
 prototype also removed outer panel shadows that obscured the desktop. Its branch,
@@ -150,6 +151,47 @@ its full 15-test command. Windows source-over code and historical alpha evidence
 are unchanged; deny.toml already permits the same maintained repository.
 This bounded ABI repair changes no material selection or blur policy and does
 not complete #66 or establish native desktop-blur quality.
+
+## macOS under-window vibrancy material (Pane #66)
+
+The pin `beb5a6dada242a4aad9f972546021a6fb6c869ba` selects
+`NSVisualEffectMaterial::UnderWindowBackground` with behind-window blending
+in the fork's `blurred_view_init_with_frame`, replacing `Selection`: on
+macOS 26+, `Selection` no longer vends the `CABackdropLayer` that
+`remove_layer_background` walks, so a blur request rendered with no blur at
+all. `blurred_view_update_layer` additionally lays an opaque black base under
+the backdrop sublayer, so Mission Control and Spaces window snapshots (which
+omit backdrop layers) read as a solid dark surface rather than fully
+transparent glass. The correction is adapted from Zui's
+`blurred_view_init_with_frame` — the wingleeio/zed GPUI lineage, read from
+Zui's current `crates/gpui_macos/src/window.rs` (the spec's `ec16c62b`
+evidence anchor is no longer fetchable); only the material selection and its
+snapshot base are adapted, no Zui blur engine or other Zui change.
+
+Two fork tests pin the seam. One reads `material`, `blendingMode` and `state`
+back from the real registered subclass; the other exercises the real
+layer-tree function, checking the root layer holds the opaque black base
+while the recursed sublayer stays cleared:
+
+```sh
+cargo +1.98.1 test --locked -j1 -p gpui_ce_macos --features font-kit --lib blurred_view
+cargo +1.98.1 test --locked -j1 -p gpui_ce_macos --features font-kit --lib remove_layer_background_clears_cgcolor_recursively
+```
+
+The release matrix's macos-renderer job runs both on macos-15 against the
+pinned revision (and the windows-renderer job now also derives its fork
+checkout from that pin, replacing its hardcoded revision), the verify tier's
+Check (macos-15) compiles the fork, and the macOS default-startup smoke
+exercises the default-glass startup path post-merge. None of this establishes
+native vibrancy quality: the dark/light desktop-blur validation with an
+external edge pattern, window movement/resize/activation, scaled/Retina
+displays and reduced-transparency behavior remain outstanding native work,
+recorded in [docs/launcher-ui-validation.md](launcher-ui-validation.md).
+
+The pin now sits above `70ed267181dc56e4739d5782eb56fae51a2afd29` (Pane
+#251's empty-copy propagation, consumed by the in-flight launcher-polish
+PR), carrying every prior fix forward as one superset. The Windows
+source-over correction and its regression coverage are unchanged.
 
 ## Pop-up tracking area return type
 
