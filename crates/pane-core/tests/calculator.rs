@@ -223,6 +223,12 @@ fn the_answer_is_listed_above_the_results_found_by_title() {
     );
     install(&launcher, &sums);
     launcher.back();
+    // The install leaves the new command selected on the blank query; a
+    // fresh visit has the first row, which is what the checks below start
+    // from. (The publication of a query's list keeps a selection that is
+    // not the first row, by its id — #201's rule — so the answer is the
+    // first row only once nothing else holds the selection.)
+    launcher.select(0);
 
     search(&launcher, "1 + 1");
 
@@ -322,6 +328,8 @@ fn an_answer_is_presented_with_its_query_under_its_commands_title() {
     );
     install(&launcher, &sums);
     launcher.back();
+    // As above: the checks start from the first row, a fresh visit's.
+    launcher.select(0);
 
     search(&launcher, "1 + 1");
     let (view, presentation) = launcher.presented_view();
@@ -405,13 +413,15 @@ fn a_row_the_user_moved_to_stays_selected_when_the_answers_arrive() {
 
     // The list is held while the calculator answers (#201): a row the
     // user moves to on it stays selected when the list is published.
+    // The blank query lists Pane's rows in the no-query order (#199), so
+    // moving down one lands on the Git row.
     let pending = launcher.set_query("install");
     launcher.move_selection(1);
     block_on(pending);
 
     assert_eq!(
         selected_title(&launcher).as_deref(),
-        Some("Install extension from npm…")
+        Some("Install extension from Git…")
     );
 }
 
@@ -441,7 +451,6 @@ fn a_query_typed_one_key_at_a_time_asks_the_calculator_once() {
     let dirs = Dirs::new();
     let runtime = dirs.runtime();
     let launcher = dirs.launcher(runtime.clone());
-    install(&launcher, &calculator());
     launcher.back();
 
     // Ten characters, one key at a time at typing speed: each keystroke

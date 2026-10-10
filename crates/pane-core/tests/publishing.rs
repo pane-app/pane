@@ -230,12 +230,13 @@ fn a_late_answer_moves_the_selection_from_the_first_row() {
     let (launcher, clock) = slow_launcher(&dirs, &[sums(&dirs), drills(&dirs)]);
 
     // The budget publishes the query's metadata list, its first row
-    // selected.
+    // selected. The static rows rank in the comparator's order (#197):
+    // "Drill 0 + 0" collates before "Sum 0 + 0".
     let answered = search_in_background(&launcher, "0 + 0");
     clock.advance(Duration::from_millis(200));
     assert!(launcher.list_published());
-    assert_eq!(titles(&launcher), ["Sum 0 + 0", "Drill 0 + 0"]);
-    assert_eq!(selected_title(&launcher).as_deref(), Some("Sum 0 + 0"));
+    assert_eq!(titles(&launcher), ["Drill 0 + 0", "Sum 0 + 0"]);
+    assert_eq!(selected_title(&launcher).as_deref(), Some("Drill 0 + 0"));
 
     // The late answer's row goes first: with the first row selected, the
     // selection moves to the new first row.
@@ -243,7 +244,7 @@ fn a_late_answer_moves_the_selection_from_the_first_row() {
     clock.advance(Duration::from_millis(16));
     assert_eq!(
         titles(&launcher),
-        ["Slow answer", "Sum 0 + 0", "Drill 0 + 0"]
+        ["Slow answer", "Drill 0 + 0", "Sum 0 + 0"]
     );
     assert_eq!(selected_title(&launcher).as_deref(), Some("Slow answer"));
 }
@@ -255,10 +256,10 @@ fn a_row_the_user_moved_to_stays_selected_when_a_late_answer_arrives() {
 
     let answered = search_in_background(&launcher, "0 + 0");
     clock.advance(Duration::from_millis(200));
-    assert_eq!(titles(&launcher), ["Sum 0 + 0", "Drill 0 + 0"]);
+    assert_eq!(titles(&launcher), ["Drill 0 + 0", "Sum 0 + 0"]);
     // The user moves the selection.
     launcher.move_selection(1);
-    assert_eq!(selected_title(&launcher).as_deref(), Some("Drill 0 + 0"));
+    assert_eq!(selected_title(&launcher).as_deref(), Some("Sum 0 + 0"));
 
     // The late answer's section never takes the selection from a row the
     // user moved to.
@@ -266,9 +267,9 @@ fn a_row_the_user_moved_to_stays_selected_when_a_late_answer_arrives() {
     clock.advance(Duration::from_millis(16));
     assert_eq!(
         titles(&launcher),
-        ["Slow answer", "Sum 0 + 0", "Drill 0 + 0"]
+        ["Slow answer", "Drill 0 + 0", "Sum 0 + 0"]
     );
-    assert_eq!(selected_title(&launcher).as_deref(), Some("Drill 0 + 0"));
+    assert_eq!(selected_title(&launcher).as_deref(), Some("Sum 0 + 0"));
 }
 
 #[test]
@@ -363,7 +364,7 @@ fn a_late_answer_merges_without_ranking_the_static_rows_again() {
     // provider's answer, ranking the static rows once for the query.
     let answered = search_in_background(&merged, "0 + 0");
     clock.advance(Duration::from_millis(200));
-    assert_eq!(titles(&merged), ["Sum 0 + 0", "Drill 0 + 0"]);
+    assert_eq!(titles(&merged), ["Drill 0 + 0", "Sum 0 + 0"]);
     let ranked = merged.root_rankings();
 
     // The late answer merges into the published list without ranking the
@@ -372,7 +373,7 @@ fn a_late_answer_merges_without_ranking_the_static_rows_again() {
     answered.recv_timeout(Duration::from_secs(240)).unwrap();
     clock.advance(Duration::from_millis(16));
     assert_eq!(merged.root_rankings(), ranked, "the merge ranked nothing");
-    assert_eq!(titles(&merged), ["Slow answer", "Sum 0 + 0", "Drill 0 + 0"]);
+    assert_eq!(titles(&merged), ["Slow answer", "Drill 0 + 0", "Sum 0 + 0"]);
     assert_eq!(selected_title(&merged).as_deref(), Some("Slow answer"));
 
     // The list is what a full re-rank of the same rows gives: a second
@@ -381,7 +382,7 @@ fn a_late_answer_merges_without_ranking_the_static_rows_again() {
     let other = Dirs::new();
     let (full, _clock) = slow_launcher(&other, &[sums(&other), drills(&other)]);
     search(&full, "0 + 0");
-    assert_eq!(titles(&full), ["Slow answer", "Sum 0 + 0", "Drill 0 + 0"]);
+    assert_eq!(titles(&full), ["Slow answer", "Drill 0 + 0", "Sum 0 + 0"]);
     assert_eq!(selected_title(&full).as_deref(), Some("Slow answer"));
 }
 

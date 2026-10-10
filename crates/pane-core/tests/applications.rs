@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
 use pane_core::applications::{Application, Applications};
@@ -51,6 +51,10 @@ struct FakeSystem {
     /// While true, listing waits.
     held: Mutex<bool>,
     released: Condvar,
+    /// The host's change notification, which the tests fire as the
+    /// system's watcher would when the applications changed by
+    /// themselves.
+    changed: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 impl FakeSystem {
@@ -66,6 +70,15 @@ impl FakeSystem {
 
     fn opened(&self) -> Vec<String> {
         self.opened.lock().unwrap().clone()
+    }
+
+    /// Tells the host the applications changed, as the system's watcher
+    /// would: the commands that asked for them are asked for their results
+    /// again (see `application_changes`).
+    fn tell_changed(&self) {
+        if let Some(changed) = self.changed.lock().unwrap().clone() {
+            changed();
+        }
     }
 
     fn hold(&self) {
@@ -119,6 +132,10 @@ impl Applications for FakeSystem {
         }
         self.opened.lock().unwrap().push(id.to_owned());
         Ok(())
+    }
+
+    fn on_change(&self, changed: Arc<dyn Fn() + Send + Sync>) {
+        *self.changed.lock().unwrap() = Some(changed);
     }
 }
 
@@ -324,7 +341,7 @@ fn a_command_ranks_above_an_application_of_the_same_title() {
 }
 
 #[test]
-fn a_blank_query_lists_no_applications_and_starts_nothing() {
+fn a_blank_query_asks_for_no_applications_and_starts_nothing() {
     let dirs = Dirs::new();
     let system = FakeSystem::with(&["Firefox"]);
     let (launcher, runtime) = dirs.launcher(&system, &[]);
@@ -336,10 +353,25 @@ fn a_blank_query_lists_no_applications_and_starts_nothing() {
     assert_eq!(system.listed(), 0, "no one looked for applications");
     assert!(!component_running(&runtime));
 
-    // After a search, clearing the query does not list every application.
+    // After a search, clearing the query keeps what it found listed — the
+    // blank query ranks the kept results in the no-query order (#199),
+    // an application below the commands — and asks for nothing: the
+    // system is not looked at again.
     search(&launcher, "fire");
+    let asked = system.listed();
     search(&launcher, "");
-    assert!(!titles(&launcher).contains(&"Firefox".to_owned()));
+    assert_eq!(
+        titles(&launcher),
+        [
+            "Install extension from folder…",
+            "Install extension from Git…",
+            "Install extension from npm…",
+            "Manage Extensions",
+            "Settings…",
+            "Firefox"
+        ]
+    );
+    assert_eq!(system.listed(), asked, "the blank query asks for nothing");
 }
 
 #[test]
@@ -353,7 +385,13 @@ fn applications_are_looked_for_once_per_visit_of_root_search() {
     search(&launcher, "fir");
     assert_eq!(system.listed(), 1);
 
-    // Installed meanwhile: found once the user comes back to root search.
+    // Installed meanwhile: a search that nothing told of the change lists
+    // the results kept from the earlier asks (#202) — a command that asked
+    // for the host's applications is not asked again by a query, and not
+    // by a show of root search that changed nothing either. The host's
+    // list is told of the change, as the system's watcher would, and the
+    // commands that asked are asked for their results again, listed in
+    // place (see `application_changes`).
     system.applications.lock().unwrap().push(app("Firewall"));
     search(&launcher, "fire");
     assert_eq!(
@@ -361,12 +399,15 @@ fn applications_are_looked_for_once_per_visit_of_root_search() {
         ["Firefox", "Install extension from Git…"]
     );
 
-    // Come back to root search afresh, as a reopened window does:
-    // Applications has no command row of its own to open and leave (a root
-    // provider, #164).
-    launcher.show_root_search();
-
-    search(&launcher, "fire");
+    system.tell_changed();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !titles(&launcher).contains(&"Firewall".to_owned()) {
+        assert!(
+            Instant::now() < deadline,
+            "the changed applications were never listed"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
     assert_eq!(
         titles(&launcher),
         ["Firefox", "Firewall", "Install extension from Git…"]
@@ -383,8 +424,18 @@ fn typing_does_not_wait_for_applications_to_be_found() {
     let searching = launcher.set_query("rust");
     let answered = thread::spawn(move || block_on(searching));
 
-    // The command is found at once; the application once it is found.
-    assert_eq!(titles(&launcher), ["Rust sample"]);
+    // The command is found once the query's list is published (#201) —
+    // the sample's provider answers within the hold — while the
+    // applications are still being looked for.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while titles(&launcher) != ["Rust sample"] {
+        assert!(
+            Instant::now() < deadline,
+            "the command was never listed: {:?}",
+            titles(&launcher)
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
     system.release();
     answered.join().unwrap();
     assert_eq!(titles(&launcher), ["Rust", "Rust sample"]);

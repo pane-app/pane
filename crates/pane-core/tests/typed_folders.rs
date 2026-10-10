@@ -28,11 +28,14 @@ use tempfile::TempDir;
 mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
+#[path = "support/settle.rs"]
+mod settle;
 #[path = "support/system.rs"]
 mod system;
 
 use feedback::RecordingWindow;
 use rows::{select_title, titles};
+use settle::wait_for_merges;
 use system::{Done, RecordingSystem};
 
 /// Activates the selected row and answers what the HUD then said, if one
@@ -230,6 +233,11 @@ impl Pane {
     fn search(&self, query: &str) {
         self.launcher.show_root_search();
         block_on(self.launcher.set_query(query));
+        // The JavaScript and TypeScript guests answer past the 200 ms
+        // budget while their engine starts: the answer merges into the
+        // published list within 16 ms of the search's end (#201), which
+        // the entries read below wait out.
+        wait_for_merges(&self.launcher);
     }
 
     /// The entries the typed folder's query listed, by the rows' titles,

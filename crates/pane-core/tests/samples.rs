@@ -27,9 +27,12 @@ mod platforms;
 mod feedback;
 #[path = "support/guests.rs"]
 mod guests;
+#[path = "support/settle.rs"]
+mod settle;
 
 use feedback::shown;
 use guests::guest;
+use settle::wait_for_merges;
 
 struct Sample {
     component: &'static str,
@@ -82,6 +85,17 @@ impl Sample {
                 matches: pane_core::CommandMatches::Title,
             }],
         );
+        // The blank query lists the command and Pane's own rows in the
+        // no-query order (#199): "Settings…" comes before "TypeScript
+        // sample", so the sample's row is chosen by its title.
+        let title = format!("{} sample", self.language);
+        let index = launcher
+            .view()
+            .rows
+            .iter()
+            .position(|row| row.title == title)
+            .unwrap_or_else(|| panic!("{title} is not listed"));
+        launcher.select(index);
         block_on(launcher.activate_selected());
         assert_eq!(launcher.view().screen, Screen::Command);
         launcher
@@ -562,6 +576,10 @@ fn reverse_typed_into_root_search_lists_the_reversed_text_to_copy(sample: &Sampl
     launcher.back();
 
     block_on(launcher.set_query("reverse Pané 1"));
+    // The JavaScript and TypeScript guests answer past the 200 ms budget
+    // while their engine starts: the answer merges into the published
+    // list within 16 ms of the search's end (#201), which is waited out.
+    wait_for_merges(&launcher);
 
     let view = launcher.view();
     assert_eq!(view.rows[0].title, "1 énaP");
@@ -604,6 +622,8 @@ fn a_root_result_opens_a_web_link(sample: &Sample) {
     launcher.back();
 
     block_on(launcher.set_query("pane website"));
+    // As above: the answer merges within 16 ms of the search's end.
+    wait_for_merges(&launcher);
 
     let view = launcher.view();
     assert_eq!(view.rows[0].title, "Pane's website");

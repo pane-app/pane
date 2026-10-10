@@ -487,10 +487,12 @@ fn an_alias_and_a_space_fill_the_first_argument_and_a_fallback_the_query(fixture
     // The alias followed by a space: no row sends the text after it (the
     // command declares arguments), and its own row, hoisted by the alias,
     // is selected with its fields showing — the space and Tab after the
-    // alias alike are the way into them.
+    // alias alike are the way into them. Pane's own Git row matches the
+    // two letters fuzzily through its subtitle (#193), below the row the
+    // alias hoists.
     pane.alias(&folder, "greet", "gr");
     pane.search("gr ");
-    assert_eq!(titles(launcher), ["Greet"]);
+    assert_eq!(titles(launcher), ["Greet", "Install extension from Git…"]);
     assert_eq!(launcher.view().selected, Some(0));
     assert_eq!(launcher.alias_after_space(), Some(AliasFlow::Fields));
     pane.search("gr");
@@ -599,7 +601,9 @@ fn the_last_dropdown_is_remembered_and_dropped_once_the_choice_is_gone(fixture: 
     assert_no_record_holds(pane.data.path(), SECRET);
 
     // The command updated with "formal" no longer among its options: the
-    // remembered choice is dropped, the field showing no choice.
+    // remembered choice is dropped, the field showing no choice. The
+    // changed manifest is installed by reloading the package — replacing
+    // its copy with the source folder's current contents.
     let file = folder.join("pane.json");
     let manifest: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
@@ -608,7 +612,8 @@ fn the_last_dropdown_is_remembered_and_dropped_once_the_choice_is_gone(fixture: 
         serde_json::to_string(&without_formal(&manifest)).unwrap(),
     )
     .unwrap();
-    block_on(pane.launcher.install_package(&folder));
+    let identity = PackageIdentity::local(&folder).unwrap();
+    block_on(pane.launcher.reload(&identity));
     assert!(matches!(pane.launcher.view().status, Status::Result(_)));
     pane.search("greet");
     assert_eq!(pane.launcher.argument_fields().unwrap().fields[2].value, "");
@@ -795,7 +800,7 @@ fn sums(sources: &Path) -> PathBuf {
         r#"{ "manifestVersion": 1, "title": "Sums", "apiVersion": "0.1",
   "commands": [{ "id": "greet", "title": "Sum 0 + 0",
     "component": "command.wasm", "mode": "no-view",
-    "arguments": [{ "name": "name", "type": "text", "placeholder": "Name", "required": true }] } }"#,
+    "arguments": [{ "name": "name", "type": "text", "placeholder": "Name", "required": true }] }] }"#,
         &built("sample_arguments.wasm"),
     )
 }
@@ -893,10 +898,12 @@ fn an_alias_and_a_space_open_a_command_without_arguments_at_once() {
     pane.alias(&no_view, "last", "ls");
 
     // A view command that searches opens its screen at once, and what is
-    // typed next is its own search's text.
+    // typed next is its own search's text. The space's flow needs the
+    // space after the alias in the query; Tab's is the alias alone.
     pane.search("ps");
-    assert_eq!(launcher.alias_after_space(), Some(AliasFlow::Opens));
     assert_eq!(launcher.alias_after_tab(), Some(AliasFlow::Opens));
+    pane.search("ps ");
+    assert_eq!(launcher.alias_after_space(), Some(AliasFlow::Opens));
     block_on(launcher.activate_selected());
     assert!(matches!(
         launcher.view().screen,

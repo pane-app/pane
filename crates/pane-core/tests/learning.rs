@@ -30,7 +30,8 @@ use pane_core::applications::{Application, Applications, Key};
 use pane_core::clipboard::ManualClock;
 use pane_core::hotkeys::{HotkeyError, Hotkeys, Shortcut};
 use pane_core::{
-    Launcher, PackageIdentity, ResultAction, Runtime, SavedData, Section, SlotChange, Status,
+    Launcher, PackageIdentity, ResultAction, Runtime, SavedData, SearchSensitivity, Section,
+    SlotChange, Status,
 };
 use tempfile::TempDir;
 
@@ -45,7 +46,7 @@ mod rows;
 
 use feedback::shown;
 use guests::guest;
-use rows::titles;
+use rows::{manage, select_title, titles, to_root};
 
 /// When the tests' clock starts, in milliseconds since the Unix epoch.
 const NOW: u64 = 1_800_000_000_000;
@@ -342,6 +343,10 @@ fn a_query_starting_with_a_learned_query_ranks_above_a_better_match() {
     let folder = pane.package("letters", &[("good", "Abc Def G"), ("poor", "Axbxcxdxefg")]);
     pane.install(&folder);
     let launcher = &pane.launcher;
+    // The poorly-matching result only fits the query at the Medium
+    // sensitivity: at High it never matches, so nothing could outrank the
+    // better match for the learned query to be seen against.
+    launcher.set_search_sensitivity(SearchSensitivity::Medium);
 
     // Without learning: the query starts the first result's words, and
     // only fuzzily fits the second (step 8).
@@ -395,24 +400,30 @@ fn the_learned_queries_stop_counting_once_the_frecency_decays_to_the_floor() {
 #[test]
 fn the_learned_queries_stop_counting_17_days_after_the_result_was_last_opened() {
     let pane = Pane::new();
-    pythons(&pane);
+    // Two results one query finds, the second the poorer match for it: the
+    // learned query "ab" — the query itself — would lift the poor result
+    // above the better one while it counts (step 3), and no longer once 17
+    // days have passed since the result was last opened. Its frecency,
+    // seven uses deep, still ranks it first on the blank query either way.
+    let folder = pane.package("letters", &[("good", "Abc"), ("poor", "Axb")]);
+    pane.install(&folder);
     let launcher = &pane.launcher;
 
-    // Seven uses: a score of 8, still above the floor after 18 days.
     for _ in 0..7 {
-        choose(launcher, "pyth", "#b");
+        choose(launcher, "ab", "#poor");
     }
     pane.clock.advance(day(18));
     block_on(launcher.set_query(""));
     assert!(
-        at(launcher, "Python", 0, "#b"),
+        at(launcher, "Axb", 0, "#poor"),
         "the frecency still ranks the used result first: {:?}",
-        ids_titled(launcher, "Python")
+        titles(launcher)
     );
-    block_on(launcher.set_query("py"));
+    block_on(launcher.set_query("ab"));
     assert!(
-        at(launcher, "Python", 0, "#a"),
-        "but its learned queries stopped counting 17 days after it was last opened"
+        at(launcher, "Abc", 0, "#good"),
+        "but its learned queries stopped counting 17 days after it was last opened: {:?}",
+        titles(launcher)
     );
 }
 
@@ -511,6 +522,18 @@ fn a_hotkey_a_computed_answer_a_fallback_and_panes_own_rows_record_nothing() {
     pane.install(&pane.built("calculator"));
     let launcher = &pane.launcher;
     let echo = format!("{}#echo", query_sample.key());
+
+    // Echo is turned into a fallback, so a query that matches nothing
+    // offers it: a row the user chooses then because nothing matched, not
+    // a root result.
+    manage(launcher);
+    select_title(launcher, "Fallback: Echo");
+    block_on(launcher.activate_selected());
+    assert_eq!(
+        launcher.view().status,
+        Status::Result("Echo is now offered for any text typed in root search".into())
+    );
+    to_root(launcher);
 
     // A fallback row: nothing matches, so it is selected, and Enter sends
     // the text to the command — a row the user chose because nothing
@@ -1020,6 +1043,9 @@ fn an_application_keeps_its_ranking_across_an_update_into_a_new_version_folder()
         listed[0].ends_with(&updated) && listed[1].ends_with("/apps/Mail.app"),
         "the application kept its ranking across the update: {listed:?}"
     );
+    // The earlier choose opened the application by the same identity; what
+    // this opening alone does is what the check reads.
+    system.opened.lock().unwrap().clear();
     block_on(pane.launcher.activate_selected());
     assert_eq!(
         *system.opened.lock().unwrap(),

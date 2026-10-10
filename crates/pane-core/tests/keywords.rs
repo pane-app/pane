@@ -15,9 +15,12 @@ use futures::executor::block_on;
 use pane_core::{Launcher, Runtime, Screen, Status};
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use rows::titles;
 
 /// Pane's data location and package sources for one test.
@@ -97,16 +100,22 @@ fn subtitles(launcher: &Launcher) -> Vec<String> {
 struct Fixture {
     /// The assembled package under `target/guests/packages`.
     package: &'static str,
+    /// The package's title, which stands in as the command's subtitle
+    /// when its manifest gives none.
+    title: &'static str,
 }
 
 const RUST: Fixture = Fixture {
     package: "sample-keywords",
+    title: "Keywords sample",
 };
 const JAVASCRIPT: Fixture = Fixture {
     package: "sample-keywords-js",
+    title: "JavaScript keywords sample",
 };
 const TYPESCRIPT: Fixture = Fixture {
     package: "sample-keywords-ts",
+    title: "TypeScript keywords sample",
 };
 
 impl Fixture {
@@ -130,7 +139,7 @@ fn a_command_is_found_by_the_keywords_its_manifest_declares(fixture: &Fixture) {
     assert_eq!(titles(&launcher), ["Empty the Bin"]);
     assert_eq!(
         subtitles(&launcher),
-        ["Keywords sample"],
+        [fixture.title],
         "the row keeps the subtitle its manifest gives"
     );
     search(&launcher, "rubbish");
@@ -141,11 +150,12 @@ fn a_command_is_found_by_the_keywords_its_manifest_declares(fixture: &Fixture) {
     search(&launcher, "bin");
     assert_eq!(titles(&launcher), ["Empty the Bin"]);
 
-    // Invoking the row a keyword found runs the command, as any row.
+    // Invoking the row a keyword found runs the command, as any row: the
+    // no-view command says what it did through its toast.
     launcher.select(0);
     block_on(launcher.activate_selected());
     assert_eq!(
-        launcher.view().status,
+        shown(&launcher),
         Status::Result("Emptied the bin".into())
     );
 }

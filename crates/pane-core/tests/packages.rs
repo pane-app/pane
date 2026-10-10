@@ -604,16 +604,19 @@ fn a_damaged_installed_copy_is_listed_with_its_problem_and_others_still_run() {
 
     let restarted = dirs.launcher();
 
+    // The blank query lists everything in the no-query order (#199):
+    // the commands by title collation, and the broken package's row last,
+    // below the commands (the kind a row that opens nothing has).
     assert_eq!(
         titles(&restarted),
         [
-            "broken",
             INSTALL_ROW,
             GIT_ROW,
             NPM_ROW,
             MANAGE_ROW,
             "Say hello",
-            SETTINGS_ROW
+            SETTINGS_ROW,
+            "broken"
         ]
     );
     let broken = restarted
@@ -829,14 +832,11 @@ fn repository(path: &str) -> PathBuf {
 fn the_assembled_sample_packages_install_and_run_in_every_language() {
     let dirs = Dirs::new();
     let launcher = dirs.launcher();
-    for (index, (name, language)) in [
+    for (name, language) in [
         ("sample-rust", "Rust"),
         ("sample-js", "JavaScript"),
         ("sample-ts", "TypeScript"),
-    ]
-    .into_iter()
-    .enumerate()
-    {
+    ] {
         let folder = repository("target/guests/packages").join(name);
         assert!(
             folder.exists(),
@@ -851,7 +851,11 @@ fn the_assembled_sample_packages_install_and_run_in_every_language() {
             launcher.view().status,
             Status::Result(format!("Installed {title}"))
         );
-        assert_eq!(launcher.view().selected, Some(index));
+        // The install selects the new command's row, wherever the blank
+        // query's no-query order (#199) ranks it by title.
+        let view = launcher.view();
+        let selected = view.rows[view.selected.expect("a row is selected")].title.clone();
+        assert_eq!(selected, title);
         block_on(launcher.activate_selected());
         assert_eq!(launcher.view().title, title);
         block_on(launcher.activate_selected());

@@ -28,22 +28,28 @@ struct Fixture {
     package: &'static str,
     component: &'static str,
     title: &'static str,
+    /// The subtitle its Echo command's manifest gives, which each
+    /// language's sample words its own way.
+    echo_subtitle: &'static str,
 }
 
 const RUST: Fixture = Fixture {
     package: "sample-query",
     component: "sample_query.wasm",
     title: "Query sample",
+    echo_subtitle: "Answers the text you send it from root search",
 };
 const JAVASCRIPT: Fixture = Fixture {
     package: "sample-query-js",
     component: "sample_query_js.wasm",
     title: "JavaScript query sample",
+    echo_subtitle: "A JavaScript command that answers the text you send it from root search",
 };
 const TYPESCRIPT: Fixture = Fixture {
     package: "sample-query-ts",
     component: "sample_query_ts.wasm",
     title: "TypeScript query sample",
+    echo_subtitle: "A TypeScript command that answers the text you send it from root search",
 };
 
 /// Copies the assembled package `name` under `target/guests/packages` to
@@ -508,17 +514,17 @@ fn copies_from_other_sources_with_the_same_title_stay_distinct(fixture: &Fixture
     // package's source after its subtitle. The copy the user gave an
     // alias ranks first of the two (#199's no-query order).
     assert!(
-        subtitle(&launcher, 1).starts_with("Answers the text you send it from root search · "),
+        subtitle(&launcher, 1).starts_with(&format!("{} · ", fixture.echo_subtitle)),
         "{}",
         subtitle(&launcher, 1)
     );
     assert_eq!(
         subtitle(&launcher, 1),
-        format!("Answers the text you send it from root search · {second_source}")
+        format!("{} · {second_source}", fixture.echo_subtitle)
     );
     assert_eq!(
         subtitle(&launcher, 2),
-        format!("Answers the text you send it from root search · {first_source}")
+        format!("{} · {first_source}", fixture.echo_subtitle)
     );
     assert_eq!(
         subtitle(&launcher, 0),

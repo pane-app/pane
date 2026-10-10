@@ -467,12 +467,14 @@ fn the_selection_moves_among_the_matches_and_enter_opens_the_selected_one() {
         ],
     );
     block_on(launcher.set_query("sample"));
+    // The two matches rank by title collation (#197): "Other sample"
+    // before "Rust sample".
     launcher.move_selection(1);
-    assert_eq!(selected_title(&launcher).as_deref(), Some("Other sample"));
+    assert_eq!(selected_title(&launcher).as_deref(), Some("Rust sample"));
     launcher.move_selection(5);
     assert_eq!(
         selected_title(&launcher).as_deref(),
-        Some("Other sample"),
+        Some("Rust sample"),
         "the selection stays among the matches"
     );
 
@@ -546,7 +548,9 @@ fn returning_to_root_search_starts_a_new_search() {
     launcher.back();
     let view = launcher.view();
     assert_eq!(view.query(), Some(""));
-    assert_eq!(titles(&launcher), ["Rust sample", "Other", "Settings…"]);
+    // The blank query lists everything in the no-query order (#199):
+    // title collation among the commands.
+    assert_eq!(titles(&launcher), ["Other", "Rust sample", "Settings…"]);
 }
 
 /// Test-local directories: package sources and Pane's data location.
@@ -663,7 +667,7 @@ fn an_installed_command_is_found_by_its_title_or_its_package_title() {
     // manager by its subtitle ("Configure, update and remove extensions in
     // Settings", #168).
     block_on(launcher.set_query("install"));
-    assert_eq!(titles(&launcher), [INSTALL_ROW, NPM_ROW, GIT_ROW]);
+    assert_eq!(titles(&launcher), [INSTALL_ROW, GIT_ROW, NPM_ROW]);
     block_on(launcher.set_query("configure"));
     assert_eq!(titles(&launcher), [MANAGE_ROW]);
 }
