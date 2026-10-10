@@ -24,7 +24,7 @@
 
 use std::time::Duration;
 
-use gpui::{App, KeyDownEvent, Keystroke, Task, Window, prelude::*};
+use gpui::{App, Focusable, KeyDownEvent, Keystroke, Task, Window, prelude::*};
 use pane_core::{KeyboardAction, Screen};
 
 use crate::app::LauncherWindow;
