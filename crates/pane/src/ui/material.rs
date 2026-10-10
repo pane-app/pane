@@ -374,3 +374,60 @@ pub(crate) fn popover_shadows(theme: &Theme) -> Vec<BoxShadow> {
             .spread_radius(geometry.popover_drop_spread),
     ]
 }
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+
+    /// The macOS leg of the material policy, beside the Windows one in
+    /// `windows_glass_allowed`: no suppression check fails a glass request
+    /// here, so glass asks for the blurred window appearance and stays
+    /// glass. The vibrancy the window then vends is the fork's
+    /// `UnderWindowBackground` selection, covered by the fork's own macOS
+    /// tests (see `docs/gpui-fork.md`); this test pins the app-side policy.
+    #[test]
+    fn a_glass_request_stands_and_blurs_the_window_on_macos() {
+        assert!(
+            glass_fallback_reason().is_none(),
+            "nothing on macOS suppresses a glass request"
+        );
+        assert_eq!(
+            MaterialMode::Glass.window_appearance(),
+            WindowBackgroundAppearance::Blurred
+        );
+        assert!(Material::new(MaterialMode::Glass).is_glass());
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    /// The Linux leg of the material policy: desktop-compositor frost is
+    /// not guaranteed behind a Linux window, so a glass request normalizes
+    /// to the opaque window and the solid panel — the explicit opaque
+    /// choice's own surface — never a glass tint over an unblurred desktop.
+    /// The settings tests cover the same normalization end to end through
+    /// the Appearance page's note; this test pins the policy itself, and
+    /// runs wherever the Linux test legs run.
+    #[test]
+    fn a_glass_request_normalizes_to_the_opaque_surface_on_linux() {
+        assert_eq!(
+            glass_fallback_reason(),
+            Some("this platform does not expose compositor frost behind a window")
+        );
+        assert_eq!(
+            MaterialMode::Glass.window_appearance(),
+            WindowBackgroundAppearance::Opaque
+        );
+        let normalized = Material::new(MaterialMode::Glass);
+        assert!(
+            !normalized.is_glass(),
+            "glass normalizes to the solid surface"
+        );
+        assert_eq!(
+            normalized.window_appearance(),
+            MaterialMode::Opaque.window_appearance()
+        );
+    }
+}

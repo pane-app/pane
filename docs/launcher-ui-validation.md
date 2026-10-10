@@ -38,7 +38,9 @@ not run and keep final validation open.
 
 The user subsequently scoped execution to Windows first, with a final CI run on
 every OS after integration. Native macOS/Linux validation is deferred; it is not
-a prerequisite for completing this Windows-focused implementation pass.
+a prerequisite for completing this Windows-focused implementation pass. The
+2026-10-10 night pass had no macOS or Linux desktop connected either;
+macOS/Linux native validation remains open.
 
 ## Current result
 
@@ -160,6 +162,137 @@ queries. Those suppressed configurations were not exercised natively here, and
 no system setting was changed. Standard 96-DPI display coverage only; scaled
 displays, native IME and screen-reader operation remain not run. Native macOS
 and Linux validation remains deferred under the user's Windows-first scope.
+
+### macOS vibrancy (#66)
+
+The correction: the fork's `blurred_view_init_with_frame` now selects
+`NSVisualEffectMaterial::UnderWindowBackground` with behind-window blending
+and an active state, replacing `Selection`, which on macOS 26+ no longer
+vends the `CABackdropLayer` that `remove_layer_background` walks and left
+blur requests rendered with no blur. `blurred_view_update_layer` lays an
+opaque black base under the backdrop sublayer so Mission Control and Spaces
+snapshots read as a solid dark surface. Integrated through fork revision
+`beb5a6dada242a4aad9f972546021a6fb6c869ba` (above
+`70ed267181dc56e4739d5782eb56fae51a2afd29`, which carries #251's empty-copy
+propagation for the in-flight launcher-polish PR), with all four Pane pins
+and the lockfile's 19 source entries moved together.
+
+The regression seams: the fork's two new macOS tests — one reading
+`material`/`blendingMode`/`state` back from the real registered subclass,
+one exercising the real layer-tree function for the snapshot base — run by
+the release matrix's macos-renderer job on macos-15, and the app-side macOS
+policy test in `crates/pane/src/ui/material.rs` (a glass request stands and
+asks for the blurred window appearance).
+
+What CI establishes: compile on all three operating systems in the quick
+tier, macOS compile via the verify tier's Check leg, and — post-merge, on
+real macOS runners — the two material tests and the macOS default-startup
+smoke exercising the default-glass startup path. What it does NOT establish,
+listed as outstanding native work, not run: dark and light desktop vibrancy
+against a known external edge pattern with opaque controls,
+text/selection/focus readability, window movement/resizing and
+activation-deactivation, standard/scaled or Retina displays,
+reduced-transparency behavior in a controlled environment, and native
+IME/assistive-technology operation. No macOS display was connected
+during this implementation pass (2026-10-10); nothing native was faked.
+
+### Repeat the macOS checks
+
+The macOS analogue of the Windows capture workflow: run
+`PANE_THEME=dark PANE_MATERIAL=glass cargo run -p pane` over a controlled
+external background with known sharp edges, compare the light/dark
+background response and an opaque control, and record OS version, display
+scaling and settings — mirroring the Windows evidence rules at the top of
+this file.
+
+### Linux opaque launcher (#67)
+
+The policy: Linux has no guaranteed compositor frost behind a window, so a
+`Glass` request normalizes at construction to the opaque window and the solid
+panel — the explicit opaque choice's own surface, in both themes — and the
+glass tint is never painted over an unblurred desktop. The Linux unit test
+in `crates/pane/src/ui/material.rs`
+(`a_glass_request_normalizes_to_the_opaque_surface_on_linux`) pins the policy
+itself, and the settings suite's
+`the_material_choice_switches_the_panel_surface` covers the same
+normalization end to end through the Appearance page, whose material row
+names the fallback on Linux. The in-window blur audit conclusion, as
+[docs/gpui-fork.md](gpui-fork.md) records: CE's X11 transparency and KDE
+Wayland blur paths stay unused by the launcher; no Zui blur engine or
+compositor integration is imported.
+
+What CI establishes, tiered:
+
+- The quick tier compiles the Linux-gated test and policy code
+  (`cargo check --all-targets` on ubuntu-24.04; the Windows leg ignores the
+  Linux-only module).
+- The verify tier's Linux test shards — Tests (ubuntu-24.04, 1/3–3/3),
+  dispatched manually over the integration — run the full workspace suites on
+  Linux, including the window, command-search and settings suites. The named
+  interaction coverage:
+  `typing_in_root_search_narrows_the_results_and_enter_opens_the_best_match`
+  (query and activation),
+  `arrow_keys_move_through_the_matches_while_the_query_keeps_focus`
+  (navigation), `the_list_scrolls_to_keep_the_selected_row_visible` and
+  `the_mouse_wheel_scrolls_away_until_the_rows_reload` (scrolling),
+  `the_selected_row_stays_visible_when_the_window_shrinks` (resize),
+  `the_keyboard_fills_in_and_submits_the_form`,
+  `a_rejected_field_shows_its_error_and_takes_focus` and
+  `clicking_a_choice_and_the_submit_button_submits_the_form` (form validation
+  and submission), `a_long_error_wraps_grows_and_scrolls_inside_the_footer`
+  (long status),
+  `an_unavailable_action_is_listed_with_its_reason_and_others_still_run`
+  (unavailable actions),
+  `the_launcher_divides_its_reference_client_edge_to_edge` (layout),
+  `input_method_composition_searches_root` and
+  `input_method_composition_commits_into_the_text_field` (IME on the test
+  platform), `assistive_technology_sees_the_search_field_and_the_selected_result`
+  and `assistive_technology_sees_the_forms_labelled_controls_and_values`
+  (accessibility on the test platform), and `keys_change_the_color_the_view_shows`
+  (custom extension drawing preserved). These are GPUI test-platform tests:
+  they verify behavior and layout, not native desktop operation, and native
+  IME or assistive-technology operation is never claimed from them.
+- Post-merge, the release matrix runs those suites again on ubuntu-24.04, and
+  its Smoke (ubuntu-24.04) leg launches the real binary on a real X server
+  (Xvfb) with real xdotool key events under forced dark/opaque and checks
+  screenshots — real X11 backend execution, but Xvfb runs no window manager
+  or compositor, so it is not a representative desktop session and not
+  Wayland.
+
+Outstanding native validation, explicitly not run — no Linux desktop with a
+display session was connected during implementation (the development machine
+is a headless build box, and local runs are forbidden by policy):
+
+- Native startup and interaction on a real X11 session with a window manager,
+  and on a Wayland session (recording the compositor, e.g. Mutter or KWin),
+  recorded by display backend as the ticket requires: XDG_SESSION_TYPE,
+  distribution and kernel, compositor, and display scaling.
+- Intended header dragging by pointer.
+- Native IME and assistive-technology operation.
+- Dark/light and narrow-layout visual inspection on the display.
+
+Advertised-backend coverage is never inferred from the other backend: an X11
+session's results do not speak for Wayland, and neither speaks for the other.
+
+### Repeat the Linux checks
+
+On a Linux desktop, in both an X11 and a Wayland session:
+
+```sh
+PANE_THEME=dark PANE_MATERIAL=opaque cargo run -p pane --locked
+```
+
+Repeat with `PANE_THEME=light`, and with `PANE_MATERIAL=glass` to observe the
+normalization (the Appearance page explains the fallback). Check startup, a
+typed query, arrow-key navigation, Enter activation, wheel scrolling, window
+resize, header dragging by the magnifier's square, a representative form's
+validation and submission, the long-status footer, an unavailable action's
+explanation, and the narrow 380x420 layout. Record the distribution, kernel,
+display backend (XDG_SESSION_TYPE), compositor, display scaling, and the
+theme/material requested — mirroring the evidence rules at the top of this
+file. The existing smoke, `bash scripts/smoke-linux.sh <out-dir>`, is the
+X11-under-Xvfb run CI uses; on a Linux desktop it can also serve as a local
+X11 check.
 
 ## Repeat the Windows checks
 
