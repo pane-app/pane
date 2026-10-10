@@ -406,7 +406,10 @@ fn a_typescript_package_with_pane_cli_installed_builds_with_its_componentizer() 
     // A package without it is explained, as an installed Pane is for one
     // whose author has not run npm install.
     let plain = TYPESCRIPT.copy_as("develop-hello-ts-no-cli");
-    let error = package_toolchains.build_for(&plain).unwrap_err();
+    let error = match package_toolchains.build_for(&plain) {
+        Ok(_) => panic!("the package has no componentizer to build with"),
+        Err(error) => error,
+    };
     assert!(error.contains("npm install"), "{error}");
     assert!(error.contains("node_modules/@pane-app/cli-"), "{error}");
 }
