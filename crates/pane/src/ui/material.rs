@@ -387,8 +387,14 @@ mod tests {
     /// tests (see `docs/gpui-fork.md`); this test pins the app-side policy.
     #[test]
     fn a_glass_request_stands_and_blurs_the_window_on_macos() {
-        assert!(glass_fallback_reason().is_none(), "nothing on macOS suppresses a glass request");
-        assert_eq!(MaterialMode::Glass.window_appearance(), WindowBackgroundAppearance::Blurred);
+        assert!(
+            glass_fallback_reason().is_none(),
+            "nothing on macOS suppresses a glass request"
+        );
+        assert_eq!(
+            MaterialMode::Glass.window_appearance(),
+            WindowBackgroundAppearance::Blurred
+        );
         assert!(Material::new(MaterialMode::Glass).is_glass());
     }
 }
