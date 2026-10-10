@@ -312,9 +312,15 @@ fn sections(state: &State) -> Vec<Section> {
     // Only the computed answers name a command: a row is one only when
     // activating it copies what a command computed. The files found for
     // the query (with the row searching them all) are labelled "Files";
-    // the rows declared for the address or path the query is, "Addresses".
-    // An answer whose command answered a section of its own sits under
-    // that ("Color", "Date & Time", #196) instead of the command's title.
+    // the rows declared for the address or path the query is,
+    // "Addresses". An answer whose command answered a section of its own
+    // sits under that ("Color", "Date & Time", #196) instead of the
+    // command's title.
+    //
+    // The typed folder's partial notice (#204) is a row of Pane's own
+    // among the files; a row with no actions on root search is only that
+    // one, the items of an opened command's list having none never being
+    // listed here.
     let answers: Vec<Option<&str>> = state.view.rows[..shown]
         .iter()
         .zip(&state.entries)
@@ -327,7 +333,7 @@ fn sections(state: &State) -> Vec<Section> {
                     Some(answer) => answer.section.as_str(),
                     None => computed.command_title.as_str(),
                 }),
-            Entry::File(_) => Some("Files"),
+            Entry::File(_) | Entry::NoActions => Some("Files"),
             Entry::Open(opening) if opening.initial_search.is_some() => Some("Files"),
             // The rows declared for the address or path the query is
             // (#195), below the results and above the files.

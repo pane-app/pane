@@ -1083,6 +1083,15 @@ impl LauncherWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Tab completes the query to a folder of the typed folder's
+        // entries when the selected row is one of them (#204), in place
+        // of focusing the next field: only a row of that kind takes it,
+        // so Tab still focuses the argument fields (#205) on any other
+        // row.
+        if let Some(query) = self.launcher.typed_folder_completion() {
+            self.query.replace(&query, cx);
+            return;
+        }
         window.focus_next(cx);
     }
 
@@ -1092,6 +1101,12 @@ impl LauncherWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Shift+Tab removes the last path component of the typed path the
+        // query is (#204), in place of focusing the previous field.
+        if let Some(query) = self.launcher.typed_path_parent() {
+            self.query.replace(&query, cx);
+            return;
+        }
         window.focus_prev(cx);
     }
 

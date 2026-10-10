@@ -90,7 +90,7 @@ pub use tree::{
 pub(crate) mod bindings {
     wasmtime::component::bindgen!({
         path: "../../wit",
-        world: "extension-with-file-index",
+        world: "extension-with-typed-folder",
         imports: {
             "pane:extension/operations": store,
             "pane:extension/helpers": store,
@@ -107,6 +107,9 @@ pub(crate) mod bindings {
             // starting, the clipboard held by another program), off the
             // runtime thread, which awaits them.
             "pane:extension/system": async,
+            // Listing the folder the user typed reads the file system,
+            // which may block, off the runtime thread, which awaits it.
+            "pane:extension/typed-folder": async,
         },
         exports: { default: async | store },
     });
@@ -166,7 +169,10 @@ use bindings::pane::extension::{
     applications, cache, clipboard_history, content, credentials, settings,
 };
 use bindings::pane::extension::{
-    feedback as feedback_host, system as system_host, window as window_host,
+    feedback as feedback_host,
+    system as system_host,
+    typed_folder as typed_folder_host,
+    window as window_host,
 };
 use indexed_bindings::exports::pane::extension::indexed_results;
 use root_bindings::exports::pane::extension::root_results;
@@ -2812,6 +2818,11 @@ impl Code {
             |state| state,
         )
         .expect("registering the file index in a fresh linker cannot conflict");
+        typed_folder_host::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
+            &mut linker,
+            |state| state,
+        )
+        .expect("registering the typed folder listing in a fresh linker cannot conflict");
         launching::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)
             .expect("registering launching commands in a fresh linker cannot conflict");
         window_host::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| {

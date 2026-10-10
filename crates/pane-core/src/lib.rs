@@ -49,6 +49,7 @@ pub mod system;
 pub mod system_icons;
 mod threads;
 pub mod tray;
+mod typed_folder;
 mod util;
 #[cfg(windows)]
 mod windows_shell;

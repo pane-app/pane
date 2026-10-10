@@ -83,8 +83,10 @@ pub(super) fn analyze(query: &str, home: Option<&Path>) -> Option<TypedQuery> {
 }
 
 /// The resolved path of a path-like `query`, if it is one: what it says
-/// as typed, `~` joined onto `home`, or `file://` taken off.
-fn path_like(query: &str, home: Option<&Path>) -> Option<String> {
+/// as typed, `~` joined onto `home`, or `file://` taken off. The typed
+/// folder the user names is resolved the same way
+/// ([`crate::typed_folder`]).
+pub(crate) fn path_like(query: &str, home: Option<&Path>) -> Option<String> {
     if let Some(rest) = query.strip_prefix("file://") {
         // An empty authority may follow the scheme, and a drive letter
         // after it: `file:///C:/Windows` is `C:/Windows`, while
@@ -262,6 +264,17 @@ fn address_row(result: &RootResult, text: &str) -> Option<(Row, Entry)> {
     ))
 }
 
+/// The query with its last path component removed and a separator kept
+/// after what remains, what Shift+Tab types for a path-like query (#204):
+/// `/home/v/Documents/` becomes `/home/v/`, `~/Documents/` `~/`, a
+/// Windows path keeps its own separators. `None` when nothing is left
+/// above it: the root, a drive, `~` itself.
+pub(super) fn parent(query: &str) -> Option<String> {
+    let trimmed = query.trim_end_matches(['/', '\\']);
+    let at = trimmed.rfind(['/', '\\'])?;
+    Some(trimmed[..at + 1].to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -403,5 +416,24 @@ mod tests {
             Some(TypedQuery::Path("C:/Windows".into()))
         );
         assert_eq!(analyzed("file://"), Some(TypedQuery::Path("/".into())));
+    }
+
+    #[test]
+    fn removing_the_last_path_component_leaves_a_separator_after_it() {
+        // Shift+Tab (#204): the parent folder is typed, browsable again.
+        assert_eq!(parent("/home/v/Documents/"), Some("/home/v/".into()));
+        assert_eq!(parent("/home/v/Documents"), Some("/home/v/".into()));
+        assert_eq!(parent("/home/"), Some("/".into()));
+        assert_eq!(parent("~/Documents/"), Some("~/".into()));
+        assert_eq!(parent(r"~\Documents"), Some(r"~\".into()));
+        assert_eq!(parent(r"C:\Users\v\"), Some(r"C:\Users\".into()));
+        assert_eq!(parent("file:///etc/hosts"), Some("file:///etc/".into()));
+        // Nothing is above the root, a drive or the home folder itself.
+        assert_eq!(parent("/"), None);
+        assert_eq!(parent(r"C:\"), None);
+        assert_eq!(parent("~"), None);
+        assert_eq!(parent("~/"), None);
+        assert_eq!(parent(r"\\server\share\"), Some(r"\\server\".into()));
+        assert_eq!(parent(r"\\"), None);
     }
 }

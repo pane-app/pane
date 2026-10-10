@@ -184,6 +184,7 @@ fn listed(found: Found, owner: &str, component: &Path) -> (Row, Entry) {
         program: found.program,
         component: component.to_path_buf(),
         indexed: true,
+        typed: false,
         folder: found.kind == EntryKind::Folder,
         path: Some(found.path),
     };

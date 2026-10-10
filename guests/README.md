@@ -52,8 +52,11 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   Its package is `packages/files`; held by
   `crates/pane-core/tests/file_index.rs` and `file_actions.rs`.
 - `sample-files`, `sample-files-js`, `sample-files-ts`: the same host
-  import and `open-file` results in Rust, JavaScript and TypeScript; held by
-  `crates/pane-core/tests/file_actions.rs`.
+  import and `open-file` results in Rust, JavaScript and TypeScript; they
+  list a typed folder's entries too
+  ([the entries of a folder the user typed](#the-entries-of-a-folder-the-user-typed));
+  held by `crates/pane-core/tests/file_actions.rs` and
+  `crates/pane-core/tests/typed_folders.rs`.
 - `fixtures/folder-files`: what Files was before #175, over the folder the
   user grants its package ([Files of a granted folder](#files-of-a-granted-folder)),
   keeping that capability covered; held by `crates/pane-core/tests/files.rs`,
@@ -993,6 +996,86 @@ return state.val.files
   .filter((file) => file.relative.includes(query))
   .map((file) => ({ id: file.relative, title: file.relative, action: { tag: "open-file", val: file.id } }));
 ```
+
+### The entries of a folder the user typed
+
+A command can list the entries of a folder the user typed into root
+search, a path-like query ending in a separator, which a WASI guest cannot
+read itself, through `pane:extension/typed-folder`
+([`wit/typed-folder.wit`](../wit/typed-folder.wit)), and answer results
+that open one (`open-file`). No folder is granted and the `pane.json`
+declares nothing: the user named the folder, so `list(folder)` takes what
+they typed (Pane resolves it: `~` to the home folder, `file://` taken off)
+and answers the direct entries — folders first and each in name order, at
+most 500, `truncated` set when the folder holds more — each with the `id`
+Pane gave it, its `name`, whether it is a `folder` and whether opening it
+would run a `program`. An error explains a folder that cannot be listed
+(not a path, a network location, a file, or one Pane cannot read): answer
+no results for it, as a missing folder does. An `open-file` result gives
+the id; Pane shows the entry's own name and folder in the row, whatever the
+result's title says, and gives the entry its own
+[file actions](../docs/files.md#the-file-actions), checking it again first.
+The bounds are Pane's, not the command's; root search lists the entries
+under "Files", below the rows declared for the path, and adds a row saying
+so when the listing is partial (see
+[docs](../docs/files.md#the-typed-folder)).
+
+Rust (`pane_extension::typed_folder`):
+
+```rust
+use pane_extension::root::{RootAction, RootResult, WallTime};
+use pane_extension::typed_folder::{self, FolderEntry};
+
+async fn results_for(query: String, at: WallTime) -> Result<Vec<RootResult>, String> {
+    let Some(entries) = typed(&query) else {
+        return Ok(Vec::new());
+    };
+    Ok(entries
+        .into_iter()
+        .map(|entry| RootResult {
+            id: entry.id.clone(),
+            title: entry.name,
+            subtitle: None,
+            action: RootAction::OpenFile(entry.id),
+            answer: None,
+        })
+        .collect())
+}
+
+/// The entries of the folder the query names, when it ends in a separator.
+fn typed(query: &str) -> Option<Vec<FolderEntry>> {
+    let query = query.trim();
+    query
+        .ends_with(['/', '\\'])
+        .then(|| typed_folder::list(query).ok())
+        .flatten()
+        .map(|listing| listing.entries)
+}
+```
+
+JavaScript or TypeScript: add `"typedFolder": true` to the `"pane"` options
+of `package.json`, so the build imports the interface (a command without it
+does not), and import it (`list` throws an object whose `payload` is the
+reason; declarations in [`js/typed-folder.d.ts`](js/typed-folder.d.ts)):
+
+```ts
+import { list } from "pane:extension/typed-folder@0.1.0";
+
+if (!query.endsWith("/") && !query.endsWith("\\")) return [];
+try {
+  return list(query.trim()).entries.map((entry) => ({
+    id: entry.id,
+    title: entry.name,
+    action: { tag: "open-file", val: entry.id },
+  }));
+} catch {
+  return [];
+}
+```
+
+The [Files](files) default extension lists a typed folder this way, and so
+do [`sample-files`](sample-files), [`sample-files-js`](sample-files-js) and
+[`sample-files-ts`](sample-files-ts) in Rust, JavaScript and TypeScript.
 
 ## Root results supplied ahead of the query
 

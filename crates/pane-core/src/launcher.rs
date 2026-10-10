@@ -62,7 +62,7 @@ mod providers;
 mod quick_slots;
 pub mod search_files;
 mod submenus;
-mod typed_query;
+pub(crate) mod typed_query;
 
 use crate::clipboard::{Capture, ClipboardSystem};
 use crate::dependencies;
@@ -4791,8 +4791,9 @@ fn open_form_for(state: &mut State, purpose: FormPurpose, form: Form) {
 /// (#195), as the environment names it: `USERPROFILE` on Windows, `HOME`
 /// elsewhere. The file index's configuration replaces it with the home it
 /// is built over (see [`Launcher::with_file_index`]), which is the same
-/// folder on a real Pane.
-fn home_folder() -> Option<PathBuf> {
+/// folder on a real Pane; the typed folder the user names is resolved with
+/// the same home ([`crate::typed_folder`]).
+pub(crate) fn home_folder() -> Option<PathBuf> {
     let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
     std::env::var_os(var).map(PathBuf::from)
 }
@@ -4905,8 +4906,9 @@ fn relist_root(state: &mut State, query: &str) {
 /// The rows for `command`'s `answer` to `query`: its results, or one
 /// explaining why it failed. A result that opens a file is shown with the
 /// file's own name and folder, as the host found it in the latest listing
-/// of `owner`'s granted folder, whatever the extension titled it; one the
-/// host does not know is left out.
+/// of `owner`'s granted folder or in the folder the user typed (#204),
+/// whatever the extension titled it; one the host does not know is left
+/// out.
 fn computed_results(
     command: CommandRegistration,
     owner: Option<&str>,
@@ -4967,6 +4969,35 @@ fn computed_results(
                 listed.push(Computed {
                     in_files: true,
                     ..computed(row, entry, None)
+                });
+            }
+            // A typed folder that holds more entries than Pane lists says
+            // so with a row of its own at the end of them (#204).
+            let typed = listed
+                .iter()
+                .any(|computed| matches!(&computed.entry, Entry::File(file) if file.typed));
+            let partial = match (files, owner) {
+                (Some(files), Some(owner)) => files.typed().partial(owner),
+                _ => false,
+            };
+            if typed && partial {
+                listed.push(Computed {
+                    in_files: true,
+                    ..computed(
+                        Row {
+                            id: format!("{}:typed-more", command.id),
+                            title: "…and more entries".into(),
+                            subtitle: Some(format!(
+                                "Pane lists a folder's first {} entries",
+                                crate::typed_folder::MAX_ENTRIES
+                            )),
+                            unavailable: None,
+                        },
+                        // The row cannot be activated: it says something,
+                        // it does not do anything.
+                        Entry::NoActions,
+                        None,
+                    )
                 });
             }
             listed

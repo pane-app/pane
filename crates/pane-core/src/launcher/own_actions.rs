@@ -9,9 +9,11 @@
 //! performs them itself; no extension is called.
 //!
 //! **A file** (ADR 0017 and ADR 0034: the extension names it by the id
-//! Pane gave it, never by a path). Pane checks it again before acting, as it
-//! always did before opening one (`crate::files`, and for the file index
-//! `crate::file_index::Indexer::checked`). A folder the index found has
+//! Pane gave it, never by a path — a typed folder's entries the same way,
+//! #204). Pane checks it again before acting, as it always did before
+//! opening one (`crate::files`, `crate::typed_folder` for a typed folder,
+//! and for the file index `crate::file_index::Indexer::checked`). A folder
+//! the index or a typed listing found has
 //! Open (Enter: the file manager), Show in Explorer, Copy Path, Copy Name,
 //! Copy File and Move to Recycle Bin. A document's actions are
 //! Open (Enter), Show in Explorer (Ctrl+Enter; Finder or the File Manager
@@ -528,8 +530,10 @@ impl Launcher {
     }
 
     /// Checks `file` again, off the calling thread (see
-    /// `crate::files::FileAccess::checked_file`; a program or script only
-    /// where `programs`), then does `act` with its checked path there.
+    /// `crate::files::FileAccess::checked_file`, and
+    /// `crate::typed_folder::TypedFolders::checked` for an entry of the
+    /// folder the user typed, #204; a program or script only where
+    /// `programs`), then does `act` with its checked path there.
     async fn on_file(
         &self,
         file: &FileRow,
@@ -543,10 +547,18 @@ impl Launcher {
         }
         let files = self.lock().files.clone();
         let (owner, id) = (file.owner.clone(), file.id.clone());
+        // An entry of the folder the user typed is checked against its
+        // listing, rather than the package's grant.
+        let typed = file.typed;
         off_thread(move || {
             let files =
                 files.ok_or_else(|| String::from("Pane's extension runtime is unavailable"))?;
-            act(files.checked_file(&owner, &id, programs)?)
+            let checked = if typed {
+                files.typed().checked(&owner, &id, programs)?
+            } else {
+                files.checked_file(&owner, &id, programs)?
+            };
+            act(checked)
         })
         .await
     }

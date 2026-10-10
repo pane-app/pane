@@ -610,8 +610,31 @@ See the [author guide](../guests/README.md#commands-for-typed-addresses-and-path
 - The [samples](../guests/README.md#commands-for-typed-addresses-and-paths)
   show the declarations in Rust, JavaScript and TypeScript.
 
-Listing a typed folder's entries belongs to a later ticket of the
-specification; the calculator's colours, dates and percentages are
+**A typed folder's entries are listed** for a path-like query that ends in
+a separator and names an existing folder ([#204](https://github.com/pane-app/pane/issues/204)):
+[Files](files.md#in-root-search) asks Pane to list the folder, through the
+`typed-folder` host interface, and answers the entries as its file results,
+under "Files" below the rows for the path. No folder is granted: the user
+named it, and Pane's own bounds apply (the direct entries only, folders
+first and each in name order, at most 500, a row saying so when the folder
+holds more; see [files](files.md#the-typed-folder)). The rows are file rows
+with the file actions, and Enter opens the selected entry with the system's
+handler — a program is shown in the file manager, never run.
+
+Browsing stays in the query:
+
+- **Tab** on a selected folder row of the listing completes the query to
+  that folder's path with a trailing separator, listing the folder's own
+  entries. Tab takes the completion over focusing an argument field only
+  when the row is a typed-folder entry (#205's fields do not exist yet); on
+  any other row, Tab focuses the next field as usual.
+- **Shift+Tab** removes the last path component of the query, keeping a
+  separator after what remains: the folder above is listed, and the root, a
+  drive or the home folder itself is where it stops. The query's form is
+  kept — `~` stays `~`.
+- Nothing is opened by the keys alone: Enter opens the selected entry.
+
+The calculator's colours, dates and percentages are
 [its](#the-calculator), above.
 
 ## Activation
@@ -789,9 +812,27 @@ system and closing the window, and its "Create Quicklink" opening the form
 with the address prefilled and saving it; Files' "Open" opening a typed
 path and revealing a program instead of running it, and its "Reveal in
 File Explorer" revealing it. The analysis' grammar has unit tests in
-`crates/pane-core/src/launcher/typed_query.rs`. Opening a typed URL and a
+`crates/pane-core/src/launcher/typed_query.rs`, including what Shift+Tab
+removes of a path. Opening a typed URL and a
 typed path with the system's own handler is a release-validation smoke
 phase to add, not a merge gate (#195).
+
+For a typed folder's entries
+([`crates/pane-core/tests/typed_folders.rs`](../crates/pane-core/tests/typed_folders.rs)),
+with the real Files extension and the Rust, JavaScript and TypeScript
+files samples, a real index over a fixture home folder and the recording
+opener and system: the entries listed as file results, folders first and
+each in name order, under "Files" below the rows for the path; `~`
+resolved to the home folder of the file index; a missing folder listing
+nothing; Enter opening a document and showing a program in the file
+manager, never running it; the 500-entry bound with the row that says so;
+and Tab's completion and Shift+Tab's query as the launcher answers them.
+The listing's bounds have unit tests in
+`crates/pane-core/src/typed_folder.rs`. In the window
+([`crates/pane/tests/file_actions.rs`](../crates/pane/tests/file_actions.rs)),
+with real keys: Tab completing to a folder and Enter opening its entry,
+Shift+Tab removing the last path component, and Enter on a program showing
+it and running nothing.
 
 For computed results and the calculator
 ([`crates/pane-core/tests/calculator.rs`](../crates/pane-core/tests/calculator.rs)),

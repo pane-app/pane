@@ -20,7 +20,8 @@
 //! applications with [`applications`], supply root results ahead of the
 //! query with [`indexed`], run its package's native helpers with
 //! [`helpers`] and the system's own programs with [`programs`], list the
-//! files of a folder with [`files`], search as the
+//! files of a folder with [`files`] and the entries of a folder the user
+//! typed with [`typed_folder`], search as the
 //! user types into its own search field with [`search`], make web
 //! requests with [`http`] and keep clipboard history with
 //! [`clipboard_history`]. It prints and logs to its package's extension log
@@ -427,6 +428,28 @@ pub mod file_index {
             }
         }
     }
+}
+
+/// The entries of a folder the user typed into root search
+/// (`pane:extension/typed-folder`, #204): Pane's host lists the folder for
+/// the command, within bounds like the granted folder's scan policy (the
+/// direct entries only, folders first and each in name order, at most 500,
+/// a partial listing saying so), since a pure WASI guest has no folders to
+/// read. No folder is granted: the user named it, so the command passes
+/// what the user typed and Pane resolves it (`~` to the home folder,
+/// `file://` taken off). [`typed_folder::list`] answers the entries, each
+/// with the id Pane gave it, its name, whether it is a folder and whether
+/// opening it would run a program; a command answers `open-file` results
+/// ([`root::RootAction::OpenFile`]) with the ids, and Pane checks each
+/// entry again before acting on it.
+pub mod typed_folder {
+    wit_bindgen::generate!({
+        path: "wit",
+        world: "typed-folder-user",
+        default_bindings_module: "pane_extension::typed_folder",
+    });
+
+    pub use pane::extension::typed_folder::{FolderEntry, FolderListing, list};
 }
 
 /// Root results a command supplies ahead of the query

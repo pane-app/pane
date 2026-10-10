@@ -25,13 +25,16 @@ interface root-results {
     /// cannot open it.
     open-url(string),
     /// Opens the entry with this id, as `file-index.search` gave it to the
-    /// package (wit/file-index.wit), or as `files.list-folder` gave it in
-    /// the package's latest listing of its granted folder, with the
+    /// package (wit/file-index.wit), as `files.list-folder` gave it in the
+    /// package's latest listing of its granted folder, or as
+    /// `typed-folder.list` gave it in its latest listing of the folder the
+    /// user typed (wit/typed-folder.wit), with the
     /// system's handler for its type (a folder in the file manager). Pane
     /// shows the entry's own name and folder in the row, whatever the
     /// result's title and subtitle say, and checks it again when it is
     /// invoked: still there, of the kind found, not a link, inside the
-    /// folders file search covers (or the granted folder). Enter on a
+    /// folders file search covers (or the granted folder, or the folder
+    /// the user typed). Enter on a
     /// program the index found shows it in the file manager and never runs
     /// it; the granted folder's programs are refused. Root search lists
     /// these results after the results it finds by title, at most 5 of the

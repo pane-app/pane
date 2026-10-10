@@ -126,6 +126,14 @@ impl QueryField {
     pub(crate) fn focus(&self, window: &mut Window, cx: &mut App) {
         window.focus(&self.input.focus_handle(cx), cx);
     }
+
+    /// Replaces the query with `query`, as Tab's completion of a typed
+    /// folder and Shift+Tab's removal of a path component do (#204): the
+    /// field searches as if `query` were typed, and the announcer waits
+    /// for the results as it does for typing.
+    pub(crate) fn replace(&self, query: &str, cx: &mut App) {
+        self.input.update(cx, |input, cx| input.emplace(query, cx));
+    }
 }
 
 impl LauncherWindow {

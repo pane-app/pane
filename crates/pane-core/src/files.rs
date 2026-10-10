@@ -225,8 +225,9 @@ pub fn walk(
     Ok(listing)
 }
 
-/// Why `folder` cannot be listed, for the user.
-fn unreadable(folder: &str, error: &io::Error) -> String {
+/// Why `folder` cannot be listed, for the user: a typed folder is told the
+/// same ([`crate::typed_folder`]).
+pub(crate) fn unreadable(folder: &str, error: &io::Error) -> String {
     match error.kind() {
         io::ErrorKind::NotFound => format!("{folder} does not exist"),
         io::ErrorKind::PermissionDenied => format!("Pane may not read {folder}"),
@@ -235,8 +236,9 @@ fn unreadable(folder: &str, error: &io::Error) -> String {
 }
 
 /// Whether the entry `name` is hidden: its name starts with a dot, or on
-/// Windows it has the hidden or system attribute.
-fn hidden(name: &str, entry: &fs::DirEntry) -> bool {
+/// Windows it has the hidden or system attribute. A typed folder's
+/// listing skips the same entries ([`crate::typed_folder`]).
+pub(crate) fn hidden(name: &str, entry: &fs::DirEntry) -> bool {
     if name.starts_with('.') {
         return true;
     }
@@ -408,8 +410,9 @@ pub(crate) fn program_named(path: &Path) -> bool {
 
 /// Whether the file a listing found at `path` runs as a program
 /// ([`runs_as_program`]), as it is now; by its name alone when it cannot be
-/// read.
-fn program_at(path: &Path) -> bool {
+/// read. A typed folder's listing tells a program the same way
+/// ([`crate::typed_folder`]).
+pub(crate) fn program_at(path: &Path) -> bool {
     match fs::symlink_metadata(path) {
         Ok(metadata) => runs_as_program(path, &metadata),
         Err(_) => program_named(path),
@@ -456,6 +459,10 @@ struct Access {
     /// The file index (#175), which file search uses instead of a granted
     /// folder; shared the same way, by the runtime and the launcher.
     indexer: crate::file_index::Indexer,
+    /// The folders the user typed into root search, listed for the
+    /// packages that asked (#204, [`crate::typed_folder`]); shared the
+    /// same way, by the runtime and the launcher.
+    typed: crate::typed_folder::TypedFolders,
 }
 
 #[derive(Default)]
@@ -526,6 +533,13 @@ impl FileAccess {
     /// The file index, shared with the runtime's guests.
     pub(crate) fn indexer(&self) -> crate::file_index::Indexer {
         self.0.indexer.clone()
+    }
+
+    /// The folders the user typed into root search, listed for the
+    /// packages that asked (#204, [`crate::typed_folder`]); shared with
+    /// the runtime's guests.
+    pub(crate) fn typed(&self) -> crate::typed_folder::TypedFolders {
+        self.0.typed.clone()
     }
 
     /// Lists folders with `folders` from now on, instead of this system's

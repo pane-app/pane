@@ -24,7 +24,8 @@
 // `indexedResults` (wit/applications.wit), `operations`
 // (wit/operations.wit), `search`
 // (wit/search.wit) and `service` (wit/service.wit); `files` makes it import the granted folder's listing
-// (wit/files.wit), `fileIndex` the file index Pane keeps (wit/file-index.wit)
+// (wit/files.wit), `fileIndex` the file index Pane keeps (wit/file-index.wit),
+// `typedFolder` the entries of a folder the user typed (wit/typed-folder.wit)
 // and `clipboardHistory` the clipboard history Pane keeps
 // for it (wit/clipboard.wit), which no other command imports. The build
 // writes a world

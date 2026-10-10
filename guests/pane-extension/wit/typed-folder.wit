@@ -1,0 +1,77 @@
+package pane:extension@0.1.0;
+
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// The entries of a folder the user typed into root search, which Pane's
+// host lists for a command that answers root results for such a query (a
+// pure WASI guest has no folders to read). No folder is granted: the user
+// named it, and ADR 0034's file access covers it, so unlike
+// wit/files.wit there is no grant to record and no row to choose one; the
+// command passes what the user typed and Pane resolves it (`~` to the home
+// folder, `file://` taken off). The bounds are the scan policy's, kept to
+// one folder: the direct entries only, folders first and each in name
+// order, at most 500 entries, with a partial listing saying so. Rust
+// commands use it through pane-extension (`pane_extension::typed_folder`),
+// JS/TS commands as the module "pane:extension/typed-folder@0.1.0"
+// (guests/js/typed-folder.d.ts), imported only by a command whose
+// package.json sets `"pane": { "typedFolder": true }`. Kept apart from the
+// other files so a command that lists none is unchanged. The header follows
+// `package`: comments above it would document the package, which
+// extension.wit already does.
+
+/// The entries of a folder the user typed.
+interface typed-folder {
+  /// One direct entry of the typed folder.
+  record folder-entry {
+    /// Identifies the entry to an `open-file` result
+    /// (wit/root-results.wit): an opaque id Pane gave it for this listing,
+    /// not a path. Pane checks the entry again before it acts on it.
+    id: string,
+    /// The entry's own name, as Pane found it.
+    name: string,
+    /// The entry is a folder.
+    folder: bool,
+    /// Whether opening it would run a program (an executable, a script, a
+    /// shortcut, an installer), as its name or permissions say. File
+    /// search's own Enter shows such a file rather than run it.
+    program: bool,
+  }
+
+  /// What Pane found in the typed folder.
+  record folder-listing {
+    /// The direct entries, folders first and each in name order.
+    entries: list<folder-entry>,
+    /// Pane did not list everything: the folder holds more entries than
+    /// its bound (500).
+    truncated: bool,
+  }
+
+  /// The entries of the folder `folder`, the path the user typed into root
+  /// search, resolved as a typed path is (`~` alone or followed by a
+  /// separator is the home folder, `file://` is taken off; the same
+  /// resolution root search itself makes). The direct entries only, folders
+  /// first and each in name order, at most 500 of them, with `truncated`
+  /// set when the folder holds more; hidden entries (a name starting with
+  /// `.`, and on Windows the hidden and system attributes), links and
+  /// names that are not Unicode are neither listed nor counted. The
+  /// listing is Pane's to keep: the entries are named by the ids it gave
+  /// them, and it checks an entry again before opening it. An error
+  /// explains a folder that cannot be listed: not a path, a network
+  /// location, a file, or one Pane cannot read.
+  list: func(folder: string) -> result<folder-listing, string>;
+}
+
+/// The typed folder import alone, for guest bindings.
+world typed-folder-user {
+  import typed-folder;
+}
+
+/// The world Pane hosts: a command that may also use extension data, call
+/// operations, find and open installed applications, run its package's
+/// native helpers and system programs, list the folder granted to its
+/// package, keep clipboard history, search the file index and list the
+/// entries of a folder the user typed.
+world extension-with-typed-folder {
+  include extension-with-file-index;
+  import typed-folder;
+}
