@@ -241,7 +241,9 @@ pub(super) fn record(state: &mut State, id: &str, query: Option<&str>, now: u64)
     if record.unreadable().is_some() || !record.kept() {
         return false;
     }
-    let query = query.map(crate::search::fold).filter(|query| !query.is_empty());
+    let query = query
+        .map(crate::search::fold)
+        .filter(|query| !query.is_empty());
     let uses = &mut record.chosen.uses;
     uses.retain(|_, use_| {
         !(frecency(use_, now) <= 1.0 && days_since(now, use_.last_opened) > WITHIN_DAYS)

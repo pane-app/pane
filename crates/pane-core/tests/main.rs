@@ -46,6 +46,7 @@ mod installer;
 mod item_actions;
 mod keywords;
 mod launcher;
+mod learning;
 mod list_tree;
 mod local_channel;
 mod memory;

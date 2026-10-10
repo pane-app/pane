@@ -2839,7 +2839,9 @@ impl Launcher {
         // A use of the selected root result, recorded once its action
         // dispatches (#199, see `learned`): read before activation, which
         // changes the screen.
-        let learned = entry.as_ref().and_then(|entry| learned::use_of(&state, entry));
+        let learned = entry
+            .as_ref()
+            .and_then(|entry| learned::use_of(&state, entry));
         // The status line is about this action from now on.
         state.sent_from = None;
         let pending = match entry {
@@ -3537,9 +3539,7 @@ impl Launcher {
             ) {
                 (Some(problem), _, _) => Status::Error(problem.clone()),
                 (None, Some(problem), _) => Status::Error(quick_slots::unreadable_report(problem)),
-                (None, None, Some(problem)) => {
-                    Status::Error(learned::unreadable_report(problem))
-                }
+                (None, None, Some(problem)) => Status::Error(learned::unreadable_report(problem)),
                 (None, None, None) => Status::Idle,
             },
             ..LauncherView::new(

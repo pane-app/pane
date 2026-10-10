@@ -701,7 +701,9 @@ impl<'a> Ranked<'a> {
         // What was learned about the result (#199): a result never chosen
         // scores 1 wherever frecency weighs, and holds no queries.
         let learned = candidate.learned;
-        let queries = learned.map(|learned| learned.queries.as_slice()).unwrap_or_default();
+        let queries = learned
+            .map(|learned| learned.queries.as_slice())
+            .unwrap_or_default();
         Ranked {
             alias: query.is_alias_of(keys),
             exact_title: query.is_title_of(keys),
