@@ -443,6 +443,22 @@ impl LauncherWindow {
         }
     }
 
+    /// Marks the argument field `index` the keyboard is about to leave
+    /// (#205), as its own blur does: a required one left blank carries
+    /// the missing mark from then on. The window's own field navigation
+    /// moves the focus itself, so it reports the leaving here too — the
+    /// mark never waiting on when the field's blur is dispatched.
+    pub(crate) fn mark_left_argument(&self, index: usize) {
+        if let Some(name) = self
+            .launcher
+            .argument_fields()
+            .and_then(|fields| fields.fields.into_iter().nth(index))
+            .map(|field| field.id)
+        {
+            self.launcher.argument_left(&name);
+        }
+    }
+
     /// Focuses the first empty argument field of the selected row's
     /// command — the first, when none is empty — as Tab from the query
     /// and an alias followed by a space (or Tab) enter the fields (#205).

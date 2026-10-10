@@ -213,7 +213,7 @@ Pane's fixed bounds on listing a granted folder, the same on every system: regul
 _Avoid_: Index scope (the file index's rules), crawl, whole-disk search
 
 **Indexed result**:
-A root result an extension command supplies ahead of the query, such as an installed application; Pane asks for them once root search is used, keeps them, and matches and ranks them by title like commands, for a query that is not blank. It may also carry alternate titles, matched as its title is, and keywords, matched as its subtitle is; its row still shows its title.
+A root result an extension command supplies ahead of the query, such as an installed application; Pane asks for them once root search is used, keeps them, and matches and ranks them by title like commands. The blank query lists the applications among them in its own order, never a link (#122). It may also carry alternate titles, matched as its title is, and keywords, matched as its subtitle is; its row still shows its title.
 _Avoid_: Index entry, cached result
 
 **Root provider**:

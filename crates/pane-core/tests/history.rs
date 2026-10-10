@@ -269,7 +269,9 @@ fn consecutive_duplicates_are_not_added_and_at_most_64_entries_are_kept() {
     let launcher = &pane.launcher;
     assert_eq!(launcher.recent_query(0).as_deref(), Some("one"));
     assert_eq!(launcher.recent_query(1).as_deref(), Some("two"));
-    assert_eq!(launcher.recent_query(2).as_deref(), None);
+    // The second "one" is not a consecutive duplicate of "two", so it is
+    // entered again — only a repeat of the entry before it is not.
+    assert_eq!(launcher.recent_query(2).as_deref(), Some("one"));
 
     // The 64 entries kept, newest first: the oldest beyond them goes
     // when one is added.

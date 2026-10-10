@@ -51,9 +51,10 @@ once they arrive, and a command whose [alias](aliases.md) the query is, or
 starts with, comes before everything (computed results included), with the
 [fallbacks](aliases.md#making-a-command-a-fallback) after everything. A
 blank query lists them in the [no-query order](#matching-and-ranking):
-the [pinned home](#the-pinned-home) above, then the commands and the
-[results supplied ahead of the query](#results-supplied-ahead-of-the-query)
-by frecency, so what the user opens most is at the top before anything is
+the [pinned home](#the-pinned-home) above, then the commands and
+applications by frecency — the [results supplied ahead of the
+query](#results-supplied-ahead-of-the-query) minus links — so what the
+user opens most is at the top before anything is
 typed. What is listed:
 
 1. the commands built into this Pane build: none in any build since
@@ -696,7 +697,9 @@ extension, through the same guest boundary as its command:
   needs them. Pane keeps the answer and ranks it with the other root
   results on every later query, so typing never waits for it; until it
   answers, the results kept from an earlier visit are listed. They are
-  asked again after each return to root search — except a command that
+  asked again after each return to root search, after a command ran and
+  after a command's list handled an action — a change nothing tells of —
+  except a command that
   asked for the host's list of installed applications: that list changes
   by itself, and such a command is asked for its results then, at once
   while root search shows a query, listed in place with the selected row
@@ -705,8 +708,10 @@ extension, through the same guest boundary as its command:
   nothing asks it for nothing (#202).
   The guest's work is not cancelled; calls run one at a time (#29).
 - They are ranked by title, subtitle and rank exactly as commands are,
-  for the blank query too (in the no-query order, by kind below commands
-  and links); on the same rank they come after commands.
+  for the blank query too (in the no-query order, by kind below commands)
+  — except a link, which the blank query does not list: what it shows is
+  the commands and applications the user opens most (#122); on the same
+  rank they come after commands.
 - An indexed result has an id (`<command id>:<result id>`), title, optional
   subtitle, **alternate titles** and **keywords** (both lists, empty for
   none; see [matching](#matching-and-ranking)), and an **action** Pane

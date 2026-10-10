@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
-use gpui::{AppContext, Entity, TestAppContext, VisualTestContext};
+use gpui::{AppContext, Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext};
 use pane::LauncherWindow;
 use pane_core::file_index::{IndexerConfig, WalkOptions};
 use pane_core::{Launcher, LauncherView, LinkOpener, Runtime, Screen, Status};
@@ -422,9 +422,26 @@ fn tab_and_shift_tab_held_for_the_typed_folders_entries_still_browse(cx: &mut Te
         "the completion has not run yet"
     );
 
-    // The entries published, the held Tab completes the query to the
-    // selected folder's path — "notes", the first entry — which lists
-    // that folder's own entries.
+    // The entries published, the held Tab is applied to the selection at
+    // that moment (#203): the address row the listing puts first, on
+    // which Tab completes nothing (#204) — the folder's rows are what it
+    // completes. The query stands, and the key opened nothing.
+    let view = until(&window, cx, |view| {
+        view.rows.iter().any(|row| row.title == "notes")
+    });
+    assert_eq!(view.query(), Some(typed_query(&world.folder).as_str()));
+    assert_eq!(view.selected, Some(0), "the address row is first");
+    assert!(world.opener.take().is_empty(), "the key opened nothing");
+
+    // The folder's row picked with the pointer — the held Tab took the
+    // keyboard off the field — and the field clicked back: a pressed
+    // Tab then completes the query to that row's path, which lists that
+    // folder's own entries.
+    let row = cx.debug_bounds("row-notes").expect("the folder's row");
+    cx.simulate_mouse_move(row.center(), None::<MouseButton>, Modifiers::none());
+    let field = cx.debug_bounds("search").expect("the query field");
+    cx.simulate_click(field.center(), Modifiers::none());
+    cx.simulate_keystrokes("tab");
     let view = until(&window, cx, |view| {
         view.rows.iter().any(|row| row.title == "todo.md")
     });

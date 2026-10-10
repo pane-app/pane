@@ -893,6 +893,18 @@ fn the_mouse_wheel_scrolls_away_until_the_rows_reload(cx: &mut TestAppContext) {
     // commands, so the first row is Pane's install row — reached by title,
     // as the "Row" commands no longer lead the list.
     let install = launcher.install_package(&folder);
+    // The user moves on from the install's moment: the collated blank
+    // list's first row is Pane's install row, which opens nothing, so the
+    // extension manager's row is picked by title and opened — leaving the
+    // screen the install began on, as activating the first row did before
+    // the collation (#199) moved Pane's own rows up among the commands.
+    let view = launcher.view();
+    let manage = view
+        .rows
+        .iter()
+        .position(|row| row.title == "Manage Extensions")
+        .expect("the row is listed");
+    launcher.select(manage);
     cx.foreground_executor()
         .block_on(launcher.activate_selected());
     launcher.back();
@@ -1932,10 +1944,13 @@ fn reset_ranking_from_the_actions_panel_clears_that_result(cx: &mut TestAppConte
         "the status line is rendered"
     );
 
-    // The entry went, and the provider's order is back for the query.
+    // The entry went, and the provider's order is back for the query. The
+    // reset's write runs off the window's thread, so the record is waited
+    // for, as the Settings' reset is.
     let record = data.path().join("extensions/learned.json");
-    let text = std::fs::read_to_string(&record).unwrap();
-    assert!(!text.contains("python-Python312"), "the entry went: {text}");
+    until(&window, cx, |_| {
+        std::fs::read_to_string(&record).is_some_and(|text| !text.contains("python-Python312"))
+    });
     cx.simulate_keystrokes("escape");
     settle(&window, cx);
     cx.simulate_input("python");

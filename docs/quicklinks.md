@@ -145,7 +145,8 @@ with its target as the subtitle, which root search keeps and matches by
 title and subtitle and ranks with the commands (current decisions item 10),
 rather than listing them above every title match as the first version's
 computed results did. They are asked for again on the first query after
-root search is shown and after a no-view command ran (an import adds some).
+root search is shown and after a no-view command ran or a command's list
+handled an action (an import adds some; a delete removes one).
 A blank query lists none. Their further ranking belongs to "Root search
 like Raycast" (#122).
 

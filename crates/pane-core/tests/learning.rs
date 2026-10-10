@@ -546,9 +546,10 @@ fn a_hotkey_a_computed_answer_a_fallback_and_panes_own_rows_record_nothing() {
     launcher.back();
 
     // A computed answer: Enter copies it, and nothing is learned of a
-    // row without a lasting identity.
+    // row without a lasting identity. The fallback row Echo stays below
+    // the answer, unselected, as it does below any other result.
     block_on(launcher.set_query("6*7"));
-    assert_eq!(titles(launcher), ["42"]);
+    assert_eq!(titles(launcher), ["42", "Echo"]);
     block_on(launcher.activate_selected());
     assert_eq!(
         launcher.view().status,

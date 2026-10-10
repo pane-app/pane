@@ -510,10 +510,12 @@ fn an_alias_and_a_space_fill_the_first_argument_and_a_fallback_the_query(fixture
     assert_eq!(launcher.view().screen, Screen::Root { query: "gr".into() });
 
     // A command that takes a query and declares no arguments keeps the row
-    // that sends the text after its alias: Relay, listed first.
+    // that sends the text after its alias: Relay, given "rl" as one, listed
+    // first, its row before the command the rest of the query matches.
+    pane.alias(&folder, "relay", "rl");
     pane.search("rl stamp");
     assert_eq!(launcher.alias_after_space(), None);
-    assert_eq!(titles(launcher), ["Relay"]);
+    assert_eq!(titles(launcher), ["Relay", "Stamp"]);
 
     // Its first argument is text and the others optional, so it may be a
     // fallback, as may Stamp and Relay (which takes a query).
@@ -819,15 +821,17 @@ fn slow(sources: &Path) -> PathBuf {
     )
 }
 
-/// Searches `query` on its own thread, reporting once the search has
-/// answered: a query's future is not polled until it is awaited, and the
-/// test advances the launcher's clock meanwhile.
+/// Searches `query`, starting it on this thread and running it on a
+/// thread of its own, reporting once it has answered: the search's
+/// synchronous part — the hold it puts the query's list under (#201) —
+/// runs as the call's does, so the test's clock advances find it, and a
+/// provider that misses the budget keeps answering there, whatever the
+/// clock says.
 fn searched(launcher: &Launcher, query: &str) -> std::sync::mpsc::Receiver<()> {
+    let searching = launcher.set_query(query);
     let (sent, answered) = std::sync::mpsc::channel();
-    let launcher = launcher.clone();
-    let query = query.to_owned();
     std::thread::spawn(move || {
-        block_on(launcher.set_query(&query));
+        block_on(searching);
         sent.send(()).unwrap();
     });
     answered
@@ -915,8 +919,9 @@ fn an_alias_and_a_space_open_a_command_without_arguments_at_once() {
         Screen::CommandSearch { query } if query == "hello"
     ));
 
-    // A no-view command runs at once.
-    pane.search("ls");
+    // A no-view command runs at once. The space's flow needs the space
+    // after the alias in the query, as the view command's did.
+    pane.search("ls ");
     assert_eq!(launcher.alias_after_space(), Some(AliasFlow::Opens));
     block_on(launcher.activate_selected());
     assert_eq!(

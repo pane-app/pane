@@ -3703,9 +3703,6 @@ impl Launcher {
         state.indexes.stale(&self.applications_askers());
         state.typed = None;
         state.published = String::new();
-        // The argument values typed into the search before this visit go
-        // with the search (#205).
-        state.arguments = argument_fields::Typed::default();
         let (rows, entries) = root_rows(state, "");
         let selected = select
             .and_then(|component| {
@@ -3717,9 +3714,13 @@ impl Launcher {
         // Root search shown fresh over a query it had: the query is
         // cleared by the showing (#206) — recorded, with the values typed
         // with it, as a recent one Up can restore, before the view below
-        // takes it.
+        // takes them.
         let cleared = state.view.query().unwrap_or("").to_owned();
         self.record_cleared_query(state, &cleared);
+        // The argument values typed into the search before this visit go
+        // with the search (#205): taken only once the record above read
+        // them, so the entry keeps them.
+        state.arguments = argument_fields::Typed::default();
         self.leave_command(state);
         state.entries = entries;
         state.view = LauncherView {
@@ -4816,6 +4817,14 @@ impl Launcher {
             result,
             Ok(_) | Err(CallError::Guest(_) | CallError::Unreadable(_))
         );
+        // The command handled the event, whatever it answered: its tree may
+        // have changed — and what its package supplies ahead of the query may
+        // have too (Delete Quicklinks removes a quicklink), so every command's
+        // results are marked stale, as a run's ending marks them (#202),
+        // whatever the screen did meanwhile: the change is the package's.
+        if handled {
+            self.lock().indexes.stale(&[]);
+        }
         {
             let Some(mut state) = self.lock_if_current(epoch) else {
                 return;
@@ -5477,6 +5486,10 @@ fn rank_statics(state: &State, query: &str) -> Ranked {
                 .grouped_results()
                 .map(|(provider, result)| (result, kind(&result.entry), provider + 1)),
         )
+        // The blank query lists the commands and applications the user
+        // opens most (#122), never a link: a quicklink is neither, and
+        // what opens most is not it.
+        .filter(|&(_, kind, _)| !blank || kind != search::Kind::Link)
         .collect();
     // What root search learned about them, as ranking sees it now
     // (#199): each recorded result's decayed frecency and counting

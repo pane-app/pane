@@ -382,12 +382,13 @@ fn tab_shift_tab_and_the_arrows_move_between_the_fields_and_the_query(cx: &mut T
         "the list did not move while a field had the keys"
     );
 
-    // Nothing ran throughout: Enter takes focus to the blank required
-    // secret instead, the status line saying nothing.
+    // Nothing ran throughout: Enter inside the focused blank required
+    // secret marks it and says what it waits for, running nothing (#205).
     cx.simulate_keystrokes("enter");
     let view = settle(&window, cx);
-    assert_eq!(view.status, Status::Idle, "nothing ran");
+    assert_eq!(view.status, Status::Error("Enter Secret".into()));
     assert_eq!(focused_label(cx).as_deref(), Some("Secret"));
+    assert!(a11y(cx).contains(MISSING), "the secret is marked");
 }
 
 #[gpui::test]

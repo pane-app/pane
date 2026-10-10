@@ -136,19 +136,41 @@ impl LauncherWindow {
         // field's — each updating the window itself, so the replay must
         // not run inside an update of it: deferred at the window's level,
         // as GPUI's own action dispatch is, the keys are dispatched as
-        // the platform's own would be, in press order.
+        // the platform's own would be, in press order. Each key is
+        // dispatched in a deferred step of its own, so the change it
+        // makes is seen — its effect cycle run — before the next key
+        // lands, exactly as the pressed keys were: a space held for the
+        // list with characters typed behind it opens the alias the space
+        // follows (#205), rather than every key landing in the query
+        // before any change is seen.
         let entity = cx.entity();
         window.defer(cx, move |window, cx| {
             entity.update(cx, |this, _cx| {
                 this.held.replaying = true;
             });
-            for keystroke in keys {
-                window.dispatch_keystroke(keystroke, cx);
-            }
+            Self::dispatch_held(entity, keys, window, cx);
+        });
+    }
+
+    /// Dispatches the held `keys`, one deferred step at a time (see
+    /// `replay_held_keys` above), the replay's end — the window no longer
+    /// replaying — in the step after the last.
+    fn dispatch_held(
+        entity: gpui::Entity<Self>,
+        mut keys: Vec<Keystroke>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if keys.is_empty() {
             entity.update(cx, |this, cx| {
                 this.held.replaying = false;
                 cx.notify();
             });
+            return;
+        }
+        window.dispatch_keystroke(keys.remove(0), cx);
+        window.defer(cx, move |window, cx| {
+            Self::dispatch_held(entity, keys, window, cx);
         });
     }
 

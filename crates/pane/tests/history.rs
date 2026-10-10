@@ -121,8 +121,8 @@ fn up_restores_the_previous_query_with_its_argument_values(cx: &mut TestAppConte
         "the query is restored"
     );
     assert_eq!(query_text(&window, cx), "greet");
-    assert_eq!(argument_text(&window, cx, "Name"), "Ada");
-    assert_eq!(argument_text(&window, cx, "Secret"), "");
+    assert_eq!(argument_text(&window, cx, "name"), "Ada");
+    assert_eq!(argument_text(&window, cx, "secret"), "");
     assert_eq!(
         view.selected.map(|index| view.rows[index].title.as_str()),
         Some("Greet")
@@ -160,7 +160,7 @@ fn repeated_up_walks_back_and_typing_ends_the_walk(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("up");
     settle(&window, cx);
     assert_eq!(query_text(&window, cx), "greet");
-    assert_eq!(argument_text(&window, cx, "Name"), "Ada");
+    assert_eq!(argument_text(&window, cx, "name"), "Ada");
     cx.simulate_keystrokes("up");
     let view = settle(&window, cx);
     assert_eq!(
@@ -171,7 +171,7 @@ fn repeated_up_walks_back_and_typing_ends_the_walk(cx: &mut TestAppContext) {
         "the walk went one back"
     );
     assert_eq!(query_text(&window, cx), "stamp");
-    assert_eq!(argument_text(&window, cx, "Label"), "tag");
+    assert_eq!(argument_text(&window, cx, "label"), "tag");
 
     // Up past the oldest restores nothing: the key does nothing more.
     cx.simulate_keystrokes("up");

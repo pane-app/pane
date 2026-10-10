@@ -116,17 +116,24 @@ impl LauncherWindow {
         // The search runs as the field's own change does — the announcer
         // waits for its results and the keys held for the list it makes
         // are applied once it is published (#203) — and the query's
-        // change ends any walk that stood.
+        // change ends any walk that stood. The replace's change reaches
+        // the field's listener only at the end of the update this key
+        // runs in, and the search it starts takes the values the query's
+        // clear recorded with it (#205): the restore, and the walk's own
+        // state after the change that would end it, are deferred to run
+        // after that.
         self.query.replace(&query, cx);
-        // The argument values the entry was recorded with follow the
-        // query (#205): the search the replace ran took the values the
-        // query's clear recorded, so they are put back after it.
-        self.launcher.restore_recent_arguments(at);
-        self.sync_arguments(window, cx);
-        // The walk: at this entry, while this query stands. Any other key
-        // than the walking one ends it.
-        self.recall = Some(Recall { at, query });
-        cx.notify();
+        cx.defer_in(window, move |this, window, cx| {
+            // The argument values the entry was recorded with follow the
+            // query (#205), now that the search the replace ran has taken
+            // the values the clear recorded.
+            this.launcher.restore_recent_arguments(at);
+            this.sync_arguments(window, cx);
+            // The walk: at this entry, while this query stands. Any other
+            // key than the walking one ends it.
+            this.recall = Some(Recall { at, query });
+            cx.notify();
+        });
     }
 
     /// Moves the selection back a row, as the previous-result key does

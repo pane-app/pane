@@ -1209,6 +1209,7 @@ impl LauncherWindow {
         // Tab in an argument field goes to the next one, and from the
         // last back to the query (#205).
         if let Some(index) = self.focused_argument(window, cx) {
+            self.mark_left_argument(index);
             let last = self
                 .launcher
                 .argument_fields()
@@ -1276,6 +1277,7 @@ impl LauncherWindow {
         // Shift+Tab in an argument field goes to the previous one, and
         // from the first back to the query (#205).
         if let Some(index) = self.focused_argument(window, cx) {
+            self.mark_left_argument(index);
             if index == 0 {
                 self.query.focus(window, cx);
             } else {

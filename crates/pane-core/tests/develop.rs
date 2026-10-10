@@ -817,8 +817,8 @@ fn a_published_copy_keeps_its_own_identity_and_code() {
             .view()
             .rows
             .iter()
-            .filter(|row| row.title == "Open Dev")
             .enumerate()
+            .filter(|(_, row)| row.title == "Open Dev")
             .map(|(index, _)| index)
             .nth(copy)
             .unwrap_or_else(|| panic!("fewer than {} Open Dev rows", copy + 1))

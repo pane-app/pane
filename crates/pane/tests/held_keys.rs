@@ -358,8 +358,10 @@ fn an_enter_repeated_during_the_hold_runs_once(cx: &mut TestAppContext) {
     cx.simulate_input("6*7");
     wait_for_rows(&window, cx, &["42"]);
 
-    // Two Enters pressed under the hold — an auto-repeat's repeats: one is
-    // held, the repeat is dropped.
+    // A new query, typed into a field cleared first: the slow command
+    // holds its list, and two Enters pressed under the hold — an
+    // auto-repeat's repeats — leave one held, the repeat dropped.
+    cx.simulate_keystrokes("escape");
     cx.simulate_input("0 + 0");
     cx.simulate_keystrokes("enter enter");
     assert_eq!(held(&window, cx), ["enter"], "the repeat is dropped");
