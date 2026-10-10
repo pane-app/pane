@@ -336,7 +336,7 @@ impl LauncherWindow {
 
     /// Begins the HUD's fade out, if one shows.
     fn fade_hud(&mut self, cx: &mut App) {
-        let Some(handle) = self.hud.window.clone() else {
+        let Some(handle) = self.hud.window else {
             return;
         };
         let _ = handle.update(cx, |view, _, cx| {
@@ -381,7 +381,7 @@ impl LauncherWindow {
         self.hud
             .window
             .as_ref()
-            .map(|handle| gpui::AnyWindowHandle::from(handle.clone()))
+            .map(|handle| gpui::AnyWindowHandle::from(*handle))
     }
 }
 

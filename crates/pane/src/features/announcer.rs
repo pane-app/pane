@@ -519,7 +519,9 @@ fn opening(opening: &Opening, count: usize, target: &Target) -> Option<String> {
 /// stays the strip's own: a progress line that changes fast would
 /// otherwise keep the selection's text waiting behind it.
 pub(crate) fn says_message(status: &Status, toast: bool, busy: bool) -> bool {
-    toast || busy || matches!(status, Status::Result(_) | Status::Error(_))
+    toast
+        || matches!(status, Status::Result(_) | Status::Error(_))
+        || (busy && matches!(status, Status::Running { .. }))
 }
 
 /// The name of the section row `index` is in, among `sections`.

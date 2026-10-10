@@ -366,6 +366,19 @@ fn a_slow_command_search_shows_the_line_under_its_own_rule(cx: &mut TestAppConte
         "beneath the threshold"
     );
 
+    // The request the search makes reaches the service before the test
+    // goes on: the service holds the answer ten seconds, and a search
+    // stopped before it starts — Escape below, or a newer text — is never
+    // started at all, so being asked is what is waited for here, as the
+    // answer is what a quick search's settle waits for.
+    wait::until(cx, |_| {
+        service
+            .requests()
+            .iter()
+            .any(|path| path == "/search?q=slow")
+            .then_some(())
+    });
+
     // Past it, the same line along the command's own rule — and the
     // footer's strip says nothing for such work (#248): no "Running…"
     // text, though the strip keeps its selector.

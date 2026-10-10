@@ -465,6 +465,11 @@ fn key_name(key: &str) -> String {
 /// focused field: Command on macOS, Ctrl elsewhere, and macOS's Option
 /// and Ctrl ones. Returns what the combination does there, for the
 /// refusal's message.
+///
+/// Up and Down are not among them: the section jumps' Command (Control
+/// elsewhere) arrows are bindings above the query field's own caret keys
+/// (#258), and the plain pair was never protected — the selection moves
+/// with them while a field has focus.
 fn text_editing_action(binding: &Binding) -> Option<&'static str> {
     let (control, alt, _shift, platform, _function) = binding.modifiers();
     let key = binding.key();
@@ -485,7 +490,7 @@ fn text_editing_action(binding: &Binding) -> Option<&'static str> {
             "space" => Some("shows the character palette"),
             "backspace" | "delete" => Some("deletes a word"),
             "left" | "right" => Some("moves by a word"),
-            "home" | "end" | "up" | "down" => Some("moves through the text"),
+            "home" | "end" => Some("moves through the text"),
             _ => None,
         };
     }

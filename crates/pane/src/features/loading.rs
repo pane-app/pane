@@ -158,7 +158,7 @@ impl Loading {
         }
         let sweep = (!reduced && strength > 0.).then(|| self.sweep(now));
         let frame = LoadingFrame {
-            bar: (strength > 0. || self.fade.is_some()).then(|| LoadingBar { strength, sweep }),
+            bar: (strength > 0. || self.fade.is_some()).then_some(LoadingBar { strength, sweep }),
             animating: self.fade.is_some() || sweep.is_some(),
             busy,
             wake: match (self.started, busy) {

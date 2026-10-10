@@ -288,12 +288,15 @@ fn a_failed_paste_is_an_error_not_a_copy(fixture: &Fixture) {
         "{}: no copy instead",
         fixture.title
     );
-    // The window had closed for the paste: the failure is said in a HUD.
+    // The window had closed for the paste: the failure is said in a
+    // HUD, its title and its message split as the HUD shows them (#250).
     pane.closed(
-        &[Hud::new(
-            ToastStyle::Failure,
-            format!("The extension reported an error: {why}"),
-        )],
+        &[Hud {
+            title: "The extension reported an error".into(),
+            message: Some(why.to_owned()),
+            icon: None,
+            style: ToastStyle::Failure,
+        }],
         "a failed Paste",
     );
 }

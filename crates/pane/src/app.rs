@@ -2246,11 +2246,16 @@ impl Render for LauncherWindow {
         // The strip's name for assistive technology: the status, or the
         // toast's title and message — or, only once waited-for work has
         // outlasted the loading bar's threshold, the busy state, so a
-        // quick action is never announced as busy (#248).
-        let announced: Option<SharedString> = match &toast {
-            Some(shown) => Some(shown.toast.text().into()),
-            None => status.clone().or(loading.busy.then(|| "Running…".into())),
-        };
+        // quick action is never announced as busy (#248). The busy state
+        // comes first: it is what is happening now, past the threshold,
+        // whatever outcome is still showing its time out in the strip.
+        let announced: Option<SharedString> = loading
+            .busy
+            .then(|| "Running…".into())
+            .or_else(|| match &toast {
+                Some(shown) => Some(shown.toast.text().into()),
+                None => status.clone(),
+            });
         // The announcer says it too (#132), when it is a toast or an
         // outcome — or the busy state, past the threshold; progress stays
         // the strip's own.

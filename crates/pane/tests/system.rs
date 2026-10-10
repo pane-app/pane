@@ -123,7 +123,7 @@ fn wait(time: Duration, cx: &mut VisualTestContext) {
 
 /// Enter runs Copy, the primary standard action: it copies, closes the
 /// window, then the HUD's window shows "Copied to Clipboard" for its 1.2
-/// seconds.
+/// seconds, fading out over about a second once they are up (#250).
 #[gpui::test]
 fn copy_closes_the_window_and_shows_its_hud(cx: &mut TestAppContext) {
     let (window, cx, system) = opened(cx);
@@ -138,8 +138,11 @@ fn copy_closes_the_window_and_shows_its_hud(cx: &mut TestAppContext) {
     );
     assert!(hidden(&window, cx), "the launcher closed");
     assert_eq!(hud(&window, cx).as_deref(), Some("Copied to Clipboard"));
+    // Its 1.2 seconds up, the HUD fades out instead of closing at once.
     wait(Duration::from_millis(1300), cx);
-    assert_eq!(hud(&window, cx), None, "gone after 1.2 seconds");
+    assert!(hud(&window, cx).is_some(), "its fade has begun");
+    wait(Duration::from_millis(1000), cx);
+    assert_eq!(hud(&window, cx), None, "gone once its fade has run");
 
     // Summoned again, the command's screen is back, as the Launcher
     // setting's default restores it.
