@@ -44,8 +44,11 @@ dark/glass.
 
 The retained `PANE_MATERIAL=glass` path requests desktop composition on
 Windows/macOS and normalizes to opaque on Linux; the Appearance page says
-so under the material choice where it happens. On macOS the request reaches
-the fork's under-window vibrancy material (see [docs/gpui-fork.md](gpui-fork.md));
+so under the material choice where it happens. On Linux that normalization
+is the intentional opaque launcher, pinned by a policy test, with its
+tiered CI evidence and the outstanding native X11/Wayland validation
+recorded in [the validation report](launcher-ui-validation.md). On macOS the
+request reaches the fork's under-window vibrancy material (see [docs/gpui-fork.md](gpui-fork.md));
 no suppression check runs there, and the page's caveat that a glass request
 is not proof of blur still applies. On Windows, the material's
 construction reads the OS build, [transparency setting](https://learn.microsoft.com/en-us/uwp/api/windows.ui.viewmanagement.uisettings.advancedeffectsenabled)

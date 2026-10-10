@@ -29,6 +29,15 @@ no additional Zui blur engine is imported. macOS now selects the under-window
 vibrancy material, adapted from Zui (see the macOS section below). No Linux
 compositor integration is added.
 
+Linux needs none of it. #67's audit of CE's own Linux backends found X11
+window transparency — engaged only for a non-opaque window appearance — and
+the KDE `org_kde_kwin_blur` Wayland protocol, requested only for the Blurred
+appearance, plus in-scene backdrop blur. The launcher never requests a
+blurred window on Linux: the material policy normalizes a glass request to
+the opaque window and solid panel at construction, so no Zui blur patch or
+compositor-specific integration is imported for Linux (see
+[docs/launcher-ui-validation.md](launcher-ui-validation.md)).
+
 This renderer correction alone does not establish useful native glass. The
 prototype also removed outer panel shadows that obscured the desktop. Its branch,
 working tree and copied Windows dependency are preserved independently by #62;

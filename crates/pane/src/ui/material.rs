@@ -398,3 +398,36 @@ mod tests {
         assert!(Material::new(MaterialMode::Glass).is_glass());
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    /// The Linux leg of the material policy: desktop-compositor frost is
+    /// not guaranteed behind a Linux window, so a glass request normalizes
+    /// to the opaque window and the solid panel — the explicit opaque
+    /// choice's own surface — never a glass tint over an unblurred desktop.
+    /// The settings tests cover the same normalization end to end through
+    /// the Appearance page's note; this test pins the policy itself, and
+    /// runs wherever the Linux test legs run.
+    #[test]
+    fn a_glass_request_normalizes_to_the_opaque_surface_on_linux() {
+        assert_eq!(
+            glass_fallback_reason(),
+            Some("this platform does not expose compositor frost behind a window")
+        );
+        assert_eq!(
+            MaterialMode::Glass.window_appearance(),
+            WindowBackgroundAppearance::Opaque
+        );
+        let normalized = Material::new(MaterialMode::Glass);
+        assert!(
+            !normalized.is_glass(),
+            "glass normalizes to the solid surface"
+        );
+        assert_eq!(
+            normalized.window_appearance(),
+            MaterialMode::Opaque.window_appearance()
+        );
+    }
+}
