@@ -629,40 +629,67 @@ impl Launcher {
         let result = self
             .install_planned(request.clone(), &mode, shown.as_ref(), &mut claimed)
             .await;
-        let mut state = self.lock();
-        for identity in &claimed {
-            state.release(identity);
-        }
-        let current = state.screen_epoch == epoch;
-        match result {
-            Ok(outcome) => {
-                let message = outcome_message(&mode, &outcome);
-                for dependency in outcome.dependencies {
-                    self.put_installed(&mut state, dependency);
+        // The install's own work, in a block so the state's lock is not
+        // held across the development that may follow: what it answers is
+        // the package Create Extension or Import Extension previewed, to
+        // develop once it is installed (see `create`).
+        let developed = {
+            let mut state = self.lock();
+            for identity in &claimed {
+                state.release(identity);
+            }
+            let current = state.screen_epoch == epoch;
+            match result {
+                Ok(outcome) => {
+                    let message = outcome_message(&mode, &outcome);
+                    for dependency in outcome.dependencies {
+                        self.put_installed(&mut state, dependency);
+                    }
+                    let package = outcome.package;
+                    // What Create Extension or Import Extension asked for:
+                    // the package they previewed is developed once it is
+                    // installed (see `create`).
+                    let develop_after = state
+                        .develop_after
+                        .take_if(|identity| *identity == package.identity);
+                    let first = package.commands().first().map(|c| c.component.clone());
+                    let replaced_is_open = self.put_installed(&mut state, package);
+                    if current || replaced_is_open {
+                        self.show_root(&mut state, first);
+                        state.view.status = Status::Result(message);
+                    } else {
+                        self.refresh(&mut state);
+                    }
+                    develop_after
                 }
-                let package = outcome.package;
-                let first = package.commands().first().map(|c| c.component.clone());
-                let replaced_is_open = self.put_installed(&mut state, package);
-                if current || replaced_is_open {
-                    self.show_root(&mut state, first);
-                    state.view.status = Status::Result(message);
-                } else {
-                    self.refresh(&mut state);
+                Err(Stopped::Changed(changed_plan)) => {
+                    let (package, plan) = *changed_plan;
+                    if current {
+                        let title = package.manifest.title.clone();
+                        self.show_preview(&mut state, &request, Ok((package, plan)));
+                        state.view.status = Status::Error(changed(&title));
+                    }
+                    None
+                }
+                Err(Stopped::Failed(failure)) => {
+                    let message = self.install_left_behind(&mut state, &failure);
+                    if current {
+                        state.view.status = Status::Error(message);
+                    }
+                    None
                 }
             }
-            Err(Stopped::Changed(changed_plan)) => {
-                let (package, plan) = *changed_plan;
-                if current {
-                    let title = package.manifest.title.clone();
-                    self.show_preview(&mut state, &request, Ok((package, plan)));
-                    state.view.status = Status::Error(changed(&title));
-                }
-            }
-            Err(Stopped::Failed(failure)) => {
-                let message = self.install_left_behind(&mut state, &failure);
-                if current {
-                    state.view.status = Status::Error(message);
-                }
+        };
+        // The package Create Extension or Import Extension previewed is
+        // developed as its own row would develop it: its folder is watched
+        // from now on, each save building and reloading it.
+        if let Some(identity) = developed {
+            let start = {
+                let mut state = self.lock();
+                self.begin_developing(&mut state, &identity)
+            };
+            if let Some(start) = start {
+                self.finish_developing(identity, start).await;
             }
         }
     }
@@ -859,6 +886,12 @@ fn preview_view(
     };
     let manifest = &package.manifest;
     let mut details = vec![format!("Source: {}", package.identity)];
+    // What the package does, in a sentence: the preview shows it beside
+    // the source, as the extension's page in Settings does under the
+    // title (#224).
+    if let Some(description) = &manifest.description {
+        details.push(description.clone());
+    }
     if let Some(version) = &manifest.version {
         details.push(format!("Version: {version}"));
     }

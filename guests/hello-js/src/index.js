@@ -3,7 +3,7 @@
 // A minimal JavaScript command to develop with Pane's development mode:
 // build it once, install this folder, choose "Develop" in the Actions menu
 // of Hello JavaScript's page in Settings, then edit GREETING and save. Pane builds the package
-// with tools/componentize-js/pane_js.py and reloads it while it keeps
+// with pane-build's JavaScript build and reloads it while it keeps
 // running; "Say hello" then shows the new text in a toast. See
 // guests/README.md.
 // @ts-check

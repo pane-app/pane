@@ -7,6 +7,8 @@
   "type": "module",
   "main": "src/index.ts",
   "devDependencies": {
-    "@pane-app/extension": "file:../js"
+    "@pane-app/extension": "file:../js",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
   }
 }

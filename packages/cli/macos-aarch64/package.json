@@ -1,0 +1,27 @@
+{
+  "name": "@pane-app/cli-macos-aarch64",
+  "version": "0.1.0",
+  "description": "Pane's command-line tool for extension authors, for macOS arm64: the pane-ext program and the componentizer a JavaScript or TypeScript package's build runs. One of @pane-app/cli's optional dependencies; npm installs it only on matching systems and the shim runs the program it holds.",
+  "homepage": "https://github.com/pane-app/pane/tree/main/packages/cli#readme",
+  "bugs": "https://github.com/pane-app/pane/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pane-app/pane.git",
+    "directory": "packages/cli/macos-aarch64"
+  },
+  "license": "GPL-3.0-or-later",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "files": [
+    "pane-ext",
+    "componentize-qjs-p3",
+    "runtime.wasm",
+    "libc.so",
+    "LICENSE-GPL",
+    "LICENSE-componentize-qjs"
+  ]
+}

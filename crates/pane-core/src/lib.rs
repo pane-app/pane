@@ -8,6 +8,7 @@ mod arguments;
 mod atomic;
 pub mod autostart;
 pub mod changes;
+pub mod check;
 pub mod clipboard;
 pub mod defaults;
 mod dependencies;
@@ -36,6 +37,7 @@ mod links;
 pub mod local_channel;
 pub mod npm;
 mod operations;
+pub mod pack;
 mod packages;
 #[cfg(test)]
 mod peak_memory;
@@ -46,11 +48,14 @@ mod programs;
 mod protection;
 pub mod run;
 mod runtime;
+pub mod schema;
 mod search;
+mod source_map;
 pub mod switch_windows;
 pub mod system;
 pub mod system_commands;
 pub mod system_icons;
+pub mod templates;
 mod threads;
 pub mod tray;
 mod util;
@@ -80,20 +85,22 @@ pub use launcher::search_files;
 pub use launcher::{
     AliasOutcome, ApplicationUpdate, BuildFailure, CommandPreferences, CommandRegistration,
     ComputedAnswer, CustomViewSnapshot, DISMISS_NOTICE, Development, ExtensionMark,
-    ExtensionOperation, FormField, FormView, HotkeyOutcome, ItemAction, ItemActions, Launcher,
-    LauncherView, ListPresentation, LogNotice, MANAGE_EXTENSIONS, OpenSubmenu, OperationKind,
-    PackagePreferences, PinTarget, PreferenceField, PreferencesTarget, Presentation, Question,
-    QuickSlot, ResultAction, ResultActionItem, ResultActions, Row, RowKind, RowPresentation,
-    Screen, Section, SelectedAction, SettingsTarget, SetupHeader, ShortcutCatalog, ShortcutCommand,
-    ShortcutGroup, SlotChange, Status, SubmenuState, UNEXPECTED_QUIT, Unavailable, UnboundShortcut,
-    UpdateHold, UpdateResult, UpdateResults, UpdateResultsAction, answer_sections, root_sections,
+    ExtensionOperation, FolderAsk, FormField, FormView, HotkeyOutcome, ItemAction, ItemActions,
+    Launcher, LauncherView, ListPresentation, LogNotice, MANAGE_EXTENSIONS, OpenSubmenu,
+    OperationKind, PackagePreferences, PinTarget, PreferenceField, PreferencesTarget, Presentation,
+    Question, QuickSlot, ResultAction, ResultActionItem, ResultActions, Row, RowKind,
+    RowPresentation, Screen, Section, SelectedAction, SettingsTarget, SetupHeader, ShortcutCatalog,
+    ShortcutCommand, ShortcutGroup, SlotChange, Status, SubmenuState, UNEXPECTED_QUIT, Unavailable,
+    UnboundShortcut, UpdateHold, UpdateResult, UpdateResults, UpdateResultsAction, answer_sections,
+    root_sections,
 };
 pub use links::LinkOpener;
 pub use operations::{MAX_CALL_DEPTH, MAX_OPERATION_JSON};
 pub use packages::{
     CommandMode, EXTENSION_API, InstalledPackage, ListedCommand, MANIFEST_FILE, MANIFEST_VERSION,
-    MAX_SCHEDULE_SECONDS, MIN_SCHEDULE_SECONDS, Manifest, ManifestCommand, ManifestHelper,
-    ManifestOperation, ManifestSchedule, PackageError, PackageIdentity, RetainedData, SavedData,
+    MAX_KEYWORDS, MAX_SCHEDULE_SECONDS, MIN_SCHEDULE_SECONDS, Manifest, ManifestCommand,
+    ManifestHelper, ManifestOperation, ManifestSchedule, PackageError, PackageIdentity,
+    RetainedData, SavedData,
 };
 #[doc(hidden)]
 pub use pane_build::process_tree;

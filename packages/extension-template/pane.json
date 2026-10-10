@@ -1,0 +1,21 @@
+{
+  "$schema": "./node_modules/@pane-app/extension/schema/pane.schema.json",
+  "manifestVersion": 1,
+  "title": "Extension Template",
+  "description": "A command that opens a list of items, each running an action.",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "icon": "icon.png",
+  "license": "Apache-2.0 OR MIT",
+  "repository": "https://github.com/pane-app/extension-template",
+  "issues": "https://github.com/pane-app/extension-template/issues",
+  "keywords": ["pane", "extension", "template"],
+  "commands": [
+    {
+      "id": "extension-template",
+      "title": "Extension Template",
+      "subtitle": "Opens a list of items, each running an action",
+      "component": "dist/extension-template.wasm"
+    }
+  ]
+}

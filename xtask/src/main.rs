@@ -6,19 +6,46 @@
 //!   helper sample's native helper built for this system, the npm sample
 //!   into `target/guests/npm/`, packed as npm packs it, and the Git sample
 //!   into `target/guests/git/greeter/`, its source with its built component
-//!   under `dist/`, as a release revision holds it.
-//! - `js-guests`: rebuild the prebuilt JS/TS sample components with the pinned
-//!   toolchain in `tools/componentize-js` (prerequisites: guests/README.md),
-//!   then run `guests`.
+//!   under `dist/`, as a release revision holds it. It also builds the
+//!   componentizer (`componentize-qjs`'s `p3_build` example, with the
+//!   committed wasm parts) into `target/guests/componentizer/`, the binary
+//!   a development build of an installed Pane spawns when the package has
+//!   no `@pane-app/cli` platform package of its own.
+//! - `js-guests`: rebuild the prebuilt JS/TS sample components through
+//!   `pane-build`'s JavaScript build (prerequisites: Node.js 22+ with npm;
+//!   the samples' `package.json`s pin esbuild and TypeScript), then run
+//!   `guests`.
+//! - `cli-package <folder>`: build `pane-ext` and the componentizer for
+//!   this system, and assemble the npm packages that ship them under
+//!   `folder` — `cli/`, `@pane-app/cli`'s shim package, and
+//!   `cli-<target>/`, the platform package — ready for `npm pack` (#219).
+//!   The workflow packs and publishes-checks them; publishing stays a
+//!   person's step.
+//! - `wasm-parts <folder>`: build the QuickJS runtime for `wasm32-wasip3`
+//!   with the pinned nightly Rust and wasi-sdk, copy the SDK's WASI 0.3
+//!   `libc.so`, and record both with their digests — the maintenance step
+//!   that rebuilds the committed wasm parts (#219; what `pane_js.py` did,
+//!   in the task runner so no Python is needed).
+//! - `check-parts <folder>`: compare the committed wasm parts with a fresh
+//!   build in `folder`, so they cannot drift from the vendored source.
+//! - `schema`: generate `pane.json`'s JSON Schema from pane-core's own
+//!   manifest types and check the committed copy against it (`--write` to
+//!   rewrite the file), so the schema cannot drift from what Pane reads
+//!   (#224). `ci-lints` runs it, and ci-fast.yml regenerates a stale copy
+//!   on a push and uploads it as an artifact, as it does the JS/TS samples.
 //! - `ci`: the lints of `ci-lints`, then the tests of `ci-tests`.
-//! - `ci-lints`: check formatting, the prebuilt JS/TS samples, the SDKs'
-//!   packages (`sdks`) and clippy: the half of `ci` that runs no tests and
-//!   builds no guest but the Rust SDK.
-//! - `sdks`: check that the SDKs package as they would be published,
-//!   publishing nothing: the Rust SDK's copy of the WIT is `wit/`, `cargo
-//!   publish --dry-run` packages `pane-extension` and builds it from the
-//!   package alone, and `npm pack` packs `@pane-app/extension` into
-//!   `target/sdks/`. Publishing them is a person's step, never CI's (#128).
+//! - `ci-lints`: check formatting, the committed `pane.json` schema, the
+//!   prebuilt JS/TS samples, the SDKs' packages (`sdks`) and clippy: the
+//!   half of `ci` that runs no tests and builds no guest but the Rust SDK.
+//!   The prebuilt-samples check needs no toolchain at all (#218): it
+//!   verifies digests and staleness in `js_guests`.
+//! - `sdks`: check that the SDKs and the CLI packages as they would be
+//!   published, publishing nothing: the Rust SDK's copy of the WIT is
+//!   `wit/`, `cargo publish --dry-run` packages `pane-extension` and builds
+//!   it from the package alone, `npm pack` packs `@pane-app/extension`,
+//!   `@pane-app/cli` and `@pane-app/create` into `target/sdks/`, and the
+//!   CLI's platform package templates match the targets pane-build looks
+//!   for. Publishing them is a person's step, never CI's (#128).
 //! - `ci-tests`: build the guests, then run the workspace's tests with
 //!   cargo-nextest, which retries a failing test twice before the run
 //!   fails for it, so one flaky failure costs time, not the run. Options
@@ -49,6 +76,8 @@
 //!   fails when a measure is over its generous ceiling. `ci-branch.yml`'s
 //!   Linux tests run it in one shard, after the tests.
 
+mod cli_packages;
+mod js_guests;
 mod package;
 mod zip;
 
@@ -61,53 +90,9 @@ const GUEST_TARGET: &str = "wasm32-wasip2";
 /// npm's own fixed time for packed files, 1985-10-26T08:15:00Z: the
 /// tarballs this repository packs (the npm sample, the Linux package) are
 /// the same on every system, so a source serves one integrity everywhere.
-pub(crate) const PACKED_MTIME: u64 = 499_162_500;
-
-/// Components built by `js-guests` and committed, so that normal builds and
-/// tests need no JavaScript toolchain.
-const PREBUILT: &[&str] = &[
-    "sample_js",
-    "sample_ts",
-    "sample_settings_js",
-    "sample_settings_ts",
-    "sample_operations_js",
-    "sample_operations_ts",
-    "sample_applications_js",
-    "sample_applications_ts",
-    "sample_query_js",
-    "sample_query_ts",
-    "sample_no_view_js",
-    "sample_no_view_ts",
-    "sample_search_js",
-    "sample_search_ts",
-    "sample_helper_js",
-    "sample_helper_ts",
-    "sample_files_js",
-    "sample_files_ts",
-    "sample_clipboard_js",
-    "sample_clipboard_ts",
-    "sample_npm_js",
-    "sample_schedule_js",
-    "sample_schedule_ts",
-    "sample_service_js",
-    "sample_service_ts",
-    "sample_actions_js",
-    "sample_actions_ts",
-    "sample_preferences_js",
-    "sample_preferences_ts",
-    "sample_arguments_js",
-    "sample_arguments_ts",
-    "sample_icons_js",
-    "sample_icons_ts",
-    "sample_programs_js",
-    "sample_programs_ts",
-    "sample_run_js",
-    "sample_run_ts",
-    "sample_system_commands_js",
-    "sample_system_commands_ts",
-    "sample_switch_windows_js",
-    "sample_switch_windows_ts",
-];
+/// `pane-ext pack`'s tarballs use it too, from where it lives
+/// (`pane_core::pack`).
+pub(crate) use pane_core::pack::PACKED_MTIME;
 
 fn main() -> ExitCode {
     let task = std::env::args().nth(1);
@@ -149,9 +134,21 @@ fn main() -> ExitCode {
                 })
         })
         .transpose();
+    // `schema --write` rewrites the committed schema it differs from.
+    let write = std::env::args().any(|arg| arg == "--write");
     let result = match (task.as_deref(), version) {
         (Some("guests"), _) => guests(),
-        (Some("js-guests"), _) => js_guests(),
+        (Some("js-guests"), _) => js_guests(std::env::args().any(|arg| arg == "--check")),
+        (Some("cli-package"), _) => {
+            folder_argument("cli-package").and_then(|out| cli_packages::cli_package(&out))
+        }
+        (Some("wasm-parts"), _) => {
+            folder_argument("wasm-parts").and_then(|into| cli_packages::wasm_parts(&into))
+        }
+        (Some("check-parts"), _) => {
+            folder_argument("check-parts").and_then(|fresh| cli_packages::check_parts(&fresh))
+        }
+        (Some("schema"), _) => schema(write),
         (Some("ci-lints"), _) => ci_lints(),
         (Some("sdks"), _) => sdks(),
         (Some("file-index-guard"), _) => file_index_guard(),
@@ -160,9 +157,13 @@ fn main() -> ExitCode {
         (Some("package-macos"), Ok(version)) => package::macos(dev, version),
         (_, Err(why)) => Err(why),
         _ => Err("usage: cargo xtask \
-             <guests|js-guests|ci-lints|sdks|file-index-guard|package-linux|package-windows|\
-             package-macos> [--dev] [--package-version <version>], cargo xtask \
-             <ci|ci-tests> [nextest options], or cargo xtask file-index-bench [options]"
+             <guests|js-guests|cli-package|wasm-parts|check-parts|ci-lints|sdks|schema|\
+             file-index-guard|package-linux|package-windows|package-macos> [--dev] \
+             [--package-version <version>], cargo xtask \
+             <cli-package|wasm-parts|check-parts> <folder>, cargo xtask schema [--write], \
+             cargo xtask js-guests --check (the staleness check alone), cargo xtask \
+             <ci|ci-tests> [nextest options], or cargo xtask \
+             file-index-bench [options]"
             .into()),
     };
     match result {
@@ -179,6 +180,17 @@ fn root() -> PathBuf {
         .parent()
         .unwrap()
         .to_path_buf()
+}
+
+/// The one folder argument of a task that takes one: `cli-package`,
+/// `wasm-parts` and `check-parts` name where they assemble or compare.
+fn folder_argument(task: &str) -> Result<PathBuf, String> {
+    let mut arguments = std::env::args().skip(2);
+    let folder = arguments.next();
+    match (folder, arguments.next().is_some()) {
+        (Some(folder), false) if !folder.starts_with('-') => Ok(PathBuf::from(folder)),
+        _ => Err(format!("usage: cargo xtask {task} <folder>")),
+    }
 }
 
 fn cargo() -> Command {
@@ -257,10 +269,18 @@ fn guests() -> Result<(), String> {
                 .map_err(|error| format!("copy {} failed: {error}", built.display()))?;
         }
     }
-    for name in PREBUILT {
+    for (name, _) in js_guests::SAMPLES {
         let prebuilt = root.join(format!("guests/prebuilt/{name}.wasm"));
         std::fs::copy(&prebuilt, out.join(format!("{name}.wasm")))
             .map_err(|error| format!("copy {} failed: {error}", prebuilt.display()))?;
+        // Its source map, which the prebuilt samples carry beside their
+        // components: the tests that develop one want the stacks the sample
+        // throws mapped to its sources (#214).
+        let map = root.join(format!("guests/prebuilt/{name}.wasm.map"));
+        if map.exists() {
+            std::fs::copy(&map, out.join(format!("{name}.wasm.map")))
+                .map_err(|error| format!("copy {} failed: {error}", map.display()))?;
+        }
     }
     // Ready-to-run sample packages: each manifest in guests/packages with the
     // component it names, and the images it shows (#139): the other files
@@ -282,14 +302,69 @@ fn guests() -> Result<(), String> {
             std::fs::copy(&from, &to)
                 .map_err(|error| format!("copy {} failed: {error}", from.display()))?;
         }
+        // The component's source map, when the prebuilt sample has one, for
+        // the tests that develop the package (#214).
+        let map = out.join(format!("{component}.wasm.map"));
+        if map.exists() {
+            std::fs::copy(&map, dest.join(format!("{component}.wasm.map")))
+                .map_err(|error| format!("copy {} failed: {error}", map.display()))?;
+        }
         // Everything beside the package's pane.json: its icons, its
         // assets/ folder, and the help (HELP.md) its Setup screen shows.
         copy_package_files(&root.join("guests/packages").join(package), &dest)?;
     }
     echo_helper(&root, &out)?;
+    componentizer(&root, &out)?;
     npm_sample(&root, &out)?;
     git_sample(&root, &out)?;
     println!("guests built into {}", out.display());
+    Ok(())
+}
+
+/// Builds the componentizer for this system — `componentize-qjs`'s
+/// `p3_build` example, the vendored crate of the workspace — and puts it,
+/// with the committed wasm parts, in `target/guests/componentizer/`: the
+/// binary a development build spawns when it does not link the componentizer
+/// in-process (a Pane checkout's default, see `pane/src/main.rs`), and the
+/// tests' stand-in for the `@pane-app/cli` platform package a package
+/// installs with `npm install` (#218's development-mode contract; #219's
+/// packages).
+fn componentizer(root: &Path, out: &Path) -> Result<(), String> {
+    run(cargo().current_dir(root).args([
+        "build",
+        "--locked",
+        "-p",
+        "componentize-qjs",
+        "--example",
+        "p3_build",
+    ]))?;
+    // Where cargo built it: `CARGO_TARGET_DIR`, else `CARGO_BUILD_TARGET_DIR`
+    // (`build.target-dir` from the environment), else `target`, in the
+    // development profile's `debug`, as the tests built the workspace.
+    let target = ["CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR"]
+        .into_iter()
+        .find_map(std::env::var_os)
+        .map(|dir| root.join(dir))
+        .unwrap_or_else(|| root.join("target"));
+    let binary = target
+        .join("debug/examples")
+        .join(format!("p3_build{}", std::env::consts::EXE_SUFFIX));
+    let dest = out.join("componentizer");
+    std::fs::create_dir_all(&dest).map_err(|error| error.to_string())?;
+    let componentizer = if cfg!(windows) {
+        "componentize-qjs-p3.exe"
+    } else {
+        "componentize-qjs-p3"
+    };
+    std::fs::copy(&binary, dest.join(componentizer))
+        .map_err(|error| format!("copy {} failed: {error}", binary.display()))?;
+    for part in ["runtime.wasm", "libc.so"] {
+        std::fs::copy(
+            root.join("tools/componentize-js/wasm-parts").join(part),
+            dest.join(part),
+        )
+        .map_err(|error| format!("copy {part} failed: {error}"))?;
+    }
     Ok(())
 }
 
@@ -498,24 +573,57 @@ const SAMPLE_PACKAGES: [(&str, &str); 66] = [
     ("sample-switch-windows-ts", "sample_switch_windows_ts"),
 ];
 
-/// Rebuilds `guests/prebuilt/` from the JS/TS sample sources, then refreshes
-/// `target/guests/`. `PYTHON` names the interpreter if the default is absent.
-fn js_guests() -> Result<(), String> {
-    run(&mut pane_js("samples"))?;
+/// Rebuilds `guests/prebuilt/` from the JS/TS sample sources with
+/// `pane-build`'s JavaScript build, then refreshes `target/guests/`. With
+/// `--check`, only verifies the committed components against their manifest
+/// and the current sources (the staleness half of `ci-lints`), without
+/// building anything.
+fn js_guests(check_only: bool) -> Result<(), String> {
+    if check_only {
+        return js_guests::check();
+    }
+    js_guests::rebuild()?;
     guests()
 }
 
-/// Runs a `tools/componentize-js/pane_js.py` subcommand with `PYTHON`, or the
-/// platform's usual interpreter name.
-fn pane_js(subcommand: &str) -> Command {
-    let python = std::env::var_os("PYTHON")
-        .unwrap_or_else(|| if cfg!(windows) { "python" } else { "python3" }.into());
-    let mut command = Command::new(python);
-    command
-        .current_dir(root())
-        .args(["tools/componentize-js/pane_js.py", subcommand]);
-    command
+/// Checks the committed `pane.json` schema against what Pane's manifest
+/// types generate, or rewrites it (`--write`). `ci-lints` runs the check,
+/// and ci-fast.yml regenerates a stale copy on a push and uploads it as an
+/// artifact, as it does the JS/TS samples (#224).
+fn schema(write: bool) -> Result<(), String> {
+    let path = root().join(SCHEMA);
+    let generated = pane_core::schema::manifest_schema();
+    if !write {
+        // The file is committed with LF endings and checked out with
+        // whatever this system uses; the generated schema is one text.
+        let committed = std::fs::read_to_string(&path)
+            .map_err(|error| format!("read {} failed: {error}", path.display()))?
+            .replace("\r\n", "\n");
+        if committed == generated {
+            println!(
+                "{} matches what Pane's manifest types generate",
+                path.display()
+            );
+            return Ok(());
+        }
+        return Err(format!(
+            "{} does not match what Pane's manifest types generate: rewrite it with \
+             `cargo xtask schema --write`",
+            path.display()
+        ));
+    }
+    if let Some(folder) = path.parent() {
+        std::fs::create_dir_all(folder).map_err(|error| error.to_string())?;
+    }
+    std::fs::write(&path, generated)
+        .map_err(|error| format!("write {} failed: {error}", path.display()))?;
+    println!("wrote {}", path.display());
+    Ok(())
 }
+
+/// Where the generated schema is committed: beside the SDK that ships it,
+/// inside the `@pane-app/extension` package (`npm pack` carries the folder).
+const SCHEMA: &str = "guests/js/schema/pane.schema.json";
 
 /// The lints half of `ci`: the formatting checks, the prebuilt-samples
 /// check, the SDKs' packages and clippy — everything that runs no tests
@@ -532,13 +640,40 @@ fn ci_lints() -> Result<(), String> {
         "guests/fixtures/mixed-p2",
         "guests/helpers/echo",
         "guests/hello-rust",
+        // The Rust templates pane-ext new writes, each a package of its
+        // own that no workspace holds (#221).
+        "crates/pane-core/templates/rust/list",
+        "crates/pane-core/templates/rust/detail",
+        "crates/pane-core/templates/rust/form",
+        "crates/pane-core/templates/rust/no-view",
     ] {
         run(cargo()
             .current_dir(root.join(dir))
             .args(["fmt", "--all", "--check"]))?;
     }
+    // The command files pane-ext new command writes are no package's
+    // source, so rustfmt checks them directly.
+    let rustfmt = if cfg!(windows) {
+        "rustfmt.exe"
+    } else {
+        "rustfmt"
+    };
+    run(Command::new(rustfmt)
+        .current_dir(&root)
+        .arg("--check")
+        .arg("--edition")
+        .arg("2024")
+        .args([
+            "crates/pane-core/templates/rust/command/list.rs",
+            "crates/pane-core/templates/rust/command/detail.rs",
+            "crates/pane-core/templates/rust/command/form.rs",
+            "crates/pane-core/templates/rust/command/no-view.rs",
+        ]))?;
+    // The committed pane.json schema is the one Pane's manifest types
+    // generate, before anything slower runs.
+    schema(false)?;
     // The prebuilt JS/TS samples must match their sources and pins.
-    run(&mut pane_js("check"))?;
+    js_guests::check()?;
     sdks()?;
     let clippy = [
         "clippy",
@@ -556,12 +691,15 @@ fn ci_lints() -> Result<(), String> {
         .args(clippy))
 }
 
-/// Checks that the SDKs package as they would be published, publishing
-/// nothing: the WIT the Rust SDK carries, and is generated from, is a copy
-/// of `wit/`; `cargo publish --dry-run` packages `pane-extension` and
-/// builds it from its package alone, as crates.io would; and `npm pack`
-/// packs `@pane-app/extension` into `target/sdks/`. Publishing them is a
-/// person's step, never CI's (#128).
+/// Checks that the SDKs and the CLI packages as they would be published,
+/// publishing nothing: the WIT the Rust SDK carries, and is generated from,
+/// is a copy of `wit/`; `cargo publish --dry-run` packages `pane-extension`
+/// and builds it from its package alone, as crates.io would; `npm pack`
+/// packs `@pane-app/extension`, `@pane-app/cli` and `@pane-app/create` (the
+/// package `npm create @pane-app` runs, #221) into `target/sdks/`; and the
+/// CLI's platform package templates match each other and the targets
+/// pane-build looks for (`cli_packages::check`). Publishing any of them is
+/// a person's step, never CI's (#128).
 fn sdks() -> Result<(), String> {
     let root = root();
     same_files(&root.join("wit"), &root.join("guests/pane-extension/wit"))?;
@@ -575,15 +713,19 @@ fn sdks() -> Result<(), String> {
         "--target",
         GUEST_TARGET,
     ]))?;
+    cli_packages::check(&root)?;
     let out = root.join("target/sdks");
     std::fs::create_dir_all(&out).map_err(|error| error.to_string())?;
     // npm is a batch file on Windows, which is started by its full name.
     let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
-    run(Command::new(npm)
-        .current_dir(root.join("guests/js"))
-        .arg("pack")
-        .arg("--pack-destination")
-        .arg(&out))
+    for package in ["guests/js", "packages/cli", "packages/create"] {
+        run(Command::new(npm)
+            .current_dir(root.join(package))
+            .arg("pack")
+            .arg("--pack-destination")
+            .arg(&out))?;
+    }
+    Ok(())
 }
 
 /// Checks that the folder `copy` holds the files `original` holds, with the

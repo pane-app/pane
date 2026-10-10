@@ -1,0 +1,20 @@
+{
+  "name": "__NAME__",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A command that runs without a screen and answers in a toast.",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "pane-ext dev",
+    "check": "pane-ext check",
+    "pack": "pane-ext pack"
+  },
+  "devDependencies": {
+    "@pane-app/cli": "0.1.0",
+    "@pane-app/extension": "0.1.0",
+    "@biomejs/biome": "2.5.15",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  }
+}

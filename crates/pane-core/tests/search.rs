@@ -24,6 +24,8 @@ mod rows;
 use guests::guest;
 use rows::titles;
 
+const CREATE_ROW: &str = "Create Extension…";
+const IMPORT_ROW: &str = "Import Extension…";
 const INSTALL_ROW: &str = "Install extension from folder…";
 const NPM_ROW: &str = "Install extension from npm…";
 const GIT_ROW: &str = "Install extension from Git…";
@@ -354,7 +356,7 @@ fn many_installed_commands_are_searched_without_running_them_and_only_the_chosen
     // Pane's own rows number six once an extension is installed (#267).
     let runtime = dirs.runtime();
     let launcher = Launcher::with_packages(Ok(runtime.clone()), vec![], dirs.packages_dir());
-    assert_eq!(launcher.view().rows.len(), 18);
+    assert_eq!(launcher.view().rows.len(), 20);
     block_on(launcher.set_query("tool 1"));
     assert_eq!(
         titles(&launcher),
@@ -397,6 +399,12 @@ fn an_installed_command_is_found_by_its_title_or_its_package_title() {
     // Settings", #168).
     block_on(launcher.set_query("install"));
     assert_eq!(titles(&launcher), [INSTALL_ROW, NPM_ROW, GIT_ROW]);
+    // The authoring rows are searched by their titles too (#222): each
+    // matches its own verb, none of them the install rows'.
+    block_on(launcher.set_query("create"));
+    assert_eq!(titles(&launcher), [CREATE_ROW]);
+    block_on(launcher.set_query("import"));
+    assert_eq!(titles(&launcher), [IMPORT_ROW]);
     block_on(launcher.set_query("configure"));
     assert_eq!(titles(&launcher), [MANAGE_ROW]);
 }

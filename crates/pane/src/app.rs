@@ -26,8 +26,8 @@ use pane_core::feedback::WindowRequest;
 use pane_core::hotkeys::Shortcut;
 use pane_core::tray::TrayAction;
 use pane_core::{
-    ComputedAnswer, Launcher, LauncherView, ListPresentation, NextShowing, Row, RowPresentation,
-    Screen, SelectedAction, SettingsTarget, Status, WindowPresence,
+    ComputedAnswer, FolderAsk, Launcher, LauncherView, ListPresentation, NextShowing, Row,
+    RowPresentation, Screen, SelectedAction, SettingsTarget, Status, WindowPresence,
 };
 
 use crate::extension_views::{custom_view, form};
@@ -821,6 +821,66 @@ impl LauncherWindow {
         );
     }
 
+    /// Asks for the parent folder a new extension package is written into
+    /// with the platform's folder picker, then shows the Create Extension
+    /// form for it (#222). Cancelling leaves root search as it was. A debug
+    /// build run by the native smokes takes the folder
+    /// `PANE_TEST_CHOOSE_FOLDER` names instead of showing the picker.
+    fn choose_create_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(debug_assertions)]
+        if let Some(parent) = std::env::var_os("PANE_TEST_CHOOSE_FOLDER") {
+            self.create_extension(Path::new(&parent), window, cx);
+            return;
+        }
+        self.choose_folder(
+            "Create",
+            |this, parent, window, cx| this.create_extension(parent, window, cx),
+            window,
+            cx,
+        );
+    }
+
+    /// Shows the Create Extension form for the parent folder `parent`,
+    /// which the picker chose: the name, language and template of the
+    /// package the form writes there. As [`LauncherWindow::import_extension`]
+    /// is Import Extension's pick, this is Create Extension's.
+    pub fn create_extension(&mut self, parent: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        self.launcher.show_create_form(parent);
+        self.sync_screen(window, cx);
+        cx.notify();
+    }
+
+    /// Asks for the folder of an extension package that already exists
+    /// with the platform's folder picker, then previews it for installing,
+    /// which develops the package once the author installs it (#222). The
+    /// folder is checked as any install is, so one without `pane.json`, or
+    /// a source-only package, is explained by Pane's own messages. A debug
+    /// build run by the native smokes takes the folder
+    /// `PANE_TEST_CHOOSE_FOLDER` names instead of showing the picker.
+    fn choose_import_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(debug_assertions)]
+        if let Some(folder) = std::env::var_os("PANE_TEST_CHOOSE_FOLDER") {
+            self.import_extension(Path::new(&folder), window, cx);
+            return;
+        }
+        self.choose_folder(
+            "Import",
+            |this, folder, window, cx| this.import_extension(folder, window, cx),
+            window,
+            cx,
+        );
+    }
+
+    /// Shows the install preview of the package in `folder`, which Pane
+    /// develops once it is installed: Import Extension's pick (#222), as
+    /// [`LauncherWindow::preview_package`] shows a folder an install
+    /// offers.
+    pub fn import_extension(&mut self, folder: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        self.motion.pointer_open();
+        let pending = self.launcher.import_extension(folder);
+        self.show_until_done(pending, window, cx);
+    }
+
     /// Asks for a folder with the platform's folder picker, its button
     /// saying `prompt`, then hands the chosen one to `chosen`. Cancelling
     /// does nothing; a picker that cannot open is reported.
@@ -1214,6 +1274,18 @@ impl LauncherWindow {
         }
         if self.launcher.selected_asks_for_folder() {
             self.choose_package_folder(window, cx);
+            return;
+        }
+        // Create Extension and Import Extension ask for a folder too: the
+        // parent folder a new package is written into, or the folder of one
+        // that already exists (#222). The launcher does nothing on their
+        // rows; the window asks, as it asks for the folder a package
+        // grants.
+        if let Some(ask) = self.launcher.selected_folder_ask() {
+            match ask {
+                FolderAsk::Create => self.choose_create_folder(window, cx),
+                FolderAsk::Import => self.choose_import_folder(window, cx),
+            }
             return;
         }
         if let Some(identity) = self.launcher.folder_to_choose() {
@@ -1912,7 +1984,8 @@ impl Render for LauncherWindow {
             Screen::UpdateResults { .. } => "No update results yet.",
             Screen::CustomView(_)
             | Screen::NetworkDetails { .. }
-            | Screen::ProgramDetails { .. } => "",
+            | Screen::ProgramDetails { .. }
+            | Screen::Crash { .. } => "",
             Screen::Confirm { .. }
             | Screen::Hotkey { .. }
             | Screen::PauseDetails { .. }
@@ -1927,7 +2000,11 @@ impl Render for LauncherWindow {
         // (an npm or Git package's has several more lines), keep their choices in
         // view.
         let preview = matches!(view.screen, Screen::Package { .. }) && !view.rows.is_empty();
-        let confirm = matches!(view.screen, Screen::Confirm { .. }) || preview;
+        // A confirmation, a preview and the error overlay keep their rows in
+        // view while their long lines of information scroll: the overlay's
+        // stack trace can be longer than the window.
+        let confirm =
+            matches!(view.screen, Screen::Confirm { .. } | Screen::Crash { .. }) || preview;
         // A preview has one or two rows (Install or Update) and more lines
         // to read, which may take more of the window than a confirmation's.
         let details_share = if preview { 0.62 } else { 0.4 };
@@ -2208,9 +2285,9 @@ impl Render for LauncherWindow {
             .font_features(theme.typography.features.clone())
             .text_color(theme.text_title)
             .when_some(heading, |content, heading| content.child(heading))
-            // A confirmation's or preview's long details scroll within 40%
-            // (a preview's 62%) of the window, leaving the rest to its
-            // choices, which stay visible.
+            // A confirmation's, preview's or error overlay's long details
+            // scroll within 40% (a preview's 62%) of the window, leaving the
+            // rest to its choices, which stay visible.
             .when(!details.is_empty(), |content| {
                 content.child(
                     div()

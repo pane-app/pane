@@ -83,6 +83,8 @@ impl Dirs {
     }
 }
 
+const CREATE_ROW: &str = "Create Extension…";
+const IMPORT_ROW: &str = "Import Extension…";
 const INSTALL_ROW: &str = "Install extension from folder…";
 const NPM_ROW: &str = "Install extension from npm…";
 const GIT_ROW: &str = "Install extension from Git…";
@@ -99,7 +101,14 @@ fn a_previewed_local_package_installs_and_its_command_runs() {
     let launcher = dirs.launcher();
     assert_eq!(
         titles(&launcher),
-        [INSTALL_ROW, NPM_ROW, GIT_ROW, SETTINGS_ROW]
+        [
+            INSTALL_ROW,
+            NPM_ROW,
+            GIT_ROW,
+            CREATE_ROW,
+            IMPORT_ROW,
+            SETTINGS_ROW
+        ]
     );
     assert!(launcher.selected_asks_for_folder());
 
@@ -148,6 +157,8 @@ fn a_previewed_local_package_installs_and_its_command_runs() {
             INSTALL_ROW,
             NPM_ROW,
             GIT_ROW,
+            CREATE_ROW,
+            IMPORT_ROW,
             CHECK_ROW,
             MANAGE_ROW,
             SETTINGS_ROW
@@ -174,6 +185,48 @@ fn error(launcher: &Launcher) -> String {
         Status::Error(message) => message,
         other => panic!("expected an error, got {other:?}"),
     }
+}
+
+#[test]
+fn a_package_that_describes_itself_shows_it_in_the_install_preview() {
+    let dirs = Dirs::new();
+    let folder = package(&dirs.source("hello"), "Hello", "1.0.0", "sample_rust");
+    // The metadata a published package carries (#224): what it does, who
+    // wrote it, where it lives, where its problems go, under which
+    // license, and the words a person would search for it by.
+    let manifest = manifest("Hello", "1.0.0", "hello.wasm").replace(
+        "\"title\": \"Hello\",",
+        "\"title\": \"Hello\",\n  \"description\": \"Greets you warmly\",\n  \"author\": \"Ada Lovelace\",\n  \"homepage\": \"https://example.com/hello\",\n  \"repository\": \"https://github.com/example/hello\",\n  \"issues\": \"https://github.com/example/hello/issues\",\n  \"license\": \"MIT\",\n  \"keywords\": [\"greeting\", \" hello \"],",
+    );
+    with_manifest(&folder, &manifest);
+    let launcher = dirs.launcher();
+
+    block_on(launcher.preview_package(&folder));
+
+    // The description is a line of the preview's details, under the
+    // source and version (#224); the rest of the metadata is held for the
+    // authoring tooling and reporting.
+    let details = launcher.view().details().to_vec();
+    let source = details
+        .iter()
+        .position(|line| line.starts_with("Source:"))
+        .expect("the source line");
+    let version = details
+        .iter()
+        .position(|line| line.starts_with("Version:"))
+        .expect("the version line");
+    let described = details
+        .iter()
+        .position(|line| line == "Greets you warmly")
+        .expect("the description line");
+    assert!(source < described && described < version, "{details:?}");
+
+    block_on(launcher.install_package(&folder));
+    // A keyword of only spaces reads as its absence, like an empty
+    // description; the description itself round-trips into the installed
+    // copy, which the Extensions group in Settings shows.
+    let packages = launcher.packages();
+    assert_eq!(packages[0].description(), Some("Greets you warmly"));
 }
 
 /// (identity, title, version) of every installed package.
@@ -211,6 +264,8 @@ fn a_second_explicit_install_of_the_same_folder_is_rejected() {
             INSTALL_ROW,
             NPM_ROW,
             GIT_ROW,
+            CREATE_ROW,
+            IMPORT_ROW,
             CHECK_ROW,
             MANAGE_ROW,
             SETTINGS_ROW
@@ -285,6 +340,8 @@ fn copies_in_different_folders_are_distinct_packages_despite_the_same_title() {
             INSTALL_ROW,
             NPM_ROW,
             GIT_ROW,
+            CREATE_ROW,
+            IMPORT_ROW,
             CHECK_ROW,
             MANAGE_ROW,
             SETTINGS_ROW
@@ -372,6 +429,8 @@ fn installed_commands_are_listed_after_a_restart_without_running_any_guest() {
             INSTALL_ROW,
             NPM_ROW,
             GIT_ROW,
+            CREATE_ROW,
+            IMPORT_ROW,
             CHECK_ROW,
             MANAGE_ROW,
             SETTINGS_ROW
@@ -491,7 +550,14 @@ fn unsupported_packages_are_explained_and_not_installed() {
         launcher.back();
         assert_eq!(
             titles(&launcher),
-            [INSTALL_ROW, NPM_ROW, GIT_ROW, SETTINGS_ROW],
+            [
+                INSTALL_ROW,
+                NPM_ROW,
+                GIT_ROW,
+                CREATE_ROW,
+                IMPORT_ROW,
+                SETTINGS_ROW
+            ],
             "{case}"
         );
     }
@@ -606,6 +672,8 @@ fn a_damaged_installed_copy_is_listed_with_its_problem_and_others_still_run() {
             INSTALL_ROW,
             NPM_ROW,
             GIT_ROW,
+            CREATE_ROW,
+            IMPORT_ROW,
             CHECK_ROW,
             MANAGE_ROW,
             SETTINGS_ROW
@@ -702,6 +770,8 @@ fn an_install_finishing_in_the_background_keeps_the_selected_row() {
             INSTALL_ROW,
             NPM_ROW,
             GIT_ROW,
+            CREATE_ROW,
+            IMPORT_ROW,
             CHECK_ROW,
             MANAGE_ROW,
             SETTINGS_ROW
@@ -945,6 +1015,8 @@ fn a_package_for_this_system_shows_its_systems_and_installs() {
             INSTALL_ROW,
             NPM_ROW,
             GIT_ROW,
+            CREATE_ROW,
+            IMPORT_ROW,
             CHECK_ROW,
             MANAGE_ROW,
             SETTINGS_ROW
@@ -975,6 +1047,8 @@ fn an_installed_copy_for_other_systems_lists_its_commands_as_unavailable() {
             INSTALL_ROW,
             NPM_ROW,
             GIT_ROW,
+            CREATE_ROW,
+            IMPORT_ROW,
             CHECK_ROW,
             MANAGE_ROW,
             SETTINGS_ROW
@@ -1041,6 +1115,8 @@ fn a_command_for_other_systems_is_listed_with_its_reason_and_others_still_open()
                 (INSTALL_ROW.into(), None),
                 (NPM_ROW.into(), None),
                 (GIT_ROW.into(), None),
+                (CREATE_ROW.into(), None),
+                (IMPORT_ROW.into(), None),
                 (CHECK_ROW.into(), None),
                 (MANAGE_ROW.into(), None),
                 (SETTINGS_ROW.into(), None),

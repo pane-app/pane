@@ -48,6 +48,7 @@ pub mod clipboard_view;
 mod command_search;
 mod confirmations;
 mod crash_notice;
+mod create;
 mod feedback;
 mod hotkeys;
 mod icon_loads;
@@ -91,6 +92,7 @@ use crate::search::{self, Keys, Query};
 
 mod dependents;
 mod developing;
+mod error_overlay;
 mod extensions;
 mod file_search;
 mod files;
@@ -119,9 +121,12 @@ pub use application_update::ApplicationUpdate;
 use application_update::{Application, Updates};
 use choices::Record;
 pub use crash_notice::{LogNotice, UNEXPECTED_QUIT};
+pub use create::FolderAsk;
+use create::{CREATE_EXTENSION, IMPORT_EXTENSION};
 use developing::Developing;
 pub use developing::{BuildFailure, Development};
 pub(crate) use developing::{BuildNow, Remote};
+use error_overlay::Shown;
 pub use extensions::{ExtensionMark, ExtensionOperation, OperationKind};
 pub use hotkeys::HotkeyOutcome;
 use hotkeys::{Bindings, Game, OpenPane};
@@ -239,6 +244,16 @@ pub enum Screen {
     /// Why Pane paused an installed package, as lines of information under
     /// the title, with a row that retries it.
     PauseDetails {
+        identity: PackageIdentity,
+        details: Vec<String>,
+    },
+    /// The error overlay of a developed package's command that crashed,
+    /// trapped, threw or failed to start (see `error_overlay`): the message
+    /// and the stack trace as lines of information under the title, with
+    /// rows that open the package's Logs screen, copy the message and
+    /// trace, and run the command again. Shown over what the launcher was
+    /// showing, which [`State::error_overlay`] holds for Back to put back.
+    Crash {
         identity: PackageIdentity,
         details: Vec<String>,
     },
@@ -560,6 +575,7 @@ impl LauncherView {
             | Screen::Extensions { details }
             | Screen::Confirm { details, .. }
             | Screen::PauseDetails { details, .. }
+            | Screen::Crash { details, .. }
             | Screen::NetworkDetails { details, .. }
             | Screen::ProgramDetails { details, .. }
             | Screen::BuildDetails { details, .. }
@@ -893,9 +909,17 @@ struct State {
     /// as last noted: their rows in root search say "Needs setup" (see
     /// `setup`).
     setup_needed: HashSet<String>,
+    /// The error overlay on show (see `error_overlay`): the covered view
+    /// and its rows, put back when it leaves.
+    error_overlay: Option<Shown>,
     /// What this start forgot because its command is a root provider (see
     /// `providers`), for the toast naming it.
     provider_forgotten: providers::Forgotten,
+    /// The package whose install preview is shown for Create Extension or
+    /// Import Extension (see `create`), which Pane develops once it is
+    /// installed: the author confirming the preview. Leaving the preview
+    /// drops it, so not installing the package is the author's answer.
+    develop_after: Option<PackageIdentity>,
 }
 
 /// What is happening to a package, which stops another change to it
@@ -1056,6 +1080,10 @@ enum FormPurpose {
     Npm,
     /// Previews the Git repository it names (Pane's own).
     Git,
+    /// Writes the new package the form names into this parent folder,
+    /// builds it once and previews it for installing, which Pane develops
+    /// once installed (Pane's own Create Extension; see `create`).
+    Create(PathBuf),
     /// Saves the preferences the Setup screen asks for, then launches the
     /// command it held back (Pane's own; see `setup`).
     Setup(Box<setup::SetupGate>),
@@ -1181,6 +1209,14 @@ enum Entry {
     AskNpm,
     /// Ask which Git repository to install from (root).
     AskGit,
+    /// Nothing in the launcher: the window asks for the parent folder a
+    /// new package is written into, then shows the Create Extension form
+    /// (root; see `create`).
+    CreateExtension,
+    /// Nothing in the launcher: the window asks for the folder of a
+    /// package that already exists, whose install preview Pane then
+    /// shows and develops once installed (root; see `create`).
+    ImportExtension,
     /// Acquire this default extension again, after Pane could not (root).
     Acquire(String),
     /// Install the offered Pane application update, which the user chose
@@ -1264,6 +1300,15 @@ enum Entry {
     /// Show the extension log of this developed package (extension list,
     /// build details).
     ExtensionLog(PackageIdentity),
+    /// Show the extension log of the developed package whose error overlay
+    /// is on display, leaving the overlay for it (error overlay).
+    CrashLogs(PackageIdentity),
+    /// Copy the message and stack trace the error overlay shows (error
+    /// overlay); the window writes the clipboard.
+    CrashCopy,
+    /// Run the failed command again, or start the failed package again
+    /// (error overlay).
+    CrashRetry,
     /// Show the update results of the latest pass that recorded (the
     /// extension list, the failure toast's View Details).
     UpdateResults,
@@ -1575,7 +1620,9 @@ impl Launcher {
             confirmations,
             confirmation_saves: Arc::default(),
             setup_needed: HashSet::new(),
+            error_overlay: None,
             provider_forgotten: providers::Forgotten::default(),
+            develop_after: None,
         };
         if let (Some(installation), Some(files)) = (&installation, &state.files) {
             files.open_record(&installation.dir);
@@ -2545,6 +2592,9 @@ impl Launcher {
             .and_then(|index| state.entries.get(index));
         match entry {
             Some(Entry::Copy(text)) => Some(text.clone()),
+            // The error overlay's copy: the message and the trace, the
+            // lines its screen shows.
+            Some(Entry::CrashCopy) => Some(state.view.details().join("\n")),
             _ => None,
         }
     }
@@ -2559,6 +2609,25 @@ impl Launcher {
             .selected
             .and_then(|index| state.entries.get(index));
         matches!(entry, Some(Entry::InstallFromFolder))
+    }
+
+    /// Which of Pane's own authoring rows is selected, whose activation
+    /// the window completes by asking for a folder before the launcher
+    /// acts (#222): Create Extension's parent folder, or Import
+    /// Extension's package folder. `None` for every other row; the
+    /// window calls [`Launcher::show_create_form`] or
+    /// [`Launcher::import_extension`] with the folder it picks.
+    pub fn selected_folder_ask(&self) -> Option<FolderAsk> {
+        let state = self.lock();
+        let entry = state
+            .view
+            .selected
+            .and_then(|index| state.entries.get(index));
+        match entry {
+            Some(Entry::CreateExtension) => Some(FolderAsk::Create),
+            Some(Entry::ImportExtension) => Some(FolderAsk::Import),
+            _ => None,
+        }
     }
 
     /// Whether the selected row opens Pane's Settings window. Activating
@@ -2642,6 +2711,9 @@ impl Launcher {
                     |entry| matches!(entry, Entry::PauseDetails(shown) if *shown == identity),
                 );
             }
+            // The error overlay leaves for what it covered; the command it
+            // was about stays open underneath, as it was.
+            Screen::Crash { .. } => self.leave_error_overlay(&mut state),
             Screen::NetworkDetails { identity, .. } => {
                 let identity = identity.clone();
                 self.show_extensions_at(
@@ -2684,10 +2756,17 @@ impl Launcher {
             Screen::CommandSearch { query } if !query.is_empty() => {
                 self.clear_search_in_command(&mut state);
             }
-            Screen::Command
-            | Screen::CommandSearch { .. }
-            | Screen::Package { .. }
-            | Screen::Extensions { .. } => self.show_root(&mut state, None),
+            Screen::Command | Screen::CommandSearch { .. } | Screen::Extensions { .. } => {
+                self.show_root(&mut state, None)
+            }
+            // Leaving an install preview drops what Create Extension or
+            // Import Extension asked Pane to do once the package was
+            // installed (see `create`): not installing it is the author's
+            // answer.
+            Screen::Package { .. } => {
+                state.develop_after = None;
+                self.show_root(&mut state, None);
+            }
             Screen::Root { query } => {
                 if !query.is_empty() {
                     self.search(&mut state, "");
@@ -2922,15 +3001,19 @@ impl Launcher {
                 self.show_extension_log(state, &identity);
                 Pending::Nothing
             }
+            Entry::CrashLogs(identity) => {
+                self.open_crash_logs(state, &identity);
+                Pending::Nothing
+            }
+            Entry::CrashCopy => {
+                state.view.status = Status::Result("Copied the message and trace".into());
+                Pending::Nothing
+            }
+            Entry::CrashRetry => self.retry_crash(state),
             Entry::UpdateResults => {
                 self.show_update_results(state);
                 Pending::Nothing
             }
-            // The window acts on these, not the launcher.
-            Entry::ShowExtension(_)
-            | Entry::InstallFromFolder
-            | Entry::ChooseFolder(_)
-            | Entry::Settings => Pending::Nothing,
             Entry::AskUninstall(identity) => {
                 let closure = dependencies::required_dependents(&state.packages, &identity);
                 if closure.is_empty() {
@@ -3033,6 +3116,13 @@ impl Launcher {
                 self.show_git_form(state);
                 Pending::Nothing
             }
+            // The window acts on these, not the launcher.
+            Entry::InstallFromFolder
+            | Entry::ChooseFolder(_)
+            | Entry::Settings
+            | Entry::ShowExtension(_)
+            | Entry::CreateExtension
+            | Entry::ImportExtension => Pending::Nothing,
             Entry::Open(opening) => {
                 if opening.no_view {
                     Launcher::begin_run(state);
@@ -3502,6 +3592,10 @@ impl Launcher {
             | Screen::CustomView(_)
             | Screen::Confirm { .. }
             | Screen::Hotkey { .. } => {}
+            // The error overlay covers the screen it stands over: what it
+            // was about does not change underneath it. A new development
+            // event of the package ends it (see `show_development`).
+            Screen::Crash { .. } => {}
             // Its lines stay, also once development ended: the window reads
             // them as they are.
             Screen::ExtensionLog { .. } => {}
@@ -3697,6 +3791,24 @@ impl Launcher {
                 unavailable: None,
             };
             add(row, Entry::AskGit, None, None);
+            // The authoring rows (ADR 0047, #222): an author starts in the
+            // app, writing a new package or importing one that exists;
+            // both hand the folder to the install preview the author
+            // confirms, and Pane develops the package once it is installed.
+            let row = Row {
+                id: CREATE_EXTENSION.into(),
+                title: "Create Extension…".into(),
+                subtitle: Some("Write a new extension package from a template".into()),
+                unavailable: None,
+            };
+            add(row, Entry::CreateExtension, None, None);
+            let row = Row {
+                id: IMPORT_EXTENSION.into(),
+                title: "Import Extension…".into(),
+                subtitle: Some("Develop an extension package that already exists".into()),
+                unavailable: None,
+            };
+            add(row, Entry::ImportExtension, None, None);
         }
         // A default extension Pane could not acquire can be tried again;
         // the row is gone while one is being acquired, or once it is
@@ -3834,6 +3946,10 @@ impl Launcher {
             }
             _ => None,
         };
+        // Pane's own Create Extension form: the package is written from
+        // the templates, built once and handed to the install preview the
+        // author confirms, after which Pane develops it (see `create`).
+        let creation = Launcher::begun_creation(state);
         let submission = match (&state.view.screen, &mut state.form, &state.open) {
             (
                 Screen::Form(form),
@@ -3885,6 +4001,9 @@ impl Launcher {
                 Some((false, spec)) => launcher.preview_npm(&spec).await,
                 Some((true, spec)) => launcher.preview_git(&spec).await,
                 None => {}
+            }
+            if let Some(creation) = creation {
+                launcher.finish_creation(epoch, creation).await;
             }
             if let Some((component, item_id, values)) = submission {
                 launcher
@@ -4177,7 +4296,20 @@ impl Launcher {
                 });
                 state.next_screen();
             }
-            Err(error) => state.view.status = Status::Error(error.to_string()),
+            Err(error) => {
+                // A developed package's crash, or error its command answered
+                // with, while the custom view opens shows as the error
+                // overlay (see `error_overlay`), in place of the status
+                // line; every other case, including a command whose
+                // package Pane does not know (its own registered
+                // commands), keeps the status line.
+                let shown = Launcher::open_again(&state, &component).is_some_and(|retry| {
+                    self.show_error_overlay(&mut state, &component, &error, retry)
+                });
+                if !shown {
+                    state.view.status = Status::Error(error.to_string());
+                }
+            }
         }
     }
 
@@ -4395,6 +4527,17 @@ impl Launcher {
             };
             let state = &mut *state;
             let ended = stopped(state, &component, &data);
+            // A developed package's crash, or error its command answered
+            // with, shows as the error overlay over the command's view
+            // (see `error_overlay`), in place of the status line and the
+            // failure toast.
+            if ended.is_none()
+                && let Err(error) = &result
+                && let Some(retry) = Launcher::open_again(state, &component)
+                && self.show_error_overlay(state, &component, error, retry)
+            {
+                return;
+            }
             let list_again = handled && ended.is_none();
             state.view.status = match (ended, result) {
                 // Stopped while it was running: its answer is not shown.
@@ -4626,7 +4769,23 @@ impl Launcher {
                         searching = self.ask_files(state, "", 0);
                     }
                 }
-                Err(error) => state.view.status = Status::Error(error.to_string()),
+                Err(error) => {
+                    // A developed package's crash, or error its command
+                    // answered with, while the command opens shows as the
+                    // error overlay (see `error_overlay`) over what the
+                    // launcher is showing, in place of the status line.
+                    let retry = Opening {
+                        component: component.clone(),
+                        command: command.clone(),
+                        search,
+                        launch: launch.clone(),
+                        initial_search: None,
+                        no_view: false,
+                    };
+                    if !self.show_error_overlay(state, &component, &error, retry) {
+                        state.view.status = Status::Error(error.to_string());
+                    }
+                }
             }
             searching
         };

@@ -117,8 +117,8 @@ fn develop(folder: Option<PathBuf>) -> Result<String, String> {
 
 /// `pane-ext`'s own folder for the package's builds, their staging folders
 /// and logs: in the user's cache folder, named by a hash of the package's
-/// folder.
-fn work_folder(folder: &Path) -> PathBuf {
+/// folder. `pack` builds there too, in its own subfolder.
+pub(crate) fn work_folder(folder: &Path) -> PathBuf {
     let home = env_path(if cfg!(windows) { "USERPROFILE" } else { "HOME" });
     let cache = if cfg!(windows) {
         env_path("LOCALAPPDATA")

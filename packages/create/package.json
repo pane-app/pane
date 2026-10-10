@@ -1,0 +1,37 @@
+{
+  "name": "@pane-app/create",
+  "version": "0.1.0",
+  "description": "npm create @pane-app: start a Pane extension package with pane-ext new, from the list, detail, form and no-view templates",
+  "keywords": [
+    "pane",
+    "launcher",
+    "extension",
+    "create",
+    "scaffold",
+    "template"
+  ],
+  "homepage": "https://github.com/pane-app/pane/tree/main/packages/create#readme",
+  "bugs": "https://github.com/pane-app/pane/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pane-app/pane.git",
+    "directory": "packages/create"
+  },
+  "license": "Apache-2.0 OR MIT",
+  "type": "module",
+  "bin": {
+    "pane-create": "./create.js"
+  },
+  "files": [
+    "create.js",
+    "README.md",
+    "LICENSE-APACHE",
+    "LICENSE-MIT"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@pane-app/cli": "0.1.0"
+  }
+}

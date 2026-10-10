@@ -1,0 +1,27 @@
+# __TITLE__'s package: a WebAssembly component Pane runs, built with
+# `cargo build --release --target wasm32-wasip2`, which `pane-ext dev` runs
+# for you. Outside a published SDK, point `pane-extension` at the
+# repository's copy instead (`path = "../../guests/pane-extension"`).
+[package]
+name = "__NAME__"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0 OR MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Pane's Rust SDK, from crates.io.
+pane-extension = "0.1"
+
+# A package of its own, built in its own folder with the documented
+# command `cargo build --release --target wasm32-wasip2`, so that its
+# component is where pane.json says: target/wasm32-wasip2/release/__CRATE__.wasm.
+[workspace]
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
