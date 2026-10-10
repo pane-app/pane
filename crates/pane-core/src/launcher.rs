@@ -5105,9 +5105,7 @@ fn root_rows(state: &State, query: &str) -> (Vec<Row>, Vec<Entry>) {
     // (#199): each recorded result's decayed frecency and counting
     // queries, by its row id — a command's or an indexed result's own.
     let learned = state.learned.chosen.ranked(state.clock.now());
-    let keys = |&(result, kind, provider)| {
-        candidate(result, kind, provider, &learned)
-    };
+    let keys = |&(result, kind, provider)| candidate(result, kind, provider, &learned);
     let parsed = Query::new(query);
     let named = |index: &usize| parsed.is_alias_of(&candidates[*index].0.keys);
     let matches: Vec<usize> =

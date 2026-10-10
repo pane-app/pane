@@ -16,6 +16,12 @@ with [the calculator](#the-calculator) as a default extension.
 [#24, #25 and #26](applications.md) add [results supplied ahead of the
 query](#results-supplied-ahead-of-the-query), with the installed
 applications as a default extension.
+Root search also
+[learns from what the user chooses](#learning-from-what-the-user-chooses)
+(ADR 0030, #199): a result the user invokes earns frecency and keeps the
+queries it was chosen with, ranking above how well titles match, and the
+blank query lists the pins, then the commands and applications by
+frecency.
 [#28](https://github.com/pane-app/pane/issues/28) adds
 [quicklinks](quicklinks.md), which open a saved link, file, folder or
 application; #149 made them indexed results ranked with commands. [#31](https://github.com/pane-app/pane/issues/31) adds
@@ -30,19 +36,27 @@ the host's [file index](files.md) of the home folder (below).
 
 ## What is searched
 
-Root search lists **root results**, in this order when the query is empty
-(for a query that is not blank, the [computed results](#results-computed-from-the-query)
-for it come first, once they arrive):
+Root search lists **root results** — for a query that is not blank, the
+[computed results](#results-computed-from-the-query) for it come first,
+once they arrive, and a command whose [alias](aliases.md) the query is, or
+starts with, comes before everything (computed results included), with the
+[fallbacks](aliases.md#making-a-command-a-fallback) after everything. A
+blank query lists them in the [no-query order](#matching-and-ranking):
+the [pinned home](#the-pinned-home) above, then the commands and the
+[results supplied ahead of the query](#results-supplied-ahead-of-the-query)
+by frecency, so what the user opens most is at the top before anything is
+typed. What is listed:
 
 1. the commands built into this Pane build: none in any build since
    [#162](https://github.com/pane-app/pane/issues/162) (the Rust,
    JavaScript and TypeScript samples are installed by hand with
    `pane --install`, and a test registers its own);
-2. the commands of each enabled installed package, in install order, and,
-   for a query that is not blank only, the [results supplied ahead of the
-   query](#results-supplied-ahead-of-the-query), such as the installed
-   applications, after them — a command's `when` and `matches` say when it
-   is listed at all, and the commands declared for a typed address or path
+2. the commands of each enabled installed package, and the [results
+   supplied ahead of the query](#results-supplied-ahead-of-the-query),
+   such as the installed applications, ranked with them (by kind below
+   commands and links, until what the user opens raises them) — a
+   command's `when` and `matches` say when it is listed at all, and the
+   commands declared for a typed address or path
    come [below the results found by title](#understanding-the-typed-query)
    instead;
 3. an enabled installed package whose managed copy cannot be read, as one row
@@ -57,10 +71,7 @@ for it come first, once they arrive):
    preview with its Install. The launcher itself has no screen for
    extensions.
 
-For a query that is not blank, a command whose [alias](aliases.md) the
-query is, or starts with, comes before everything (computed results
-included), and the [fallbacks](aliases.md#making-a-command-a-fallback)
-after everything; when nothing but fallbacks is listed, the first is
+For a query that matches nothing but fallbacks, the first fallback is
 selected, so Enter sends it the query (ADR 0031).
 
 A **disabled** package contributes nothing ([#10](https://github.com/pane-app/pane/issues/10)):
@@ -134,18 +145,20 @@ difference winning:
 1. the query is the result's alias;
 2. the query is longer than three characters and is exactly the title or
    an alternate title;
-3. the query is exactly one of the result's learned queries (#199);
+3. the query is exactly one of the result's [learned
+   queries](#learning-from-what-the-user-chooses);
 4. the query is exactly the subtitle (a keyword counts: keywords rank as
    subtitles);
 5. the alias starts with the query;
-6. a learned query starts with the query (#199);
-7. the query starts with a learned query of at least three characters
-   (#199);
+6. a learned query starts with the query;
+7. the query starts with a learned query of at least three characters (an
+   "overbounds" match; the longer learned query wins, and it is ignored
+   when the query is more than three characters longer than it);
 8. the higher of the title, alternate-title and subtitle scores (a
    keyword's counts where the subtitle's does; a match the composites or
    the package title found holds none of them, and ranks below every
    result with a score);
-9. higher frecency (#199);
+9. higher frecency;
 10. higher title score;
 11. kind priority — commands above links (quicklinks), above
     applications, above files;
@@ -156,12 +169,11 @@ difference winning:
 13. the title, with digits compared by their value ("Item 2" before
     "Item 10").
 
-Steps 3, 6, 7 and 9 (the learned queries, and the frecency both weigh)
-are the learning ticket's (#199), filled in beside the steps they belong
-to: until then every result compares equal at them, as it does at the
-no-query order (frecency, having an alias, kind, provider, title) that
-follows the last step, so results the comparator cannot tell apart keep
-the order they were listed in. For "download" among Clear cache
+The **no-query order** — the blank query's own order, and the last
+tiebreak of every query's — follows the last step: frecency, then having
+an alias, then kind priority, then the provider's order, then the title.
+Results the comparator cannot tell apart keep the order they were listed
+in. For "download" among Clear cache
 ("Delete downloaded files"), Downloader, Download, Recent downloads and
 Undownloadable files: Download (its title is the query), then Downloader
 (a title that starts with the query), then Recent downloads and Clear
@@ -184,8 +196,10 @@ provider supplies (an application's
 is added twice); a computed result's section names the command that
 computed it, and a file row shows its folder, so neither adds anything.
 
-A blank query lists every root result, in root search order. The best
-match is selected after every change of the query; searching the same
+A blank query lists every root result, in the no-query order: with
+nothing learned yet, having an alias and the title decide, so Pane's own
+rows rank with the commands. The best match is selected after every
+change of the query; searching the same
 query again changes nothing. Each result's text is folded once, when
 root search is shown or its results are rebuilt, not on every
 keystroke.
@@ -196,9 +210,55 @@ spans the title and the subtitle); a result found by an alternate title,
 a keyword, its subtitle or its package title alone highlights nothing in
 its title.
 
-Not done, deliberately: typo tolerance (edit distance), locale-aware case
-folding, and the learning the comparator's seams leave (#199: learned
-queries, frecency, and the blank query's order).
+Not done, deliberately: typo tolerance (edit distance) and locale-aware
+case folding.
+
+## Learning from what the user chooses
+
+Root search learns from what the user invokes
+([ADR 0030](adr/0030-root-search-learns-from-what-the-user-chooses.md),
+#199). A **use** is recorded when the user invokes a root result from
+root search — Enter, a click, its number chord — and its action was
+dispatched, not refused as unavailable or paused, together with the query
+then in the field, folded as matching folds it. Invoking a quick slot
+from the pinned home records a use with no query. Not recorded: a result
+opened by its global hotkey; results without a lasting identity (computed
+answers and other computed results, file results); fallback rows; Pane's
+own install and management rows; and rows the user did not invoke.
+
+A use earns two things:
+
+- **Frecency**, a score that decays with a ten-day half-life and never
+  falls below the score of a result never used: a use adds 1 to the
+  decayed score and re-anchors it at that moment, by the launcher's
+  clock. It weighs at the comparator's ninth step and orders the blank
+  query. Recording a use never re-sorts the list on screen; the next
+  search ranks with it.
+- **Learned queries**, the last three distinct non-empty queries the
+  result was chosen with, newest first. They weigh at steps 3, 6 and 7
+  only while the result's frecency is above 1 and it was last opened
+  within 17 days.
+
+A use is keyed by the result's identity, as a quick slot is (ADR 0026):
+a registered command by its command id, an indexed result — an
+application by [the applications' identity](applications.md#names),
+which an update into a new version folder keeps — by its own id under
+the command that supplies it. Never a row's title or position.
+
+The record is Pane's own — `learned.json` beside `installed.json`,
+following the house record rules of `aliases.json`: versioned,
+validated, written atomically one write at a time; an unreadable record
+is reported on root search's status line and never replaced, and nothing
+is recorded while it cannot be read; a write that fails puts back what
+the record last held. Uninstalling a package forgets its entries, as its
+aliases are forgotten; disabling keeps them. An entry whose score has
+decayed to 1 and that was last opened more than 17 days ago is dropped,
+since it ranks nothing. What Pane learns stays on this computer and is
+never sent anywhere.
+
+The user's controls over what is learned — a per-result "Reset Ranking"
+in the Actions panel, a reset-all and an on switch in Settings — are
+[#200](https://github.com/pane-app/pane/issues/200)'s.
 
 ## Host behavior
 
@@ -242,8 +302,10 @@ A blank query shows the **pinned home** (#101) above the results: the
 list of pins with no gaps and no limit
 ([ADR 0027](adr/0027-quick-slots-are-an-ordered-list.md)). A query
 whose trimmed text is not blank hides it; clearing the query brings it
-back. The results below keep their own order and their "Commands" label:
-Pane lists no suggestions of recent use.
+back. The results below keep their "Commands" label and are ordered by
+what root search [learned](#learning-from-what-the-user-chooses) — the
+no-query order, frecency first — as any query's are; the list is one
+list, with no section of suggestions of its own.
 
 - **What a slot holds** is an identity, never a row: a registered command
   by its id, or an indexed result (an installed application) by its own id
@@ -297,8 +359,9 @@ Pane lists no suggestions of recent use.
   disabled, paused or missing target, or an application its command has
   not listed yet, keeps its slot and its name and says why it cannot run;
   it can always be removed, and enabling or installing the same identity
-  resolves it again. Showing root search asks a pinned application's
-  command for its results if it never answered, without typing a query.
+  resolves it again. Showing root search asks for the indexed results
+  the home lists, without typing a query (see
+  [below](#results-supplied-ahead-of-the-query)).
 - **The record** is `quick-slots.json` in Pane's data folder, beside
   `settings.json` (see [ADR 0026](adr/0026-host-keeps-quick-slots-by-identity.md)
   and [ADR 0027](adr/0027-quick-slots-are-an-ordered-list.md)), version 2:
@@ -338,7 +401,7 @@ Each row shows what the launcher knows beyond its title and subtitle, from a rea
   best placement — in the accent; a result found by an alternate title, a
   keyword, its subtitle or its package title alone highlights nothing.
 
-Rows sit under section labels: "Commands" over a blank query's list (root search's own order, with no claim of recent use), "Results" with their count over a query's, a computed answer under the title of the command that computed it ("Calculator") or, since #196, under the section the answer's own detail names (the calculator's colours under "Color", its dates and times under "Date & Time"), the rows declared for the address or path the query is under "Addresses" (#195), the files found for the query with the row searching them all under "Files" (#175), and the fallbacks under "Fallbacks" (below the no-results notice when nothing else matched). The presentation changes nothing about what is listed, its order, or what a row does.
+Rows sit under section labels: "Commands" over a blank query's list (the no-query order — what the user opens most first — with no section of suggestions), "Results" with their count over a query's, a computed answer under the title of the command that computed it ("Calculator") or, since #196, under the section the answer's own detail names (the calculator's colours under "Color", its dates and times under "Date & Time"), the rows declared for the address or path the query is under "Addresses" (#195), the files found for the query with the row searching them all under "Files" (#175), and the fallbacks under "Fallbacks" (below the no-results notice when nothing else matched). The presentation changes nothing about what is listed, its order, or what a row does.
 
 **A computed answer** (#96) — a computed result whose action copies
 text, such as the calculator's — is drawn as the reference calculator
@@ -476,20 +539,20 @@ extension, through the same guest boundary as its command:
   Pane checks both at install, without running it
   ([author guide](../guests/README.md#root-results-supplied-ahead-of-the-query),
   in Rust, JavaScript and TypeScript).
-- The first change to a query that is not blank after root search is shown
-  asks each enabled command with `indexedResults` for `results()`, one after
-  another, after the commands computing results from the query. Pane keeps
-  the answer and ranks it with the other root results on every later query,
-  so typing never waits for it; until it answers, the results kept from an
-  earlier visit are listed. They are asked again after each return to root
+- Root search being shown asks each enabled command with
+  `indexedResults` for `results()`, one after another, after the commands
+  computing results from the query: the blank query's list below the pins
+  needs them. Pane keeps the answer and ranks it with the other root
+  results on every later query, so typing never waits for it; until it
+  answers, the results kept from an earlier visit are listed. They are asked again after each return to root
   search, and when the host's list of installed applications changes by
   itself for a command that asked for it: at once while root search shows
   a query, listed in place with the selected row kept on its result,
   otherwise at the next query ([applications](applications.md#live-list)).
   The guest's work is not cancelled; calls run one at a time (#29).
-- They are listed only for a query that is not blank, ranked by title,
-  subtitle and rank exactly as commands are; on the same rank they come
-  after commands.
+- They are ranked by title, subtitle and rank exactly as commands are,
+  for the blank query too (in the no-query order, by kind below commands
+  and links); on the same rank they come after commands.
 - An indexed result has an id (`<command id>:<result id>`), title, optional
   subtitle, **alternate titles** and **keywords** (both lists, empty for
   none; see [matching](#matching-and-ranking)), and an **action** Pane
@@ -950,6 +1013,26 @@ answer for an older search discarded as before. The slow provider's
 real-clock flow — the budget publishing with the calculator's staged
 answer while the slow call goes on, its answer merging within 16 ms —
 is checked in the calculator's own tests, above.
+
+For what root search learns from what the user chooses
+([`crates/pane-core/tests/learning.rs`](../crates/pane-core/tests/learning.rs)),
+with packages of the no-view sample, the real calculator and
+applications guests, a fake applications system and a manual clock: a
+use ranks the result first for the blank query and for the query it was
+chosen with (steps 3, 6 and 7, the overbounds bound included); the
+17-day and frecency gates; decay over simulated days, a use re-anchoring
+the score; uses that earn nothing — a global hotkey, a computed answer,
+a fallback row, an unavailable row, Pane's own rows; a quick slot's use
+with no query; uninstalling a package forgetting what was learned and
+disabling keeping it; survival across a restart over the same data
+folder; an unreadable record reported on the status line and never
+replaced; an application keeping its ranking across an update into a new
+version folder; and the blank query listing the pins, then the commands
+and applications by frecency under "Commands", with no Suggestions
+section. In the window
+([`crates/pane/tests/window.rs`](../crates/pane/tests/window.rs)), with
+real keys: choosing the second of two equal results a few times puts it
+first for that query.
 
 For root providers
 ([`crates/pane-core/tests/root_providers.rs`](../crates/pane-core/tests/root_providers.rs)),

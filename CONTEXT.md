@@ -116,6 +116,10 @@ _Avoid_: Type, category
 A labelled run of root results: "Commands" over a blank query's commands and applications, below the pinned home; "Results" with their count over a query's, then "Fallbacks"; a run of computed answers sits under the title of the command that computed them ("Calculator"), the rows declared for the address or path the query is under "Addresses" (#195), and the files found for the query, with the row searching them all, under "Files". Sections only label the list; they never reorder or filter it, and none claims recent use: learning orders the list (frecency orders the blank query's), never a section.
 _Avoid_: Group (a shortcut group is a Settings term), suggestions
 
+**Learned ranking**:
+How root search orders its results by what it learned from the user's choices (see Frecency and Learned query): a query the result was chosen with ranks it above how well titles match, frecency breaks ties between equally good matches and orders the blank query. The list itself shows no section of it.
+_Avoid_: Suggestions, history, personalization, favorites
+
 **Learned query**:
 A query the user had typed when they chose a root result from root search, which Pane remembers by the result's identity (the last few distinct ones), never by its title or row. Typing it again ranks that result above how well titles match, after only an alias and an exact title, while the result was used recently (ADR 0030).
 _Avoid_: Search history (the queries Up recalls), alias (the user's own word for a command), suggestion

@@ -652,7 +652,12 @@ fn the_launcher_offers_the_rust_javascript_and_typescript_samples(cx: &mut TestA
     let samples = ["JavaScript sample", "Rust sample", "TypeScript sample"];
     assert_eq!(
         titles,
-        ["JavaScript sample", "Rust sample", "Settings…", "TypeScript sample"]
+        [
+            "JavaScript sample",
+            "Rust sample",
+            "Settings…",
+            "TypeScript sample"
+        ]
     );
 
     for title in samples {
@@ -668,10 +673,7 @@ fn the_launcher_offers_the_rust_javascript_and_typescript_samples(cx: &mut TestA
         }
         cx.simulate_keystrokes("enter");
         let view = settle(&window, cx);
-        assert_eq!(
-            (view.screen, view.title.as_str()),
-            (Screen::Command, title)
-        );
+        assert_eq!((view.screen, view.title.as_str()), (Screen::Command, title));
 
         cx.simulate_keystrokes("escape");
         let view = settle(&window, cx);
@@ -1803,9 +1805,7 @@ impl pane_core::applications::Applications for TwoPythons {
 /// the second of two equal results a few times puts it first for that
 /// query, so the user's own choice outranks the provider's order.
 #[gpui::test]
-fn choosing_the_second_of_two_equal_results_a_few_times_puts_it_first(
-    cx: &mut TestAppContext,
-) {
+fn choosing_the_second_of_two_equal_results_a_few_times_puts_it_first(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
     let runtime = Runtime::start().unwrap();
     runtime.set_applications(std::sync::Arc::new(TwoPythons));
