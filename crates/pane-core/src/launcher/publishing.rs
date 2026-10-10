@@ -107,7 +107,11 @@ impl Launcher {
         let mut guard = self.lock();
         let now = guard.clock.now();
         let mut changed = false;
-        if guard.holding.as_ref().is_some_and(|held| now >= held.deadline) {
+        if guard
+            .holding
+            .as_ref()
+            .is_some_and(|held| now >= held.deadline)
+        {
             publish(&mut guard);
             changed = true;
         }
@@ -147,7 +151,9 @@ pub(super) fn publish(state: &mut State) {
 /// publishing the list once every provider asked has.
 pub(super) fn answered(state: &mut State, component: &Path) {
     let due = state.holding.as_mut().is_some_and(|holding| {
-        holding.awaiting.retain(|asked| asked.as_path() != component);
+        holding
+            .awaiting
+            .retain(|asked| asked.as_path() != component);
         holding.awaiting.is_empty()
     });
     if due {

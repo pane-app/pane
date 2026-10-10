@@ -1550,7 +1550,11 @@ fn the_list_does_not_flicker_while_providers_answer_within_the_budget(cx: &mut T
         window.launcher().view().query().map(str::to_owned)
     });
     let published = cx.read_entity(&window, |window, _| window.launcher().list_published());
-    assert_eq!(typed.as_deref(), Some("6*7+1"), "the field shows it at once");
+    assert_eq!(
+        typed.as_deref(),
+        Some("6*7+1"),
+        "the field shows it at once"
+    );
     assert!(!published, "the query's list is held while it is answered");
     assert_eq!(row_titles(&window, cx), ["42"], "the previous list stays");
 
@@ -1560,7 +1564,9 @@ fn the_list_does_not_flicker_while_providers_answer_within_the_budget(cx: &mut T
     // empty here (no first row to draw).
     cx.run_until_parked();
     let drawn = cx.read_entity(&window, |window, _| {
-        window.drawn_view().and_then(|view| view.rows.first().map(|row| row.title.clone()))
+        window
+            .drawn_view()
+            .and_then(|view| view.rows.first().map(|row| row.title.clone()))
     });
     assert!(
         drawn.as_deref() == Some("42") || drawn.as_deref() == Some("43"),

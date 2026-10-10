@@ -86,7 +86,11 @@ fn sums(dirs: &Dirs) -> PathBuf {
 /// A plain command titled "Drill 0 + 0", which the slow query matches by
 /// title too.
 fn drills(dirs: &Dirs) -> PathBuf {
-    dirs.package("drills", &manifest("Drill 0 + 0"), &built("sample_rust.wasm"))
+    dirs.package(
+        "drills",
+        &manifest("Drill 0 + 0"),
+        &built("sample_rust.wasm"),
+    )
 }
 
 /// Pane's data location and compiled code cache for one test, with its
@@ -237,7 +241,10 @@ fn a_late_answer_moves_the_selection_from_the_first_row() {
     // selection moves to the new first row.
     answered.recv_timeout(Duration::from_secs(240)).unwrap();
     clock.advance(Duration::from_millis(16));
-    assert_eq!(titles(&launcher), ["Slow answer", "Sum 0 + 0", "Drill 0 + 0"]);
+    assert_eq!(
+        titles(&launcher),
+        ["Slow answer", "Sum 0 + 0", "Drill 0 + 0"]
+    );
     assert_eq!(selected_title(&launcher).as_deref(), Some("Slow answer"));
 }
 
@@ -257,7 +264,10 @@ fn a_row_the_user_moved_to_stays_selected_when_a_late_answer_arrives() {
     // user moved to.
     answered.recv_timeout(Duration::from_secs(240)).unwrap();
     clock.advance(Duration::from_millis(16));
-    assert_eq!(titles(&launcher), ["Slow answer", "Sum 0 + 0", "Drill 0 + 0"]);
+    assert_eq!(
+        titles(&launcher),
+        ["Slow answer", "Sum 0 + 0", "Drill 0 + 0"]
+    );
     assert_eq!(selected_title(&launcher).as_deref(), Some("Drill 0 + 0"));
 }
 
@@ -325,7 +335,9 @@ fn late_answers_arriving_close_together_merge_into_one_update() {
 #[test]
 fn a_query_that_asks_no_provider_is_published_at_once() {
     let dirs = Dirs::new();
-    let launcher = dirs.launcher(dirs.runtime()).with_clock(ManualClock::at(1_000));
+    let launcher = dirs
+        .launcher(dirs.runtime())
+        .with_clock(ManualClock::at(1_000));
     install(&launcher, &sums(&dirs));
 
     // No provider is asked: the query's list is published at once, the
