@@ -169,9 +169,7 @@ use bindings::pane::extension::{
     applications, cache, clipboard_history, content, credentials, settings,
 };
 use bindings::pane::extension::{
-    feedback as feedback_host,
-    system as system_host,
-    typed_folder as typed_folder_host,
+    feedback as feedback_host, system as system_host, typed_folder as typed_folder_host,
     window as window_host,
 };
 use indexed_bindings::exports::pane::extension::indexed_results;

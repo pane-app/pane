@@ -20,7 +20,7 @@
 // runs it), which it performs itself.
 // @ts-check
 import { search, status } from "pane:extension/file-index@0.1.0";
-import { list } from "pane:extension/typed-folder@0.1.0";
+import { listEntries } from "pane:extension/typed-folder@0.1.0";
 
 /** The most entries one query lists. */
 const MAX_RESULTS = 20;
@@ -45,7 +45,7 @@ function typed(query) {
   const path = query.trim();
   if (!path.endsWith("/") && !path.endsWith("\\")) return null;
   try {
-    return list(path).entries;
+    return listEntries(path).entries;
   } catch {
     return null;
   }

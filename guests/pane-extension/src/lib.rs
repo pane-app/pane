@@ -437,7 +437,7 @@ pub mod file_index {
 /// a partial listing saying so), since a pure WASI guest has no folders to
 /// read. No folder is granted: the user named it, so the command passes
 /// what the user typed and Pane resolves it (`~` to the home folder,
-/// `file://` taken off). [`typed_folder::list`] answers the entries, each
+/// `file://` taken off). [`typed_folder::list_entries`] answers the entries, each
 /// with the id Pane gave it, its name, whether it is a folder and whether
 /// opening it would run a program; a command answers `open-file` results
 /// ([`root::RootAction::OpenFile`]) with the ids, and Pane checks each
@@ -449,7 +449,7 @@ pub mod typed_folder {
         default_bindings_module: "pane_extension::typed_folder",
     });
 
-    pub use pane::extension::typed_folder::{FolderEntry, FolderListing, list};
+    pub use pane::extension::typed_folder::{FolderEntry, FolderListing, list_entries};
 }
 
 /// Root results a command supplies ahead of the query

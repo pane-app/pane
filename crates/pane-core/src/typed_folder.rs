@@ -361,7 +361,7 @@ fn home(access: &crate::files::FileAccess) -> Option<PathBuf> {
 /// The host side of `pane:extension/typed-folder`: lists the folder the
 /// user typed for the command's package's answer of root results.
 impl wit::Host for GuestState {
-    async fn list(&mut self, folder: String) -> Result<wit::FolderListing, String> {
+    async fn list_entries(&mut self, folder: String) -> Result<wit::FolderListing, String> {
         // Answers from what the listing thread found; the runtime thread
         // awaits it, serving other packages' calls meanwhile.
         let _host = self.host();
@@ -481,10 +481,12 @@ mod tests {
         // The first 500 in name order: the last file is not among them.
         assert_eq!(listing.entries[0].name, "file 0000.txt");
         assert_eq!(listing.entries.last().unwrap().name, "file 0499.txt");
-        assert!(!listing
-            .entries
-            .iter()
-            .any(|entry| entry.name == "file 0500.txt"));
+        assert!(
+            !listing
+                .entries
+                .iter()
+                .any(|entry| entry.name == "file 0500.txt")
+        );
     }
 
     #[test]
@@ -553,10 +555,12 @@ mod tests {
             .iter()
             .find(|entry| entry.name == "run plan.bat")
             .unwrap();
-        assert!(folders
-            .checked("owner", &bat.id, false)
-            .unwrap_err()
-            .contains("would run"));
+        assert!(
+            folders
+                .checked("owner", &bat.id, false)
+                .unwrap_err()
+                .contains("would run")
+        );
         assert!(folders.checked("owner", &bat.id, true).is_ok());
         // An id of an earlier listing is not found: the listing replaced
         // it.

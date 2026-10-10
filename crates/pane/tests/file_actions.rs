@@ -325,7 +325,9 @@ fn select_row(
     cx: &mut VisualTestContext,
     title: &str,
 ) -> LauncherView {
-    let view = until(window, cx, |view| view.rows.iter().any(|row| row.title == title));
+    let view = until(window, cx, |view| {
+        view.rows.iter().any(|row| row.title == title)
+    });
     let index = view
         .rows
         .iter()
@@ -350,8 +352,13 @@ fn tab_completes_a_typed_folder_and_enter_opens_its_entry(cx: &mut TestAppContex
     // Tab completes the query to the selected folder's path, with a
     // separator after it, which lists the folder's own entries.
     cx.simulate_keystrokes("tab");
-    let view = until(&window, cx, |view| view.rows.iter().any(|row| row.title == "todo.md"));
-    assert_eq!(view.query(), Some(typed_query(&world.folder.join("notes")).as_str()));
+    let view = until(&window, cx, |view| {
+        view.rows.iter().any(|row| row.title == "todo.md")
+    });
+    assert_eq!(
+        view.query(),
+        Some(typed_query(&world.folder.join("notes")).as_str())
+    );
     select_row(&window, cx, "todo.md");
     cx.simulate_keystrokes("enter");
     done(&window, cx);
@@ -374,7 +381,9 @@ fn shift_tab_removes_the_last_path_component(cx: &mut TestAppContext) {
     typed_root(&window, cx, &typed_query(&world.folder.join("notes")));
     select_row(&window, cx, "todo.md");
     cx.simulate_keystrokes("shift-tab");
-    let view = until(&window, cx, |view| view.rows.iter().any(|row| row.title == "notes"));
+    let view = until(&window, cx, |view| {
+        view.rows.iter().any(|row| row.title == "notes")
+    });
     assert_eq!(view.query(), Some(typed_query(&world.folder).as_str()));
     // Nothing was opened by the keys alone.
     assert!(world.opener.take().is_empty());

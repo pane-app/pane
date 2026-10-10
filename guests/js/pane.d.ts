@@ -480,10 +480,10 @@ export interface RootResult {
    * `{ tag: "open-url", val: url }` opens `url`, an `http://` or `https://`
    * address, with the system's handler for web links (Pane refuses others);
    * `{ tag: "open-file", val: id }` opens the entry with `id`, as the file
-   * index's `search()`, `listFolder()` or the typed folder's `list()` gave
-   * it, with the system's handler
-   * for its type, once Pane has checked it again (Enter on a program the
-   * index found shows it in the file manager, never runs it).
+   * index's `search()`, `listFolder()` or the typed folder's
+   * `listEntries()` gave it, with the system's handler for its type, once
+   * Pane has checked it again (Enter on a program the index found shows it
+   * in the file manager, never runs it).
    */
   action: RootAction;
   /**
@@ -555,9 +555,9 @@ export interface SearchResult {
    * An entry of Pane's file index, by the `id` `search()` of
    * "pane:extension/file-index@0.1.0" gave it, a file of the folder
    * granted to the command's package, by the `id` `listFolder()` gave it,
-   * or an entry of the folder the user typed, by the `id` `list()` of
-   * "pane:extension/typed-folder@0.1.0" gave it,
-   * when the result is that file (as Search Files' are): Pane lists it
+   * or an entry of the folder the user typed, by the `id` `listEntries()`
+   * of "pane:extension/typed-folder@0.1.0" gave it, when the result is
+   * that file (as Search Files' are): Pane lists it
    * with the file's own name and folder, and gives it
    * Pane's own file actions (Open, Reveal, Open With…, Copy Path, Copy
    * File, Move to Recycle Bin; for a program, Enter reveals it and only

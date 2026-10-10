@@ -27,7 +27,7 @@ interface root-results {
     /// Opens the entry with this id, as `file-index.search` gave it to the
     /// package (wit/file-index.wit), as `files.list-folder` gave it in the
     /// package's latest listing of its granted folder, or as
-    /// `typed-folder.list` gave it in its latest listing of the folder the
+    /// `typed-folder.list-entries` gave it in its latest listing of the folder the
     /// user typed (wit/typed-folder.wit), with the
     /// system's handler for its type (a folder in the file manager). Pane
     /// shows the entry's own name and folder in the row, whatever the

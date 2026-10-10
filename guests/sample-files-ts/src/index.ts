@@ -19,7 +19,7 @@
 // File, Move to Recycle Bin; for a program, Enter shows it and only Run
 // runs it), which it performs itself.
 import { type FileEntry, search, status } from "pane:extension/file-index@0.1.0";
-import { type FolderEntry, list } from "pane:extension/typed-folder@0.1.0";
+import { type FolderEntry, listEntries } from "pane:extension/typed-folder@0.1.0";
 import type {
   Command,
   CommandSearch,
@@ -47,7 +47,7 @@ function typed(query: string): FolderEntry[] | null {
   const path = query.trim();
   if (!path.endsWith("/") && !path.endsWith("\\")) return null;
   try {
-    return list(path).entries;
+    return listEntries(path).entries;
   } catch {
     return null;
   }

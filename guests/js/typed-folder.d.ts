@@ -44,5 +44,5 @@ declare module "pane:extension/typed-folder@0.1.0" {
    * a path, a network location, a file, or a folder Pane cannot read) it
    * throws an object whose `payload` is the reason.
    */
-  export function list(folder: string): FolderListing;
+  export function listEntries(folder: string): FolderListing;
 }

@@ -62,9 +62,7 @@ struct Package {
     package: &'static str,
 }
 
-const FILES: Package = Package {
-    package: "files",
-};
+const FILES: Package = Package { package: "files" };
 const RUST: Package = Package {
     package: "sample-files",
 };
@@ -206,10 +204,7 @@ impl Pane {
                 .with_link_opener(Arc::new(opener.clone()))
                 .with_system(system.clone())
                 .with_file_index(index);
-        block_on(launcher.install_package(&built(&format!(
-            "packages/{}",
-            fixture.package
-        ))));
+        block_on(launcher.install_package(&built(&format!("packages/{}", fixture.package))));
         assert!(
             matches!(launcher.view().status, Status::Result(_)),
             "{:?}",
@@ -332,11 +327,12 @@ fn enter_shows_a_program_and_runs_nothing(fixture: &Package) {
         Some(format!("Showed run plan.bat in {}", manager()).as_str())
     );
     assert!(pane.opener.take().is_empty(), "nothing ran it");
-    assert!(pane
-        .system
-        .take()
-        .iter()
-        .all(|done| matches!(done, Done::Revealed(_))));
+    assert!(
+        pane.system
+            .take()
+            .iter()
+            .all(|done| matches!(done, Done::Revealed(_)))
+    );
 }
 
 contract!(

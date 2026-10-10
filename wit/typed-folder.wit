@@ -58,7 +58,7 @@ interface typed-folder {
   /// them, and it checks an entry again before opening it. An error
   /// explains a folder that cannot be listed: not a path, a network
   /// location, a file, or one Pane cannot read.
-  list: func(folder: string) -> result<folder-listing, string>;
+  list-entries: func(folder: string) -> result<folder-listing, string>;
 }
 
 /// The typed folder import alone, for guest bindings.

@@ -51,7 +51,7 @@ fn typed(query: &str) -> Option<Vec<FolderEntry>> {
     }
     // Pane resolves what the user typed: `~` to the home folder,
     // `file://` taken off. The bounds are Pane's, not the command's.
-    typed_folder::list(query).ok().map(|listing| listing.entries)
+    typed_folder::list_entries(query).ok().map(|listing| listing.entries)
 }
 
 impl Command for Sample {

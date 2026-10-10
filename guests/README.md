@@ -1004,7 +1004,8 @@ search, a path-like query ending in a separator, which a WASI guest cannot
 read itself, through `pane:extension/typed-folder`
 ([`wit/typed-folder.wit`](../wit/typed-folder.wit)), and answer results
 that open one (`open-file`). No folder is granted and the `pane.json`
-declares nothing: the user named the folder, so `list(folder)` takes what
+declares nothing: the user named the folder, so `list-entries(folder)`
+takes what
 they typed (Pane resolves it: `~` to the home folder, `file://` taken off)
 and answers the direct entries — folders first and each in name order, at
 most 500, `truncated` set when the folder holds more — each with the `id`
@@ -1047,7 +1048,7 @@ fn typed(query: &str) -> Option<Vec<FolderEntry>> {
     let query = query.trim();
     query
         .ends_with(['/', '\\'])
-        .then(|| typed_folder::list(query).ok())
+        .then(|| typed_folder::list_entries(query).ok())
         .flatten()
         .map(|listing| listing.entries)
 }
@@ -1055,15 +1056,15 @@ fn typed(query: &str) -> Option<Vec<FolderEntry>> {
 
 JavaScript or TypeScript: add `"typedFolder": true` to the `"pane"` options
 of `package.json`, so the build imports the interface (a command without it
-does not), and import it (`list` throws an object whose `payload` is the
+does not), and import it (`listEntries` throws an object whose `payload` is the
 reason; declarations in [`js/typed-folder.d.ts`](js/typed-folder.d.ts)):
 
 ```ts
-import { list } from "pane:extension/typed-folder@0.1.0";
+import { listEntries } from "pane:extension/typed-folder@0.1.0";
 
 if (!query.endsWith("/") && !query.endsWith("\\")) return [];
 try {
-  return list(query.trim()).entries.map((entry) => ({
+  return listEntries(query.trim()).entries.map((entry) => ({
     id: entry.id,
     title: entry.name,
     action: { tag: "open-file", val: entry.id },
