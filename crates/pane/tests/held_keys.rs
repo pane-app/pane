@@ -100,10 +100,10 @@ fn open_launcher(
 
 /// A launcher with the calculator installed in `data` (as `window.rs`'s
 /// `with_calculator` builds it), and the window over it.
-fn calculator_window(
-    cx: &mut TestAppContext,
+fn calculator_window<'a>(
+    cx: &'a mut TestAppContext,
     data: &Path,
-) -> (Entity<LauncherWindow>, &mut VisualTestContext) {
+) -> (Entity<LauncherWindow>, &'a mut VisualTestContext) {
     cx.executor().allow_parking();
     let launcher = Launcher::with_packages(Runtime::start(), vec![], data.join("extensions"));
     install(cx, &launcher, &calculator_folder());
@@ -114,11 +114,11 @@ fn calculator_window(
 /// launcher's clock frozen: the list for "0 + 0" stays unpublished until
 /// the slow command answers (about a second), so keys pressed under it
 /// are held for the test's own time, not the real one.
-fn slow_window(
-    cx: &mut TestAppContext,
+fn slow_window<'a>(
+    cx: &'a mut TestAppContext,
     sources: &Path,
     data: &Path,
-) -> (Entity<LauncherWindow>, &mut VisualTestContext) {
+) -> (Entity<LauncherWindow>, &'a mut VisualTestContext) {
     cx.executor().allow_parking();
     let launcher = Launcher::with_packages(Runtime::start(), vec![], data.join("extensions"))
         .with_clock(ManualClock::at(0));
