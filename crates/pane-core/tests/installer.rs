@@ -568,11 +568,11 @@ fn an_unreachable_source_leaves_the_core_usable_and_a_row_tries_again() {
         titles(&launcher),
         [
             "Install extension from folder…",
-            "Install extension from npm…",
             "Install extension from Git…",
+            "Install extension from npm…",
             "Set up Calculator",
             "Set up Helper sample",
-            // Pane's own row, listed after every command.
+            // Pane's own row, ranked with the retry rows by title (#199).
             "Settings…"
         ]
     );

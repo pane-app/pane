@@ -80,21 +80,23 @@ fn downloads() -> Launcher {
 }
 
 #[test]
-fn root_search_opens_with_an_empty_query_listing_every_command_in_order() {
+fn root_search_opens_with_an_empty_query_listing_every_result_in_the_no_query_order() {
     let launcher = downloads();
     let view = launcher.view();
     assert_eq!(view.query(), Some(""));
+    // Nothing is learned yet, so the blank query's order is the no-query
+    // order without its frecency: having an alias, then kind, provider,
+    // then the title (#199). Pane's own rows rank with the commands.
     assert_eq!(
         titles(&launcher),
         [
             "Clear cache",
-            "Undownloadable files",
-            "Recent downloads",
-            "Downloader",
             "Download",
+            "Downloader",
+            "Recent downloads",
             "Settings",
-            // Pane's own row, listed after every command.
-            "Settings…"
+            "Settings…",
+            "Undownloadable files"
         ]
     );
     assert_eq!(view.selected, Some(0));
@@ -822,9 +824,10 @@ fn an_unavailable_command_matches_and_explains_why_it_does_not_run() {
 }
 
 /// The presentation root search hands the window: every row a command,
-/// under one "Commands" label for a blank query — root search's own
-/// order, claiming no recent use — and under "Results" with their count
-/// for a query, each title's match where the query matched it.
+/// under one "Commands" label for a blank query — the no-query order
+/// (#199), with no section of suggestions — and under "Results" with
+/// their count for a query, each title's match where the query matched
+/// it.
 #[test]
 fn root_search_presents_its_rows_with_kinds_sections_and_title_matches() {
     let launcher = downloads();

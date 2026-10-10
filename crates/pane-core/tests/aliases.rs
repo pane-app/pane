@@ -505,7 +505,8 @@ fn copies_from_other_sources_with_the_same_title_stay_distinct(fixture: &Fixture
         ]
     );
     // The commands' own rows share that title too (#197): each names its
-    // package's source after its subtitle, the first copy's first.
+    // package's source after its subtitle. The copy the user gave an
+    // alias ranks first of the two (#199's no-query order).
     assert!(
         subtitle(&launcher, 1).starts_with("Answers the text you send it from root search · "),
         "{}",
@@ -513,11 +514,11 @@ fn copies_from_other_sources_with_the_same_title_stay_distinct(fixture: &Fixture
     );
     assert_eq!(
         subtitle(&launcher, 1),
-        format!("Answers the text you send it from root search · {first_source}")
+        format!("Answers the text you send it from root search · {second_source}")
     );
     assert_eq!(
         subtitle(&launcher, 2),
-        format!("Answers the text you send it from root search · {second_source}")
+        format!("Answers the text you send it from root search · {first_source}")
     );
     assert_eq!(
         subtitle(&launcher, 0),

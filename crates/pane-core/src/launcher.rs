@@ -2854,7 +2854,7 @@ impl Launcher {
         // recorded off this thread, and the list on screen is not
         // re-sorted for it.
         if let Some((id, query)) = learned {
-            self.record_use(&id, query.as_deref());
+            self.record_use(&id, Some(query.as_str()));
         }
         work
     }
@@ -5037,6 +5037,24 @@ enum Told {
     Apart,
 }
 
+/// One root result as the search module ranks it (see `Candidate`): the
+/// result's keys, what kind of thing it is, the position of the provider
+/// that supplied it among the others, and what root search learned about
+/// it (#199), looked up by its row id.
+fn candidate<'a>(
+    result: &'a RootResult,
+    kind: search::Kind,
+    provider: usize,
+    learned: &'a HashMap<String, search::Learned>,
+) -> Candidate<'a> {
+    Candidate {
+        keys: &result.keys,
+        kind,
+        provider,
+        learned: learned.get(&result.row.id),
+    }
+}
+
 /// What kind of thing a root result is, as the comparator ranks kinds:
 /// commands above links, above applications, above files. Folders,
 /// fallbacks and the like are never ranked by the comparator — they keep
@@ -5087,11 +5105,8 @@ fn root_rows(state: &State, query: &str) -> (Vec<Row>, Vec<Entry>) {
     // (#199): each recorded result's decayed frecency and counting
     // queries, by its row id — a command's or an indexed result's own.
     let learned = state.learned.chosen.ranked(state.clock.now());
-    let keys = |&(result, kind, provider)| Candidate {
-        keys: &result.keys,
-        kind,
-        provider,
-        learned: learned.get(&result.row.id),
+    let keys = |&(result, kind, provider)| {
+        candidate(result, kind, provider, &learned)
     };
     let parsed = Query::new(query);
     let named = |index: &usize| parsed.is_alias_of(&candidates[*index].0.keys);

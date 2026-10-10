@@ -96,7 +96,7 @@ fn a_previewed_local_package_installs_and_its_command_runs() {
     let launcher = dirs.launcher();
     assert_eq!(
         titles(&launcher),
-        [INSTALL_ROW, NPM_ROW, GIT_ROW, SETTINGS_ROW]
+        [INSTALL_ROW, GIT_ROW, NPM_ROW, SETTINGS_ROW]
     );
     assert!(launcher.selected_asks_for_folder());
 
@@ -141,19 +141,27 @@ fn a_previewed_local_package_installs_and_its_command_runs() {
     assert_eq!(
         titles(&launcher),
         [
-            "Say hello",
             INSTALL_ROW,
-            NPM_ROW,
             GIT_ROW,
+            NPM_ROW,
             MANAGE_ROW,
+            "Say hello",
             SETTINGS_ROW
         ]
     );
-    assert_eq!(view.selected, Some(0));
+    assert_eq!(
+        view.selected.map(|index| view.rows[index].title.as_str()),
+        Some("Say hello")
+    );
     assert_eq!(view.status, Status::Result("Installed Hello".into()));
     // Row ids come from the identity's stable key, not its display text.
-    assert_eq!(view.rows[0].id, format!("{}#hello", identity.key()));
-    assert!(!view.rows[0].id.contains("local folder"));
+    let row = view
+        .rows
+        .iter()
+        .find(|row| row.title == "Say hello")
+        .expect("the command's row");
+    assert_eq!(row.id, format!("{}#hello", identity.key()));
+    assert!(!row.id.contains("local folder"));
     assert!(!launcher.selected_asks_for_folder());
 
     block_on(launcher.activate_selected());
@@ -203,11 +211,11 @@ fn a_second_explicit_install_of_the_same_folder_is_rejected() {
     assert_eq!(
         titles(&launcher),
         [
-            "Say hello",
             INSTALL_ROW,
-            NPM_ROW,
             GIT_ROW,
+            NPM_ROW,
             MANAGE_ROW,
+            "Say hello",
             SETTINGS_ROW
         ]
     );
@@ -275,17 +283,17 @@ fn copies_in_different_folders_are_distinct_packages_despite_the_same_title() {
     assert_eq!(
         titles(&launcher),
         [
-            "Say hello",
-            "Say hello",
             INSTALL_ROW,
-            NPM_ROW,
             GIT_ROW,
+            NPM_ROW,
             MANAGE_ROW,
+            "Say hello",
+            "Say hello",
             SETTINGS_ROW
         ]
     );
     // Each runs its own copy.
-    for (index, answer) in [(0, "Rust"), (1, "JavaScript")] {
+    for (index, answer) in [(4, "Rust"), (5, "JavaScript")] {
         launcher.back();
         launcher.select(index);
         block_on(launcher.activate_selected());
@@ -362,15 +370,20 @@ fn installed_commands_are_listed_after_a_restart_without_running_any_guest() {
     assert_eq!(
         titles(&restarted),
         [
-            "Say hello",
             INSTALL_ROW,
-            NPM_ROW,
             GIT_ROW,
+            NPM_ROW,
             MANAGE_ROW,
+            "Say hello",
             SETTINGS_ROW
         ]
     );
-    assert_eq!(view.rows[0].subtitle.as_deref(), Some("Greets you"));
+    let row = view
+        .rows
+        .iter()
+        .find(|row| row.title == "Say hello")
+        .expect("the command's row");
+    assert_eq!(row.subtitle.as_deref(), Some("Greets you"));
     assert_eq!(
         installed(&restarted),
         [(
@@ -484,7 +497,7 @@ fn unsupported_packages_are_explained_and_not_installed() {
         launcher.back();
         assert_eq!(
             titles(&launcher),
-            [INSTALL_ROW, NPM_ROW, GIT_ROW, SETTINGS_ROW],
+            [INSTALL_ROW, GIT_ROW, NPM_ROW, SETTINGS_ROW],
             "{case}"
         );
     }
@@ -594,21 +607,33 @@ fn a_damaged_installed_copy_is_listed_with_its_problem_and_others_still_run() {
     assert_eq!(
         titles(&restarted),
         [
-            "Say hello",
             "broken",
             INSTALL_ROW,
-            NPM_ROW,
             GIT_ROW,
+            NPM_ROW,
             MANAGE_ROW,
+            "Say hello",
             SETTINGS_ROW
         ]
     );
-    restarted.select(1);
+    let broken = restarted
+        .view()
+        .rows
+        .iter()
+        .position(|row| row.title == "broken")
+        .expect("the broken package's row");
+    restarted.select(broken);
     block_on(restarted.activate_selected());
     let message = error(&restarted);
     assert!(message.starts_with("broken cannot load from"), "{message}");
     assert!(message.contains("Invalid pane.json"), "{message}");
-    restarted.select(0);
+    let working = restarted
+        .view()
+        .rows
+        .iter()
+        .position(|row| row.title == "Say hello")
+        .expect("the working package's row");
+    restarted.select(working);
     block_on(restarted.activate_selected());
     assert_eq!(restarted.view().screen, Screen::Command);
 }
@@ -663,7 +688,13 @@ fn an_install_finishing_in_the_background_keeps_a_command_the_user_is_opening() 
     let installing = launcher.activate_selected();
     // The user leaves the preview and opens a command before it finishes.
     launcher.back();
-    launcher.select(0);
+    let sample = launcher
+        .view()
+        .rows
+        .iter()
+        .position(|row| row.title == "JavaScript sample")
+        .expect("the build command's row");
+    launcher.select(sample);
     let opening = launcher.activate_selected();
 
     block_on(installing);
@@ -684,7 +715,7 @@ fn an_install_finishing_in_the_background_keeps_the_selected_row() {
     block_on(launcher.preview_package(&folder));
     let installing = launcher.activate_selected();
     launcher.back();
-    launcher.select(1);
+    launcher.select(0);
     assert_eq!(selected_title(&launcher).as_deref(), Some(INSTALL_ROW));
 
     block_on(installing);
@@ -692,12 +723,12 @@ fn an_install_finishing_in_the_background_keeps_the_selected_row() {
     assert_eq!(
         titles(&launcher),
         [
-            "JavaScript sample",
-            "Say hello",
             INSTALL_ROW,
-            NPM_ROW,
             GIT_ROW,
+            NPM_ROW,
+            "JavaScript sample",
             MANAGE_ROW,
+            "Say hello",
             SETTINGS_ROW
         ]
     );
@@ -935,11 +966,11 @@ fn a_package_for_this_system_shows_its_systems_and_installs() {
     assert_eq!(
         titles(&launcher),
         [
-            "Say hello",
             INSTALL_ROW,
-            NPM_ROW,
             GIT_ROW,
+            NPM_ROW,
             MANAGE_ROW,
+            "Say hello",
             SETTINGS_ROW
         ]
     );
@@ -964,20 +995,33 @@ fn an_installed_copy_for_other_systems_lists_its_commands_as_unavailable() {
     assert_eq!(
         titles(&restarted),
         [
-            "Say hello",
             INSTALL_ROW,
-            NPM_ROW,
             GIT_ROW,
+            NPM_ROW,
             MANAGE_ROW,
+            "Say hello",
             SETTINGS_ROW
         ]
     );
-    let row = restarted.view().rows[0].clone();
+    let row = restarted
+        .view()
+        .rows
+        .iter()
+        .find(|row| row.title == "Say hello")
+        .expect("the command's row")
+        .clone();
     assert_eq!(row.subtitle.as_deref(), Some("Greets you"));
     assert_eq!(
         row.unavailable,
         Some(Unavailable::OnThisSystem(explanation.clone()))
     );
+    let index = restarted
+        .view()
+        .rows
+        .iter()
+        .position(|row| row.title == "Say hello")
+        .expect("the command's row");
+    restarted.select(index);
     block_on(restarted.activate_selected());
     let view = restarted.view();
     assert_eq!(
@@ -1029,16 +1073,16 @@ fn a_command_for_other_systems_is_listed_with_its_reason_and_others_still_open()
             [
                 ("Elsewhere".into(), Some(elsewhere.clone())),
                 ("Here".into(), None),
-                ("Nowhere".into(), Some(nowhere.clone())),
                 (INSTALL_ROW.into(), None),
-                (NPM_ROW.into(), None),
                 (GIT_ROW.into(), None),
+                (NPM_ROW.into(), None),
                 (MANAGE_ROW.into(), None),
+                ("Nowhere".into(), Some(nowhere.clone())),
                 (SETTINGS_ROW.into(), None),
             ]
         );
 
-        for (index, reason) in [(0, &elsewhere), (2, &nowhere)] {
+        for (index, reason) in [(0, &elsewhere), (6, &nowhere)] {
             launcher.select(index);
             block_on(launcher.activate_selected());
             let view = launcher.view();
@@ -1106,7 +1150,13 @@ fn installed_color_view(dirs: &Dirs, runtime: &Runtime) -> (Launcher, PathBuf) {
 
 /// From root search, opens the installed command and its color picker.
 fn open_installed_color_view(launcher: &Launcher) {
-    launcher.select(0);
+    let hello = launcher
+        .view()
+        .rows
+        .iter()
+        .position(|row| row.title == "Say hello")
+        .expect("the command's row");
+    launcher.select(hello);
     block_on(launcher.activate_selected());
     let color = launcher
         .view()

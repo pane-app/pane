@@ -76,14 +76,11 @@ impl Pane {
         clock: Arc<ManualClock>,
         runtime: Runtime,
     ) -> Pane {
-        let launcher = Launcher::with_packages(
-            Ok(runtime),
-            Vec::new(),
-            data.path().join("extensions"),
-        )
-        .with_clock(clock.clone())
-        .with_hotkeys(Arc::new(FakeHotkeys::default()))
-        .with_quick_slots(data.path());
+        let launcher =
+            Launcher::with_packages(Ok(runtime), Vec::new(), data.path().join("extensions"))
+                .with_clock(clock.clone())
+                .with_hotkeys(Arc::new(FakeHotkeys::default()))
+                .with_quick_slots(data.path());
         Pane {
             sources,
             data,
@@ -96,12 +93,7 @@ impl Pane {
     /// A Pane over folders and a clock of the test's own, starting a
     /// runtime that keeps compiled code in `cache`: so a record the test
     /// wrote is read as Pane starts.
-    fn over(
-        sources: TempDir,
-        data: TempDir,
-        cache: TempDir,
-        clock: Arc<ManualClock>,
-    ) -> Pane {
+    fn over(sources: TempDir, data: TempDir, cache: TempDir, clock: Arc<ManualClock>) -> Pane {
         let runtime = Runtime::start_with_cache(cache.path().to_path_buf()).unwrap();
         Pane::start(sources, data, cache, clock, runtime)
     }
@@ -294,17 +286,29 @@ fn a_use_ranks_the_result_first_for_the_blank_query_and_the_query_it_was_chosen_
     // Two same-titled commands match equally: nothing is learned, so
     // they keep the order they were listed in.
     block_on(launcher.set_query("pyt"));
-    assert!(at(launcher, "Python", 0, "#a"), "{:?}", ids_titled(launcher, "Python"));
+    assert!(
+        at(launcher, "Python", 0, "#a"),
+        "{:?}",
+        ids_titled(launcher, "Python")
+    );
     choose(launcher, "pyt", "#b");
 
     // The blank query lists what root search learned first: the used
     // result's frecency is above the floor an unused result stands at.
     block_on(launcher.set_query(""));
-    assert!(at(launcher, "Python", 0, "#b"), "{:?}", ids_titled(launcher, "Python"));
+    assert!(
+        at(launcher, "Python", 0, "#b"),
+        "{:?}",
+        ids_titled(launcher, "Python")
+    );
     // The query it was chosen with is its learned query (step 3): typing
     // it again ranks it above the equal match.
     block_on(launcher.set_query("pyt"));
-    assert!(at(launcher, "Python", 0, "#b"), "{:?}", ids_titled(launcher, "Python"));
+    assert!(
+        at(launcher, "Python", 0, "#b"),
+        "{:?}",
+        ids_titled(launcher, "Python")
+    );
 }
 
 #[test]
@@ -317,16 +321,17 @@ fn a_learned_query_starting_with_the_query_ranks_above_an_equal_match() {
     // Half the learned query is typed: the result it was chosen with
     // ranks above the equal match (step 6).
     block_on(launcher.set_query("py"));
-    assert!(at(launcher, "Python", 0, "#b"), "{:?}", ids_titled(launcher, "Python"));
+    assert!(
+        at(launcher, "Python", 0, "#b"),
+        "{:?}",
+        ids_titled(launcher, "Python")
+    );
 }
 
 #[test]
 fn a_query_starting_with_a_learned_query_ranks_above_a_better_match() {
     let pane = Pane::new();
-    let folder = pane.package(
-        "letters",
-        &[("good", "Abc Def G"), ("poor", "Axbxcxdxefg")],
-    );
+    let folder = pane.package("letters", &[("good", "Abc Def G"), ("poor", "Axbxcxdxefg")]);
     pane.install(&folder);
     let launcher = &pane.launcher;
 
@@ -534,7 +539,9 @@ fn a_hotkey_a_computed_answer_a_fallback_and_panes_own_rows_record_nothing() {
         .set_hotkey(&echo, Some(shortcut.clone()))
         .expect("the hotkey is set");
     block_on(set);
-    let opened = launcher.press_hotkey(&shortcut).expect("the hotkey opens it");
+    let opened = launcher
+        .press_hotkey(&shortcut)
+        .expect("the hotkey opens it");
     block_on(opened);
 
     assert!(
@@ -722,8 +729,7 @@ fn the_blank_query_lists_the_pins_then_commands_and_applications_by_frecency() {
         .into_iter()
         .find(|id| id.ends_with("/apps/Firefox.app"))
         .expect("Firefox's row");
-    let (change, recorded) =
-        launcher.change_quick_slots(&firefox, ResultAction::Pin);
+    let (change, recorded) = launcher.change_quick_slots(&firefox, ResultAction::Pin);
     assert_eq!(change, SlotChange::Changed(Some(0)), "{change:?}");
     block_on(recorded);
 
@@ -744,7 +750,10 @@ fn the_blank_query_lists_the_pins_then_commands_and_applications_by_frecency() {
     block_on(launcher.resolve_root_home());
     let slots = launcher.quick_slots();
     assert_eq!(
-        slots.iter().map(|slot| slot.title.as_str()).collect::<Vec<_>>(),
+        slots
+            .iter()
+            .map(|slot| slot.title.as_str())
+            .collect::<Vec<_>>(),
         ["Firefox"],
         "the pins, above the results"
     );
@@ -778,7 +787,11 @@ fn the_blank_query_lists_the_pins_then_commands_and_applications_by_frecency() {
     );
     assert_eq!(
         *system.opened.lock().unwrap(),
-        ["/apps/Terminal.app", "/apps/Terminal.app", "/apps/Firefox.app"]
+        [
+            "/apps/Terminal.app",
+            "/apps/Terminal.app",
+            "/apps/Firefox.app"
+        ]
     );
 }
 
@@ -796,10 +809,7 @@ fn an_application_keeps_its_ranking_across_an_update_into_a_new_version_folder()
     );
 
     let system = Arc::new(FakeApplications {
-        applications: Mutex::new(vec![
-            app(&identity, "Tools"),
-            app("/apps/Mail.app", "Mail"),
-        ]),
+        applications: Mutex::new(vec![app(&identity, "Tools"), app("/apps/Mail.app", "Mail")]),
         opened: Mutex::new(Vec::new()),
     });
     let pane = applications_pane(pane, &system, &[]);
@@ -816,10 +826,8 @@ fn an_application_keeps_its_ranking_across_an_update_into_a_new_version_folder()
 
     // The update: the program is found in its new version folder, the
     // same application by its identity, and the results are listed again.
-    *system.applications.lock().unwrap() = vec![
-        app(&updated, "Tools"),
-        app("/apps/Mail.app", "Mail"),
-    ];
+    *system.applications.lock().unwrap() =
+        vec![app(&updated, "Tools"), app("/apps/Mail.app", "Mail")];
     pane.launcher.show_root_search();
     block_on(pane.launcher.resolve_root_home());
     let listed = application_ids(&pane.launcher);

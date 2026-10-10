@@ -213,12 +213,12 @@ fn typing_says_the_selected_row_once_settled_if_it_changed(cx: &mut TestAppConte
     let blank = view(&window, cx);
     assert_eq!(
         blank.selected.map(|index| blank.rows[index].title.as_str()),
-        Some("Rust sample"),
-        "root search's first row"
+        Some("JavaScript sample"),
+        "root search's first row, by the blank query's no-query order (#199)"
     );
 
     // Typing that keeps the same first row: nothing, then or later.
-    cx.simulate_input("rust");
+    cx.simulate_input("java");
     view(&window, cx);
     assert_eq!(announcement(cx), "");
     typing_settles(cx);
@@ -228,9 +228,9 @@ fn typing_says_the_selected_row_once_settled_if_it_changed(cx: &mut TestAppConte
     // Typing that changes it: nothing for each keystroke, then the row,
     // once, after the results settle.
     cx.simulate_keystrokes("backspace backspace backspace backspace");
-    cx.simulate_input("java");
+    cx.simulate_input("ru");
     let shown = view(&window, cx);
-    assert_eq!(shown.query(), Some("java"));
+    assert_eq!(shown.query(), Some("ru"));
     // What the announcer holds after each frame the test draws: it
     // changes once, from nothing to the row.
     let mut heard = vec![announcement(cx)];
@@ -245,9 +245,9 @@ fn typing_says_the_selected_row_once_settled_if_it_changed(cx: &mut TestAppConte
     let changes = heard.windows(2).filter(|pair| pair[0] != pair[1]).count();
     assert_eq!(changes, 1, "said once: {heard:?}");
 
-    // A move while typing settles is said at once (JavaScript sample,
-    // second for "sample", was said last: Down twice reaches another).
-    cx.simulate_keystrokes("backspace backspace backspace backspace");
+    // A move while typing settles is said at once (the first row was
+    // said for "ru"; Down twice reaches another row of "sample").
+    cx.simulate_keystrokes("backspace backspace");
     cx.simulate_input("sample");
     cx.simulate_keystrokes("down down");
     let shown = view(&window, cx);
@@ -315,6 +315,9 @@ fn a_query_with_no_results_says_its_first_fallback_and_a_move_into_the_fallbacks
 #[gpui::test]
 fn opening_a_command_says_its_name_and_count_then_its_row(cx: &mut TestAppContext) {
     let (window, cx) = open_samples(cx);
+    // Typed first: the blank query's first row is not the Rust sample's
+    // (#199's no-query order).
+    cx.simulate_input("rust");
     cx.simulate_keystrokes("enter");
     let shown = view(&window, cx);
     assert_eq!(shown.screen, Screen::Command);

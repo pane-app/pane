@@ -782,10 +782,10 @@ fn a_package_that_only_publishes_operations_adds_no_command() {
         titles(&launcher),
         [
             "Install extension from folder…",
-            "Install extension from npm…",
             "Install extension from Git…",
+            "Install extension from npm…",
             "Manage Extensions",
-            // Pane's own row, listed after every command.
+            // Pane's own row, ranked with the commands by title (#199).
             "Settings…"
         ]
     );

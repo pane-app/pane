@@ -123,6 +123,15 @@ fn open_launcher(
     cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx))
 }
 
+/// Opens the sample's command from root search with the keyboard: its
+/// name typed, then Enter. Typing first because the blank query's order
+/// (#199) ranks Pane's own rows with the commands by title, so Enter
+/// alone would not always open the sample.
+fn open_sample(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) {
+    cx.simulate_input("sample");
+    cx.simulate_keystrokes("enter");
+}
+
 /// Opens the sample's command with Enter and clicks the row whose debug
 /// selector is `row` (`row-<title>`).
 fn click_row(
@@ -130,7 +139,7 @@ fn click_row(
     cx: &mut VisualTestContext,
     row: &'static str,
 ) -> pane_core::LauncherView {
-    cx.simulate_keystrokes("enter");
+    open_sample(window, cx);
     settle(window, cx);
     let row = cx.debug_bounds(row).expect("row rendered");
     cx.simulate_click(row.center(), Modifiers::none());
@@ -154,7 +163,7 @@ fn open_by_click(
 fn the_keyboard_opens_the_sample_and_runs_an_action(cx: &mut TestAppContext, sample: &Sample) {
     let (window, cx) = open(cx, sample);
 
-    cx.simulate_keystrokes("enter");
+    open_sample(&window, cx);
     let view = settle(&window, cx);
     assert_eq!(view.screen, Screen::Command);
     assert_eq!(view.title, format!("{} sample", sample.language));
@@ -214,7 +223,7 @@ fn a_validation_error_is_rendered(cx: &mut TestAppContext, sample: &Sample) {
 /// Opens the sample's command and then its form ("Greet someone", the fifth
 /// item) with the keyboard.
 fn open_form(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) {
-    cx.simulate_keystrokes("enter");
+    open_sample(window, cx);
     settle(window, cx);
     cx.simulate_keystrokes("down down down down enter");
     let view = settle(window, cx);
@@ -289,7 +298,7 @@ fn an_unavailable_action_is_listed_with_its_reason_and_others_still_run(
     let answer = format!("Ran the {available} in the {} guest", sample.language);
     let (window, cx) = open(cx, sample);
     cx.simulate_resize(gpui::size(gpui::px(640.), gpui::px(420.)));
-    cx.simulate_keystrokes("enter");
+    open_sample(&window, cx);
     let view = settle(&window, cx);
     let index = |title: &str| view.rows.iter().position(|row| row.title == title).unwrap();
 
@@ -637,17 +646,31 @@ fn the_launcher_offers_the_rust_javascript_and_typescript_samples(cx: &mut TestA
     let (window, cx) = open_with(cx, samples::sample_commands());
     let root = settle(&window, cx);
     let titles: Vec<&str> = root.rows.iter().map(|row| row.title.as_str()).collect();
-    // Pane's own Settings row is listed last, whatever is installed (its
-    // window is the Settings milestone's work, covered in tests/settings).
-    let samples = ["Rust sample", "JavaScript sample", "TypeScript sample"];
-    assert_eq!(titles, [samples.as_slice(), &["Settings…"]].concat());
+    // Pane's own Settings row is listed with the commands, by the blank
+    // query's no-query order (#199): its window is the Settings
+    // milestone's work, covered in tests/settings.
+    let samples = ["JavaScript sample", "Rust sample", "TypeScript sample"];
+    assert_eq!(
+        titles,
+        ["JavaScript sample", "Rust sample", "Settings…", "TypeScript sample"]
+    );
 
-    for (index, title) in samples.iter().enumerate() {
+    for title in samples {
+        // Each sample opens in turn, selected by its place in the list.
+        let view = settle(&window, cx);
+        let index = view
+            .rows
+            .iter()
+            .position(|row| row.title == title)
+            .unwrap_or_else(|| panic!("{title} is not listed"));
+        for _ in 0..index {
+            cx.simulate_keystrokes("down");
+        }
         cx.simulate_keystrokes("enter");
         let view = settle(&window, cx);
         assert_eq!(
             (view.screen, view.title.as_str()),
-            (Screen::Command, *title)
+            (Screen::Command, title)
         );
 
         cx.simulate_keystrokes("escape");
@@ -657,9 +680,6 @@ fn the_launcher_offers_the_rust_javascript_and_typescript_samples(cx: &mut TestA
             "{:?}",
             view.screen
         );
-        for _ in 0..=index {
-            cx.simulate_keystrokes("down");
-        }
     }
 }
 
@@ -994,7 +1014,7 @@ fn assistive_technology_sees_the_list_the_selection_and_the_result(cx: &mut Test
 /// Opens the sample's command and then its color picker ("Choose a color",
 /// the sixth item) with the keyboard.
 fn open_color(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) {
-    cx.simulate_keystrokes("enter");
+    open_sample(window, cx);
     settle(window, cx);
     cx.simulate_keystrokes("down down down down down enter");
     let view = settle(window, cx);
@@ -1777,6 +1797,65 @@ impl pane_core::applications::Applications for TwoPythons {
     fn open(&self, _id: &str) -> Result<(), String> {
         Ok(())
     }
+}
+
+/// What root search learns from what the user chooses (#199): choosing
+/// the second of two equal results a few times puts it first for that
+/// query, so the user's own choice outranks the provider's order.
+#[gpui::test]
+fn choosing_the_second_of_two_equal_results_a_few_times_puts_it_first(
+    cx: &mut TestAppContext,
+) {
+    let data = tempfile::tempdir().unwrap();
+    let runtime = Runtime::start().unwrap();
+    runtime.set_applications(std::sync::Arc::new(TwoPythons));
+    let folder =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/applications");
+    let launcher = Launcher::with_packages(Ok(runtime), vec![], data.path().join("extensions"));
+    cx.executor().allow_parking();
+    cx.foreground_executor()
+        .block_on(launcher.install_package(&folder));
+    launcher.back();
+    let (window, cx) = open_launcher(cx, launcher);
+
+    // Both Pythons match their name equally, and nothing is learned, so
+    // the provider's own order holds: the first Python's row is first.
+    cx.simulate_input("python");
+    wait_for_rows(&window, cx, &["Python", "Python"]);
+    let listed = |cx: &mut VisualTestContext| {
+        cx.read_entity(&window, |window, _| window.launcher().view().rows)
+    };
+    assert!(
+        listed(cx)[0].id.ends_with("python-Python311"),
+        "the provider's order: {:?}",
+        listed(cx)
+    );
+
+    // The second Python is chosen three times; Enter opens it, and root
+    // search stays as it was.
+    for _ in 0..3 {
+        cx.simulate_keystrokes("down enter");
+        let view = settle(&window, cx);
+        assert_eq!(view.status, Status::Result("Opened Python".into()));
+    }
+    assert!(
+        cx.read_entity(&window, |window, _| window
+            .launcher()
+            .wait_for_learned_recorded(Duration::from_secs(30))),
+        "the uses were recorded"
+    );
+
+    // The query again: the Python the user chose is first, for that query.
+    cx.simulate_keystrokes("escape");
+    settle(&window, cx);
+    cx.simulate_input("python");
+    wait_for_rows(&window, cx, &["Python", "Python"]);
+    let view = settle(&window, cx);
+    assert!(
+        view.rows[0].id.ends_with("python-Python312"),
+        "the chosen Python ranks first: {:?}",
+        view.rows
+    );
 }
 
 /// A pinned application sharing its name with another says what tells it
