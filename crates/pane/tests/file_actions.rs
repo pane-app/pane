@@ -436,11 +436,32 @@ fn tab_and_shift_tab_held_for_the_typed_folders_entries_still_browse(cx: &mut Te
     // The folder's row picked with the pointer — the held Tab took the
     // keyboard off the field — and the field clicked back: a pressed
     // Tab then completes the query to that row's path, which lists that
-    // folder's own entries.
+    // folder's own entries. The row's element follows its data by a
+    // frame — `until` above waits only for the data — so it is polled
+    // for as the Actions panel's entries are below. The pointer's first
+    // event in the window only records where it is, so a second move
+    // onto the row is what selects it (see window.rs's pointer tests).
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while cx.debug_bounds("row-notes").is_none() {
+        assert!(Instant::now() < deadline, "the folder's row never drew");
+        settle(&window, cx);
+        std::thread::sleep(Duration::from_millis(5));
+    }
     let row = cx.debug_bounds("row-notes").expect("the folder's row");
     cx.simulate_mouse_move(row.center(), None::<MouseButton>, Modifiers::none());
+    cx.simulate_mouse_move(
+        row.center() + gpui::point(gpui::px(1.), gpui::px(0.)),
+        None::<MouseButton>,
+        Modifiers::none(),
+    );
     let field = cx.debug_bounds("search").expect("the query field");
-    cx.simulate_click(field.center(), Modifiers::none());
+    // The query's input is the search header, the container's top row:
+    // the container's middle is the list's, whose rows a click there
+    // would pick instead of the field.
+    cx.simulate_click(
+        gpui::point(field.center().x, field.top() + gpui::px(32.)),
+        Modifiers::none(),
+    );
     cx.simulate_keystrokes("tab");
     let view = until(&window, cx, |view| {
         view.rows.iter().any(|row| row.title == "todo.md")
@@ -452,7 +473,9 @@ fn tab_and_shift_tab_held_for_the_typed_folders_entries_still_browse(cx: &mut Te
 
     // Shift+Tab pressed under the query typed on from there: it is held
     // too, and removes the last path component once the list is
-    // published, leaving the folder's entries again.
+    // published, leaving the folder's entries again — the query steps
+    // back at once, the rows for it only once the listing answers, so
+    // both are waited for.
     cx.simulate_input("more");
     cx.simulate_keystrokes("shift-tab");
     assert_eq!(
@@ -462,6 +485,7 @@ fn tab_and_shift_tab_held_for_the_typed_folders_entries_still_browse(cx: &mut Te
     );
     let view = until(&window, cx, |view| {
         view.query() == Some(typed_query(&world.folder.join("notes")).as_str())
+            && view.rows.iter().any(|row| row.title == "todo.md")
     });
     assert!(view.rows.iter().any(|row| row.title == "todo.md"));
 

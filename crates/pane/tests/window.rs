@@ -890,23 +890,18 @@ fn the_mouse_wheel_scrolls_away_until_the_rows_reload(cx: &mut TestAppContext) {
     // An install that finishes after the user has moved on: it reloads root
     // search in the background and keeps the selected row, the first. The
     // blank query's order (#199) collates Pane's own rows among the
-    // commands, so the first row is Pane's install row — reached by title,
-    // as the "Row" commands no longer lead the list.
+    // commands, so the first row is Pane's install row and the "Row"
+    // commands no longer lead the list.
     let install = launcher.install_package(&folder);
     // The user moves on from the install's moment: the collated blank
-    // list's first row is Pane's install row, which opens nothing, so the
-    // extension manager's row is picked by title and opened — leaving the
-    // screen the install began on, as activating the first row did before
-    // the collation (#199) moved Pane's own rows up among the commands.
-    let view = launcher.view();
-    let manage = view
-        .rows
-        .iter()
-        .position(|row| row.title == "Manage Extensions")
-        .expect("the row is listed");
-    launcher.select(manage);
-    cx.foreground_executor()
-        .block_on(launcher.activate_selected());
+    // list's first row is Pane's install row, which opens nothing in the
+    // launcher, and the extension manager's row is not listed yet — it
+    // lists only while something is installed or retained (#41), and
+    // the twelve registered commands are no packages — so the flow that
+    // row's activation enters is entered directly, leaving the screen
+    // the install began on, as activating the first row did before the
+    // collation (#199) moved Pane's own rows up among the commands.
+    launcher.manage_extensions();
     launcher.back();
     redraw(&window, cx);
     assert!(row_is_visible(cx, "row-Install extension from folder…"));

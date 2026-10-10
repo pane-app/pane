@@ -12,12 +12,12 @@ use std::path::PathBuf;
 
 use gpui::{Entity, TestAppContext, VisualTestContext, prelude::*};
 use pane::LauncherWindow;
-use pane_core::{Launcher, Runtime, Screen};
+use pane_core::{Launcher, Runtime, Screen, Status};
 
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::{settle, settle_bare};
+use settle::{settle, settle_bare, settle_shown};
 
 #[path = "support/packages.rs"]
 mod packages;
@@ -129,15 +129,16 @@ fn up_restores_the_previous_query_with_its_argument_values(cx: &mut TestAppConte
     );
 
     // Enter runs the command with the restored values, as typing them
-    // would: one key repeats the search.
+    // would: one key repeats the search. The run's answer is the toast
+    // the footer shows while the status line stays idle (#141), as the
+    // arguments tests read the same run.
     cx.simulate_keystrokes("enter");
-    let view = settle_bare(&window, cx);
-    assert!(
-        matches!(&view.status, pane_core::Status::Result(message)
-            if message.contains("name=Ada")),
-        "{:?}",
-        view.status
+    assert_eq!(
+        settle_shown(&window, cx),
+        Status::Result("Greet run 1 from root-search: name=Ada; fallback text: none".into()),
+        "Enter runs the command with the restored values"
     );
+    let view = settle_bare(&window, cx);
     assert_eq!(
         view.screen,
         Screen::Root {
