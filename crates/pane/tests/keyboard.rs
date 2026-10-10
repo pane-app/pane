@@ -1329,16 +1329,17 @@ fn the_navigation_bindings_move_the_selection_unless_an_action_has_their_keys(
     cx.simulate_input("script");
     assert_eq!(settle(&window, cx).selected, Some(0));
 
-    // The choices are Raycast's, each labelled with the keys it binds,
-    // and none clashes with the default keys: Vim Motions is available
-    // beside Open actions' Ctrl+K.
+    // The choices are Raycast's, each labelled with the keys it binds —
+    // the selection's pair and Left and Right (#258) — and none clashes
+    // with the default keys: Vim Motions is available beside Open
+    // actions' Ctrl+K.
     let (_settings, mut settings_cx) = keyboard_page(cx);
     click(&mut settings_cx, "keyboard-navigation");
     settings_cx.run_until_parked();
     let tree = a11y(&mut settings_cx);
     for label in [
-        format!("Emacs ({NAV_NAME}+P, {NAV_NAME}+N)"),
-        format!("Vim Motions ({NAV_NAME}+K, {NAV_NAME}+J)"),
+        format!("Emacs ({NAV_NAME}+P, {NAV_NAME}+N, {NAV_NAME}+B, {NAV_NAME}+F)"),
+        format!("Vim Motions ({NAV_NAME}+K, {NAV_NAME}+J, {NAV_NAME}+H, {NAV_NAME}+L)"),
     ] {
         assert!(tree.contains(&label), "{label} is offered, {tree}");
     }

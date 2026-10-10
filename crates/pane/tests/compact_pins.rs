@@ -5,6 +5,7 @@
 //! plus the row's.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use gpui::{Entity, Modifiers, Pixels, TestAppContext, VisualTestContext, px};
 use pane::LauncherWindow;
@@ -271,6 +272,11 @@ fn a_compact_pin_of_a_named_glyph_draws_it_on_panes_neutral_tile(cx: &mut TestAp
     cx.foreground_executor()
         .block_on(launcher.install_package(&package));
     let (window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    // The install's outcome keeps the window expanded while the footer
+    // has it to say; once its toast's time is past the status rests and
+    // the window collapses.
+    cx.executor().advance_clock(Duration::from_secs(3));
+    cx.run_until_parked();
     settle(&window, cx);
     assert_eq!(
         asked_height(cx),

@@ -2249,13 +2249,14 @@ impl Render for LauncherWindow {
         // quick action is never announced as busy (#248). The busy state
         // comes first: it is what is happening now, past the threshold,
         // whatever outcome is still showing its time out in the strip.
-        let announced: Option<SharedString> = loading
-            .busy
-            .then(|| "Running…".into())
-            .or_else(|| match &toast {
-                Some(shown) => Some(shown.toast.text().into()),
-                None => status.clone(),
-            });
+        let announced: Option<SharedString> =
+            loading
+                .busy
+                .then(|| "Running…".into())
+                .or_else(|| match &toast {
+                    Some(shown) => Some(shown.toast.text().into()),
+                    None => status.clone(),
+                });
         // The announcer says it too (#132), when it is a toast or an
         // outcome — or the busy state, past the threshold; progress stays
         // the strip's own.
@@ -2472,14 +2473,19 @@ impl Render for LauncherWindow {
             .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(Self::toggle_actions))
             .on_action(cx.listener(Self::open_toast_details))
+            // The Back-a-level key, beneath every focused control but
+            // above the fields' own empty Backspace (#258). It is the
+            // first capture listener of them all: the keystroke gate
+            // ahead of the key bindings stops the key's dispatch when a
+            // back would act, and a stopped dispatch leaves the capture
+            // loop after its first listener, so the one the gate means to
+            // reach has to be it.
+            .capture_key_down(cx.listener(Self::backspace_back_keys))
             .map(|content| Self::on_quick_slot_keys(content, cx))
             // A toast's actions' shortcuts first: the toast is what was
             // said last (#141).
             .capture_key_down(cx.listener(Self::toast_action_keys))
             .capture_key_down(cx.listener(Self::item_action_keys))
-            // The Back-a-level key, beneath every focused control but
-            // above the fields' own empty Backspace (#258).
-            .capture_key_down(cx.listener(Self::backspace_back_keys))
             .on_action(cx.listener(Self::select_next_five))
             .on_action(cx.listener(Self::select_previous_five))
             .on_action(cx.listener(Self::select_next_section))

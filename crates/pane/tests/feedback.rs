@@ -205,10 +205,10 @@ fn hud_shown(
 /// The HUD window's pill — its popover surface — and the alpha it is
 /// drawn with: the fade out shows in it. The pill is told by its fill,
 /// the popover's own solid colour (dark `0x26272B`, light `0xFBFBFD`,
-/// whichever the theme holds), which the fade weakens the alpha of
-/// alone: the border's strips paint transparent fills of another
-/// colour, and the style's dot its success, so neither is mistaken for
-/// the pill however large they draw.
+/// whichever the theme holds) with the alpha the fade changes taken
+/// out of the comparison: the border's strips paint transparent fills
+/// of another colour, and the style's dot its success, so neither is
+/// mistaken for the pill however large they draw.
 fn pill_alpha(hud: &mut VisualTestContext) -> f32 {
     let popover = |hex: u32| gpui::rgb_to_hsla(gpui::rgba(hex));
     let [dark, light] = [popover(0x26272BFF), popover(0xFBFBFDFF)];
@@ -217,10 +217,10 @@ fn pill_alpha(hud: &mut VisualTestContext) -> f32 {
         .into_iter()
         .filter_map(|quad| {
             let fill = quad.background.as_solid()?;
-            let same = |colour| {
-                (fill.h, fill.s, fill.l) == (colour.h, colour.s, colour.l)
-            };
-            (same(dark) || same(light)).then_some(fill.alpha)
+            let alpha = fill.alpha;
+            let mut at_full = fill;
+            at_full.alpha = 1.;
+            (at_full == dark || at_full == light).then_some(alpha)
         })
         .collect();
     assert_eq!(pills.len(), 1, "the HUD's pill: {pills:?}");

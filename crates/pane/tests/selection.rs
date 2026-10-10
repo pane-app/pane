@@ -548,8 +548,10 @@ fn a_confirmations_buttons_hover_wash_fades_out_when_the_pointer_leaves(cx: &mut
     settle(&window, cx);
     cx.simulate_input("ask");
     settle(&window, cx);
+    // The action may wait on the confirmation it asks for: its call stays
+    // running until it is answered, so the window is waited on for the
+    // dialog itself, not for the call to end.
     cx.simulate_keystrokes("enter");
-    settle(&window, cx);
     wait::until(cx, |cx| {
         cx.debug_bounds("confirmation").is_some().then_some(())
     });

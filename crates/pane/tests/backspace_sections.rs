@@ -318,13 +318,26 @@ fn select(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, title: &s
 /// Whether the element `selector` names lies in the result list's view,
 /// between the search header and the footer: a label scrolled past is
 /// drawn no further down than the header, one scrolled into view is
-/// (#258).
+/// (#258). The footer is found by whichever selector the status in force
+/// names: the strip keeps its status-* family, and no one selector is
+/// always the one drawn.
 fn in_view(cx: &mut VisualTestContext, selector: &'static str) -> bool {
     let Some(label) = cx.debug_bounds(selector) else {
         return false;
     };
     let header = cx.debug_bounds("search").expect("the search header");
-    let footer = cx.debug_bounds("status").expect("the footer");
+    let mut footer = None;
+    for status in [
+        "status-idle",
+        "status-running",
+        "status-progress",
+        "status-result",
+        "status-error",
+        "status-toast",
+    ] {
+        footer = footer.or_else(|| cx.debug_bounds(status));
+    }
+    let footer = footer.expect("the footer");
     label.bottom() > header.bottom() && label.top() < footer.top()
 }
 
@@ -542,20 +555,23 @@ fn alt_arrows_move_root_searches_selection_five_rows(cx: &mut TestAppContext) {
 fn a_command_list_moves_five_rows_and_jumps_to_its_ends(cx: &mut TestAppContext) {
     let (window, cx) = open_command_list(cx);
     let view = settle(&window, cx);
-    assert_eq!(view.rows.len(), 9, "{:?}", titles(&view));
+    // The sample's eight items, its two platform-gated ones listed as
+    // unavailable wherever they do not run, so the count is the same on
+    // every system.
+    assert_eq!(view.rows.len(), 8, "{:?}", titles(&view));
     assert_eq!(view.selected, Some(0));
 
     cx.simulate_keystrokes("alt-down");
     assert_eq!(settle(&window, cx).selected, Some(5));
     cx.simulate_keystrokes("alt-down");
-    assert_eq!(settle(&window, cx).selected, Some(8), "clamped at the last");
+    assert_eq!(settle(&window, cx).selected, Some(7), "clamped at the last");
     cx.simulate_keystrokes("alt-up");
-    assert_eq!(settle(&window, cx).selected, Some(3));
+    assert_eq!(settle(&window, cx).selected, Some(2));
 
     // One section of its own: down goes to the last row, up from inside
     // it to its first, and no further.
     cx.simulate_keystrokes("ctrl-down");
-    assert_eq!(settle(&window, cx).selected, Some(8));
+    assert_eq!(settle(&window, cx).selected, Some(7));
     cx.simulate_keystrokes("ctrl-up");
     assert_eq!(settle(&window, cx).selected, Some(0));
     cx.simulate_keystrokes("ctrl-up");
@@ -783,6 +799,7 @@ fn panel_runs(keys: &str, window: &Entity<LauncherWindow>, cx: &mut VisualTestCo
     settle(window, cx);
     assert!(actions_open(window, cx));
     cx.simulate_keystrokes(keys);
+    settle(window, cx);
     cx.simulate_keystrokes("enter");
     settle_shown(window, cx)
 }
@@ -812,8 +829,10 @@ fn the_emacs_pair_moves_the_selection_and_the_argument_fields(cx: &mut TestAppCo
     assert_eq!(focused_label(cx).as_deref(), Some("Name"));
     cx.simulate_keystrokes(EMACS_RIGHT);
     assert_eq!(focused_label(cx).as_deref(), Some("Secret"));
+    // The tone field: its chosen segment is what assistive technology
+    // reads of it, the radio group's active descendant.
     cx.simulate_keystrokes(EMACS_RIGHT);
-    assert_eq!(focused_label(cx).as_deref(), Some("Tone"));
+    assert_eq!(focused_label(cx).as_deref(), Some("Warm"));
     cx.simulate_keystrokes(EMACS_LEFT);
     assert_eq!(focused_label(cx).as_deref(), Some("Secret"));
     cx.simulate_keystrokes(EMACS_LEFT);
@@ -849,6 +868,7 @@ fn the_vim_pair_moves_the_selection_and_ctrl_k_opens_the_panel(cx: &mut TestAppC
     settle(&window, cx);
     assert!(actions_open(&window, cx));
     cx.simulate_keystrokes(VIM_NEXT);
+    settle(&window, cx);
     cx.simulate_keystrokes("enter");
     assert_eq!(
         settle_shown(&window, cx),
