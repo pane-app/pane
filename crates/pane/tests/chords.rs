@@ -112,7 +112,8 @@ fn with_calculator(cx: &mut TestAppContext, data: &std::path::Path) -> Launcher 
         "{:?}",
         launcher.view().status
     );
-    launcher.back()
+    launcher.back();
+    launcher
 }
 
 fn open_launcher(
@@ -333,7 +334,8 @@ fn an_altgr_character_reaches_the_field_and_matches_no_chord(cx: &mut TestAppCon
 #[gpui::test]
 fn ctrl_c_copies_a_selection_and_without_one_runs_the_rows_copy_action(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
-    let (window, cx) = open_launcher(cx, with_calculator(cx, data.path()));
+    let launcher = with_calculator(cx, data.path());
+    let (window, cx) = open_launcher(cx, launcher);
 
     cx.simulate_input("6*7");
     wait_for_rows(&window, cx, &["42"]);
