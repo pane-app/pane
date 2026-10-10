@@ -98,6 +98,27 @@ fn calculator() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/calculator")
 }
 
+/// The actions sample as a root command, titled "Actions sample": the
+/// window's item_actions tests open it the same way, for a list whose
+/// items carry several actions in sections.
+fn actions_command() -> CommandRegistration {
+    let component =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/sample_actions.wasm");
+    assert!(
+        component.exists(),
+        "{} is missing; run `cargo xtask guests`",
+        component.display()
+    );
+    CommandRegistration {
+        id: "actions-sample".into(),
+        title: "Actions sample".into(),
+        subtitle: None,
+        component,
+        takes_query: false,
+        search: false,
+    }
+}
+
 /// A root command `id` titled `title`, whose component is the Rust
 /// sample's: root search only lists it, and no key here runs it.
 fn command(id: &str, title: &str) -> CommandRegistration {
@@ -152,20 +173,20 @@ fn install(launcher: &Launcher, name: &str) {
 }
 
 /// The window over `launcher`, with the keys bound as the binary does.
-fn open_launcher<'a>(
-    cx: &'a mut TestAppContext,
+fn open_launcher(
+    cx: &mut TestAppContext,
     launcher: Launcher,
-) -> (Entity<LauncherWindow>, &'a mut VisualTestContext) {
+) -> (Entity<LauncherWindow>, &mut VisualTestContext) {
     cx.executor().allow_parking();
     cx.update(pane::bind_keys);
     cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx))
 }
 
 /// The window over `commands` root commands, on root search.
-fn open_with<'a>(
-    cx: &'a mut TestAppContext,
+fn open_with(
+    cx: &mut TestAppContext,
     commands: Vec<CommandRegistration>,
-) -> (Entity<LauncherWindow>, &'a mut VisualTestContext) {
+) -> (Entity<LauncherWindow>, &mut VisualTestContext) {
     open_launcher(cx, Launcher::new(Runtime::start(), commands))
 }
 
@@ -208,9 +229,9 @@ fn open_preview<'a>(
 
 /// The window over the Rust sample as a root command, its list opened
 /// with Enter: a command's own list, "Say hello" selected.
-fn open_command_list<'a>(
-    cx: &'a mut TestAppContext,
-) -> (Entity<LauncherWindow>, &'a mut VisualTestContext) {
+fn open_command_list(
+    cx: &mut TestAppContext,
+) -> (Entity<LauncherWindow>, &mut VisualTestContext) {
     let (window, cx) = open_with(cx, vec![command("sample_rust", "Rust sample")]);
     cx.simulate_input("rust sample");
     settle(&window, cx);
@@ -315,30 +336,18 @@ fn select(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, title: &s
     panic!("no row {title} is selected");
 }
 
-/// Whether the element `selector` names lies in the result list's view,
-/// between the search header and the footer: a label scrolled past is
-/// drawn no further down than the header, one scrolled into view is
-/// (#258). The footer is found by whichever selector the status in force
-/// names: the strip keeps its status-* family, and no one selector is
-/// always the one drawn.
+/// Whether the element `selector` names lies in the result list's view:
+/// the rows' column, between the search header and the footer — the
+/// region the virtual list draws its children into. A label scrolled
+/// past is drawn above that column (or not at all, a virtual list laying
+/// out only what is near the view), one scrolled into view intersects it
+/// (#258).
 fn in_view(cx: &mut VisualTestContext, selector: &'static str) -> bool {
     let Some(label) = cx.debug_bounds(selector) else {
         return false;
     };
-    let header = cx.debug_bounds("search").expect("the search header");
-    let mut footer = None;
-    for status in [
-        "status-idle",
-        "status-running",
-        "status-progress",
-        "status-result",
-        "status-error",
-        "status-toast",
-    ] {
-        footer = footer.or_else(|| cx.debug_bounds(status));
-    }
-    let footer = footer.expect("the footer");
-    label.bottom() > header.bottom() && label.top() < footer.top()
+    let list = cx.debug_bounds("rows").expect("the result list");
+    label.bottom() > list.top() && label.top() < list.bottom()
 }
 
 /// Backspace with no modifiers, on an empty command search, goes back one
@@ -738,7 +747,7 @@ fn the_horizontal_strip_is_not_entered(cx: &mut TestAppContext) {
 /// selected, which names the entry each jump lands on.
 #[gpui::test]
 fn the_actions_panel_jumps_entries_and_groups(cx: &mut TestAppContext) {
-    let (window, cx) = open_with(cx, vec![command("actions-sample", "Actions sample")]);
+    let (window, cx) = open_with(cx, vec![actions_command()]);
     cx.simulate_input("actions sample");
     settle(&window, cx);
     cx.simulate_keystrokes("enter");
@@ -784,9 +793,10 @@ fn the_actions_panel_jumps_entries_and_groups(cx: &mut TestAppContext) {
         runs("ctrl-up", &window, cx),
         Status::Result("Open: Alpha note".into())
     );
-    // From inside "Share", up lands on its own first entry first.
+    // From inside "Share" — past its first entry — up lands on its own
+    // first entry first, before the group above it.
     assert_eq!(
-        runs("alt-down ctrl-up", &window, cx),
+        runs("alt-down down ctrl-up", &window, cx),
         Status::Result("Copy Link: Alpha note".into())
     );
 }
@@ -850,7 +860,7 @@ fn the_vim_pair_moves_the_selection_and_ctrl_k_opens_the_panel(cx: &mut TestAppC
         data.path(),
         r#"{ "version": 1, "navigationBindings": "vim" }"#,
     );
-    let (window, cx) = open_with(cx, vec![command("actions-sample", "Actions sample")]);
+    let (window, cx) = open_with(cx, vec![actions_command()]);
     cx.simulate_input("actions sample");
     settle(&window, cx);
     cx.simulate_keystrokes("enter");
