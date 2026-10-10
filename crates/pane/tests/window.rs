@@ -127,7 +127,7 @@ fn open_launcher(
 /// name typed, then Enter. Typing first because the blank query's order
 /// (#199) ranks Pane's own rows with the commands by title, so Enter
 /// alone would not always open the sample.
-fn open_sample(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) {
+fn open_sample(cx: &mut VisualTestContext) {
     cx.simulate_input("sample");
     cx.simulate_keystrokes("enter");
 }
@@ -139,7 +139,7 @@ fn click_row(
     cx: &mut VisualTestContext,
     row: &'static str,
 ) -> pane_core::LauncherView {
-    open_sample(window, cx);
+    open_sample(cx);
     settle(window, cx);
     let row = cx.debug_bounds(row).expect("row rendered");
     cx.simulate_click(row.center(), Modifiers::none());
@@ -163,7 +163,7 @@ fn open_by_click(
 fn the_keyboard_opens_the_sample_and_runs_an_action(cx: &mut TestAppContext, sample: &Sample) {
     let (window, cx) = open(cx, sample);
 
-    open_sample(&window, cx);
+    open_sample(cx);
     let view = settle(&window, cx);
     assert_eq!(view.screen, Screen::Command);
     assert_eq!(view.title, format!("{} sample", sample.language));
@@ -223,7 +223,7 @@ fn a_validation_error_is_rendered(cx: &mut TestAppContext, sample: &Sample) {
 /// Opens the sample's command and then its form ("Greet someone", the fifth
 /// item) with the keyboard.
 fn open_form(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) {
-    open_sample(window, cx);
+    open_sample(cx);
     settle(window, cx);
     cx.simulate_keystrokes("down down down down enter");
     let view = settle(window, cx);
@@ -298,7 +298,7 @@ fn an_unavailable_action_is_listed_with_its_reason_and_others_still_run(
     let answer = format!("Ran the {available} in the {} guest", sample.language);
     let (window, cx) = open(cx, sample);
     cx.simulate_resize(gpui::size(gpui::px(640.), gpui::px(420.)));
-    open_sample(&window, cx);
+    open_sample(cx);
     let view = settle(&window, cx);
     let index = |title: &str| view.rows.iter().position(|row| row.title == title).unwrap();
 
@@ -1016,7 +1016,7 @@ fn assistive_technology_sees_the_list_the_selection_and_the_result(cx: &mut Test
 /// Opens the sample's command and then its color picker ("Choose a color",
 /// the sixth item) with the keyboard.
 fn open_color(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) {
-    open_sample(window, cx);
+    open_sample(cx);
     settle(window, cx);
     cx.simulate_keystrokes("down down down down down enter");
     let view = settle(window, cx);

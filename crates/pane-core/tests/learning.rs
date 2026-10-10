@@ -801,8 +801,8 @@ fn an_application_keeps_its_ranking_across_an_update_into_a_new_version_folder()
     // The same program, its updater having moved it into a new version
     // folder: one identity, whose version segment is a wildcard.
     let program = |folder: &str| format!(r"C:\Program Files\Tools\{folder}\tools.exe");
-    let identity = applications::Key::program(&program("app-1.0.0"), "").id();
-    let updated = applications::Key::program(&program("app-1.2.0"), "").id();
+    let identity = Key::program(&program("app-1.0.0"), "").id();
+    let updated = Key::program(&program("app-1.2.0"), "").id();
     assert_eq!(
         identity, updated,
         "the version folder is wildcarded, so the update keeps the identity"
