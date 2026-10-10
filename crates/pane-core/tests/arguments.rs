@@ -1,17 +1,20 @@
 //! A command's arguments through the launcher's public interface, with the
 //! arguments sample in Rust, JavaScript and TypeScript, real guests `cargo
-//! xtask guests` assembles: a launch the user started that leaves a
-//! required argument without a value shows Pane's argument form (from root
-//! search, a global hotkey, a quick slot and another command's launch), and
-//! the command runs once it is submitted, with the values by name and the
-//! empty optional ones absent; submitting with a required field empty runs
-//! nothing and marks it, and Back runs nothing; a background launch with a
-//! required argument missing is refused, as are values another command
-//! passes that are not the target's; text sent through an alias or as a
-//! fallback fills the first text argument; the last dropdown value is
-//! remembered across a restart; and a password's value is in none of
-//! Pane's records. The manifest's mistakes are refused at install. The
-//! sample tells what it ran with in a toast; the form's refusals are Pane's
+//! xtask guests` assembles: root search shows the selected row's fields
+//! inline after the query (#205) — Enter with a required one blank marks
+//! it, says "Enter <placeholder>" and runs nothing, the values typed run
+//! the command with them by name and the empty optional ones absent, and
+//! they survive the list being re-ranked and a restart's remembered
+//! dropdowns (dropped once the choice is gone); a launch that leaves root
+//! search — a global hotkey, a quick slot, another command's — still asks
+//! through Pane's argument form, which submits and runs the command once;
+//! a background launch with a required argument missing is refused, as are
+//! values another command passes that are not the target's; text sent as a
+//! fallback fills the first text argument, while an alias followed by a
+//! space fills the fields and runs the command from its alias, a command
+//! without arguments opening at once instead; and a password's value is in
+//! none of Pane's records. The manifest's mistakes are refused at install.
+//! The sample tells what it ran with in a toast; the refusals are Pane's
 //! own, in the status line.
 
 use std::fs;
@@ -20,10 +23,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::executor::block_on;
+use pane_core::clipboard::ManualClock;
 use pane_core::hotkeys::{HotkeyError, Hotkeys, Shortcut};
 use pane_core::{
-    Choice, FieldKind, FormField, FormView, Launcher, PackageIdentity, ResultAction, Runtime,
-    Screen, Status,
+    AliasFlow, Choice, FieldKind, FormField, FormView, Launcher, Limits, PackageIdentity,
+    ResultAction, Runtime, Screen, Status,
 };
 use tempfile::TempDir;
 
@@ -179,16 +183,6 @@ impl Pane {
         block_on(self.launcher.set_query(query));
     }
 
-    /// Types `query` in root search, chooses the row titled `title` and
-    /// waits for what it does; what it showed: its toast, or the status
-    /// line.
-    fn run(&self, query: &str, title: &str) -> Status {
-        self.search(query);
-        select_title(&self.launcher, title);
-        block_on(self.launcher.activate_selected());
-        shown(&self.launcher)
-    }
-
     /// Types `query` in root search, which the alias it starts with makes
     /// select its command's row, and presses Enter; what it showed: its
     /// toast, or the status line.
@@ -291,39 +285,46 @@ fn greet_fields(tone: &str) -> Vec<FormField> {
     ]
 }
 
-fn the_form_asks_for_a_required_argument_and_runs_the_command_once(fixture: &Fixture) {
+fn root_searchs_fields_refuse_a_blank_required_argument_and_run_with_the_values(
+    fixture: &Fixture,
+) {
     let pane = Pane::new();
-    let folder = pane.install(fixture);
+    pane.install(fixture);
     let launcher = &pane.launcher;
     assert_eq!(launcher.arguments_asked_for(), None);
 
-    // Enter on "Greet" asks for its arguments, in declaration order, the
-    // dropdown on its first option.
-    pane.run("greet", "Greet");
-    let form = pane.form("Greet");
-    assert_eq!(form.fields, greet_fields("warm"));
-    assert_eq!(form.submit_label, "Run command");
-    assert_eq!(launcher.arguments_asked_for(), Some(id(&folder, "greet")));
+    // "Greet" selected: its fields show after the query, one per argument,
+    // the dropdown with no choice chosen — the empty choice its list leads
+    // with — and nothing marked before anything has been left blank.
+    pane.search("greet");
+    assert_eq!(titles(launcher), ["Greet"]);
+    let fields = launcher.argument_fields().expect("the fields show");
+    assert_eq!(fields.title, "Greet");
+    assert_eq!(fields.fields, greet_fields(""));
 
-    // Submitting with the required name empty (or blank) marks it and runs
-    // nothing.
-    for blank in ["", "   "] {
-        assert_eq!(
-            pane.submit(&[("name", blank)]),
-            Status::Error(format!("Name: {MISSING}"))
-        );
-        let form = pane.form("Greet");
-        assert_eq!(form.fields[0].error.as_deref(), Some(MISSING));
-        assert_eq!(form.fields[1].error, None);
-    }
-
-    // Filled, it runs once with the values by name; the empty password is
-    // absent. Root search is back as it was, its query kept.
+    // Enter with the required name blank marks it, names it in the status
+    // line, and runs nothing: root search stays as it was.
+    block_on(launcher.activate_selected());
+    let view = launcher.view();
+    assert_eq!(view.status, Status::Error("Enter Name".into()));
     assert_eq!(
-        pane.submit(&[("name", "Ada")]),
-        Status::Result(
-            "Greet run 1 from root-search: name=Ada, tone=warm; fallback text: none".into()
-        )
+        view.screen,
+        Screen::Root {
+            query: "greet".into()
+        }
+    );
+    let fields = launcher.argument_fields().expect("the fields show");
+    assert_eq!(fields.fields[0].error.as_deref(), Some(MISSING));
+    assert_eq!(fields.fields[1].error, None);
+
+    // The value typed clears the mark and runs the command once with it;
+    // the empty password is absent, and the dropdown with no choice too.
+    launcher.set_argument_value("name", "Ada");
+    assert_eq!(launcher.argument_fields().unwrap().fields[0].error, None);
+    block_on(launcher.activate_selected());
+    assert_eq!(
+        shown(launcher),
+        Status::Result("Greet run 1 from root-search: name=Ada; fallback text: none".into())
     );
     assert_eq!(
         launcher.view().screen,
@@ -332,27 +333,26 @@ fn the_form_asks_for_a_required_argument_and_runs_the_command_once(fixture: &Fix
         }
     );
 
-    // Back runs nothing: the next run is the second.
-    pane.run("greet", "Greet");
-    pane.form("Greet");
-    assert!(launcher.back());
-    let view = launcher.view();
+    // The fields hold what was typed, and the next run carries every
+    // value, the dropdown's among them.
+    assert_eq!(launcher.argument_fields().unwrap().fields[0].value, "Ada");
+    launcher.set_argument_value("name", "Grace");
+    launcher.set_argument_value("secret", "s3cret");
+    launcher.set_argument_value("tone", "brief");
+    block_on(launcher.activate_selected());
     assert_eq!(
-        view.screen,
-        Screen::Root {
-            query: "greet".into()
-        }
-    );
-    assert_eq!(view.status, Status::Idle);
-    pane.run("greet", "Greet");
-    assert_eq!(
-        pane.submit(&[("name", "Grace"), ("secret", "s3cret"), ("tone", "brief")]),
+        shown(launcher),
         Status::Result(
             "Greet run 2 from root-search: name=Grace, secret (6 characters), tone=brief; \
              fallback text: none"
                 .into()
         )
     );
+
+    // The values go with the query: another search of the same row starts
+    // them empty.
+    pane.search("gre");
+    assert_eq!(launcher.argument_fields().unwrap().fields[0].value, "");
 }
 
 fn hotkey_and_quick_slot_launches_ask_for_the_arguments(fixture: &Fixture) {
@@ -481,24 +481,46 @@ fn another_command_launch_asks_for_missing_arguments_and_a_background_one_is_ref
     assert_eq!(pane.form("Greet").fields, greet_fields("formal"));
 }
 
-fn alias_and_fallback_text_fill_the_first_text_argument(fixture: &Fixture) {
+fn an_alias_and_a_space_fill_the_first_argument_and_a_fallback_the_query(
+    fixture: &Fixture,
+) {
     let pane = Pane::new();
     let folder = pane.install(fixture);
     let launcher = &pane.launcher;
 
-    // Through its alias: the text fills the name, so nothing is asked, and
-    // stays the fallback text; the dropdown, given no value, is absent.
+    // The alias followed by a space: no row sends the text after it (the
+    // command declares arguments), and its own row, hoisted by the alias,
+    // is selected with its fields showing — the space and Tab after the
+    // alias alike are the way into them.
     pane.alias(&folder, "greet", "gr");
+    pane.search("gr ");
+    assert_eq!(titles(launcher), ["Greet"]);
+    assert_eq!(launcher.view().selected, Some(0));
+    assert_eq!(launcher.alias_after_space(), Some(AliasFlow::Fields));
+    pane.search("gr");
+    assert_eq!(launcher.alias_after_tab(), Some(AliasFlow::Fields));
+
+    // What is typed after the alias fills the first argument, and Enter
+    // runs the command from its alias with it; the alias stays in the
+    // query, and the text is not the fallback text — it is the value.
+    launcher.set_argument_value("name", "Ada");
+    block_on(launcher.activate_selected());
     assert_eq!(
-        pane.send("gr  Ada "),
-        Status::Result("Greet run 1 from alias: name=Ada; fallback text: Ada".into())
+        shown(launcher),
+        Status::Result("Greet run 1 from alias: name=Ada; fallback text: none".into())
     );
     assert_eq!(
         launcher.view().screen,
         Screen::Root {
-            query: "gr  Ada ".into()
+            query: "gr".into()
         }
     );
+
+    // A command that takes a query and declares no arguments keeps the row
+    // that sends the text after its alias: Relay, listed first.
+    pane.search("rl stamp");
+    assert_eq!(launcher.alias_after_space(), None);
+    assert_eq!(titles(launcher), ["Relay"]);
 
     // Its first argument is text and the others optional, so it may be a
     // fallback, as may Stamp and Relay (which takes a query).
@@ -554,13 +576,22 @@ fn a_command_whose_arguments_cannot_take_the_query_is_not_offered_as_a_fallback(
     });
 }
 
-fn the_last_dropdown_is_remembered_and_a_password_is_recorded_nowhere(fixture: &Fixture) {
+fn the_last_dropdown_is_remembered_and_dropped_once_the_choice_is_gone(
+    fixture: &Fixture,
+) {
     let pane = Pane::new();
-    pane.install(fixture);
+    let folder = pane.install(fixture);
+    let launcher = &pane.launcher;
 
-    pane.run("greet", "Greet");
+    // Run with a dropdown choice and a password: the choice is remembered,
+    // the password recorded nowhere.
+    pane.search("greet");
+    launcher.set_argument_value("name", "Ada");
+    launcher.set_argument_value("secret", SECRET);
+    launcher.set_argument_value("tone", "formal");
+    block_on(launcher.activate_selected());
     assert_eq!(
-        pane.submit(&[("name", "Ada"), ("secret", SECRET), ("tone", "formal")]),
+        shown(launcher),
         Status::Result(format!(
             "Greet run 1 from root-search: name=Ada, secret ({} characters), tone=formal; \
              fallback text: none",
@@ -569,12 +600,36 @@ fn the_last_dropdown_is_remembered_and_a_password_is_recorded_nowhere(fixture: &
     );
     assert_no_record_holds(pane.data.path(), SECRET);
 
-    // After a restart, the form chooses the last tone, and holds no secret.
+    // After a restart the tone is offered again, and no secret is held.
     let pane = pane.restart();
-    pane.run("greet", "Greet");
-    assert_eq!(pane.form("Greet").fields, greet_fields("formal"));
-    assert!(pane.launcher.back());
+    pane.search("greet");
+    assert_eq!(pane.launcher.argument_fields().unwrap().fields[2].value, "formal");
     assert_no_record_holds(pane.data.path(), SECRET);
+
+    // The command updated with "formal" no longer among its options: the
+    // remembered choice is dropped, the field showing no choice.
+    let file = folder.join("pane.json");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+    fs::write(
+        &file,
+        serde_json::to_string(&without_formal(&manifest)).unwrap(),
+    )
+    .unwrap();
+    block_on(pane.launcher.install_package(&folder));
+    assert!(matches!(pane.launcher.view().status, Status::Result(_)));
+    pane.search("greet");
+    assert_eq!(pane.launcher.argument_fields().unwrap().fields[2].value, "");
+    assert_no_record_holds(pane.data.path(), SECRET);
+}
+
+/// `manifest` with the option "formal" left out of "Greet"'s tone.
+fn without_formal(manifest: &serde_json::Value) -> serde_json::Value {
+    let mut manifest = manifest.clone();
+    let options = &mut manifest["commands"][0]["arguments"][2]["options"];
+    let options = options.as_array_mut().unwrap();
+    options.retain(|option| option["value"] != "formal" && option != "formal");
+    manifest
 }
 
 /// Checks that no file under `folder` (Pane's records, the packages'
@@ -618,11 +673,11 @@ macro_rules! contract {
 }
 
 contract!(
-    the_form_asks_for_a_required_argument_and_runs_the_command_once,
+    root_searchs_fields_refuse_a_blank_required_argument_and_run_with_the_values,
     hotkey_and_quick_slot_launches_ask_for_the_arguments,
     another_command_launch_asks_for_missing_arguments_and_a_background_one_is_refused,
-    alias_and_fallback_text_fill_the_first_text_argument,
-    the_last_dropdown_is_remembered_and_a_password_is_recorded_nowhere,
+    an_alias_and_a_space_fill_the_first_argument_and_a_fallback_the_query,
+    the_last_dropdown_is_remembered_and_dropped_once_the_choice_is_gone,
 );
 
 /// Installs the Rust sample with its `pane.json` changed by `change`;
@@ -715,4 +770,158 @@ fn a_command_whose_other_arguments_are_not_all_optional_is_no_fallback() {
     assert!(rows.iter().any(|row| row == "Alias for Greet"), "{rows:?}");
     assert!(!rows.iter().any(|row| row == "Fallback: Greet"), "{rows:?}");
     assert!(rows.iter().any(|row| row == "Fallback: Stamp"), "{rows:?}");
+}
+
+/// A package folder holding one command: `manifest`'s entry, with
+/// `component` as its component.
+fn package_of(sources: &Path, name: &str, manifest: &str, component: &Path) -> PathBuf {
+    let folder = sources.join(name);
+    fs::create_dir_all(&folder).unwrap();
+    fs::write(folder.join("pane.json"), manifest).unwrap();
+    fs::copy(component, folder.join("command.wasm")).unwrap();
+    folder
+}
+
+/// A compiled fixture under `target/guests`, from `cargo xtask guests`.
+fn built(path: &str) -> PathBuf {
+    let built = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests");
+    let built = built.join(path);
+    assert!(
+        built.exists(),
+        "{} is missing; run `cargo xtask guests`",
+        built.display()
+    );
+    built
+}
+
+/// "Greet" as a command titled "Sum 0 + 0", matching the slow query by
+/// title, so its inline fields show for the list the budget publishes.
+fn sums(sources: &Path) -> PathBuf {
+    package_of(
+        sources,
+        "sums",
+        r#"{ "manifestVersion": 1, "title": "Sums", "apiVersion": "0.1",
+  "commands": [{ "id": "greet", "title": "Sum 0 + 0",
+    "component": "command.wasm", "mode": "no-view",
+    "arguments": [{ "name": "name", "type": "text", "placeholder": "Name", "required": true }] } }"#,
+        &built("sample_arguments.wasm"),
+    )
+}
+
+/// The slow fixture's package: a root provider that answers "0 + 0" after
+/// about a second of busy work, merging into whatever the budget
+/// published.
+fn slow(sources: &Path) -> PathBuf {
+    package_of(
+        sources,
+        "slow",
+        r#"{ "manifestVersion": 1, "title": "Slow", "apiVersion": "0.1",
+  "commands": [{ "id": "command", "title": "Slow answers",
+    "component": "command.wasm", "rootResults": true }] }"#,
+        &built("faulty.wasm"),
+    )
+}
+
+/// Searches `query` on its own thread, reporting once the search has
+/// answered: a query's future is not polled until it is awaited, and the
+/// test advances the launcher's clock meanwhile.
+fn searched(launcher: &Launcher, query: &str) -> std::sync::mpsc::Receiver<()> {
+    let (sent, answered) = std::sync::mpsc::channel();
+    let launcher = launcher.clone();
+    let query = query.to_owned();
+    std::thread::spawn(move || {
+        block_on(launcher.set_query(&query));
+        sent.send(()).unwrap();
+    });
+    answered
+}
+
+#[test]
+fn the_typed_values_survive_the_list_being_rebuilt() {
+    let sources = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    // The slow fixture computes for about a second, which a loaded machine
+    // can stretch past the default computing limit.
+    let runtime = Runtime::start().unwrap();
+    runtime.set_limits(Limits {
+        compute: Duration::from_secs(180),
+        ..Limits::default()
+    });
+    let launcher = Launcher::with_packages(Ok(runtime), vec![], data.path().join("extensions"))
+        .with_hotkeys(Arc::new(FakeHotkeys::default()))
+        .with_quick_slots(data.path());
+    let sums = sums(sources.path());
+    let slow = slow(sources.path());
+    for folder in [&sums, &slow] {
+        block_on(launcher.install_package(folder));
+        assert!(
+            matches!(launcher.view().status, Status::Result(_)),
+            "{:?}",
+            launcher.view().status
+        );
+    }
+    let clock = ManualClock::at(1_000);
+    let launcher = launcher.with_clock(clock.clone());
+
+    // The query's list is held while the slow provider answers; the budget
+    // publishes it with the arguments command's row selected, its field
+    // given a value.
+    let answered = searched(&launcher, "0 + 0");
+    clock.advance(Duration::from_millis(200));
+    assert_eq!(titles(&launcher), ["Sum 0 + 0"]);
+    assert!(launcher.argument_fields().is_some());
+    launcher.set_argument_value("name", "Ada");
+
+    // The late answer re-ranks the list; selecting the same row again, the
+    // value is kept, and the run carries it.
+    answered.recv_timeout(Duration::from_secs(240)).unwrap();
+    clock.advance(Duration::from_millis(16));
+    assert_eq!(titles(&launcher), ["Slow answer", "Sum 0 + 0"]);
+    select_title(&launcher, "Sum 0 + 0");
+    assert_eq!(
+        launcher.argument_fields().expect("the fields show").fields[0].value,
+        "Ada"
+    );
+    block_on(launcher.activate_selected());
+    assert_eq!(
+        shown(&launcher),
+        Status::Result("Greet run 1 from root-search: name=Ada; fallback text: none".into())
+    );
+}
+
+#[test]
+fn an_alias_and_a_space_open_a_command_without_arguments_at_once() {
+    let pane = Pane::new();
+    let search = pane.source("sample-search", "search");
+    let no_view = pane.source("sample-no-view", "no-view");
+    block_on(pane.launcher.install_package(&search));
+    block_on(pane.launcher.install_package(&no_view));
+    let launcher = &pane.launcher;
+    pane.alias(&search, "packages", "ps");
+    pane.alias(&no_view, "last", "ls");
+
+    // A view command that searches opens its screen at once, and what is
+    // typed next is its own search's text.
+    pane.search("ps");
+    assert_eq!(launcher.alias_after_space(), Some(AliasFlow::Opens));
+    assert_eq!(launcher.alias_after_tab(), Some(AliasFlow::Opens));
+    block_on(launcher.activate_selected());
+    assert!(matches!(
+        launcher.view().screen,
+        Screen::CommandSearch { query } if query.is_empty()
+    ));
+    block_on(launcher.set_query("hello"));
+    assert!(matches!(
+        launcher.view().screen,
+        Screen::CommandSearch { query } if query == "hello"
+    ));
+
+    // A no-view command runs at once.
+    pane.search("ls");
+    assert_eq!(launcher.alias_after_space(), Some(AliasFlow::Opens));
+    block_on(launcher.activate_selected());
+    assert_eq!(
+        shown(launcher),
+        Status::Result("Last report: none. Ticks: 0; last tick: none".into())
+    );
 }

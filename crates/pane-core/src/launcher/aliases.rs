@@ -5,8 +5,12 @@
 //!   Typing it in root search lists the command first, above everything
 //!   else. For a command that takes a query (`"takesQuery": true`, or a
 //!   first argument that is text with every other optional; see
-//!   `arguments`), typing the alias, a space and more text lists a row that
-//!   sends that text to the command when the user invokes it.
+//!   `arguments`) and declares no arguments, typing the alias, a space and
+//!   more text lists a row that sends that text to the command when the
+//!   user invokes it. A command that declares arguments has no such row:
+//!   the alias and the space open its inline argument fields instead, and
+//!   what is typed after the alias goes into them (#205, see
+//!   [`AliasFlow`]).
 //! - A **fallback** is a command that takes a query, which the user chose to
 //!   have offered for any text typed in root search: it is listed below every
 //!   other result, and when nothing but fallbacks is listed the first is
@@ -36,6 +40,7 @@ use std::future::Future;
 
 use serde_json::{Map, Value};
 
+use super::argument_fields;
 use super::choices::{Choices, Record, provider_title, split};
 use super::{
     CommandRegistration, Entry, FormField, FormPurpose, FormView, Launcher, LauncherView, OpenForm,
@@ -262,8 +267,11 @@ fn send_row(state: &State, target: &Target, text: &str, via: Via, how: &str) -> 
 }
 
 /// The rows for `query` typed as an alias followed by text: for the command
-/// that takes a query whose alias is the query's first word, a row that
-/// sends it the rest.
+/// that takes a query whose alias is the query's first word and that
+/// declares no arguments, a row that sends it the rest — a command that
+/// declares arguments shows its fields inline after the query instead, and
+/// what is typed after the alias goes into them, not a row that sends it
+/// (#205).
 pub(super) fn rows_sending_after_alias(state: &State, query: &str) -> Vec<(Row, Entry)> {
     let Some((word, text)) = query.trim().split_once(char::is_whitespace) else {
         return Vec::new();
@@ -271,6 +279,14 @@ pub(super) fn rows_sending_after_alias(state: &State, query: &str) -> Vec<(Row, 
     let text = text.trim();
     targets(state)
         .filter(|target| target.registration.takes_query)
+        .filter(|target| {
+            argument_fields::declared_of(
+                state,
+                &target.registration.component,
+                target.registration.manifest_id(),
+            )
+            .is_empty()
+        })
         .filter_map(|target| {
             let alias = state.aliases.chosen.active_alias(&target.registration.id)?;
             same_text(alias, word).then(|| {
@@ -349,7 +365,90 @@ struct Configured<'a> {
     inactive: Option<String>,
 }
 
+/// What a command the query names by its alias does once the alias is
+/// followed by a space, or by Tab after the alias alone (#205): Raycast's
+/// one-motion way into a command. See [`Launcher::alias_after_space`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AliasFlow {
+    /// The command declares arguments: its fields show inline after the
+    /// query — the window focuses their first empty one, and what is
+    /// typed next goes into the first text or password field.
+    Fields,
+    /// The command declares no arguments and takes no query: it opens at
+    /// once, as Enter on its row does — a view command opens its screen,
+    /// a no-view command runs.
+    Opens,
+}
+
+/// The flow of the command the query's first word names by its alias
+/// (#205): `space` says the query holds the alias followed by one, as
+/// typing a space makes; `false`, that the query is the alias alone and
+/// Tab follows it. `None` when the query names no command by its alias,
+/// or the command takes a query — its row that sends the text after the
+/// alias stays, and Enter is the invocation, since that text is its
+/// input.
+fn alias_flow(state: &State, space: bool) -> Option<AliasFlow> {
+    let Screen::Root { query } = &state.view.screen else {
+        return None;
+    };
+    let word = match query.split_once(char::is_whitespace) {
+        // The alias alone: only Tab's flow — a space would have landed in
+        // the query.
+        None if space => return None,
+        None => query.trim(),
+        // The alias with a space after it: only the space's flow — Tab's
+        // is for the alias alone.
+        Some((word, _)) => {
+            if !space {
+                return None;
+            }
+            word
+        }
+    };
+    if word.is_empty() {
+        return None;
+    }
+    targets(state).find_map(|target| {
+        let alias = state.aliases.chosen.active_alias(&target.registration.id)?;
+        if !same_text(alias, word) {
+            return None;
+        }
+        let declared = argument_fields::declared_of(
+            state,
+            &target.registration.component,
+            target.registration.manifest_id(),
+        );
+        Some(if declared.is_empty() {
+            if target.registration.takes_query {
+                return None;
+            }
+            AliasFlow::Opens
+        } else {
+            AliasFlow::Fields
+        })
+    })
+}
+
 impl Launcher {
+    /// What the command the query names by its alias does now that a space
+    /// follows the alias (#205): its fields show inline, or the command
+    /// opens at once; `None` when the query does not name a command by its
+    /// alias, or the command takes a query, whose row that sends the text
+    /// after the alias stays. The window asks as the space lands in the
+    /// query, whatever published the list is — the alias row is selected
+    /// either way, as the query that is one word its alias selected it.
+    pub fn alias_after_space(&self) -> Option<AliasFlow> {
+        alias_flow(&self.lock(), true)
+    }
+
+    /// What the command the query is the alias of does now that Tab
+    /// follows it (#205): as a space after the alias does — its fields
+    /// show inline, or the command opens at once; `None` when the query
+    /// is not a command's alias alone, or the command takes a query.
+    pub fn alias_after_tab(&self) -> Option<AliasFlow> {
+        alias_flow(&self.lock(), false)
+    }
+
     /// The alias and fallback rows of the extension list: for each command
     /// of an enabled package, and of a disabled one with an alias or
     /// fallback, a row for its alias and, if it takes a query, one for
@@ -700,9 +799,9 @@ impl Launcher {
     /// command's alias (#203): it is one word that some installed command's
     /// active alias starts with, compared caselessly as the alias itself
     /// is matched. While it could — and the current query's list is not
-    /// yet published — the window holds a space typed next; what an alias
-    /// and a space then do is #205's to decide, and until then the space
-    /// lands in the field as text. `false` off root search, and for a
+    /// yet published — the window holds a space typed next, and the space
+    /// then opens what the alias names (#205,
+    /// [`Launcher::alias_after_space`]). `false` off root search, and for a
     /// query that is blank or already holds a space: such a query can no
     /// longer become an alias's word.
     pub fn could_still_be_alias(&self) -> bool {

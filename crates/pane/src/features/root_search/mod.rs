@@ -28,7 +28,7 @@ use gpui::{
 };
 use gpui_elements::editable_text::actions::DEFAULT_INPUT_CONTEXT;
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
-use pane_core::{Keyboard, KeyboardAction};
+use pane_core::{Keyboard, KeyboardAction, Screen};
 
 use crate::app::LauncherWindow;
 use crate::ui::icon::{Glyph, glyph};
@@ -36,9 +36,16 @@ use crate::ui::input::TextEditingKeys;
 use crate::ui::theme::Theme;
 use crate::{SelectNext, SelectPrevious};
 
+pub(crate) mod arguments;
 pub(crate) mod layouts;
 
 pub(crate) const CONTEXT: &str = "RootSearch";
+/// The query field's own context, within the search field's: the query
+/// input's wrapper carries it, so the keys bound to the query field (its
+/// selection keys, and the argument fields' edge keys, #205) take the
+/// keystrokes only there — an argument field's input, another editable
+/// text under the search field, keeps the element's own keys.
+const QUERY_FIELD: &str = "QueryField";
 /// The query field's placeholder on root search: the reference's "Search
 /// apps, commands, plugins…" in Pane's own terms — root search finds
 /// installed applications and commands, and Pane has extensions, not
@@ -51,7 +58,7 @@ pub(crate) const COMMAND_PLACEHOLDER: &str = "Search";
 /// The context of the query field with focus, as a binding's context is
 /// written: the search field inside the window.
 pub(crate) fn field_context() -> String {
-    format!("{CONTEXT} > {DEFAULT_INPUT_CONTEXT}")
+    format!("{CONTEXT} > {QUERY_FIELD} > {DEFAULT_INPUT_CONTEXT}")
 }
 
 /// Registers the selection keys in the query field, under the bindings
@@ -106,8 +113,30 @@ impl QueryField {
                 // Launcher page holds now.
                 this.launcher
                     .set_search_sensitivity(crate::settings::search_sensitivity_of(cx));
-                let computed = this.launcher.set_query(input.read(cx).as_str());
+                let query = input.read(cx).as_str().to_owned();
+                // Whether the query just became a word followed by a space
+                // (#205): a word that is a command's alias, and a space
+                // typed after it, open what the alias names — the fields
+                // the query is one word that the space follows.
+                let became_alias_space = match this.launcher.screen() {
+                    Screen::Root { query: before } => {
+                        !before.is_empty()
+                            && !before.chars().any(char::is_whitespace)
+                            && query == format!("{before} ")
+                    }
+                    _ => false,
+                };
+                let computed = this.launcher.set_query(&query);
                 this.announcer.search_started();
+                // The query's caret is at its end, where the typing left
+                // it, as the argument fields' edge keys count it (#205).
+                this.query_caret = query.chars().count();
+                // The search may have selected a row whose fields show
+                // after the query (#205).
+                this.sync_arguments(window, cx);
+                if became_alias_space {
+                    this.alias_opened(window, cx);
+                }
                 cx.notify();
                 cx.spawn_in(window, async move |this, cx| {
                     computed.await;
@@ -183,10 +212,11 @@ impl LauncherWindow {
     }
 
     /// Root search, or an opened command's search: the query field, showing
-    /// `placeholder` while empty, above `list`, the results — the content
-    /// that arrives with a view transition, wrapped by the caller (see
-    /// [`crate::app::LauncherWindow::render`]); the field above it is the
-    /// shell's search header and never moves.
+    /// `placeholder` while empty — the selected command's title, while its
+    /// argument fields show after the query (#205) — above `list`, the
+    /// results — the content that arrives with a view transition, wrapped
+    /// by the caller (see [`crate::app::LauncherWindow::render`]); the field
+    /// above it is the shell's search header and never moves.
     ///
     /// The field's chrome is the reference's search header: a 64px row with
     /// the magnifier, 20px padding, a 14px gap and a hairline below — no
@@ -196,12 +226,15 @@ impl LauncherWindow {
     pub(crate) fn render_search(
         &self,
         query: String,
-        placeholder: &'static str,
+        placeholder: &str,
         list: impl gpui::IntoElement,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let input = &self.query.input;
         let visuals = crate::settings::launcher_visuals(cx);
+        // Root search's inline argument fields, when the selected row's
+        // command declares any (#205): after the query, in this field.
+        let arguments = self.render_argument_fields(cx);
         div()
             .id("search")
             .debug_selector(|| "search".into())
@@ -218,7 +251,13 @@ impl LauncherWindow {
             .min_h(px(0.))
             .flex()
             .flex_col()
-            .child(search_header(input, placeholder, &visuals.theme))
+            .child(search_header(
+                input,
+                placeholder,
+                arguments,
+                &visuals.theme,
+                cx,
+            ))
             .child(list)
             .into_any_element()
     }
@@ -228,7 +267,8 @@ impl LauncherWindow {
 /// the 20px horizontal padding, the 14px gap and the hairline below —
 /// around the editable text element `input`, which is the caller's own
 /// (the launcher's query field, or another search field built the same
-/// way).
+/// way), and root search's inline argument fields after the query, when
+/// the selected row's command declares any (#205).
 ///
 /// The magnifier's wrapper is the search header's drag region: with the
 /// native title bar hidden, the window can be moved by grabbing the icon —
@@ -248,11 +288,15 @@ impl LauncherWindow {
 /// frosted pill inside the 64px row, with no hairline below it.
 ///
 /// The launcher's search screens ([`LauncherWindow::render_search`])
-/// compose this header.
+/// compose this header. The argument fields' keys are taken here, over
+/// the query and the fields both: the header is the ancestor of the one
+/// as of the other, wherever the keyboard is.
 pub(crate) fn search_header(
     input: &Entity<EditableTextState>,
-    placeholder: &'static str,
+    placeholder: &str,
+    arguments: Option<AnyElement>,
     theme: &Theme,
+    cx: &mut Context<LauncherWindow>,
 ) -> Div {
     let geometry = &theme.geometry;
     let typography = &theme.typography;
@@ -260,6 +304,10 @@ pub(crate) fn search_header(
         .flex()
         .items_center()
         .gap(geometry.search_gap)
+        .on_action(cx.listener(LauncherWindow::field_left))
+        .on_action(cx.listener(LauncherWindow::field_right))
+        .on_action(cx.listener(LauncherWindow::field_home))
+        .on_action(cx.listener(LauncherWindow::field_end))
         .child(
             div()
                 .window_control_area(WindowControlArea::Drag)
@@ -276,23 +324,30 @@ pub(crate) fn search_header(
                 )),
         )
         .child(
-            text_input("query")
-                .state(input.downgrade())
-                .placeholder(placeholder)
-                .placeholder_color(theme.text_placeholder)
-                .caret_color(theme.accent_text)
-                .selection_color(theme.row_selected)
-                .marked_color(theme.accent_text)
-                .text_size(typography.search_size)
-                .text_color(theme.text_query)
-                .font_family(typography.family.clone())
-                .font_features(typography.features.clone())
-                .pl(geometry.search_text_inset)
-                .w_full()
+            div()
+                .key_context(QUERY_FIELD)
+                .flex_1()
                 .min_w(px(0.))
-                .whitespace_nowrap()
-                .overflow_x_scroll(),
-        );
+                .child(
+                    text_input("query")
+                        .state(input.downgrade())
+                        .placeholder(placeholder)
+                        .placeholder_color(theme.text_placeholder)
+                        .caret_color(theme.accent_text)
+                        .selection_color(theme.row_selected)
+                        .marked_color(theme.accent_text)
+                        .text_size(typography.search_size)
+                        .text_color(theme.text_query)
+                        .font_family(typography.family.clone())
+                        .font_features(typography.features.clone())
+                        .pl(geometry.search_text_inset)
+                        .w_full()
+                        .min_w(px(0.))
+                        .whitespace_nowrap()
+                        .overflow_x_scroll(),
+                ),
+        )
+        .when_some(arguments, |row, arguments| row.child(arguments));
     match theme.frost {
         None => field
             .flex_none()

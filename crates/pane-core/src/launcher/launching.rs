@@ -106,16 +106,20 @@ impl Launcher {
     /// The argument form's step of a launch, then the launch: when a
     /// required argument is still without a value, the argument form is
     /// shown and the command runs once it is submitted
-    /// ([`Launcher::ask_for_arguments`]); otherwise it launches now with
-    /// its arguments filled in. What a setup gate lets through continues
-    /// here.
+    /// ([`Launcher::ask_for_arguments`]) — in root search, whose selected
+    /// row's fields stand in for the form, nothing runs and the blank one
+    /// is marked (#205); otherwise it launches now with its arguments
+    /// filled in. What a setup gate lets through continues here.
     pub(super) async fn launch_with_arguments(
         &self,
         epoch: u64,
         opening: Opening,
         data: Option<PackageData>,
     ) {
-        if let Some(opening) = self.ask_for_arguments(epoch, opening) {
+        if let Some((opening, remembered)) = self.ask_for_arguments(epoch, opening) {
+            if let Some(command) = remembered {
+                self.record_remembered(&command).await;
+            }
             self.launch_ready(epoch, opening, data).await
         }
     }

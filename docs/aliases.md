@@ -37,11 +37,12 @@ open. The page edits the same records, so nothing differs between the two.
 In root search, a query that is the alias, compared the same caseless way,
 lists the command first, above every other result, computed results
 included; Enter opens it as usual.
-For a command that takes a query, the alias, a space and more text ("ec
-hello world") list a row titled with the command, subtitled "Send “hello
-world” · alias ec", first and selected; Enter sends "hello world" (the text
-after the alias, trimmed) and shows the command's answer as the result,
-root search staying as it was. The answer is cleared from the status line as
+For a command that takes a query and declares no arguments, the alias, a
+space and more text ("ec hello world") list a row titled with the command,
+subtitled "Send “hello world” · alias ec", first and selected; Enter sends
+"hello world" (the text after the alias, trimmed) and shows the command's
+answer as the result, root search staying as it was. The answer is cleared
+from the status line as
 soon as the query changes, and an answer that arrives after it changed is
 not shown. Text after the alias of a command that takes no query sends
 nothing (the query is then matched as usual). When another command offered
@@ -49,12 +50,23 @@ has the same title (copies of a package from other sources), the row's
 subtitle also names its source ("Send “hi” · alias ec · local folder …"),
 and so does a fallback row.
 
+An alias and a space is also the user's way into a command's
+[arguments](root-search.md#inline-argument-fields) (#205): for a command
+that declares them there is no row that sends the text after the alias —
+the alias stays in the query and the command's inline fields show after
+it, entered at their first empty one, with what is typed next going into
+the first text or password one. Tab after the alias alone does the same.
+A command without arguments that takes no query opens at once instead,
+as Raycast does: a view command opens its screen, a no-view command runs.
+
 A command **takes a query** when its manifest says `"takesQuery": true`, or
 when its first [argument](../guests/README.md#arguments) is text and every
 other argument is optional (Raycast's rule, #144). The text sent fills its
 first text or password argument unless that already has a value, and is
 its launch record's fallback text as well; when another required argument
-is still empty, Pane's argument form asks for it before the command runs.
+is still empty, Pane's argument form asks for it before the command runs
+— for a fallback row, which never shows the inline fields, as for every
+launch that does not come from root search.
 
 ## Making a command a fallback
 
@@ -171,6 +183,13 @@ shown and never counts towards [pausing](pausing.md); a trap does.
   row, with no text, runs and opens no screen. The launch record's source
   (alias or fallback) and a view command opened through its alias with
   text are checked in [`no_view.rs`](../crates/pane-core/tests/no_view.rs).
+  What an alias and a space opens — the inline fields of a command that
+  declares arguments, run from its alias with the first argument filled;
+  the row that sends the text kept for a command that takes a query with
+  none; a command without either opened at once — is checked in
+  [`arguments.rs`](../crates/pane-core/tests/arguments.rs), and with real
+  keys, including a space held with the query's list, in
+  [`crates/pane/tests/arguments.rs`](../crates/pane/tests/arguments.rs).
 - Window ([`crates/pane/tests/aliases.rs`](../crates/pane/tests/aliases.rs)),
   on GPUI's test platform with real key events: the alias typed in its form
   and saved, the form reopened filled with it, the fallback turned on; "ec

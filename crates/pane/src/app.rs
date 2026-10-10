@@ -42,6 +42,7 @@ use crate::features::hud;
 use crate::features::number_hints::row_number;
 use crate::features::quick_slots;
 use crate::features::root_search;
+use crate::features::root_search::arguments as argument_fields;
 use crate::features::settings;
 use crate::features::toast;
 use crate::ui::footer;
@@ -100,6 +101,14 @@ pub struct LauncherWindow {
     /// yet published, and how they are replayed (#203; see
     /// [`features::held_keys`]).
     pub(crate) held: held_keys::HeldKeys,
+    /// Root search's inline argument fields' controls, while the selected
+    /// row's command declares arguments (#205; see
+    /// [`features::root_search::arguments`]).
+    pub(crate) arguments: Option<argument_fields::ArgumentControls>,
+    /// The caret's place in the query, in characters, as the window last
+    /// knew it — counted wherever the window moves it, so the argument
+    /// fields' edge keys know when Right leaves the query (#205).
+    pub(crate) query_caret: usize,
     /// The HUD's window, while one shows; see [`features::hud`].
     pub(crate) hud: hud::HudWindow,
     /// The confirmation a command asks for: its focus and "Don't ask
@@ -224,6 +233,8 @@ impl LauncherWindow {
             toast: toast::ToastControls::new(cx),
             announcer: announcer::Announcer::default(),
             held: held_keys::HeldKeys::default(),
+            arguments: None,
+            query_caret: 0,
             hud: hud::HudWindow::default(),
             confirmation: confirmation::ConfirmationControls::new(cx),
             home: quick_slots::Home::default(),
@@ -446,20 +457,29 @@ impl LauncherWindow {
         self.window_requested(WindowRequest::Hud(hud), window, cx);
     }
 
-    pub(crate) fn select_next(&mut self, _: &SelectNext, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn select_next(
+        &mut self,
+        _: &SelectNext,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.launcher.move_selection(1);
         self.announcer.user_moved();
+        // The selected row's argument fields follow it (#205).
+        self.sync_arguments(window, cx);
         cx.notify();
     }
 
     pub(crate) fn select_previous(
         &mut self,
         _: &SelectPrevious,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.launcher.move_selection(-1);
         self.announcer.user_moved();
+        // The selected row's argument fields follow it (#205).
+        self.sync_arguments(window, cx);
         cx.notify();
     }
 
@@ -469,12 +489,14 @@ impl LauncherWindow {
     pub(crate) fn select_next_page(
         &mut self,
         _: &SelectNextPage,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let step = virtual_list::page_move(Some(self.paged_list()), true);
         self.launcher.move_selection(step);
         self.announcer.user_moved();
+        // The selected row's argument fields follow it (#205).
+        self.sync_arguments(window, cx);
         cx.notify();
     }
 
@@ -483,12 +505,14 @@ impl LauncherWindow {
     pub(crate) fn select_previous_page(
         &mut self,
         _: &SelectPreviousPage,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let step = virtual_list::page_move(Some(self.paged_list()), false);
         self.launcher.move_selection(step);
         self.announcer.user_moved();
+        // The selected row's argument fields follow it (#205).
+        self.sync_arguments(window, cx);
         cx.notify();
     }
 
@@ -498,6 +522,17 @@ impl LauncherWindow {
         self.files
             .as_ref()
             .map_or(&self.results.list, |files| &files.list)
+    }
+
+    /// The query field's placeholder on root search: the selected
+    /// command's title, while its argument fields show after the query,
+    /// so the user knows what they are filling in — else the search's own
+    /// (#205).
+    fn search_placeholder(&self) -> String {
+        self.launcher
+            .argument_fields()
+            .map(|fields| fields.title)
+            .unwrap_or_else(|| root_search::ROOT_PLACEHOLDER.to_owned())
     }
 
     pub(crate) fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
@@ -639,6 +674,12 @@ impl LauncherWindow {
             || self.close_open_menu(window, cx)
             || self.close_actions(window, cx)
         {
+            return;
+        }
+        // Escape in an argument field returns the focus to the query with
+        // its text selected; the next Escape is the usual one (#205).
+        if self.focused_argument(window, cx).is_some() {
+            self.escape_argument(window, cx);
             return;
         }
         // The Keyboard page's escape behavior: hide from wherever the
@@ -1128,6 +1169,45 @@ impl LauncherWindow {
             self.query.replace(&query, cx);
             return;
         }
+        // Tab in an argument field goes to the next one, and from the
+        // last back to the query (#205).
+        if let Some(index) = self.focused_argument(window, cx) {
+            let last = self
+                .launcher
+                .argument_fields()
+                .map(|fields| fields.fields.len())
+                .unwrap_or(0);
+            if index + 1 >= last {
+                self.query.focus(window, cx);
+            } else {
+                self.focus_argument(index + 1, window, cx);
+            }
+            return;
+        }
+        if self.query_field().focus_handle(cx).is_focused(window) {
+            // Tab after a word that is a command's alias enters what the
+            // alias names, as a space after it does (#205): the command's
+            // fields, focused on their first empty one, or the command
+            // itself.
+            match self.launcher.alias_after_tab() {
+                Some(pane_core::AliasFlow::Fields) => {
+                    self.enter_arguments(window, cx);
+                    return;
+                }
+                Some(pane_core::AliasFlow::Opens) => {
+                    self.activate_selected(window, cx);
+                    return;
+                }
+                None => {}
+            }
+            // Tab in the query, the selected row's fields showing: the
+            // first empty one of them, the first when none is empty
+            // (#205).
+            if self.launcher.argument_fields().is_some() {
+                self.enter_arguments(window, cx);
+                return;
+            }
+        }
         window.focus_next(cx);
     }
 
@@ -1151,6 +1231,24 @@ impl LauncherWindow {
         // query is (#204), in place of focusing the previous field.
         if let Some(query) = self.launcher.typed_path_parent() {
             self.query.replace(&query, cx);
+            return;
+        }
+        // Shift+Tab in an argument field goes to the previous one, and
+        // from the first back to the query (#205).
+        if let Some(index) = self.focused_argument(window, cx) {
+            if index == 0 {
+                self.query.focus(window, cx);
+            } else {
+                self.focus_argument(index - 1, window, cx);
+            }
+            return;
+        }
+        // Shift+Tab in the query, the selected row's fields showing: the
+        // last one of them (#205).
+        if self.query_field().focus_handle(cx).is_focused(window)
+            && let Some(fields) = self.launcher.argument_fields()
+        {
+            self.focus_argument(fields.fields.len().saturating_sub(1), window, cx);
             return;
         }
         window.focus_prev(cx);
@@ -1178,6 +1276,23 @@ impl LauncherWindow {
     /// again after calling this (see [`crate::ui::motion`]).
     pub(crate) fn activate_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.motion.land_at_once();
+        // Enter (or a click, the footer's button, Ctrl and a digit) inside
+        // an argument field that is required and blank marks it, and the
+        // launcher says what it waits for; nothing runs (#205).
+        if let Some(name) = self.focused_blank_argument(window, cx) {
+            self.launcher.argument_entered(&name);
+            cx.notify();
+            return;
+        }
+        // A blank required argument in the selected row's fields: the
+        // field takes the focus instead of the row running, so a command
+        // is never sent half-filled (#205).
+        if self.blank_required_argument().is_some() {
+            self.sync_arguments(window, cx);
+            let blank = self.blank_required_argument().unwrap_or(0);
+            self.focus_argument(blank, window, cx);
+            return;
+        }
         // The Settings root result opens the Settings window, "Manage
         // Extensions" opens it at the extensions, and the install rows at
         // its install flow (#168): Settings is where extensions are
@@ -1317,6 +1432,9 @@ impl LauncherWindow {
         }
         self.sync_form(window, cx);
         self.sync_custom_view(window, cx);
+        // Root search's inline argument fields follow the selected row
+        // (#205).
+        self.sync_arguments(window, cx);
         // Last: coming back to root search, even as a view closes, focuses
         // the query rather than the list.
         self.sync_root_search(window, cx);
@@ -1362,6 +1480,7 @@ impl LauncherWindow {
         &mut self,
         index: usize,
         position: Point<Pixels>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let moved = self.pointer.is_some_and(|last| last != position);
@@ -1369,7 +1488,7 @@ impl LauncherWindow {
             return;
         }
         if self.launcher.selected() != Some(index) {
-            self.select_under_pointer(index);
+            self.select_under_pointer(index, window, cx);
             cx.notify();
         }
     }
@@ -1380,9 +1499,11 @@ impl LauncherWindow {
     /// row under it, which the next small movement would select and
     /// scroll in turn. Only the keys' selection scrolls, as the
     /// reference's does.
-    fn select_under_pointer(&mut self, index: usize) {
+    fn select_under_pointer(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.launcher.select(index);
         self.announcer.user_moved();
+        // The selected row's argument fields follow it (#205).
+        self.sync_arguments(window, cx);
         if let Some(scrolled_for) = self.scrolled_for.as_mut() {
             scrolled_for.selected = Some(index);
         }
@@ -1401,7 +1522,7 @@ impl LauncherWindow {
             self.activate_selected(window, cx);
             self.motion.pointer_open();
         } else {
-            self.select_under_pointer(index);
+            self.select_under_pointer(index, window, cx);
             cx.notify();
         }
     }
@@ -1508,8 +1629,8 @@ impl LauncherWindow {
         // rows also select under the moving pointer; a command's rows keep
         // their click-runs semantics.
         .when(root, |row| {
-            row.on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
-                this.pointer_moved_over(index, event.position, cx);
+            row.on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, window, cx| {
+                this.pointer_moved_over(index, event.position, window, cx);
             }))
         })
         .debug_selector(|| format!("row-{}", row.title))
@@ -1571,8 +1692,8 @@ impl LauncherWindow {
             let press = pressed(visuals.theme.results.card_fill);
             move |card| card.bg(press)
         })
-        .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
-            this.pointer_moved_over(index, event.position, cx);
+        .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, window, cx| {
+            this.pointer_moved_over(index, event.position, window, cx);
         }))
         .debug_selector(|| format!("row-{}", row.title))
         .role(Role::ListBoxOption)
@@ -2016,12 +2137,8 @@ impl Render for LauncherWindow {
             // pins' row under it, where the Launcher page shows them.
             Screen::Root { query } if collapsed => {
                 let pins = self.render_compact_pins(numbers, &theme, cx);
-                self.render_search(
-                    query,
-                    root_search::ROOT_PLACEHOLDER,
-                    div().children(pins),
-                    cx,
-                )
+                let placeholder = self.search_placeholder();
+                self.render_search(query, &placeholder, div().children(pins), cx)
             }
             Screen::Root { query } => {
                 let results = actions_panel::dimmed(
@@ -2029,7 +2146,10 @@ impl Render for LauncherWindow {
                     self.actions.is_some(),
                     &theme,
                 );
-                self.render_search(query, root_search::ROOT_PLACEHOLDER, results, cx)
+                // While the selected row's argument fields show, the
+                // query field's placeholder is the command's title (#205).
+                let placeholder = self.search_placeholder();
+                self.render_search(query, &placeholder, results, cx)
             }
             // The opened command's own search field, the same control.
             Screen::CommandSearch { query } => {

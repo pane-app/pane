@@ -41,6 +41,7 @@ mod aliases;
 mod application_changes;
 mod application_icons;
 mod application_update;
+mod argument_fields;
 mod argument_form;
 mod choices;
 mod clipboard_settings;
@@ -114,6 +115,8 @@ use actions::selected_action;
 pub use actions::{DISMISS_NOTICE, ResultAction, ResultActionItem, ResultActions};
 use aliases::AliasChoices;
 pub use aliases::AliasOutcome;
+pub use aliases::AliasFlow;
+pub use argument_fields::ArgumentFields;
 pub use application_update::ApplicationUpdate;
 use application_update::{Application, Updates};
 use choices::Record;
@@ -846,6 +849,11 @@ struct State {
     /// The dropdown arguments' values each command was last launched with
     /// (see `argument_form`).
     remembered_arguments: Record<argument_form::ArgumentChoices>,
+    /// The values typed into root search's inline argument fields, and
+    /// the required arguments left blank once (see `argument_fields`,
+    /// #205): the selected row's command's, kept while the query stands
+    /// and the list is rebuilt around them.
+    arguments: argument_fields::Typed,
     /// The quick slots the user pinned results to, and their record (see
     /// `quick_slots`).
     quick_slots: quick_slots::Kept,
@@ -1056,6 +1064,9 @@ impl State {
         self.holding = None;
         self.merge = None;
         self.staged.clear();
+        // Root search's inline argument values belong to the search that
+        // is left (#205).
+        self.arguments = argument_fields::Typed::default();
         // A submenu belongs to the screen it opened on; an answer still on
         // its way finds it gone.
         self.submenus.close_all();
@@ -1600,6 +1611,7 @@ impl Launcher {
             open_pane: OpenPane::default(),
             aliases,
             remembered_arguments,
+            arguments: argument_fields::Typed::default(),
             quick_slots: quick_slots::Kept::default(),
             acquisitions: Acquisitions::default(),
             updates: Updates::default(),
@@ -2468,6 +2480,9 @@ impl Launcher {
         // query's publication relists whatever it would have.
         state.merge = None;
         state.staged.clear();
+        // The argument values typed into the previous query's fields go
+        // with it (#205): another query is another search.
+        state.arguments = argument_fields::Typed::default();
         let asked = self.ask_for_root_results(state, query);
         if asked.is_empty() {
             // No provider is asked: the list is published at once, the
@@ -3627,6 +3642,9 @@ impl Launcher {
         state.indexes.stale(&self.applications_askers());
         state.typed = None;
         state.published = String::new();
+        // The argument values typed into the search before this visit go
+        // with the search (#205).
+        state.arguments = argument_fields::Typed::default();
         let (rows, entries) = root_rows(state, "");
         let selected = select
             .and_then(|component| {
@@ -4909,6 +4927,13 @@ impl Launcher {
             let mut searching = None;
             match result {
                 Ok(view) => {
+                    // A command the query's alias named and a space opened
+                    // (#205): the text typed after the alias lands in the
+                    // root query while the command opens — the open is not
+                    // done before the keys that follow the space arrive —
+                    // and it is the command's own search the user was
+                    // typing toward.
+                    let alias_search = Launcher::alias_opened_search(state, &launch, search);
                     let extra = looks::remember(state, &component, &view.items);
                     let CommandList { rows, entries } =
                         self.command_list(state, &component, view.items);
@@ -4950,6 +4975,9 @@ impl Launcher {
                         searching = self.search_in_command(state, &text);
                     } else if files {
                         searching = self.ask_files(state, "", 0);
+                    } else if let Some(text) = alias_search {
+                        // Searched at once, as if typed.
+                        searching = self.search_in_command(state, &text);
                     }
                 }
                 Err(error) => state.view.status = Status::Error(error.to_string()),
@@ -4959,6 +4987,27 @@ impl Launcher {
         if let Some(searching) = searching {
             searching.await;
         }
+    }
+
+    /// The text typed after the alias that opened the command this opening
+    /// is for, as that command's own search's start (#205): the launch
+    /// came from root search through the command's alias — its record
+    /// carries no fallback text, which the row that sends text to a
+    /// query-taking command does — and the root query still holds the
+    /// alias with what followed it. `None` when the command does not
+    /// search, or the query is only the alias.
+    fn alias_opened_search(state: &State, launch: &LaunchRecord, search: bool) -> Option<String> {
+        if !search || launch.source != LaunchSource::Alias || launch.fallback_text.is_some() {
+            return None;
+        }
+        let Screen::Root { query } = &state.view.screen else {
+            return None;
+        };
+        query
+            .trim()
+            .split_once(char::is_whitespace)
+            .map(|(_, text)| text.trim().to_owned())
+            .filter(|text| !text.is_empty())
     }
 
     /// The extension data of the installed package `component` belongs to,

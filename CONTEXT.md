@@ -249,7 +249,7 @@ A key combination the user assigns to an installed command in Pane, which opens 
 _Avoid_: Shortcut (any key combination, including Pane's own keys), keybinding, alias
 
 **Alias**:
-A word the user gives an installed command in Pane; typing it in root search lists that command first, and, for a query-taking command, typing it before some text lists a row that sends the text to the command when invoked. Pane keeps it as its own record by command id; a disabled package's commands offer none.
+A word the user gives an installed command in Pane; typing it in root search lists that command first, and typing a space after it (or Tab) invokes it at once — through its argument fields, which the text typed next fills, when it declares any. A query-taking command is not invoked that way: its row that sends the text after the alias when the user presses Enter stays. Pane keeps it as its own record by command id; a disabled package's commands offer none.
 _Avoid_: Keyword (an author's search term), shortcut, nickname
 
 **Fallback**:
@@ -257,12 +257,16 @@ A query-taking command the user chose to have offered below root search's result
 _Avoid_: Default action, catch-all
 
 **Query-taking command**:
-An extension command that declares it takes a query: text typed in root search, which Pane sends it only when the user invokes it through its alias or as a fallback, as the fallback text of its launch record (and its first text argument, when it declares arguments).
+An extension command that declares it takes a query: text typed in root search, which Pane sends it only when the user invokes it — through its alias or as a fallback — as the fallback text of its launch record (and its first text argument, when it declares arguments). Its alias never enters it with a space: the text after the alias is its input, sent when the user presses Enter.
 _Avoid_: Argument (one declared field, which the text may fill), search provider (a provider is asked while the user types)
 
 **Argument**:
-One of up to three typed fields (text, password or dropdown) a command declares for input before each run. Root search shows them after the query, and a launch without them asks for the required ones that are empty. Their values reach the command in its launch record; a password's is never recorded.
+One of up to three typed fields (text, password or dropdown) a command declares for input before each run. Its value reaches the command in its launch record; a password's is never recorded.
 _Avoid_: Query (root search's text), parameter, preference (set once, not for each run)
+
+**Argument field**:
+An argument as root search shows it, after the query while its command's row is selected: the place the user types it before invoking the command, which a launch from anywhere else asks for through the argument form. The values survive the list being re-ranked but not a new query.
+_Avoid_: Argument (the declared field itself), form field (the argument form's), input
 
 **Launch record**:
 The one record a command receives on every way in: how it was launched (by the user or in the background, and from where), its arguments' values, any fallback text sent through its alias or as a fallback, and any context another command passed when launching it.

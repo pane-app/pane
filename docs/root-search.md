@@ -22,6 +22,9 @@ Root search also
 queries it was chosen with, ranking above how well titles match, and the
 blank query lists the pins, then the commands and applications by
 frecency.
+[#205](https://github.com/pane-app/pane/issues/205) shows the selected
+row's [inline argument fields](#inline-argument-fields) after the query,
+and opens them with an alias and a space.
 [#28](https://github.com/pane-app/pane/issues/28) adds
 [quicklinks](quicklinks.md), which open a saved link, file, folder or
 application; #149 made them indexed results ranked with commands. [#31](https://github.com/pane-app/pane/issues/31) adds
@@ -274,8 +277,8 @@ state and maps input to those calls.
 | Alt+P / Alt+N (the Keyboard page's Emacs navigation bindings) or Alt+K / Alt+J (its Vim Motions), Control instead of Alt on macOS | Previous / next result too, beside Up and Down, while that set is chosen (the default is None). Raycast for Windows puts these sets on Alt as well; its Alt+B / Alt+F and Alt+H / Alt+L move left and right in its grids, and Pane has no left or right selection to give them, so they stay unbound |
 | Moving the pointer over a result | Select it, so the footer's action and Enter act on it; a pointer resting on a result never undoes the keys' selection, and while a layer over the list owns the target (the Actions panel, the Pane menu) the pointer selects nothing. The first pointer event after the window shows only records where the pointer is |
 | A click on a result | The selected result: invoke it, as Enter does. An unselected one (the keys moved the selection away while the pointer rested on it): select it; a second click invokes it |
-| Enter | Invoke the selected result: open the command, explain an unavailable or unreadable one, open Pane's own screen, copy a computed result's text to the clipboard ("Copied 42 to the clipboard"; root search stays as it was), open an application ("Opened Firefox"; root search stays as it was), or send the text to a command that takes a query, through its alias or as a fallback — with nothing else listed, the first fallback is the selected result (ADR 0031) — and show its answer (root search stays as it was). While the query's list is not yet published, Enter waits for it (see below) |
-| Tab / Shift+Tab | Focus the next / previous field, as forms and the footer's controls take them; on a selected entry of a typed folder, complete the query to its path instead, and Shift+Tab remove the last path component ([understanding the typed query](#understanding-the-typed-query)). Both wait for the query's list as Enter does (see below) |
+| Enter | Invoke the selected result: open the command, explain an unavailable or unreadable one, open Pane's own screen, copy a computed result's text to the clipboard ("Copied 42 to the clipboard"; root search stays as it was), open an application ("Opened Firefox"; root search stays as it was), or send the text to a command that takes a query, through its alias or as a fallback — with nothing else listed, the first fallback is the selected result (ADR 0031) — and show its answer (root search stays as it was). A selected command whose [argument fields](#inline-argument-fields) leave a required one blank runs nothing: Enter (or a click, the footer's button, Ctrl and a digit) takes focus to the first blank one, and Enter inside a blank required field marks it and says "Enter <placeholder>" in the status line. While the query's list is not yet published, Enter waits for it (see below) |
+| Tab / Shift+Tab | Focus the next / previous field, as forms and the footer's controls take them — from the query, into the selected row's [argument fields](#inline-argument-fields) when they show (the first empty one, or the first; the last for Shift+Tab), and between them, back to the query from the last and the first; on a selected entry of a typed folder, complete the query to its path instead, and Shift+Tab remove the last path component ([understanding the typed query](#understanding-the-typed-query)); after a word that is a command's alias alone, enter what the alias names as a space after it does. Both wait for the query's list as Enter does (see below) |
 | Escape | Clear the query; with an empty query, nothing |
 | Ctrl+K (Cmd+K on macOS; the Keyboard page's Open actions), or the footer's Actions button | Open the selected result's Actions panel, or close it — waiting for the query's list as Enter does (see below) |
 
@@ -312,6 +315,67 @@ bindings and handlers — while the launcher only reports whether the current
 query's list is published; a hold is keyed by the query its first key was
 pressed under, and a query that moves on (Escape cleared it, a completion
 replaced it) drops its keys rather than running them on another list.
+
+## Inline argument fields
+
+A command that declares arguments (the "Extension commands like Raycast"
+specification's contract, #120: at most three, of text, password and
+dropdown) shows them **after the query, in the search field**, while its
+row is selected (#205). They replace the [argument
+form](../guests/README.md#arguments) there, in root search alone: a
+command invoked any other way — a global hotkey, a quick slot, another
+command's launch — asks through the form as it always did.
+
+Each field is a Settings-family well sized to its value or placeholder; a
+password masks what is typed, drawn as dots and reading as dots to
+assistive technology, and a dropdown shows its choice or placeholder on a
+trigger that Enter, Space, Down or a click opens, listing a leading empty
+choice then the command's options (the arrows move the highlight, Enter
+picks, Escape or Tab closes). An optional argument carries an "optional"
+marker inside its field; a required one carries none until it has been
+left blank once, when it takes the danger ring until it gets a value.
+While the fields show, the query field's placeholder is the command's
+title, so the user knows what they are filling in.
+
+The values are the search's own state, never recorded: they survive the
+list being rebuilt — a late answer's re-rank, another selection come back
+to the same row — while the query stands, a dropdown's while it is still
+a choice, and they go when the query does. A password's value is recorded
+nowhere, as the form's is not. The last choice of each command's dropdown
+argument is remembered per command as the form remembers it
+(`arguments.json`, never a password) and offered again until it is no
+longer a choice.
+
+The keys: **Tab** from the query focuses the first empty argument (the
+first, when none is empty); **Shift+Tab** the last. Inside an argument,
+Tab goes to the next and from the last back to the query, Shift+Tab to
+the previous and from the first back to the query; Left at the start goes
+to the field before it and Right at the end to the one after it, which
+needs the caret's place — the fields' and the query's own navigation keys
+are bound so the window counts every move; Right at the query's end
+focuses the first field. Up and Down do nothing while a field has the
+keys: the list does not move while the user types into one. Escape
+returns focus to the query with its text selected; the next Escape is the
+usual one. Backspace in an empty field does nothing special. **Enter**
+with every required argument filled runs the command with the values
+(from its alias, when the query names the command by one); with a
+required one blank, focus moves to the first blank one and nothing runs,
+and Enter inside a focused blank required field marks it, the status line
+saying "Enter <placeholder>".
+
+**An alias and a space** is the way in: when the query becomes a command's
+alias followed by a space — Tab after the alias alone does the same — the
+alias stays in the field, focus moves to the command's first empty
+argument, and text typed after the space (held with the query's list when
+it is not yet published, #203) goes into the first argument if it is text
+or password, the caret at its end. A command **without** arguments opens
+at once instead, as Raycast does: a view command opens its screen — a
+searching one's own field taking what is typed next — and a no-view
+command runs. A command that accepts fallback text but declares no
+arguments keeps today's row that sends the text after the alias on Enter,
+since that text is its input; a fallback with arguments receives the
+query in its first text argument as it always did, and never shows the
+fields. Rows that send the query never show them.
 
 ### The pinned home
 
@@ -860,6 +924,14 @@ Checked through GPUI's accessibility tree
   `ListBoxOption`s with label, description (subtitle, and the reason when
   unavailable), selected state, and their position in the whole list and
   its size (a computed answer's card is one of them, named "6*7 = 42").
+- Each [inline argument field](#inline-argument-fields) is a labelled
+  editable node inside the combo box's group (#205), named by its
+  placeholder ("Name", "Secret", "Tone"), with its required or optional
+  state as its description — and, once a required one has been left blank,
+  what it waits for. A text field carries its value; a password field
+  carries dots, never the value; a dropdown's trigger is a combo box
+  carrying its choice, its open list a list box of its options with the
+  highlighted one the focused node's active descendant.
 - The combo box stays the focused node while the selection moves, so a
   screen reader echoes what is typed. No result reports itself as focused:
   GPUI CE implements an active descendant by reporting the descendant as
@@ -1050,6 +1122,40 @@ same as a full re-rank gives (#202). The slow provider's
 real-clock flow — the budget publishing with the calculator's staged
 answer while the slow call goes on, its answer merging within 16 ms —
 is checked in the calculator's own tests, above.
+
+For the inline argument fields
+([`crates/pane-core/tests/arguments.rs`](../crates/pane-core/tests/arguments.rs)),
+with the real arguments samples in Rust, JavaScript and TypeScript, the
+search and no-view samples, and the `faulty` fixture's slow provider with
+the launcher's clock frozen: the selected row's fields shown with the
+command's title as the query field's placeholder; Enter with a required
+argument blank marking it, saying "Enter <placeholder>" and running
+nothing, the mark clearing when the argument gets a value and the values
+going when the query does; the values passed to the command on the run,
+the empty optional ones absent and the dropdown with no choice absent
+too; an alias and a space (or Tab after the alias) entering the fields,
+running the command from its alias with the first argument filled and no
+fallback text, while a command that takes a query keeps its row that
+sends the text and a fallback's query fills the first text argument; a
+command without arguments opened at once — a searching view command's
+own screen, a no-view command run; the last dropdown choice remembered
+across a restart and dropped once it is no longer a choice, a password
+recorded nowhere; and the typed values surviving a late answer's
+re-rank, the same row selected again with its value kept and the run
+carrying it. The form still asks wherever the fields do not show — a
+global hotkey, a quick slot, another command's launch — and its own
+contract stays as it was. In the window
+([`crates/pane/tests/arguments.rs`](../crates/pane/tests/arguments.rs)),
+with real keys: the fields' labelled nodes with their required or
+optional state; Enter with a blank required argument focusing it, marking
+it only once the field was left, and Enter inside a blank required one
+marking it with the status line's "Enter Name"; Tab, Shift+Tab and the
+arrows at the fields' edges moving between the fields and the query with
+Up and Down moving nothing; Escape returning to the query with its text
+selected; the password drawn and read as dots; "gr hello" typed while the
+query's list is held landing in the first field, the alias staying in
+the query; and a no-view command's hotkey still showing the hidden
+window for the form.
 
 For what root search learns from what the user chooses
 ([`crates/pane-core/tests/learning.rs`](../crates/pane-core/tests/learning.rs)),

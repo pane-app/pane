@@ -1828,21 +1828,36 @@ refused at install with the reason.
 The values reach the command in its launch record's `arguments`, by name,
 in the order it declares them; an optional argument left empty is absent
 (`launch.argument("name")` in Rust, `launch.arguments.find(...)` in
-JavaScript and TypeScript). When a launch the user started leaves a
-required argument without a value, Pane first shows its argument form:
-the command's title and one field per argument, focus on the first empty
-required one; Enter with a required field still empty takes focus to it,
-and Escape launches nothing. This is how a global hotkey, a quick slot or
-another command's launch without values asks; root search's own inline
-fields come later. A background launch with a required argument missing
-is refused.
+JavaScript and TypeScript).
 
-Text sent through the command's alias or to it as a fallback fills its
-first text or password argument unless that has a value, and stays the
-launch record's fallback text. A command may be a fallback when it takes
-a query, or when its first argument is text and every other is optional.
-Pane remembers the last value of each dropdown per command and chooses it
-next time; it never records a password's value anywhere. The
+When the command's row is selected, [root search](../docs/root-search.md#inline-argument-fields)
+shows the fields **inline after the query** (#205): one field per
+argument, a password masked, a dropdown's choices on a trigger that opens
+them, an optional field marked so. Tab, Shift+Tab and the arrows move
+between the fields and the query; Enter with every required argument
+filled runs the command with the values, and with one blank moves focus
+to it instead, marking it once it has been left blank. Typing the
+command's alias and a space enters the fields, carrying what is typed
+next into the first text or password one — a command without arguments
+opens at once instead, and one that takes a query keeps the row that
+sends the text after its alias. The values are the search's own state,
+never recorded: they survive the list being re-ranked and go when the
+query does, and a password's value is recorded nowhere.
+
+Every launch that does not come from root search — a global hotkey, a
+quick slot, another command's — asks through Pane's argument form when a
+required argument has no value: the command's title and one field per
+argument, focus on the first empty required one; Enter with a required
+field still empty takes focus to it, and Escape launches nothing. A
+background launch with a required argument missing is refused.
+
+Text sent to the command as a fallback fills its first text or password
+argument unless that has a value, and stays the launch record's fallback
+text. A command may be a fallback when it takes a query, or when its
+first argument is text and every other is optional.
+Pane remembers the last value of each dropdown per command and offers it
+again in the fields and the form; it never records a password's value
+anywhere. The
 [arguments sample](sample-arguments) does all of this in Rust, and its
 [JavaScript](sample-arguments-js) and [TypeScript](sample-arguments-ts)
 copies answer the same.
