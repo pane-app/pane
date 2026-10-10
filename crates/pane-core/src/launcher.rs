@@ -3746,13 +3746,13 @@ impl Launcher {
             .staged
             .retain(|staged| computing.contains(&staged.component));
         Launcher::forget_indexes(state);
-        let query = state.view.query().unwrap_or_default();
+        let query = state.view.query().unwrap_or_default().to_owned();
         // While the query's list is held (#201), the rows shown stay the
         // previous query's: what changed is ranked when it is published.
         if state.holding.is_some() {
             return;
         }
-        let (rows, entries) = root_rows(state, query);
+        let (rows, entries) = root_rows(state, &query);
         let selected = selected_id
             .and_then(|id| rows.iter().position(|row| row.id == id))
             .or_else(|| aliases::first_choice(&entries));
@@ -5168,18 +5168,13 @@ fn root_rows(state: &mut State, query: &str) -> (Vec<Row>, Vec<Entry>) {
     let shared: Vec<bool> = {
         let folded: Vec<&str> = listed.iter().map(|row| row.folded.as_str()).collect();
         (0..folded.len())
-            .map(|at| folded.iter().filter(|other| *other == folded[at]).count() > 1)
+            .map(|at| folded.iter().filter(|other| **other == folded[at]).count() > 1)
             .collect()
     };
     let mut rows: Vec<Row> = Vec::with_capacity(listed.len());
     let mut entries: Vec<Entry> = Vec::with_capacity(listed.len());
     for (listed, shared) in listed.into_iter().zip(shared) {
-        let StaticRow {
-            row,
-            entry,
-            told,
-            ..
-        } = listed;
+        let StaticRow { row, entry, told, .. } = listed;
         let row = match (told, shared) {
             (Told::Source(identity), true) => Row {
                 subtitle: Some(match row.subtitle {
@@ -5237,9 +5232,10 @@ struct StaticRow {
 /// see [`State::ranked`]): the query stands, and nothing they were ranked
 /// from has changed since they were ranked.
 fn kept_ranking(state: &State, query: &str) -> bool {
-    state.ranked.as_ref().is_some_and(|ranked| {
-        ranked.query == query && ranked.statics == state.statics
-    })
+    state
+        .ranked
+        .as_ref()
+        .is_some_and(|ranked| ranked.query == query && ranked.statics == state.statics)
 }
 
 /// Ranks root search's static rows for `query` (see [`Ranked`]): every

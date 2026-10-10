@@ -1669,7 +1669,10 @@ impl Runtime {
     /// drops its instance, so a call after it starts one again; root search
     /// asks a provider once a burst of keystrokes has gone quiet (#202).
     pub fn instance_starts(&self, component: &Path) -> u64 {
-        lock(&self.shared.starts).get(component).copied().unwrap_or(0)
+        lock(&self.shared.starts)
+            .get(component)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// The components with calls the user asked for that have not answered
