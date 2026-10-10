@@ -389,7 +389,9 @@ impl std::fmt::Display for Binding {
 }
 
 /// The key as the user reads it: the named keys with their names, a
-/// single character as its uppercase, anything else capitalized.
+/// single character as its uppercase, anything else capitalized. The
+/// numpad's keys keep their own names, distinct from their counterparts'
+/// (#260).
 fn key_name(key: &str) -> String {
     match key {
         "escape" => "Escape".into(),
@@ -406,6 +408,16 @@ fn key_name(key: &str) -> String {
         "tab" => "Tab".into(),
         "backspace" => "Backspace".into(),
         "delete" => "Delete".into(),
+        "numpad_add" => "Num +".into(),
+        "numpad_decimal" => "Num .".into(),
+        "numpad_divide" => "Num /".into(),
+        "numpad_enter" => "Num Enter".into(),
+        "numpad_multiply" => "Num *".into(),
+        "numpad_subtract" => "Num -".into(),
+        key if key.starts_with("numpad") => {
+            let digit = key.strip_prefix("numpad").expect("the numpad's digit");
+            format!("Num {digit}")
+        }
         other => other.to_uppercase(),
     }
 }

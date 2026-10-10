@@ -96,6 +96,10 @@ const ICON_ID: u32 = 1;
 const TRAY_MESSAGE: u32 = 0x8000 + 3;
 /// The icon's tooltip.
 const TIP: &str = "Pane";
+/// The icon's tooltip while game mode has paused Pane's hotkeys for a
+/// game in front (#125): the entry says so, so a press that does
+/// nothing while the game has the keys is understood.
+const TIP_PAUSED: &str = "Pane — hotkeys paused for a game";
 /// The menu's commands, as `TrackPopupMenuEx` reports them.
 const OPEN_PANE: usize = 1;
 const SETTINGS: usize = 2;
@@ -188,6 +192,10 @@ struct NotifyIcon<S: Shell> {
     identity: Identity,
     /// The variant shown, or to show, for the taskbar's theme.
     variant: Variant,
+    /// Whether the tooltip says Pane's hotkeys are paused for a game
+    /// (game mode, #125), kept even while the icon is not shown, so the
+    /// next add — after a hide, or an Explorer restart — shows it.
+    paused: bool,
     /// The visibility Pane last asked for — the preference as the
     /// application applies it, kept even when the system refused it, so
     /// the next `TaskbarCreated` tries again.
@@ -218,6 +226,7 @@ impl<S: Shell> NotifyIcon<S> {
             shell,
             identity,
             variant,
+            paused: false,
             wanted: false,
             shown: false,
             version_4: false,
@@ -229,7 +238,7 @@ impl<S: Shell> NotifyIcon<S> {
         Notification {
             identity,
             variant: self.variant,
-            tip: TIP,
+            tip: if self.paused { TIP_PAUSED } else { TIP },
             callback: TRAY_MESSAGE,
         }
     }
@@ -250,6 +259,20 @@ impl<S: Shell> NotifyIcon<S> {
             self.shown = false;
             Ok(())
         }
+    }
+
+    /// Says in the icon's tooltip whether Pane's hotkeys are paused for a
+    /// game in front (game mode, #125): the icon is changed in place,
+    /// where the notification area holds it, and the choice is kept for
+    /// the next add where it does not. Repeating the state in effect
+    /// succeeds.
+    fn set_hotkeys_paused(&mut self, paused: bool) -> Result<(), TrayError> {
+        if self.paused == paused {
+            return Ok(());
+        }
+        self.paused = paused;
+        self.redraw();
+        Ok(())
     }
 
     /// Adds the icon as its identity. A GUID the system refuses gives way
@@ -685,6 +708,9 @@ impl Drop for NotificationArea {
 enum Request {
     Show(mpsc::Sender<Result<(), TrayError>>),
     Hide(mpsc::Sender<Result<(), TrayError>>),
+    /// Says in the tooltip whether Pane's hotkeys are paused for a game
+    /// (game mode, #125).
+    Pause(bool, mpsc::Sender<Result<(), TrayError>>),
 }
 
 type Requests = Arc<Mutex<VecDeque<Request>>>;
@@ -1038,10 +1064,31 @@ fn serve(message: &MSG, requests: &Requests) {
             Some(Request::Hide(answer)) => {
                 let _ = answer.send(change(false));
             }
+            Some(Request::Pause(paused, answer)) => {
+                let _ = answer.send(paused_tip(paused));
+            }
         }
     }
     // A broadcast that arrived while a change held the entry.
     apply_deferred();
+}
+
+/// Applies the pause to the entry this thread holds. Runs on the tray
+/// thread.
+fn paused_tip(paused: bool) -> Result<(), TrayError> {
+    ENTRY.with(|entry| {
+        let Ok(mut held) = entry.try_borrow_mut() else {
+            return Err(TrayError::Refused(
+                "the tray entry was busy on a click".to_string(),
+            ));
+        };
+        match held.as_mut() {
+            Some(entry) => entry.icon.set_hotkeys_paused(paused),
+            None => Err(TrayError::Refused(
+                "the tray entry was not made".to_string(),
+            )),
+        }
+    })
 }
 
 /// Applies `shown` to the entry this thread holds. Runs on the tray
@@ -1099,6 +1146,16 @@ impl Tray for WindowsTray {
             .recv()
             .unwrap_or_else(|_| Err(TrayError::Refused("the tray thread stopped".into())))
     }
+
+    fn set_hotkeys_paused(&self, paused: bool) -> Result<(), TrayError> {
+        let (answer, answered) = mpsc::channel();
+        if !self.send(Request::Pause(paused, answer)) {
+            return Err(TrayError::Refused("the tray thread stopped".into()));
+        }
+        answered
+            .recv()
+            .unwrap_or_else(|_| Err(TrayError::Refused("the tray thread stopped".into())))
+    }
 }
 
 impl Drop for WindowsTray {
@@ -1123,8 +1180,8 @@ mod tests {
 
     use super::{
         Click, ICON_ID, Identity, MARK_DARK, MARK_LIGHT, NIN_KEYSELECT, Notification, NotifyIcon,
-        Shell, TIP, TRAY_MESSAGE, TrayError, Variant, click, icon_guid, icon_image, load_icon,
-        small_icon_size, taskbar_variant,
+        Shell, TIP, TIP_PAUSED, TRAY_MESSAGE, TrayError, Variant, click, icon_guid, icon_image,
+        load_icon, small_icon_size, taskbar_variant,
     };
 
     /// A call the icon made to the notification area.
@@ -1214,6 +1271,59 @@ mod tests {
             tip: TIP,
             callback: TRAY_MESSAGE,
         }
+    }
+
+    #[test]
+    fn saying_the_hotkeys_are_paused_changes_the_tooltip_and_it_survives_a_taskbar_restart() {
+        let mut icon = fresh();
+        icon.set_visible(true).unwrap();
+        icon.shell.calls.clear();
+        // Game mode paused Pane's hotkeys for a game in front (#125): the
+        // icon is changed in place, its tooltip saying so.
+        icon.set_hotkeys_paused(true).unwrap();
+        assert_eq!(
+            icon.shell.calls,
+            [Call::Modify(Notification {
+                tip: TIP_PAUSED,
+                ..added(Variant::Light)
+            })]
+        );
+        // Explorer restarted: the icon is added again with the same
+        // tooltip, not the resting one.
+        icon.shell.calls.clear();
+        icon.taskbar_created();
+        assert_eq!(
+            icon.shell.calls,
+            [
+                Call::Add(Notification {
+                    tip: TIP_PAUSED,
+                    ..added(Variant::Light)
+                }),
+                Call::SetVersion(Identity::Guid(guid())),
+            ]
+        );
+        // The game left the front: the tooltip is Pane's again. Repeating
+        // either state changes nothing, as it does not while hidden.
+        icon.shell.calls.clear();
+        icon.set_hotkeys_paused(true).unwrap();
+        assert!(icon.shell.calls.is_empty(), "{:?}", icon.shell.calls);
+        icon.set_hotkeys_paused(false).unwrap();
+        assert_eq!(icon.shell.calls, [Call::Modify(added(Variant::Light))]);
+        // A hidden icon keeps the choice for its next add: nothing is
+        // changed in place while it is not there to change.
+        icon.set_visible(false).unwrap();
+        icon.shell.calls.clear();
+        icon.set_hotkeys_paused(true).unwrap();
+        assert!(icon.shell.calls.is_empty(), "{:?}", icon.shell.calls);
+        icon.set_visible(true).unwrap();
+        assert!(
+            icon.shell.calls.contains(&Call::Add(Notification {
+                tip: TIP_PAUSED,
+                ..added(Variant::Light)
+            })),
+            "{:?}",
+            icon.shell.calls
+        );
     }
 
     #[test]

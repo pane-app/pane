@@ -63,11 +63,49 @@ fn open_pane_keystrokes() -> &'static str {
 struct FakeHotkeys {
     registered: Mutex<Vec<Shortcut>>,
     taken: Mutex<Vec<Shortcut>>,
+    /// Whether this system's adapter has a keyboard hook of its own, as
+    /// Windows' does (#260, #268): the binding kinds #260 adds bind here
+    /// and the recorder's sessions come from the hook; a system without
+    /// one explains the kinds and offers no session.
+    hooks: bool,
+    /// The senders of the recording sessions handed out (#260), for the
+    /// test to feed what the user pressed, as the hook adapter would
+    /// report it.
+    reporters: Mutex<Vec<pane_core::hotkeys::PressSender>>,
+}
+
+impl FakeHotkeys {
+    /// A system whose adapter has a keyboard hook, as Windows' does.
+    fn hooking() -> FakeHotkeys {
+        FakeHotkeys {
+            hooks: true,
+            ..FakeHotkeys::default()
+        }
+    }
 }
 
 impl Hotkeys for FakeHotkeys {
     fn unavailable(&self) -> Option<String> {
         None
+    }
+
+    // A system whose adapter has a keyboard hook takes the binding kinds
+    // #260 adds; one without explains them, as the default does.
+    fn kind_unavailable(&self, shortcut: &Shortcut) -> Option<String> {
+        if self.hooks {
+            None
+        } else {
+            pane_core::hotkeys::kinds_unavailable(shortcut, pane_core::Platform::current())
+        }
+    }
+
+    fn recording(&self) -> Option<pane_core::hotkeys::RecordingSession> {
+        if !self.hooks {
+            return None;
+        }
+        let (sender, presses) = pane_core::hotkeys::channel();
+        self.reporters.lock().unwrap().push(sender);
+        Some(pane_core::hotkeys::RecordingSession::of(presses, || {}))
     }
 
     fn register(&self, shortcut: &Shortcut) -> Result<(), HotkeyError> {
@@ -233,7 +271,36 @@ fn open<'a>(
     Arc<FakeHotkeys>,
     &'a mut VisualTestContext,
 ) {
-    let hotkeys = Arc::new(FakeHotkeys::default());
+    open_over(Arc::new(FakeHotkeys::default()), cx, data, packages)
+}
+
+/// [`open`] over a fake whose adapter has a keyboard hook, as Windows'
+/// does, for the tests that record the kinds only a session can report
+/// (#260).
+fn open_hooking<'a>(
+    cx: &'a mut TestAppContext,
+    data: &TempDir,
+    packages: &[&Path],
+) -> (
+    Entity<LauncherWindow>,
+    WindowHandle<SettingsWindow>,
+    Arc<FakeHotkeys>,
+    &'a mut VisualTestContext,
+) {
+    open_over(Arc::new(FakeHotkeys::hooking()), cx, data, packages)
+}
+
+fn open_over<'a>(
+    hotkeys: Arc<FakeHotkeys>,
+    cx: &'a mut TestAppContext,
+    data: &TempDir,
+    packages: &[&Path],
+) -> (
+    Entity<LauncherWindow>,
+    WindowHandle<SettingsWindow>,
+    Arc<FakeHotkeys>,
+    &'a mut VisualTestContext,
+) {
     let launcher = Launcher::with_packages(
         Ok(Runtime::start().unwrap()),
         vec![],
@@ -2124,4 +2191,91 @@ fn reduced_motion_settles_disclosures_at_once(cx: &mut TestAppContext) {
         "the window asked for no further frame"
     );
     let _ = window;
+}
+
+#[gpui::test]
+fn a_hotkey_cell_records_the_kinds_a_session_reports(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let query = query_package(&data.path().join("sources").join("query"));
+    let hello = hello_package(&data.path().join("sources").join("hello"));
+    let (window, settings, hotkeys, cx) = open_hooking(cx, &data, &[&query, &hello]);
+    let mut settings_cx = record_hotkey(&settings, cx, &command_id(&query));
+    let (echo_id, hello_id) = (command_id(&query), command_id(&hello));
+
+    // The cell's recorder asked the adapter for a session (#260): the
+    // fake hands one whose reports the test feeds as the user's presses —
+    // a lone tap of Right Ctrl, which the window's own keystrokes cannot
+    // name, recorded inline as a chord is.
+    let reported = hotkeys.reporters.lock().unwrap().clone();
+    assert_eq!(reported.len(), 1, "the cell asked for one session");
+    // The platform's own name for a modifier (Control on macOS), "Right "
+    // before a side's, as the row names the kinds.
+    let ctrl = if cfg!(target_os = "macos") {
+        "Control"
+    } else {
+        "Ctrl"
+    };
+    let right_ctrl = Shortcut::parse("tap:rctrl").unwrap();
+    reported[0].send(right_ctrl.clone());
+    settings_cx.run_until_parked();
+    let (label, _) = accessibility(&mut settings_cx);
+    assert_eq!(
+        label.as_deref(),
+        Some(format!("Hotkey for Echo: Right {ctrl}").as_str()),
+        "the cell names the side as Windows does: {label:?}"
+    );
+    assert!(hotkeys.registered.lock().unwrap().contains(&right_ctrl));
+    assert!(hotkeys_record(&data).contains("\"tap:rctrl\""));
+    // The recorded binding opens the command, as a chord's does: Echo is
+    // a no-view command, so the hotkey runs it without opening a view,
+    // and its toast says what it was sent — nothing, for a hotkey's
+    // press.
+    press(&window, &right_ctrl, cx);
+    assert_eq!(
+        settle_shown(&window, cx),
+        Status::Result(
+            "Echo heard nothing: give it an alias or make it a fallback in Settings, then send \
+             it text from root search"
+                .into()
+        )
+    );
+
+    // A double tap records the same way ("Ctrl Ctrl"), replacing the
+    // binding the cell held. A single and a double tap of the same
+    // modifier are refused together, as they are through the hotkey
+    // screen: the same command's own double tap refuses another
+    // command's single tap of that modifier.
+    let mut settings_cx = record_hotkey(&settings, cx, &echo_id);
+    let reported = hotkeys.reporters.lock().unwrap().clone();
+    reported[1].send(Shortcut::parse("double:ctrl").unwrap());
+    settings_cx.run_until_parked();
+    let (label, _) = accessibility(&mut settings_cx);
+    assert_eq!(
+        label.as_deref(),
+        Some(format!("Hotkey for Echo: {ctrl} {ctrl}").as_str())
+    );
+    let mut settings_cx = record_hotkey(&settings, cx, &hello_id);
+    let reported = hotkeys.reporters.lock().unwrap().clone();
+    reported[2].send(Shortcut::parse("tap:ctrl").unwrap());
+    settings_cx.run_until_parked();
+    assert!(
+        settings_cx.debug_bounds("shortcut-hotkey-error").is_some(),
+        "the coexistence refusal is shown under the cell"
+    );
+    let (_, tree) = accessibility(&mut settings_cx);
+    assert!(
+        tree.contains("cannot coexist"),
+        "a single and a double tap of the same modifier refuse each other: {tree}"
+    );
+
+    // Escape still cancels the cell's recorder, session and all: Hello's
+    // cell rests with no hotkey, and Echo keeps its double tap.
+    settings_cx.simulate_keystrokes("escape");
+    settings_cx.run_until_parked();
+    let (label, tree) = accessibility(&mut settings_cx);
+    assert_eq!(label.as_deref(), Some("Hotkey for Say hello: none"));
+    assert!(
+        tree.contains(&format!("Hotkey for Echo: {ctrl} {ctrl}")),
+        "the refusal changed nothing: {tree}"
+    );
 }

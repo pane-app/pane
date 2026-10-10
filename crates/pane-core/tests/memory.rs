@@ -153,6 +153,12 @@ fn language(name: &str) -> &'static str {
 #[test]
 fn memory_peaks_of_the_samples() {
     let mut names: Vec<String> = [
+        // The three default extensions this repository still builds
+        // (#125): the five a release pins live in their own repositories
+        // (#285), whose own suites measure their peaks.
+        "run",
+        "system_commands",
+        "switch_windows",
         "sample_rust",
         "sample_settings",
         "sample_operations",

@@ -1,7 +1,8 @@
 //! Pane's host settings: the appearance preferences, the Open Pane hotkey,
-//! the launch-at-login choice, the tray visibility, and the Launcher
-//! page's choices — the display the launcher opens on and what reopening
-//! shows — held as one observable entity every window renders through.
+//! the launch-at-login choice, the tray visibility, the taskbar choice
+//! (#268), and the Launcher page's choices — the display the launcher
+//! opens on and what reopening shows — held as one observable entity every
+//! window renders through.
 //!
 //! [`init`] reads the record — `settings.json` in Pane's data folder, kept
 //! by [`pane_core::HostSettings`] under the house record rules — applies
@@ -94,6 +95,7 @@ use pane_core::{
 };
 
 use crate::background::{self, Backdrop};
+use crate::taskbar::Taskbar;
 use crate::ui::Visuals;
 use crate::ui::material::{Material, MaterialMode};
 use crate::ui::theme::{Appearance, Theme};
@@ -240,6 +242,17 @@ pub(crate) struct Settings {
     /// launcher window has attached it (see [`attach_launcher`]); `None`
     /// until then, so the choice still persists without one to apply it.
     launcher: Option<Launcher>,
+    /// Whether the record was absent — a fresh data folder — and no
+    /// launcher has resolved the fresh-install Open Pane hotkey against
+    /// its adapter yet (#268, ADR 0039): consumed by the first
+    /// [`attach_launcher`], so an existing record keeps the hotkey it
+    /// holds and the user's later changes are never re-resolved over.
+    fresh: bool,
+    /// The adapter that shows the taskbar while the launcher is open and
+    /// puts it back when it hides, once one has been attached (see
+    /// [`attach_taskbar`]); `None` until then or on a platform with no
+    /// taskbar of the kind, so the choice is not offered there.
+    taskbar: Option<Arc<dyn Taskbar>>,
     /// The adapter that shows and hides the native tray or menu-bar
     /// entry, once one has been attached (see [`attach_tray`]); `None`
     /// until then, so the choice still persists with nothing to apply
@@ -277,12 +290,12 @@ impl Settings {
         integration: Arc<dyn Autostart>,
         cx: &Context<Self>,
     ) -> Settings {
-        let (saved, unreadable) = match &dir {
+        let (saved, unreadable, fresh) = match &dir {
             Some(dir) => match HostSettings::open(dir) {
-                Ok(saved) => (saved, None),
-                Err(problem) => (HostSettings::default(), Some(problem)),
+                Ok(saved) => (saved, None, !HostSettings::recorded(dir)),
+                Err(problem) => (HostSettings::default(), Some(problem), false),
             },
-            None => (HostSettings::default(), None),
+            None => (HostSettings::default(), None, false),
         };
         let system = appearance_of(cx.window_appearance());
         let chosen = saved.clone();
@@ -306,6 +319,8 @@ impl Settings {
                 state: Ok(Registration::Disabled),
             },
             launcher: None,
+            fresh,
+            taskbar: None,
             tray: None,
             tray_problem: None,
             backdrop: None,
@@ -693,6 +708,20 @@ impl Settings {
         self.chosen.open_pane.clone()
     }
 
+    /// Makes the Open Pane hotkey the fresh-install default resolved to
+    /// (#268): an in-memory choice, like any other, that the next save of
+    /// any preference records — nothing is written for the resolution
+    /// itself, so a data folder no preference was ever saved into stays
+    /// exactly as fresh on the disk as it was. Not the user's choice, so
+    /// it takes none of a change's steps: no record, no status, only the
+    /// pages' next reading of the binding.
+    fn choose_open_pane(&mut self, shortcut: Shortcut, cx: &mut Context<Self>) {
+        if self.chosen.open_pane != shortcut {
+            self.chosen.open_pane = shortcut;
+            cx.notify();
+        }
+    }
+
     /// The in-app navigation bindings the host settings hold: what the
     /// Keyboard page shows and what every window's keys follow.
     pub(crate) fn keyboard(&self) -> Keyboard {
@@ -822,6 +851,78 @@ impl Settings {
             let _ = tray.set_visible(false);
         }
     }
+
+    /// Whether the user chose Pane to show the taskbar while the
+    /// launcher window is open (#268): the saved preference, applied by
+    /// the window as it shows and hides.
+    pub(crate) fn show_taskbar(&self) -> bool {
+        self.chosen.show_taskbar
+    }
+
+    /// Whether the taskbar choice is offered here at all: whether a
+    /// taskbar adapter is attached, which Windows' always is at run time
+    /// and no other platform's is — the General page explains the choice
+    /// where it is not, rather than offering a switch that would
+    /// pretend.
+    pub(crate) fn taskbar_offered(&self) -> bool {
+        self.taskbar.is_some()
+    }
+
+    /// Chooses whether Pane shows the taskbar while the launcher is open
+    /// (#268): the choice is kept and the record written off the window's
+    /// thread, as the other preferences are, and the launcher window —
+    /// which observes these settings — applies it at once, for the
+    /// launcher it is showing. An unreadable record refuses the choice,
+    /// as it refuses the others.
+    pub(crate) fn set_show_taskbar(&mut self, shown: bool, cx: &mut Context<Self>) {
+        if self.chosen.show_taskbar == shown {
+            return;
+        }
+        if self.refuse_unreadable(cx) {
+            return;
+        }
+        let mut chosen = self.chosen.clone();
+        chosen.show_taskbar = shown;
+        self.commit(chosen, Taken::Recorded, cx);
+    }
+
+    /// Shows the taskbar while the launcher is open, where the user chose
+    /// that and this system has one to show (#268): for a taskbar that
+    /// hides itself, the adapter shows it and remembers the state the
+    /// user's own setting had. Called as the launcher window is shown.
+    pub(crate) fn taskbar_while_open(&self) {
+        if self.chosen.show_taskbar
+            && let Some(taskbar) = &self.taskbar
+        {
+            taskbar.show_while_open();
+        }
+    }
+
+    /// Puts the taskbar back as the user had it, where the adapter showed
+    /// it while the launcher was open (#268): called as the window hides,
+    /// and when the choice is turned off while the launcher is shown. An
+    /// adapter with nothing to put back — no show happened, or the
+    /// taskbar does not hide itself — does nothing, so a window that
+    /// hides without having shown one disturbs nothing.
+    pub(crate) fn restore_taskbar(&self) {
+        if let Some(taskbar) = &self.taskbar {
+            taskbar.restore();
+        }
+    }
+
+    /// Says in the entry's tooltip whether Pane's hotkeys are paused for
+    /// a game in front (game mode, #125): the entry tells so while they
+    /// are, and says only Pane again once they return. Nothing is kept —
+    /// the pause is the launcher's, read as the window follows its
+    /// changes — and a refusal is the entry's own state, not a status
+    /// to surface, as the entry's other changes report theirs; where no
+    /// entry is attached, there is nothing to tell.
+    pub(crate) fn set_tray_paused(&self, paused: bool) {
+        if let Some(tray) = &self.tray {
+            let _ = tray.set_hotkeys_paused(paused);
+        }
+    }
+
     /// Records `shortcut` as the Open Pane hotkey, the application-owned
     /// binding that summons the launcher from any application. It is
     /// applied through the attached launcher *first* — checked against the
@@ -1408,17 +1509,53 @@ pub(crate) fn navigation_of(cx: &App) -> pane_core::NavigationBindings {
 /// system refuses it, or another command's recorded hotkey has it) is
 /// kept as the record's choice with the reason as its problem, for the
 /// General page to explain.
+///
+/// A fresh data folder — no settings record at all — starts with the
+/// fresh-install default instead (#268, ADR 0039), decided against the
+/// adapter that will register it: the Windows key alone on Windows where
+/// the adapter's own keyboard hook can recognize the tap, today's
+/// default where it cannot or on the other systems. The resolution
+/// happens once, here — nothing is written for it, so the folder stays
+/// as fresh on the disk as it was, and the next save of any preference
+/// records what the binding came to hold — and an existing record keeps
+/// the hotkey it has, wherever the adapter stands.
 pub(crate) fn attach_launcher(launcher: &Launcher, cx: &mut App) {
     let settings = ensure(cx);
-    let recorded = settings.read(cx).open_pane();
-    settings.update(cx, |settings, _| {
+    // Consumed here: a second window (or a third) attaches over a
+    // binding already applied, and never re-resolves over a choice the
+    // user made since.
+    let fresh = settings.update(cx, |settings, _| {
         settings.launcher = Some(launcher.clone());
+        std::mem::take(&mut settings.fresh)
     });
+    if fresh {
+        let resolution = launcher.open_pane_fresh_default();
+        settings.update(cx, |settings, cx| {
+            settings.choose_open_pane(resolution.shortcut.clone(), cx);
+        });
+    }
+    let recorded = settings.read(cx).open_pane();
     // The application-owned binding, registered exactly as the command
     // hotkeys are — through the platform adapter the launcher holds, on
     // the window's thread. The outcome is the binding's own state (the
     // problem), not a status the launcher surfaces.
     let _ = launcher.sync_open_pane(recorded);
+}
+
+/// Attaches the adapter that shows the taskbar while the launcher window
+/// is open (#268), for the "Show the taskbar when Pane opens" choice the
+/// General page records. `None` on a platform with no taskbar of the kind
+/// (macOS, Linux today): the choice stays recorded, and the page explains
+/// it instead of offering a switch that would pretend. Called once, at
+/// startup, as the binary does; the tests attach their fake the same way.
+/// The window applies the choice as the launcher shows and hides, and as
+/// the choice changes while it is shown — nothing is applied here, for
+/// there is no window yet.
+pub fn attach_taskbar(taskbar: Option<Arc<dyn Taskbar>>, cx: &mut App) {
+    let settings = ensure(cx);
+    settings.update(cx, |settings, _| {
+        settings.taskbar = taskbar;
+    });
 }
 
 /// Attaches the adapter that shows and hides the native tray or

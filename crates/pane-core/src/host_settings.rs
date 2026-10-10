@@ -35,8 +35,18 @@ use crate::keyboard::Keyboard;
 /// The file the settings are recorded in, in Pane's data folder.
 const FILE: &str = "settings.json";
 
-/// The record's version; a record of another version is not read.
-const VERSION: u64 = 1;
+/// The record's version as this Pane writes it.
+const VERSION: u64 = 2;
+
+/// Whether this Pane reads a record of `version`: its own, and 1, the
+/// record an older Pane wrote. The Open Pane field's grammar moved with
+/// #260's binding kinds — a lone tap (`tap:win`), a double tap
+/// (`double:ctrl`), a side-specific modifier (`rctrl+space`) — but the
+/// grammar is [`Shortcut::parse`], which reads a chord's id from version
+/// 1 as it is, so a record of either version reads.
+fn reads(version: u64) -> bool {
+    version == VERSION || version == 1
+}
 
 /// The theme the user chose for Pane's windows: follow the operating
 /// system's appearance, or force one of the two palettes.
@@ -259,6 +269,15 @@ pub struct HostSettings {
     /// those actions live outside Pane's own windows; the General page
     /// can hide it, where the platform provides one.
     pub tray_visible: bool,
+    /// Whether Pane shows the taskbar while the launcher window is open
+    /// (#268, ADR 0039): for a user whose taskbar hides itself, the
+    /// Windows adapter shows it while the launcher is open — so the
+    /// Start button stays one click away once the Windows key opens Pane
+    /// — and puts it back as the user had it when the launcher hides.
+    /// Windows only; where the platform has no taskbar of the kind, the
+    /// General page does not offer the choice. A provisional default,
+    /// proposed by ADR 0039: off.
+    pub show_taskbar: bool,
     /// Whether the user chose Pane to start at login. A preference, not a
     /// registration: whether Pane actually starts is the platform's own
     /// login integration, which the window layer reconciles with this
@@ -309,6 +328,7 @@ impl Default for HostSettings {
             material: MaterialPreference::default(),
             open_pane: Shortcut::open_pane_default(),
             tray_visible: true,
+            show_taskbar: false,
             launch_at_login: false,
             opening_monitor: OpeningMonitor::default(),
             reopening: Reopening::default(),
@@ -335,7 +355,12 @@ impl HostSettings {
     /// Reads the settings recorded in `dir`. No record at all means the
     /// defaults, as a record with missing fields does; a record that
     /// cannot be read, parsed or validated is `Err` with the problem,
-    /// phrased with the file's path, and is left as it is.
+    /// phrased with the file's path, and is left as it is. No record is
+    /// also what makes a data folder fresh, the one case whose Open Pane
+    /// hotkey starts with the fresh-install default rather than what a
+    /// record names — that is the caller's to decide against the
+    /// hotkeys adapter ([`crate::hotkeys::Hotkeys::open_pane_fresh_default`],
+    /// #268), and [`HostSettings::recorded`] says which case it is.
     pub fn open(dir: &Path) -> Result<HostSettings, String> {
         let file = dir.join(FILE);
         let text = match std::fs::read_to_string(&file) {
@@ -348,7 +373,7 @@ impl HostSettings {
         let fields: Map<String, Value> = serde_json::from_str(&text)
             .map_err(|error| format!("{} is invalid: {error}", file.display()))?;
         match fields.get("version").and_then(Value::as_u64) {
-            Some(VERSION) => {}
+            Some(version) if reads(version) => {}
             Some(version) => {
                 return Err(format!(
                     "{} has version {version}, which this Pane does not read",
@@ -391,6 +416,7 @@ impl HostSettings {
             material: recorded.material,
             open_pane,
             tray_visible: recorded.tray_visible,
+            show_taskbar: recorded.show_taskbar,
             launch_at_login: recorded.launch_at_login,
             opening_monitor: recorded.opening_monitor,
             reopening: recorded.reopening,
@@ -406,6 +432,16 @@ impl HostSettings {
         })
     }
 
+    /// Whether `dir` holds a settings record at all (#268): a fresh data
+    /// folder — one no Pane has saved settings into — holds none, and it
+    /// is the one whose Open Pane hotkey starts with the fresh-install
+    /// default rather than what a record names. A record that cannot be
+    /// read still counts: it exists, and is never replaced (see
+    /// [`HostSettings::open`]).
+    pub fn recorded(dir: &Path) -> bool {
+        dir.join(FILE).exists()
+    }
+
     /// Writes these settings to the record in `dir`, atomically: the
     /// record is replaced whole or not at all, and a crash leaves the
     /// previous one. `Err` with the problem, phrased with the file's path,
@@ -418,6 +454,7 @@ impl HostSettings {
             material: self.material,
             open_pane: Some(self.open_pane.id()),
             tray_visible: self.tray_visible,
+            show_taskbar: self.show_taskbar,
             launch_at_login: self.launch_at_login,
             opening_monitor: self.opening_monitor,
             reopening: self.reopening,
@@ -449,11 +486,13 @@ struct Recorded {
     theme: ThemePreference,
     #[serde(default)]
     material: MaterialPreference,
-    /// The Open Pane hotkey as its id, such as `ctrl+alt+space`; missing
-    /// means this system's provisional default. A value that is not a
-    /// shortcut fails the whole record. The field keeps the name it was
-    /// first recorded with, so records an earlier Pane wrote still read,
-    /// while the record's other fields follow the house camelCase names.
+    /// The Open Pane hotkey as its id, such as `ctrl+alt+space`, or one of
+    /// the binding kinds #260 adds written as their ids (`tap:win`,
+    /// `double:ctrl`, `rctrl+space`); missing means this system's
+    /// provisional default. A value that is not a shortcut fails the whole
+    /// record. The field keeps the name it was first recorded with, so
+    /// records an earlier Pane wrote still read, while the record's other
+    /// fields follow the house camelCase names.
     #[serde(default, rename = "open_pane")]
     open_pane: Option<String>,
     /// Whether the tray or menu-bar entry is shown; missing means shown,
@@ -461,6 +500,10 @@ struct Recorded {
     /// whole record, as unknown values do.
     #[serde(default = "shown_by_default")]
     tray_visible: bool,
+    /// Whether Pane shows the taskbar while the launcher is open (#268);
+    /// missing means not, the provisional default.
+    #[serde(default)]
+    show_taskbar: bool,
     /// Whether the user chose Pane to start at login; missing means not.
     #[serde(default)]
     launch_at_login: bool,
@@ -567,6 +610,7 @@ mod tests {
             material: MaterialPreference::Solid,
             open_pane: Shortcut::parse("ctrl+alt+b").unwrap(),
             tray_visible: false,
+            show_taskbar: true,
             launch_at_login: true,
             opening_monitor: super::OpeningMonitor::Pointer,
             reopening: super::Reopening::After90Seconds,
@@ -593,6 +637,7 @@ mod tests {
             "\"escapeBehavior\": \"hide\"",
             "\"escapeClosesSettings\": false",
             "\"navigationBindings\": \"emacs\"",
+            "\"showTaskbar\": true",
         ] {
             assert!(text.contains(field), "the record is {text}");
         }
@@ -702,6 +747,42 @@ mod tests {
     }
 
     #[test]
+    fn showing_the_taskbar_while_the_launcher_is_open_defaults_to_off_and_is_written_and_read() {
+        // Missing: off, so nothing shows a taskbar the user did not ask
+        // for (#268).
+        assert!(!HostSettings::default().show_taskbar);
+        assert!(!reading(r#"{ "version": 1 }"#).unwrap().show_taskbar);
+        // Recorded as the record's camelCase field, and read back.
+        assert_eq!(
+            reading(r#"{ "version": 1, "showTaskbar": true }"#).unwrap(),
+            HostSettings {
+                show_taskbar: true,
+                ..HostSettings::default()
+            }
+        );
+        // A value that is not a boolean fails the whole record.
+        let problem = reading(r#"{ "version": 1, "showTaskbar": "yes" }"#);
+        assert!(problem.is_err(), "{problem:?}");
+    }
+
+    #[test]
+    fn a_folder_with_no_record_is_fresh_and_one_with_any_record_is_not() {
+        // The fresh data folder is the one with no settings record at
+        // all: its Open Pane hotkey starts with the fresh-install
+        // default (#268), while a record — readable or not, naming the
+        // hotkey or defaulting it — keeps the hotkey it has.
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!HostSettings::recorded(dir.path()));
+        HostSettings::default().save(dir.path()).unwrap();
+        assert!(HostSettings::recorded(dir.path()));
+        std::fs::write(dir.path().join(FILE), "{ not a record").unwrap();
+        assert!(
+            HostSettings::recorded(dir.path()),
+            "an unreadable record is still a record, never replaced"
+        );
+    }
+
+    #[test]
     fn the_tray_visibility_defaults_to_shown_and_a_non_boolean_fails_the_record() {
         // Missing: shown, the provisional default.
         assert_eq!(
@@ -736,6 +817,18 @@ mod tests {
                 ..HostSettings::default()
             }
         );
+        // The binding kinds #260 add are the field's grammar too, recorded
+        // as their ids and read back.
+        for text in ["tap:win", "double:ctrl", "rctrl+space", "tap:ralt"] {
+            assert_eq!(
+                reading(&format!(r#"{{ "version": 2, "open_pane": "{text}" }}"#)).unwrap(),
+                HostSettings {
+                    open_pane: Shortcut::parse(text).unwrap(),
+                    ..HostSettings::default()
+                },
+                "{text} does not round trip"
+            );
+        }
         // A value that is not a shortcut fails the whole record.
         let problem = reading(r#"{ "version": 1, "open_pane": "not a shortcut" }"#);
         assert!(problem.is_err(), "{problem:?}");
@@ -745,6 +838,8 @@ mod tests {
                 .contains("its open pane hotkey is not one"),
             "the field is named"
         );
+        let problem = reading(r#"{ "version": 2, "open_pane": "tap:escape" }"#);
+        assert!(problem.is_err(), "{problem:?}");
     }
 
     #[test]
@@ -816,7 +911,16 @@ mod tests {
 
     #[test]
     fn another_versions_record_is_not_read() {
-        let problem = reading(r#"{ "version": 2, "theme": "light" }"#);
+        // Version 1 still reads (the Open Pane field's first grammar, a
+        // chord's id); version 3, a later Pane's, does not.
+        assert_eq!(
+            reading(r#"{ "version": 1, "theme": "light" }"#).unwrap(),
+            HostSettings {
+                theme: ThemePreference::Light,
+                ..HostSettings::default()
+            }
+        );
+        let problem = reading(r#"{ "version": 3, "theme": "light" }"#);
         assert!(problem.is_err(), "{problem:?}");
         assert!(
             problem

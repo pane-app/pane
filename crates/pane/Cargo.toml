@@ -31,12 +31,13 @@ raw-window-handle = "0.6"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Read system transparency/high-contrast preferences once at startup, round
-# the window's own corners through the Desktop Window Manager, and place the
+# the window's own corners through the Desktop Window Manager, place the
 # launcher window on the display the Launcher page's choice resolves to
 # (the monitors the GDI API lists, the pointer, the foreground window's
-# monitor, and the move itself); already in the tree through pane-core's
-# Windows adapters.
-windows = { workspace = true, features = ["UI_ViewManagement", "Wdk_System_SystemServices", "Win32_System_SystemInformation", "Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }
+# monitor, and the move itself), and show the taskbar while the launcher
+# is open (#268: the AppBar message over the taskbar's own window); already
+# in the tree through pane-core's Windows adapters.
+windows = { workspace = true, features = ["UI_ViewManagement", "Wdk_System_SystemServices", "Win32_System_SystemInformation", "Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 # The channel the reduced-motion watch reports Windows' preference changes
 # over, from the WinRT event's thread to the app's thread — the same hop
 # pane-core's global-hotkey presses take, so no second mechanism is added.

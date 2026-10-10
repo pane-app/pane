@@ -52,10 +52,19 @@ pub(super) fn provider_title(state: &State, command: &str) -> Option<String> {
 pub(super) trait Choices: Clone + Default + Send + 'static {
     /// The record's file name, beside `installed.json`.
     const FILE: &'static str;
-    /// The record's version; a record of another version is not read.
+    /// The record's version as this Pane writes it; a record of a version
+    /// [`reads`] does not is not read.
     const VERSION: u64;
     /// What the choices are, for messages ("hotkeys").
     const WHAT: &'static str;
+
+    /// Whether this Pane reads a record of `version`: the version it
+    /// writes by default, with the earlier ones a choices' record kept
+    /// the grammar of (hotkeys' version 1, #252) reading too. Overridden
+    /// by the choices whose record moved.
+    fn reads(version: u64) -> bool {
+        version == Self::VERSION
+    }
 
     /// The choices in a record's fields (besides `version`). Entries that
     /// cannot be used are left out.
@@ -101,7 +110,7 @@ impl<C: Choices> Record<C> {
         let read = match std::fs::read_to_string(&file) {
             Ok(text) => match serde_json::from_str::<Map<String, Value>>(&text) {
                 Ok(fields) => match fields.get("version").and_then(Value::as_u64) {
-                    Some(version) if version == C::VERSION => C::read(&fields)
+                    Some(version) if C::reads(version) => C::read(&fields)
                         .map(Some)
                         .map_err(|error| format!("{} is invalid: {error}", file.display())),
                     Some(version) => Err(format!(

@@ -1,0 +1,58 @@
+{
+  "manifestVersion": 1,
+  "title": "JavaScript run sample",
+  "version": "0.2.0",
+  "apiVersion": "0.1",
+  "preferences": [
+    {
+      "name": "shell",
+      "type": "dropdown",
+      "title": "Terminal Shell",
+      "description": "The shell Run in Terminal opens the command line in",
+      "default": "powershell",
+      "options": [
+        { "value": "powershell", "title": "PowerShell" },
+        { "value": "cmd", "title": "Command Prompt" }
+      ]
+    }
+  ],
+  "commands": [
+    {
+      "id": "run",
+      "title": "JavaScript run sample",
+      "subtitle": "Runs a command line, as Windows' Run dialog does",
+      "component": "sample_run_js.wasm",
+      "mode": "no-view",
+      "takesQuery": true
+    },
+    {
+      "id": "elevated",
+      "title": "Run elevated",
+      "subtitle": "Runs a command line through Windows' own elevation prompt",
+      "component": "sample_run_js.wasm",
+      "mode": "no-view",
+      "takesQuery": true
+    },
+    {
+      "id": "in-terminal",
+      "title": "Run in Terminal",
+      "subtitle": "Runs a command line in a new Windows Terminal tab, or the shell's own window",
+      "component": "sample_run_js.wasm",
+      "mode": "no-view",
+      "takesQuery": true
+    },
+    {
+      "id": "with-completions",
+      "title": "Run with Completions",
+      "subtitle": "Type a command line; what you ran and installed completes it as you type",
+      "component": "sample_run_js.wasm",
+      "search": true
+    },
+    {
+      "id": "history",
+      "title": "Run history",
+      "subtitle": "The Run dialog's history: run an entry again or delete it",
+      "component": "sample_run_js.wasm"
+    }
+  ]
+}

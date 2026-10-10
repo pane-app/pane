@@ -57,6 +57,7 @@ use serde::{Deserialize, Serialize};
 use crate::extension_data::{ExtensionData, PackageData};
 
 pub(crate) mod history;
+pub(crate) mod ignoring;
 #[cfg(target_os = "linux")]
 pub(crate) mod linux;
 #[cfg(target_os = "macos")]

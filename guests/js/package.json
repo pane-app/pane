@@ -1,7 +1,7 @@
 {
   "name": "@pane-app/extension",
   "version": "0.1.0",
-  "description": "Write Pane extensions in JavaScript or TypeScript: the types of Pane's extension contract (wit/extension.wit), web requests (@pane-app/extension/http), toasts, HUDs and the window (@pane-app/extension/feedback), the clipboard, opening, revealing and recycling with the standard actions (@pane-app/extension/system), preferences (@pane-app/extension/preferences), icon helpers (@pane-app/extension/icons) and system programs (@pane-app/extension/programs)",
+  "description": "Write Pane extensions in JavaScript or TypeScript: the types of Pane's extension contract (wit/extension.wit), web requests (@pane-app/extension/http), toasts, HUDs and the window (@pane-app/extension/feedback), the clipboard, opening, revealing and recycling with the standard actions (@pane-app/extension/system), the session and power commands (@pane-app/extension/system-commands), preferences (@pane-app/extension/preferences), icon helpers (@pane-app/extension/icons) and system programs (@pane-app/extension/programs)",
   "keywords": [
     "pane",
     "launcher",
@@ -41,6 +41,10 @@
     "./system": {
       "types": "./system.d.ts",
       "default": "./system.js"
+    },
+    "./system-commands": {
+      "types": "./system-commands.d.ts",
+      "default": "./system-commands.js"
     },
     "./preferences": {
       "types": "./preferences.d.ts",

@@ -190,6 +190,15 @@ pub struct SettingsWindow {
     launcher_page: launcher::State,
     /// The Shortcuts page's state, owned by its module.
     shortcuts: shortcuts::State,
+    /// The recorder's session with the hotkeys adapter, while a recorder
+    /// listens (#260): the General page's Open Pane recorder or the
+    /// Shortcuts page's hotkey cell. The adapter holds the keys back from
+    /// the system while it lasts and reports what the user presses, so
+    /// the kinds no registration can express are recorded without the
+    /// Start menu opening; `None` where this system's adapter has none
+    /// (macOS, X11) or while no recorder listens. See
+    /// [`Self::start_recording_session`].
+    recording_session: Option<pane_core::hotkeys::RecordingStop>,
     /// The Keyboard page's state, owned by its module.
     keyboard: keyboard::State,
     /// The Extensions page's state (its preferences' text fields and
@@ -288,6 +297,7 @@ impl SettingsWindow {
             launcher_page: launcher::State::new(window, cx),
             shortcuts: shortcuts::State::new(launcher, cx),
             keyboard: keyboard::State::new(window, cx),
+            recording_session: None,
             extensions: extensions::State::default(),
             file_search: file_search::State::default(),
             search: search::State::new(cx),
@@ -374,7 +384,9 @@ impl SettingsWindow {
     }
 
     /// Stops every recorder listening, changing nothing: the window lost
-    /// focus, so the keys it would capture go elsewhere.
+    /// focus, so the keys it would capture go elsewhere. The recording
+    /// session ends with them (#260), so the adapter stops holding the
+    /// keys back.
     fn stop_recorders(&mut self, cx: &mut Context<Self>) {
         if self.general.recording || self.keyboard.recording.is_some() {
             self.general.recording = false;
@@ -384,6 +396,81 @@ impl SettingsWindow {
             cx.notify();
         }
         self.shortcuts_cancel_recording(cx);
+        self.end_recording_session();
+    }
+
+    /// Starts a recording session with the hotkeys adapter, for whichever
+    /// recorder is about to listen (#260): while it lasts, the adapter
+    /// holds the keys back from the system — the Start menu the Windows
+    /// key alone opens stays closed — and reports the bindings the user
+    /// presses, so the kinds no registration can express — the Windows
+    /// key alone, a double tap, the side of a modifier — are recorded as
+    /// easily as a chord. Where this system's adapter has no session
+    /// (macOS, X11) nothing changes: the recorder listens to the window's
+    /// own keys, as it does today. The session ends — its reports end —
+    /// when the recorder stops listening ([`Self::end_recording_session`]
+    /// ends it at every such place), the window loses focus (see
+    /// [`Self::stop_recorders`]) or Pane quits.
+    fn start_recording_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.recording_session.is_some() {
+            return;
+        }
+        let Some(session) = self.launcher.recording() else {
+            return;
+        };
+        let (reports, stop) = session.split();
+        self.recording_session = Some(stop);
+        cx.spawn_in(window, async move |this, cx| {
+            let mut reports = reports;
+            while let Some(shortcut) = reports.next().await {
+                let listening = this
+                    .update_in(cx, |window, w, cx| {
+                        window.recording_reported(shortcut, w, cx)
+                    })
+                    .unwrap_or(false);
+                if !listening {
+                    break;
+                }
+            }
+            // The session ended on its own — the window lost focus, or
+            // Pane is quitting — so the recorders stop listening, changing
+            // nothing; where the recorder had stopped listening itself,
+            // this changes nothing either.
+            let _ = this.update(cx, |window, cx| window.stop_recorders(cx));
+        })
+        .detach();
+    }
+
+    /// Ends the recording session, wherever the recorder stopped
+    /// listening (#260): a refusal keeps it listening, so the session
+    /// lasts while the recorder does, and the adapter stops holding the
+    /// keys back the moment it ends.
+    fn end_recording_session(&mut self) {
+        self.recording_session = None;
+    }
+
+    /// One binding a recording session reported, as the user pressed it
+    /// while a recorder listened (#260): routed to whichever recorder
+    /// that is — the General page's Open Pane recorder, or the Shortcuts
+    /// page's hotkey cell — and recorded as its own keystrokes are: the
+    /// same checks, the same refusals, the same flow. Whether the
+    /// recorder still listens (a refusal keeps it listening for another
+    /// try; a change that lands ends it).
+    fn recording_reported(
+        &mut self,
+        shortcut: pane_core::hotkeys::Shortcut,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.general.recording {
+            self.apply_open_pane(shortcut, window, cx);
+            self.general.recording
+        } else if let Some(command) = self.shortcuts.recording_command() {
+            self.shortcuts_apply_hotkey(&command, Some(shortcut), window, cx);
+            self.shortcuts.recording_hotkey()
+        } else {
+            false
+        }
     }
 
     /// Escape, where no control took it: closes this window if the

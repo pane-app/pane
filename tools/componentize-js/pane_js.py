@@ -61,15 +61,24 @@ EXPORT_OPTIONS = {
 }
 # `"pane"` option -> the interface a command setting it also imports, beyond
 # what every command may import (`js-extension`): a command that sets none
-# of them does not import it at all.
+# of them does not import it at all. `run` and `windows` are Windows-only
+# capabilities: a command importing them elsewhere has every call answer
+# not-available, which is not a failure.
 IMPORT_OPTIONS = {
     "files": "pane:extension/files@0.1.0",
     "fileIndex": "pane:extension/file-index@0.1.0",
     "clipboardHistory": "pane:extension/clipboard-history@0.1.0",
+    "run": "pane:extension/run@0.1.0",
+    "windows": "pane:extension/windows@0.1.0",
 }
 PREBUILT = REPO / "guests" / "prebuilt"
 MANIFEST = PREBUILT / "manifest.json"
-# (component file in guests/prebuilt and target/guests, source package)
+# (component file in guests/prebuilt and target/guests, source package).
+# A new sample also joins PREBUILT and SAMPLE_PACKAGES in
+# xtask/src/main.rs, and a Rust one the workspaces list and the guests
+# workspace's members and Cargo.lock too (``cargo xtask guests`` builds
+# with --locked), so that `cargo xtask guests` assembles its package and
+# `cargo xtask js-guests` rebuilds its component.
 SAMPLES = [
     ("sample_js.wasm", "guests/sample-js"),
     ("sample_ts.wasm", "guests/sample-ts"),
@@ -106,11 +115,19 @@ SAMPLES = [
     ("sample_icons_ts.wasm", "guests/sample-icons-ts"),
     ("sample_programs_js.wasm", "guests/sample-programs-js"),
     ("sample_programs_ts.wasm", "guests/sample-programs-ts"),
+    ("sample_run_js.wasm", "guests/sample-run-js"),
+    ("sample_run_ts.wasm", "guests/sample-run-ts"),
+    ("sample_system_commands_js.wasm", "guests/sample-system-commands-js"),
+    ("sample_system_commands_ts.wasm", "guests/sample-system-commands-ts"),
+    ("sample_switch_windows_js.wasm", "guests/sample-switch-windows-js"),
+    ("sample_switch_windows_ts.wasm", "guests/sample-switch-windows-ts"),
 ]
-# Pane's WIT, copied beside the world in guests/js/wit.
-PANE_WIT = ["extension.wit", "commands.wit", "feedback.wit", "system.wit", "data.wit", "preferences.wit", "root-results.wit",
+# Pane's WIT, copied beside the world in guests/js/wit. A new wit/*.wit
+# joins this list, and is mirrored to guests/pane-extension/wit/ for the
+# Rust SDK, whose copy `cargo xtask sdks` checks is identical.
+PANE_WIT = ["extension.wit", "commands.wit", "feedback.wit", "system.wit", "system-commands.wit", "data.wit", "preferences.wit", "root-results.wit",
             "operations.wit", "applications.wit", "search.wit", "helpers.wit", "files.wit", "clipboard.wit", "service.wit",
-            "programs.wit", "file-index.wit"]
+            "programs.wit", "file-index.wit", "run.wit", "windows.wit"]
 # WASI's WIT (clocks, and `wasi:http` with the packages it names), copied from
 # wit/deps into the world's deps/.
 WASI_WIT = sorted((REPO / "wit" / "deps").glob("*.wit"))
@@ -498,7 +515,8 @@ def build(package: Path, out: Path, toolchain: Toolchain) -> dict:
         shutil.copyfile(path, wit / "deps" / path.name)
     out.parent.mkdir(parents=True, exist_ok=True)
     bundled = bundle.read_text(encoding="utf-8")
-    world = command_world(manifest.get("pane", {}), uses_http(bundled), uses_programs(bundled))
+    world = command_world(manifest.get("pane", {}), uses_http(bundled),
+                          uses_programs(bundled), uses_system_commands(bundled))
     (wit / "command.wit").write_text(world, encoding="utf-8")
     report = run([toolchain.componentizer, wit, COMMAND_WORLD, bundle, toolchain.runtime, out],
                  env=clean_env(QJS_P3_LIBC=str(toolchain.libc)), capture=True)
@@ -557,15 +575,28 @@ def uses_http(bundle: str) -> bool:
 PROGRAMS_IMPORT = "pane:extension/programs@0.1.0"
 
 
+# Pane's session and power commands (wit/system-commands.wit), which a
+# command imports the same way (itself or through
+# `@pane-app/extension/system-commands`).
+SYSTEM_COMMANDS_IMPORT = "pane:extension/system-commands@0.1.0"
+
+
 def uses_programs(bundle: str) -> bool:
     """Whether the bundled module imports Pane's system programs."""
     return re.search(r"""(?:from|import)\s*\(?\s*["']pane:extension/programs@""", bundle) is not None
 
 
-def command_world(options: dict, http: bool, programs: bool = False) -> str:
+def uses_system_commands(bundle: str) -> bool:
+    """Whether the bundled module imports Pane's session and power commands."""
+    return re.search(r"""(?:from|import)\s*\(?\s*["']pane:extension/system-commands@""", bundle) is not None
+
+
+def command_world(options: dict, http: bool, programs: bool = False,
+                  system_commands: bool = False) -> str:
     """The world `js-command`: `js-extension` exporting and importing what
-    `options` name, importing `wasi:http`'s client if `http` and Pane's
-    system programs if `programs`."""
+    `options` name, importing `wasi:http`'s client if `http`, Pane's system
+    programs if `programs` and Pane's session and power commands if
+    `system_commands`."""
     unknown = sorted(set(options) - set(EXPORT_OPTIONS) - set(IMPORT_OPTIONS))
     if unknown:
         raise SystemExit(f"pane-js: unknown \"pane\" options in package.json: {', '.join(unknown)}")
@@ -577,6 +608,8 @@ def command_world(options: dict, http: bool, programs: bool = False) -> str:
         imports += f"  import {HTTP_IMPORT};\n"
     if programs:
         imports += f"  import {PROGRAMS_IMPORT};\n"
+    if system_commands:
+        imports += f"  import {SYSTEM_COMMANDS_IMPORT};\n"
     return (f"package pane:js-guest@0.1.0;\n\nworld {COMMAND_WORLD} {{\n  include {WORLD};\n"
             f"{imports}{exports}}}\n")
 

@@ -8,7 +8,9 @@
 //! General page's launch-at-login toggle is driven the same way, through a fake
 //! login system the tests script — no test ever touches the real login
 //! configuration of the machine running it; and the Extensions page
-//! manages extensions through the launcher's own operations.
+//! manages extensions through the launcher's own operations. The About
+//! page's diagnostics copy holds the state of Pane's keyboard hook (#259),
+//! read through a fake hotkeys system the tests script.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,6 +26,7 @@ use pane_core::autostart::{Autostart, Registration};
 use pane_core::changes;
 use pane_core::defaults::ArtifactSource;
 use pane_core::develop::{Build, BuildJob, BuildOutcome, Builder, Toolchains};
+use pane_core::hotkeys::{HookHealth, HotkeyError, Hotkeys, Shortcut};
 use pane_core::{Launcher, PackageIdentity, Runtime, Screen, Status, Target};
 use tempfile::TempDir;
 
@@ -139,6 +142,45 @@ impl Autostart for FakeLogin {
         }
         *self.registration.lock().unwrap() = Registration::Disabled;
         Ok(Registration::Disabled)
+    }
+}
+
+/// A fake hotkeys system, standing where the pane binary puts the
+/// platform's own: its keyboard hook's state as the tests script it
+/// (#259), which the diagnostics copy holds. No shortcut is ever
+/// refused, and none is dispatched through the hook — the health is the
+/// whole of the answer.
+struct FakeHotkeys {
+    /// The hook's state, as the launcher's query reads it.
+    health: std::sync::Mutex<Option<HookHealth>>,
+}
+
+impl Hotkeys for FakeHotkeys {
+    fn unavailable(&self) -> Option<String> {
+        None
+    }
+
+    fn kind_unavailable(&self, shortcut: &Shortcut) -> Option<String> {
+        // This fake models a system without Pane's own keyboard hook, as
+        // macOS' and X11's adapters are: the kinds only the hook
+        // recognizes are explained (macOS stands in where the test
+        // binary runs on Windows, so a fresh data folder keeps today's
+        // Open Pane default rather than taking the Windows key).
+        let modeled = match pane_core::Platform::current() {
+            Some(pane_core::Platform::Windows) => Some(pane_core::Platform::Macos),
+            platform => platform,
+        };
+        pane_core::hotkeys::kinds_unavailable(shortcut, modeled)
+    }
+
+    fn register(&self, _shortcut: &Shortcut) -> Result<(), HotkeyError> {
+        Ok(())
+    }
+
+    fn unregister(&self, _shortcut: &Shortcut) {}
+
+    fn hook_health(&self) -> Option<HookHealth> {
+        self.health.lock().unwrap().clone()
     }
 }
 
@@ -1687,6 +1729,44 @@ fn the_page_copies_the_diagnostics_to_the_clipboard_locally(cx: &mut TestAppCont
     assert!(report.contains("Data folder: "), "{report}");
     assert!(
         report.contains("Update check: Pane 99.0.0 is available"),
+        "{report}"
+    );
+    // No keyboard hook is in use — this launcher has no adapter that
+    // uses one — and the report says so cleanly rather than nothing
+    // (#259).
+    assert!(report.contains("Keyboard hook: not in use"), "{report}");
+}
+
+#[gpui::test]
+fn the_diagnostics_hold_the_keyboard_hook_s_state(cx: &mut TestAppContext) {
+    // The hook's state, as a Windows adapter would answer while a
+    // binding needs it (#259): two reinstallations, its pages pinned.
+    let system = Arc::new(FakeHotkeys {
+        health: std::sync::Mutex::new(Some(HookHealth {
+            reinstalls: 2,
+            pinned: true,
+            given_up: None,
+        })),
+    });
+    let launcher = Launcher::new(Runtime::start(), samples::sample_commands()).with_hotkeys(system);
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let (_window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+
+    // The copy holds the hook's state beside the installation's own
+    // facts, as plain text on this computer's clipboard.
+    let (_settings, mut settings_cx) = open_about(cx);
+    click_row(&mut settings_cx, "about-diagnostics");
+    until_text(&mut settings_cx, "Copied to the clipboard");
+    let report = settings_cx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .expect("the report was copied");
+    assert!(
+        report.contains(
+            "Keyboard hook: Installed, its pages are pinned in memory; Windows removed it \
+             2 times and Pane installed it again"
+        ),
         "{report}"
     );
 }
@@ -3303,7 +3383,9 @@ fn all_six_pages_are_listed_reachable_and_searchable(cx: &mut TestAppContext) {
 /// launcher rows: its own settings rows stand in a card, one under the
 /// other past the card's 1px rule, each at least 48 high; the Open Pane
 /// hotkey's recorder is a 36px well (black 24%) at its row's end, 14px
-/// in, with the Reset button inside it, and the launch-at-login choice is
+/// in, with the Reset button inside it, the "Use the Windows key" choice
+/// a plain settings row under it (#268, explained while this fake cannot
+/// take the tap), and the launch-at-login choice is
 /// the board's 40x24 switch at its row's end — white 16% with its knob at
 /// the left while off, the accent with the knob at the right once taken.
 /// No root-row wash is painted on the rows, and nothing fades.
@@ -3325,13 +3407,18 @@ fn the_general_page_draws_the_settings_control_families(cx: &mut TestAppContext)
 
     let card = rect_of(sc, "general-card");
     let row = rect_of(sc, "general-open-pane-row");
+    let choice_row = rect_of(sc, "general-use-windows-key");
     let login_row = rect_of(sc, "general-launch-at-login-row");
     assert_eq!(row[1], card[1], "the card's first row");
     assert!(
-        (login_row[1] - (row[1] + row[3] + 1.)).abs() < 0.5,
-        "the next row past the card's rule: {login_row:?} under {row:?}"
+        (choice_row[1] - (row[1] + row[3] + 1.)).abs() < 0.5,
+        "the \"Use the Windows key\" choice under it: {choice_row:?} under {row:?}"
     );
-    for bounds in [row, login_row] {
+    assert!(
+        (login_row[1] - (choice_row[1] + choice_row[3] + 1.)).abs() < 0.5,
+        "the next row past the card's rule: {login_row:?} under {choice_row:?}"
+    );
+    for bounds in [row, choice_row, login_row] {
         assert!(bounds[3] >= 48., "a settings row's floor: {bounds:?}");
     }
 
@@ -4695,4 +4782,117 @@ fn an_unreadable_record_refuses_the_login_choice(cx: &mut TestAppContext) {
     assert!(!login_chosen(&mut settings_cx), "the choice was refused");
     assert_eq!(login.registration(), Registration::Disabled);
     assert_eq!(record_of(data.path()), garbage);
+}
+
+/// The taskbar the tests attach, as the binary attaches Windows' own
+/// (#268): what the window asked it to do, in order — a show while the
+/// launcher is open, a restore when it hides or the choice turns off —
+/// and whether a show is in effect a restore would end.
+#[derive(Default)]
+struct FakeTaskbar {
+    asked: std::sync::Mutex<Vec<&'static str>>,
+    shown: std::sync::Mutex<bool>,
+}
+
+impl pane::taskbar::Taskbar for FakeTaskbar {
+    fn show_while_open(&self) {
+        let mut shown = self.shown.lock().unwrap();
+        if !*shown {
+            *shown = true;
+            self.asked.lock().unwrap().push("show");
+        }
+    }
+
+    fn restore(&self) {
+        let mut shown = self.shown.lock().unwrap();
+        if *shown {
+            *shown = false;
+            self.asked.lock().unwrap().push("restore");
+        }
+    }
+}
+
+impl FakeTaskbar {
+    /// What the window asked, in order.
+    fn asked(&self) -> Vec<&'static str> {
+        self.asked.lock().unwrap().clone()
+    }
+}
+
+#[gpui::test]
+fn the_taskbar_follows_the_launcher_while_the_choice_is_on(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    // The fake taskbar is attached before the window opens, as the binary
+    // attaches Windows' at startup; the launcher's hotkeys are the
+    // fake whose hook reports the health, as the other tests' are.
+    let taskbar = Arc::new(FakeTaskbar::default());
+    let launcher = Launcher::new(Runtime::start(), samples::sample_commands()).with_hotkeys(
+        Arc::new(FakeHotkeys {
+            health: std::sync::Mutex::new(None),
+        }),
+    );
+    // Guest replies arrive from the real runtime thread, outside the test
+    // scheduler's deterministic control.
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+        pane::settings::init_with_overrides(
+            Some(data.path().to_owned()),
+            pane::settings::Overrides::default(),
+            cx,
+        );
+        pane::settings::attach_taskbar(Some(taskbar.clone()), cx);
+        pane::bind_keys(cx);
+    });
+    let (window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+
+    // The choice starts off: hiding the launcher — Escape at an empty
+    // root search — and showing it again — the Open Pane hotkey — ask
+    // nothing of the taskbar.
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    let default = Shortcut::open_pane_default();
+    window.update_in(cx, |window, w, cx| window.hotkey_pressed(&default, w, cx));
+    cx.run_until_parked();
+    assert!(taskbar.asked().is_empty(), "{:?}", taskbar.asked());
+
+    // The choice is on the General page, explained; the launcher is open,
+    // so turning it on shows the taskbar at once (#268).
+    let mut settings_cx = open_settings(cx);
+    assert!(
+        settings_cx.debug_bounds("general-show-taskbar").is_some(),
+        "the taskbar row is drawn"
+    );
+    choose(&mut settings_cx, "general-show-taskbar");
+    settings_cx.run_until_parked();
+    assert_eq!(taskbar.asked(), ["show"]);
+
+    // Hiding the launcher puts the taskbar back as the user had it; the
+    // Settings window closes first, so the launcher has the keys again.
+    settings_cx.update(|window, _| window.remove_window());
+    cx.run_until_parked();
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(taskbar.asked(), ["show", "restore"]);
+
+    // The Open Pane hotkey shows the launcher again, and the taskbar with
+    // it.
+    cx.executor().advance_clock(Duration::from_millis(700));
+    window.update_in(cx, |window, w, cx| window.hotkey_pressed(&default, w, cx));
+    cx.run_until_parked();
+    assert_eq!(taskbar.asked(), ["show", "restore", "show"]);
+
+    // Turning the choice off while the launcher is open puts the taskbar
+    // back at once, and hiding again asks nothing more.
+    let mut settings_cx = open_settings(cx);
+    choose(&mut settings_cx, "general-show-taskbar");
+    settings_cx.run_until_parked();
+    assert_eq!(taskbar.asked(), ["show", "restore", "show", "restore"]);
+    settings_cx.update(|window, _| window.remove_window());
+    cx.run_until_parked();
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(taskbar.asked(), ["show", "restore", "show", "restore"]);
+
+    // The record holds the choice the page leaves.
+    until_record_holds(cx, data.path(), "\"showTaskbar\": false");
 }

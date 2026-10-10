@@ -101,6 +101,12 @@ const PREBUILT: &[&str] = &[
     "sample_icons_ts",
     "sample_programs_js",
     "sample_programs_ts",
+    "sample_run_js",
+    "sample_run_ts",
+    "sample_system_commands_js",
+    "sample_system_commands_ts",
+    "sample_switch_windows_js",
+    "sample_switch_windows_ts",
 ];
 
 fn main() -> ExitCode {
@@ -202,6 +208,9 @@ fn guests() -> Result<(), String> {
             &[
                 "sample_rust",
                 "sample_settings",
+                "run",
+                "system_commands",
+                "switch_windows",
                 "sample_operations",
                 "sample_dependencies",
                 "sample_query",
@@ -215,6 +224,9 @@ fn guests() -> Result<(), String> {
                 "sample_helper",
                 "sample_icons",
                 "sample_programs",
+                "sample_run",
+                "sample_system_commands",
+                "sample_switch_windows",
                 "sample_files",
                 "faulty",
                 "folder_files",
@@ -414,14 +426,19 @@ fn git_sample(root: &Path, out: &Path) -> Result<(), String> {
 /// (package folder in `guests/packages`, component) of each sample package.
 /// The default extensions' packages are not here: their sources left this
 /// repository for their own (#285), and a Pane release installs them from
-/// the commits its pins name (`crates/pane/defaults.json`).
-const SAMPLE_PACKAGES: [(&str, &str); 54] = [
+/// the commits its pins name (`crates/pane/defaults.json`) — except the
+/// Windows power features' three (#125), which this repository still
+/// builds until their own repositories release.
+const SAMPLE_PACKAGES: [(&str, &str); 66] = [
     ("sample-rust", "sample_rust"),
     ("sample-settings", "sample_settings"),
     ("sample-js", "sample_js"),
     ("sample-ts", "sample_ts"),
     ("sample-settings-js", "sample_settings_js"),
     ("sample-settings-ts", "sample_settings_ts"),
+    ("run", "run"),
+    ("system-commands", "system_commands"),
+    ("switch-windows", "switch_windows"),
     ("sample-operations", "sample_operations"),
     ("sample-operations-js", "sample_operations_js"),
     ("sample-operations-ts", "sample_operations_ts"),
@@ -470,6 +487,15 @@ const SAMPLE_PACKAGES: [(&str, &str); 54] = [
     ("sample-programs", "sample_programs"),
     ("sample-programs-js", "sample_programs_js"),
     ("sample-programs-ts", "sample_programs_ts"),
+    ("sample-run", "sample_run"),
+    ("sample-run-js", "sample_run_js"),
+    ("sample-run-ts", "sample_run_ts"),
+    ("sample-system-commands", "sample_system_commands"),
+    ("sample-system-commands-js", "sample_system_commands_js"),
+    ("sample-system-commands-ts", "sample_system_commands_ts"),
+    ("sample-switch-windows", "sample_switch_windows"),
+    ("sample-switch-windows-js", "sample_switch_windows_js"),
+    ("sample-switch-windows-ts", "sample_switch_windows_ts"),
 ];
 
 /// Rebuilds `guests/prebuilt/` from the JS/TS sample sources, then refreshes

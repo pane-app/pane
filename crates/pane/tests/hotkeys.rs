@@ -26,11 +26,49 @@ use packages::package;
 #[derive(Default)]
 struct FakeSystem {
     registered: Mutex<Vec<Shortcut>>,
+    /// Whether this system's adapter has a keyboard hook of its own, as
+    /// Windows' does (#260, #268): the binding kinds #260 adds bind here
+    /// and the recorder's sessions come from the hook; a system without
+    /// one explains the kinds and offers no session.
+    hooks: bool,
+    /// The senders of the recording sessions handed out (#260), for the
+    /// test to feed what the user pressed, as the hook adapter would
+    /// report it.
+    reporters: Mutex<Vec<pane_core::hotkeys::PressSender>>,
+}
+
+impl FakeSystem {
+    /// A system whose adapter has a keyboard hook, as Windows' does.
+    fn hooking() -> FakeSystem {
+        FakeSystem {
+            hooks: true,
+            ..FakeSystem::default()
+        }
+    }
 }
 
 impl Hotkeys for FakeSystem {
     fn unavailable(&self) -> Option<String> {
         None
+    }
+
+    // A system whose adapter has a keyboard hook takes the binding kinds
+    // #260 adds; one without explains them, as the default does.
+    fn kind_unavailable(&self, shortcut: &Shortcut) -> Option<String> {
+        if self.hooks {
+            None
+        } else {
+            pane_core::hotkeys::kinds_unavailable(shortcut, pane_core::Platform::current())
+        }
+    }
+
+    fn recording(&self) -> Option<pane_core::hotkeys::RecordingSession> {
+        if !self.hooks {
+            return None;
+        }
+        let (sender, presses) = pane_core::hotkeys::channel();
+        self.reporters.lock().unwrap().push(sender);
+        Some(pane_core::hotkeys::RecordingSession::of(presses, || {}))
     }
 
     fn register(&self, shortcut: &Shortcut) -> Result<(), HotkeyError> {
@@ -197,4 +235,97 @@ fn a_command_hotkey_cannot_take_the_open_pane_keys(cx: &mut TestAppContext) {
         !data.path().join("extensions").join("hotkeys.json").exists(),
         "nothing was recorded"
     );
+}
+
+#[gpui::test]
+fn the_hotkey_screen_records_the_kinds_a_recording_session_reports(cx: &mut TestAppContext) {
+    let (sources, data): (TempDir, TempDir) =
+        (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = package(&sources.path().join("hello"));
+    let system = Arc::new(FakeSystem::hooking());
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"))
+            .with_hotkeys(system.clone());
+    let (window, cx) = cx.add_window_view(|window, cx| {
+        let mut launcher = LauncherWindow::new(launcher, window, cx);
+        launcher.preview_package(&folder, window, cx);
+        launcher
+    });
+    settle(&window, cx);
+    cx.simulate_keystrokes("enter");
+    settle(&window, cx);
+    enter_flow(&window, cx);
+    cx.simulate_keystrokes("down down down down enter");
+    let view = settle(&window, cx);
+    assert!(
+        matches!(view.screen, Screen::Hotkey { .. }),
+        "{:?}",
+        view.screen
+    );
+
+    // The screen's recorder asked the adapter for a session (#260): the
+    // fake hands one whose reports the test feeds as the user's presses —
+    // the kinds the window's own keystrokes cannot name. A binding that
+    // Pane refuses is explained as a keystroke is, and the screen stays
+    // for another try.
+    cx.run_until_parked();
+    let reported = system.reporters.lock().unwrap().clone();
+    assert_eq!(reported.len(), 1, "the screen asked for one session");
+    reported[0].send(Shortcut::parse("p").expect("a chord candidate"));
+    let view = settle(&window, cx);
+    assert!(matches!(view.status, Status::Error(_)), "{:?}", view.status);
+    assert!(
+        matches!(view.screen, Screen::Hotkey { .. }),
+        "{:?}",
+        view.screen
+    );
+
+    // A lone tap of the Windows key, as the session reports it: recorded,
+    // and the record round trips its textual form.
+    reported[0].send(Shortcut::parse("tap:win").expect("a tap"));
+    let view = settle(&window, cx);
+    let tap = Shortcut::parse("tap:win").unwrap();
+    assert_eq!(
+        view.status,
+        Status::Result(format!("{tap} now opens Say hello"))
+    );
+    assert!(
+        matches!(view.screen, Screen::Extensions { .. }),
+        "{:?}",
+        view.screen
+    );
+    assert!(
+        system
+            .registered
+            .lock()
+            .unwrap()
+            .contains(&Shortcut::open_pane_default())
+    );
+    assert!(system.registered.lock().unwrap().contains(&tap));
+    assert!(
+        std::fs::read_to_string(data.path().join("extensions").join("hotkeys.json"))
+            .unwrap()
+            .contains("\"tap:win\"")
+    );
+
+    // Escape on the hotkey screen still leaves it, session and all: the
+    // recorder's own cancellation keys are untouched by the session.
+    enter_flow(&window, cx);
+    cx.simulate_keystrokes("down down down down enter");
+    let view = settle(&window, cx);
+    assert!(
+        matches!(view.screen, Screen::Hotkey { .. }),
+        "{:?}",
+        view.screen
+    );
+    cx.simulate_keystrokes("escape");
+    let view = settle(&window, cx);
+    assert!(
+        matches!(view.screen, Screen::Extensions { .. }),
+        "{:?}",
+        view.screen
+    );
+    assert_eq!(system.reporters.lock().unwrap().len(), 2);
 }

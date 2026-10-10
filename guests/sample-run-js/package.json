@@ -1,0 +1,16 @@
+{
+  "name": "pane-sample-run-js",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pane's Run sample in JavaScript",
+  "license": "Apache-2.0 OR MIT",
+  "type": "module",
+  "main": "src/index.js",
+  "devDependencies": {
+    "@pane-app/extension": "file:../js"
+  },
+  "pane": {
+    "run": true,
+    "search": true
+  }
+}

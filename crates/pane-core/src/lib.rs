@@ -20,6 +20,7 @@ pub mod extension_log;
 pub mod feedback;
 pub mod file_index;
 pub mod files;
+pub mod game_mode;
 mod generation;
 pub mod git;
 mod helpers;
@@ -43,9 +44,12 @@ mod platform;
 mod preferences;
 mod programs;
 mod protection;
+pub mod run;
 mod runtime;
 mod search;
+pub mod switch_windows;
 pub mod system;
+pub mod system_commands;
 pub mod system_icons;
 mod threads;
 pub mod tray;
@@ -61,6 +65,7 @@ pub use feedback::{
     ConfirmAnswer, Confirmation, Hud, NextShowing, PopToRoot, ShownToast, Toast, ToastAction,
     ToastSlot, ToastStyle, WindowControl, WindowPresence,
 };
+pub use game_mode::GameMode;
 pub use helpers::runner::{MAX_HELPER_INPUT, MAX_HELPER_OUTPUT};
 pub use host_settings::{
     BackgroundEffect, EscapeBehavior, HostSettings, MaterialPreference, NavigationBindings,

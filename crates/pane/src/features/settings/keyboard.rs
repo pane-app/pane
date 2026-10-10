@@ -33,14 +33,33 @@
 //! what the back key does in the launcher, whether Escape closes Settings,
 //! and extra Emacs or Vim Motions keys for moving the selection, on Alt as
 //! Raycast for Windows has them (see [`NavigationBindings`]).
+//!
+//! Below the actions, the state of Pane's own keyboard hook (Windows,
+//! #252): while a hotkey of yours is dispatched through it, a row says
+//! whether it is installed, how many times Windows removed it and Pane
+//! installed it again, and whether its pages are pinned in memory — and
+//! why Pane gave up keeping it installed, if it did (#259, read from the
+//! launcher's adapter). Where no hook is in use nothing shows: none is
+//! needed, and the rows of the system's own registrations say nothing
+//! either. Beside it, the Game mode section (#125): the on/off choice and
+//! the programs to treat as games, applied through the launcher's
+//! game-mode record (`pane_core::game_mode`), so that Pane's hotkeys
+//! pause while a game is in front and come back when it leaves. Offered
+//! where a foreground source is attached — Windows, or a test's fake —
+//! and explained as Windows-only elsewhere.
 
 use std::collections::BTreeMap;
 
 use gpui::{
-    AnyElement, App, Context, Div, Entity, FocusHandle, KeyBinding, KeyDownEvent, MouseDownEvent,
-    Role, ScrollAnchor, SharedString, Stateful, Toggled, Window, actions, div, prelude::*,
+    AnyElement, App, Context, Div, Entity, FocusHandle, Focusable, KeyBinding, KeyDownEvent,
+    MouseDownEvent, Role, ScrollAnchor, SharedString, Stateful, Toggled, Window, actions, div,
+    prelude::*, px,
 };
-use pane_core::{Binding, EscapeBehavior, Keyboard, KeyboardAction, Launcher, NavigationBindings};
+use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
+use pane_core::hotkeys::HookHealth;
+use pane_core::{
+    Binding, EscapeBehavior, GameMode, Keyboard, KeyboardAction, Launcher, NavigationBindings,
+};
 
 use super::{Page, SettingsWindow, search};
 use crate::ui::controls::{self, status_note as note};
@@ -88,11 +107,33 @@ pub(crate) const ABOUT: &str = "Keys for moving around Pane";
 /// The labels of the page's sections.
 pub(crate) const BEHAVIOR: &str = "Behavior";
 pub(crate) const SECTION: &str = "Shortcuts";
+pub(crate) const GAME: &str = "Game mode";
+
+/// The name of the row that says the state of Pane's own keyboard hook
+/// (Windows, #252), in a card under the page's actions: shown while a
+/// hotkey of yours is dispatched through the hook, with whether it is
+/// installed, how many times Windows removed it and Pane installed it
+/// again, and whether its pages are pinned in memory (#259). Where no
+/// hook is in use nothing shows, as the rows of the system's own
+/// registrations say nothing of a route.
+pub(crate) const HOOK: &str = "Pane's keyboard hook";
 
 /// The Behavior section's rows.
 pub(crate) const ESCAPE_NAME: &str = "Escape key behavior";
 pub(crate) const ESCAPE_CLOSES_NAME: &str = "Escape key closes Settings";
 pub(crate) const NAVIGATION_NAME: &str = "Navigation bindings";
+
+/// The Game mode section's rows: the on/off choice, and the field a
+/// program is named in (#125).
+pub(crate) const GAME_MODE_NAME: &str = "Pause Pane's hotkeys while a game is in front";
+pub(crate) const GAME_PROGRAMS_NAME: &str = "Treat a program as a game";
+
+/// What the Game mode section says where no foreground source is
+/// attached, so the choice is not offered: game mode is Windows only.
+const GAME_NOT_OFFERED: &str = "Game mode is available on Windows only";
+/// What it says there on Windows, whose source the system refused.
+const GAME_NO_WATCH: &str = "Game mode needs Pane's watch on the windows that come to the front, \
+which Windows did not grant";
 
 /// The escape behaviors the page offers, in segment order: the
 /// preference, the segment's name and its test selector.
@@ -142,9 +183,10 @@ pub(crate) fn page() -> Page {
 
 /// The settings the page offers the sidebar's search: the Behavior
 /// section's rows, then each navigation action of the bounded set, named
-/// as the page's row names it, in the group it sits in. Read live, so a
-/// change is in the next catalog as it lands.
-fn entries(_launcher: &Launcher, _cx: &App) -> Vec<search::Entry> {
+/// as the page's row names it, in the group it sits in, then the
+/// keyboard hook's state while a hook is in use. Read live, so a change
+/// is in the next catalog as it lands.
+fn entries(launcher: &Launcher, _cx: &App) -> Vec<search::Entry> {
     let behavior = [
         ("keyboard-escape", ESCAPE_NAME),
         ("keyboard-escape-closes", ESCAPE_CLOSES_NAME),
@@ -157,6 +199,20 @@ fn entries(_launcher: &Launcher, _cx: &App) -> Vec<search::Entry> {
         group: Some(BEHAVIOR.into()),
         unavailable: None,
     });
+    let game = [
+        ("keyboard-game-mode", GAME_MODE_NAME),
+        ("keyboard-game-program", GAME_PROGRAMS_NAME),
+    ]
+    .into_iter()
+    .map(|(control, title)| search::Entry {
+        control: Some(control.into()),
+        title: title.into(),
+        group: Some(GAME.into()),
+        // Game mode is offered where a foreground source is attached,
+        // which the section itself says; the settings it lists are never
+        // unavailable here.
+        unavailable: None,
+    });
     let actions = KeyboardAction::ALL.into_iter().map(|action| search::Entry {
         control: Some(action.id().into()),
         title: action.title().into(),
@@ -166,7 +222,15 @@ fn entries(_launcher: &Launcher, _cx: &App) -> Vec<search::Entry> {
         // unavailable here.
         unavailable: None,
     });
-    behavior.chain(actions).collect()
+    // The hook's state row, offered exactly while the page shows it: a
+    // jump reveals the row, which takes no focus of its own.
+    let hook = launcher.hook_health().map(|_| search::Entry {
+        control: Some("keyboard-hook".into()),
+        title: HOOK.into(),
+        group: None,
+        unavailable: None,
+    });
+    behavior.chain(game).chain(actions).chain(hook).collect()
 }
 
 /// Each action's recorder takes keyboard focus — the recorders are tab
@@ -183,6 +247,11 @@ fn focus(
     if target == "keyboard-navigation" {
         let trigger = this.keyboard.navigation.read(cx).trigger_focus();
         window.focus(&trigger, cx);
+        return true;
+    }
+    if target == "keyboard-game-program" {
+        let input = program_input(this, cx);
+        window.focus(&input.focus_handle(cx), cx);
         return true;
     }
     let Some(action) = KeyboardAction::of(target) else {
@@ -210,6 +279,9 @@ pub(crate) struct State {
     focuses: BTreeMap<KeyboardAction, FocusHandle>,
     /// The navigation bindings' select.
     navigation: Entity<Select>,
+    /// The Game mode section's state (#125): the program field, and what
+    /// a change of the settings is doing.
+    pub(crate) game: GameState,
 }
 
 impl State {
@@ -249,8 +321,21 @@ impl State {
             rejection: None,
             focuses,
             navigation,
+            game: GameState::default(),
         }
     }
+}
+
+/// The Game mode section's state: the field a program is named in, and
+/// what a change of the settings is doing (#125).
+#[derive(Default)]
+pub(crate) struct GameState {
+    /// The program field, made the first time the section draws it.
+    pub(crate) program: Option<Entity<EditableTextState>>,
+    /// Whether a change of the settings is being recorded.
+    pub(crate) busy: bool,
+    /// Why the last change could not be recorded, if it could not.
+    pub(crate) problem: Option<String>,
 }
 
 /// The navigation bindings' choices, a set whose keys an action has been
@@ -311,6 +396,24 @@ pub(crate) struct KeyboardView {
     /// The Behavior section's choices.
     pub(crate) escape: EscapeBehavior,
     pub(crate) escape_closes: bool,
+    /// The Game mode section's choices and state (#125).
+    pub(crate) game: GameView,
+}
+
+/// What the Game mode section shows, as plain values (#125): the choices
+/// as the launcher holds them, and what a change of them is doing.
+pub(crate) struct GameView {
+    /// Whether game mode is on.
+    pub(crate) on: bool,
+    /// The programs to treat as games.
+    pub(crate) programs: Vec<String>,
+    /// Whether the choice is offered here: a foreground source is
+    /// attached, which is Windows' or a test's fake.
+    pub(crate) offered: bool,
+    /// Whether a change is being recorded.
+    pub(crate) busy: bool,
+    /// Why the last change could not be recorded, if it could not.
+    pub(crate) problem: Option<String>,
 }
 
 /// The rows of the bounded set of actions, in the set's order, as
@@ -333,10 +436,10 @@ pub(crate) fn rows(keyboard: &Keyboard) -> Vec<KeyboardRow> {
 }
 
 /// Draws the Keyboard page: the Behavior section, then the navigation
-/// actions, each with its recorder.
+/// actions, each with its recorder, then the Game mode section.
 fn render(
     this: &mut SettingsWindow,
-    _window: &mut Window,
+    window: &mut Window,
     cx: &mut Context<SettingsWindow>,
 ) -> AnyElement {
     let theme = crate::settings::visuals(cx).theme;
@@ -351,6 +454,9 @@ fn render(
             settings.escape_closes_settings(),
         )
     };
+    // Game mode's choices come from the launcher, which applies them
+    // with the pause they decide (#125).
+    let mode = this.launcher.game_mode();
     let view = KeyboardView {
         rows: rows(&keyboard),
         recording: this.keyboard.recording,
@@ -358,6 +464,13 @@ fn render(
         status,
         escape,
         escape_closes,
+        game: GameView {
+            on: mode.on,
+            programs: mode.programs,
+            offered: this.launcher.game_mode_offered(),
+            busy: this.keyboard.game.busy,
+            problem: this.keyboard.game.problem.clone(),
+        },
     };
     // Each row's scroll anchor, which the search's reveal scrolls to (see
     // the window's render), and each recorder's focus.
@@ -372,12 +485,23 @@ fn render(
         .flex_none()
         .anchor_scroll(Some(this.search_anchor("keyboard-navigation")))
         .child(this.keyboard.navigation.clone());
+    // The keyboard hook's state, read from the launcher's adapter as of
+    // this frame: the row shows only while a hook is in use, as its
+    // entry in the search does.
+    let hook_health = this.launcher.hook_health();
+    let hook_anchor = this.search_anchor("keyboard-hook");
+    let hook = hook_health
+        .as_ref()
+        .map(|health| hook_section(health, hook_anchor, &theme));
     let focuses = this.keyboard.focuses.clone();
     let recording = this.keyboard.recording;
     let defaults = Keyboard::default_for_this_system();
+    let game = game_section(this, &view.game, &theme, window, cx);
     compose(
         &view,
         Some(navigation),
+        hook,
+        Some(game),
         &theme,
         |control, element| match control {
             KeyboardControl::Recorder(action) => {
@@ -464,11 +588,15 @@ fn keyboard_is_default(action: KeyboardAction, cx: &App) -> bool {
 /// Escape-closes-Settings switch and `navigation` (the navigation
 /// bindings' select) — then the Shortcuts section, a card of a settings
 /// row per action with its recorder at its end, with what a save reported
-/// under the card. `attach` adds each control's behavior; the composition
-/// gives each its identity, its accessibility and its look.
+/// under the card, and under them, where a keyboard hook is in use, the
+/// card of its state (`hook`, see [`hook_section`]). `attach` adds each
+/// control's behavior; the composition gives each its identity, its
+/// accessibility and its look.
 pub(crate) fn compose(
     view: &KeyboardView,
     navigation: Option<Stateful<Div>>,
+    hook: Option<Div>,
+    game: Option<AnyElement>,
     theme: &Theme,
     attach: impl Fn(KeyboardControl, Stateful<Div>) -> Stateful<Div>,
 ) -> Stateful<Div> {
@@ -543,11 +671,36 @@ pub(crate) fn compose(
         .child(
             controls::section(Some(SECTION.into()), shortcuts, theme)
                 .debug_selector(|| "keyboard-field".into()),
-        );
+        )
+        .children(hook)
+        // The Game mode section, its rows built where their behavior
+        // lives (`game_section`), as the navigation select's are.
+        .children(game);
     div()
         .id("keyboard")
         .debug_selector(|| "keyboard".into())
         .child(page)
+}
+
+/// The card that says the state of Pane's own keyboard hook (#259): one
+/// row under the page's actions, named [`HOOK`], saying the adapter's
+/// [`HookHealth::note`] under its name. A hook Pane gave up keeping
+/// installed says its reason in the warning ink; a working one's state
+/// is the muted ink of a row's description. It takes no focus and no
+/// click — a jump from the search reveals it, and the sidebar keeps the
+/// window's keyboard focus.
+fn hook_section(health: &HookHealth, anchor: ScrollAnchor, theme: &Theme) -> Div {
+    let tone = if health.given_up.is_some() {
+        theme.warning
+    } else {
+        theme.text_muted
+    };
+    let state = note("keyboard-hook", health.note(), tone, theme);
+    let row = controls::setting_row(HOOK, vec![state.into_any_element()], theme)
+        .id("keyboard-hook-row")
+        .debug_selector(|| "keyboard-hook-row".into())
+        .anchor_scroll(Some(anchor));
+    controls::section(None, controls::card([row.into_any_element()], theme), theme)
 }
 
 /// An action's settings row: its title at the left, with why its last
@@ -607,6 +760,250 @@ fn recorder_row(
     controls::setting_row(action.title(), lines, theme)
         .debug_selector(move || format!("keyboard-row-{}", action.id()))
         .child(attach(KeyboardControl::Recorder(action), recorder))
+}
+
+/// Draws the Game mode section (#125): the on/off choice, then — where
+/// a foreground source is attached, which is Windows' or a test's fake —
+/// each program to treat as a game with Remove, and the field a program
+/// is named in with its Add button. Where none is, the choice is not
+/// offered and the section says so: game mode is Windows only. What a
+/// change could not record is the section's note, as the actions'
+/// status is the card's.
+fn game_section(
+    this: &mut SettingsWindow,
+    view: &GameView,
+    theme: &Theme,
+    window: &mut Window,
+    cx: &mut Context<SettingsWindow>,
+) -> AnyElement {
+    let mode_anchor = this.search_anchor("keyboard-game-mode");
+    let lines = if view.offered {
+        vec![
+            controls::row_line(
+                "Pane's hotkeys are released while a game is in front, and come back when it \
+                 leaves",
+                theme.text_muted,
+                theme,
+            ),
+            controls::row_line(
+                "A full-screen game is recognized by itself; windowed ones are named below",
+                theme.text_muted,
+                theme,
+            ),
+        ]
+    } else {
+        vec![controls::row_line(
+            if cfg!(target_os = "windows") {
+                GAME_NO_WATCH
+            } else {
+                GAME_NOT_OFFERED
+            },
+            theme.text_muted,
+            theme,
+        )]
+    };
+    let switch = super::general::switch_row(
+        super::general::SwitchRow {
+            id: "keyboard-game-mode",
+            selector: "keyboard-game-mode",
+            title: GAME_MODE_NAME,
+            on: view.on,
+            offered: view.offered && !view.busy,
+            lines,
+        },
+        theme,
+        |switch| {
+            switch
+                .anchor_scroll(Some(mode_anchor))
+                .when(view.offered && !view.busy, |switch| {
+                    switch.on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                        let on = !this.launcher.game_mode().on;
+                        game_change(this, move |mode| mode.on = on, cx);
+                    }))
+                })
+        },
+    )
+    .into_any_element();
+    let mut rows = vec![switch];
+    if view.offered {
+        for program in &view.programs {
+            let removed = program.clone();
+            let shown = program.clone();
+            rows.push(
+                controls::setting_row(
+                    program.clone(),
+                    vec![controls::row_line(
+                        "Treated as a game while it is in front",
+                        theme.text_muted,
+                        theme,
+                    )],
+                    theme,
+                )
+                .debug_selector(move || format!("keyboard-game-program-{shown}"))
+                .child(
+                    button(
+                        format!("keyboard-game-remove-{program}"),
+                        "Remove",
+                        !view.busy,
+                        theme,
+                    )
+                    .when(!view.busy, |button| {
+                        button.on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                            this.remove_game_program(&removed, cx);
+                        }))
+                    }),
+                )
+                .into_any_element(),
+            );
+        }
+        let input = program_input(this, cx);
+        let focused = input.focus_handle(cx).is_focused(window);
+        let text = input.read(cx).as_str().to_owned();
+        let placeholder = "such as game.exe";
+        let field_anchor = this.search_anchor("keyboard-game-program");
+        let well = controls::well(true, theme)
+            .w(px(240.))
+            .id("keyboard-game-program")
+            .debug_selector(|| "keyboard-game-program-field".into())
+            .anchor_scroll(Some(field_anchor))
+            .track_focus(&input.focus_handle(cx))
+            .shadow(controls::well_shadows(focused, theme))
+            .role(Role::TextInput)
+            .aria_label(GAME_PROGRAMS_NAME)
+            .aria_value(text.clone())
+            .aria_placeholder(placeholder)
+            .child(controls::well_input(
+                text_input("keyboard-game-input").state(input.downgrade()),
+                placeholder,
+                theme,
+            ));
+        let offered = !view.busy && !text.trim().is_empty();
+        let add =
+            button("keyboard-game-add".into(), "Add", offered, theme).when(offered, |button| {
+                button.on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                    add_program(this, cx);
+                }))
+            });
+        rows.push(
+            controls::setting_row(
+                GAME_PROGRAMS_NAME,
+                vec![controls::row_line(
+                    "The program's file name, matched wherever it is installed",
+                    theme.text_muted,
+                    theme,
+                )],
+                theme,
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(theme.geometry.controls.button_gap)
+                    .child(well)
+                    .child(add),
+            )
+            .into_any_element(),
+        );
+    }
+    let inset = theme.geometry.settings.section_label_inset;
+    let problem = view
+        .problem
+        .as_ref()
+        .map(|problem| note("game-status", problem.clone(), theme.danger, theme).px(inset));
+    let card = div()
+        .flex()
+        .flex_col()
+        .gap(theme.geometry.settings.section_label_gap)
+        .child(controls::card(rows, theme))
+        .children(problem);
+    controls::section(Some(GAME.into()), card, theme)
+        .debug_selector(|| "keyboard-game".into())
+        .into_any_element()
+}
+
+/// The program field's state, created the first time it is wanted.
+fn program_input(
+    this: &mut SettingsWindow,
+    cx: &mut Context<SettingsWindow>,
+) -> Entity<EditableTextState> {
+    if let Some(input) = &this.keyboard.game.program {
+        return input.clone();
+    }
+    let input = cx.new(|cx| EditableTextState::new(StringStorage::default(), cx));
+    input.focus_handle(cx).tab_stop(true);
+    // The Add button follows the text.
+    cx.subscribe(&input, |_, _, _: &TextChanged, cx| cx.notify())
+        .detach();
+    this.keyboard.game.program = Some(input.clone());
+    input
+}
+
+/// Changes game mode's settings through `edit` and records them (#125):
+/// the switch's choice, a program named or removed. The section's rows
+/// dim while the record is written, and a failure is the section's note,
+/// as the File search page's changes are.
+fn game_change(
+    this: &mut SettingsWindow,
+    edit: impl FnOnce(&mut GameMode),
+    cx: &mut Context<SettingsWindow>,
+) {
+    let mut mode = this.launcher.game_mode();
+    edit(&mut mode);
+    let pending = this.launcher.set_game_mode(mode);
+    this.keyboard.game.busy = true;
+    this.keyboard.game.problem = None;
+    cx.notify();
+    cx.spawn(async move |this, cx| {
+        let outcome = pending.await;
+        this.update(cx, |this, cx| {
+            this.keyboard.game.busy = false;
+            this.keyboard.game.problem = outcome.err();
+            cx.notify();
+        })
+        .ok();
+    })
+    .detach();
+}
+
+/// Adds the program in the field to game mode's settings, clearing it,
+/// as the File search page's pattern field is cleared by its Exclude.
+fn add_program(this: &mut SettingsWindow, cx: &mut Context<SettingsWindow>) {
+    let Some(input) = this.keyboard.game.program.clone() else {
+        return;
+    };
+    let program = input.read(cx).as_str().trim().to_owned();
+    if program.is_empty() {
+        return;
+    }
+    input.update(cx, |input, cx| input.emplace("", cx));
+    game_change(
+        this,
+        move |mode| {
+            if !mode
+                .programs
+                .iter()
+                .any(|kept| kept.eq_ignore_ascii_case(&program))
+            {
+                mode.programs.push(program.clone());
+            }
+        },
+        cx,
+    );
+}
+
+/// A text button with its test selector, as the File search page's are.
+fn button(
+    selector: String,
+    label: &'static str,
+    enabled: bool,
+    theme: &Theme,
+) -> gpui::Stateful<gpui::Div> {
+    let debug = selector.clone();
+    controls::button(SharedString::from(selector), label, enabled, theme)
+        .debug_selector(move || debug)
+        .role(Role::Button)
+        .aria_label(label)
 }
 
 impl SettingsWindow {
@@ -677,6 +1074,17 @@ impl SettingsWindow {
     /// choice. A refusal leaves everything as it was; the reason is the
     /// page's status, and the recorder — if one is listening — keeps
     /// listening for another try.
+    /// Removes `program` from game mode's settings, recording the change
+    /// (#125), as the program row's Remove button does.
+    fn remove_game_program(&mut self, program: &str, cx: &mut Context<Self>) {
+        let removed = program.to_owned();
+        game_change(
+            self,
+            move |mode| mode.programs.retain(|kept| *kept != removed),
+            cx,
+        );
+    }
+
     fn keyboard_apply(
         &mut self,
         action: KeyboardAction,

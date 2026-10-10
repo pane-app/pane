@@ -1,0 +1,15 @@
+{
+  "manifestVersion": 1,
+  "title": "TypeScript Switch Windows sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "switch-windows",
+      "title": "TypeScript Switch Windows sample",
+      "subtitle": "Lists the open windows as Alt+Tab does; running one switches to it",
+      "component": "sample_switch_windows_ts.wasm",
+      "search": true
+    }
+  ]
+}

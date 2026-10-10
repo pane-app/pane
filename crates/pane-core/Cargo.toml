@@ -75,10 +75,18 @@ png = "0.18"
 # a property store), the program an MSI-advertised shortcut installs (the
 # Windows Installer's functions), the known folders of the Desktops, and
 # opening a shortcut or packaged app as Explorer does, global hotkeys
-# (`RegisterHotKey`), the system search path in the registry, the
-# elevation prompt (`ShellExecuteExW` with `runas`), and the clipboard
-# format listener of clipboard history (a message-only window, the
-# clipboard and its global memory); already in the
+# (`RegisterHotKey`, and the `WH_KEYBOARD_LL` keyboard hook a refused
+# registration falls back to, with its raw-input watchdog, session and
+# power notifications, locked pages and priority), the system search path
+# in the registry, the elevation prompt (`ShellExecuteExW` with `runas`),
+# and the clipboard format listener of clipboard history (a message-only
+# window, the clipboard and its global memory). What the Run dialog runs
+# (#254) expands `%NAME%` in command lines, reads and writes the RunMRU
+# key of the history it shares with the Run dialog, and looks programs up
+# in App Paths; the selected text (#262) is read through UI Automation's
+# `IUIAutomation` from the focused element of the target's own thread
+# (`GetGUIThreadInfo`), its tree woken first with `WM_GETOBJECT`, and its
+# simulated copy reads the clipboard's sequence number; already in the
 # dependency tree through GPUI CE. The file index (#126) lists folders with
 # their file ids, reads the NTFS change journal without administrator rights
 # (`DeviceIoControl`, the journal's control codes) and runs its threads in
@@ -88,9 +96,20 @@ png = "0.18"
 # location and icon resources. The tray icon (#131) reads the taskbar's
 # theme and whether high contrast is on, and is made at the small-icon size
 # for its window's DPI. Local credentials and clipboard history are
-# encrypted on disk with DPAPI for the current user (#130).
+# encrypted on disk with DPAPI for the current user (#130). The session and
+# power commands (#255) end the session (`ExitWindowsEx`, which needs the
+# shutdown privilege), lock the screen (`LockWorkStation`) and ask the
+# power system what the computer can do, suspends and hibernates it
+# (`SetSuspendState`, `GetPwrCapabilities` of PowrProf). The volume and
+# microphone commands (#265) reach the audio endpoints through Core Audio
+# (`IMMDeviceEnumerator`, `IAudioEndpointVolume`), the open windows of
+# Switch Windows (#263) read the DWM cloak of a window and its taskbar
+# removal mark, and ask the shell's virtual desktop manager which desktop
+# it is on, and the Recycle Bin, appearance, hidden files and drives of
+# the remaining system commands (#266) reach the shell and the devices
+# (the bin, the Explorer settings, the ejection requests).
 [target.'cfg(windows)'.dependencies]
-windows = { workspace = true, features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_Storage_Packaging_Appx", "Win32_System_ApplicationInstallationAndServicing", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_DataExchange", "Win32_System_IO", "Win32_System_Ioctl", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_ProcessStatus", "Win32_System_Registry", "Win32_System_Threading", "Win32_System_Variant", "Win32_System_WindowsProgramming", "Win32_UI_Accessibility", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Shell_PropertiesSystem", "Win32_UI_WindowsAndMessaging"] }
+windows = { workspace = true, features = ["Win32_Devices_Bluetooth", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_Display", "Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Media_Audio", "Win32_Media_Audio_Endpoints", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_Storage_Packaging_Appx", "Win32_System_ApplicationInstallationAndServicing", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_DataExchange", "Win32_System_Environment", "Win32_System_IO", "Win32_System_Ioctl", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_Power", "Win32_System_ProcessStatus", "Win32_System_Registry", "Win32_System_RemoteDesktop", "Win32_System_Shutdown", "Win32_System_Threading", "Win32_System_Variant", "Win32_System_WindowsProgramming", "Win32_UI_Accessibility", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Shell_PropertiesSystem", "Win32_UI_WindowsAndMessaging"] }
 
 # Global hotkeys on X11 (key grabs on the root window) and the X11
 # clipboard of clipboard history (XFIXES selection events, selection
@@ -129,6 +148,12 @@ fsevent-sys = "4.1"
 
 [dev-dependencies]
 tempfile.workspace = true
+
+# The opt-in real-input hotkey adapter test injects keys with `SendInput`
+# and reaches the hook behind the adapter's back; the Windows half of the
+# workspace's `windows` crate serves it, already in the tree.
+[target.'cfg(windows)'.dev-dependencies]
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
 
 # The integration tests are one binary, whose `tests/main.rs` declares each
 # file: a binary per file meant a link, and a debug file, for each of them.

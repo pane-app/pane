@@ -8,7 +8,10 @@ name: Componentizer
 # against them with the stable Rust, uploads it, componentizes the
 # TypeScript sample with it and runs Pane's install and sample checks on
 # the result. It runs on demand and when the toolchain changes; nothing
-# else waits for it. docs/agents/ci.md describes the tiers.
+# else waits for it. Its guest-build step is also the one leg a plain push
+# to a ticket branch gets that compiles the Rust guests (`cargo xtask
+# guests`), so it has caught guest-side errors before the verify tier
+# more than once. docs/agents/ci.md describes the tiers.
 on:
   workflow_dispatch:
   push:

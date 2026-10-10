@@ -10,6 +10,13 @@
 //! keys do on each operating system, IME composition through a real
 //! input method — is recorded natively in
 //! `docs/evidence/settings-77/`.
+//!
+//! The page also holds the state of Pane's own keyboard hook (#259):
+//! while a hotkey of yours is dispatched through it — the fake system
+//! takes the Open Pane keys for another application, as Windows' adapter
+//! would — the row under the actions says the hook's state, and the
+//! General page's Open Pane row says the binding's dispatch route; where
+//! no hook is in use, the page says nothing.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -20,7 +27,7 @@ use gpui::{
     AnyWindowHandle, Modifiers, TestAppContext, VisualTestContext, WindowHandle, prelude::*,
 };
 use pane::{LauncherWindow, SettingsWindow};
-use pane_core::hotkeys::{HotkeyError, Hotkeys, Shortcut};
+use pane_core::hotkeys::{HookHealth, HotkeyError, Hotkeys, Route, Shortcut};
 use pane_core::{Launcher, Runtime, Screen, Status};
 use tempfile::TempDir;
 
@@ -53,10 +60,32 @@ use wait::{until, until_record_holds};
 
 /// The fake system: what Pane registered, for checking the launcher's
 /// dismissal leaves the global hotkeys running (a press still works
-/// after).
+/// after). A shortcut the tests mark another application using is taken
+/// by Pane's own keyboard hook instead, as Windows' adapter takes a
+/// registration Windows refuses (ADR 0039, #252), so a binding's row
+/// says its dispatch route and the Keyboard page can say the hook's
+/// state (#259).
 #[derive(Default)]
 struct FakeSystem {
     registered: Mutex<Vec<Shortcut>>,
+    /// The shortcuts other applications use, which Pane's own keyboard
+    /// hook dispatches while Pane runs.
+    taken: Mutex<Vec<Shortcut>>,
+    /// The shortcuts dispatched through the hook rather than the
+    /// system's registration.
+    hooked: Mutex<Vec<Shortcut>>,
+    /// The state of the hook, as the Keyboard page and Copy Diagnostics
+    /// read it; `None` while no hook is in use.
+    health: Mutex<Option<HookHealth>>,
+}
+
+impl FakeSystem {
+    /// Another application takes `shortcut`: the system refuses it, and
+    /// Pane's own keyboard hook dispatches the binding instead (Windows,
+    /// #252).
+    fn take(&self, shortcut: Shortcut) {
+        self.taken.lock().unwrap().push(shortcut);
+    }
 }
 
 impl Hotkeys for FakeSystem {
@@ -64,16 +93,47 @@ impl Hotkeys for FakeSystem {
         None
     }
 
+    fn kind_unavailable(&self, shortcut: &Shortcut) -> Option<String> {
+        // This fake models a system without Pane's own keyboard hook, as
+        // macOS' and X11's adapters are: the kinds only the hook
+        // recognizes are explained (macOS stands in where the test
+        // binary runs on Windows, so a fresh data folder keeps today's
+        // Open Pane default rather than taking the Windows key).
+        let modeled = match pane_core::Platform::current() {
+            Some(pane_core::Platform::Windows) => Some(pane_core::Platform::Macos),
+            platform => platform,
+        };
+        pane_core::hotkeys::kinds_unavailable(shortcut, modeled)
+    }
+
     fn register(&self, shortcut: &Shortcut) -> Result<(), HotkeyError> {
+        if self.taken.lock().unwrap().contains(shortcut) {
+            // The hook takes the binding the system refuses (ADR 0039):
+            // not an error, and the binding's row says the route.
+            self.hooked.lock().unwrap().push(shortcut.clone());
+        }
         self.registered.lock().unwrap().push(shortcut.clone());
         Ok(())
     }
 
     fn unregister(&self, shortcut: &Shortcut) {
+        self.hooked.lock().unwrap().retain(|kept| kept != shortcut);
         self.registered
             .lock()
             .unwrap()
             .retain(|kept| kept != shortcut);
+    }
+
+    fn route(&self, shortcut: &Shortcut) -> Route {
+        if self.hooked.lock().unwrap().contains(shortcut) {
+            Route::Hook
+        } else {
+            Route::System
+        }
+    }
+
+    fn hook_health(&self) -> Option<HookHealth> {
+        self.health.lock().unwrap().clone()
     }
 }
 
@@ -1533,6 +1593,79 @@ fn the_behavior_choices_are_applied_by_a_fresh_application(cx: &mut TestAppConte
     fresh_cx.simulate_keystrokes("escape");
     fresh_cx.run_until_parked();
     assert!(hidden(&window, fresh_cx), "the recorded choice hides");
+}
+
+#[gpui::test]
+fn the_keyboard_page_says_the_hook_s_state_and_the_rows_say_their_route(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let system = Arc::new(FakeSystem::default());
+    // Another application has the Open Pane keys, so Pane's own keyboard
+    // hook takes the binding — the fallback Windows' adapter makes
+    // (#252). The hook has been reinstalled twice, and its pages are
+    // pinned in memory.
+    system.take(Shortcut::open_pane_default());
+    *system.health.lock().unwrap() = Some(HookHealth {
+        reinstalls: 2,
+        pinned: true,
+        given_up: None,
+    });
+    let launcher =
+        Launcher::new(Runtime::start(), samples::sample_commands()).with_hotkeys(system.clone());
+    let (_window, cx) = open_launcher(cx, launcher, Some(data.path()));
+
+    // Settings opens on the General page, where the Open Pane row says
+    // its dispatch route, with the elevated-application limit that comes
+    // with a hook-dispatched binding.
+    cx.simulate_keystrokes(settings_shortcut());
+    cx.run_until_parked();
+    let (_settings, mut settings_cx) = open_settings(cx);
+    settings_cx.simulate_resize(gpui::size(gpui::px(860.), gpui::px(1000.)));
+    settings_cx.run_until_parked();
+    assert!(
+        settings_cx.debug_bounds("open-pane-route").is_some(),
+        "the Open Pane row says the route"
+    );
+    let tree = a11y(&mut settings_cx);
+    assert!(
+        tree.contains("Dispatched through Pane's keyboard hook"),
+        "{tree}"
+    );
+    assert!(tree.contains("elevated application"), "{tree}");
+
+    // The Keyboard page holds the hook's health under its actions (#259):
+    // that it is installed, how many times Windows removed it and Pane
+    // installed it again, and that its pages are pinned. The row is not a
+    // control — it takes no focus and no click — so it is read through its
+    // note, the status line assistive technology sees.
+    click(&mut settings_cx, "section-Keyboard");
+    settings_cx.run_until_parked();
+    assert!(
+        settings_cx.debug_bounds("keyboard-hook").is_some(),
+        "the hook's row is drawn"
+    );
+    let tree = a11y(&mut settings_cx);
+    assert!(
+        tree.contains("Installed, its pages are pinned in memory"),
+        "{tree}"
+    );
+    assert!(
+        tree.contains("Windows removed it 2 times and Pane installed it again"),
+        "{tree}"
+    );
+}
+
+#[gpui::test]
+fn the_keyboard_page_says_nothing_of_a_hook_that_is_not_in_use(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    // No binding is dispatched through a hook, and none is in use: the
+    // page says nothing — no row claiming a hook is missing, since none
+    // is needed (Windows installs none while no binding needs it).
+    let (_window, cx) = open_sample(cx, Some(data.path()));
+    let (_settings, mut settings_cx) = keyboard_page(cx);
+    assert!(
+        settings_cx.debug_bounds("keyboard-hook").is_none(),
+        "no hook row is drawn"
+    );
 }
 
 /// The keystroke that focuses the Settings search: Cmd+F on macOS,

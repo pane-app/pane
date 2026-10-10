@@ -2208,6 +2208,132 @@ its bundle uses it. The programs samples are a
 [TypeScript](sample-programs-ts/src/index.ts) command running `pane-echo`
 by its bare name, which must be on the search path.
 
+## Running what the Run dialog runs
+
+`pane_extension::run` (`pane:extension/run`, wit/run.wit) runs a command
+line as Windows' Run dialog (Win+R) reads it — a program by its bare name,
+found on the search path the registry names at the time of the call and in
+App Paths, or by its path, with arguments; a Control Panel applet through
+the Control Panel program; a document, a folder, a network path or a
+`shell:` or `ms-settings:` address — with environment variables expanded.
+An elevated run goes through Windows' own elevation prompt, which the user
+may decline. The history is the Run dialog's own, in the registry, shared
+in both directions: `run` records the command line that ran, `history`
+lists it newest first and `delete-from-history` removes an entry from
+both. Windows only; elsewhere every call answers `not-available`, which is
+not a failure.
+
+```rust
+use pane_extension::run::{self, RunError};
+
+run::run("notepad.exe C:\Notes\todo.txt", false)?;
+run::run("regedit", true)?; // Windows asks first
+let history = run::history()?; // newest first, as typed
+```
+
+A command that takes a query is the natural shape for it: the text typed
+in root search is the command line, sent when the user invokes it through
+its alias or as a fallback. The [Run](run) default extension does exactly
+that (ADR 0040), with "Run as Administrator" and a "Run History" list
+beside it. The run samples are a
+[Rust](sample-run/src/lib.rs), a
+[JavaScript](sample-run-js/src/index.js) and a
+[TypeScript](sample-run-ts/src/index.ts) command answering the same; a
+JavaScript or TypeScript command's package.json sets
+`"pane": { "run": true }` to import the interface.
+## Session and power commands
+
+A command may also lock the screen, log the user out, restart, shut down,
+sleep, hibernate, turn the displays off, start the screen saver, change
+the volume of the default output device, mute the microphones, open or
+empty the Recycle Bin, switch the system's appearance between light and
+dark, toggle HDR, show the desktop, toggle hidden files in File Explorer,
+eject the removable drives or toggle Bluetooth (#255, #265, #266, ADR
+0040, `pane:extension/system-commands` in
+[wit/system-commands.wit](../wit/system-commands.wit)). Each function
+answers what it ended in — the state the system is in now, or why nothing
+changed ("Restarting", "Volume 52%", "Microphones muted", "Dark mode",
+"HDR on", "Ejected E:", "Hibernation is
+not available on this computer: there is no hibernation file") — never
+an error: show the text in a HUD, as the System Commands default extension
+does (it confirms the destructive ones first, with "Don't ask again",
+emptying the Recycle Bin among them).
+The decisions are Pane's: restart and shut down force applications closed,
+a log out does not; sleep turns the displays off on a computer that enters
+Modern Standby when they turn off, and suspends any other; a volume step
+moves the level as Windows' own volume keys do, and the microphone toggle
+mutes every microphone when any is unmuted and unmutes them all otherwise;
+the HDR and Bluetooth toggles turn every capable display or radio on when
+any is off, and all off when they are all on; an already empty Recycle Bin
+is a success, and ejection names each drive that refused with why.
+Set Volume takes its level, 0 to 100, as the command's argument. Windows
+implements them today; other systems answer that the commands are not
+available there yet.
+
+```rust
+use pane_extension::feedback::{show_hud, ToastStyle};
+use pane_extension::system_commands::{self, Outcome};
+
+match system_commands::lock_screen() {
+    Outcome::Done(text) => show_hud(&text, ToastStyle::Success),
+    Outcome::Explained(text) => show_hud(&text, ToastStyle::Failure),
+}
+```
+
+```ts
+import { lockScreen } from "@pane-app/extension/system-commands";
+import { showHUD } from "@pane-app/extension/feedback";
+
+const outcome = lockScreen();
+showHUD(outcome.text, outcome.state === "done" ? "success" : "failure");
+```
+
+A JavaScript or TypeScript command imports the interface only if its bundle
+uses it. The samples are a [Rust](sample-system-commands/src/lib.rs), a
+[JavaScript](sample-system-commands-js/src/index.js) and a
+[TypeScript](sample-system-commands-ts/src/index.ts) command, one item per
+function, each saying what it answered.
+
+## Listing the open windows
+
+A command may also list the open windows — the ones Alt+Tab would show,
+with their titles, their applications' names and icons, and whether each
+is minimized, maximized, on another virtual desktop or elevated, in
+z-order with the front application's window first — and bring one of them
+to the front, restoring it first if it is minimized (#263, ADR 0040,
+`pane:extension/windows` in [wit/windows.wit](../wit/windows.wit)). A
+window's `id` is opaque and valid for the session alone: give it back to
+`activate` to switch to that window; one that closed is gone, and another
+may have taken its place. Windows only; elsewhere every call answers
+`not-available`, which is not a failure.
+
+```rust
+use pane_extension::windows;
+
+for window in windows::list_windows()? {
+    if window.title.contains("todo") {
+        windows::activate(&window.id)?;
+    }
+}
+```
+
+```ts
+import { activate, listWindows } from "pane:extension/windows@0.1.0";
+
+for (const window of listWindows()) {
+  if (window.title.includes("todo")) activate(window.id);
+}
+```
+
+A JavaScript or TypeScript command's package.json sets
+`"pane": { "windows": true }` to import the interface. The [Switch
+Windows](switch-windows) default extension is the one that lists them
+(ADR 0040); the windows samples are a
+[Rust](sample-switch-windows/src/lib.rs), a
+[JavaScript](sample-switch-windows-js/src/index.js) and a
+[TypeScript](sample-switch-windows-ts/src/index.ts) command answering the
+same, one item per window, each switching to it.
+
 ## Packaging and installing a local extension
 
 A package is a folder with a `pane.json` manifest at its root and the built

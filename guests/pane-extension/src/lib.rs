@@ -19,11 +19,14 @@
 //! its own package publishes with [`publish`], find and open installed
 //! applications with [`applications`], supply root results ahead of the
 //! query with [`indexed`], run its package's native helpers with
-//! [`helpers`] and the system's own programs with [`programs`], list the
+//! [`helpers`], the system's own programs with [`programs`] and what
+//! Windows' Run dialog runs, sharing its history, with [`run`], list the
 //! files of a folder with [`files`], search as the
 //! user types into its own search field with [`search`], make web
-//! requests with [`http`] and keep clipboard history with
-//! [`clipboard_history`]. It prints and logs to its package's extension log
+//! requests with [`http`], keep clipboard history with
+//! [`clipboard_history`], and lock, log out, restart, shut down, sleep,
+//! hibernate, turn off the displays of or start the screen saver of the
+//! computer with [`system_commands`]. It prints and logs to its package's extension log
 //! with [`info!`], [`warn!`], [`println!`] and the like ([`log`]). The crate
 //! is `no_std` so the component imports only WASI 0.3 interfaces; it supplies
 //! the allocator and a panic handler that logs the panic and traps, which the
@@ -335,6 +338,95 @@ pub mod clipboard_history {
     };
 }
 
+/// The session, power, audio and device commands
+/// (`pane:extension/system-commands`): locking the screen, logging out,
+/// restarting, shutting down, sleeping, hibernating, turning the displays
+/// off, starting the screen saver, the volume of the default output
+/// device and the microphones' mute, and the Recycle Bin (opening and
+/// emptying it), the system's appearance, HDR, the desktop, the file
+/// manager's hidden files, the removable drives and Bluetooth, which
+/// Pane asks the system for (a pure WASI guest cannot). Each answers
+/// what it ended in ([`system_commands::Outcome`]): the state the system
+/// is in now, or why nothing changed — an operation that cannot happen
+/// on this system, or failed, is an answer, never an error and never a
+/// reason to pause the extension. The System Commands default extension
+/// shows the text in a HUD ([`feedback::show_hud`]) and confirms the
+/// destructive ones first ([`feedback::confirm`]), as ADR 0040 records.
+pub mod system_commands {
+    wit_bindgen::generate!({
+        path: "wit",
+        world: "system-commands-user",
+        default_bindings_module: "pane_extension::system_commands",
+    });
+
+    pub use pane::extension::system_commands::{
+        Outcome, eject_removable_drives, empty_recycle_bin, hibernate, lock_screen, log_out,
+        open_recycle_bin, restart, set_volume, show_desktop, shut_down, sleep, start_screen_saver,
+        toggle_appearance, toggle_bluetooth, toggle_hdr, toggle_hidden_files,
+        toggle_microphone_mute, toggle_mute, turn_off_displays, volume_down, volume_up,
+    };
+
+    impl Outcome {
+        /// What it says, for a toast or a HUD: the state the system is in
+        /// now, or why nothing changed.
+        pub fn text(&self) -> &str {
+            match self {
+                Outcome::Done(text) | Outcome::Explained(text) => text,
+            }
+        }
+
+        /// Whether the command happened (it did not fail, and nothing was
+        /// explained).
+        pub fn done(&self) -> bool {
+            matches!(self, Outcome::Done(_))
+        }
+    }
+}
+
+/// The open windows (`pane:extension/windows`): the ones Windows' own
+/// Alt+Tab would show, which Pane lists for the command — each with its
+/// title, its application's name and icon, whether it is minimized,
+/// maximized, on another virtual desktop or elevated, in z-order with
+/// the front application's window first — and brings one of them to the
+/// front, restoring it first if it is minimized. A window's `id` is
+/// opaque and valid for the session alone: give it back to
+/// [`windows::activate`] to switch to that window. Windows only;
+/// elsewhere every call answers [`WindowsError::NotAvailable`], which is
+/// not a failure.
+///
+/// ```ignore
+/// use pane_extension::windows;
+///
+/// for window in windows::list_windows()? {
+///     if window.title.contains("todo") {
+///         windows::activate(&window.id)?;
+///     }
+/// }
+/// ```
+///
+/// The Switch Windows default extension (guests/switch-windows) is the
+/// one that lists them (ADR 0040); the windows samples are a Rust, a
+/// JavaScript and a TypeScript command answering the same.
+pub mod windows {
+    wit_bindgen::generate!({
+        path: "wit",
+        world: "windows-user",
+        default_bindings_module: "pane_extension::windows",
+    });
+
+    pub use pane::extension::windows::{Window, WindowsError, activate, list_windows};
+
+    impl WindowsError {
+        /// What it says, for the user: why the open windows are not
+        /// available here, or why the listing or activation went wrong.
+        pub fn message(&self) -> &str {
+            match self {
+                WindowsError::NotAvailable(why) | WindowsError::Failed(why) => why,
+            }
+        }
+    }
+}
+
 /// Native helpers (`pane:extension/helpers`): prebuilt programs the
 /// command's own package ships, one per system, which Pane runs for it with
 /// [`helpers::run`]. Declare them under `helpers` in `pane.json`. Dropping
@@ -504,6 +596,7 @@ pub mod service {
 pub mod http;
 pub mod log;
 pub mod programs;
+pub mod run;
 
 /// Logs a line at debug level to the package's extension log, formatted as
 /// [`alloc::format!`] formats (see [`log`]).

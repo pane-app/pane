@@ -1,0 +1,16 @@
+{
+  "name": "pane-sample-switch-windows-ts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pane's Switch Windows sample in TypeScript",
+  "license": "Apache-2.0 OR MIT",
+  "type": "module",
+  "main": "src/index.ts",
+  "devDependencies": {
+    "@pane-app/extension": "file:../js"
+  },
+  "pane": {
+    "windows": true,
+    "search": true
+  }
+}

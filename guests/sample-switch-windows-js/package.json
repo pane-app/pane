@@ -1,0 +1,16 @@
+{
+  "name": "pane-sample-switch-windows-js",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pane's Switch Windows sample in JavaScript",
+  "license": "Apache-2.0 OR MIT",
+  "type": "module",
+  "main": "src/index.js",
+  "devDependencies": {
+    "@pane-app/extension": "file:../js"
+  },
+  "pane": {
+    "windows": true,
+    "search": true
+  }
+}

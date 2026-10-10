@@ -17,7 +17,7 @@ use std::mem::{Discriminant, discriminant};
 use std::path::Path;
 
 use gpui::{
-    App, ClipboardItem, Context, Div, EntityInputHandler, FocusHandle, Focusable, Hsla,
+    App, ClipboardItem, Context, Div, Entity, EntityInputHandler, FocusHandle, Focusable, Hsla,
     KeyDownEvent, MouseMoveEvent, ObjectFit, PathPromptOptions, Pixels, Point, Role, SharedString,
     Size, Stateful, Window, div, img, prelude::*, px, relative,
 };
@@ -112,10 +112,24 @@ pub struct LauncherWindow {
     /// of which navigation arrives and which lands at once; see
     /// [`FrameMotion`].
     pub(crate) motion: FrameMotion,
+    /// The hotkey screen's recording session, while the screen listens
+    /// (#260): the hook adapter holds the keys back from Windows and
+    /// reports what the user presses, so the kinds no registration can
+    /// express are recorded without the Start menu opening. `None` where
+    /// this system's adapter has no session (macOS, X11) — the screen's
+    /// own keystrokes record, as they do today — or while no session
+    /// listens.
+    hotkey_recording: Option<pane_core::hotkeys::RecordingStop>,
     /// Whether the window is shown, when it was hidden, the Open Pane
     /// hotkey's repeat guard and the compact window mode's sizes; see
     /// [`Presence`].
     presence: Presence,
+    /// The "Show the taskbar when Pane opens" choice as this window last
+    /// applied it (#268), so only a change acts: turned on while the
+    /// launcher is shown, the taskbar shows at once; turned off, it goes
+    /// back as the user had it. The show and hide transitions apply the
+    /// choice in between.
+    taskbar_followed: bool,
     /// The result list, drawn virtually: its scroll position, the heights
     /// it measured and the frame it lays out (#165; see
     /// [`result_list`]).
@@ -151,6 +165,10 @@ pub struct LauncherWindow {
     /// Test and debug builds only.
     #[cfg(any(test, debug_assertions))]
     drawn_over: bool,
+    /// Whether the tray entry's tooltip said Pane's hotkeys were paused
+    /// the last time the window looked (game mode, #125), so a change is
+    /// the only thing it tells the entry again.
+    tray_paused: bool,
 }
 
 /// What the list was last scrolled for. When any of it changes, the list
@@ -227,7 +245,10 @@ impl LauncherWindow {
             confirmation: confirmation::ConfirmationControls::new(cx),
             home: quick_slots::Home::default(),
             motion: FrameMotion::new(),
+            hotkey_recording: None,
             presence: Presence::default(),
+            taskbar_followed: crate::settings::ensure(cx).read(cx).show_taskbar(),
+            tray_paused: false,
             #[cfg(any(test, debug_assertions))]
             drawn: None,
             #[cfg(any(test, debug_assertions))]
@@ -259,6 +280,18 @@ impl LauncherWindow {
         this.place(window, cx);
         // The home's slots resolve from the first visit.
         this.sync_home(cx);
+        // The taskbar follows the choice as it changes while the window
+        // lives (#268), and the launcher starts shown, so the choice
+        // applies at once: for a user whose taskbar hides itself, the
+        // Start button is one click away from the first frame.
+        let taskbar = crate::settings::ensure(cx);
+        cx.observe_in(&taskbar, window, |this, settings, _, cx| {
+            this.follow_taskbar(&settings, cx);
+        })
+        .detach();
+        if this.taskbar_followed {
+            taskbar.read(cx).taskbar_while_open();
+        }
         this
     }
 
@@ -339,6 +372,16 @@ impl LauncherWindow {
                         this.unhide(window, cx);
                         window.activate_window();
                         cx.activate(true);
+                    }
+                    // Game mode paused or resumed Pane's hotkeys for a
+                    // game in front (#125): the tray icon's tooltip
+                    // follows, on the window's thread as the entry's
+                    // changes are.
+                    let paused = this.launcher.hotkeys_paused();
+                    if paused != this.tray_paused {
+                        this.tray_paused = paused;
+                        crate::settings::shared(cx)
+                            .update(cx, |settings, _| settings.set_tray_paused(paused));
                     }
                     this.sync_screen(window, cx);
                     cx.notify();
@@ -869,6 +912,11 @@ impl LauncherWindow {
             // shares nothing of the launcher's lifecycle, stays where the
             // user put it.
             self.place(window, cx);
+            // The taskbar shows while the launcher is open, where the user
+            // chose that and this system has one to show (#268): a taskbar
+            // that hides itself is on screen now, so the Start button
+            // stays one click away.
+            crate::settings::shared(cx).read(cx).taskbar_while_open();
         }
     }
 
@@ -880,6 +928,10 @@ impl LauncherWindow {
     fn hide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.set_visible(false);
         self.presence.hide(cx.background_executor().now());
+        // The taskbar goes back as the user had it, where showing it while
+        // the launcher was open was chosen (#268): hidden, the launcher
+        // leaves the screen to what the user had there.
+        crate::settings::shared(cx).read(cx).restore_taskbar();
         // A toast shown from now on is a HUD (#141), and a confirmation
         // shown is answered as not confirmed (#146).
         self.launcher.set_window_presence(WindowPresence::Hidden);
@@ -889,6 +941,35 @@ impl LauncherWindow {
         self.motion.land_at_once();
         self.end_numbers(cx);
         cx.notify();
+    }
+
+    /// Follows the "Show the taskbar when Pane opens" choice as it
+    /// changes while this window lives (#268): while the launcher is
+    /// shown, turning the choice on shows the taskbar at once, and
+    /// turning it off puts it back as the user had it; while the launcher
+    /// is hidden, the next showing applies the choice (see
+    /// [`LauncherWindow::unhide`]). Any other change of the settings
+    /// leaves the taskbar as it is.
+    fn follow_taskbar(
+        &mut self,
+        settings: &Entity<crate::settings::Settings>,
+        cx: &mut Context<Self>,
+    ) {
+        let chosen = settings.read(cx).show_taskbar();
+        if chosen == self.taskbar_followed {
+            return;
+        }
+        self.taskbar_followed = chosen;
+        if self.presence.hidden() {
+            // Hidden: nothing shows now; the next showing applies the
+            // choice.
+            return;
+        }
+        if chosen {
+            settings.read(cx).taskbar_while_open();
+        } else {
+            settings.read(cx).restore_taskbar();
+        }
     }
 
     /// Places the launcher window on the display the Launcher page's
@@ -1259,6 +1340,9 @@ impl LauncherWindow {
         if !self.actions_belong_to(&self.launcher.screen()) && self.actions.take().is_some() {
             self.launcher.close_submenus();
         }
+        // The hotkey screen's recording session starts when the screen
+        // listens and ends when it leaves (#260).
+        self.sync_hotkey_recording(window, cx);
         self.sync_form(window, cx);
         self.sync_custom_view(window, cx);
         // Last: coming back to root search, even as a view closes, focuses
@@ -1278,6 +1362,72 @@ impl LauncherWindow {
         // over whatever screen is shown (#146).
         self.sync_confirmation(window, cx);
         cx.refresh_windows();
+    }
+
+    /// Starts or ends the hotkey screen's recording session so it lasts
+    /// exactly while the screen listens (#260): while it does, the hook
+    /// adapter holds the keys back from Windows — the Start menu the
+    /// Windows key alone opens stays closed — and reports what the user
+    /// presses, including the kinds no registration can express and
+    /// modifiers' sides, which the screen's own keystrokes cannot name.
+    /// The reports end when the recorder stops listening, the window
+    /// loses focus, or Pane quits; on a system whose adapter has no
+    /// session the screen records through its own keystrokes, as it
+    /// always has. Idempotent, so every screen change can call it.
+    fn sync_hotkey_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let listening = matches!(self.launcher.screen(), Screen::Hotkey { .. });
+        if listening == self.hotkey_recording.is_some() {
+            return;
+        }
+        if !listening {
+            // The screen left: the session ends with the stop it owns.
+            self.hotkey_recording = None;
+            return;
+        }
+        let Some(session) = self.launcher.recording() else {
+            // No adapter session here: the keystroke path records, as it
+            // does today (macOS, X11).
+            return;
+        };
+        let (reports, stop) = session.split();
+        self.hotkey_recording = Some(stop);
+        cx.spawn_in(window, async move |this, cx| {
+            let mut reports = reports;
+            while let Some(shortcut) = reports.next().await {
+                // Still listening: the task ends with the screen it
+                // records for, and the session's stop ends the reports
+                // when the recorder stops listening without a press.
+                let listening = this
+                    .update_in(cx, |window, w, cx| {
+                        window.hotkey_recording_reported(shortcut, w, cx)
+                    })
+                    .unwrap_or(false);
+                if !listening {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// One binding a recording session reported, pressed on the hotkey
+    /// screen (#260): recorded as the screen's own keystrokes are — the
+    /// same checks, the same flow, the same refusals — and whether the
+    /// screen still listens for another try (a refusal keeps it
+    /// listening, a change that lands leaves it).
+    fn hotkey_recording_reported(
+        &mut self,
+        shortcut: Shortcut,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !matches!(self.launcher.screen(), Screen::Hotkey { .. }) {
+            return false;
+        }
+        let pending = self.launcher.record_hotkey(shortcut);
+        self.motion.land_at_once();
+        self.show_until_done(pending, window, cx);
+        matches!(self.launcher.screen(), Screen::Hotkey { .. })
     }
 
     /// Freezes root search's selection against the pointer, or lets it

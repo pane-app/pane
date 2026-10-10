@@ -24,6 +24,17 @@ use super::Joinable;
 pub(crate) const WM_WAKE: u32 = WM_APP + 1;
 /// Ends a thread's message loop.
 pub(crate) const WM_STOP: u32 = WM_APP + 2;
+/// A keyboard-hook binding was pressed: the hook thread posts it to the
+/// hotkey thread, whose `wParam` names the binding (see `hotkeys`).
+pub(crate) const WM_FIRED: u32 = WM_APP + 3;
+/// What a recording session recognized: the hook thread posts it to the
+/// hotkey thread while the session listens, its `wParam` packing what
+/// was recognized (see `hotkeys`, #260).
+pub(crate) const WM_RECORDED: u32 = WM_APP + 4;
+/// A recording session ended: the hook thread noticed the window lost
+/// the focus, and posts it to the hotkey thread, which ends the session
+/// (see `hotkeys`, #260).
+pub(crate) const WM_RECORDED_ENDED: u32 = WM_APP + 5;
 
 /// How often, and how long apart, Pane tries to post a message to a thread
 /// whose queue is full.
@@ -267,6 +278,12 @@ impl MessageThread {
             }
         }
         false
+    }
+
+    /// The thread's id, so another holder of its request queue can wake
+    /// it when this handle is not at hand.
+    pub(crate) fn id(&self) -> u32 {
+        self.id
     }
 
     /// Stops the thread and waits for it to end, at most `limit` if given:

@@ -27,7 +27,14 @@
 //!   argument), File Explorer's selection with
 //!   `SHOpenFolderAndSelectItems`, and the Recycle Bin with
 //!   `SHFileOperationW` (`FOF_ALLOWUNDO`, warning before a path that would
-//!   be deleted for good, such as one on a network drive);
+//!   be deleted for good, such as one on a network drive). The front
+//!   application, paste and the selected text are Windows' (#125): a
+//!   system foreground hook watches the window in front, pasting brings
+//!   it back and sends it a tagged Ctrl+V, putting the clipboard back
+//!   afterwards, and the selected text is read through UI Automation in
+//!   a worker process of Pane's own program and, where that gives
+//!   nothing, a simulated copy that leaves the clipboard as it was
+//!   (`front`, `selected`, `system::windows`);
 //! - macOS: the general pasteboard (text, a file URL, the
 //!   `org.nspasteboard.ConcealedType` marker), `/usr/bin/open` (with `-a`
 //!   for an application, `-R` to reveal), and `NSFileManager`'s
@@ -43,22 +50,33 @@
 //! and implemented on Windows by the Windows power features (#125):
 //! [`System::can_paste`], [`System::paste_clipboard`],
 //! [`System::front_application`] and [`System::selected_text`] answer
-//! [`SystemError::NotAvailable`] on every system until an adapter answers
-//! them, which is not a failure. Pane itself does the rest of a paste
-//! (`paste`): it closes its window, puts the content on the clipboard, has
-//! the system paste, and puts back what the clipboard held.
+//! [`SystemError::NotAvailable`] on macOS and Linux until an adapter
+//! answers them, which is not a failure. Pane itself does the rest of a
+//! paste (`paste`): it closes its window, puts the content on the
+//! clipboard, has the system paste, and puts back what the clipboard
+//! held.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+pub(crate) mod front;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(unix)]
 mod programs;
+pub mod selected;
 #[cfg(target_os = "windows")]
 mod windows;
+
+// The Windows power features' own halves of the paste worker and the
+// front application's reading (#125), which the Switch Windows host
+// functions reuse (#263): the path that brings a window to the front,
+// the reading of a window's title and its own AppUserModelID, and
+// whether a process is running as administrator.
+#[cfg(target_os = "windows")]
+pub(crate) use windows::{app_user_model_id, bring_to_front, elevated, window_title};
 
 /// The most text `read-clipboard` and `selected-text` answer, in bytes of
 /// UTF-8: a command reading more is told so rather than given it, since
@@ -115,7 +133,9 @@ pub trait System: Send + Sync + 'static {
 
     /// Whether this system can paste into the application that was in
     /// front before Pane: asked before the window closes for a paste, so
-    /// that a paste Pane cannot make changes nothing.
+    /// that a paste Pane cannot make changes nothing. On Windows this also
+    /// keeps what the clipboard holds, every format in ordinary memory,
+    /// to put back once the paste is done (#125).
     fn can_paste(&self) -> Result<(), SystemError> {
         Err(not_yet(PASTE))
     }
@@ -200,26 +220,38 @@ fn not_yet(what: &str) -> SystemError {
 /// are concealed: the paste is not the user's copy, and putting back is
 /// not a new one, so clipboard managers (Pane's own history among them)
 /// keep neither. Clipboard contents other than text and a file (an image,
-/// say) are not put back, nor is an empty clipboard emptied again.
+/// say) are not put back, nor is an empty clipboard emptied again — the
+/// Windows adapter puts back every format it could keep itself (#125).
+/// When the paste fails, nothing is put back: what Pane put there stays,
+/// still concealed, for the user to paste by hand.
 pub(crate) fn paste(system: &dyn System, clip: &Clip) -> Result<(), SystemError> {
     let before = system.read_clipboard().ok().flatten();
     system.copy(clip, true).map_err(SystemError::Failed)?;
     let pasted = system.paste_clipboard();
-    let holds_ours = matches!(system.read_clipboard(), Ok(Some(now)) if now == *clip);
-    if holds_ours && let Some(before) = before {
-        // Putting it back is a courtesy: the paste itself is done, so a
-        // failure here does not make it fail.
-        let _ = system.copy(&before, true);
+    if pasted.is_ok() {
+        let holds_ours = matches!(system.read_clipboard(), Ok(Some(now)) if now == *clip);
+        if holds_ours && let Some(before) = before {
+            // Putting it back is a courtesy: the paste itself is done, so a
+            // failure here does not make it fail.
+            let _ = system.copy(&before, true);
+        }
     }
     pasted
 }
 
 /// This system's adapter: Windows', macOS' or Linux's, or one that
-/// explains that Pane reaches no system functions here.
+/// explains that Pane reaches no system functions here. On Windows the
+/// adapter watches the application in front from the moment it is made
+/// (#125), which its front application and paste answer.
 pub fn native() -> Arc<dyn System> {
     #[cfg(target_os = "windows")]
     {
-        Arc::new(windows::WindowsSystem)
+        // The watcher of the application in front starts with Pane: a
+        // system foreground event hook on a thread of its own
+        // (`front::windows`). Without it — the hook was refused — the front
+        // application and paste answer that they cannot reach one.
+        let watching = front::windows::Watcher::start().ok();
+        Arc::new(windows::WindowsSystem::new(watching))
     }
     #[cfg(target_os = "macos")]
     {
@@ -237,6 +269,18 @@ pub fn native() -> Arc<dyn System> {
             std::env::consts::OS
         )))
     }
+}
+
+/// The Windows system whose UI Automation selected-text reads run in
+/// this process, on a thread of their own, instead of in a worker process
+/// of Pane's own program: the real-input adapter test's, which cannot
+/// start Pane's program as its worker. The read it asks for is the code
+/// the worker runs. Hidden: not Pane's interface, only that test's.
+#[cfg(target_os = "windows")]
+#[doc(hidden)]
+pub fn native_selected_text_in_process() -> Arc<dyn System> {
+    let watching = front::windows::Watcher::start().ok();
+    Arc::new(windows::WindowsSystem::reading_selected_here(watching))
 }
 
 /// The system of a launcher given none: every function says that this
@@ -373,20 +417,42 @@ mod tests {
     }
 
     #[test]
-    fn this_systems_adapter_says_paste_front_application_and_selected_text_are_not_available_yet() {
+    fn this_systems_adapter_answers_what_it_can_do_yet() {
         let system = native();
-        for answer in [
-            system.can_paste(),
-            system.paste_clipboard(),
-            system.front_application().map(drop),
-            system.selected_text().map(drop),
-        ] {
-            match answer {
-                Err(SystemError::NotAvailable(why)) => {
-                    assert!(why.contains("is not available on"), "{why}");
-                    assert!(why.ends_with(" yet"), "{why}");
+        if cfg!(target_os = "windows") {
+            // Paste, the front application and the selected text are
+            // Windows' now (#125): they answer, without saying they are
+            // not available — what they answer depends on the session,
+            // and their real paths are the real-input adapter test's,
+            // which owns the windows it pastes into and reads the
+            // selection of. Only their read-only halves are asked: pasting
+            // here would paste for real, into whatever is in front, and
+            // so would reading the selection, which copies where UI
+            // Automation gives nothing.
+            let answered = system.can_paste();
+            assert!(
+                !matches!(answered, Err(SystemError::NotAvailable(_))),
+                "{answered:?}"
+            );
+            let answered = system.front_application().map(drop);
+            assert!(
+                !matches!(answered, Err(SystemError::NotAvailable(_))),
+                "{answered:?}"
+            );
+        } else {
+            for answer in [
+                system.can_paste(),
+                system.paste_clipboard(),
+                system.front_application().map(drop),
+                system.selected_text().map(drop),
+            ] {
+                match answer {
+                    Err(SystemError::NotAvailable(why)) => {
+                        assert!(why.contains("is not available on"), "{why}");
+                        assert!(why.ends_with(" yet"), "{why}");
+                    }
+                    other => panic!("expected not available, got {other:?}"),
                 }
-                other => panic!("expected not available, got {other:?}"),
             }
         }
         assert_eq!(
@@ -404,6 +470,8 @@ mod tests {
         done: std::sync::Mutex<Vec<String>>,
         /// What another program copies while the paste happens.
         meanwhile: Option<Clip>,
+        /// Why its paste fails, when it does.
+        fails: Option<String>,
     }
 
     impl System for Pasting {
@@ -442,7 +510,10 @@ mod tests {
             if let Some(meanwhile) = &self.meanwhile {
                 *self.clipboard.lock().unwrap() = Some(meanwhile.clone());
             }
-            Ok(())
+            match &self.fails {
+                Some(why) => Err(SystemError::Failed(why.clone())),
+                None => Ok(()),
+            }
         }
     }
 
@@ -478,6 +549,33 @@ mod tests {
         let system = Pasting::default();
         assert_eq!(paste(&system, &pasted), Ok(()));
         assert_eq!(system.done.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_paste_that_fails_leaves_the_clipboard_as_it_put_it() {
+        // What Pane put there stays, still concealed, for the user to
+        // paste by hand (#125); what the clipboard held before is not put
+        // back.
+        let why = "The application that was in front is gone";
+        let before = Clip::Text("before".into());
+        let pasted = Clip::Text("pasted".into());
+        let system = Pasting {
+            fails: Some(why.into()),
+            ..Pasting::default()
+        };
+        *system.clipboard.lock().unwrap() = Some(before);
+        assert_eq!(
+            paste(&system, &pasted),
+            Err(SystemError::Failed(why.into()))
+        );
+        assert_eq!(
+            *system.done.lock().unwrap(),
+            [
+                format!("copy {pasted:?} concealed true"),
+                format!("paste {:?}", Some(&pasted)),
+            ]
+        );
+        assert_eq!(system.read_clipboard(), Ok(Some(pasted)));
     }
 
     #[test]

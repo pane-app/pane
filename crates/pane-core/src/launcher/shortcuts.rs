@@ -25,7 +25,7 @@ use std::collections::HashSet;
 
 use super::choices::split;
 use super::{Launcher, State};
-use crate::hotkeys::Shortcut;
+use crate::hotkeys::{Route, Shortcut};
 use crate::packages::{InstalledPackage, PackageIdentity, paused_reason};
 
 /// The installed commands with their aliases and hotkeys, grouped by
@@ -88,6 +88,12 @@ pub struct ShortcutCommand {
     pub editable: bool,
     /// The global hotkey the user gave it, if any.
     pub hotkey: Option<Shortcut>,
+    /// How the hotkey is dispatched while it is active: through the
+    /// system's own registration, or through Pane's own keyboard hook,
+    /// where the system refused it (Windows, #252) — which also does
+    /// nothing while an elevated application is in front. The page shows
+    /// it beside the hotkey, with [`Route::note_on`].
+    pub hotkey_route: Route,
     /// Why the hotkey is not active, if it is not: the command is not
     /// offered (its package is disabled, or the command is unavailable on
     /// this system), the system refused to register it, or this system has
@@ -196,6 +202,7 @@ pub(super) fn catalog(launcher: &Launcher, state: &State) -> ShortcutCatalog {
             alias_inactive: Some(why),
             editable: false,
             hotkey,
+            hotkey_route: Route::default(),
             hotkey_inactive,
             hotkey_editable: false,
         });
@@ -251,6 +258,7 @@ fn command(
         .map(str::to_owned)
         .or_else(|| hotkey_package_inactive.map(str::to_owned))
         .or_else(|| hotkey.as_ref().and_then(|_| state.bindings.problem_of(&id)));
+    let hotkey_route = state.bindings.route_of(&id);
     ShortcutCommand {
         id,
         title,
@@ -260,6 +268,7 @@ fn command(
         alias_inactive,
         editable: true,
         hotkey,
+        hotkey_route,
         hotkey_inactive,
         // A command whose package is disabled, or that is unavailable on
         // this system, is not offered: its hotkey is kept, not changed
@@ -303,6 +312,7 @@ fn missing(
             alias_inactive: Some(why),
             editable: false,
             hotkey,
+            hotkey_route: Route::default(),
             hotkey_inactive,
             hotkey_editable: false,
         });

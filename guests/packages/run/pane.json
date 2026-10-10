@@ -1,0 +1,60 @@
+{
+  "manifestVersion": 1,
+  "title": "Run",
+  "version": "0.2.0",
+  "apiVersion": "0.1",
+  "platforms": ["windows"],
+  "icon": "icon.svg",
+  "preferences": [
+    {
+      "name": "shell",
+      "type": "dropdown",
+      "title": "Terminal Shell",
+      "description": "The shell Run in Terminal opens the command line in",
+      "default": "powershell",
+      "options": [
+        { "value": "powershell", "title": "PowerShell" },
+        { "value": "cmd", "title": "Command Prompt" }
+      ]
+    }
+  ],
+  "commands": [
+    {
+      "id": "run",
+      "title": "Run",
+      "subtitle": "Runs a command line, as Windows' Run dialog does, sharing its history",
+      "component": "run.wasm",
+      "mode": "no-view",
+      "takesQuery": true
+    },
+    {
+      "id": "run-as-administrator",
+      "title": "Run as Administrator",
+      "subtitle": "Runs a command line through Windows' own elevation prompt",
+      "component": "run.wasm",
+      "mode": "no-view",
+      "takesQuery": true
+    },
+    {
+      "id": "run-in-terminal",
+      "title": "Run in Terminal",
+      "subtitle": "Runs a command line in a new Windows Terminal tab, or the shell's own window",
+      "component": "run.wasm",
+      "mode": "no-view",
+      "takesQuery": true
+    },
+    {
+      "id": "run-with-completions",
+      "title": "Run with Completions",
+      "subtitle": "Type a command line; what you ran and installed completes it as you type",
+      "component": "run.wasm",
+      "search": true
+    },
+    {
+      "id": "run-history",
+      "title": "Run History",
+      "subtitle": "What you ran in Pane and the Run dialog: run it again, or delete it",
+      "component": "run.wasm"
+    }
+  ]
+}

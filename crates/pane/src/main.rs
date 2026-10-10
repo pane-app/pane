@@ -74,6 +74,19 @@ fn smoke_system(log: PathBuf) {
 }
 
 fn main() {
+    // Pane's own program serves as the selected-text worker (#262) when
+    // it is started with the internal argument: checked before anything
+    // else, so the worker starts no window, no runtime, no settings and
+    // no tray — only the UI Automation reads it is asked for, ending when
+    // Pane ends it. The argument is Pane's own, never shown and never
+    // parsed as the user's interface.
+    #[cfg(windows)]
+    if std::env::args_os()
+        .skip(1)
+        .any(|arg| arg == pane_core::system::selected::WORKER_ARGUMENT)
+    {
+        pane_core::system::selected::serve();
+    }
     let preview = package_to_preview();
     // Pane's own log and crash record (#133), before anything else can
     // write a diagnostic or panic: the log keeps what standard error says,
@@ -129,7 +142,18 @@ fn main() {
         .with_link_opener(Arc::new(pane::SystemLinks))
         // What commands copy, open, reveal and recycle reaches the system's
         // own clipboard, handlers, file manager and Recycle Bin (#145).
-        .with_system(pane_core::system::native());
+        .with_system(pane_core::system::native())
+        // What commands run through the Run dialog's work reaches the
+        // shell, Windows' elevation prompt and the Run dialog's own
+        // history (#254).
+        .with_run(pane_core::run::native())
+        // What commands lock, log out, restart, shut down, sleep, hibernate,
+        // turn the displays off of and start the screen saver of reaches the
+        // system's own session and power (#255).
+        .with_system_commands(pane_core::system_commands::native())
+        // What commands list of the open windows and which one they bring
+        // to the front reaches the system's own windows (#263).
+        .with_switch_windows(pane_core::switch_windows::native());
         // That Pane quit unexpectedly last time, told in root search and on
         // the About page; a clean quit removes this run's marker.
         let launcher = match crash_record.clone() {
@@ -233,6 +257,21 @@ fn main() {
         // whose run loop receives the presses on macOS.
         let (press_sender, mut presses) = pane_core::hotkeys::channel();
         let launcher = launcher.with_hotkeys(pane_core::hotkeys::native(press_sender));
+        // Game mode's foreground source (#125): the system's own
+        // foreground event hook on Windows, which the launcher
+        // subscribes to, deciding on each window that comes to the front
+        // whether a game is in it — so Pane's hotkeys pause and return by
+        // themselves while game mode is on. Everywhere else there is
+        // none: game mode is Windows only, and the Keyboard page says so.
+        let launcher = match pane_core::game_mode::native() {
+            Some(source) => launcher.with_foreground(source),
+            None => launcher,
+        };
+        // The taskbar while the launcher is open (#268): Windows' adapter
+        // — which shows a taskbar that hides itself and puts it back as
+        // the user had it — or none, and the General page explains the
+        // choice where the platform has no taskbar of the kind.
+        pane::settings::attach_taskbar(pane::taskbar::native(), cx);
         // The tray or menu-bar entry: Pane's item in the system's tray
         // (Windows) or menu bar (macOS), whose menu opens the launcher,
         // Settings and Quit — the entry the General page's visibility

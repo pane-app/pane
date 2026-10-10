@@ -60,13 +60,17 @@ mod presentation;
 mod programs;
 mod providers;
 mod quick_slots;
+mod run;
 pub mod search_files;
 mod submenus;
+mod switch_windows;
+mod system_commands;
 
 use crate::clipboard::{Capture, ClipboardSystem};
 use crate::dependencies;
 use crate::extension_data::{ExtensionData, PackageData};
 use crate::files::FileAccess;
+use crate::game_mode::{Foreground, ForegroundSource, ForegroundTold};
 use crate::generation::End;
 use crate::hotkeys::{self as system_hotkeys, Hotkeys};
 use crate::keyboard::PaneKeys;
@@ -120,7 +124,7 @@ pub use developing::{BuildFailure, Development};
 pub(crate) use developing::{BuildNow, Remote};
 pub use extensions::{ExtensionMark, ExtensionOperation, OperationKind};
 pub use hotkeys::HotkeyOutcome;
-use hotkeys::{Bindings, OpenPane};
+use hotkeys::{Bindings, Game, OpenPane};
 pub(crate) use install::InstallPreview;
 pub use item_actions::{ItemAction, ItemActions, UnboundShortcut};
 pub use looks::{AccessoryKind, ShownAccessory, absolute_date, relative_date};
@@ -616,6 +620,10 @@ pub struct Launcher {
     links: Arc<dyn LinkOpener>,
     /// Registers the global hotkeys the user assigns with the system.
     hotkeys: Arc<dyn Hotkeys>,
+    /// The source of foreground changes game mode decides on, given
+    /// with [`Launcher::with_foreground`]; `None` where the system has
+    /// none, which is everywhere but Windows (see `crate::game_mode`).
+    foreground: Option<Arc<dyn ForegroundSource>>,
     /// Keeps the clipboard history of the packages that keep one, given
     /// with the system's clipboard ([`Launcher::with_clipboard`]).
     clipboard: Option<Arc<Capture>>,
@@ -654,6 +662,9 @@ struct WeakLauncher {
     application: Option<Application>,
     links: Arc<dyn LinkOpener>,
     hotkeys: Arc<dyn Hotkeys>,
+    /// The foreground source game mode decides on, held weakly so that
+    /// dropping the launcher stops the watching with it.
+    foreground: Option<Arc<dyn ForegroundSource>>,
     /// Held weakly, so that Pane stops watching the clipboard as soon as
     /// the launcher is dropped.
     clipboard: Option<std::sync::Weak<Capture>>,
@@ -690,6 +701,7 @@ impl WeakLauncher {
             application: self.application.clone(),
             links: self.links.clone(),
             hotkeys: self.hotkeys.clone(),
+            foreground: self.foreground.clone(),
             clipboard,
             schedules: self.schedules.as_ref().and_then(std::sync::Weak::upgrade),
             services: self.services.as_ref().and_then(std::sync::Weak::upgrade),
@@ -788,6 +800,10 @@ struct State {
     /// settings record and the window applies through the same
     /// registration path (see [`crate::hotkeys`]).
     open_pane: OpenPane,
+    /// Game mode: the settings in force, the window in front as the
+    /// foreground source last reported it, and whether Pane's hotkeys
+    /// are paused for a game (#125).
+    game: Game,
     /// The aliases and fallbacks the user gave commands.
     aliases: Record<AliasChoices>,
     /// The dropdown arguments' values each command was last launched with
@@ -860,6 +876,14 @@ struct State {
     submenus: submenus::Submenus,
     /// The system the `system` host functions act on (see `system`).
     system: Arc<dyn crate::system::System>,
+    /// The Run dialog's work the `run` host functions act on (see `run`).
+    run: Arc<dyn crate::run::Run>,
+    /// The session and power commands the `system-commands` host
+    /// functions act on (see `system_commands`).
+    system_commands: Arc<dyn crate::system_commands::SystemCommands>,
+    /// The open windows the `windows` host functions act on (see
+    /// `switch_windows`).
+    switch_windows: Arc<dyn crate::switch_windows::SwitchWindows>,
     /// The answers the user told Pane to remember for confirmations (see
     /// `confirmations`).
     confirmations: Record<confirmations::Confirmations>,
@@ -1456,6 +1480,10 @@ impl Launcher {
             .as_ref()
             .and_then(|installation| updates::UpdateControls::open(&installation.dir))
             .unwrap_or_default();
+        let game = installation
+            .as_ref()
+            .map(|installation| Game::open(&installation.dir))
+            .unwrap_or_default();
         let update_results = installation
             .as_ref()
             .map_or_else(update_results::Record::default, |installation| {
@@ -1518,6 +1546,7 @@ impl Launcher {
             paused: Pauses::default(),
             bindings,
             open_pane: OpenPane::default(),
+            game,
             aliases,
             remembered_arguments,
             quick_slots: quick_slots::Kept::default(),
@@ -1540,6 +1569,9 @@ impl Launcher {
             subtitle_saves: Arc::default(),
             submenus: submenus::Submenus::default(),
             system: crate::system::none(),
+            run: crate::run::none(),
+            system_commands: crate::system_commands::none(),
+            switch_windows: crate::switch_windows::none(),
             confirmations,
             confirmation_saves: Arc::default(),
             setup_needed: HashSet::new(),
@@ -1578,6 +1610,7 @@ impl Launcher {
             application: None,
             links: Arc::new(NoOpener),
             hotkeys: system_hotkeys::none(),
+            foreground: None,
             clipboard: None,
             schedules: None,
             services: None,
@@ -1788,6 +1821,43 @@ impl Launcher {
         launcher
     }
 
+    /// This launcher deciding game mode on the windows that come to the
+    /// front through `source`, normally the system's
+    /// ([`crate::game_mode::native`]): each window in front is reported
+    /// on the source's own thread (see `crate::game_mode`), and a game
+    /// there releases every hotkey until it leaves. The recorded
+    /// settings are in force already. Without a source — every system
+    /// but Windows — game mode is offered nowhere and nothing ever
+    /// pauses; the source is held for the launcher's life, and dropping
+    /// the launcher ends the watching.
+    pub fn with_foreground(self, source: Arc<dyn ForegroundSource>) -> Self {
+        // The subscription holds the launcher weakly, so the source does
+        // not keep it, or its runtime, running once the window is gone.
+        let told = self.downgrade();
+        source.watch(ForegroundTold::of(Arc::new(move |front: &Foreground| {
+            if let Some(launcher) = told.upgrade() {
+                launcher.foreground_changed(front);
+            }
+        })));
+        Launcher {
+            foreground: Some(source),
+            ..self
+        }
+    }
+
+    /// A recording session with this system's hotkeys adapter, for a
+    /// recorder that is about to listen (#260): while the session lasts,
+    /// the adapter holds the keys back from the system and reports the
+    /// bindings the user pressed — chords, lone taps, double taps, sides —
+    /// so the kinds no registration can express are recorded as easily
+    /// as a chord, without the system acting on them (the Start menu the
+    /// Windows key alone opens). `None` where this system's adapter has
+    /// no hook to hold keys back with (macOS, X11): the recorder records
+    /// through the window's own keys, as it does today.
+    pub fn recording(&self) -> Option<crate::hotkeys::RecordingSession> {
+        self.hotkeys.recording()
+    }
+
     /// This launcher keeping clipboard history for the installed packages
     /// that ask for it through `clipboard`, normally the system's
     /// ([`crate::clipboard::native`]): Pane watches the clipboard exactly
@@ -1862,6 +1932,7 @@ impl Launcher {
             application: self.application.clone(),
             links: self.links.clone(),
             hotkeys: self.hotkeys.clone(),
+            foreground: self.foreground.clone(),
             clipboard: self.clipboard.as_ref().map(Arc::downgrade),
             schedules: self.schedules.as_ref().map(Arc::downgrade),
             services: self.services.as_ref().map(Arc::downgrade),

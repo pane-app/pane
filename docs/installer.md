@@ -204,7 +204,11 @@ are the calculator, applications, quicklinks, files and clipboard history
 choice): all five set up at first setup and each individually
 disableable, with clipboard history recording from the first start
 ([ADR 0042](adr/0042-clipboard-history-records-from-the-first-start.md)).
-Every build sets up the same five: no sample is a default extension
+Every build sets up the same five — the Windows power features' three
+default extensions (Run, System Commands, Switch Windows, ADR 0040) are
+not pinned yet: this repository builds them until their own repositories
+release, when their pins join the committed ones — and no sample is a
+default extension
 ([#162](https://github.com/pane-app/pane/issues/162)). Until #162 a
 development build also acquired the prebuilt-helper sample; an install
 that acquired it keeps it as an ordinary installed package (Pane removes

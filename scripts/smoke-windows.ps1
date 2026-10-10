@@ -40,6 +40,9 @@ public static class Win {
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int command);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern bool RegisterHotKey(IntPtr h, int id, uint modifiers, uint key);
+    [DllImport("user32.dll")] public static extern bool UnregisterHotKey(IntPtr h, int id);
+    [DllImport("user32.dll")] public static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
 }
 "@
 # Screenshots, screen bounds and SetCursorPos then all use physical pixels,
@@ -133,6 +136,15 @@ function Click-At($x, $y) {
     [Win]::mouse_event(0x4, 0, 0, 0, [UIntPtr]::Zero)   # left button up
 }
 function Send($keys) { [System.Windows.Forms.SendKeys]::SendWait($keys) }
+# Presses one key, as a tool that injects input does (#260): the Windows
+# key has no SendKeys form, and the binding kinds the hotkeys gain are
+# pressed with the key's own code. Injected and untagged: another tool's
+# keys, which the hook takes as the user's presses.
+function Press-Key([byte]$key) {
+    [Win]::keybd_event($key, 0, 0, [UIntPtr]::Zero) | Out-Null
+    Start-Sleep -Milliseconds 100
+    [Win]::keybd_event($key, 0, 2, [UIntPtr]::Zero) | Out-Null   # KEYEVENTF_KEYUP
+}
 # Brings Pane's window to the front, so that key events reach it.
 function Focus-Pane($process) {
     [Win]::SetForegroundWindow($process.MainWindowHandle) | Out-Null
@@ -830,6 +842,140 @@ Capture "58-disabled-pressed.png"   # still root search: nothing opened
 $shots = "57-disabled", "58-disabled-pressed" | ForEach-Object { Join-Path $OutDir "$_.png" }
 python "$PSScriptRoot/check_screenshot.py" --same @shots
 if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the released hotkey still did something" }
+Stop-Pane $process
+
+# A hook-dispatched binding: the smoke holds Ctrl+Alt+J from its own
+# process first, as another application would (RegisterHotKey from this
+# PowerShell thread), so Windows refuses the chord to Pane and Pane's own
+# low-level keyboard hook takes the binding instead (#252, ADR 0039):
+# assigning it to Greeting in Settings says so on the row ("Dispatched
+# through Pane's keyboard hook"), and pressing it with the launcher
+# unfocused opens Greeting exactly as the registered chord does. A data
+# folder of its own.
+$data = Join-Path $OutDir "hook-hotkeys-data"
+if (Test-Path $data) { Remove-Item -Recurse -Force $data }
+$env:PANE_DATA_DIR = $data
+# MOD_NOREPEAT 0x4000 | MOD_CONTROL 0x2 | MOD_ALT 0x1, 'J' 0x4A: an
+# unlikely combination, so the session's own shortcuts are not disturbed.
+if (-not [Win]::RegisterHotKey([IntPtr]::Zero, 0x5A4A, 0x4003, 0x4A)) { throw "the smoke could not hold the chord" }
+$process = Start-Pane "stderr-hook.log" @("--install", "target/guests/packages/sample-settings")
+Send "{ENTER}"; Start-Sleep -Seconds 2   # Install; Greeting is selected
+Open-Extension "Settings sample"
+Press-Named "Hotkey for Greeting:" -Prefix   # the recorder listens
+Send "^%j"
+# Evidence of where the phase stands before it waits: the recorder's row
+# says whether the keys were captured at all, and what a refusal answered.
+Capture "77-hook-recorder.png"
+Wait-For (Join-Path $data "extensions/hotkeys.json") '"ctrl+alt+j"' $true
+Wait-Shown "Dispatched through Pane's keyboard hook" -Prefix
+Capture "77-hook-assigned.png"   # the row says the binding's dispatch route
+Close-Settings   # root search
+Minimize-Pane $process
+Capture "78-hook-unfocused.png"   # evidence only: Pane is not on screen
+# SendKeys injects the keys, as a tool would: the hook recognizes the
+# chord of another tool's injected keys all the same.
+[System.Windows.Forms.SendKeys]::SendWait("^%j"); Start-Sleep -Seconds 3
+Check-Pane-In-Front $process
+Capture "79-hook-opened.png"
+Check "79-hook-opened.png" "selected" 3000   # Greeting's first item, selected
+$shots = "78-hook-unfocused", "79-hook-opened" | ForEach-Object { Join-Path $OutDir "$_.png" }
+python "$PSScriptRoot/check_screenshot.py" --distinct @shots
+if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the hook-dispatched hotkey opened nothing" }
+Stop-Pane $process
+[void][Win]::UnregisterHotKey([IntPtr]::Zero, 0x5A4A)
+
+# A lone tap of the Windows key (#260): the recorder's session with the
+# hook holds the keys back from Windows while it listens, so the tap is
+# recorded without the Start menu opening — the session is what makes
+# the kinds no registration can express recordable — and the row says
+# the binding works through Pane's keyboard hook. Pressed with the
+# launcher unfocused, the tap opens Greeting: the Start-menu mask keeps
+# the Start menu closed, so Pane is what comes to the front. A data
+# folder of its own.
+$data = Join-Path $OutDir "tap-hotkeys-data"
+if (Test-Path $data) { Remove-Item -Recurse -Force $data }
+$env:PANE_DATA_DIR = $data
+$process = Start-Pane "stderr-tap.log" @("--install", "target/guests/packages/sample-settings")
+Send "{ENTER}"; Start-Sleep -Seconds 2   # Install; Greeting is selected
+Open-Extension "Settings sample"
+Press-Named "Hotkey for Greeting:" -Prefix   # the recorder listens, holding the keys back
+Wait-Shown "Recording; Hotkey for Greeting"
+Capture "80-tap-recording.png"
+# VK_LWIN, pressed and released alone: a lone tap, held back from Windows.
+Press-Key 0x5B
+Wait-For (Join-Path $data "extensions/hotkeys.json") '"tap:win"' $true
+Wait-Shown "through Pane's keyboard hook" -Prefix
+Capture "81-tap-assigned.png"   # the row says the binding's dispatch route
+Close-Settings   # root search
+Minimize-Pane $process
+Capture "82-tap-unfocused.png"   # evidence only: Pane is not on screen
+# The bound tap, pressed as a tool's keys are: the mask keeps the Start
+# menu closed, and Pane opens Greeting in front.
+Press-Key 0x5B
+Start-Sleep -Seconds 3
+Check-Pane-In-Front $process
+Capture "83-tap-opened.png"
+Check "83-tap-opened.png" "selected" 3000   # Greeting's first item, selected
+$shots = "82-tap-unfocused", "83-tap-opened" | ForEach-Object { Join-Path $OutDir "$_.png" }
+python "$PSScriptRoot/check_screenshot.py" --distinct @shots
+if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the tapped hotkey opened nothing" }
+
+# Switch Windows (#263, ADR 0040): the default extension lists the open
+# windows as Alt+Tab does -- with their titles, their applications' names
+# and icons, in z-order with the front application's window first -- and
+# Enter brings the chosen one to the front, restoring it if it is
+# minimized. The phase opens a Notepad of its own, on a file the smoke
+# makes so the window's title says which window it is; Pane's window
+# opens over it, so Notepad is the front application and its window is
+# the first row, selected, and one Enter switches to it. Pane's window
+# closed as the switch happened: the open-pane hotkey brings it back,
+# and typing in the command's search field filters by title, so the
+# second switch finds the window by what is typed. A data folder of its
+# own.
+$data = Join-Path $OutDir "switch-windows-data"
+if (Test-Path $data) { Remove-Item -Recurse -Force $data }
+$env:PANE_DATA_DIR = $data
+$notes = Join-Path $OutDir "switch-me.txt"
+Set-Content -Path $notes -Value "switch to me"
+$notepad = Start-Process notepad -PassThru -ArgumentList @("`"$notes`"")
+for ($i = 0; $i -lt 100 -and $notepad.MainWindowHandle -eq 0; $i++) {
+    Start-Sleep -Milliseconds 100; $notepad.Refresh()
+}
+if ($notepad.MainWindowHandle -eq 0) { throw "the smoke's Notepad window did not appear" }
+$process = Start-Pane "stderr-switch-windows.log" @("--install", "target/guests/packages/switch-windows")
+Send "{ENTER}"; Start-Sleep -Seconds 2   # Install; Switch Windows is selected
+Send "switch"; Start-Sleep -Seconds 2
+Send "{ENTER}"; Start-Sleep -Seconds 2   # the open windows, Notepad's first, selected
+Capture "610-switch-listed.png"
+Check "610-switch-listed.png" "selected" 3000   # a window's row is selected
+Send "{ENTER}"; Start-Sleep -Seconds 1   # switch to the selected window
+$switched = $false
+for ($i = 0; $i -lt 150; $i++) {
+    if ([Win]::GetForegroundWindow() -eq $notepad.MainWindowHandle) { $switched = $true; break }
+    Start-Sleep -Milliseconds 100
+}
+if (-not $switched) { throw "Switch Windows did not bring the smoke's window to the front" }
+Capture "612-switch-in-front.png"   # evidence only: Notepad is in front, Pane hidden
+# The open-pane hotkey brings the launcher back over Notepad, whose
+# window is the front application's again; typing filters the list by
+# title before the second switch.
+Send "^% "; Start-Sleep -Seconds 2
+Send "switch"; Start-Sleep -Seconds 2
+Send "{ENTER}"; Start-Sleep -Seconds 2
+Send "switch-me"; Start-Sleep -Seconds 2   # the command's search field filters by title
+Capture "613-switch-filtered.png"
+Check "613-switch-filtered.png" "selected" 3000   # the filtered window's row, selected
+Send "{ENTER}"; Start-Sleep -Seconds 1
+$switched = $false
+for ($i = 0; $i -lt 150; $i++) {
+    if ([Win]::GetForegroundWindow() -eq $notepad.MainWindowHandle) { $switched = $true; break }
+    Start-Sleep -Milliseconds 100
+}
+if (-not $switched) { throw "the filtered window did not come to the front" }
+$shots = "610-switch-listed", "612-switch-in-front" | ForEach-Object { Join-Path $OutDir "$_.png" }
+python "$PSScriptRoot/check_screenshot.py" --distinct @shots
+if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: switching changed nothing on screen" }
+[void]$notepad.CloseMainWindow()
 Stop-Pane $process
 
 # Pausing a broken extension: the settings sample's last item, Crash, crashes
@@ -2450,7 +2596,7 @@ try {
     # reads the index once — its request is the first.
     if ($process.HasExited) { throw "the installed Pane exited during setup" }
     # The default set (#60).
-    foreach ($default in "calculator", "applications", "quicklinks", "files", "clipboard-history") {
+    foreach ($default in "calculator", "applications", "quicklinks", "files", "clipboard-history", "run", "switch-windows") {
         Wait-For $registry ('"default": "' + $default + '"') $true 1200
     }
     # The check has read the index: the offer is in root search. The

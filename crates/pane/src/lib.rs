@@ -22,6 +22,7 @@ mod ui;
 
 pub mod placement;
 pub mod settings;
+pub mod taskbar;
 
 pub use app::LauncherWindow;
 pub use features::settings::SettingsWindow;
@@ -126,6 +127,12 @@ pub const APP_VERSION: &str = match option_env!("PANE_PACKAGE_VERSION") {
 /// them, not between releases. A development build can replace them
 /// with a file of its own through `PANE_DEFAULTS` (see
 /// [`pane_core::defaults::pins_from_dev_env`]).
+///
+/// The Windows power features' default extensions (ADR 0040) — Run
+/// (#254), System Commands (#255) and Switch Windows (#263) — are not
+/// pinned yet: this repository still builds them (`guests/run`,
+/// `guests/system-commands`, `guests/switch-windows`) until their own
+/// repositories release, when their pins join the committed ones.
 pub fn default_extensions() -> Vec<pane_core::DefaultExtension> {
     pane_core::defaults::parse_pins(DEFAULT_EXTENSIONS_PINS)
         .expect("the committed pins are valid; a test checks them")
