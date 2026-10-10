@@ -239,7 +239,7 @@ pub(crate) fn check(root: &Path) -> Result<(), String> {
         Value::Object(optional) => optional.clone(),
         _ => serde_json::Map::new(),
     };
-    for target in targets {
+    for &target in &targets {
         let name = format!("@pane-app/cli-{}", target.id());
         match optional.remove(&name) {
             Some(at) if at.as_str() == Some(version) => {}
@@ -563,7 +563,8 @@ fn without_cargo_environment(command: &mut Command) {
 /// The search path with `folder` in front: the SDK's tools first.
 fn path_with(folder: &Path) -> std::ffi::OsString {
     let existing = std::env::var_os("PATH").unwrap_or_default();
-    let with_folder = std::iter::once(folder).chain(std::env::split_paths(&existing));
+    let with_folder =
+        std::iter::once(folder.to_path_buf()).chain(std::env::split_paths(&existing));
     std::env::join_paths(with_folder).unwrap_or(existing)
 }
 
@@ -771,6 +772,7 @@ fn copy_file(from: &Path, to: &Path) -> Result<(), String> {
     }
     std::fs::copy(from, to)
         .map_err(|error| format!("copy {} failed: {error}", from.display()))
+        .map(|_| ())
 }
 
 /// Copies the folder `from` to `to` (which must not exist), recursively.
