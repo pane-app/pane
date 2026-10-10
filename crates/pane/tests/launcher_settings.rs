@@ -1336,7 +1336,11 @@ fn pythons(folder: &Path) -> PathBuf {
 fn over_learned_data<'a>(
     cx: &'a mut TestAppContext,
     data: &Path,
-) -> (gpui::Entity<LauncherWindow>, &'a mut VisualTestContext, PathBuf) {
+) -> (
+    gpui::Entity<LauncherWindow>,
+    &'a mut VisualTestContext,
+    PathBuf,
+) {
     let folder = pythons(&data.join("sources").join("pythons"));
     let key = PackageIdentity::local(&folder).unwrap().key();
     let extensions = data.join("extensions");
@@ -1353,12 +1357,9 @@ fn over_learned_data<'a>(
         ),
     )
     .unwrap();
-    let launcher = Launcher::with_packages(
-        Ok(Runtime::start().unwrap()),
-        vec![],
-        extensions.clone(),
-    )
-    .with_hotkeys(Arc::new(FakeSystem::default()));
+    let launcher =
+        Launcher::with_packages(Ok(Runtime::start().unwrap()), vec![], extensions.clone())
+            .with_hotkeys(Arc::new(FakeSystem::default()));
     cx.executor().allow_parking();
     cx.foreground_executor()
         .block_on(launcher.install_package(&folder));
@@ -1421,7 +1422,9 @@ fn reset_ranking_in_settings_asks_first_and_clears_everything(cx: &mut TestAppCo
     click(&mut sc, "launcher-reset-ranking-reset");
     sc.run_until_parked();
     until(&mut sc, |_| {
-        fs::read_to_string(&record).ok().filter(|text| !text.contains("#b"))
+        fs::read_to_string(&record)
+            .ok()
+            .filter(|text| !text.contains("#b"))
     });
 
     // The same query now ranks the unlearned order.
@@ -1473,7 +1476,10 @@ fn the_learn_switch_is_found_through_the_settings_search(cx: &mut TestAppContext
         sc.debug_bounds("launcher-learn-row").is_some(),
         "the row is revealed"
     );
-    assert!(switch_on(&mut sc, "Learn from what I choose"), "on by default");
+    assert!(
+        switch_on(&mut sc, "Learn from what I choose"),
+        "on by default"
+    );
 
     // Turned off: the order ignores what was learned, and a choice
     // records nothing — the record stands as it was.

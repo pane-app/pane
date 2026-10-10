@@ -591,7 +591,10 @@ fn reset_ranking_clears_one_result_only() {
     );
     // The entry went; the other result's learning stands.
     let text = fs::read_to_string(pane.record()).unwrap();
-    assert!(!text.contains("#b"), "the reset result's entry went: {text}");
+    assert!(
+        !text.contains("#b"),
+        "the reset result's entry went: {text}"
+    );
     assert!(text.contains("#c"), "the other result stands: {text}");
 
     // The reset result ranks as never used, for the query and for the
@@ -651,7 +654,10 @@ fn resetting_everything_clears_all_that_was_learned() {
     assert!(ran, "there was something to reset");
     block_on(recorded).unwrap();
     let text = fs::read_to_string(pane.record()).unwrap();
-    assert!(!text.contains("#b") && !text.contains("#c"), "nothing is left: {text}");
+    assert!(
+        !text.contains("#b") && !text.contains("#c"),
+        "nothing is left: {text}"
+    );
 
     // The rows rank as never used, and a restart reads the same nothing.
     block_on(launcher.set_query("pyt"));

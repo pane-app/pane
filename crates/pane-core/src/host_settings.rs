@@ -885,7 +885,11 @@ mod tests {
         assert!(HostSettings::default().learning);
         assert!(reading(r#"{ "version": 1 }"#).unwrap().learning);
         // Recorded as the record's camelCase field, and read back.
-        assert!(!reading(r#"{ "version": 1, "learning": false }"#).unwrap().learning);
+        assert!(
+            !reading(r#"{ "version": 1, "learning": false }"#)
+                .unwrap()
+                .learning
+        );
         // A value that is not a boolean fails the whole record.
         let problem = reading(r#"{ "version": 1, "learning": "off" }"#);
         assert!(problem.is_err(), "{problem:?}");

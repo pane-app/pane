@@ -475,9 +475,9 @@ fn entries(launcher: &Launcher, cx: &App) -> Vec<search::Entry> {
         (
             RESET_DEBUG,
             RESET_NAME,
-            launcher.learned_problem().map(|problem| {
-                format!("What root search learned cannot be read: {problem}")
-            }),
+            launcher
+                .learned_problem()
+                .map(|problem| format!("What root search learned cannot be read: {problem}")),
         ),
     ]
     .into_iter()
@@ -639,15 +639,15 @@ fn render(
         theme,
         |switch| {
             let anchor = this.search_anchor(LEARN_DEBUG);
-            switch
-                .anchor_scroll(Some(anchor))
-                .on_click(cx.listener(|_, _: &gpui::ClickEvent, _, cx| {
+            switch.anchor_scroll(Some(anchor)).on_click(cx.listener(
+                |_, _: &gpui::ClickEvent, _, cx| {
                     let settings = crate::settings::shared(cx);
                     let on = settings.read(cx).learning();
                     settings.update(cx, |settings, cx| {
                         settings.set_learning(!on, cx);
                     });
-                }))
+                },
+            ))
         },
     )
     .into_any_element();
@@ -727,34 +727,29 @@ fn reset_row(
     let offered = unreadable.is_none();
     let anchor = Some(anchor);
     let buttons = if asking {
-        let confirm = controls::button(
-            "launcher-reset-ranking-reset",
-            "Reset",
-            offered,
-            theme,
-        )
-        .debug_selector(|| "launcher-reset-ranking-reset".into())
-        .role(Role::Button)
-        .aria_label("Reset what every result learned")
-        .text_color(theme.danger)
-        .anchor_scroll(anchor)
-        .when(offered, |reset| {
-            reset.on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-                this.launcher_page.reset = Resetting::Idle;
-                this.launcher_page.reset_problem = None;
-                let (_, recorded) = this.launcher.reset_all_learned();
-                cx.spawn(async move |this, cx| {
-                    let outcome = recorded.await;
-                    this.update(cx, |this, cx| {
-                        this.launcher_page.reset_problem = outcome.err();
-                        cx.notify();
+        let confirm = controls::button("launcher-reset-ranking-reset", "Reset", offered, theme)
+            .debug_selector(|| "launcher-reset-ranking-reset".into())
+            .role(Role::Button)
+            .aria_label("Reset what every result learned")
+            .text_color(theme.danger)
+            .anchor_scroll(anchor)
+            .when(offered, |reset| {
+                reset.on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                    this.launcher_page.reset = Resetting::Idle;
+                    this.launcher_page.reset_problem = None;
+                    let (_, recorded) = this.launcher.reset_all_learned();
+                    cx.spawn(async move |this, cx| {
+                        let outcome = recorded.await;
+                        this.update(cx, |this, cx| {
+                            this.launcher_page.reset_problem = outcome.err();
+                            cx.notify();
+                        })
+                        .ok();
                     })
-                    .ok();
-                })
-                .detach();
-                cx.notify();
-            }))
-        });
+                    .detach();
+                    cx.notify();
+                }))
+            });
         let cancel = controls::ghost_button("launcher-reset-ranking-cancel", "Cancel", true, theme)
             .debug_selector(|| "launcher-reset-ranking-cancel".into())
             .role(Role::Button)
@@ -787,13 +782,7 @@ fn reset_row(
     };
     controls::setting_row(RESET_NAME, lines, theme)
         .debug_selector(|| "launcher-reset-ranking-field".into())
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .flex_none()
-                .child(buttons),
-        )
+        .child(div().flex().items_center().flex_none().child(buttons))
         .into_any_element()
 }
 

@@ -1908,7 +1908,10 @@ fn reset_ranking_from_the_actions_panel_clears_that_result(cx: &mut TestAppConte
         view.status,
         Status::Result("Ranking reset for Python".into())
     );
-    assert!(cx.debug_bounds("toast-success").is_some(), "the toast is rendered");
+    assert!(
+        cx.debug_bounds("toast-success").is_some(),
+        "the toast is rendered"
+    );
 
     // The entry went, and the provider's order is back for the query.
     let record = data.path().join("extensions/learned.json");
