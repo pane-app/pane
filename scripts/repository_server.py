@@ -8,14 +8,15 @@ Usage:
       (everything but dist/) committed on `main`, then the branch `release`
       adding the built component under dist/, tagged `v0.1.0`.
   repository_server.py clone-defaults <committed-pins> <repositories-folder> <pins-file> <url>
-      Clones the five default extensions' repositories (calculator,
-      applications, quicklinks, files, clipboard-history) at the commits
-      the committed pins file names (crates/pane/defaults.json) into
+      Clones the default extensions' repositories at the commits the
+      committed pins file names (crates/pane/defaults.json) into
       <repositories-folder> — the smoke's own setup, from their real
       addresses on GitHub; the Pane under test fetches only from <url> —
       and writes <pins-file>: the pins a development build's PANE_DEFAULTS
       names, the same ids, titles, tags and commits as the committed pins,
-      pointing each at <url><id>.git. Run it after `serve` has written its
+      pointing each at <url><id>.git. An entry that names a platform is
+      written through, so a Pane whose system is not that one never
+      fetches it. Run it after `serve` has written its
       port, with <url> the address it serves at. The clones hold the
       release revisions' built components, so a first setup installs
       exactly what a release installs.
@@ -204,13 +205,15 @@ def move_sample(repository, version):
 
 
 def clone_defaults(committed, repositories, pins_file, url):
-    """Clones the five default extensions' repositories at the commits the
+    """Clones the default extensions' repositories at the commits the
     committed pins file names (crates/pane/defaults.json) — their real
     addresses, as the smoke's own setup on the runner; the Pane under test
     fetches only from the URL it is served at — and writes the pins file
-    naming them: a JSON array of { id, title, repository, tag, commit }
-    pointing each at the URL the smoke serves them from, with the same
-    ids, titles, tags and commits as the committed pins."""
+    naming them: a JSON array of { id, title, repository, tag, commit,
+    platform } pointing each at the URL the smoke serves them from, with
+    the same ids, titles, tags and commits as the committed pins, and the
+    same platform: an entry that names one is served as it is committed,
+    so a Pane whose system is not that one never fetches it."""
     with open(committed, encoding="utf-8") as f:
         committed = json.load(f)
     pins = []
@@ -229,13 +232,16 @@ def clone_defaults(committed, repositories, pins_file, url):
                        env=env, check=True)
         subprocess.run(["git", "checkout", "--quiet", "--detach", pin["commit"]],
                        cwd=repository, env=env, check=True)
-        pins.append({
+        served = {
             "id": id,
             "title": pin["title"],
             "repository": "%s%s.git" % (url, id),
             "tag": pin["tag"],
             "commit": pin["commit"],
-        })
+        }
+        if "platform" in pin:
+            served["platform"] = pin["platform"]
+        pins.append(served)
     with open(pins_file + ".tmp", "w", encoding="utf-8") as f:
         json.dump(pins, f, indent=2)
     os.replace(pins_file + ".tmp", pins_file)

@@ -13,5 +13,14 @@
     "tag": "v0.8.0", "commit": "eaaa82e81f875fc06a5db917a36b977a923bb594" },
   { "id": "clipboard-history", "title": "Clipboard History",
     "repository": "https://github.com/pane-app/clipboard-history",
-    "tag": "v0.6.0", "commit": "36bdc4a28d848b39190bc3121ae92501c2e678c9" }
+    "tag": "v0.6.0", "commit": "36bdc4a28d848b39190bc3121ae92501c2e678c9" },
+  { "id": "run", "title": "Run",
+    "repository": "https://github.com/pane-app/run",
+    "tag": "v0.2.0", "commit": "4560a2f76ad95fb1976e6b20bd5de1544753eda9", "platform": "windows" },
+  { "id": "system-commands", "title": "System Commands",
+    "repository": "https://github.com/pane-app/system-commands",
+    "tag": "v0.1.0", "commit": "0f4d26d571f2ed0c25149e2e39931dec0777ba60", "platform": "windows" },
+  { "id": "switch-windows", "title": "Switch Windows",
+    "repository": "https://github.com/pane-app/switch-windows",
+    "tag": "v0.1.0", "commit": "370a297307c651dccbdecb5383209636d482525a", "platform": "windows" }
 ]

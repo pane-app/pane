@@ -204,11 +204,13 @@ are the calculator, applications, quicklinks, files and clipboard history
 choice): all five set up at first setup and each individually
 disableable, with clipboard history recording from the first start
 ([ADR 0042](adr/0042-clipboard-history-records-from-the-first-start.md)).
-Every build sets up the same five — the Windows power features' three
-default extensions (Run, System Commands, Switch Windows, ADR 0040) are
-not pinned yet: this repository builds them until their own repositories
-release, when their pins join the committed ones — and no sample is a
-default extension
+Every build sets up the same five on every system — the Windows power
+features' Run, System Commands and Switch Windows
+([ADR 0040](adr/0040-default-extensions-grow-to-include-windows-tools.md))
+are pinned with `"platform": "windows"` and set up on Windows alone:
+the pins file's platform field is read before any repository is fetched
+(the launcher's platform gate), so a Linux or macOS first setup never
+fetches them — and no sample is a default extension
 ([#162](https://github.com/pane-app/pane/issues/162)). Until #162 a
 development build also acquired the prebuilt-helper sample; an install
 that acquired it keeps it as an ordinary installed package (Pane removes
@@ -220,13 +222,16 @@ Since [#278](https://github.com/pane-app/pane/issues/278) each default is
 fetched from its own repository, at the commit of the release tag this
 Pane release pins
 ([ADR 0045](adr/0045-official-extensions-live-in-their-own-repositories.md)):
-the five live in public repositories of their own in the
+the eight live in public repositories of their own in the
 [`pane-app`](https://github.com/pane-app) organization
-([#279](https://github.com/pane-app/pane/issues/279)), and the pins are
+([#279](https://github.com/pane-app/pane/issues/279),
+[#301](https://github.com/pane-app/pane/issues/301)), and the pins are
 committed to the build
 ([`crates/pane/defaults.json`](../crates/pane/defaults.json)), each naming
-the default's id, title, repository, release tag and that tag's commit; a
-newer Pane release moves them forward. (Before #278 the defaults were
+the default's id, title, repository, release tag, that tag's commit and,
+for the Windows-only three, the platform they are set up on; a newer Pane
+release moves the pins forward, as for the five. (Before #278 the
+defaults were
 acquired from Pane's artifact source as tarballs an index named; that
 machinery is gone, and the artifact source remains for Pane's own
 application updates alone.) A development build can replace the pins

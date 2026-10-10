@@ -34,6 +34,8 @@ use tempfile::TempDir;
 mod defaults;
 #[path = "support/repo_server.rs"]
 mod repo_server;
+#[path = "support/unreachable.rs"]
+mod unreachable;
 
 use defaults::{from_sample, made, package_files, pinned, version_of};
 use repo_server::{Mode, Server};
@@ -434,6 +436,110 @@ fn an_interrupted_fetch_is_tried_again_and_set_up() {
     // Nothing half-written is left: the downloads folder is emptied in
     // the background once the installs end.
     dirs.wait_for_no_downloads();
+}
+
+/// A pin that names this system installs at first setup exactly as a pin
+/// that names no platform does: the gate is a filter, not a different
+/// path.
+#[test]
+fn a_pin_that_names_this_system_installs_at_first_setup() {
+    let Some(here) = pane_core::Platform::current() else {
+        // A system Pane does not name: no pin can name it, so nothing
+        // here applies.
+        return;
+    };
+    let mut dirs = Dirs::new();
+    dirs.publish();
+    let mut named = dirs.pin("sample-icons");
+    named.platform = Some(here);
+    let launcher = dirs.launcher_with(vec![named, dirs.pin("helper-sample")]);
+
+    block_on(launcher.acquire_defaults());
+
+    assert_eq!(
+        launcher.view().status,
+        Status::Result("Set up Pane's default extensions".into())
+    );
+    assert_eq!(installed(&launcher), ["Icons sample", "Helper sample"]);
+    assert_eq!(dirs.fetches("sample-icons"), 1);
+}
+
+/// A pin that names another system is never fetched: the platform gate
+/// of the pins file drops it where the pins are taken into the launcher,
+/// before any repository is fetched. Its repository here points at a
+/// port that refuses connections — an attempt would fail loudly, after
+/// three tries, and leave the row that tries again — so the pin's
+/// absence from the outcome is the gate's proof: no network attempt at
+/// all.
+#[test]
+fn a_pin_that_names_another_system_is_never_fetched() {
+    let mut dirs = Dirs::new();
+    dirs.publish();
+    let closed = unreachable::ClosedPort::new();
+    // A platform this is not: Pane names three, so one other than this
+    // always exists.
+    let elsewhere = pane_core::Platform::ALL
+        .into_iter()
+        .find(|platform| Some(*platform) != pane_core::Platform::current())
+        .expect("Pane names a platform this is not");
+    // The mismatched pin: another system's, over the port that refuses
+    // connections.
+    let mut windows_only = dirs.pin("sample-icons");
+    windows_only.id = "windows-only".into();
+    windows_only.title = "Windows only".into();
+    windows_only.repository = format!("{}/windows-only.git", closed.url());
+    windows_only.platform = Some(elsewhere);
+    let launcher = dirs.launcher_with(vec![windows_only, dirs.pin("helper-sample")]);
+
+    block_on(launcher.acquire_defaults());
+
+    // The helper sample alone is set up, with the success the others'
+    // set-up ends in: no failure is explained (a fetch of the closed
+    // port would have been, after three tries), no row retries anything,
+    // and the mismatched id is in no record.
+    assert_eq!(
+        launcher.view().status,
+        Status::Result("Set up the Helper sample".into())
+    );
+    assert_eq!(installed(&launcher), ["Helper sample"]);
+    assert_eq!(dirs.fetches("helper-sample"), 1);
+    let registry: Value = serde_json::from_str(
+        &fs::read_to_string(dirs.packages_dir().join("installed.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        registry["packages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|record| record["default"] != "windows-only"),
+        "the mismatched pin is in no record: {registry:#}"
+    );
+    assert!(
+        !titles(&launcher)
+            .iter()
+            .any(|title| title.starts_with("Set up ")),
+        "no row retries a default that was never fetched: {:?}",
+        titles(&launcher)
+    );
+}
+
+/// A pin that names no platform installs on this system, as the five's
+/// pins do: the gate leaves it alone.
+#[test]
+fn a_pin_that_names_no_platform_installs_on_this_system() {
+    let mut dirs = Dirs::new();
+    dirs.publish();
+    let launcher = dirs.launcher_with(vec![dirs.pin("sample-icons")]);
+
+    block_on(launcher.acquire_defaults());
+
+    assert_eq!(
+        launcher.view().status,
+        Status::Result("Set up the Icons sample".into())
+    );
+    assert_eq!(installed(&launcher), ["Icons sample"]);
+    assert_eq!(dirs.fetches("sample-icons"), 1);
 }
 
 /// A default extension a build no longer sets up stays what it became:
