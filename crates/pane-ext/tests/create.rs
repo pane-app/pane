@@ -67,7 +67,7 @@ fn files(tarball: &Path) -> Vec<String> {
 
 /// Unpacks `tarball` into `folder`, as npm install of it would put it at
 /// `folder/@pane-app/create`.
-fn unpack(tarball: &Path, create: &Path) {
+fn unpack(tarball: &Path, folder: &Path) {
     let bytes = fs::read(tarball).unwrap();
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(&bytes[..]));
     for entry in archive.entries().unwrap() {
@@ -76,7 +76,7 @@ fn unpack(tarball: &Path, create: &Path) {
         let Some(file) = path.strip_prefix("package/") else {
             continue;
         };
-        let to = create.join(file);
+        let to = folder.join(file);
         fs::create_dir_all(to.parent().unwrap()).unwrap();
         let mut contents = Vec::new();
         entry.read_to_end(&mut contents).unwrap();
@@ -138,13 +138,13 @@ fn the_create_package_packs_and_its_bin_scaffolds_a_project() {
     // Where npm install puts the published package, with the pane-ext
     // binary beside it in the platform package its dependency installs.
     let node_modules = work.path().join("node_modules");
-    let create = node_modules.join("@pane-app/create");
-    unpack(&tarball, &create);
+    let installed = node_modules.join("@pane-app/create");
+    unpack(&tarball, &installed);
     install_cli(&node_modules);
 
     let project = work.path().join("notes");
     let (passed, printed) = create(
-        &create.join("create.js"),
+        &installed.join("create.js"),
         &[
             project.to_str().unwrap(),
             "--name",
@@ -170,12 +170,12 @@ fn the_create_package_packs_and_its_bin_scaffolds_a_project() {
 fn the_create_bin_says_how_to_get_pane_ext_when_it_finds_none() {
     let work = tempfile::tempdir().unwrap();
     let tarball = pack(work.path());
-    let create = work.path().join("create");
-    unpack(&tarball, &create);
+    let unpacked = work.path().join("create");
+    unpack(&tarball, &unpacked);
     // No @pane-app/cli platform package beside it, and no pane-ext on the
     // PATH the test runs with.
     let (passed, printed) = create(
-        &create.join("create.js"),
+        &unpacked.join("create.js"),
         &[work.path().join("nowhere").to_str().unwrap()],
     );
     assert!(!passed, "{printed}");
